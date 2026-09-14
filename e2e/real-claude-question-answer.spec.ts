@@ -309,7 +309,7 @@ test('real claude changes model during a question and resumes with the original 
   await expect(page.locator('.channel-list__row-open')).toBeVisible({
     timeout: HANDSHAKE_TIMEOUT_MS
   })
-  await page.getByRole('button', { name: 'New discussion' }).click()
+  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
   await expect(conversation).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
   await expect(sendButton).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
 

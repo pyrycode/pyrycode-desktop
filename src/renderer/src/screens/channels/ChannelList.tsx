@@ -5,10 +5,6 @@ import {
   useConversationListStore,
   selectConversations
 } from '../../store/conversationListStore'
-import {
-  useDefaultWorkspaceStore,
-  selectDefaultWorkspace
-} from '../../store/defaultWorkspaceStore'
 import { requestNewConversation } from '../../store/conversationCreatedBridge'
 // #1199 reads BOTH legs per server. The app-wide `selectStatus` / `selectRelayLinkStatus` cells are
 // untouched in name, signature and value; the host row is simply no longer a reader of either.
@@ -119,8 +115,11 @@ import {
 //
 // The wire ConversationSummary carries no message text, so both Figma row shapes (avatar-bearing
 // channel rows, preview-bearing discussion rows) collapse to a single label row; the avatars, body
-// previews, top app bar, and "See all" link are deferred to other tickets. The new-discussion FAB
-// (#242) is added here — its click dispatches the createConversation command.
+// previews, top app bar, and "See all" link are deferred to other tickets.
+//
+// #1426 deleted the new-discussion FAB (#242) that used to float over this list. The sidebar's one route
+// to a new chat is now the workspace row's own plus (#1178/#1185/#1189), which mints in the clicked row's
+// directory on that row's host rather than in a Settings-chosen default on the sole paired one.
 //
 // #1097 converged that row on the DESKTOP node (103:2968): a 24px row carrying a body-small label and
 // nothing else. The trailing last-activity time the mobile node drew is gone — deleted, not hidden —
@@ -129,8 +128,8 @@ import {
 /**
  * Store-bound container. The store read is its only impurity — safe under `renderToStaticMarkup` in
  * Node, where the store yields its initial `null` (the #218 container posture), so the pure view is
- * what the tests server-render with injected props. `onNewConversation` dereferences `window.pyry`
- * only inside the click arrow (never during render), so the server-render smoke is untouched — the
+ * what the tests server-render with injected props. `onCreateChat` dereferences `window.pyry` only
+ * inside the click arrow (never during render), so the server-render smoke is untouched — the
  * Composer.handleSubmit discipline (UnpairControl was the other example until #1061 deleted it).
  */
 export function ChannelList({
@@ -174,13 +173,15 @@ export function ChannelList({
   onLeaveConversation: () => void
 }): JSX.Element {
   const conversations = useConversationListStore(selectConversations)
-  // The client-owned default workspace (#403), read reactively so the FAB always closes over the current
-  // value — #404 changing the default re-renders the container. Mirrors the conversations store read above;
-  // safe under renderToStaticMarkup where the singleton hydrates to null (the typeof-window guard).
-  const defaultWorkspace = useDefaultWorkspaceStore(selectDefaultWorkspace)
+  // #1426 — the client-owned default workspace (#403) is NO LONGER READ HERE. The FAB was its only reader
+  // in this file and it closed over the current value so #404 would re-render the container; with the FAB
+  // gone the plus carries the clicked row's own `cwd`, so the setting reaches no create path and this
+  // container has one fewer store slice to wake on. The store and its Settings row are untouched — whether
+  // that row stays is a separate decision, tracked in the project's Open Questions.
+  //
   // #1098 — the open chat's id, read HERE rather than per row. `activateConversation` calls
   // `setActiveConversation` unconditionally on both its branches before navigating (#448), so this is
-  // correct for a sidebar row click and for a FAB-minted conversation alike.
+  // correct for a sidebar row click and for a plus-minted conversation alike.
   //
   // The FIELD IS `id`. `ConversationCreatedPayload` is a 5-field shape (`id, is_promoted, cwd, name,
   // last_used_at`) and carries no `conversation_id` — the same read ships at ConversationScreen's
@@ -221,13 +222,12 @@ export function ChannelList({
   const statuses = useSessionStore((state) => state.statuses)
   const connected = (serverId: string | null | undefined): boolean =>
     typeof serverId === 'string' && statuses.get(serverId)?.type === 'connected'
-  const soleServerId = servers.length === 1 ? servers[0].serverId : undefined
   // Transient, per-interaction dialog state — component-local useState, not the store (the lowest scope
   // that survives re-render, the PermissionModal `pendingOptionId` posture). `saveRow` is the row whose
   // Save-as-channel dialog is open (or none); the dialog's name + location + round-trip state now live in
   // the SaveAsChannelDialog container itself (#288), seeded from the row on mount. The dialog is not
   // rendered on first paint (`saveRow` starts null) and `window.pyry` is dereferenced only inside the
-  // container's callbacks, so ChannelList stays server-renderable (the onNewConversation discipline).
+  // container's callbacks, so ChannelList stays server-renderable (the onCreateChat discipline).
   const [saveRow, setSaveRow] = useState<SidebarRow | null>(null)
   // The Rename dialog's independent per-interaction state (#360) — a separate local pair, not shared with
   // the save-as one. No mutual-exclusion logic is needed: an open dialog's fixed-inset overlay covers the
@@ -290,7 +290,7 @@ export function ChannelList({
       {/* #834: the headless one-shot that fills the host row's label, mounted HERE — the SettingsScreen
           idiom (<ServerInfoData /> beside <ServerRowControl />) applied to the screen that actually
           renders the row. It renders null, so DOM order is immaterial, and it dereferences `window.pyry`
-          only inside its effect, so this container stays server-renderable (the onNewConversation
+          only inside its effect, so this container stays server-renderable (the onCreateChat
           discipline). The two alternatives both fail: an app-level mount fires once at launch, BEFORE
           pairing, and never re-runs — leaving the row stale after a same-session pair — and mounting it
           in SettingsScreen is exactly what AC5 forbids ("with no visit to the Settings screen first").
@@ -320,11 +320,9 @@ export function ChannelList({
         onOpenArchive={onOpenArchive}
         onPairNewHost={onPairNewHost}
         onRepairHost={onRepairHost}
-        onNewConversation={() => {
-          if (!canMutateHost(soleServerId)) return
-          requestNewConversation(window.pyry.sendCommand, defaultWorkspace, soleServerId)
-        }}
-        // Retain the clicked workspace and its host through the synchronous send.
+        // Retain the clicked workspace and its host through the synchronous send. Since #1426 this is the
+        // sidebar's ONLY direct create: `window.pyry` is dereferenced HERE, at interaction time, never
+        // during render, which is the discipline the deleted `onNewConversation` used to be named for.
         onCreateChat={(cwd, serverId) => {
           if (!canMutateHost(serverId)) return
           requestNewConversation(window.pyry.sendCommand, cwd, serverId)
@@ -449,7 +447,7 @@ export function ChannelList({
           onCancel={() => setEditHostServerId(null)}
           onSave={() => {
             // `window.pyry` is dereferenced HERE, at interaction time, never during render — the
-            // `onNewConversation` discipline. The helper trims the name and classifies the answer; this
+            // `onCreateChat` discipline. The helper trims the name and classifies the answer; this
             // arrow decides only what to do with it.
             //
             // ⭐ THE STORE WRITE IS KEYED BY THE ID CAPTURED IN THIS CLOSURE, never by anything the
@@ -496,7 +494,7 @@ export function ChannelList({
               const serverId = editHostServerId
               void runEditHostUnpair({
                 // `window.pyry` is dereferenced HERE, at interaction time, never during render — the
-                // `onNewConversation` discipline, so this container stays server-renderable.
+                // `onCreateChat` discipline, so this container stays server-renderable.
                 unpair: () =>
                   runUnpairServer(
                     {
@@ -587,7 +585,6 @@ export function ChannelListView({
   onOpenArchive,
   onPairNewHost,
   onRepairHost,
-  onNewConversation,
   onCreateChat,
   onCreateChannel,
   onEditWorkspace,
@@ -625,11 +622,10 @@ export function ChannelListView({
   // draws the headers and hands it to each of them.
   onPairNewHost: () => void
   onRepairHost?: (serverId: string) => void
-  onNewConversation: () => void
-  // #1178 — start a chat in the named workspace, the sidebar's first create that is not the client's
-  // default. REQUIRED rather than optional, `openConversationId`'s reasoning: the container must decide,
-  // and a defaulted prop would let a future caller silently render a sidebar with no per-workspace route
-  // to a new chat. The `cwd` is the group's key and travels verbatim; this view never inspects it.
+  // #1178 — start a chat in the named workspace, and since #1426 the sidebar's ONLY create that sends a
+  // command directly. REQUIRED rather than optional, `openConversationId`'s reasoning: the container must
+  // decide, and a defaulted prop would let a future caller silently render a sidebar with no route to a
+  // new chat at all. The `cwd` is the group's key and travels verbatim; this view never inspects it.
   onCreateChat: (cwd: string, serverId: string | undefined) => void
   // #1179 — open the Create-channel dialog for the named workspace. REQUIRED for `onCreateChat`'s
   // reason, and the symmetric one: a defaulted prop would let a future caller silently render a
@@ -666,7 +662,8 @@ export function ChannelListView({
     <section className="channel-list" aria-label="Conversations">
       {/* #347: the top-right actions cluster — the Archive entry leads, the gear trails (conventional
           gear-rightmost). One sticky flex-row wrapper hosts both, so two independent sticky children do
-          not stack awkwardly. Present in all three list states (AC1), like the FAB. */}
+          not stack awkwardly. Present in all three list states (AC1) — and since #1426 deleted the FAB
+          that used to be its counterpart at the bottom, the list's only sticky child. */}
       <div className="channel-list__actions">
         <ArchiveButton onClick={onOpenArchive} />
         <SettingsButton onClick={onOpenSettings} />
@@ -687,18 +684,17 @@ export function ChannelListView({
         onSaveAsChannel,
         onRename
       )}
-      <NewConversationFab onClick={onNewConversation} disabled={serverIds.length !== 1 || statuses.get(serverIds[0])?.type !== 'connected'} />
     </section>
   )
 }
 
 // The Settings entry affordance (#333) — a desktop-invented control: ChannelList has no top app bar yet
-// (its own comment defers it), and no Figma node on the list scope (15-8) pins a settings entry, so —
-// like NewConversationFab — this is invented rather than traced. Rendered as the FIRST child of the
-// <section> and pinned top-right via CSS, so it is present in all three list states (AC1) and stays
-// reachable while a long list scrolls under it. Clones NewConversationFab's shape: an icon-only native
-// <button> (keyboard-focusable), `aria-label` supplies the accessible name since the gear glyph carries
-// no text, and the SVG is aria-hidden. onClick is a pure injected nav effect — no window.pyry, no store.
+// (its own comment defers it), and no Figma node on the list scope (15-8) pins a settings entry, so this
+// is invented rather than traced. Rendered as the FIRST child of the <section> and pinned top-right via
+// CSS, so it is present in all three list states (AC1) and stays reachable while a long list scrolls
+// under it. An icon-only native <button> (keyboard-focusable), `aria-label` supplies the accessible name
+// since the gear glyph carries no text, and the SVG is aria-hidden — the shape `ArchiveButton` beside it
+// shares. onClick is a pure injected nav effect — no window.pyry, no store.
 // The 24px Material `settings` (gear) glyph.
 function SettingsButton({ onClick }: { onClick: () => void }): JSX.Element {
   return (
@@ -750,36 +746,14 @@ function ArchiveButton({ onClick }: { onClick: () => void }): JSX.Element {
   )
 }
 
-// The new-discussion FAB (Figma 15-106) — a floating add affordance pinned bottom-right of the list
-// scroller. Rendered as a sibling of `renderBody`, so it is present in all three list states (AC1). An
-// icon-only `<button>`, mirroring #140's BackControl: a native button is keyboard-focusable (AC4) and
-// `aria-label` supplies the accessible name (the .composer__send / StatusRow pattern) since the glyph
-// alone carries no text. On click it dispatches the createConversation command (fire-and-forget) via the
-// injected handler; navigation to the new thread is decoupled and event-driven (useConversationCreatedNav
-// in PairedShell fires on the daemon's conversationCreated confirmation), never synchronous here. The
-// Material `add` glyph path is the 24px add icon.
-function NewConversationFab({ onClick, disabled }: { onClick: () => void; disabled: boolean }): JSX.Element {
-  return (
-    <button
-      type="button"
-      className="channel-list__fab"
-      aria-label="New discussion"
-      disabled={disabled}
-      onClick={onClick}
-    >
-      <svg
-        className="channel-list__fab-icon"
-        viewBox="0 0 24 24"
-        width="24"
-        height="24"
-        fill="currentColor"
-        aria-hidden="true"
-      >
-        <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
-      </svg>
-    </button>
-  )
-}
+// `NewConversationFab` (#242, Figma 15-106) stood HERE until #1426 deleted it — a floating 56px add
+// affordance pinned bottom-right of the scroller, minting a chat in the Settings default workspace on the
+// sole paired host and disabled whenever the paired count was not exactly one. Recorded rather than
+// silently removed because the sidebar card (103:2959) never drew a floating button, and because the
+// deletion is what the three comments above — SettingsButton's, ArchiveButton's and the actions
+// cluster's — used to cite as the shape they cloned. Its replacement was already shipped: the workspace
+// row's plus (#1178/#1185/#1189) mints in the clicked row's directory on that row's host, so every paired
+// machine keeps a route to a first chat and no create depends on a client-side default any more.
 
 // What the host row shows when there is NO usable operator label (#834) — a client-owned module-level
 // constant in the SERVER_ROW_LABEL / SETTINGS_COPY idiom, never a daemon string. #710 shipped it as the
@@ -2167,7 +2141,7 @@ function Row({
         </button>
       )}
       {onSaveAsChannel && (
-        // Icon-only button — `aria-label` supplies the accessible name (the .channel-list__fab pattern),
+        // Icon-only button — `aria-label` supplies the accessible name (the .channel-list__save pattern),
         // since the glyph alone carries no text. Since #1171 the glyph is the drawing's own export for
         // the CHATS tree: a bold chevron-up, replacing the Material bookmark that stood in. The layer it
         // comes from is named `circle-chevron-up-solid`, but the drawing draws the chevron ALONE — there

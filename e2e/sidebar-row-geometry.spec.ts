@@ -279,7 +279,7 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   // directions: a `gap` on the `.channel-list` column would produce the 4px between rows AND move the
   // workspace row's spacing, which AC1's second half forbids. The adjacent-sibling rule produces the
   // first and leaves the second at the zero it has today. ---
-  await page.getByRole('button', { name: 'New discussion' }).click()
+  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
   await expect(row).toHaveCount(2)
   await expect(page.locator('.channel-list__workspace')).toHaveCount(1)
 

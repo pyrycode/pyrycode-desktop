@@ -120,7 +120,9 @@ test('sidebar ownership follows the target in both open-chat directions', async 
     await expect(page.locator('.channel-list__workspace-create')).toHaveCount(1)
     await expect(page.locator('.channel-list__workspace-edit')).toHaveCount(1)
     await expect(page.locator('.channel-list__rename')).toHaveCount(1)
-    await expect(page.getByRole('button', { name: 'New discussion' })).toBeDisabled()
+    // #1426 deleted the assertion that stood here: the global create was inert while two hosts were
+    // paired. The plus that replaced it is per-row and carries no such state — it is withheld entirely
+    // for a host that is not connected, which the three counts above already read.
     await commands.clear()
     await page.locator('.channel-list__workspace-create').click({ force: true })
     await page.locator('.create-channel__input').fill('Owned channel')
@@ -183,13 +185,14 @@ test('chat creation and scratch promotion address the connected sidebar host whi
   })
 })
 
-test('the sole-host global create targets that host, and failed-host local controls remain usable', async ({ launchPairedApp }) => {
+// #1426 — this test opened with a FAB press and two `createConversation` assertions, proving the global
+// create addressed the sole paired host. That half is deleted rather than re-pointed: there is no global
+// create any more, and its host-targeting claim is not lost — the sibling test above presses the plus and
+// asserts the resulting `createConversation` carries the right `serverId` and `cwd`. What survives is the
+// failed-host half, which is what this test is now named for.
+test('failed-host local controls remain usable', async ({ launchPairedApp }) => {
   const app = await launchPairedApp({ buildReplyFrames: conversationStateFake() })
-  const commands = await observeCommands(app)
   const { page } = app
-  await page.getByRole('button', { name: 'New discussion' }).click()
-  await expect.poll(async () => (await commands.read()).filter(c => c.type === 'createConversation').length).toBe(1)
-  expect((await commands.read()).find(c => c.type === 'createConversation')).toMatchObject({ serverId: FIRST_SERVER_ID })
   await connection(app, FIRST_SERVER_ID, 'failed')
   const host = page.locator('.channel-list__host').first()
   await expect(host.getByRole('button', { name: 'Repair host' })).toBeVisible()

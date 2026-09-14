@@ -135,7 +135,7 @@ test('a run-config reply describing the previous conversation changes nothing af
   // `conversation_created` drives the nav, so B is the open conversation and A's request is now the
   // in-flight one the operator navigated away from — the defect's exact state. B's own ask goes out
   // behind A's; both stay unanswered. ---
-  await page.locator('.channel-list__fab').click()
+  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
   await expect
     .poll(() => requests.find((r) => r.conversationId !== SEED.id)?.envelopeId, {
       timeout: ROUNDTRIP_TIMEOUT_MS

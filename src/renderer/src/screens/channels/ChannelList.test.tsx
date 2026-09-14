@@ -137,7 +137,6 @@ const render = (
       onOpen={noop}
       onOpenSettings={noop}
       onOpenArchive={noop}
-      onNewConversation={noop}
       onCreateChat={noop}
       onCreateChannel={noop}
       onEditWorkspace={noop}
@@ -152,10 +151,7 @@ const render = (
     />
   )
 
-// The new-discussion FAB's accessible name (#242) — present in every list state (AC1/AC4).
-const FAB_MARKER = 'aria-label="New discussion"'
-
-// The Settings entry affordance's accessible name (#333) — present in every list state, like the FAB.
+// The Settings entry affordance's accessible name (#333) — present in every list state.
 const SETTINGS_ENTRY_MARKER = 'aria-label="Settings"'
 
 // The Archive entry affordance's accessible name (#347) — present in every list state, like the FAB and
@@ -604,12 +600,15 @@ describe('ChannelListView', () => {
     expect(countOf(recent, '>Save as channel</span>')).toBe(1)
   })
 
-  it('renders the new-discussion FAB with its accessible name in all three list states (AC1/AC4)', () => {
-    // The FAB is a sibling of the list body, so it is present whether the list is not-loaded, empty,
-    // or populated — the affordance to start a conversation must always be reachable.
-    expect(render(null)).toContain(FAB_MARKER)
-    expect(render([])).toContain(FAB_MARKER)
-    expect(render([row({ id: 'd1', name: 'a discussion' })])).toContain(FAB_MARKER)
+  it('draws no new-discussion FAB in any of the three list states (#1426 AC1)', () => {
+    // #1426 — the inverted form of the assertion #242 shipped. The FAB was a sibling of the list body and
+    // so present in every state; it is gone from every state, and the workspace row's own plus is the one
+    // way to start a chat. Asserted on BOTH the class and the accessible name because the suite's e2e
+    // locators used both, and a partial deletion that left either would be a control this tier still saw.
+    for (const html of [render(null), render([]), render([row({ id: 'd1', name: 'a discussion' })])]) {
+      expect(html).not.toContain('aria-label="New discussion"')
+      expect(html).not.toContain('channel-list__fab')
+    }
   })
 
   it('renders the Settings entry with its accessible name in all three list states (#333 AC1)', () => {
@@ -2333,7 +2332,6 @@ describe('host-owned mutation availability', () => {
       expect(html).not.toContain('aria-label="Edit workspace"')
       expect(html.match(/class="channel-list__row-open"/g)).toHaveLength(2)
       expect(html).toContain('aria-expanded="true"')
-      expect(html).toMatch(/aria-label="New discussion"[^>]*disabled/)
     }
   )
 
@@ -2344,7 +2342,6 @@ describe('host-owned mutation availability', () => {
       const html = render(rows, open, ['offline', 'online'], statuses)
       expect(html.match(/aria-label="Rename"/g)).toHaveLength(1)
       expect(html.match(/aria-label="Create channel"/g)).toHaveLength(1)
-      expect(html).toMatch(/aria-label="New discussion"[^>]*disabled/)
     }
   })
 })

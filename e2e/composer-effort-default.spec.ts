@@ -205,7 +205,7 @@ test('a new chat opens at the last effort level used, and a chat with its own le
   // locator reads it throughout, and its COUNT is the mounted/not-mounted reading.
   const label = page.locator('.composer__effort-label')
   const panel = page.getByRole('menu', { name: 'Effort', exact: true })
-  const newChat = (): Promise<void> => page.locator('.channel-list__fab').click()
+  const newChat = (): Promise<void> => page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
 
   // --- 1. Chat A is open (launchPairedApp navigates by clicking the seeded row) and since #1166 opening
   // it asks for its run configuration, which the fake answered with A's own level. ---

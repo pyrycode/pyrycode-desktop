@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { AttachmentUploadEvent } from '../../../../shared/ipc/attachmentUpload'
 import {
@@ -9,6 +9,7 @@ import {
   ComposerAttachmentStrip,
   NO_PENDING_ATTACHMENTS,
   REMOVE_ATTACHMENT_LABEL,
+  attachmentAskTarget,
   composerClassName,
   dragCarriesFiles,
   drainPendingAttachments,
@@ -21,6 +22,7 @@ import {
   removePendingAttachment
 } from './ComposerAttach'
 import type { MessageAttachment } from '../../store/threadTimeline'
+import { conversationListStore } from '../../store/conversationListStore'
 import { attachmentUploadOutcomeCopy } from './attachmentUploadCopy'
 
 // #863: the attach control's two pure views. Renderer specs here are static server renders
@@ -963,5 +965,51 @@ describe('mirrorTakeToDisplay (#1262 AC4)', () => {
     const take = mirrorTakeToDisplay(drainPendingAttachments(holder), show)
     expect(take.attachments).toBe(NO_PENDING_ATTACHMENTS)
     expect(shown[0]).toBe(NO_PENDING_ATTACHMENTS)
+  })
+})
+
+describe('attachmentAskTarget — the host the three asks name', () => {
+  const initialRows = conversationListStore.getState()
+  afterEach(() => {
+    conversationListStore.setState(initialRows, true)
+  })
+  const row = {
+    id: 'chat-1',
+    name: null,
+    is_promoted: false,
+    is_archived: false,
+    cwd: '/',
+    last_message_ts: '',
+    last_used_at: '',
+    workspace_label: null
+  }
+
+  it('names the open chat’s host, read off the conversation list', () => {
+    conversationListStore.setState({ conversations: [{ ...row, serverId: 'owner' }] })
+    expect(attachmentAskTarget('chat-1')).toEqual({ conversationId: 'chat-1', serverId: 'owner' })
+  })
+
+  it('omits the key outright when the list does not hold the chat — never `serverId: undefined`', () => {
+    conversationListStore.setState({ conversations: null })
+    const unloaded = attachmentAskTarget('chat-1')
+    expect(unloaded).toEqual({ conversationId: 'chat-1' })
+    expect('serverId' in unloaded).toBe(false)
+    conversationListStore.setState({ conversations: [{ ...row, id: 'other-chat', serverId: 'owner' }] })
+    expect('serverId' in attachmentAskTarget('chat-1')).toBe(false)
+  })
+
+  it('omits the key rather than guess when two hosts hold a row with the same id', () => {
+    conversationListStore.setState({
+      conversations: [
+        { ...row, serverId: 'first' },
+        { ...row, serverId: 'second' }
+      ]
+    })
+    expect('serverId' in attachmentAskTarget('chat-1')).toBe(false)
+  })
+
+  it('omits the key when the row carries no server of its own', () => {
+    conversationListStore.setState({ conversations: [{ ...row, serverId: null }] })
+    expect('serverId' in attachmentAskTarget('chat-1')).toBe(false)
   })
 })

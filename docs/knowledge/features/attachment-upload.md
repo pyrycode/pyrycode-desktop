@@ -603,12 +603,12 @@ tests, the copy tests, the progress-gate tests and the e2e proof.
 - **`completed.filename` ships with no consumer (#1038).** `attachmentUploadCopy.ts`'s `completed` arm
   still returns a constant; #1039 is the first consumer, and inherits the layout bound and the
   non-empty assumption named in the `completed` arm's own docblock.
-- **No sender names a server yet (#1129).** Both guarded asks accept `serverId`, but neither
-  `dropAttachmentFile` nor `pasteAttachmentImage` (`src/preload/index.ts`) sends one — the composer has
-  no per-server surface to source an id from until #1086 lands. Every upload today still resolves
-  through the unnamed path: the sole connection with one paired server, a refusal with more than one.
-  With two servers paired and no composer surface to pick one, an operator on a second connected server
-  cannot attach a file at all until #1086 ships.
+- **Every sender names a server now.** `useAttachmentUpload` (`ComposerAttach.tsx`) reads the open
+  chat's host off the conversation list at the gesture, through `attachmentAskTarget`, and the three
+  preload senders forward it. The unnamed path survives only for a chat the list does not hold: the
+  sole connection with one paired server, a refusal with more than one. Before this the senders sent
+  no id, waiting on #1086, and an operator with two hosts paired could not attach at all — the router
+  refused every ask as `ambiguous-server`, rendered as the `not-connected` sentence.
 
 ## Related
 

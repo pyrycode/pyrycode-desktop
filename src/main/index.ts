@@ -4,6 +4,7 @@ import {
   clipboard,
   dialog,
   ipcMain,
+  nativeImage,
   Notification,
   session,
   shell
@@ -24,6 +25,7 @@ import { createPairingConfirmation } from './pairingConfirmation'
 import { parsePairingPayload } from './pairingPayload'
 import { selectRelayPolicy } from './relayPolicy'
 import { selectWindowPresentation, type WindowPresentation } from './windowPresentation'
+import { selectDockIcon } from './dockIcon'
 import { registerPairingHandler } from './pairingHandler'
 import { registerPairingStatusHandler } from './pairingStatusHandler'
 import { registerUnpairServerHandler } from './unpairHandler'
@@ -180,6 +182,29 @@ function isSameTarget(url: string, allowed: string): boolean {
 }
 
 app.whenReady().then(() => {
+  // #1446: the drawn app icon on the dock. Only a dev run reaches this — see selectDockIcon, whose
+  // false-first isPackaged gate keeps a shipped build's bundle icon authoritative — and it is set once
+  // here rather than per window, because the dock icon belongs to the process and outlives every
+  // window the `activate` handler at the bottom opens.
+  //
+  // LOADED FIRST AND CHECKED, rather than handing `setIcon` the path: setIcon THROWS on a path it
+  // cannot read (measured — "Failed to load image from path"), and this is the first statement in
+  // whenReady, so a missing file would reject this whole promise and take the launch down — no
+  // window, no IPC, no connection — for a cosmetic dev affordance. createFromPath returns an empty
+  // image instead of throwing, which makes the check the guard. The warn is deliberate: setIcon
+  // accepts an empty image happily and silently leaves Electron's own default in place, so without
+  // it a moved or pruned build/ would present as "the ticket never worked".
+  const dockIcon = selectDockIcon({
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    appPath: app.getAppPath()
+  })
+  if (dockIcon) {
+    const icon = nativeImage.createFromPath(dockIcon)
+    if (icon.isEmpty()) console.warn(`dock icon unreadable at ${dockIcon}`)
+    else app.dock.setIcon(icon)
+  }
+
   // Deny every renderer permission request except the one the app actually needs (camera, microphone,
   // geolocation, notifications, and the rest stay denied). A compromised renderer cannot prompt its way
   // to anything not on this list.

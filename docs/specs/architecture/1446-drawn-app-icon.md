@@ -120,3 +120,33 @@ in a package overview. Not written here.
   Electron's behaviour; if it throws, the call needs a guard, and that guard is a `## Revisions` entry.
 - Is the residual difference against the node's render purely antialiasing? Confirm at the visual
   review; a structural residual means the gradient transcription is wrong, not the rasterizer.
+
+## Revisions
+
+**2026-09-14 — both open questions resolved; the first one changed the design.**
+
+1. **`dock.setIcon` throws on an unreadable path**, rather than no-opping as the Design section
+   assumed — measured against Electron 33 on darwin: `setIcon('/definitely/not/here.png')` raises
+   *"Failed to load image from path"*. Because the call is the first statement in `whenReady`, a
+   missing `build/icon.png` would reject that promise and take the entire launch down — no window, no
+   IPC, no connection — for a cosmetic dev affordance. The guard the question anticipated therefore
+   ships: the root loads the file through `nativeImage.createFromPath`, which returns an EMPTY image
+   instead of throwing (measured the same run), and calls `setIcon` only when it is non-empty. The
+   empty branch warns rather than staying silent, because `setIcon` accepts an empty image without
+   complaint and leaves Electron's default in place — a silent miss would present as "the ticket never
+   worked". `selectDockIcon` stays pure: it still answers only *which file*, and the guard is three
+   lines at the composition root, where the I/O belongs.
+2. **The residual against the node's render is antialiasing, not structure.** The shipped 256 ICO
+   entry differs from the node's own render by a mean absolute channel difference of 1.576 — the same
+   figure the pre-implementation candidate measurement gave, so the gradient transcription introduced
+   nothing. The only large per-channel differences are the RGB of fully transparent corner pixels,
+   where the value is not observable. The two renders are visually indistinguishable.
+
+**Evidence gap, recorded rather than worked around.** AC2's dock is OS chrome outside the app's
+window, so the only direct capture is `screencapture`, and this host has not granted the terminal
+Screen Recording — it fails with *"could not create image from display"*. Per the shared visual-review
+recipe that is a prerequisite failure to report, not to evade. What is proven instead: a real
+`npm run dev` ran to a live relay connection with the icon call as the first statement of `whenReady`,
+so it cannot have thrown; and a probe run shows `createFromPath` on the committed master yields a
+non-empty 512² image and `app.dock.setIcon` accepts it without throwing. The pixels on the dock tile
+are the one link a human still has to eyeball.

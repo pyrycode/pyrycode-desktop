@@ -100,7 +100,8 @@ export function translateModalEvent(
         ...('reasonType' in event ? { reasonType: event.reasonType } : {}),
         ...('blockedPath' in event ? { blockedPath: event.blockedPath } : {}),
         ...('description' in event ? { description: event.description } : {}),
-        ...('defaultToNo' in event ? { defaultToNo: event.defaultToNo } : {})
+        ...('defaultToNo' in event ? { defaultToNo: event.defaultToNo } : {}),
+        ...('alwaysAllow' in event ? { alwaysAllow: event.alwaysAllow } : {})
       }
     case 'modalDismissed':
       return { type: 'dismissed', modalId: event.modalId, outcome: event.outcome, source: event.source }

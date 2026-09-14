@@ -127,6 +127,8 @@ export type RealDaemonOptions = {
   // permission prompt as an answerable modal_shown — the desktop#483 gap the PTY live-buffer path
   // cannot close. "pty" pins the default explicitly. Config-file only; the daemon has no runner flag.
   interactiveRunner: '' | 'pty' | 'stream-json'
+  /** Scenario opt-in: rule offers require the daemon's stdio permission path. */
+  stdioPermissionPrompt: boolean
   // #483/T9 — pair the device WITH `pyry pair --allow-remote-permissions`. The daemon fail-closes a
   // remote permission answer on the device's grant (modal_resolve_v2.go: MayAnswerRemotePermission),
   // so without it a relayed modal renders but the "allow" is denied and the turn never completes. The
@@ -191,6 +193,7 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
   seedPromoted: [false, { option: true }],
   skipPermissions: [true, { option: true }],
   interactiveRunner: ['', { option: true }],
+  stdioPermissionPrompt: [false, { option: true }],
   allowRemotePermissions: [false, { option: true }],
   claudeModel: ['haiku', { option: true }],
   requiredCapabilities: [[], { option: true }],
@@ -216,6 +219,7 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
       seedPromoted,
       skipPermissions,
       interactiveRunner,
+      stdioPermissionPrompt,
       allowRemotePermissions,
       claudeModel,
       requiredCapabilities,
@@ -358,15 +362,14 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
 
       // #483/T9 — select the interactive runner for THIS spawned daemon. resolveConfigPath() is
       // $HOME/.pyry/config.json and HOME is daemonHome below, so a config here is the daemon's own.
-      // Written only when a runner is requested; "" leaves the file absent → the daemon's PTY default,
-      // byte-identical to today. The `-pyry-relay` flag overrides relay_url, so the file needs only the
-      // one field (config.Load overlays it onto DefaultConfig).
-      if (interactiveRunner !== '') {
+      // Defaults leave the file absent. Only the permission drive enables stdio rule offers.
+      if (interactiveRunner !== '' || stdioPermissionPrompt) {
         const pyryDir = join(daemonHome, '.pyry')
         await mkdir(pyryDir, { recursive: true, mode: 0o700 })
         await writeFile(
           join(pyryDir, 'config.json'),
-          JSON.stringify({ interactive_runner: interactiveRunner }),
+          JSON.stringify({ ...(interactiveRunner !== '' ? { interactive_runner: interactiveRunner } : {}),
+            ...(stdioPermissionPrompt ? { stdio_permission_prompt: true } : {}) }),
           { mode: 0o600 }
         )
       }

@@ -71,6 +71,29 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
+**#1409 (2026-09-14) — the dispatcher's authenticated gate PASSED, confirming AC4's session-permission checkbox live.**
+`real-claude-permission-modal.spec.ts`'s `real claude session checkbox grants repeated Bash use only in
+the current session` now opts the fixture into `stdio_permission_prompt: true` (retaining the stream
+runner, `skipPermissions: false` and remote permission approval), observes an offered checkbox, checks
+it, explicitly Confirms allow, and observes the witness Bash command's effect; a repeat of the identical
+command in the same session produces a fresh effect with no second permission event, and a fresh session
+in the same workspace raises a new permission request before any fresh effect. Result: 19 executed, 19
+passed, 0 failed, 0 skipped, at `feature/1409` `e49ea05a1d` merged with `origin/main` `3f6f3e1e83`
+(0 commits behind before the merge), exit 0, wall clock 101.0s. The dispatcher moved the ticket to In
+Documentation and removed `needs-real-claude`. The tier's file/spec count is unchanged at 19 tests in
+19 files — `real-claude-permission-modal.spec.ts` was modified, not added — so no
+`PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED` floor change is owed.
+
+Getting here took three gate reworks, recorded in the plan's Revisions for the mechanism, not repeated
+here: the first live attempt (`98627c7`) found the checkbox absent because the installed dedicated test
+binary predated upstream #2365's grant/mixed-offer fixes; #1413's running-daemon mint-order fix (below)
+then briefly reddened all 19 specs at fixture setup for an unrelated pairing-contract reason and was
+absorbed via merge; the final rework (`e49ea05`) dropped a 120s post-Cancel `turnEnd` wait whose premise
+was wrong — the daemon has no `modal_cancel` coverage for the stdio-permission-prompt path, so nothing
+upstream proves what a cancelled prompt resolves to, and AC4 does not require it. That specific daemon-
+side observation (a cancelled stdio permission prompt produces no `turn_end` within 120s) is out of
+scope for this client repo and unrepeated here; it is recorded for the maintainer in the plan and PR.
+
 **#1413 (2026-09-13/14) — the real tier's device credential now mints from the running daemon, not offline.**
 Upstream pyrycode#2393 (daemon `8a850505`) turned bare `pyry pair` into a running-service operation, which
 had reddened the whole tier at fixture setup (`pyry pair exited with code 1 … connect: no such file or

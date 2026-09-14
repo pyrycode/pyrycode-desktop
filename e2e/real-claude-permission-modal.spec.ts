@@ -1,181 +1,148 @@
-import { type Locator } from '@playwright/test'
-import { existsSync } from 'node:fs'
+import { type Page } from '@playwright/test'
+import { existsSync, statSync, utimesSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
-// Tier-3 real-claude e2e (#432) — the DEEPEST liveness net in the suite: the permission modal proven over
-// the REAL stack. It exercises the whole interactive-permission chain end to end — a freshly-spawned real
-// `pyry` daemon → real claude actually BLOCKING on a tool permission → the daemon relaying `modal_shown`
-// to the remote desktop → the desktop answering "allow" → the tool running → the turn completing. Every
-// prior modal test SCRIPTS the modal: the unit tests (interactiveRoundtrip / PermissionModal /
-// modalResolution) and the fake-stack twin (permission-modal-answer-paths.spec.ts, #426) push a
-// `daemon.pushFrame`. This proves ONE answer path — allow — over the REAL chain, where the `modal_shown`
-// is emitted by a real daemon relaying a real claude tool prompt, not a scripted push.
-//
-// It clones real-claude.spec.ts's precondition VERBATIM (pair against a freshly-spawned real `pyry` on
-// `--model haiku`, bridged to the built Electron window through #251's content-blind routing relay, then
-// CREATE the conversation through the New-discussion FAB and reach the connected `.conversation` with Send
-// enabled) and swaps only the turn body: send a prompt engineered to force exactly ONE permission-gated
-// tool call, answer the relayed dialog "allow", and prove the turn completes. Same clone-then-swap shape
-// as the merged siblings #445 (interrupt) and #446 (queue-drop).
-//
-// The client wiring is fully shipped and fake-stack-proven; this adds NO production `src/` change. The app
-// advertises `CAPABILITY_INTERACTIVE` at hello (daemonConnection.ts, #179), whose vocabulary explicitly
-// includes modal prompts — that is what makes the daemon relay claude's permission prompt to the remote
-// desktop instead of resolving it PTY-side. `PermissionModal` is mounted unconditionally on the
-// conversation surface (ConversationScreen.tsx:201) and renders whenever `modalStore.outstanding[0]` exists,
-// driven purely by an inbound `modal_shown` — NOT gated on the interactive-timeline flip. So no un-inert
-// step; the dialog renders the moment the prompt arrives.
-//
-// REAL-CLAUDE DIVERGENCES from the fake twin #426 (mirrors the #445/#446 doc discipline):
-//   - NO `daemon.pushFrame`: the real daemon owns the modal lifecycle. The `modal_shown` is emitted by a
-//     real claude actually reaching a tool call and blocking on the permission, not a scripted push.
-//   - NO outbound frame capture: the daemon is a SEPARATE process behind the content-blind relay, so #426's
-//     in-process `capturingModalFake` / captured `modal_answer` assertions are unavailable. Every assertion
-//     reads DOM text / visibility / counts only.
-//   - The option labels + which option is default are DAEMON-SUPPLIED here (the daemon relays claude's
-//     actual permission options), not test-controlled as in #426 — see § "Answering allow" below.
-//   - Accepted limitation (OQ-e, cloned from #445): DOM-only over the real wire CANNOT *prove* the turn
-//     ended BECAUSE of the allow. The mitigation is structural: the tool is permission-gated, so `turn_end`
-//     can only follow the tool running, which can only follow the answer. Do NOT try to strengthen it into a
-//     causation proof by asserting reply content.
-//
-// It inherits the real-claude harness for free: `spawnClaude` defaults true (claude on `--model haiku`) and
-// the full skip-gate (resolves `pyry` + `claude` on PATH + a credential BEFORE any resource; testInfo.skip
-// on any miss). The ONLY override is `skipPermissions: false` (#432's single-consumer fixture option), which
-// drops `--dangerously-skip-permissions` so a tool call blocks on a permission decision instead of
-// auto-running. It is auto-discovered by playwright.real-claude.config.ts's `testMatch: /real-.*\.spec\.ts$/`
-// (runs under `npm run e2e:real-claude`, the operator pre-ship gate) and IGNORED by the default `npm run
-// e2e`. When the real stack is unavailable the spec SKIPS cleanly — an unrun test, never a hard failure.
-//
-// SECRET HYGIENE (AC5): every assertion reads DOM text / visibility / counts only; the tool-call prompt is a
-// non-secret nonce literal, content NEVER asserted; the pairing payload is built the real-claude.spec.ts way
-// and never echoed into a message. No failure diagnostic serialises the token, keys, or the transcript;
-// trace / screenshot / video stay disabled (the real-claude config already disables all three).
-
-// The fixture overrides that make the modal reach — and be answerable by — this desktop client:
-//   - skipPermissions:false (#432) drops `--dangerously-skip-permissions`, so the tool call blocks on a
-//     per-tool permission decision instead of auto-running.
-//   - interactiveRunner:'stream-json' (#483/T9) routes the daemon's interactive path onto the streamsup
-//     runner. On the PTY path the daemon read the permission dialog by screen-scraping and misclassified it
-//     on the live buffer (desktop#483), so the modal never surfaced. The stream runner instead wires
-//     claude's approval tool to the daemon, which emits the modal_shown deterministically.
-//   - allowRemotePermissions:true (#483/T9) pairs the device with the remote-permission grant. The daemon
-//     fail-closes the answer on that grant, so without it the dialog would render but "allow" would be
-//     denied and the turn would never complete — the second gate the PTY red masked.
-// Every sibling spec sets none of these → PTY default, plain pairing, identical args as today.
-test.use({ skipPermissions: false, interactiveRunner: 'stream-json', allowRemotePermissions: true })
-
-// --- Selectors (verbatim from real-claude.spec.ts) ---------------------------
-// turn_end appends a turnBoundary that drops the streaming cursor ▎ (U+258E) — its absence is the per-turn
-// quiesce signal.
-const CURSOR_SELECTOR = '.bubble__cursor'
-
-// --- Timeouts (verbatim from real-claude.spec.ts) ----------------------------
-// Generous to absorb real daemon startup latency (registration on /v1/server is async after spawn) plus a
-// handshake re-dial or two; Send-enabled is the readiness signal.
+// Authenticated execution belongs to the dispatcher. An absent offer fails this scenario;
+// fixture prerequisite skips never establish acceptance. Keep trace/video/screenshots disabled.
+test.use({ skipPermissions: false, interactiveRunner: 'stream-json',
+  stdioPermissionPrompt: true, allowRemotePermissions: true })
 const HANDSHAKE_TIMEOUT_MS = 45_000
-// One turn = cold PTY claude (spawn + model load + first reply). Also bounds the post-answer completion wait.
 const TURN_TIMEOUT_MS = 120_000
-// Whole spec: handshake + one permission-gated turn + headroom.
-const SPEC_TIMEOUT_MS = 300_000
+const STALE_SECONDS = 1
 
-// --- New constant ------------------------------------------------------------
-// The wait for the first permission dialog after Send. Cold PTY claude must spawn, load the model, and reach
-// the tool call before it blocks on the permission, so bound it as generously as a whole turn.
-const MODAL_TIMEOUT_MS = 120_000
+// Retain only routing/observation metadata, never whole events, transcripts, rules or answer tokens.
+type Drive = {
+  created: { id: string; cwd: string }[]
+  modals: { conversationId: string; allowLabel: string | null; offered: boolean }[]
+  completed: string[]
+  sessions: Map<string, { id: string; received: number }>
+  off: () => void
+}
+type DriveWindow = typeof window & { permissionDrive: Drive }
+const driveCounts = (page: Page, conversationId: string) => page.evaluate(id => {
+  const drive = (window as DriveWindow).permissionDrive
+  return { modals: drive.modals.filter(m => m.conversationId === id).length,
+    completed: drive.completed.filter(c => c === id).length }
+}, conversationId)
 
-// Choose a supplied affirmative row, then Continue; only a non-default needs Confirm.
-// The wire's labels and default remain authoritative, and no option is sent by selection alone.
-async function answerAllow(dialog: Locator): Promise<void> {
-  await dialog
-    .locator('.question-panel__option').filter({ hasText: /^(yes|allow|approve|accept|grant)\b/i })
-    .first()
-    .click()
-  await dialog.getByRole('button', { name: 'Continue', exact: true }).click()
-  const confirm = dialog.getByRole('button', { name: 'Confirm', exact: true })
-  if ((await confirm.count()) > 0) await confirm.click()
+async function sessionId(page: Page, conversationId: string): Promise<string> {
+  const before = await page.evaluate(id => (window as DriveWindow).permissionDrive.sessions.get(id)?.received ?? 0,
+    conversationId)
+  await page.evaluate(id => window.pyry.sendCommand({ type: 'requestSessionSettings',
+    payload: { conversation_id: id } }), conversationId)
+  await expect.poll(() => page.evaluate(id => (window as DriveWindow).permissionDrive.sessions.get(id)?.received ?? 0,
+    conversationId), { timeout: HANDSHAKE_TIMEOUT_MS }).toBeGreaterThan(before)
+  return page.evaluate(id => (window as DriveWindow).permissionDrive.sessions.get(id)!.id, conversationId)
 }
 
-test('real claude relays a per-tool permission modal that answering "allow" clears, completing the turn', async ({
-  relay,
-  daemon,
-  page
-}) => {
-  test.setTimeout(SPEC_TIMEOUT_MS)
-
-  // A per-run nonce so reruns differ (defeats any accidental reply caching), never asserted on. Engineered
-  // to force exactly ONE deterministic, permission-gated tool call — a single file write, no read/list first
-  // — so a single `modal_shown` surfaces and the run stays cheap on haiku. The write lands in the daemon's
-  // -pyry-workdir (the harness temp workdir). Content is NEVER asserted (Date.now() is fine in a spec).
-  const runNonce = Date.now()
-  const message =
-    `Create a file named ${runNonce}.txt in the current directory whose exact contents are the word ok. ` +
-    `Use a single write and do nothing else — do not read or list any files first. run=${runNonce}`
-
-  // --- Precondition (AC1): pair against the real daemon, dial the test relay's /v1/client leg. ---
-  // Verbatim from real-claude.spec.ts: the app dials `${relay.url}/v1/client` unchanged (NOT pyry's emitted
-  // prod relay); the loopback affordance (#97) accepts the ws://127.0.0.1 relay.
-  const payload = encodePairingPayload({
-    server: daemon.pairFields.server,
-    relay: `${relay.url}/v1/client`,
-    token: daemon.pairFields.token,
-    server_static_pubkey: daemon.pairFields.server_static_pubkey
-  })
-
-  const conversation = page.locator('.conversation')
-  const sendButton = page.getByRole('button', { name: 'Send' })
+test('real claude session checkbox grants repeated Bash use only in the current session', async ({ relay, daemon, page }) => {
+  test.setTimeout(420_000)
+  // Same grantable Bash command as TestInteractiveStreamStdioAlwaysAllowIsSessionScoped.
+  const witness = join(daemon.workdir, 'pyrycode-always-allow-witness.txt')
+  const message = 'Use the Bash tool to run exactly `touch pyrycode-always-allow-witness.txt`. ' +
+    'Do not use another tool. After it completes, reply with one short word.'
+  const modified = (): number => existsSync(witness) ? statSync(witness).mtimeMs : 0
+  const panel = page.locator('.permission-panel')
   const composer = page.getByPlaceholder('Message…')
-  // Current-chat FIFO permission panel; questionnaire controls have their own request path.
-  const dialog = page.locator('.permission-panel')
+  const send = page.getByRole('button', { name: 'Send', exact: true })
 
-  await pairFromUnpairedLaunch(page, payload)
-
-  // --- Create the conversation THROUGH THE UI (#448) — the operator flow, not a pre-bound seed. ---
-  // The seeded row renders only after the real daemon's `conversations` reply arrives on the connected edge,
-  // so its visibility IS the connected gate; only then click the FAB, which fires a real create at the real
-  // daemon and navigates on `conversation_created`. Send is enabled once the thread is connected.
-  await expect(page.locator('.channel-list__row-open')).toBeVisible({
-    timeout: HANDSHAKE_TIMEOUT_MS
-  })
-  await page.getByRole('button', { name: 'New discussion' }).click()
-  await expect(conversation).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
-  await expect(sendButton).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
-
-  // --- Send the one-tool-call prompt (AC3). ---
-  await composer.fill(message)
-  await sendButton.click()
-
-  // --- CORE liveness proof (AC3): the real daemon relayed claude's per-tool permission prompt as a
-  //     `modal_shown`, and it rendered on the desktop as the answerable dialog. ---
-  // This is THE tier-3 assertion. A timeout here is a GENUINE liveness signal — the daemon build under test
-  // did not relay the per-tool prompt to the interactive client (it resolved it PTY-side) — not a flake to
-  // soften (OQ-a). Note the fixture already suppresses claude's OWN startup dialogs (trust pre-seed +
-  // skipDangerousModePermissionPrompt); the per-tool permission prompt is the distinct behavior under test.
-  await expect(dialog).toBeVisible({ timeout: MODAL_TIMEOUT_MS })
-
-  // --- Answer "allow" from the desktop (AC4). ---
-  await answerAllow(dialog)
-
-  // --- The prompt clears (AC4) — the answer posted, the outstanding prompt left `outstanding[0]`. ---
-  await expect(dialog).toHaveCount(0, { timeout: MODAL_TIMEOUT_MS })
-
-  // --- The turn completes (AC4): the claude→daemon→relay→desktop→answer→claude→completion loop closes. ---
-  // Effect-observable proof that answering "allow" let the tool run: with a permission-gated tool call,
-  // `turn_end` (cursor cleared) can only follow the tool running, which can only follow the allow. A timeout
-  // here means the answer never closed the loop (daemon stuck on the permission, or the tool hung) — a
-  // genuine red, do NOT soften.
-  await expect(page.locator(CURSOR_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
-  // AC4 completion signal — tool EFFECT, not reply content. The permission-gated Write lands its file in the
-  // daemon's shared workdir (claude's cwd, exposed by the fixture per #487). The file can only exist if the
-  // tool ran, which can only follow the "allow", so its presence is the deterministic proof the answer closed
-  // the loop. This supersedes the old nonEmptyAssistantCount text-reply check: the prompt forces a single
-  // tool-only turn to keep exactly one modal, and real haiku emits no assistant TEXT on such a turn.
-  await expect
-    .poll(() => existsSync(join(daemon.workdir, `${runNonce}.txt`)), {
-      timeout: TURN_TIMEOUT_MS,
-      message: 'permission-gated Write never landed its file in the daemon workdir after "allow"'
+  await page.evaluate(() => {
+    const drive: Drive = { created: [], modals: [], completed: [], sessions: new Map(), off: () => {} }
+    drive.off = window.pyry.onDaemonEvent(event => {
+      if (event.type === 'conversationCreated') drive.created.push({ id: event.conversation.id, cwd: event.conversation.cwd })
+      if (event.type === 'modalShown' && event.class === 'permission') drive.modals.push({
+        conversationId: event.conversationId,
+        allowLabel: event.options.find(option => option.id === 'allow_once')?.label ?? null,
+        offered: event.alwaysAllow?.offered === true
+      })
+      if (event.type === 'turnEnd') drive.completed.push(event.conversationId)
+      if (event.type === 'runConfigReceived' && event.sessionId) drive.sessions.set(event.conversationId, {
+        id: event.sessionId, received: (drive.sessions.get(event.conversationId)?.received ?? 0) + 1
+      })
     })
-    .toBe(true)
+    ;(window as DriveWindow).permissionDrive = drive
+  })
+  try {
+    await pairFromUnpairedLaunch(page, encodePairingPayload({ server: daemon.pairFields.server,
+      relay: `${relay.url}/v1/client`, token: daemon.pairFields.token,
+      server_static_pubkey: daemon.pairFields.server_static_pubkey }))
+    await expect(page.locator('.channel-list__row-open')).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
+
+    const create = async (count: number): Promise<string> => {
+      await page.getByRole('button', { name: 'New discussion', exact: true }).click()
+      await expect.poll(() => page.evaluate(() => (window as DriveWindow).permissionDrive.created.length),
+        { timeout: HANDSHAKE_TIMEOUT_MS }).toBe(count)
+      // Compare paths inside the page: failed assertions expose only a Boolean.
+      expect(await page.evaluate(workdir => (window as DriveWindow).permissionDrive.created.at(-1)?.cwd === workdir,
+        daemon.workdir)).toBe(true)
+      await expect(send).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
+      return page.evaluate(() => (window as DriveWindow).permissionDrive.created.at(-1)!.id)
+    }
+    const submit = async (): Promise<void> => { await composer.fill(message); await send.click() }
+    const conversationId = await create(1)
+    expect(existsSync(witness)).toBe(false)
+    await submit()
+    await expect(panel).toBeVisible({ timeout: TURN_TIMEOUT_MS })
+    expect(await page.evaluate(id => (window as DriveWindow).permissionDrive.modals
+      .filter(modal => modal.conversationId === id).at(-1)?.offered, conversationId),
+    'The daemon must offer rules; the dedicated test binary requires upstream #2365, including the mixed-offer fix.'
+    ).toBe(true)
+    const checkbox = panel.getByRole('checkbox', { name: "Don't ask again this session for:", exact: true })
+    await expect(checkbox).toBeVisible()
+    await expect(checkbox).not.toBeChecked()
+    expect(await panel.locator('.permission-panel__rules li').count()).toBeGreaterThan(0)
+    expect(existsSync(witness)).toBe(false)
+    await panel.locator('.permission-panel__session-offer label').click()
+    await expect(checkbox).toBeChecked()
+    const allowLabel = await page.evaluate(() => (window as DriveWindow).permissionDrive.modals.at(-1)?.allowLabel)
+    expect(typeof allowLabel === 'string').toBe(true)
+    if (!allowLabel) throw new Error('The supplied permission has no allow_once option')
+    await panel.getByRole('radio', { name: allowLabel, exact: true }).press('Space')
+    await panel.getByRole('button', { name: 'Continue', exact: true }).click()
+    await expect(checkbox).toBeChecked()
+    await expect(panel.getByRole('button', { name: 'Confirm', exact: true })).toBeVisible()
+    expect(existsSync(witness)).toBe(false)
+    await panel.getByRole('button', { name: 'Confirm', exact: true }).click()
+    await expect.poll(modified, { timeout: TURN_TIMEOUT_MS }).toBeGreaterThan(STALE_SECONDS * 1000)
+    await expect.poll(async () => (await driveCounts(page, conversationId)).completed,
+      { timeout: TURN_TIMEOUT_MS }).toBe(1)
+    await expect(panel).toHaveCount(0)
+    const originalSession = await sessionId(page, conversationId)
+
+    utimesSync(witness, STALE_SECONDS, STALE_SECONDS)
+    expect(modified()).toBe(STALE_SECONDS * 1000)
+    const beforeRepeat = await driveCounts(page, conversationId)
+    await submit()
+    // Observing every permission event catches a transient panel as well as a held one.
+    await expect.poll(async () => {
+      const counts = await driveCounts(page, conversationId)
+      if (counts.modals !== beforeRepeat.modals) return 'unexpected-permission'
+      return counts.completed > beforeRepeat.completed && modified() > STALE_SECONDS * 1000 ? 'fresh-effect' : 'waiting'
+    }, { timeout: TURN_TIMEOUT_MS }).toBe('fresh-effect')
+    expect((await driveCounts(page, conversationId)).modals).toBe(beforeRepeat.modals)
+    expect(await sessionId(page, conversationId) === originalSession).toBe(true)
+
+    utimesSync(witness, STALE_SECONDS, STALE_SECONDS)
+    const freshConversation = await create(2)
+    expect(freshConversation !== conversationId).toBe(true)
+    const beforeFresh = await driveCounts(page, freshConversation)
+    await submit()
+    // A new session in the SAME workspace must ask before a fresh tool effect.
+    await expect(panel).toBeVisible({ timeout: TURN_TIMEOUT_MS })
+    expect((await driveCounts(page, freshConversation)).modals).toBeGreaterThan(beforeFresh.modals)
+    expect(modified()).toBe(STALE_SECONDS * 1000)
+    expect(await sessionId(page, freshConversation) !== originalSession).toBe(true)
+    await expect(checkbox).not.toBeChecked()
+    // The acceptance is complete above: the fresh session asked before any effect. Cancelling is
+    // this client's own path, so the drive asserts only what this repo owns — the unconditional
+    // local dismissal and the still-absent effect. What the daemon does with a stdio permission
+    // prompt after a modal_cancel has no upstream proof, so no assertion here waits on it.
+    await panel.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(panel).toHaveCount(0)
+    expect(modified()).toBe(STALE_SECONDS * 1000)
+  } finally {
+    await page.evaluate(() => { (window as DriveWindow).permissionDrive.off(); delete (window as any).permissionDrive })
+  }
 })

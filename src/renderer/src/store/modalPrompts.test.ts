@@ -93,6 +93,21 @@ describe('reduceModal — install', () => {
     expect(state.outstanding[0]).toHaveProperty('defaultToNo', false)
   })
 
+  it('retains only a continuous, identical ordered offer, including batched removal/restoration', () => {
+    const offer = { offered: true, rules: ['Read', 'Bash(touch:*)'] }
+    const first = reduceModal(initialModalState, shown('offer', { alwaysAllow: offer }))
+    const same = reduceModal(first, shown('offer', { alwaysAllow: { ...offer, rules: [...offer.rules] } }))
+    expect(same.outstanding[0].alwaysAllow).toBe(first.outstanding[0].alwaysAllow)
+    for (const replacement of [{}, { alwaysAllow: { offered: false, rules: [] } },
+      { alwaysAllow: { offered: true, rules: [...offer.rules].reverse() } },
+      { alwaysAllow: { offered: true, rules: ['Changed'] } }, { class: 'trust' as const, alwaysAllow: offer }]) {
+      const changed = reduceModal(same, shown('offer', replacement))
+      const restored = reduceModal(changed, shown('offer', { alwaysAllow: { ...offer } }))
+      expect(restored.outstanding[0].alwaysAllow).not.toBe(first.outstanding[0].alwaysAllow)
+    }
+    expect(reduceModal(first, shown('offer')).outstanding[0]).not.toHaveProperty('alwaysAllow')
+  })
+
   it.each(['plain reason', { checks: [false, 0, null] }, null, false, 0])('holds context and drops it on replacement: %j', (reason) => {
     const context = { reason, reasonType: 'rule', blockedPath: '/workspace/file',
       description: 'Additional context', defaultToNo: true }

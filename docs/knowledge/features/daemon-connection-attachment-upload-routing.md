@@ -37,7 +37,7 @@ refusals into one `null` — a distinct composer sentence would need either a va
 already shown, or a re-derivation of the resolver's own branch at the call site, duplicating a decision
 `serverRouter.ts` owns — and because minting a distinct `AttachmentUploadFailure` member would
 compile-force a fourth production file (`attachmentUploadCopy.ts`) for a sentence with no differently
-actionable instruction behind it, until #1086 gives the composer a server surface to name. The
+actionable instruction behind it, while the composer had no server to name. The
 operator-facing diagnostic stays precise regardless: `resolve` logs `ambiguous-server` vs
 `server-not-connected` under `server-route-refused` either way.
 
@@ -46,10 +46,10 @@ resolver's unnamed path unconditionally — the sole connection when the registr
 entry, a refusal when it holds more. `buildDeps(undefined)` is called after the `pickerOpen` gate, so a
 suppressed second picker builds nothing.
 
-**No renderer sender was wired to send a `serverId` in this slice.** The composer has no per-server
-surface to source one from until #1086 lands, so both shipped senders
-(`dropAttachmentFile`/`pasteAttachmentImage`, `src/preload/index.ts`) still emit the bare ask, and every
-upload today still takes the unnamed path — single-server behaviour is unchanged byte-for-byte. See
+**No renderer sender was wired to send a `serverId` in this slice**, and the senders were wired later,
+by hand: `useAttachmentUpload` now reads the open chat's host off the conversation list at the gesture
+(`attachmentAskTarget`, `ComposerAttach.tsx`) and all three preload senders forward it. Until then every
+upload took the unnamed path, which a second paired host turned into a refusal on every attach. See
 [Attachment upload](attachment-upload.md) and [Attachment upload — the guard and the
 drive](attachment-upload-guard-and-drive.md) for the channel-contract and guard detail, and
 `docs/specs/architecture/1129-attachment-upload-server-routing.md` for the full plan and security

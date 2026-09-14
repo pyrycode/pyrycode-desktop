@@ -5,6 +5,8 @@ import { AttachmentFileIcon } from './AttachmentFileIcon'
 import { ComposerAttachmentImage } from './ComposerAttachmentImage'
 import { isImageAttachmentName } from './attachmentIsImage'
 import { attachmentUploadOutcomeCopy } from './attachmentUploadCopy'
+import { conversationListStore, selectConversations } from '../../store/conversationListStore'
+import { serverIdForOpenConversation } from './unpairAction'
 // #1055: the take's shape is declared with its CONSUMER (composerSend's `takeAttachments` dep), so the
 // pure send helper never names this React module. See PendingAttachmentTake's own docblock.
 import type { PendingAttachmentTake } from './composerSend'
@@ -710,6 +712,37 @@ export function drainPendingAttachments(holder: {
 }
 
 /**
+ * What the three attach asks name: the open chat, and the paired server it belongs to.
+ *
+ * THE HOST IS READ OFF THE CONVERSATION LIST AT THE GESTURE, the way `connectedConversationHostNow`
+ * reads it for the send — and read once rather than live, for the reason the conversation id is: the
+ * background process resolves the ask against the registry when it arrives, and a chat switch after
+ * the click must not re-point a transfer already on the wire. Until the host rode the ask every entry
+ * went out unnamed and took the resolver's one-connection fallback, which is a refusal the moment a
+ * second host is paired — the composer rendered it as "Not connected" for an operator connected to
+ * both, and #1129 had deferred the wiring to a composer surface #1086 never built.
+ *
+ * `serverIdForOpenConversation` answers null when the list does not hold the chat, or holds it twice,
+ * and the ask then OMITS THE KEY rather than carrying `serverId: undefined`: structured clone preserves
+ * an undefined own property and the guard admits one, but the bare ask is the documented unnamed shape
+ * and the one the router's fallback is written for. Not `connectedConversationHostNow`, deliberately:
+ * that helper answers null for a paired host that is offline, and refusing here would leave the
+ * operator with no sentence at all, where the background process already has the honest one.
+ *
+ * Exported for its own tests; the three senders in `useAttachmentUpload` are its only callers.
+ */
+export function attachmentAskTarget(conversationId: string): {
+  conversationId: string
+  serverId?: string
+} {
+  const serverId = serverIdForOpenConversation(
+    selectConversations(conversationListStore.getState()),
+    conversationId
+  )
+  return serverId === null ? { conversationId } : { conversationId, serverId }
+}
+
+/**
  * The container half: the held outcome, the pending set, and the intent that clears the outcome.
  *
  * EPHEMERAL, SCREEN-LOCAL, READ BY NOTHING ELSE — ADR 0006's `useState` shape, not ADR 0004's module
@@ -816,7 +849,7 @@ export function useAttachmentUpload({ conversationId }: { conversationId: string
     // name one exists here to send. The id is the open chat's daemon-minted one, read at the click —
     // the ask carries it once and the background process spreads it onto every chunk, so a chat switch
     // after this line cannot re-point the transfer (pyrycode #2146 would refuse it if it could).
-    window.pyry.requestAttachmentUpload({ conversationId })
+    window.pyry.requestAttachmentUpload(attachmentAskTarget(conversationId))
   }
 
   /**
@@ -835,7 +868,7 @@ export function useAttachmentUpload({ conversationId }: { conversationId: string
   const dropFile = (file: File): void => {
     if (conversationId === null) return // #1205, `requestAttach`'s reason
     setOutcome(null)
-    window.pyry.dropAttachmentFile(file, { conversationId })
+    window.pyry.dropAttachmentFile(file, attachmentAskTarget(conversationId))
   }
 
   /**
@@ -856,19 +889,18 @@ export function useAttachmentUpload({ conversationId }: { conversationId: string
    * about the image — not a byte, a dimension, a length or a name — is knowable here. `window.pyry` is
    * dereferenced only in this closure and the two above, never during render.
    *
-   * ⭐ STILL TRUE OF THE CALL, AND NOW QUALIFIED AT THE SHAPE (#1129). `AttachmentPasteRequest`
-   * admits an optional `serverId` naming which paired server the image is for, so the ask is no
-   * longer literally empty — but this sender passes none and `pasteAttachmentImage()` still takes
-   * no argument, because the composer has nothing to source a server id from until #1086. Every
-   * sentence above survives the widening regardless: a routing key is not clipboard content, it is
-   * resolved against the registry's held entry set in the background process and discarded, and
-   * nothing about the image becomes knowable here. When this composer does acquire a server, this
-   * is the call that names it.
+   * ⭐ STILL TRUE OF THE IMAGE, AND THE ASK NOW NAMES TWO LOOKUP KEYS. `AttachmentPasteRequest`
+   * admits an optional `serverId` naming which paired server the image is for (#1129), and this
+   * sender passes it: `attachmentAskTarget` reads the open chat's host off the conversation list at
+   * the keystroke, beside the conversation id #1205 made required. Every sentence above survives
+   * regardless: a routing key is not clipboard content, it is resolved against the registry's held
+   * entry set in the background process and discarded, and nothing about the image becomes knowable
+   * here. Until the host rode the ask, a second paired server refused every paste as ambiguous.
    */
   const pasteImage = (): void => {
     if (conversationId === null) return // #1205, `requestAttach`'s reason
     setOutcome(null)
-    window.pyry.pasteAttachmentImage({ conversationId })
+    window.pyry.pasteAttachmentImage(attachmentAskTarget(conversationId))
   }
 
   /**

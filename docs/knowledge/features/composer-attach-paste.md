@@ -66,12 +66,13 @@ next is unambiguously about the paste just made. Like `dropFile`, it does **not*
 pending-attachments set — see [Composer attach § Pending
 attachments](composer-attach-pending.md#pending-attachments-1039).
 
-**One argument since #1205, the destination; still no server.** `AttachmentPasteRequest` gained an
-optional `serverId` in #1129 that this call site has nothing to source until #1086, and a *required*
-`conversationId` in #1205 that it sources from the screen's open conversation — the daemon refuses a
-chunk naming none (pyrycode#2143). So `pasteAttachmentImage({ conversationId })` carries exactly one
-value, and it is a lookup key the daemon validates, not clipboard content. See [Attachment upload § The
-paste ask](attachment-upload.md#the-paste-ask-and-the-refused-split-1032) for the full reasoning.
+**Two lookup keys: the destination since #1205, and its host.** `AttachmentPasteRequest` gained an
+optional `serverId` in #1129 and a *required* `conversationId` in #1205; the daemon refuses a chunk
+naming no conversation (pyrycode#2143), and the router refuses an ask naming no server once two hosts
+are paired. `attachmentAskTarget` reads both off the screen's open conversation and the conversation
+list at the keystroke, so `pasteAttachmentImage(attachmentAskTarget(conversationId))` carries two
+lookup keys and no clipboard content. See [Attachment upload § The paste
+ask](attachment-upload.md#the-paste-ask-and-the-refused-split-1032) for the full reasoning.
 
 **The handler, in `Composer` (`ConversationScreen.tsx`):**
 

@@ -41,10 +41,16 @@ daemon filesystem path) still reaches the DOM only inside the label string as au
 children — the `toolCall`/`userText` posture, unchanged since #286. Both rules stay decorative
 `aria-hidden` styled `div`s, not semantic `<hr>`s.
 
-Row clearance (16px above/below) is the *sum* of `.conversation__thread`'s `gap: var(--space-3)` (12px)
-and the row's own `--space-1` padding (4px) — not `--space-4`, which would double the container's
-existing gap into 28px. AC5 (equal halves under resize; a long unbroken workspace path wrapping inside
-the row rather than stranding a rule) was settled as review-by-inspection in the spec, since nothing
+Row clearance (16px above/below) was originally the *sum* of `.conversation__thread`'s `gap:
+var(--space-3)` (12px) and the row's own `--space-1` padding (4px) — not `--space-4`, which would have
+doubled the container's then-gap into 28px. [#1444](../../specs/architecture/1444-chat-top-bar-and-inset.md)
+retuned the thread's gap to `--space-4` (16px) for the chat card's own inset and deleted the row's
+padding outright rather than zeroing it, since the gap alone now draws the same 16px clearance this
+section originally split two ways — the CSS comment predicted this exact silent breakage ("if that
+container gap ever changes, this number is what silently breaks") and it broke exactly that way, caught
+by neither the new ticket's own spec nor any other, only by re-reading the comment. AC5 (equal halves
+under resize; a long unbroken workspace path wrapping inside the row rather than stranding a rule) was
+settled as review-by-inspection in the spec, since nothing
 under `renderToStaticMarkup` can measure layout — but the PR discovered that the Playwright Electron tier
 actually *can* resize the window (`app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]
 .setSize(w, h))`; `page.setViewportSize` still does not apply to an Electron page), so AC5 was verified

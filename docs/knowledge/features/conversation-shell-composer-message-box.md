@@ -25,6 +25,23 @@ colour from what is behind it, which is why the box read wrong too although its 
 `e2e/question-answer-continue.spec.ts` pins the panel. Reported by the operator on 2026-09-05, the same
 day #1058 merged, and fixed by hand on `main` rather than through the pipeline.
 
+**`.composer` took the card's own sides and foot, and deliberately left the top, since
+[#1444](../../specs/architecture/1444-chat-top-bar-and-inset.md)** drew the chat card's inset
+(24 top / 20 sides / 16 foot on `.conversation`, mirroring the sidebar's own top-bar-and-inset ticket,
+\#1443 — the two cards' *feet* differ on purpose, 20 on the sidebar and 16 here, both as their own Figma
+node draws them, and are not meant to converge). `.composer`'s padding went from its own
+`var(--space-2) var(--space-3) var(--space-3)` to `var(--space-2) 0 0`: the card's 20px sides and 16px
+foot replace the block's own, which is what puts the message box across the full content width. The
+top 8 (`--space-2`) was kept rather than zeroed — `.composer-status` is a sibling in the `.conversation`
+column, which declares no gap, so that 8px of `.composer`'s own padding-top is the *whole* distance
+between the status row's bottom edge and the message box's top edge in every connection state; #1444's
+own AC did not ask to move it, and zeroing it with the rest would have deleted a drawn value rather than
+converged on one. **`.question-panel`, the
+same slot's other occupant, still carries the retired `--space-3` side padding** — it is drawn by its
+own Figma node (347:6018), which #1444 did not read, so the permission/question surface sits 12px in
+from the message box's edge until a ticket reads that node and converges it. Not a bug in #1444; a
+scope boundary it named explicitly rather than silently redrawing a node it hadn't read.
+
 **`.composer__row` *is* the box now**, not a bare flex row holding a filled textarea beside a filled send
 disc. It keeps its class — three shipped specs and #940's type-ahead anchor depend on it — and gains the
 ground, the 6px corner (`--radius-xs`) and 12px vertical padding (`--space-3`); the textarea

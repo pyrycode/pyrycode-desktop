@@ -10,7 +10,7 @@ Part of [Conversation shell](conversation-shell.md); see that document for what 
 
 ```
 ConversationScreen            .conversation        (flex column, full height, position: relative)
-├── ThreadOverflowMenu         .conversation__overflow (trigger + menu, gated on onBack, #276; grew from 1 to 3 items in #962; the band's last survivor since #1064 deleted the leading arrow it used to balance, and now floats alone over the thread's top-right corner)
+├── ThreadOverflowMenu         .conversation__overflow (trigger + menu, gated on onBack, #276; grew from 1 to 3 items in #962; the band's last survivor since #1064 deleted the leading arrow it used to balance; the card's own drawn in-flow top bar since #1444 — a 24px trigger justified to the trailing edge over a full-width 1px rule, no longer an absolute box)
 ├── ConnectionBannerControl    .conversation__banner (null unless not-connected, top of thread, #279; the first thing under the overflow menu's gate since #1061 deleted the header row that used to sit here — and, since #1064, the first thing in `.conversation` at all)
 ├── WorkspaceChip              .conversation__workspace-chip (null unless empty + unpromoted, #278; onChange opens WorkspacePickerSheet, #383)
 ├── Timeline                  .conversation__thread (null when empty; the single thread surface since #179, #203)
@@ -103,11 +103,19 @@ The empty pane `back` used to reach from inside the thread is not gone — it is
 other ways, all landing on route `list` (`back` is absolute in `nextPairedRoute`): the shell enters at
 `list`, [Settings](#unpair-control-166-deleted-by-1061) and Archive return there through their own back
 controls, and the delete and archive exits dispatch `back` too. What went is the deselect *from inside
-the open thread* — the arrow was its only source. The thread starts ~56px higher (the deleted control's
-48px plus its `--space-1` margins, in a flex column with no top padding), and
-`.conversation__overflow` — `position: absolute`, reserving no flow space — now floats alone over the
-thread's top-right corner rather than sitting beside a control in flow. Both are expected consequences,
-not regressions to compensate for: no padding, spacer or reserved band was added to hold the old offset.
+the open thread* — the arrow was its only source.
+
+**Through #1064 to #1444**, the thread started ~56px higher (the deleted control's 48px plus its
+`--space-1` margins, in a flex column with no top padding) and `.conversation__overflow` —
+`position: absolute`, reserving no flow space — floated alone over the thread's top-right corner rather
+than sitting beside a control in flow. Both were expected consequences of the deletion, not regressions
+to compensate for: no padding, spacer or reserved band was added to hold the old offset.
+[#1444](../../specs/architecture/1444-chat-top-bar-and-inset.md) ended that interim by drawing the card's
+own top bar (Figma `Content` 106:3321): `.conversation` gained the card's 24/20/16 inset,
+`.conversation__overflow` became an in-flow bar — a 24px trigger justified to the trailing edge, a 1px
+`--color-primary` rule at 60% opacity 20px under it, 16px of the bar's own foot — and the first message
+row now sits at the drawn 97px below the card's top edge. The back affordance is still not coming back;
+only the interim absolute-positioned overflow trigger that stood in for it is gone.
 
 The back arrow used to sit ahead of a separate unpair header row, a deliberate interim pending a future
 top-app-bar ticket that would consolidate back + title + overflow + unpair into the one bar Figma 16-9

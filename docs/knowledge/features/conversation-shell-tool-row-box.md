@@ -114,7 +114,7 @@ and the pending row's 50% opacity dims the shadow with the box.
 ## Consecutive tool rows join into one stack (#1073)
 
 A run of tool rows now draws as one stack with exactly one border line at each join, rather than as
-separate boxes 12px apart on `.conversation__thread`'s flex gap. Two selectors carry all of it, each naming
+separate boxes apart on `.conversation__thread`'s flex gap. Two selectors carry all of it, each naming
 one half of a join — `.tool-row + .tool-row` the lower row, `.tool-row:has(+ .tool-row)` the upper — so a
 lone row, or a tool row beside a message bubble, matches neither and is byte-identical to what #1102 already
 shipped. The markup does not change: every tool row is already a direct child of the thread's flex column
@@ -123,10 +123,16 @@ shipped in Chromium 105; this app runs Electron 33 (Chromium 130) with no other 
 needed.
 
 **The join is a negative margin, not a gap change** — `gap` cannot be varied per pair.
-`margin-top: calc(-1 * var(--space-3) - 1px)` on the lower row cancels the column's 12px gap and overlaps
+`margin-top: calc(-1 * var(--space-4) - 1px)` on the lower row cancels the column's gap and overlaps
 the pair by the border's own 1px, landing both borders on the same pixel band. Tokenised against
-`--space-3` rather than written as `-13px`, since the gap must follow that token if it ever moves; the
-`1px` stays a literal because it is the border width, not a spacing step.
+the thread's own gap token rather than written as a literal negative pixel value, since the gap must
+follow that token if it ever moves; the `1px` stays a literal because it is the border width, not a
+spacing step. #1444 retuned the thread's gap `--space-3` → `--space-4` (12px → 16px) and did not move
+this margin with it, leaving `16 - 13 = 3px` of daylight plus the border at every join — caught by this
+section's own `tool-row-toggle.spec.ts`, which reads the margin against the thread's *live* gap rather
+than a hardcoded value for exactly this reason, and fixed the same week. A rule measured off a
+container's spacing token is a dependent of that token, not a one-time copy of its value — grep the
+token being retuned across the file before calling a container resize local.
 
 **A run's internal corners are square; only its outer corners keep the 6px** — Juhana ruled this
 2026-09-04. The Figma node for the run (384:7103) is *not* the answer here: it is literally two `Tool use`

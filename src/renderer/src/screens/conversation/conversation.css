@@ -16,10 +16,32 @@
    same wash: it was already here for the run-config sheet, and it already lifts this whole subtree above
    the wrapper's ::before. Its second reason is now load-bearing too — do not remove it if #177's sheet
    ever moves. */
+/* #1444 — THE CARD'S OWN INSET (Figma `Content` 106:3321, pt-[24px] px-[20px] pb-[16px]). This column had
+   none until now: the pane's edge WAS the thread's edge, and the drawn top bar arriving above the rows is
+   what makes an inset meaningful rather than decorative. `box-sizing: border-box` is not optional beside
+   `height: 100%` — index.css sets no global reset (the rule pairedShell.css records), so under the default
+   content-box these three paddings would be ADDED to the pane's height and the column would overflow its
+   own card. `.channel-list`'s block carries the identical pair for the identical reason.
+
+   THE 16 AT THE FOOT IS NOT THE SIDEBAR'S 20, AND THE DIFFERENCE IS DRAWN. `Channels and chats`
+   (103:2959) is pb-[20px] and this node is pb-[16px]; both are as their own node draws them. Do not
+   converge them.
+
+   NO `gap` HERE, and the absence is load-bearing. The node's 12px column gap is carried as
+   `.conversation__thread`'s own vertical padding instead, because a gap on this element would apply
+   between EVERY child — and the 8px between `.composer-status` and `.composer` (the drawn Input area's
+   own gap-[8px], which .composer's block records as the whole distance) would silently become 20.
+
+   The padding also does nothing to the Run configuration sheet: an absolutely positioned child resolves
+   `inset: 0` against its containing block's PADDING box, which here is the whole element, so the sheet
+   still covers the pane edge to edge. `.conversation`'s border box likewise still equals
+   `.paired-shell__pane`'s, which is what e2e/paired-shell-card.spec.ts's checkpoint 4 asserts. */
 .conversation {
   display: flex;
   flex-direction: column;
   height: 100%;
+  box-sizing: border-box;
+  padding: var(--space-6) var(--space-5) var(--space-4);
   color: var(--color-on-surface);
   font-family: var(--font-sans);
   /* Containing block for the Run configuration sheet overlay (#177), which is absolutely positioned
@@ -37,13 +59,14 @@
    finding an epitaph. It survives in `docs/` — the package overviews and the frozen per-ticket archive
    record the control's history, which is theirs to keep and is what the documentation phase updates.
 
-   THE THREAD STARTS HIGHER BY THE DELETED BOX — 48px plus its --space-1 margins — because this column
-   has no top padding and that child was `flex: 0 0 auto`. That lift IS the change, not a regression to
-   absorb: do not add padding, a spacer or a reserved band to hold the old offset. `.conversation__overflow`
-   is `position: absolute` and reserved no flow space, so it now floats over the thread's top-right corner
-   instead of sitting beside a control in flow — also expected, and interim: the header row comes back
-   DRAWN (a channel title and a channel settings button), and the overflow menu is itself mobile-era
-   chrome a later ticket retires once #683 lands the footer's model and effort controls. */
+   #1444 ENDED THE INTERIM THIS NOTE USED TO DESCRIBE. Through that ticket the paragraph here read "the
+   thread starts higher by the deleted box, and `.conversation__overflow` floats over its top-right corner
+   — both expected, both interim". The drawn top bar is what replaced it: the column now takes the card's
+   24px top padding, the overflow control is an in-flow bar above the thread rather than an absolute box
+   over it, and the first message row sits at the drawn 97 from the card's top edge. The back affordance
+   itself is still deleted and still not coming back — do not add a spacer, a reserved band or a leading
+   control to hold its old offset. The overflow MENU remains mobile-era chrome that a later ticket retires
+   once #683 lands the footer's model and effort controls; only its placement has been drawn. */
 
 /* #279 — the prominent, disconnected-only connection banner across the top of the thread, above the
    message list. (It used to be described as sitting below the header row; #1061 deleted that row.)
@@ -54,14 +77,16 @@
    --color-error accent border (the only error role token on desktop; no new theme tokens) — with
    body-medium on-surface text, deliberately a step up from a muted body-small caption.
    flex: 0 0 auto so it pushes the thread down rather than overlaying it (the
-   header/composer convention, never growing or shrinking). --space-4 horizontal padding aligns it with
-   the thread. margin: 0 resets the <p> default. No Figma node (the mobile file draws only the connected
-   thread); sourced from the locked mobile design doc "Connection state banner (top, only when not
-   connected)". */
+   header/composer convention, never growing or shrinking). NO horizontal padding since #1444: this rule
+   has always stated that its x is the thread's, and the thread's own --space-4 is what that ticket
+   deleted when the card took the drawn 20px inset. The alignment is unchanged; the element that carries
+   it moved one level out. margin: 0 resets the <p> default. No Figma node (the mobile file draws only the
+   connected thread); sourced from the locked mobile design doc "Connection state banner (top, only when
+   not connected)". */
 .conversation__banner {
   flex: 0 0 auto;
   margin: 0;
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-3) 0;
   background: var(--color-surface-container-high);
   color: var(--color-on-surface);
   border-left: 4px solid var(--color-error);
@@ -75,12 +100,14 @@
    thread showing the workspace `cwd` the discussion will run in, with a placeholder "Change" affordance
    (the #157 Workspace Picker seam). No Figma node (the mobile file draws only the populated thread — the
    documented #148 gap); sourced from the locked mobile design doc pill. The wrapper is flex: 0 0 auto
-   with the thread's --space-4 horizontal inset (the .conversation__banner convention), a flex row so the
-   pill left-anchors and sizes to content, sitting above the empty surface and pushing it down. */
+   with the thread's horizontal inset (the .conversation__banner convention) — which since #1444 is the
+   card's own 20 on .conversation, so this rule states it by NOT padding rather than by matching a
+   --space-4 the thread no longer has — a flex row so the pill left-anchors and sizes to content, sitting
+   above the empty surface and pushing it down. */
 .conversation__workspace-chip {
   flex: 0 0 auto;
   display: flex;
-  padding: var(--space-3) var(--space-4) 0;
+  padding: var(--space-3) 0 0;
 }
 
 /* The pill itself — the .tool-row__chip idiom (inline-flex, --space-2 gap, --space-2/--space-3 padding,
@@ -194,6 +221,37 @@
    (clientWidth 616 -> 601). Reading `.channel-list` and `.composer__input` back as `auto` in the same run
    is what proves the read discriminates, and is the same assertion that pins them as untouched: the
    composer textarea's bar past five lines is a deliberate signal (#1056), not an oversight. */
+/* #1444 — THE VERTICAL PADDING IS THE CARD'S COLUMN GAP, CARRIED HERE. `Content` (106:3321) is
+   gap-[12px] between its three sections, and the 12 above the first row and below the last are both that
+   gap. It is a padding on this element rather than a `gap` on `.conversation` because a gap there would
+   apply between every child of the column and would turn the drawn 8px between `.composer-status` and
+   `.composer` into 20 — see .conversation's own block.
+
+   NO HORIZONTAL INSET ON THE ROWS: the card's 20px is theirs. The drawing's `Message area` (132:4171) is
+   full-width inside the inset frame with no strip of its own, so the content box sits exactly on the
+   card's. Two rules that state their x as "the thread's" followed it out: `.conversation__banner` and
+   `.conversation__workspace-chip`.
+
+   BUT THE LEFT PADDING IS BORROWED BACK, and #1444 shipped without it once — the regression PR #1453's
+   first push carried. This element clips on BOTH axes: `overflow-y: auto` makes the other axis compute to
+   `auto` too, and a scroll container clips at its PADDING box, where left-side overflow in LTR is
+   unreachable by scrolling. A three-digit ordered-list marker is what lives out there — the
+   `.bubble__markdown` list rule works the budget out in full, and its answer is that `100.` reaches 36px
+   left of the row's content edge, 20 of which .bubble's own inline padding covers. The remaining 16 was
+   this element's inline padding until the rows moved to the card's edge, and `e2e/assistant-whitespace`
+   reads it as `threadPaddingLeftPx` in exactly that sum.
+
+   So the strip is taken back the way `.channel-list__tree` takes the sidebar's 20 for its scrollbar: a
+   negative margin widens the border box, an equal padding returns the content box to where it was. The
+   rows are unmoved and the clip box gains the 16 the marker paints into, which lands on the card's own
+   20px inset with 4 to spare. LEFT ONLY — the scrollbar edge needs nothing, being hidden
+   (`scrollbar-width: none`, above) and taking no width either way.
+
+   The gap is the message area's own gap-[16px], one step up from the 12 it carried while the rows sat in
+   an uninset pane. TWO RULES ARE MEASURED OFF IT and moved with it, both silently wrong at the old value:
+   the tool-row join margin (`.tool-row + .tool-row`), which cancels this gap before overlapping by a
+   border, and `.session-delimiter`'s padding, which tops this gap up to the clearance its own block
+   draws. */
 .conversation__thread {
   flex: 1 1 auto;
   min-height: 0;
@@ -201,8 +259,9 @@
   scrollbar-width: none;
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-4);
+  gap: var(--space-4);
+  margin-left: calc(-1 * var(--space-4));
+  padding: var(--space-3) 0 var(--space-3) var(--space-4);
 }
 
 /* The inert fallback for the rule above — see its comment. `scrollbar-width: none` is what hides the bar on
@@ -857,7 +916,9 @@
    needed, because the overhang lands in padding that already exists: `10.` needs 28px and overhangs 12px
    into .bubble's own 20px (#969 — 14px when this was written), and the bubble's fill paints its padding
    box, so the marker lands ON the bubble;
-   `100.` needs 40px and overhangs 24px into that 20 plus .conversation__thread's 16 (:240) = 36px. That 36
+   `100.` needs 40px and overhangs 24px into that 20 plus .conversation__thread's left 16 = 36px. Since #1444
+   that 16 is a borrowed clip strip rather than an inset on the rows — see that rule, which names this
+   paragraph as the reason it is there at all, and do not zero it without reading both. That 36
    is a HARD edge rather than a scrollbar — the thread declares overflow-y: auto, so its other axis computes
    to `auto`, a scroll container clips at its PADDING box, and left-side overflow in LTR is unreachable by
    scrolling. Indent also COMPOUNDS with depth and lists are where depth actually lives: at --space-6 a
@@ -1407,16 +1468,19 @@
    the chip and empty cases — a regression in the two states this ticket does not touch. The group's own
    min-height: 24px is what restores it.
 
-   Horizontal padding --space-3 matches .composer's, so the icon aligns with the composer's left edge —
-   the load-bearing alignment. justify-content: space-between right-aligns whichever occupant the slot
-   holds with no spacer. */
+   NO horizontal padding since #1444, and the alignment it used to state by matching .composer's --space-3
+   is the same alignment stated by matching its zero: the card took the drawn 20px inset, both blocks gave
+   up their own sides, and the icon still starts at the composer's left edge. The drawing agrees
+   independently — `Status area` (I347:5408;111:3525) is a full-width row at x=0 of the Input area, and it
+   is the Status GROUP inside it that carries pr-[8px] py-[4px]. justify-content: space-between
+   right-aligns whichever occupant the slot holds with no spacer. */
 .composer-status {
   flex: 0 0 auto;
   min-height: 24px;
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  padding: 0 var(--space-3);
+  padding: 0;
 }
 
 /* The left group (Figma 112:3530): the turning mark then the status label, --space-2 apart — the Figma's
@@ -1830,8 +1894,9 @@
    the smallest element containing both, so the rendered result is identical to the region's.
 
    NOTHING ELSE FROM THE REGION NEEDED A HOME. Its flex/column/gap/padding existed to make a standalone
-   strip sit thread-consistent, and .conversation__thread already declares the same gap: var(--space-3)
-   and padding: var(--space-2) var(--space-4) — so a merged row inherits the rhythm with no rule at all. */
+   strip sit thread-consistent, and .conversation__thread already declares that rhythm as its own gap and
+   padding — so a merged row inherits it with no rule at all, at whatever step those are currently at
+   (--space-4 and --space-3 since #1444; the point is that the row restates neither). */
 .message-row--queued {
   opacity: 0.5;
 }
@@ -1925,7 +1990,7 @@
    THE SHADOW (the 2026-09-05 shadow fix, Figma "Tool use" 134:4939): --shadow-thread as a box-shadow, the
    value every element of the message area casts. The design puts it on each single row and ONCE on the
    grouped stack (384:7103). THIS RULE IS NOW THE LONE ROW'S HALF ONLY: #1073 joined consecutive rows, which
-   falsified the argument that used to stand here — that "the thread's 12px gap is wider than the shadow's 9px
+   falsified the argument that used to stand here — that "the thread's gap is wider than the shadow's 9px
    reach (4 down plus a 5px blur), so no row's shadow lands on the next" — since closing that gap is exactly
    what #1073 does. A row with a tool-row successor now computes `box-shadow: none` and the run's last row
    carries the group's one shadow; see the #1073 comment below for why the last rather than the first. A row
@@ -1976,10 +2041,14 @@
    Each selector targets one side of a join; a visible non-tool row or a depth change ends the stack.
 
    THE MARGIN. gap cannot be varied per pair, so the join is a negative top margin on the lower row: the
-   column's gap and the item's margin both apply, so the pair's effective separation is 12 + (-13) = -1px and
+   column's gap and the item's margin both apply, so the pair's effective separation is 16 + (-17) = -1px and
    the lower row's 1px top border lands on exactly the pixel band the upper row's bottom border occupies. One
-   line, not two and not a 2px-looking one. Tokenised rather than -13px so the gap follows --space-3 if it
-   ever moves; the 1px stays a literal because it is the BORDER WIDTH, not a spacing step. On the lower row
+   line, not two and not a 2px-looking one. IT IS THE THREAD'S GAP THIS CANCELS, so it is written as whichever
+   token `.conversation__thread` declares — #1444 moved that gap --space-3 -> --space-4 and left this at the
+   old token, which is how `tool-groups` and `tool-row-toggle` came back measuring 4px of daylight at every
+   join (16 - 13 = 3, plus the border). e2e/tool-row-toggle.spec.ts states the invariant outright, reading the
+   thread's LIVE gap rather than -13px, and that is the spec to trust over any figure written here; the 1px
+   stays a literal because it is the BORDER WIDTH, not a spacing step. On the lower row
    rather than Figma's own mb-[-1px] on the upper one — equivalent under a flex gap, and `+` is the cheaper
    selector, so :has() is spent only where the property genuinely lives on the upper element.
 
@@ -1992,7 +2061,7 @@
 
    THE SHADOW, and it is the half most easily missed. The design casts --shadow-thread ONCE on the wrapper
    frame where a lone row (134:4939) casts its own, and .tool-row's own comment above says in as many words
-   that per-row shadows are safe only because "the thread's 12px gap is wider than the shadow's 9px reach" —
+   that per-row shadows are safe only because "the thread's gap is wider than the shadow's 9px reach" —
    which is precisely what this rule falsifies. Left alone every interior row would drop 9px of shadow across
    its join onto the row below and smear ~2.5px past the stack's sides at each join, and where a pending row
    precedes a resolved one its atomic paint group (see below) would put that shadow fully on top. So every row
@@ -2023,7 +2092,7 @@
    and e2e/thread-scroll-pin.spec.ts, which each drive exactly one row and so form no run. */
 .tool-row + .tool-row,
 .tool-group-row--joined-above > .tool-row {
-  margin-top: calc(-1 * var(--space-3) - 1px);
+  margin-top: calc(-1 * var(--space-4) - 1px);
   border-top-left-radius: 0;
   border-top-right-radius: 0;
 }
@@ -2597,19 +2666,25 @@
 /* #286, redrawn #690 — the session-boundary delimiter (Figma node 119-3843): ONE 16px-tall row, rule /
    centred label / rule, marking where a /clear, an idle eviction or a workspace change started a fresh
    session. The desktop chat screen's inline separator, replacing #286's mobile-derived (node 16-35)
-   title stacked above a full-width rule. A child of .conversation__thread's flex column (inherits its
-   horizontal padding). Token only — every value below exists in tokens.css.
+   title stacked above a full-width rule. A child of .conversation__thread's flex column, so it spans that
+   column's content box — the card's, since #1444. Token only — every value below exists in tokens.css.
 
    flex-wrap is left at its nowrap default, and THAT IS THE WHOLE OF AC5. Two siblings carrying an
    identical `flex: 1 0 0` split the leftover width into equal halves at every container width, with
    nothing to keep in sync — no width, no percentage — and nowrap is what makes "a rule stranded on a
    line of its own" unreachable rather than merely unobserved.
 
-   CLEARANCE ARITHMETIC: .conversation__thread (:233) is a flex column with gap: var(--space-3) = 12px,
-   which already separates this row from the messages above and below. 12 + this --space-1 = the 16px of
-   clearance the design asks for, while the row's own content box stays the Figma's exact 16px (the
-   label's line-height). Writing --space-4 here would yield 28px. Padding, not margin, as #286 used —
-   and if that container gap ever changes, this number is what silently breaks.
+   CLEARANCE ARITHMETIC, AND IT HAS ALREADY BROKEN ONCE THE WAY THIS PARAGRAPH WARNED IT WOULD.
+   .conversation__thread is a flex column whose gap already separates this row from the messages above and
+   below, and the padding here used to top that gap up to the 16px of clearance the design asks for: 12 + 4.
+   #1444 moved the thread's gap to --space-4, so the gap alone is now the whole 16 and the --space-1 that
+   stood here drew 20 — no spec reads this distance, which is exactly the silent break the old note
+   predicted. The declaration is DELETED rather than set to 0, per this file's own rule that restating a
+   settled value is how it gets lost (.session-delimiter__title's --font-mono below, .tool-row__summary):
+   a div has no UA padding, so a zero here would assert nothing. What the paragraph is for is the reason
+   there is none — this distance is a REMAINDER of the thread's gap, never a value of its own, so it comes
+   back the moment that gap drops below 16 again. The row's own content box is untouched either way at the
+   Figma's exact 16px (the label's line-height).
 
    NO SHADOW ON THE ROW, though the design draws its effect here: "Session reset" 119:3843 carries the
    --shadow-thread effect on the frame (the 2026-09-05 shadow fix). That frame has no fill, and Figma
@@ -2620,7 +2695,6 @@
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-1) 0;
 }
 
 /* The centred label (Figma node 119:3844): M3 body/small in --color-primary. No font-family — the
@@ -2705,13 +2779,23 @@
    it, so the box read wrong too until this went. .question-panel, which takes this slot, dropped the same
    paint in the same change. e2e/paired-shell-card.spec.ts pins this block transparent beside
    .conversation. Do not restore a background here without deleting the card. */
+/* #1444 TOOK THE SIDES AND THE FOOT, AND DELIBERATELY LEFT THE TOP. The card's own 20px sides and 16px
+   foot (`.conversation`) replaced this block's --space-3 pair, which is what puts the message box across
+   the full content width as `Input large` (I347:5408;347:6635) draws it, with `.composer__footer`'s
+   px-[16px] kept as the drawn `Input footer` inset. The padding-top is NOT the card's to take: it is the
+   Input area's own gap-[8px] between the Status area and the message box, which the paragraph above
+   records as the whole distance between the two, and zeroing it with the rest would have deleted a drawn
+   value. `.question-panel`, the slot's other occupant, is drawn by its own node (347:6018) and still
+   carries this block's retired --space-3 sides; converging it belongs to the ticket that reads that node.
+
+   NO background since #1099. */
 .composer {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   align-items: stretch;
   gap: var(--space-1);
-  padding: var(--space-2) var(--space-3) var(--space-3);
+  padding: var(--space-2) 0 0;
 }
 
 /* #1262 — the pending attachments, drawn between the status row and the message box (Figma `Attachment
@@ -4512,46 +4596,103 @@
   font-weight: var(--text-body-small-weight);
 }
 
-/* #276 — the thread top app bar's trailing overflow menu (Figma node 16-16): the single entry point to
-   per-conversation actions, opening the Channel Info sheet first (#155). The wrapper anchors the trigger
-   to the top-right corner of .conversation (the position: relative containing block). It balanced the
-   left-aligned back arrow across the top-bar band until #1064 deleted that arrow; this trigger is the
-   band's last survivor and now floats alone over the thread's top-right corner, which the deletion note
-   at the top of this file records as expected and interim. Absolute, so it overlays rather than pushing
-   flow — which is also why nothing reflowed into the deleted arrow's space, and why the thread simply
-   starts higher. NO explicit z-index by design: a positioned element
-   already paints above the non-positioned message thread ("above the message list"), and the
-   status-sheet / permission-modal overlays — also positioned but later in the child list — keep painting
-   above this menu by DOM order ("below the sheet overlay"). A competing z-index here would lift the menu
-   above those overlays, the very stacking regression the spec's open question flags; the menu and a
-   sheet/modal never coexist anyway (an outside-click dismisses the menu). */
+/* THE TOP BAR (#1444, Figma `Top bar` 497:1891) — #276's per-conversation overflow menu, as the chat
+   card's own first row. It is the FIRST child of the column and kept in flow: the box this replaces was
+   `position: absolute; top: --space-1; right: --space-1`, reserving no flow space and floating a 48px
+   round button over the thread's top-right corner. All three declarations are deleted, not overridden.
+   What replaces them is ordinary flow above `.conversation__thread`, which is the whole of "the bar does
+   not scroll": the thread scrolls under the rule and the bar never moves. `.channel-list__actions` is the
+   sidebar's shipped half of the same change (#1443).
+
+   WHY NOT STICKY INSIDE THE SCROLLER. A bar floating over the rows needs an opaque ground to hide what
+   passes behind it, and this card has none — #1058 deleted this column's background so the wash on
+   `.paired-shell__pane::before` could show through, and the drawing gives the bar no fill either. Taking
+   it out of the scroller is what makes the absence of a fill correct rather than a defect.
+
+   THE SCROLLPORT DELIBERATELY DID NOT MOVE. `.conversation__thread` was already the element that
+   scrolls and it still is. #1443 had to carry seven specs across when the sidebar's scrollport moved one
+   level in, because a `scrollTop` write to a non-scrolling element is a silent no-op and every spec
+   driving the old element would have failed OPEN rather than red. Fifteen specs read this thread and
+   `thread-scroll-pin` drives it exactly that way; nothing here needed them touched.
+
+   NO explicit z-index by design: a positioned element already paints above the non-positioned message
+   thread, and the status-sheet / permission-modal overlays — also positioned but later in the child list —
+   keep painting above this menu by DOM order. A competing z-index here would lift the menu above those
+   overlays; the menu and a sheet/modal never coexist anyway (an outside-click dismisses the menu).
+
+   The column's own default `align-items: stretch` is what spans the rule across the card's content box,
+   and the anchor below overrides it with `align-self: flex-end` — which is the node's justify-end on its
+   `Buttons` row. A separate full-width row element would buy nothing and would be a third class. The
+   padding-bottom is the bar's own pb-[16px], the last term of the drawn 97. */
 .conversation__overflow {
-  position: absolute;
-  top: var(--space-1);
-  right: var(--space-1);
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: var(--space-4);
 }
 
-/* The trigger — the .composer__send glyph-in-48px treatment (Figma 16-16's 48px frame around the
-   24px more_vert 16-17): a transparent round icon button, on-surface content gaining a surface tint on
-   hover and a focus-visible outline. 48px is structural component geometry (the send-square convention).
-   (It cited the back arrow for this until #1064 deleted it; the send button is the surviving twin here,
-   and `.settings__back` is the one that keeps the 48px SQUARE shape outside this file.) */
+/* THE ANCHOR (#1444) — a shrink-wrapped box around the trigger and its menu, at the bar's trailing edge.
+   It exists for two reasons that must not be separated, which is why it is one element and not two.
+
+   THE MENU'S CONTAINING BLOCK. `.conversation__overflow-menu` is `top: 100%; right: 0`, so it needs a
+   relative box that is exactly the 24px button; hung off the bar it would drop clear of the rule and the
+   bar's 16px foot before it began.
+
+   ⭐ AND THE OUTSIDE-CLICK REF. `ThreadOverflowMenu`'s dismissal is `!wrapperRef.current.contains(target)`,
+   so whatever element that ref holds defines "inside the menu". On the bar — a full-width element since
+   this ticket — a mousedown anywhere across the pane's width would have counted as inside and the menu
+   would have stopped dismissing. No shipped spec would have caught it: the twelve that click this trigger
+   all go on to click a menu ITEM. e2e/chat-top-bar-geometry.spec.ts is where that click now lives.
+   Moving the ref off this element requires moving the menu's anchor with it. */
+.conversation__overflow-anchor {
+  align-self: flex-end;
+  position: relative;
+  display: flex;
+}
+
+/* THE RULE (#1444, `Rectangle` 497:1899) — 1px, --space-5 under the button row, spanning the card's
+   content box. A SIBLING, not the bar's `border-bottom`: a border cannot carry the node's 60% without
+   fading the glyph with it, and this file paints opacity as a de-emphasis device on its own element.
+
+   ⭐ THE COLOUR'S FIGMA NAME IS NOT ITS TOKEN NAME. The node is STYLED `inverse-primary` and resolves to
+   #9dcbfc, which is this repo's --color-primary; `tokens.css` has its own --color-inverse-primary at
+   #32628d, a different colour entirely. Reach for the value, not the style name. `channels.css` records
+   the same near-miss above the sidebar's identical line (#1443); the two are not joined onto one selector
+   list because they live in different files, and these stylesheets share no selectors.
+
+   `flex: 0 0 auto` keeps a 1px box 1px tall in the column — a flex item's default `flex-shrink: 1` would
+   let it be rounded away under pressure. It sits OUTSIDE the scroller, so no scrollbar moves its trailing
+   edge. 1px is structural geometry; the 60% is opacity, not a pre-mixed colour literal. */
+.conversation__overflow-rule {
+  flex: 0 0 auto;
+  height: 1px;
+  margin-top: var(--space-5);
+  background: var(--color-primary);
+  opacity: 0.6;
+}
+
+/* The trigger (`Menu button` 497:1896) — a --space-6 box, which is the node's 24; the glyph inside it is
+   6 × 24 and carries its own dimensions in the markup, so this rule sizes the box and never the leaf.
+   `padding: 0` because the box IS the hit target at this size.
+
+   ⭐ DRAWN AT REST AND WITH NO GROUND, which is the one place the old treatment must not be copied. This
+   wore `.composer__send`'s glyph-in-48px round treatment — transparent until `:hover`, then
+   surface-container-high, with `--radius-full` — because it was never traced from a node. The drawing
+   fills the glyph --color-primary in every state it draws and gives it no circle at all, so the ground
+   rule, the radius, the 48px box and the hover rule are all deleted rather than retuned.
+   `.channel-list__settings` is the shipped block this mirrors. The `:focus-visible` outline stays, per the
+   file convention; it no longer doubles as a reveal, because there is nothing left to reveal. */
 .conversation__overflow-trigger {
-  width: 48px;
-  height: 48px;
+  width: var(--space-6);
+  height: var(--space-6);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 0;
   border: none;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--color-on-surface);
+  background: none;
+  color: var(--color-primary);
   cursor: pointer;
-}
-
-.conversation__overflow-trigger:hover {
-  background: var(--color-surface-container-high);
 }
 
 .conversation__overflow-trigger:focus-visible {
@@ -4563,8 +4704,9 @@
 }
 
 /* The opened menu surface — no Figma frame (the mobile file draws a native Android overflow menu, the
-   documented #148 gap), so an M3-idiom dropdown: right-anchored below the trigger (top: 100% of the 48px
-   wrapper, right: 0), a surface-container card with an elevation border. The .status-sheet panel surface
+   documented #148 gap), so an M3-idiom dropdown: right-anchored below the trigger (top: 100% of
+   `.conversation__overflow-anchor`, the 24px box around the trigger since #1444 — read that rule before
+   moving either offset), a surface-container card with an elevation border. The .status-sheet panel surface
    treatment (--color-surface-container-low fill, --radius-md corners, --color-outline-variant border) —
    no new color literals. */
 .conversation__overflow-menu {

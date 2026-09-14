@@ -1,7 +1,7 @@
 import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { encodeEnvelope } from '../src/main/transport/codec'
 import type { ConversationSummary, ConversationsPayload } from '../src/shared/wire/types'
-import type { Locator, Page } from '@playwright/test'
+import type { Locator } from '@playwright/test'
 
 // #1190 — the name pill the HOST row's pen and plus show on their own hover and keyboard focus, in the
 // one tier that can hover or focus anything. `vitest.config.ts` sets `environment: 'node'` and every
@@ -16,20 +16,29 @@ import type { Locator, Page } from '@playwright/test'
 // none of their seeds addresses a host row at all.
 //
 // ⭐ A BOUNDING BOX IS NOT A DETECTOR FOR A CLIP, which is why the geometry here is containment inside
-// `.channel-list` and never `toBeVisible()` or "inside the window" — #1172's finding for the same
-// treatment: a layout box comes back whether or not an ancestor clipped the pixels away. `.channel-list`
+// THE SCROLLER and never `toBeVisible()` or "inside the window" — #1172's finding for the same
+// treatment: a layout box comes back whether or not an ancestor clipped the pixels away. The scroller
 // is `overflow-y: auto`, which forces `overflow-x` off `visible` too, so it clips on BOTH axes, and
 // `.paired-shell__sidebar` is a second `overflow: hidden` outside it. The tighter ancestor is asserted.
 //
-// ⭐ THE ACTIONS-EDGE ASSERTION IS THE QUESTION THE TICKET ASKED, AND THE ANSWER IS SLACK. It asked
-// whether the Channels host row clips under its section header at scroll top, because that is exactly
-// where #1304's header pill DID collide: `.channel-list__actions` is sticky at `top: var(--space-1)`
-// resolved against the scrollport's CONTENT box, so at scroll top its bottom edge lands 4px INSIDE the
-// Channels header. The first host row of a section is one whole header box lower — MEASURED here at
-// scroll top with the list overflowing: the row's band is 104…132, the pill's top edge 106, the cluster's
-// bottom edge 76. So the band placement the three shipped pills use is reused rather than deviated from,
-// and this read is a standing statement of the relation — it would catch a cluster that grew or a sticky
-// offset that changed, but with 30px of slack it is NOT the detector for a wrong placement here.
+// ⭐ SINCE #1443 THE SCROLLER IS `.channel-list__tree`, NOT `.channel-list`. The drawn top bar split the
+// column in two: `.channel-list` is the padded card column and no longer scrolls or clips at all, and the
+// tree wrapper inside it is the scrollport. `scrollTreeTo`, the overflow precondition, `expectInsideTree`
+// and the horizontal-scroll read all name it, through ONE `tree` locator so they cannot drift apart —
+// writing `scrollTop` to an element that does not scroll is a SILENT no-op, so a read left on the column
+// would fail open rather than red.
+//
+// ⭐ THE TOP-BAR-EDGE ASSERTION IS THE QUESTION THE TICKET ASKED, AND THE ANSWER WAS ALREADY SLACK. It
+// asked whether the Channels host row clips under its section header at scroll top, because that is
+// exactly where #1304's header pill DID collide: `.channel-list__actions` was then sticky at
+// `top: var(--space-1)` resolved against the scrollport's CONTENT box, so at scroll top its bottom edge
+// landed 4px INSIDE the Channels header. The first host row of a section is one whole header box lower —
+// MEASURED at the time, at scroll top with the list overflowing: the row's band 104…132, the pill's top
+// edge 106, the cluster's bottom edge 76. So the band placement the three shipped pills use was reused
+// rather than deviated from. #1443 then moved the bar out of this scroller entirely, which turns that
+// 30px of slack into the whole tree: the relation now holds BY CONSTRUCTION. It is kept, not deleted,
+// because it is still read between two live boxes and would catch a bar that grew down into the tree —
+// but it is not, and never was, the detector for a wrong placement here.
 //
 // ⭐ THE BAND IS THAT DETECTOR, and it is also what makes containment true on the rows no test visits.
 // Each pill sits inside its host row's own 28px band (a 24px box centred on a control whose centre is the
@@ -141,14 +150,14 @@ const onlyOneShowing = async (pills: Locator): Promise<void> => {
 }
 
 // THE CRITERION. Not `toBeVisible()`, not "inside the window" — see this file's header.
-const expectInsideList = (pill: Box, list: Box, role: string): void => {
-  expect(pill.x, `${role}: left edge`).toBeGreaterThanOrEqual(list.x - EPSILON_PX)
-  expect(pill.y, `${role}: top edge`).toBeGreaterThanOrEqual(list.y - EPSILON_PX)
+const expectInsideTree = (pill: Box, tree: Box, role: string): void => {
+  expect(pill.x, `${role}: left edge`).toBeGreaterThanOrEqual(tree.x - EPSILON_PX)
+  expect(pill.y, `${role}: top edge`).toBeGreaterThanOrEqual(tree.y - EPSILON_PX)
   expect(pill.x + pill.width, `${role}: right edge`).toBeLessThanOrEqual(
-    list.x + list.width + EPSILON_PX
+    tree.x + tree.width + EPSILON_PX
   )
   expect(pill.y + pill.height, `${role}: bottom edge`).toBeLessThanOrEqual(
-    list.y + list.height + EPSILON_PX
+    tree.y + tree.height + EPSILON_PX
   )
 }
 
@@ -165,8 +174,8 @@ const expectInTheRowsBand = (pill: Box, row: Box, role: string): void => {
   )
 }
 
-const scrollListTo = (page: Page, offset: 'top' | 'bottom'): Promise<void> =>
-  page.locator('.channel-list').evaluate((el, where) => {
+const scrollTreeTo = (tree: Locator, offset: 'top' | 'bottom'): Promise<void> =>
+  tree.evaluate((el, where) => {
     el.scrollTop = where === 'top' ? 0 : el.scrollHeight
   }, offset)
 
@@ -175,7 +184,7 @@ test('the host row’s pen and plus name themselves in a pill, inside the scroll
 }) => {
   const { page, daemon } = await launchPairedApp()
 
-  const list = page.locator('.channel-list')
+  const tree = page.locator('.channel-list__tree')
   const sidebar = page.locator('.paired-shell__sidebar')
   const actions = page.locator('.channel-list__actions')
   const hostRows = page.locator('.channel-list__host')
@@ -206,20 +215,20 @@ test('the host row’s pen and plus name themselves in a pill, inside the scroll
   // list that never scrolled — which is what puts the sticky cluster in its pinned state for the
   // clearance read. Asserted rather than assumed: a window that grew, or a pitch that shrank, would
   // otherwise quietly make that claim vacuous.
-  expect(await list.evaluate((el) => el.scrollHeight > el.clientHeight + 1)).toBe(true)
+  expect(await tree.evaluate((el) => el.scrollHeight > el.clientHeight + 1)).toBe(true)
 
   // --- 2. `hostRow` IS the Channels one: the topmost host row in the list, and so the one under the
   // header the cluster overlaps. Read as a relation between the two rows rather than by index, so a tree
   // order that changed fails here rather than quietly re-aiming every assertion below at the other
   // section. ---
-  await scrollListTo(page, 'top')
+  await scrollTreeTo(tree, 'top')
   expect((await boxOf(hostRow, 'channels host row')).y).toBeLessThan(
     (await boxOf(hostRows.nth(1), 'chats host row')).y
   )
 
   // --- 3. AC1 at rest: all four pills mounted and all four hidden — a count AND a hidden-ness, since an
   // absent pill satisfies a hidden-ness vacuously, and `display: none` is what the four triggers have to
-  // change. Read with the pointer parked on the actions cluster, not on a row: the fixture's launch click
+  // change. Read with the pointer parked on the top bar, not on a row: the fixture's launch click
   // left it over the seeded row, and reading "at rest" with the pointer still there would assert a
   // reveal. ---
   await actions.hover()
@@ -239,22 +248,22 @@ test('the host row’s pen and plus name themselves in a pill, inside the scroll
   // anchored to ITS control and not to the row; then the ACTIONS-EDGE relation; then containment. ---
   const rowBox = await boxOf(hostRow, 'channels host row')
   const penPillBox = await boxOf(penPill, 'pen pill')
-  const actionsBox = await boxOf(actions, 'actions cluster')
+  const actionsBox = await boxOf(actions, 'top bar')
   expectInTheRowsBand(penPillBox, rowBox, 'pen pill')
   expect(rowBox.x + rowBox.width - (penPillBox.x + penPillBox.width)).toBeCloseTo(
     PEN_RIGHT_INSET_PX,
     0
   )
-  expect(penPillBox.y, 'pen pill: clear of the sticky actions').toBeGreaterThanOrEqual(
+  expect(penPillBox.y, 'pen pill: clear of the top bar').toBeGreaterThanOrEqual(
     actionsBox.y + actionsBox.height - EPSILON_PX
   )
-  expectInsideList(penPillBox, await boxOf(list, 'channel list'), 'pen pill')
+  expectInsideTree(penPillBox, await boxOf(tree, 'sidebar tree'), 'pen pill')
 
   // --- 6. AC2's other half, read WHILE that pill is up: the sidebar has not widened and the scroller has
   // gained no horizontal scroll. An out-of-flow box adds scrollable overflow only where it overflows
   // right or bottom, and this one grows leftward — measured rather than argued. ---
   expect((await boxOf(sidebar, 'sidebar')).width).toBeCloseTo(SIDEBAR_WIDTH_PX, 0)
-  expect(await list.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1)
+  expect(await tree.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1)
 
   // --- 7. AC1 and AC2 on the PLUS, the control 10px to the pen's right and the reason this ticket
   // exists: two bare glyphs that appear together need to say which is which. Its own name, its own band,
@@ -269,10 +278,10 @@ test('the host row’s pen and plus name themselves in a pill, inside the scroll
   const plusPillBox = await boxOf(plusPill, 'plus pill')
   expectInTheRowsBand(plusPillBox, rowBox, 'plus pill')
   expect(plusPillBox.x + plusPillBox.width).toBeCloseTo(rowBox.x + rowBox.width, 0)
-  expect(plusPillBox.y, 'plus pill: clear of the sticky actions').toBeGreaterThanOrEqual(
+  expect(plusPillBox.y, 'plus pill: clear of the top bar').toBeGreaterThanOrEqual(
     actionsBox.y + actionsBox.height - EPSILON_PX
   )
-  expectInsideList(plusPillBox, await boxOf(list, 'channel list'), 'plus pill')
+  expectInsideTree(plusPillBox, await boxOf(tree, 'sidebar tree'), 'plus pill')
 
   // --- 8. AC1's scoping clause: hovering the host row's LABEL shows nothing. Ordered after the two
   // positive reads above, so it measures the trigger's SCOPE rather than a pill that never showed. A
@@ -296,7 +305,7 @@ test('the host row’s pen and plus name themselves in a pill, inside the scroll
   // keyboard-modality heuristic and a programmatic focus after a pointer interaction does not match it,
   // so the assertion would be testing the heuristic rather than the rule. #1181's and #1304's specs
   // record the same reasoning on their own controls. ---
-  await scrollListTo(page, 'top')
+  await scrollTreeTo(tree, 'top')
   await page.locator('.channel-list__pair').first().focus()
   await page.keyboard.press('Tab')
   await expect(pen).toBeFocused()

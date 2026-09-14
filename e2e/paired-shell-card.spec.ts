@@ -254,8 +254,10 @@ test('paired shell: both panes draw the card, the backdrop draws the glow, and n
   expect(await pane.evaluate((el) => el.children.length)).toBe(0)
 
   // --- 6. The channel-list overlays still escape the sidebar (AC5). .create-channel-overlay is
-  // `position: fixed` ON PURPOSE — .channel-list is the overflow-y: auto scroll column, so an absolute
-  // overlay would scroll with the rows — and the card's `overflow: hidden` must not take that away. A
+  // `position: fixed` ON PURPOSE — .channel-list__tree is the overflow-y: auto scrollport since #1443 (the
+  // drawn top bar split it out of .channel-list, which is now the padded card column and scrolls nothing),
+  // so an absolute overlay would scroll with the rows — and the card's `overflow: hidden` must not take
+  // that away. A
   // fixed box is not clipped by an overflow ancestor, but that is the claim, not the evidence.
   //
   // boundingBox() CANNOT be the evidence: a clipped element still reports its full layout box, so it

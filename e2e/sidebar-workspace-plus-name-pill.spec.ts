@@ -1,7 +1,7 @@
 import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { encodeEnvelope } from '../src/main/transport/codec'
 import type { ConversationSummary, ConversationsPayload } from '../src/shared/wire/types'
-import type { Locator, Page } from '@playwright/test'
+import type { Locator } from '@playwright/test'
 
 // #1181 — the name pill the WORKSPACE row's plus shows on hover and on keyboard focus, in the one tier
 // that can hover or focus anything. `vitest.config.ts` sets `environment: 'node'` and every renderer spec
@@ -19,11 +19,18 @@ import type { Locator, Page } from '@playwright/test'
 // that line says why.
 //
 // ⭐ A BOUNDING BOX IS NOT A DETECTOR FOR A CLIP, which is why the geometry here is containment inside
-// `.channel-list` and never `toBeVisible()` or "inside the window" — #1172's and
+// THE SCROLLER and never `toBeVisible()` or "inside the window" — #1172's and
 // `e2e/composer-attachment-name.spec.ts`'s finding for the same treatment: a layout box comes back
-// whether or not an ancestor clipped the pixels away. `.channel-list` is `overflow-y: auto`, which forces
+// whether or not an ancestor clipped the pixels away. The scroller is `overflow-y: auto`, which forces
 // `overflow-x` off `visible` too, so it clips on BOTH axes, and `.paired-shell__sidebar` is a second
 // `overflow: hidden` outside it. The tighter ancestor is the one asserted against.
+//
+// ⭐ SINCE #1443 THE SCROLLER IS `.channel-list__tree`, NOT `.channel-list`. The drawn top bar split the
+// column in two: `.channel-list` is the padded card column and no longer scrolls or clips at all, and the
+// tree wrapper inside it is the scrollport. `scrollTreeTo`, the overflow precondition, `expectInsideTree`
+// and the horizontal-scroll read all name it, through ONE `tree` locator so they cannot drift apart —
+// writing `scrollTop` to an element that does not scroll is a SILENT no-op, so a read left on the column
+// would fail open rather than red.
 //
 // ⭐ AND THE BAND IS WHAT MAKES CONTAINMENT TRUE ON THE ROWS NO TEST VISITS. The pill sits inside the
 // head row's own 28px band (a 24px box centred on the plus, whose centre is the row's), so containment
@@ -117,19 +124,19 @@ const allHidden = async (pills: Locator): Promise<void> => {
 }
 
 // THE CRITERION. Not `toBeVisible()`, not "inside the window" — see this file's header.
-const expectInsideList = (pill: Box, list: Box, role: string): void => {
-  expect(pill.x, `${role}: left edge`).toBeGreaterThanOrEqual(list.x - EPSILON_PX)
-  expect(pill.y, `${role}: top edge`).toBeGreaterThanOrEqual(list.y - EPSILON_PX)
+const expectInsideTree = (pill: Box, tree: Box, role: string): void => {
+  expect(pill.x, `${role}: left edge`).toBeGreaterThanOrEqual(tree.x - EPSILON_PX)
+  expect(pill.y, `${role}: top edge`).toBeGreaterThanOrEqual(tree.y - EPSILON_PX)
   expect(pill.x + pill.width, `${role}: right edge`).toBeLessThanOrEqual(
-    list.x + list.width + EPSILON_PX
+    tree.x + tree.width + EPSILON_PX
   )
   expect(pill.y + pill.height, `${role}: bottom edge`).toBeLessThanOrEqual(
-    list.y + list.height + EPSILON_PX
+    tree.y + tree.height + EPSILON_PX
   )
 }
 
-const scrollListTo = (page: Page, offset: 'top' | 'bottom'): Promise<void> =>
-  page.locator('.channel-list').evaluate((el, where) => {
+const scrollTreeTo = (tree: Locator, offset: 'top' | 'bottom'): Promise<void> =>
+  tree.evaluate((el, where) => {
     el.scrollTop = where === 'top' ? 0 : el.scrollHeight
   }, offset)
 
@@ -138,7 +145,7 @@ test('the workspace plus names itself in a pill on hover and on focus, inside th
 }) => {
   const { page, daemon } = await launchPairedApp()
 
-  const list = page.locator('.channel-list')
+  const tree = page.locator('.channel-list__tree')
   const sidebar = page.locator('.paired-shell__sidebar')
   const actions = page.locator('.channel-list__actions')
   const heads = page.locator('.channel-list__workspace-head')
@@ -184,11 +191,11 @@ test('the workspace plus names itself in a pill on hover and on focus, inside th
   // The list really does overrun its own viewport, so "at scroll top" below is a position rather than a
   // list that never scrolled. Asserted rather than assumed: a window that grew, or a pitch that shrank,
   // would otherwise quietly make the claim vacuous.
-  expect(await list.evaluate((el) => el.scrollHeight > el.clientHeight + 1)).toBe(true)
+  expect(await tree.evaluate((el) => el.scrollHeight > el.clientHeight + 1)).toBe(true)
 
   // --- AC1 at rest: both pills MOUNTED and both hidden — a count AND a hidden-ness, since an absent pill
   // satisfies a hidden-ness vacuously, and `display: none` is what the two triggers below have to change.
-  // Read with the pointer parked on the actions cluster, not on a row: the fixture's launch click left it
+  // Read with the pointer parked on the top bar, not on a row: the fixture's launch click left it
   // over the seeded row, and reading "at rest" with the pointer still there would assert a reveal. ---
   await actions.hover()
   await allHidden(pills)
@@ -196,7 +203,7 @@ test('the workspace plus names itself in a pill on hover and on focus, inside th
   // --- AC1, the hover, on the CHANNELS tree's plus with the list scrolled to the top. The positive read
   // comes first; the set read beside it is what makes this "that control's pill" rather than "a pill
   // somewhere", and the exact text is what says each tree draws ITS OWN name. ---
-  await scrollListTo(page, 'top')
+  await scrollTreeTo(tree, 'top')
   await createChannel.hover()
   await expect(channelsPill).toBeVisible({ timeout: TIMEOUT_MS })
   await expect(channelsPill).toHaveText(CREATE_CHANNEL_NAME)
@@ -213,13 +220,13 @@ test('the workspace plus names itself in a pill on hover and on focus, inside th
   expect(pillBox.height).toBeCloseTo(PILL_HEIGHT_PX, 0)
   expect(pillBox.y + pillBox.height / 2).toBeCloseTo(headBox.y + headBox.height / 2, 0)
   expect(pillBox.x + pillBox.width).toBeCloseTo(headBox.x + headBox.width, 0)
-  expectInsideList(pillBox, await boxOf(list, 'channel list'), 'channels workspace pill')
+  expectInsideTree(pillBox, await boxOf(tree, 'sidebar tree'), 'channels workspace pill')
 
   // --- AC2's other half, read WHILE that pill is up: the sidebar has not widened and the scroller has
   // gained no horizontal scroll. An out-of-flow box adds scrollable overflow only where it overflows
   // right or bottom, and this one grows leftward — measured rather than argued. ---
   expect((await boxOf(sidebar, 'sidebar')).width).toBeCloseTo(SIDEBAR_WIDTH_PX, 0)
-  expect(await list.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1)
+  expect(await tree.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1)
 
   // --- AC1's scoping clause: hovering the workspace row's LABEL shows nothing. Ordered after the
   // positive read above, so it measures the trigger's SCOPE rather than a pill that never showed. A
@@ -249,7 +256,7 @@ test('the workspace plus names itself in a pill on hover and on focus, inside th
   // focus after a pointer interaction does not match it, so the assertion would be testing the heuristic
   // rather than the rule. `sidebar-row-geometry.spec.ts` records the same reasoning for this control's
   // own opacity reveal. ---
-  await scrollListTo(page, 'top')
+  await scrollTreeTo(tree, 'top')
   await channelsHead.locator('.channel-list__workspace').focus()
   await page.keyboard.press('Tab')
   await expect(createChannel).toBeFocused()

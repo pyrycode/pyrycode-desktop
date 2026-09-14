@@ -1,7 +1,7 @@
 import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { encodeEnvelope } from '../src/main/transport/codec'
 import type { ConversationSummary, ConversationsPayload } from '../src/shared/wire/types'
-import type { Locator, Page } from '@playwright/test'
+import type { Locator } from '@playwright/test'
 
 // #1172 — the name pill a sidebar row's trailing control shows on hover and on keyboard focus, in the one
 // tier that can hover or focus anything. `vitest.config.ts` sets `environment: 'node'` and every renderer
@@ -12,21 +12,29 @@ import type { Locator, Page } from '@playwright/test'
 // clips on every row.
 //
 // ⭐ A BOUNDING BOX IS NOT A DETECTOR FOR A CLIP, which is why the geometry here is written as containment
-// inside `.channel-list` and not as `toBeVisible()` or as "inside the window".
+// inside THE SCROLLER and not as `toBeVisible()` or as "inside the window".
 // `e2e/composer-attachment-name.spec.ts` states the same trap for the same treatment one screen over: a
-// layout box comes back whether or not an ancestor clipped the pixels away. `.channel-list` is
+// layout box comes back whether or not an ancestor clipped the pixels away. The scroller is
 // `overflow-y: auto`, which forces `overflow-x` off `visible` too, so it clips on BOTH axes, and
 // `.paired-shell__sidebar` is a second `overflow: hidden` outside it — a window-relative assertion would
 // pass with the pill fully cut off. The tighter ancestor is the one asserted against.
 //
+// ⭐ AND SINCE #1443 THAT ANCESTOR IS `.channel-list__tree`, NOT `.channel-list`. The drawn top bar split
+// the column in two: `.channel-list` is the padded card column and no longer scrolls or clips at all, and
+// the tree wrapper inside it is the scrollport. Every read here that depends on WHICH box scrolls moves
+// with it — `scrollTreeTo`, the overflow precondition, `expectInsideTree`, the horizontal-scroll read and
+// the high-row parking below. They share ONE `tree` locator so they cannot drift apart, and the reason is
+// that drifting apart would not redden: writing `scrollTop` to an element that does not scroll is a
+// SILENT no-op, so "scrolled to bottom" would quietly become "at top" and this drive would pass proving
+// nothing.
+//
 // ⭐ WHICH ASSERTION IS THE PLACEMENT DETECTOR — MEASURED, NOT ASSUMED. Re-pointing
 // `.channel-list__control-name` at the composer pill's own placement (`bottom: calc(100% + --space-2)`,
 // one row up) and rebuilding reddens the FIRST-ROW BAND assertion by exactly 32px. It does NOT redden any
-// containment assertion in this file, and that is worth stating rather than glossing: `.channel-list__actions`
-// is sticky at the scroller's top-right, so no hoverable control ever sits nearer the top edge than that
-// cluster's own height, and 32px of headroom survives even on the highest row a pointer can reach. So the
-// containment reads below are the CRITERION this ticket owes, and the band assertion is what makes them
-// true on rows no test visits. Both are kept; neither stands in for the other.
+// containment assertion in this file, and that is worth stating rather than glossing: every pill sits in
+// its own row's band, so containment follows from the ROW being in view and holds at any scroll position.
+// So the containment reads below are the CRITERION this ticket owes, and the band assertion is what makes
+// them true on rows no test visits. Both are kept; neither stands in for the other.
 //
 // ONE test() block, ONE launch, ONE continuous drive (the sibling pill spec's shape): each launch pays a
 // full handshake, and the ordering is load-bearing throughout — every absence assertion is placed after a
@@ -60,7 +68,7 @@ const SIDEBAR_WIDTH_PX = 400
 const EPSILON_PX = 1.5
 
 // Enough promoted rows that the Channels tree alone (a 28px pitch under a header, a host row and a
-// workspace row) overruns the 800px window the app opens at, so `.channel-list` really scrolls and the
+// workspace row) overruns the 800px window the app opens at, so the tree really scrolls and the
 // first and last rows are at genuinely different scroll positions. Deliberately not tuned to the exact
 // overflow: a taller window must still scroll here.
 const PROMOTED_ROW_COUNT = 40
@@ -121,19 +129,19 @@ const allHidden = async (pills: Locator, count: number): Promise<void> => {
 }
 
 // THE CRITERION. Not `toBeVisible()`, not "inside the window" — see this file's header.
-const expectInsideList = (pill: Box, list: Box, role: string): void => {
-  expect(pill.x, `${role}: left edge`).toBeGreaterThanOrEqual(list.x - EPSILON_PX)
-  expect(pill.y, `${role}: top edge`).toBeGreaterThanOrEqual(list.y - EPSILON_PX)
+const expectInsideTree = (pill: Box, tree: Box, role: string): void => {
+  expect(pill.x, `${role}: left edge`).toBeGreaterThanOrEqual(tree.x - EPSILON_PX)
+  expect(pill.y, `${role}: top edge`).toBeGreaterThanOrEqual(tree.y - EPSILON_PX)
   expect(pill.x + pill.width, `${role}: right edge`).toBeLessThanOrEqual(
-    list.x + list.width + EPSILON_PX
+    tree.x + tree.width + EPSILON_PX
   )
   expect(pill.y + pill.height, `${role}: bottom edge`).toBeLessThanOrEqual(
-    list.y + list.height + EPSILON_PX
+    tree.y + tree.height + EPSILON_PX
   )
 }
 
-const scrollListTo = (page: Page, offset: 'top' | 'bottom'): Promise<void> =>
-  page.locator('.channel-list').evaluate((el, where) => {
+const scrollTreeTo = (tree: Locator, offset: 'top' | 'bottom'): Promise<void> =>
+  tree.evaluate((el, where) => {
     el.scrollTop = where === 'top' ? 0 : el.scrollHeight
   }, offset)
 
@@ -142,7 +150,7 @@ test('a row control names itself in a pill on hover and on focus, inside the scr
 }) => {
   const { page, daemon } = await launchPairedApp()
 
-  const list = page.locator('.channel-list')
+  const tree = page.locator('.channel-list__tree')
   const rows = page.locator('.channel-list__row')
   // ⭐ SCOPED TO `.channel-list__row` SINCE #1181, which gave the WORKSPACE row's plus the same pill
   // class. That control lives in `.channel-list__workspace-head`, not in a row, so this scope restores
@@ -169,7 +177,7 @@ test('a row control names itself in a pill on hover and on focus, inside the scr
   // The list really does overrun its own viewport, so "the first row" and "the last row" below are at
   // different scroll positions rather than both on screen at once. Asserted rather than assumed: a window
   // that grew, or a pitch that shrank, would otherwise quietly turn the two scrolled blocks into one.
-  const overflows = await list.evaluate((el) => el.scrollHeight > el.clientHeight + 1)
+  const overflows = await tree.evaluate((el) => el.scrollHeight > el.clientHeight + 1)
   expect(overflows).toBe(true)
 
   // --- Resting: every pill is MOUNTED and every pill is hidden. A count AND a hidden-ness, not one or
@@ -181,7 +189,7 @@ test('a row control names itself in a pill on hover and on focus, inside the scr
   // --- AC1, the hover, on the FIRST row with the list scrolled to the top. The positive read comes
   // first; the set read beside it is what makes this "that control's pill" rather than "a pill somewhere".
   // ---
-  await scrollListTo(page, 'top')
+  await scrollTreeTo(tree, 'top')
   await renames.first().hover()
   const firstPill = pills.first()
   await expect(firstPill).toBeVisible({ timeout: TIMEOUT_MS })
@@ -236,13 +244,13 @@ test('a row control names itself in a pill on hover and on focus, inside the scr
   // Right-aligned to the control, so it grows LEFTWARD off the row's right edge and can reach neither
   // horizontal edge of the scroller.
   expect(firstBox.x + firstBox.width).toBeCloseTo(firstRowBox.x + firstRowBox.width, 0)
-  expectInsideList(firstBox, await boxOf(list, 'channel list'), 'first row pill')
+  expectInsideTree(firstBox, await boxOf(tree, 'sidebar tree'), 'first row pill')
 
   // --- AC3's other half, read WHILE that pill is up: the sidebar has not widened and the scroller has
   // gained no horizontal scroll. An out-of-flow box adds scrollable overflow only where it overflows right
   // or bottom, and this one grows leftward — measured rather than argued. ---
   expect((await boxOf(sidebar, 'sidebar')).width).toBeCloseTo(SIDEBAR_WIDTH_PX, 0)
-  const horizontal = await list.evaluate((el) => el.scrollWidth - el.clientWidth)
+  const horizontal = await tree.evaluate((el) => el.scrollWidth - el.clientWidth)
   expect(horizontal).toBeLessThanOrEqual(1)
 
   // --- AC1's scoping clause: hovering the row's TITLE alone shows nothing. Ordered after the positive
@@ -255,7 +263,12 @@ test('a row control names itself in a pill on hover and on focus, inside the scr
   // --- AC3 on the LAST row, with the list scrolled to the bottom: the row nearest the scroller's bottom
   // edge, which is the case a below-the-row placement clips. That row is the seeded unpromoted one, so
   // this block also carries AC1's other name. ---
-  await scrollListTo(page, 'bottom')
+  await scrollTreeTo(tree, 'bottom')
+  // Read back rather than assumed, and the only place in this drive that needs to be: `scrollTop` written
+  // to an element that does not scroll is a SILENT no-op, so a `tree` locator left pointing at the padded
+  // column would turn this block's "scrolled to bottom" into "at top" and keep every assertion below
+  // green. `scrollTreeTo(tree, 'top')` cannot carry the same guard, 0 being its own no-op.
+  expect(await tree.evaluate((el) => el.scrollTop)).toBeGreaterThan(0)
   await save.hover()
   const lastPill = pills.last()
   await expect(lastPill).toBeVisible({ timeout: TIMEOUT_MS })
@@ -263,21 +276,22 @@ test('a row control names itself in a pill on hover and on focus, inside the scr
   const lastBox = await boxOf(lastPill, 'last row pill')
   const lastRowBox = await boxOf(rows.last(), 'last row')
   expect(lastBox.y).toBeCloseTo(lastRowBox.y, 0)
-  expectInsideList(lastBox, await boxOf(list, 'channel list'), 'last row pill')
+  expectInsideTree(lastBox, await boxOf(tree, 'sidebar tree'), 'last row pill')
 
   // --- ...and on THE HIGHEST ROW A POINTER CAN REACH, mid-scroll — the case an above-the-row placement
   // clips, and the one no unscrolled read gets near: at `scrollTop: 0` the first row sits a header, a host
   // row and a workspace row below the top edge, with room above it for a pill that does not belong there.
   //
-  // ⭐ "HIGHEST REACHABLE" AND NOT "FLUSH WITH THE TOP EDGE", because the row flush with the top edge has
-  // no hoverable control at all: `.channel-list__actions` is STICKY at the scroller's top-right with
-  // `z-index: 1`, which is exactly where a row's trailing control sits, so the cluster covers it. MEASURED,
-  // not predicted — two earlier drafts scrolled a row onto the top edge and hovered its control, and both
-  // came back with the row 700px down the viewport: `hover()` scrolls its target into view, so an
-  // unhittable control makes Playwright RELOCATE the row rather than fail on it, silently dismantling the
-  // arrangement the assertion was set up on. Hence the row is parked immediately under the cluster's own
-  // bottom edge, read at runtime rather than assumed, and the post-hover re-read below is what proves it
-  // stayed there.
+  // ⭐ "HIGHEST REACHABLE" IS FLUSH WITH THE SCROLLER'S TOP EDGE SINCE #1443, and it was not before. Until
+  // then the row flush with the top edge had no hoverable control at all: `.channel-list__actions` was
+  // STICKY at the scroller's top-right with `z-index: 1`, which is exactly where a row's trailing control
+  // sits, so the cluster covered it — and the cost of that was MEASURED rather than predicted, two earlier
+  // drafts having scrolled a row onto the top edge and hovered its control, both coming back with the row
+  // 700px down the viewport, because `hover()` scrolls an unhittable target into view and so RELOCATES the
+  // row rather than failing on it, silently dismantling the arrangement the assertion was set up on. The
+  // drawn top bar sits OUTSIDE this scroller, so nothing overlaps its top edge any more and the row parks
+  // flush with it. The post-hover re-read below still proves it stayed there: that guard is about
+  // `hover()`'s relocation, which is unchanged, and it is what would catch a future overlay arriving here.
   //
   // THE ROW IS SCROLLED INTO POSITION RATHER THAN SEARCHED FOR. A third draft picked the topmost visible
   // row out of the laid-out rects; it selected the LAST row, because a divider, a second section header, a
@@ -285,34 +299,23 @@ test('a row control names itself in a pill on hover and on focus, inside the scr
   // the way that search assumed. Scrolling a KNOWN row to a known y is exact whatever the window height or
   // the tree's shape, and states the arrangement it wants instead of hunting for it. ---
   const HIGH_ROW_INDEX = 20
-  // Two readings of where that row sits: its gap below the sticky cluster (the arrangement this block
-  // sets up, so ~0) and its distance from the scroller's own top edge (what makes it the HIGH case rather
-  // than a mid-list one). Read together in one evaluate so they cannot describe two different scroll
-  // positions.
-  const rowPosition = (): Promise<{ belowActions: number; belowListTop: number }> =>
-    list.evaluate((el, index) => {
+  // ONE reading where there used to be two. The second was the row's gap below the sticky cluster, and
+  // there is no cluster inside this scroller to read against any more — the bar is the padded column's
+  // child, a level up. What is left is the reading that actually defines the case: the row's distance from
+  // the scroller's own top edge, which this block drives to 0.
+  const rowTopInTree = (): Promise<number> =>
+    tree.evaluate((el, index) => {
       const row = el.querySelectorAll('.channel-list__row')[index]
-      const actions = el.querySelector('.channel-list__actions')
-      if (actions === null) throw new Error('expected the sticky actions cluster')
-      const top = row.getBoundingClientRect().top
-      return {
-        belowActions: top - actions.getBoundingClientRect().bottom,
-        belowListTop: top - el.getBoundingClientRect().top
-      }
+      return row.getBoundingClientRect().top - el.getBoundingClientRect().top
     }, HIGH_ROW_INDEX)
-  await list.evaluate((el, index) => {
+  await tree.evaluate((el, index) => {
     const row = el.querySelectorAll('.channel-list__row')[index]
-    const actions = el.querySelector('.channel-list__actions')
-    if (actions === null) throw new Error('expected the sticky actions cluster')
-    el.scrollTop += row.getBoundingClientRect().top - actions.getBoundingClientRect().bottom
+    el.scrollTop += row.getBoundingClientRect().top - el.getBoundingClientRect().top
   }, HIGH_ROW_INDEX)
-  // Positioned before anything is hovered, so the arrangement the block needs is established rather than
-  // hoped for. `belowActions` is asserted against the cluster's own bottom rather than against its height:
-  // the scroller's top padding and the cluster's sticky offset both sit between the two, and neither is
-  // pinned anywhere, so the relation is read where the arrangement actually lives.
-  const placed = await rowPosition()
-  expect(placed.belowActions).toBeCloseTo(0, 0)
-  expect(placed.belowListTop).toBeLessThan(4 * PILL_HEIGHT_PX)
+  // Read before anything is hovered, so the arrangement the block needs is established rather than hoped
+  // for. The tree's 28px top padding is what the header used to sit in; at this scroll offset it has
+  // scrolled away, so 0 really is the clip edge and not the padding box's inside.
+  expect(await rowTopInTree()).toBeCloseTo(0, 0)
 
   const highRow = rows.nth(HIGH_ROW_INDEX)
   await highRow.locator('.channel-list__rename, .channel-list__save').hover()
@@ -320,12 +323,9 @@ test('a row control names itself in a pill on hover and on focus, inside the scr
   await expect(highPill).toBeVisible({ timeout: TIMEOUT_MS })
   // Re-read AFTER the hover: this is what says the row is still where it was put, so the containment below
   // is still measuring the case it was set up for rather than one Playwright scrolled it into.
-  const hovered = await rowPosition()
-  expect(hovered.belowActions).toBeCloseTo(0, 0)
-  expect(hovered.belowListTop).toBeLessThan(4 * PILL_HEIGHT_PX)
+  expect(await rowTopInTree()).toBeCloseTo(0, 0)
   const highBox = await boxOf(highPill, 'high row pill')
-  const listBox = await boxOf(list, 'channel list')
-  expectInsideList(highBox, listBox, 'high row pill')
+  expectInsideTree(highBox, await boxOf(tree, 'sidebar tree'), 'high row pill')
 
   // --- AC1's other half of the hover: leaving hides it. Ordered after the positive read above, so the
   // hidden-ness measures the pointer leaving rather than a pill that was never up. ---
@@ -339,7 +339,7 @@ test('a row control names itself in a pill on hover and on focus, inside the scr
   // heuristic and a programmatic focus after a pointer interaction does not match it, so the assertion
   // would be testing the heuristic rather than the rule. `sidebar-row-geometry.spec.ts` records the same
   // reasoning for the same control's opacity reveal. ---
-  await scrollListTo(page, 'top')
+  await scrollTreeTo(tree, 'top')
   await rows.first().locator('.channel-list__row-open').focus()
   await page.keyboard.press('Tab')
   await expect(renames.first()).toBeFocused()

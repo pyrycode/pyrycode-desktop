@@ -74,9 +74,10 @@
 /* #1058 — THE PANE CARD, one rule for both wrappers (Figma Channels and chats 103:2959 and Content
    106:3321, byte-identical treatment: bg-[rgba(0,0,0,0.3)] rounded-[6px]). These two elements are the
    card's box exactly — full height, already at the shell's 20px inset and 20px gap above, and neither is
-   a scroll container. That last point is why the card lives here and not on the screens: .channel-list is
-   overflow-y: auto, so a ::before at inset: 0 there would cover the SCROLLER'S VIEWPORT and not its
-   scrolled height, and the wash would slide with the rows.
+   a scroll container. That last point is why the card lives here and not on the screens: each of them
+   either is a scroller or holds one — .channel-list__tree since #1443, .conversation__thread all along —
+   so a ::before at inset: 0 inside would cover the SCROLLER'S VIEWPORT and not its scrolled height, and
+   the wash would slide with the rows.
 
    overflow: hidden is load-bearing, not tidiness. It is what stops a row's hover rectangle or the
    thread's content painting square over the 6px arc at either end of a column. It does NOT reach the two
@@ -126,10 +127,12 @@
    `min-width: 0` is the SAME load-bearing declaration the pane below carries, and for the same reason
    read in the other direction: `flex: 0 0 400px` fixes the basis but leaves `min-width: auto`, which
    floors a flex item at its CONTENT's min-content width — so one unbreakable descendant grows the
-   sidebar PAST 400 no matter what the basis says. `.channel-list`'s `overflow-x` (computed `auto`, since
-   its `overflow-y: auto` forces the other axis off `visible`) does not save it: a scroll container's
+   sidebar PAST 400 no matter what the basis says. The scroller's `overflow-x` (computed `auto`, its own
+   `overflow-y: auto` forcing the other axis off `visible`) does not save it: a scroll container's
    automatic minimum size is 0 for ITSELF, but its min-content CONTRIBUTION to an ancestor is still
-   content-derived. #834 is where that became reachable in practice — the host row now carries an
+   content-derived. That scroller is `.channel-list__tree` since #1443 and was `.channel-list` before it,
+   which changes nothing here — this rule never depended on WHICH descendant clipped, only on the fact
+   that clipping does not travel up. #834 is where that became reachable in practice — the host row now carries an
    operator-typed name up to MAX_HOST_LABEL_LENGTH (128) with `white-space: nowrap`, whose min-content
    size is the whole string, which measured ~1063px and took the sidebar with it. `.channel-list__title`
    and `.channel-list__workspace-label` are nowrap too and had the same latent reach; this pins all

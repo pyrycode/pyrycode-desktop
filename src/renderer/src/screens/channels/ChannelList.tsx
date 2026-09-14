@@ -660,42 +660,69 @@ export function ChannelListView({
 }): JSX.Element {
   return (
     <section className="channel-list" aria-label="Conversations">
-      {/* #347: the top-right actions cluster — the Archive entry leads, the gear trails (conventional
-          gear-rightmost). One sticky flex-row wrapper hosts both, so two independent sticky children do
-          not stack awkwardly. Present in all three list states (AC1) — and since #1426 deleted the FAB
-          that used to be its counterpart at the bottom, the list's only sticky child. */}
+      {/* #1443, Figma Top bar 115:3693 — the card's own bar, drawn at last where #333/#347 could only
+          invent: the gear at the content edge and the Archive entry 28 to its right, under a rule. Both
+          the ALIGNMENT and the ORDER flip here — this was an archive-then-gear cluster pinned top-RIGHT,
+          sticky inside the scroller, and the drawing puts the gear first at the left. Still present in
+          all three list states (AC1), because it is still a sibling of the list body rather than part of
+          it. The wrapper keeps `.channel-list__actions` as its class token although it is no longer a
+          cluster and no longer sticky: three specs park the pointer on it and nothing in the redraw
+          needs a new name. It is no longer the list's only sticky child either — since #1426 deleted the
+          FAB and this ticket unpinned the bar, the sidebar has no sticky child at all. */}
       <div className="channel-list__actions">
-        <ArchiveButton onClick={onOpenArchive} />
         <SettingsButton onClick={onOpenSettings} />
+        <ArchiveButton onClick={onOpenArchive} />
       </div>
-      {renderBody(
-        conversations,
-        statuses,
-        serverIds,
-        openConversationId,
-        onPairNewHost,
-        onOpen,
-        onCreateChat,
-        onCreateChannel,
-        onEditWorkspace,
-        onEditHost,
-        onAddWorkspace,
-        onRepairHost,
-        onSaveAsChannel,
-        onRename
-      )}
+      {/* The rule (497:1852) — 20 under the bar and drawn in the same 1px, same colour, same 60% as the
+          section divider below, which is what the node draws. A sibling element rather than the bar's
+          own border: the 60% is carried by `opacity`, this file family's de-emphasis device, and a
+          border would fade the two glyphs with it. */}
+      <div className="channel-list__actions-rule" />
+      {/* THE SCROLLPORT, and the structural half of #1443. `.channel-list` used to be both the padded
+          card column and the scroller; the bar cannot both sit still and live inside a scroller that has
+          no ground of its own to hide rows behind (#1058 deleted this column's background so the card
+          wash could show through), so the tree moved into its own wrapper and `.channel-list` kept only
+          the padding. The card's 28px column gap rides here as the wrapper's top padding rather than on
+          the bar, so the Channels header scrolls away with its rows instead of pinning under the rule. */}
+      <div className="channel-list__tree">
+        {renderBody(
+          conversations,
+          statuses,
+          serverIds,
+          openConversationId,
+          onPairNewHost,
+          onOpen,
+          onCreateChat,
+          onCreateChannel,
+          onEditWorkspace,
+          onEditHost,
+          onAddWorkspace,
+          onRepairHost,
+          onSaveAsChannel,
+          onRename
+        )}
+      </div>
     </section>
   )
 }
 
-// The Settings entry affordance (#333) — a desktop-invented control: ChannelList has no top app bar yet
-// (its own comment defers it), and no Figma node on the list scope (15-8) pins a settings entry, so this
-// is invented rather than traced. Rendered as the FIRST child of the <section> and pinned top-right via
-// CSS, so it is present in all three list states (AC1) and stays reachable while a long list scrolls
-// under it. An icon-only native <button> (keyboard-focusable), `aria-label` supplies the accessible name
-// since the gear glyph carries no text, and the SVG is aria-hidden — the shape `ArchiveButton` beside it
-// shares. onClick is a pure injected nav effect — no window.pyry, no store.
-// The 24px Material `settings` (gear) glyph.
+// The Settings entry affordance (#333, redrawn by #1443 as the Top bar's `Settings button` 115:3834) —
+// no longer a desktop-invented control. #333 and #347 both recorded that the list scope (mobile 15-8)
+// pinned no settings entry and no archive entry, so both were invented and both wore the
+// `.settings__back` 48px round treatment. The desktop card draws them: two 24px boxes at the card's top
+// inset, the gear LEADING at the content edge, filled --color-primary with no ground in any state drawn.
+// Rendered as a child of the bar, which is a sibling of the list body, so it is present in all three
+// list states (AC1) and stays put while a long list scrolls under the rule. An icon-only native <button>
+// (keyboard-focusable), `aria-label` supplies the accessible name since the gear glyph carries no text,
+// and the SVG is aria-hidden — the shape `ArchiveButton` beside it shares. onClick is a pure injected
+// nav effect — no window.pyry, no store.
+//
+// THE GLYPH IS THE DRAWING'S OWN EXPORT (`gear-solid-full 1` 115:3832), drawn at its own 22 × 24 and
+// centred in the 24px box by the button's flex centring — the outer box and the leaf are separate
+// numbers in the node and stay separate here. Its path is inlined rather than fetched: the Figma MCP
+// asset URLs expire after seven days, so the operator recorded both path strings on the ticket. It
+// replaces the 24px Material `settings` glyph #333 shipped. `fill="currentColor"` over the button's
+// `color` is what keeps the node's #9dcbfc a TOKEN reference rather than a literal.
 function SettingsButton({ onClick }: { onClick: () => void }): JSX.Element {
   return (
     <button
@@ -706,24 +733,29 @@ function SettingsButton({ onClick }: { onClick: () => void }): JSX.Element {
     >
       <svg
         className="channel-list__settings-icon"
-        viewBox="0 0 24 24"
-        width="24"
+        viewBox="0 0 22 24"
+        width="22"
         height="24"
         fill="currentColor"
         aria-hidden="true"
       >
-        <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
+        <path d="M8.3569 1.125C8.48641 0.472059 9.05191 0 9.70806 0H12.2895C12.9457 0 13.5112 0.472059 13.6407 1.125L14.2666 4.21324C14.8753 4.47794 15.4451 4.81765 15.9631 5.21912L18.8899 4.22647C19.5115 4.01471 20.1936 4.27941 20.5217 4.86176L21.8124 7.14706C22.1405 7.72941 22.0239 8.46176 21.5318 8.90735L19.2309 10.9985C19.2698 11.325 19.2871 11.6603 19.2871 12C19.2871 12.3397 19.2655 12.675 19.2309 13.0015L21.5361 15.0971C22.0282 15.5426 22.1405 16.2794 21.8167 16.8574L20.526 19.1426C20.1979 19.7206 19.5158 19.9897 18.8942 19.7779L15.9674 18.7853C15.4451 19.1868 14.8753 19.5221 14.2709 19.7912L13.6493 22.875C13.5155 23.5324 12.95 24 12.2981 24H9.7167C9.06054 24 8.49504 23.5279 8.36553 22.875L7.74391 19.7912C7.13524 19.5265 6.56974 19.1868 6.04741 18.7853L3.10766 19.7779C2.48604 19.9897 1.80399 19.725 1.47591 19.1426L0.185184 16.8574C-0.142893 16.275 -0.0263396 15.5426 0.465776 15.0971L2.77095 13.0015C2.7321 12.675 2.71483 12.3397 2.71483 12C2.71483 11.6603 2.73642 11.325 2.77095 10.9985L0.465776 8.90294C-0.0263396 8.45735 -0.138577 7.72059 0.185184 7.14265L1.47591 4.85735C1.80399 4.275 2.48604 4.01029 3.10766 4.22206L6.03446 5.21471C6.55679 4.81324 7.12661 4.47794 7.73096 4.20882L8.3569 1.125ZM10.9988 15.5294C12.9068 15.5206 14.4479 13.9368 14.4393 11.9868C14.4306 10.0368 12.8809 8.46176 10.9729 8.47059C9.06486 8.47941 7.52376 10.0632 7.53239 12.0132C7.54102 13.9632 9.09076 15.5382 10.9988 15.5294Z" />
       </svg>
     </button>
   )
 }
 
-// The Archive entry affordance (#347) — a desktop-invented control mirroring SettingsButton's shape (no
-// Figma node pins it on the list scope 15-8, like the gear). It leads the top-right actions cluster.
-// Clones the gear's posture exactly: an icon-only native <button> (keyboard-focusable), whose distinct
-// `aria-label="Archive"` supplies the accessible name and disambiguates it from the gear's "Settings"
-// (the ticket's disambiguation), and whose SVG is aria-hidden. onClick is a pure injected nav effect —
-// no window.pyry, no store. The 24px Material `archive` (box) glyph.
+// The Archive entry affordance (#347, redrawn by #1443 as the Top bar's `Archive button` 117:3835) —
+// mirroring SettingsButton's shape, as it has since #347, and now TRAILING rather than leading: the
+// drawing puts the gear first. Clones the gear's posture exactly: an icon-only native <button>
+// (keyboard-focusable), whose distinct `aria-label="Archive"` supplies the accessible name and
+// disambiguates it from the gear's "Settings" (the ticket's disambiguation), and whose SVG is
+// aria-hidden. onClick is a pure injected nav effect — no window.pyry, no store.
+//
+// THE GLYPH IS THE DRAWING'S OWN EXPORT (`box-archive-solid-full 1` 117:3839), drawn at its own 24 × 21
+// — a DIFFERENT leaf size from the gear's 22 × 24 inside the same 24px box, which is why neither is
+// sized by a shared rule. Inlined for the gear's reason: the export URLs expire after seven days. It
+// replaces the 24px Material `archive` glyph #347 shipped.
 function ArchiveButton({ onClick }: { onClick: () => void }): JSX.Element {
   return (
     <button
@@ -734,13 +766,13 @@ function ArchiveButton({ onClick }: { onClick: () => void }): JSX.Element {
     >
       <svg
         className="channel-list__archive-icon"
-        viewBox="0 0 24 24"
+        viewBox="0 0 24 21"
         width="24"
-        height="24"
+        height="21"
         fill="currentColor"
         aria-hidden="true"
       >
-        <path d="M20.54 5.23l-1.39-1.68C18.88 3.21 18.47 3 18 3H6c-.47 0-.88.21-1.16.55L3.46 5.23C3.17 5.57 3 6.02 3 6.5V19c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6.5c0-.48-.17-.93-.46-1.27zM12 17.5L6.5 12H10v-2h4v2h3.5L12 17.5zM5.12 5l.81-1h12l.94 1H5.12z" />
+        <path d="M0 1.5C0 0.670312 0.670312 0 1.5 0H22.5C23.3297 0 24 0.670312 24 1.5V3C24 3.82969 23.3297 4.5 22.5 4.5H1.5C0.670312 4.5 0 3.82969 0 3V1.5ZM1.5 6.75H22.5V18C22.5 19.6547 21.1547 21 19.5 21H4.5C2.84531 21 1.5 19.6547 1.5 18V6.75ZM8.625 9.75C8.00156 9.75 7.5 10.2516 7.5 10.875C7.5 11.4984 8.00156 12 8.625 12H15.375C15.9984 12 16.5 11.4984 16.5 10.875C16.5 10.2516 15.9984 9.75 15.375 9.75H8.625Z" />
       </svg>
     </button>
   )

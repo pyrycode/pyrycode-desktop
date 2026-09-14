@@ -44,6 +44,7 @@ import type {
   SessionFactsPayload,
   ThinkingProgressPayload,
   RateLimitedPayload,
+  ContextUsagePayload,
   UnrecognizedMessagePayload,
   SessionTransitionPayload,
   SessionSettingsPayload,
@@ -483,6 +484,37 @@ interface FrameTimestamp {
  * lookup path. Ships dormant — daemonConnection's inbound switch has no catch-all, so the report stops
  * here until the carry slice claims it.
  *
+ * The `context-usage` kind (#1454) carries the decoded ContextUsagePayload — claude's own report of what
+ * is in the context window, published after every turn end on the interactive path. THE READING HALF
+ * ONLY: the frame's three inventories and their three dropped counts are on the wire and are decoded by
+ * the follow-on slices, not here. Conversation-scoped like the two kinds above — no `turn_id`, and it
+ * opens and closes no turn. The fail-closed defence is two required strings and three required NUMBERS,
+ * each through the type-not-truthiness helpers, so `''` and `0` survive as the values the daemon's empty
+ * fixture states them to be rather than being read as absences.
+ *
+ * PROVENANCE IS MIXED WITHIN THE ONE PAYLOAD, which is what separates this kind from every neighbour
+ * here: `conversation_id` is daemon-authored, `model` is claude-authored and unsanitized. A consumer
+ * assuming one provenance for the whole value is wrong half the time, in the direction that promotes
+ * `model` to a checked value. See ContextUsagePayload, which names the split field by field.
+ *
+ * THE THREE INTEGERS ARE NOT RANGE-CHECKED and are NOT mutually consistent by contract. The daemon
+ * neither recomputes nor normalizes claude's figures, so a consumer must not derive `percentage` from
+ * the token pair, must guard its own arithmetic (a `max_tokens` of `0` yields `Infinity` — the renderer's
+ * `contextUsagePercent` documents what that does to a gauge), and must never allocate, iterate or size
+ * anything proportional to any of them.
+ *
+ * IT TAKES NO FrameTimestamp, for the two kinds above's reason: that mix-in marks exactly the arms
+ * `decodeHistoryEvent` draws, this type gains no arm there, and stamping it would advertise a join
+ * nothing can perform.
+ *
+ * NOTHING DECODED REACHES THE LOG. `model` is claude-authored text that crossed the subprocess trust
+ * boundary — untrusted and unsanitized, so logging it would put model-influenced strings into a file
+ * whose readers assume it is machine-written — and the three integers disclose how much private work is
+ * in the window, as unwelcome in a log an operator may send off-box as the correlating `conversation_id`
+ * beside them. Untrusted DISPLAY text, decoded and never interpreted: a later consumer renders `model` as
+ * inert text and feeds it to no HTML sink, attribute, URL, Map key, icon lookup or path. Ships dormant —
+ * daemonConnection's inbound switch has no catch-all, so the reading stops here until #1419 claims it.
+ *
  * The `background-task-started` kind (#564) carries the decoded BackgroundTaskStartedPayload — the daemon's
  * announcement that claude started work OUTLIVING the turn that spawned it (pyrycode#1240), fanned out to
  * interactive clients. Unlike its `stall` / `api-retry` / `compacting` neighbours it is not a claude
@@ -741,6 +773,7 @@ export type InboundDaemonMessage =
   | { kind: 'thinking-progress'; thinkingProgress: ThinkingProgressPayload }
   | { kind: 'tool-progress'; toolProgress: ToolProgressPayload }
   | { kind: 'rate-limited'; rateLimited: RateLimitedPayload }
+  | { kind: 'context-usage'; contextUsage: ContextUsagePayload }
   | { kind: 'background-task-started'; backgroundTaskStarted: BackgroundTaskStartedPayload }
   | { kind: 'background-task-updated'; backgroundTaskUpdated: BackgroundTaskUpdatedPayload }
   | { kind: 'background-task-roster'; backgroundTaskRoster: BackgroundTaskRosterPayload }
@@ -2185,6 +2218,60 @@ function parseRateLimitedPayload(payload: unknown): RateLimitedPayload {
 }
 
 /**
+ * Narrow an opaque payload into a ContextUsagePayload (#1454) — THE READING HALF of the frame only.
+ * Fail-closed like parseRateLimitedPayload directly above, whose shape this is minus one string and one
+ * nullable list plus two numbers: two `requireString`s and three `requireNumber`s. No helper is invented
+ * here, and nothing is cross-validated.
+ *
+ * THE SIX INVENTORY KEYS ARE DROPPED, NOT READ. `categories`, `mcp_tools`, `memory_files` and their three
+ * dropped counts are on EVERY real frame, so this parser's forward-compatibility is load-bearing rather
+ * than hypothetical: the fresh five-field literal tolerates them without copying them through, which also
+ * makes it prototype-pollution-safe against a planted `__proto__` and keeps the daemon fixture's
+ * deliberately adversarial inventory values (a `../../../etc/passwd` memory-file path, markup
+ * metacharacters in a tool name) from crossing even as opaque data. The two follow-on slices decode them
+ * and own their validation.
+ *
+ * NO RANGE CHECK ON ANY OF THE THREE INTEGERS AND NO CROSS-FIELD CHECK, and the daemon's contract is why:
+ * the reading is INFORMATIONAL — claude's own integers, which the daemon neither recomputes nor
+ * normalizes — so nothing may assume `percentage` is derivable from `total_tokens` and `max_tokens`. A
+ * `percentage` over 100, a total exceeding the window, a `max_tokens` of `0` beside a non-zero total and
+ * a negative are all ordinary traffic here; rejecting one would be a validation rule with no captured
+ * negative case behind it, and re-deriving the percentage would make this client disagree with the figure
+ * claude reported, which is the whole reason the frame displaces the transcript route. This is the bare
+ * posture parseSessionSettingsPayload takes for `used_tokens` / `window_tokens`. The unguarded-`Infinity`
+ * hazard a `max_tokens` of `0` creates is a RENDER concern and already has a home in the renderer's
+ * `contextUsagePercent`; it does not belong at this boundary.
+ *
+ * requireNumber CHECKS THE TYPE AND NOT TRUTHINESS, so `0` survives as `0` — and `0` is what the daemon's
+ * committed empty fixture carries for all three. A `!value` guard anywhere here would read that whole
+ * frame as missing and drop a legitimate one. requireString is the same posture for the two strings:
+ * `''` passes free, and the empty fixture's `conversation_id` and `model` are both `''`.
+ *
+ * DELIBERATELY NO MEMBERSHIP CHECK ON `model`. The house rule is parseBackgroundTaskStartedPayload's — a
+ * client-invented set fail-closes a valid future frame, the drift risk CLAUDE.md / ADR 0002 rank above
+ * cosmetic robustness — and it binds here because a new claude release renames the string by definition.
+ * It is claude-authored descriptive text beside a token count, NOT an identity to match against a model
+ * menu: `model_announced` remains that authority. See ContextUsagePayload for the inert-text obligation
+ * that travels with it.
+ *
+ * Any missing / mistyped field throws WireDecodeError (never a partial value), dropping the frame as a
+ * whole the way every other arm drops one. Its messages name the failure CATEGORY only, never
+ * interpolating a value: `model` is untrusted claude-authored text and `conversation_id` a correlating
+ * identifier.
+ */
+function parseContextUsagePayload(payload: unknown): ContextUsagePayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed context_usage payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const model = requireString(payload, 'model')
+  const total_tokens = requireNumber(payload, 'total_tokens')
+  const max_tokens = requireNumber(payload, 'max_tokens')
+  const percentage = requireNumber(payload, 'percentage')
+  return { conversation_id, model, total_tokens, max_tokens, percentage }
+}
+
+/**
  * Narrow an opaque payload into a SessionTransitionPayload (#254). Fail-closed like parseTurnStatePayload,
  * scaled to six fields: four required strings (`conversation_id` / `previous_session_id` /
  * `new_session_id` / `occurred_at`),
@@ -3605,6 +3692,29 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'rate-limited', rateLimited }
+    }
+    case 'context_usage': {
+      // Narrow BEFORE logging so a malformed frame (a JSON-string `percentage`, an absent `model`, a
+      // payload that is not an object) throws first and leaves no record. NOTHING decoded is logged —
+      // not `model`, which is claude-authored text that crossed the subprocess trust boundary and is
+      // unsanitized; not the three integers, which disclose how much private work is in the window; and
+      // not the `conversation_id` beside them. Only the frame's byte length + one-way hash, reusing the
+      // existing content-free field set (no new DiagnosticEvent field, so #131's renderer pin is
+      // untouched). Strictly safer than the `default:` arm this replaces for the type, which logged a
+      // WIRE-SUPPLIED `envelope.type`; the code here is a static literal.
+      //
+      // NO `ts` on the returned arm — see the kind's paragraph on InboundDaemonMessage: the mix-in marks
+      // the arms decodeHistoryEvent draws, and this type gains no arm there.
+      // Nothing consumes this arm yet: daemonConnection's inbound switch has no catch-all, so the
+      // reading stops here until the carry slice claims it.
+      const contextUsage = parseContextUsagePayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'context_usage',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'context-usage', contextUsage }
     }
     case 'background_task_started': {
       // Narrow BEFORE logging so a malformed frame (an omitted `truncated_fields` key, a non-string

@@ -982,19 +982,84 @@ export interface RateLimitedPayload {
 }
 
 /**
- * Inbound `context_usage` event (daemon → client), THE READING HALF ONLY (#1454). Mirrors the first five
- * fields of the daemon's ContextUsagePayload (SSOT pyrycode#2370 declared / #2371 emitted,
- * internal/protocol/interactive.go), wire order `conversation_id, model, total_tokens, max_tokens,
- * percentage` — all five ALWAYS PRESENT (no `omitempty`). Fanned out ONLY to `interactive`-capable
- * clients, after every turn end on the interactive path. Conversation-scoped like RateLimitedPayload
- * above: no `turn_id`, and receiving one neither opens nor closes a turn.
+ * ONE ROW of a `context_usage` frame's category breakdown (daemon → client, #1455). Mirrors the daemon's
+ * `ContextUsageCategory` field-for-field (SSOT pyrycode#2370, internal/protocol/interactive.go), wire
+ * order `name, tokens`. One named contribution to the reading in ContextUsagePayload below.
  *
- * THE FRAME CARRIES SIX MORE KEYS THAT THIS TYPE DELIBERATELY DOES NOT DECLARE: three inventories
- * (`categories`, `mcp_tools`, `memory_files`) and their three dropped counts. They are on every real
- * frame and are decoded by the two follow-on slices. Declaring one here without parsing it would put a
- * field on the wire surface with no narrowing behind it — a promise the decoder does not keep — so the
- * declaration and the parsing land together or not at all. `parseContextUsagePayload` returns a fresh
- * five-field literal, so the six are tolerated and dropped rather than copied through.
+ * NAMED WITHOUT THE `Wire` PREFIX, deliberately. That prefix is this file's mark for a nested row whose
+ * BARE NAME IS GENERIC ENOUGH TO BE WANTED AGAIN DOWNSTREAM — `WireQuestion`, `WireModalOption`,
+ * `WireModelOption`, `WireSlashCommand`, each of which would otherwise claim a name a store or a screen
+ * naturally wants for its own view model. `ContextUsageCategory` is already qualified by its frame and
+ * claims nothing a consumer would want back, so it joins the rows named plainly after the daemon's own
+ * type: `BackgroundTask`, `QueuedItem`, `HistoryEntry`. Colliding with a Go type name is NOT the
+ * criterion — all three of those collide too.
+ *
+ * BOTH KEYS ARE ALWAYS PRESENT, with no `omitempty` on either, so `name: ''` is a VALUE and `tokens: 0`
+ * is claude's reading of zero. An absent key is a real defect rather than an empty row, and a truthiness
+ * test on either would read a legitimate row as malformed and drop the whole frame with it.
+ *
+ * `tokens` IS ONE CONTRIBUTION, AND THE CONTRIBUTIONS DO NOT RECONCILE. The daemon states the categories
+ * need not sum to `total_tokens`, and a cut list makes the sum smaller still — so a consumer must not
+ * derive a total from these rows, present their sum as the reading, or treat a gap between the two as an
+ * error. It is not range-checked in either direction, for the reading's own reason: the figures are
+ * claude's and the daemon neither recomputes nor normalizes them.
+ *
+ * SECURITY: `name` is claude-authored descriptive text that crossed the SUBPROCESS TRUST BOUNDARY. The
+ * producer bounds it at construction but neither validates nor sanitizes it, so it stays untrusted,
+ * model-influenced text all the way here — the daemon calls it a LABEL, never a selector a client may
+ * branch on for authority. Safe to render as INERT TEXT, never fed to an HTML sink (`innerHTML` /
+ * `dangerouslySetInnerHTML`), an attribute or a URL, and never used as a lookup path, a filename, a CSS
+ * class or an icon name. The committed fixture carries `Messages <&>` with its markup metacharacters on
+ * purpose and this decoder passes them through byte-for-byte: the escaping is owed at the RENDER SINK
+ * (CLAUDE.md's 2026-08-20 operator ruling), and escaping here would corrupt the value for every
+ * non-HTML sink while buying false safety at the real one. **IF A CONSUMER INDEXES ROWS BY THIS FIELD,
+ * THE INDEX IS A `Map`, NEVER A PLAIN OBJECT** — `byName[row.name] = row` with a `__proto__` label
+ * writes through to `Object.prototype`, which is `WireModelOption.display_name`'s rule one frame over
+ * and a stronger invitation here, because a breakdown is exactly the shape a legend or a chart keys by
+ * its label. The same goes for a React `key`. See #1455 (this decode); the IPC carry is #1419, the
+ * store #1420, the surfaces #1421.
+ */
+export interface ContextUsageCategory {
+  name: string
+  // Go `int`; a plain `number` like every other integer on this wire.
+  tokens: number
+}
+
+/**
+ * Inbound `context_usage` event (daemon → client), THE READING PLUS THE CATEGORY BREAKDOWN (#1454 the
+ * reading, #1455 the breakdown). Mirrors the first seven fields of the daemon's ContextUsagePayload
+ * (SSOT pyrycode#2370 declared / #2371 emitted,
+ * internal/protocol/interactive.go), wire order `conversation_id, model, total_tokens, max_tokens,
+ * percentage, categories, dropped_categories` — all seven ALWAYS PRESENT (no `omitempty`). Fanned out
+ * ONLY to `interactive`-capable clients, after every turn end on the interactive path.
+ * Conversation-scoped like RateLimitedPayload above: no `turn_id`, and receiving one neither opens nor
+ * closes a turn.
+ *
+ * THE FRAME CARRIES FOUR MORE KEYS THAT THIS TYPE DELIBERATELY DOES NOT DECLARE: two inventories
+ * (`mcp_tools`, `memory_files`) and their two dropped counts. They are on every real frame and are
+ * decoded by #1456. Declaring one here without parsing it would put a field on the wire surface with no
+ * narrowing behind it — a promise the decoder does not keep — so the declaration and the parsing land
+ * together or not at all. `parseContextUsagePayload` returns a fresh seven-field literal, so the four
+ * are tolerated and dropped rather than copied through.
+ *
+ * `categories` IS A PLAIN ARRAY AND NEVER `ContextUsageCategory[] | null`: the daemon's `MarshalJSON`
+ * normalises a nil slice to `[]` precisely so a client never has to tell the two apart, and `omitempty`
+ * is deliberately out. AN EMPTY `[]` IS THE POSITIVE STATEMENT THAT CLAUDE REPORTED NO CATEGORIES, which
+ * a consumer must keep distinguishable from the absence a frame that never arrived yields; a `null` or
+ * an absent key is a real defect. THE ROWS ARRIVE AS A PREFIX IN THE PRODUCER'S DESCENDING-TOKEN ORDER,
+ * any cut taking entries off the TAIL — so a shortened list is never a list with holes, and re-sorting
+ * or de-duplicating destroys the only ordering signal a consumer gets.
+ *
+ * `dropped_categories` IS INDEPENDENT AND NOT INFERABLE, and it is the field a reader is likeliest to
+ * try to reconcile. It accumulates TWO SEPARATE CUTS: the producer's entry and string caps, plus the
+ * mapper's own frame-byte budget spent keeping the envelope under the v2 cap. So a retained list's
+ * LENGTH IS NO EVIDENCE OF COMPLETENESS in either direction — the committed fixture's `3` sits beside
+ * exactly two retained rows — and `categories.length + dropped_categories` is the breakdown's true size
+ * rather than something to check. A client that reads a full list as proof nothing was dropped, or an
+ * empty one as proof everything was, is wrong both times. `0` is a VALUE, never consulted for
+ * truthiness: the key is always written, so an absent one is a defect rather than a valid zero. The
+ * producer's caps are DAEMON-SIDE and may change without any change to this contract, so a client must
+ * never hardcode one, treat a particular length as a signal, or re-decide a bound here.
  *
  * PROVENANCE IS MIXED WITHIN THIS ONE STRUCT, and it is the field-level fact a reader is likeliest to get
  * wrong. `conversation_id` is DAEMON-authored: the mapper fills it from the daemon's own registry record,
@@ -1014,7 +1079,8 @@ export interface RateLimitedPayload {
  * size anything proportional to any of them; they are unbounded daemon-supplied values, and that is
  * AttachmentChunkPayload's never-allocate-from-a-claim rule one frame over.
  *
- * SECURITY: `model` is a claude-authored string that crossed the SUBPROCESS TRUST BOUNDARY. The daemon
+ * SECURITY: `model` — and every `name` on the rows — is a claude-authored string that crossed the
+ * SUBPROCESS TRUST BOUNDARY. The daemon
  * bounds it at construction but does NOT validate or sanitize it, so it stays untrusted,
  * model-influenced text all the way here: safe to render as INERT TEXT, never fed to an HTML sink
  * (`innerHTML` / `dangerouslySetInnerHTML`), an attribute, or a URL, and never used as a Map key, an
@@ -1024,8 +1090,11 @@ export interface RateLimitedPayload {
  * count, never a key to match a model menu against. `conversation_id` is a daemon-asserted routing key,
  * never an authorization signal and never resolved against a filesystem. NOTHING DECODED REACHES A LOG:
  * the three integers disclose how much private work is in the window, a side-channel as unwelcome in a
- * log an operator may send off-box as the correlating id beside them. See #1454 (this decode); the IPC
- * carry is #1419, the store #1420, the surfaces #1421.
+ * log an operator may send off-box as the correlating id beside them. The BREAKDOWN is a finer instance
+ * of that same side-channel and is excluded for the same reason — a per-category figure discloses how
+ * the window is composed and not merely how full it is, and the list's LENGTH is a weak reading of the
+ * same thing. See #1454 (the reading) and #1455 (this breakdown); the IPC carry is #1419, the store
+ * #1420, the surfaces #1421.
  */
 export interface ContextUsagePayload {
   conversation_id: string
@@ -1035,6 +1104,8 @@ export interface ContextUsagePayload {
   total_tokens: number
   max_tokens: number
   percentage: number
+  categories: ContextUsageCategory[]
+  dropped_categories: number
 }
 
 /**

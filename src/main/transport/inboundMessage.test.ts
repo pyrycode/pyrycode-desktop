@@ -396,11 +396,12 @@ function encodeContextUsage(payload: unknown): Uint8Array {
 }
 
 /** The daemon's committed `internal/protocol/testdata/context_usage.json` payload, transcribed whole
- *  (#1454). The six inventory / dropped keys are carried VERBATIM and deliberately: this slice reads
- *  only the five-field reading, so the fixture is simultaneously the forward-compat case — the drop is
- *  proven against a real frame rather than an invented extra key. Two of the inventory values are
- *  adversarial upstream on purpose (`../../../etc/passwd`, markup metacharacters); neither is read here,
- *  and both are a MUST-review item for whichever slice decodes them. */
+ *  (#1454). Since #1455 the `categories` pair IS read and the remaining FOUR inventory / dropped keys are
+ *  carried verbatim and deliberately, so the fixture is still simultaneously the forward-compat case —
+ *  the drop is proven against a real frame rather than an invented extra key. `Messages <&>` is
+ *  adversarial upstream on purpose and now CROSSES, byte-for-byte and unescaped, which is the point:
+ *  escaping is owed at the render sink, not at this decoder. `../../../etc/passwd` is still unread and
+ *  remains a MUST-review item for #1456. */
 const CONTEXT_USAGE_FRAME = {
   conversation_id: 'conversation-context',
   model: 'claude-opus-5',
@@ -424,13 +425,21 @@ const CONTEXT_USAGE_FRAME = {
   dropped_memory_files: 7
 }
 
-/** The five-field READING that fixture must narrow to — the decoder's whole output for it (#1454). */
+/** The reading plus the category breakdown that fixture must narrow to — the decoder's whole output for
+ *  it (#1454 the five, #1455 the pair). The two rows come out in WIRE ORDER, which is the producer's
+ *  descending-token order; `dropped_categories: 3` sits beside exactly two retained rows, so this
+ *  constant is also the case proving nothing reconciles the count against the length. */
 const CONTEXT_USAGE = {
   conversation_id: 'conversation-context',
   model: 'claude-opus-5',
   total_tokens: 128_400,
   max_tokens: 200_000,
-  percentage: 64
+  percentage: 64,
+  categories: [
+    { name: 'System prompt', tokens: 41_200 },
+    { name: 'Messages <&>', tokens: 9800 }
+  ],
+  dropped_categories: 3
 }
 
 /** The daemon's committed `context_usage_empty.json` payload (#1454). Its two empty strings and three
@@ -450,13 +459,17 @@ const CONTEXT_USAGE_EMPTY_FRAME = {
   dropped_memory_files: 0
 }
 
-/** The five-field reading the empty fixture narrows to (#1454). */
+/** What the empty fixture narrows to (#1454, extended #1455). The empty `categories` is the POSITIVE
+ *  statement that claude reported no categories — not an absence — and `dropped_categories: 0` is a
+ *  genuine zero beside it. */
 const CONTEXT_USAGE_EMPTY = {
   conversation_id: '',
   model: '',
   total_tokens: 0,
   max_tokens: 0,
-  percentage: 0
+  percentage: 0,
+  categories: [],
+  dropped_categories: 0
 }
 
 /** A well-formed background_task_started payload — the daemon's canonical fixture (#564). Every field
@@ -3045,22 +3058,24 @@ describe('parseInboundMessage — context_usage recognition (#1454, AC1/AC4)', (
     })
   })
 
-  it('drops the six inventory keys the frame really carries, keeping exactly the five (forward-compat)', () => {
-    // Not a hypothetical unknown key: `categories` / `mcp_tools` / `memory_files` and their three
-    // dropped counts are on EVERY real frame, and this slice must tolerate them without copying them
-    // through. The fresh five-key literal is what does that — and is also what makes the narrower
-    // prototype-pollution-safe against a planted `__proto__`.
+  it('drops the FOUR inventory keys still unread, keeping exactly the seven (#1455, forward-compat)', () => {
+    // Not a hypothetical unknown key: `mcp_tools` / `memory_files` and their two dropped counts are on
+    // EVERY real frame, and this decoder must tolerate them without copying them through. The fresh
+    // seven-key literal is what does that — and is also what makes the narrower prototype-pollution-safe
+    // against a planted `__proto__`. #1456 decodes the remaining pair.
     const decoded = parseInboundMessage(encodeContextUsage(CONTEXT_USAGE_FRAME))
     expect(decoded?.kind === 'context-usage' && Object.keys(decoded.contextUsage).sort()).toEqual([
+      'categories',
       'conversation_id',
+      'dropped_categories',
       'max_tokens',
       'model',
       'percentage',
       'total_tokens'
     ])
-    // The adversarial inventory values must not cross even as opaque data. `../../../etc/passwd` is
-    // the daemon's own fixture value and is the clearest statement that the inventories are a
-    // path-traversal surface for whichever slice decodes them.
+    // The two adversarial values still unread must not cross even as opaque data. `../../../etc/passwd`
+    // is the daemon's own fixture value and is the clearest statement that the inventories are a
+    // path-traversal surface for the slice that decodes them.
     const json = JSON.stringify(decoded)
     expect(json).not.toContain('etc/passwd')
     expect(json).not.toContain('read_file')
@@ -3174,6 +3189,210 @@ describe('parseInboundMessage — context_usage fail-closed (#1454, AC2)', () =>
     expect(() => parseInboundMessage(encodeContextUsage('nope'))).toThrow(WireDecodeError)
     expect(() => parseInboundMessage(encodeContextUsage(['a']))).toThrow(WireDecodeError)
     expect(() => parseInboundMessage(encodeContextUsage(null))).toThrow(WireDecodeError)
+  })
+})
+
+/** Read one decoded frame's categories, or fail the test if the arm did not narrow (#1455). */
+function categoriesOf(payload: unknown): { name: string; tokens: number }[] {
+  const decoded = parseInboundMessage(encodeContextUsage(payload))
+  if (decoded?.kind !== 'context-usage') {
+    throw new Error('expected a context-usage decode')
+  }
+  return decoded.contextUsage.categories
+}
+
+describe('parseInboundMessage — context_usage category rows (#1455, AC1)', () => {
+  it("carries the daemon's two fixture rows in WIRE ORDER, values untouched", () => {
+    // Wire order IS the producer's descending-token order, and a cut takes entries off the TAIL — so a
+    // shortened list is never a list with holes, and re-sorting here would destroy the only ordering
+    // signal a consumer gets. Asserted as a sequence, never as a set.
+    expect(categoriesOf(CONTEXT_USAGE_FRAME)).toEqual([
+      { name: 'System prompt', tokens: 41_200 },
+      { name: 'Messages <&>', tokens: 9800 }
+    ])
+  })
+
+  it('decodes a row whose name is EMPTY and whose tokens are 0 — both are values', () => {
+    // The daemon states both keys remain present even when `name` is empty. `requireString` and
+    // `requireNumber` police the TYPE, never truthiness, so a `!value` guard on either would read a
+    // legitimate row as malformed and drop the whole frame with it.
+    const frame = { ...CONTEXT_USAGE_FRAME, categories: [{ name: '', tokens: 0 }] }
+    expect(categoriesOf(frame)).toEqual([{ name: '', tokens: 0 }])
+  })
+
+  it.each([
+    ['a negative contribution', -1],
+    ['an absurd magnitude', 1_262_304_000_000],
+    ['a contribution exceeding the whole window', 400_000]
+  ])('decodes %s — the row polices type, never range', (_label, tokens) => {
+    // The frame-level no-range-check rule one level down. The categories need not sum to
+    // `total_tokens` by contract, so no per-row bound and no running total is checked here.
+    const frame = { ...CONTEXT_USAGE_FRAME, categories: [{ name: 'System prompt', tokens }] }
+    expect(categoriesOf(frame)).toEqual([{ name: 'System prompt', tokens }])
+  })
+
+  it('crosses an adversarial name BYTE-FOR-BYTE — unescaped, untrimmed, un-normalised', () => {
+    // The must-review item #1454's fixture comment flagged for this slice. `name` is claude-authored
+    // text that crossed the subprocess trust boundary; escaping it HERE would be escaping at the wrong
+    // layer — it corrupts the value for every non-HTML sink and buys false safety at the real one. The
+    // operator ruling (CLAUDE.md, 2026-08-20) puts the escaping at the render sink, so this test
+    // reddens if a later change sanitizes at the decoder.
+    const hostile = '  <img src=x onerror="alert(1)">\n&amp; __proto__  '
+    const frame = { ...CONTEXT_USAGE_FRAME, categories: [{ name: hostile, tokens: 1 }] }
+    expect(categoriesOf(frame)).toEqual([{ name: hostile, tokens: 1 }])
+  })
+
+  it('drops a row\'s unknown keys — including a planted __proto__ — without copying them through', () => {
+    // Each row returns its own FRESH two-field literal, which is what makes the row parser
+    // forward-compatible AND prototype-pollution-safe against a hostile daemon response.
+    //
+    // The row is built through JSON.parse ON PURPOSE. A `__proto__:` key written in an object literal
+    // sets the prototype rather than an own property, so JSON.stringify would drop it before it ever
+    // reached the wire and this test would pass without proving anything. JSON.parse is the classic
+    // pollution vector precisely because it creates `__proto__` as an OWN property, which survives the
+    // round trip and actually arrives at the decoder.
+    const row: unknown = JSON.parse(
+      '{"name":"System prompt","tokens":41200,"colour":"red","__proto__":{"polluted":1}}'
+    )
+    expect(Object.keys(row as object)).toContain('__proto__')
+    const decoded = categoriesOf({ ...CONTEXT_USAGE_FRAME, categories: [row] })
+    expect(decoded).toEqual([{ name: 'System prompt', tokens: 41_200 }])
+    expect(Object.keys(decoded[0])).toEqual(['name', 'tokens'])
+    expect({}).not.toHaveProperty('polluted')
+    expect(Object.prototype).not.toHaveProperty('polluted')
+  })
+})
+
+describe('parseInboundMessage — context_usage categories list shape (#1455, AC2)', () => {
+  it('decodes an EMPTY list to [] — a positive statement, not an absence', () => {
+    // MarshalJSON normalises a nil slice to `[]` precisely so a client never has to tell the two apart.
+    // `[]` says claude reported no categories; it must stay distinguishable from the `undefined` a frame
+    // that never arrived yields, which is what the second assertion pins.
+    expect(categoriesOf(CONTEXT_USAGE_EMPTY_FRAME)).toEqual([])
+    const neverArrived: { categories?: unknown } = {}
+    expect(neverArrived.categories).toBeUndefined()
+  })
+
+  it.each([
+    ['null — the daemon never sends one, so it is a real defect', null],
+    ['a string', 'System prompt'],
+    ['a number', 42],
+    ['an object keyed by name', { 'System prompt': 41_200 }],
+    ['a boolean', false]
+  ])('fails the WHOLE frame closed when categories is %s', (_label, categories) => {
+    expect(() =>
+      parseInboundMessage(encodeContextUsage({ ...CONTEXT_USAGE_FRAME, categories }))
+    ).toThrow(WireDecodeError)
+  })
+
+  it('fails closed when categories is ABSENT — the key is always written, so a missing one is a defect', () => {
+    const absent: Record<string, unknown> = { ...CONTEXT_USAGE_FRAME }
+    delete absent.categories
+    expect(() => parseInboundMessage(encodeContextUsage(absent))).toThrow(WireDecodeError)
+  })
+})
+
+describe('parseInboundMessage — context_usage malformed row (#1455, AC3)', () => {
+  it.each([
+    ['a non-record row', 'System prompt'],
+    ['a null row', null],
+    ['an array row', ['System prompt', 41_200]],
+    ['a row missing name', { tokens: 41_200 }],
+    ['a row missing tokens', { name: 'System prompt' }],
+    ['a row whose name is mistyped', { name: 42, tokens: 41_200 }],
+    ['a row whose name is null', { name: null, tokens: 41_200 }],
+    ['a row whose tokens are mistyped', { name: 'System prompt', tokens: '41200' }],
+    ['a row whose tokens are null', { name: 'System prompt', tokens: null }]
+  ])('throws on %s rather than yielding a partial breakdown', (_label, row) => {
+    // ONE bad row drops the WHOLE frame. A half-populated breakdown presented as complete is the
+    // outcome this narrower exists to prevent — and it is worse than no breakdown, because a consumer
+    // cannot tell the two apart once `dropped_categories` no longer accounts for the loss.
+    const frame = { ...CONTEXT_USAGE_FRAME, categories: [{ name: 'System prompt', tokens: 41_200 }, row] }
+    expect(() => parseInboundMessage(encodeContextUsage(frame))).toThrow(WireDecodeError)
+  })
+
+  it('throws a message naming the failure CATEGORY only — no name, no id, no token count, no INDEX', () => {
+    // AC3's second half. Every string on a row is untrusted claude-authored text, a `conversation_id`
+    // correlates a conversation, and `daemonConnection` catches WireDecodeError into a caller that may
+    // log it — so a value echoed here rides into that log. The row INDEX is excluded too: it would be a
+    // weak oracle over the breakdown for no diagnostic gain (`parseModelOption`'s rule).
+    const SECRET_NAME = 'secret-category-name'
+    const SECRET_CONV = 'secret-conversation-id'
+    try {
+      parseInboundMessage(
+        encodeContextUsage({
+          ...CONTEXT_USAGE_FRAME,
+          conversation_id: SECRET_CONV,
+          categories: [
+            { name: SECRET_NAME, tokens: 41_200 },
+            { name: 'Messages', tokens: '9800' }
+          ]
+        })
+      )
+      expect.unreachable('a mistyped tokens field must throw')
+    } catch (error) {
+      expect(error).toBeInstanceOf(WireDecodeError)
+      const message = (error as WireDecodeError).message
+      expect(message).toContain('tokens')
+      expect(message).not.toContain(SECRET_NAME)
+      expect(message).not.toContain(SECRET_CONV)
+      expect(message).not.toContain('41200')
+      expect(message).not.toContain('9800')
+      expect(message).not.toMatch(/\b(index|row 1|\[1\])\b/i)
+    }
+  })
+})
+
+describe('parseInboundMessage — context_usage dropped_categories (#1455, AC4)', () => {
+  it('carries 3 beside TWO retained rows — the count is independent, never reconciled', () => {
+    // The count accumulates TWO cuts: the producer's entry and string caps, plus the mapper's own
+    // frame-byte budget. So a retained list's length is no evidence of completeness in either
+    // direction, and `categories.length + dropped_categories` is the breakdown's true size rather than
+    // something to check. This test reddens if anyone adds that check.
+    const decoded = parseInboundMessage(encodeContextUsage(CONTEXT_USAGE_FRAME))
+    expect(decoded?.kind === 'context-usage' && decoded.contextUsage.dropped_categories).toBe(3)
+  })
+
+  it.each([
+    ['0 beside a populated list — nothing was dropped', { dropped_categories: 0 }],
+    ['a count far exceeding the retained rows', { dropped_categories: 900 }],
+    ['a negative count — no client-invented range check', { dropped_categories: -1 }]
+  ])('decodes %s untouched', (_label, override) => {
+    const frame = { ...CONTEXT_USAGE_FRAME, ...override }
+    expect(parseInboundMessage(encodeContextUsage(frame))).toEqual({
+      kind: 'context-usage',
+      contextUsage: { ...CONTEXT_USAGE, ...override }
+    })
+  })
+
+  it('decodes 0 beside an EMPTY list — a zero is a value, never an absence', () => {
+    const decoded = parseInboundMessage(encodeContextUsage(CONTEXT_USAGE_EMPTY_FRAME))
+    expect(decoded?.kind === 'context-usage' && decoded.contextUsage.dropped_categories).toBe(0)
+  })
+
+  it.each([
+    ['mistyped', { dropped_categories: '3' }],
+    ['null', { dropped_categories: null }]
+  ])('fails the whole frame closed when dropped_categories is %s', (_label, override) => {
+    expect(() =>
+      parseInboundMessage(encodeContextUsage({ ...CONTEXT_USAGE_FRAME, ...override }))
+    ).toThrow(WireDecodeError)
+  })
+
+  it('fails closed when dropped_categories is ABSENT — no omitempty, so an absent key is a defect', () => {
+    const absent: Record<string, unknown> = { ...CONTEXT_USAGE_FRAME }
+    delete absent.dropped_categories
+    expect(() => parseInboundMessage(encodeContextUsage(absent))).toThrow(WireDecodeError)
+  })
+
+  it('caps nothing and allocates nothing from the CLAIMED count', () => {
+    // The never-allocate-from-a-claim rule (AttachmentChunkPayload's `new Array(total_chunks)` hazard).
+    // A huge count beside two rows must decode instantly and yield exactly the two that ARRIVED — the
+    // decoder sizes from the array it actually got, never from the number the daemon asserts. AC4 also
+    // forbids a client-side entry cap, so a long list decodes whole.
+    const many = Array.from({ length: 200 }, (_unused, i) => ({ name: `c${i}`, tokens: i }))
+    const frame = { ...CONTEXT_USAGE_FRAME, categories: many, dropped_categories: 9_000_000 }
+    expect(categoriesOf(frame)).toHaveLength(200)
   })
 })
 
@@ -6842,13 +7061,16 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     const { log, lines } = captureLog()
     const SECRET_CONV = 'secret-conversation-id'
     const SECRET_MODEL = 'secret-model-text'
+    const SECRET_CATEGORY = 'secret-category-name'
     const plaintext = encodeContextUsage({
       ...CONTEXT_USAGE_FRAME,
       conversation_id: SECRET_CONV,
       model: SECRET_MODEL,
       total_tokens: 4242,
       max_tokens: 8484,
-      percentage: 7373
+      percentage: 7373,
+      categories: [{ name: SECRET_CATEGORY, tokens: 5151 }],
+      dropped_categories: 6262
     })
 
     parseInboundMessage(plaintext, log)
@@ -6877,6 +7099,13 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(lines[0]).not.toContain('4242')
     expect(lines[0]).not.toContain('8484')
     expect(lines[0]).not.toContain('7373')
+    // #1455: the breakdown is a FINER side-channel than the three integers above, because a per-category
+    // figure discloses how the window is composed and not merely how full it is. A category name is
+    // model-influenced text on the same footing as `model`. Neither the rows nor the dropped count nor
+    // the list's LENGTH reaches the record — the exact-key-set assertion above is what pins the length.
+    expect(lines[0]).not.toContain(SECRET_CATEGORY)
+    expect(lines[0]).not.toContain('5151')
+    expect(lines[0]).not.toContain('6262')
   })
 
   it('writes NO inbound-unmodeled record for a context_usage any more (#1454, AC3)', () => {
@@ -6891,6 +7120,22 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     const { log, lines } = captureLog()
     expect(() =>
       parseInboundMessage(encodeContextUsage({ ...CONTEXT_USAGE_FRAME, percentage: '64' }), log)
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
+  it('does NOT log on a malformed category ROW throw path (#1455, AC3)', () => {
+    // The row parser runs inside the same pre-log narrowing, so a bad row is as unlogged as a bad
+    // top-level field — including the row's own untrusted name, which never reaches the file.
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(
+        encodeContextUsage({
+          ...CONTEXT_USAGE_FRAME,
+          categories: [{ name: 'secret-category-name', tokens: '41200' }]
+        }),
+        log
+      )
     ).toThrow(WireDecodeError)
     expect(lines).toHaveLength(0)
   })

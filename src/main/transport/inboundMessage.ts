@@ -44,6 +44,7 @@ import type {
   SessionFactsPayload,
   ThinkingProgressPayload,
   RateLimitedPayload,
+  ContextUsageCategory,
   ContextUsagePayload,
   UnrecognizedMessagePayload,
   SessionTransitionPayload,
@@ -485,17 +486,27 @@ interface FrameTimestamp {
  * here until the carry slice claims it.
  *
  * The `context-usage` kind (#1454) carries the decoded ContextUsagePayload — claude's own report of what
- * is in the context window, published after every turn end on the interactive path. THE READING HALF
- * ONLY: the frame's three inventories and their three dropped counts are on the wire and are decoded by
- * the follow-on slices, not here. Conversation-scoped like the two kinds above — no `turn_id`, and it
+ * is in the context window, published after every turn end on the interactive path. THE READING AND THE
+ * CATEGORY BREAKDOWN: #1455 decodes `categories` and `dropped_categories`, while the frame's remaining
+ * two inventories (`mcp_tools` / `memory_files`) and their two dropped counts are on the wire and are
+ * decoded by #1456, not here. Conversation-scoped like the two kinds above — no `turn_id`, and it
  * opens and closes no turn. The fail-closed defence is two required strings and three required NUMBERS,
  * each through the type-not-truthiness helpers, so `''` and `0` survive as the values the daemon's empty
- * fixture states them to be rather than being read as absences.
+ * fixture states them to be rather than being read as absences — and, for the breakdown, a list-shape
+ * guard plus a per-row narrowing where ONE BAD ROW DROPS THE WHOLE FRAME rather than yielding a partial
+ * breakdown.
+ *
+ * `categories` IS NEVER NULL and an empty list is the POSITIVE STATEMENT that claude reported no
+ * categories; the rows are a PREFIX in the producer's descending-token order, so a short list is never a
+ * list with holes. `dropped_categories` IS INDEPENDENT AND NOT INFERABLE — two cuts' worth of loss, so a
+ * retained list's length says nothing about completeness and nothing here reconciles the two.
  *
  * PROVENANCE IS MIXED WITHIN THE ONE PAYLOAD, which is what separates this kind from every neighbour
- * here: `conversation_id` is daemon-authored, `model` is claude-authored and unsanitized. A consumer
- * assuming one provenance for the whole value is wrong half the time, in the direction that promotes
- * `model` to a checked value. See ContextUsagePayload, which names the split field by field.
+ * here: `conversation_id` is daemon-authored, `model` and every row's `name` are claude-authored and
+ * unsanitized. A consumer assuming one provenance for the whole value is wrong half the time, in the
+ * direction that promotes those strings to checked values. A row's `name` is a LABEL, never a selector,
+ * and if a consumer indexes rows by it the index is a `Map`, never a plain object. See
+ * ContextUsagePayload and ContextUsageCategory, which name the split field by field.
  *
  * THE THREE INTEGERS ARE NOT RANGE-CHECKED and are NOT mutually consistent by contract. The daemon
  * neither recomputes nor normalizes claude's figures, so a consumer must not derive `percentage` from
@@ -2218,18 +2229,84 @@ function parseRateLimitedPayload(payload: unknown): RateLimitedPayload {
 }
 
 /**
- * Narrow an opaque payload into a ContextUsagePayload (#1454) — THE READING HALF of the frame only.
- * Fail-closed like parseRateLimitedPayload directly above, whose shape this is minus one string and one
- * nullable list plus two numbers: two `requireString`s and three `requireNumber`s. No helper is invented
- * here, and nothing is cross-validated.
+ * Narrow one row of a `context_usage` frame's category breakdown into a ContextUsageCategory (#1455).
+ * parseModelOption's shape scaled down to two fields: an isRecord gate, one requireString, one
+ * requireNumber, returning a fresh two-field literal. No helper is invented here.
  *
- * THE SIX INVENTORY KEYS ARE DROPPED, NOT READ. `categories`, `mcp_tools`, `memory_files` and their three
+ * WHAT IS DELIBERATELY NOT CHECKED, each of which would fail-close valid traffic:
+ *
+ *   - NO emptiness check on `name`. requireString polices the TYPE, so `''` passes free — the daemon
+ *     states both keys remain present even when Name is empty, so an empty label is a VALUE. The same
+ *     posture makes `tokens: 0` claude's reading of zero rather than an absence.
+ *   - NO range check on `tokens`, and no running total. The frame's own no-range-check rule one level
+ *     down: the figures are claude's and the daemon neither recomputes nor normalizes them. The
+ *     categories NEED NOT SUM to `total_tokens` by contract, and a cut list makes the sum smaller
+ *     still, so a consumer must not derive a total from these rows or read a gap as an error.
+ *   - NO trim, normalise, strip, escape, re-encode or length cap on `name`. It is CLAUDE-AUTHORED text
+ *     that crossed the subprocess trust boundary; the producer bounds it at construction and
+ *     parseInboundMessage's MAX_PLAINTEXT_BYTES guard backstops the frame, so a third bound here would
+ *     be a client-invented one to keep in agreement (the parseSlashCommand posture). The committed
+ *     fixture's `Messages <&>` crosses byte-for-byte on purpose: ESCAPING AT A DECODER IS ESCAPING AT
+ *     THE WRONG LAYER — it corrupts the value for every non-HTML sink and buys false safety at the real
+ *     one. CLAUDE.md's 2026-08-20 operator ruling puts it at the render sink, which is #1421's.
+ *   - NO closed set on `name`. It is descriptive text a claude release renames by definition, so a
+ *     client-side set would fail-close a valid future frame.
+ *
+ * Its message names the failure CATEGORY only, never a value and NEVER THE ROW INDEX — parseModelOption's
+ * rule verbatim: every string here is untrusted text, daemonConnection catches WireDecodeError into a
+ * caller that may log it, and an index would be a weak oracle over the breakdown that buys nothing.
+ */
+function parseContextUsageCategory(payload: unknown): ContextUsageCategory {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed context usage category')
+  }
+  const name = requireString(payload, 'name')
+  const tokens = requireNumber(payload, 'tokens')
+  return { name, tokens }
+}
+
+/**
+ * Narrow an opaque payload into a ContextUsagePayload (#1454 the reading, #1455 the category breakdown).
+ * Fail-closed like parseRateLimitedPayload directly above, extended with parseModelListPayload's
+ * list-frame shape: two `requireString`s, three `requireNumber`s, the inline Array.isArray-then-`raw.map`
+ * over the rows, and a plain `requireNumber` for the dropped count. No helper is invented here, and
+ * nothing is cross-validated.
+ *
+ * THE FOUR REMAINING INVENTORY KEYS ARE DROPPED, NOT READ. `mcp_tools`, `memory_files` and their two
  * dropped counts are on EVERY real frame, so this parser's forward-compatibility is load-bearing rather
- * than hypothetical: the fresh five-field literal tolerates them without copying them through, which also
- * makes it prototype-pollution-safe against a planted `__proto__` and keeps the daemon fixture's
- * deliberately adversarial inventory values (a `../../../etc/passwd` memory-file path, markup
- * metacharacters in a tool name) from crossing even as opaque data. The two follow-on slices decode them
- * and own their validation.
+ * than hypothetical: the fresh seven-field literal tolerates them without copying them through, which
+ * also makes it prototype-pollution-safe against a planted `__proto__` and keeps the daemon fixture's
+ * deliberately adversarial remaining values (a `../../../etc/passwd` memory-file path, markup
+ * metacharacters in a tool name) from crossing even as opaque data. #1456 decodes them and owns their
+ * validation — that path value is the clearest possible statement that those two are a PATH-TRAVERSAL
+ * SURFACE and is a must-review item for it.
+ *
+ * `categories` FAILS CLOSED ON `null`, ON AN ABSENT KEY AND ON ANY NON-ARRAY, while an EMPTY ARRAY
+ * DECODES TO `[]`. The daemon's MarshalJSON normalises a nil slice to `[]` precisely so a client never
+ * has to tell the two apart, which makes `[]` the POSITIVE STATEMENT that claude reported no categories
+ * and makes a `null` a real defect; `Array.isArray(null)` is `false`, which is exactly what fails it, and
+ * an omitted key (`undefined`) fails the same way. That empty list must stay distinguishable from the
+ * absence a frame that never arrived yields — which is a CONSUMER obligation from #1419 onward, since
+ * this decoder only ever returns one or throws. ORDER IS PRESERVED FROM THE WIRE: the rows are a prefix
+ * of the producer's descending-token order with any cut taken off the TAIL, so a shortened list is never
+ * a list with holes and re-sorting would destroy the only ordering signal a consumer gets. ONE BAD ROW
+ * THROWS THE WHOLE FRAME rather than yielding a partial breakdown — `raw.map` propagates the first
+ * throw — and a half-populated breakdown is worse than none, because nothing downstream could tell the
+ * two apart once `dropped_categories` no longer accounts for the loss.
+ *
+ * `dropped_categories` decodes through plain requireNumber, correct PRECISELY BECAUSE the Go field has
+ * no `omitempty`: the key is always written, so `0` is a genuine value carried as `0` and never
+ * truthiness-tested, while an absent key is a real defect. NOTHING CROSS-CHECKS IT AGAINST
+ * `categories.length` AND NOTHING CAPS THE ENTRY COUNT (AC4). The count is TWO CUTS' worth of loss — the
+ * producer's entry and string caps plus the mapper's own frame-byte budget — so a retained list's length
+ * is no evidence of completeness in either direction, and the committed fixture's `3` beside exactly two
+ * rows is the case that proves it; `categories.length + dropped_categories` is the true size, not
+ * something to reconcile. The producer's caps are DAEMON-SIDE and may change without any change to this
+ * contract, so re-deciding a bound here would be a second place the limit lives, free to disagree
+ * silently. NOTHING IS ALLOCATED, SIZED OR LOOPED FROM THE CLAIMED COUNT: `raw.map` allocates from the
+ * array that ACTUALLY arrived, which is AttachmentChunkPayload's never-allocate-from-a-claim rule, and
+ * the array itself is already bounded because parseInboundMessage checks MAX_PLAINTEXT_BYTES as its
+ * first statement — ahead of decodeEnvelope and therefore ahead of the JSON.parse that materialises it.
  *
  * NO RANGE CHECK ON ANY OF THE THREE INTEGERS AND NO CROSS-FIELD CHECK, and the daemon's contract is why:
  * the reading is INFORMATIONAL — claude's own integers, which the daemon neither recomputes nor
@@ -2256,8 +2333,8 @@ function parseRateLimitedPayload(payload: unknown): RateLimitedPayload {
  *
  * Any missing / mistyped field throws WireDecodeError (never a partial value), dropping the frame as a
  * whole the way every other arm drops one. Its messages name the failure CATEGORY only, never
- * interpolating a value: `model` is untrusted claude-authored text and `conversation_id` a correlating
- * identifier.
+ * interpolating a value: `model` and every row's `name` are untrusted claude-authored text and
+ * `conversation_id` a correlating identifier.
  */
 function parseContextUsagePayload(payload: unknown): ContextUsagePayload {
   if (!isRecord(payload)) {
@@ -2268,7 +2345,21 @@ function parseContextUsagePayload(payload: unknown): ContextUsagePayload {
   const total_tokens = requireNumber(payload, 'total_tokens')
   const max_tokens = requireNumber(payload, 'max_tokens')
   const percentage = requireNumber(payload, 'percentage')
-  return { conversation_id, model, total_tokens, max_tokens, percentage }
+  const raw = payload.categories
+  if (!Array.isArray(raw)) {
+    throw new WireDecodeError('malformed context usage categories list')
+  }
+  const categories = raw.map(parseContextUsageCategory)
+  const dropped_categories = requireNumber(payload, 'dropped_categories')
+  return {
+    conversation_id,
+    model,
+    total_tokens,
+    max_tokens,
+    percentage,
+    categories,
+    dropped_categories
+  }
 }
 
 /**

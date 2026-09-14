@@ -125,8 +125,12 @@ test('healthy host remains usable; last-host and repeated failures never navigat
   await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(2)
   await page.locator('.channel-list__row-open').filter({ hasText: 'Server two chat' }).click()
   await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
-  // Local-storage copy is expected; another host's failure must add no connection warning.
-  await expect(page.locator('.conversation__banner')).toHaveText(['No messages are saved on this device.'])
+  // Nothing is saved locally for this chat, which since #1447 draws no notice at all — so the band is
+  // empty of everything, and another host's failure adding a connection warning is what would fill it.
+  // The mounted-screen assertion comes first: a count of zero read against an unmounted conversation
+  // would pass on its own, which is not the claim being made.
+  await expect(page.locator('.conversation')).toBeVisible()
+  await expect(page.locator('.conversation__banner')).toHaveCount(0)
   await page.getByPlaceholder('Message…').fill('Hello healthy host')
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(page.locator('.bubble[data-thread-role="assistant"]')).toContainText('Healthy host reply')

@@ -102,8 +102,9 @@ cancellation. Offline rows keep copying and scrolling without history/configurat
 requests. Saved rendering suppresses cursors and grouped-tool running labels even
 when durable rows are partial, including after reconnect. Connected opening and
 reconnect remove offline notices without reviving saved working state; new live
-receipts resume normal rendering. Pending, failed and empty local-read notices can
+receipts resume normal rendering. Pending and failed local-read notices can
 still appear while connected because they describe local storage, not connectivity.
+A loaded, empty local read draws no notice, connected or offline (\#1447).
 
 Received queue rows remain readable on disconnect with disabled drop controls.
 Pending, failed and restored local slices must not borrow the conversation-id-only

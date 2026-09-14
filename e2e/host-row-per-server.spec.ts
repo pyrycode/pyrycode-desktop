@@ -127,8 +127,10 @@ test('the host row reports the server it names, and the other machine dropping d
   await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
   await expect(page.getByRole('button', { name: COMPOSER_REPAIR_BUTTON_COPY, exact: true })).toHaveCount(0)
   await expect(page.locator('.composer-status__error')).toHaveCount(0)
-  // Local-storage copy is expected; another host's failure must add no connection warning.
-  await expect(page.locator('.conversation__banner')).toHaveText(['No messages are saved on this device.'])
+  // Nothing is saved locally for this chat, which since #1447 draws no notice at all — so the band is
+  // empty of everything, and another host's failure adding a connection warning is what would fill it.
+  // Safely anchored: the composer assertions above have already waited for this screen to mount.
+  await expect(page.locator('.conversation__banner')).toHaveCount(0)
   await expect(page.getByRole('region', { name: 'Repair pairing', exact: true })).toHaveCount(0)
 
   // AC3 — and only now. B's dots have changed; the row naming server A has not.

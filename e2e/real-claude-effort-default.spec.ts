@@ -19,12 +19,12 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 // put a visible user turn in the thread and burn a turn to do it, so the thread itself is the detector.
 //
 // WHY THE ONE REAL TURN IS DRIVEN THROUGH THE SEEDED ROW, and this is the correction the first gate run
-// bought (the drive spent its turn on a FAB-created chat and then read a blank label). The apply is gated
+// bought (the drive spent its turn on a newly-minted chat and then read a blank label). The apply is gated
 // on the remembered level appearing among the levels PUBLISHED for the target chat's model, and the
 // daemon builds `model_list` from claude's own `initialize` reply — one exchange per child spawn. A
 // never-messaged conversation has no child, so its vocabulary can only come from pyrycode#2124's
 // daemon-wide fallback, whose source is `Pool.Default()`: the BOOTSTRAP session's retained list. The
-// harness seeds exactly one conversation and binds it to that bootstrap session, while every FAB-created
+// harness seeds exactly one conversation and binds it to that bootstrap session, while every newly-created
 // conversation gets a dedicated minted session of its own (`create_conversation`'s eager bind). So a turn
 // spent in the seeded row is what puts a vocabulary behind the fallback, and a turn spent anywhere else
 // leaves the fallback empty and every never-messaged chat without levels. That is a property of where the
@@ -48,8 +48,9 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 // withholding relay that `modelListStore`'s header forbids the CLIENT, and a drive that spins where the
 // app may not is asserting a behaviour the app does not have. One caused ask, then the ordinary timeout.
 //
-// The FAB-minted chat further down needs none of this: it is activated AFTER turn 1 has put a vocabulary
-// behind the daemon-wide fallback, so its own one-shot ask is answered — request and response, no push.
+// The chat minted further down through the `Create chat` plus needs none of this: it is activated AFTER
+// turn 1 has put a vocabulary behind the daemon-wide fallback, so its own one-shot ask is answered —
+// request and response, no push.
 //
 // AND WHY EVERY TURN GATE HERE IS POSITIVE-THEN-MUTATION, AND WHY THE POSITIVE HALF IS BASE-RELATIVE.
 // A bare closing `toHaveCount(0)` on the streaming cursor passes before the send's own work has even
@@ -61,7 +62,7 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 // But UP AGAINST WHAT is the second half of that lesson, and it is what the SECOND gate run bought. The
 // count is polled against a baseline read immediately before the send, never against a bare `>= 1`.
 // real-claude.spec.ts can use `>= 1` for its first turn only because the chat it drives was minted empty
-// by the FAB two lines earlier; it switches to base-relative the moment a turn has already landed in that
+// by the plus two lines earlier; it switches to base-relative the moment a turn has already landed in that
 // thread. This drive's first turn runs in the SEEDED row — a pre-existing daemon conversation whose thread
 // this spec never established as empty — so `>= 1` there is satisfiable by whatever the daemon's history
 // reply already rendered, and the drive would sail past a send that never produced a turn. That is the same
@@ -213,7 +214,7 @@ test('a level set before a chat’s first message survives into the first turn',
   // the click; and the one ask in that set that is NOT idempotent, the opening history page, declines
   // through `requestOpeningHistory`'s own per-conversation gate rather than prepending a second copy.
   //
-  // The locator is deliberately left unfiltered: only the seeded conversation exists until the FAB runs
+  // The locator is deliberately left unfiltered: only the seeded conversation exists until the plus runs
   // below, so Playwright's strict mode is itself the check that this click lands on that row. ---
   await seededRow.click()
 
@@ -272,7 +273,7 @@ test('a level set before a chat’s first message survives into the first turn',
   await page.getByRole('button', { name: 'Close' }).click()
   await expect(label).toHaveText(picked, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
-  // --- 2. Mint a chat through the FAB and send NOTHING. It has a session bound at creation and no claude
+  // --- 2. Mint a chat through the plus and send NOTHING. It has a session bound at creation and no claude
   // child, which is exactly the state this ticket's write has to survive. The empty thread is what proves
   // the app actually navigated: the seeded chat it came from holds a settled exchange, so this count can
   // only be reached by arriving somewhere else. ---
@@ -297,7 +298,7 @@ test('a level set before a chat’s first message survives into the first turn',
   // accepted-then-dropped would show itself. ---
   await composer.fill(message(2))
   await sendButton.click()
-  // `>= 1` is sound HERE and only here: this chat was minted by the FAB and its thread was asserted empty
+  // `>= 1` is sound HERE and only here: this chat was minted by the plus and its thread was asserted empty
   // above, so the baseline is established rather than assumed — real-claude.spec.ts's own condition for
   // the same shape.
   await expect

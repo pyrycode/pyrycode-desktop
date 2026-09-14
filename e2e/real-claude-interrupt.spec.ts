@@ -12,9 +12,9 @@ test.use({ interactiveRunner: 'stream-json' })
 // claude's actual streaming + the client-side quiesce when the interrupt frame lands. It clones
 // real-claude.spec.ts's precondition (pair against a freshly-spawned real `pyry` on `--model haiku`,
 // bridged to the built Electron window through #251's content-blind routing relay, then CREATE the
-// conversation through the New-discussion FAB and reach the connected `.conversation` with Send enabled)
-// and swaps only the turn body: start a deliberately-long turn, interrupt it while it streams, and prove
-// the turn quiesces.
+// conversation through the workspace row's `Create chat` plus and reach the connected `.conversation`
+// with Send enabled) and swaps only the turn body: start a deliberately-long turn, interrupt it while it
+// streams, and prove the turn quiesces.
 //
 // The fake-stack twins (#307 InterruptButton render, #427 the queued-backlog-interrupt chain) prove the
 // client WIRING — the button is gated on `isTurnRunning(phase)` (thinking || responding), `sendInterrupt`
@@ -164,8 +164,9 @@ test('real claude quiesces a genuinely running turn when interrupted', async ({
 
   // --- Create the conversation THROUGH THE UI (#448) — the operator flow, not a pre-bound seed. ---
   // The seeded row renders only after the real daemon's `conversations` reply arrives on the connected edge,
-  // so its visibility IS the connected gate; only then click the FAB, which fires a real create at the real
-  // daemon and navigates on `conversation_created`. Send is enabled once the thread is connected.
+  // so its visibility IS the connected gate; only then click the workspace row's `Create chat` plus, which
+  // fires a real create at the real daemon and navigates on `conversation_created`. Send is enabled once the
+  // thread is connected.
   await expect(page.locator('.channel-list__row-open')).toBeVisible({
     timeout: HANDSHAKE_TIMEOUT_MS
   })

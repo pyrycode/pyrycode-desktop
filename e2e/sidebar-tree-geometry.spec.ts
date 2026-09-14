@@ -17,7 +17,7 @@ import type { Locator } from '@playwright/test'
 //
 // ONE launch, TWO sections. `launchPairedApp` reaches the thread by clicking a single STRICT
 // `.channel-list__row-open`, so the seed is one PROMOTED row (it renders under "Channels"), and the second
-// section is minted afterwards through the real product control: the new-discussion FAB creates an
+// section is minted afterwards through a real product control: the host row's `Add workspace` creates an
 // UNPROMOTED conversation, which the stateful fake re-lists under "Chats". Only with rows in both sections
 // does the divider render at all, and the divider's margins are half of what this file is for.
 //

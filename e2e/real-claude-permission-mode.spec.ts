@@ -81,7 +81,7 @@ test('real claude applies a permission-mode change picked from the input footer'
   await pairFromUnpairedLaunch(page, payload)
 
   // --- Precondition: pair, then create the conversation THROUGH THE UI (#448) — the operator flow. The
-  // seeded row rendering is the connected gate; the FAB must not be clicked before it. ---
+  // seeded row rendering is the connected gate; the `Create chat` plus must not be clicked before it. ---
   await expect(page.locator('.channel-list__row-open')).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
   await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
   await expect(conversation).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })

@@ -46,7 +46,7 @@ const LABEL_WEIGHT_RESTING = '400'
 // #1098 — the open row's label is `M3/body/small-emphasized` (node 103:2969), which differs from
 // body-small in WEIGHT ALONE. Both values live here because both are reachable in the same launch: the
 // fixture reaches the thread by CLICKING the seeded row, so that row is the open one from the first
-// paint, and the FAB further down mints a second conversation and moves the open state to it.
+// paint, and the plus further down mints a second conversation and moves the open state to it.
 const LABEL_WEIGHT_OPEN = '500'
 
 // #1098's fill — `Schemes/On Primary` #003355, worn as a background, as Chromium reports it. Read as a
@@ -88,7 +88,7 @@ const DOT_RING = 'rgb(157, 203, 252) 0px 0px 0px 1px inset'
 const GEOMETRY_TOLERANCE_PX = 1
 
 // The cwd `conversationStateFake` resolves a null-cwd `create_conversation` to. Both seeds use it so a
-// FAB-minted row lands in the SAME workspace group as the seed and the two rows are adjacent siblings —
+// minted row lands in the SAME workspace group as the seed and the two rows are adjacent siblings —
 // which is the only arrangement in which `.channel-list__row + .channel-list__row` fires at all.
 const WORKSPACE_CWD = '/fake/workspace'
 
@@ -195,7 +195,7 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   // THE WEIGHT IS THE OPEN ONE HERE, and that is not a relaxation of #1097's 400 — it is where the
   // fixture actually leaves the app. `launchPairedApp` reaches the thread by clicking this row, so the
   // single seeded row is the OPEN row from the first paint (#1098) and its label is one weight heavier
-  // by design. The resting 400 is asserted further down, where the FAB has moved the open state to a
+  // by design. The resting 400 is asserted further down, where the plus has moved the open state to a
   // second row and both values are on screen at once.
   expect(await computed(title, 'font-weight')).toBe(LABEL_WEIGHT_OPEN)
 
@@ -273,8 +273,8 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   const dotBox = await boxOf(dot, 'status dot')
   expectAbout(dotBox.y + dotBox.height / 2, rowBox.y + rowBox.height / 2)
 
-  // --- 7. AC1's pitch. Mint a second row through the real product control — the new-discussion FAB sends
-  // `create_conversation` with a null cwd, which the fake resolves to the seed's own workspace, so the two
+  // --- 7. AC1's pitch. Mint a second row through the real product control — the workspace row's `Create
+  // chat` plus sends `create_conversation` with that group's own cwd, the seed's workspace, so the two
   // rows land in ONE group as adjacent siblings. Both assertions matter and they fail in opposite
   // directions: a `gap` on the `.channel-list` column would produce the 4px between rows AND move the
   // workspace row's spacing, which AC1's second half forbids. The adjacent-sibling rule produces the

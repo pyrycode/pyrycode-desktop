@@ -24,7 +24,7 @@ import type { ConversationSummary } from '../src/shared/wire/types'
 // they would stay green with the pane unkeyed, which is exactly why they are not the observable here.
 //
 // BOTH activation paths are driven, because both leave the route on `thread` and both must re-key the
-// pane: the FAB's create→nav (useConversationCreatedNav) and the sidebar row click (onOpen).
+// pane: the plus's create→nav (useConversationCreatedNav) and the sidebar row click (onOpen).
 //
 // One `test`, one `launchPairedApp` launch, one sequential drive; it runs under the default `npm run e2e`
 // (the filename does not match the config's `real-*` testIgnore).
@@ -36,7 +36,7 @@ import type { ConversationSummary } from '../src/shared/wire/types'
 
 // EXACTLY ONE clickable seed: launchPairedApp reaches the thread by clicking a single strict
 // `.channel-list__row-open`, so a second seed would strict-violate at launch (the sibling specs' constraint).
-// The second conversation this drive needs is therefore MINTED by the FAB rather than seeded — which is
+// The second conversation this drive needs is therefore MINTED through the plus rather than seeded — which is
 // #1426 — UNPROMOTED so the seed lands in the Chats tree, whose workspace row carries the `Create chat`
 // plus this spec now mints through (the deleted FAB needed no group). Named so its title is a crisp filter target,
 // distinct from the minted row's. Fixed literals only — deterministic, no Date.now()/randomness.

@@ -3,7 +3,7 @@ import { mintChatInWorkspace } from './fixtures/mintChatRow'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 // The credential-light real-daemon tier (#439) driving the DESTRUCTIVE conversation lifecycle — archive →
-// restore → delete of a single FAB-created conversation — against a REAL spawned `pyry` on #251's
+// restore → delete of a single UI-created conversation — against a REAL spawned `pyry` on #251's
 // content-blind routing relay, gating on the `pyry` binary ALONE (no `claude`, no Anthropic credential).
 // This is the real-daemon twin of the merged fake-stack spec #452 (`conversation-archive-lifecycle.spec.ts`,
 // PR#454): the SAME chain, the SAME assertion surface, but the `conversationStateFake` is swapped for the

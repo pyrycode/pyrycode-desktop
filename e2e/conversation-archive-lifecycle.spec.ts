@@ -4,7 +4,7 @@ import { mintChatInWorkspace } from './fixtures/mintChatRow'
 import type { ConversationSummary } from '../src/shared/wire/types'
 
 // Fake-stack UI e2e for the DESTRUCTIVE lifecycle (#452, split from #422): archive → restore → delete of a
-// single FAB-created conversation, driven end-to-end through renderer → IPC → main → Noise wire → decode →
+// single UI-created conversation, driven end-to-end through renderer → IPC → main → Noise wire → decode →
 // render against the stateful conversationStateFake (#434) on the launchPairedApp fixture (#433). Today only
 // pair-and-send and (via the sibling #451) create/rename have e2e coverage; archive, restore and delete are
 // unguarded. This is the fake-stack twin of the real-daemon lifecycle spec #440; both hit the same structural
@@ -55,7 +55,7 @@ const SEED: ConversationSummary = {
   workspace_label: null
 }
 
-// The FAB-created row's displayed title: it is minted unnamed (name: null) and #452 never renames it, so
+// The created row's displayed title: it is minted unnamed (name: null) and #452 never renames it, so
 // titleFor(null) = 'Untitled'. Used to scope the created row's row-open (distinct from SEED's title) and to
 // assert its absence after delete.
 const UNTITLED = 'Untitled'

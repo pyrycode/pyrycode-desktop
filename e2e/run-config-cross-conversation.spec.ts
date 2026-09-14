@@ -19,7 +19,7 @@ import type {
 // what makes this its own file.
 //
 // THE STANDING RULE IS KEPT: a fake-tier spec may not supply an input production does not produce. Every
-// frame here is one the daemon sends unprovoked or in reply — the create round trip is the FAB's own
+// frame here is one the daemon sends unprovoked or in reply — the create round trip is the plus's own
 // (`conversationStateFake` answers `create_conversation` with the correlated `conversation_created`), a
 // `turn_state` is pushed unprovoked, and each `session_settings` answers a `request_session_settings`
 // this app actually sent, correlated by that request's own envelope id. Only the TIMING is this test's,
@@ -131,7 +131,7 @@ test('a run-config reply describing the previous conversation changes nothing af
   const requestA = requests.find((r) => r.conversationId === SEED.id)
   expect(requestA).toBeDefined()
 
-  // --- 2. Switch to B. The FAB mints it through the real create round trip and the correlated
+  // --- 2. Switch to B. The plus mints it through the real create round trip and the correlated
   // `conversation_created` drives the nav, so B is the open conversation and A's request is now the
   // in-flight one the operator navigated away from — the defect's exact state. B's own ask goes out
   // behind A's; both stay unanswered. ---

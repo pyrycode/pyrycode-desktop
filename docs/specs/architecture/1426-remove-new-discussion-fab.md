@@ -177,3 +177,29 @@ the create inside one workspace group as before.
 
 All 26 tests across the 15 touched fake-tier spec files pass, plus `ChannelList.test.tsx` (147) and
 `npm run build`. The real tier is the dispatcher's gate and is not run here.
+
+### 2026-09-14 — AC4's sweep finished, and the same sweep carried into the specs
+
+Verification found AC4 unmet in both `.tsx` files the criterion names: six comments still presented the FAB
+in the present tense. The § Design comment sweep above enumerated the sites it knew of and missed these,
+which is the gap — not a narrower boundary anyone chose. Two of the six were load-bearing rather than
+decorative: `workspaceRowTagsIn` and the workspace-plus tag helper each justify being tag-scoped rather
+than document-scoped by naming the controls that legitimately repeat `aria-label` in one render, and the
+FAB was in that list. Dropping it leaves the argument standing on the gear, Archive, Rename and Save-as,
+which still render. A third was wrong on its own terms besides — the Archive-entry note called the FAB a
+member of the top-right actions cluster, and it was pinned bottom-right.
+
+**The spec-comment sweep is new scope against this plan, taken up deliberately.** § Design bounded the
+sweep to the three files the ticket names and left everything else to the documentation stage. That
+boundary was right for comments that attribute history ("a FAB-created row" explaining why a line exists),
+and it is still held for those. It was wrong for a class this PR created: about forty comments in twenty-one
+specs narrated the FAB as *the control being pressed*, directly above press lines this PR rewrote to the
+`Create chat` plus or `Add workspace`. Verification raised five of them as a NIT; the same defect was in
+sixteen more files, and a sweep of the sampled five alone would have left the identical error unfixed
+around it.
+
+The rule applied: a comment describing what the drive does **now** is corrected to the control it actually
+presses; a comment recording what the FAB **did** stays, in the past tense. Ten such records survive on
+purpose, including `mintChatRow.ts`'s docblock, whose whole argument is that the minted row is the FAB's
+row field for field. Comment-only throughout — `npm run build` is green and `npx playwright test --list`
+parses all 108 spec files (233 tests), so no press, locator or assertion moved.

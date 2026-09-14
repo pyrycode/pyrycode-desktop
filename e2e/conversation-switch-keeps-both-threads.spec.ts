@@ -18,8 +18,8 @@ import type { Page } from '@playwright/test'
 // It fails on the pre-#758 code at step 5 — the flat store's reset left the returned-to thread empty.
 //
 // The drive is the sibling switch spec's (conversation-switch-remount.spec.ts): one seeded row, a second
-// conversation MINTED by the FAB (exactly one clickable seed, or launchPairedApp's strict row click
-// strict-violates at launch), and both activation paths — the FAB's create→nav and a sidebar row click.
+// conversation MINTED through the plus (exactly one clickable seed, or launchPairedApp's strict row click
+// strict-violates at launch), and both activation paths — the plus's create→nav and a sidebar row click.
 // The observable is the composer's OPTIMISTIC ECHO rather than a daemon reply: it is a real production
 // timeline row written by the real writer (composerSend → dispatchFor, keyed by the conversation it was
 // sent to), it needs no reply frame, and it is AC4 ("the composer's own echo appears in the thread it was

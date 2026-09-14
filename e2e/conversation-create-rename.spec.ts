@@ -12,7 +12,7 @@ const ROUNDTRIP_TIMEOUT_MS = 15_000
 // EXACTLY ONE clickable seed: launchPairedApp reaches the thread by clicking a single strict
 // `.channel-list__row-open`, so a second seed would strict-violate at launch. Promoted + named so it
 // renders in the "Channels" section (mirroring the demonstrator) and its baseline assertion is crisp.
-// The FAB-created row is non-promoted → it lands in "Chats", so the grown list exercises
+// The created row is non-promoted → it lands in "Chats", so the grown list exercises
 // both sections. Fixed literals only — deterministic, no Date.now()/randomness (the fakeDaemon convention).
 const SEED: ConversationSummary = {
   id: 'seed-conversation',
@@ -29,7 +29,7 @@ const SEED: ConversationSummary = {
 // SEED.name so both final assertions (SEED still present / created-under-NEW_TITLE present) stay crisp.
 const NEW_TITLE = 'Created then renamed'
 
-// The FAB-created row's displayed title before the rename: it is minted unnamed (name: null), so
+// The created row's displayed title before the rename: it is minted unnamed (name: null), so
 // titleFor(null) = 'Untitled' — the sibling specs' convention. Used below to tell the created row apart
 // from SEED, which is named, when reading which row the sidebar marks as open.
 const UNTITLED = 'Untitled'
@@ -86,8 +86,9 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
     page.locator('.channel-list').getByText('Seeded channel', { exact: true })
   ).toBeVisible()
 
-  // AC3 — FAB create-nav. The FAB dispatches requestNewConversation (name: null) → create_conversation →
-  // the fake mints `created-1` (unnamed, non-promoted) and replies conversation_created →
+  // AC3 — create-nav. Add workspace dispatches requestNewWorkspaceChat (name: null, cwd stated) →
+  // create_conversation → the fake mints `created-1` (unnamed, non-promoted) and replies
+  // conversation_created →
   // useConversationCreatedNav sets it active and dispatches `open` → route `thread` (and, independently,
   // #515's re-list lands the row in the store, still unnamed). Assert NAVIGATION into a thread, NOT list
   // membership: the list re-renders on the re-list whether or not the app navigated, so a row assertion

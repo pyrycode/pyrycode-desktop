@@ -44,14 +44,41 @@ nothing.
 ## `build/` holds icon inputs, not app payload
 
 `build/icon.ico` and `build/icon.png` are committed under `build/`, electron-builder's default
-`buildResources` directory, picked up by convention rather than named in `files`. Both are rendered from
-the snowflake `src/renderer/src/theme/PyryMark.tsx` already ships (the same geometry mobile carries as
-`ic_pyry_logo.xml`), on a tile in `--color-on-primary-container` over `--color-primary-container` — no
-new mark, no new color. The ICO carries all seven conventional entry sizes (16/24/32/48/64/128/256); the
-256² entry is the one electron-builder requires and is confirmed present, byte-for-byte, inside both
-built exes. `win.icon: build/icon.ico` supplies the installed app's and the taskbar's icon;
-`nsis.installerIcon` falls back to the application icon when `build/installerIcon.ico` is absent, which
-it deliberately is, so the installer chrome uses the same icon rather than a second asset.
+`buildResources` directory, picked up by convention rather than named in `files`. `win.icon:
+build/icon.ico` supplies the installed app's and the taskbar's icon; `nsis.installerIcon` falls back to
+the application icon when `build/installerIcon.ico` is absent, which it deliberately is, so the
+installer chrome uses the same icon rather than a second asset. The ICO carries all seven conventional
+entry sizes (16/24/32/48/64/128/256); the 256² entry is the one electron-builder requires and is
+confirmed present, byte-for-byte, inside both built exes.
+
+Both binaries are rendered from Figma node 504:2189 by the committed `scripts/render-app-icon.mjs`
+(`npx electron scripts/render-app-icon.mjs`), re-rendered in [#1446](https://github.com/pyrycode/pyrycode-desktop/issues/1446)
+to replace the flat tile #1416 shipped before that node existed. The 256² frame has 4px rounded corners
+over a `--color-surface` base; a radial gradient centred above the middle at (128, 91) — solid
+`--color-primary-container` out to 11% of its radius, fading to fully transparent `#003355` by 62% — is
+transcribed verbatim from the node's own gradient stops rather than reimplemented, so nothing here is an
+approximation of it. The snowflake sits in its raw `#7AB8E8`, 192 tall inside a 32px inset. The script
+reads the mark's `d` attribute directly out of `PyryMark.tsx` rather than holding a second copy, so the
+icon cannot drift from the mark the app renders elsewhere.
+
+Two things worth knowing before touching that script again:
+
+- **The node draws the mark vertically mirrored** — a 180° rotation composed with an x-flip is a y-flip.
+  The snowflake is organic rather than exactly symmetric, so this is visible and was settled by
+  measurement, not by reading the transform list: rasterising both candidates against the node's own
+  render gave a mean absolute channel difference of 1.58 mirrored versus 5.73 plain. The shipped 256 ICO
+  entry differs from the node's own render by 1.576 — no worse than that pre-implementation measurement,
+  so the gradient transcription introduced no additional error; the only large per-channel differences
+  are the RGB channels of fully transparent corner pixels, which are not observable.
+- **Chromium blocks top-level `data:` navigation, and in Electron that failure presents as a hang, not an
+  error.** The script rasterises its composed SVG through an `<img>` of a `data:image/svg+xml` URL drawn
+  into a `<canvas>`, but the *page* that hosts that canvas has to load from a `file://` path — a
+  top-level page loaded from a `data:` URL never resolves.
+
+`appIcon.test.ts` reads both committed binaries back as bytes with no image decoder: the PNG's IHDR
+gives its dimensions directly, and the ICO's entries are uncompressed 32-bit BMP (bottom-up BGRA after a
+40-byte header), so a corner pixel's transparency, the mark's centre color and the gradient's non-
+flatness are all assertable straight off the bytes.
 
 ## Cross-building on macOS: reaches `makensis`, then fails there — Apple Silicon without Rosetta 2
 

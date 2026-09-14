@@ -362,12 +362,25 @@ interface FrameTimestamp {
  * error content.
  *
  * The two interactive-stream kinds (#199) carry the decoded AssistantDeltaPayload / TurnEndPayload.
- * Unlike `snapshot`, the assistant delta `text` IS the render payload — the consumer carries it onward
- * (dropping only `conversation_id`); the fail-closed decode here is the boundary this slice defends.
+ * Unlike `snapshot`, the assistant delta `text` IS the render payload — the consumer carries it onward,
+ * and `conversation_id` with it, by name as `conversationId` (#751 for the delta, #752 for the turn end);
+ * the fail-closed decode here is the boundary this slice defends. The "turn-stream item, or daemon state?"
+ * test that governs the status kinds below answers differently on these two and the id crosses anyway: a
+ * delta and the boundary that closes it ARE turn-stream items, and they carry the id not to report
+ * per-conversation state but because a slice of assistant text has to be filed in the right thread, and a
+ * consumer cannot route what it cannot attribute (#675). Both parsers require `conversation_id`, so each
+ * emit reads it BARE — a missing or non-string one drops the whole line rather than closing the wrong
+ * thread's turn.
  *
  * The `turn-state` kind (#214) carries the decoded TurnStatePayload — the coarse lifecycle scalar that
- * drives the timeline `phase` (#202). The consumer carries only `state` onward (dropping
- * `conversation_id`); the fail-closed `state` enum check here is the boundary this slice defends.
+ * drives the timeline `phase` (#202). The consumer carries `state` onward, and `conversation_id` with it,
+ * by name as `conversationId` (#724), because per-conversation phase is daemon state rather than a
+ * turn-stream item: the sidebar must say a chat is thinking while the operator looks at a different one
+ * (#674). That id is a daemon-asserted ROUTING KEY and not rendered text — never markup, an attribute, a
+ * URL, a filename, a cache key or a lookup path, and none of the untrusted-display-text warnings this
+ * block attaches elsewhere attach to it. The fail-closed `state` enum check here is the boundary this
+ * slice defends, and the required `conversation_id` string beside it fails the whole line rather than
+ * emitting a phase attributed to nothing.
  *
  * The `stall` kind (#315) carries the decoded StallPayload — the onset-only liveness signal the daemon
  * fans out to interactive clients when a turn goes quiet. The consumer carries the payload's only field,
@@ -523,9 +536,14 @@ interface FrameTimestamp {
  *
  * The `session-transition` kind (#254) carries the decoded SessionTransitionPayload — the session-boundary
  * marker whose `new_session_id` is the addressing key the #259 holder will retain. The consumer carries
- * ONLY `new_session_id` onward (dropping the other four decoded fields — the #180 content-drop model); the
- * fail-closed `reason` closed-enum check plus the nullable `workspace_cwd` here are the boundary this slice
- * defends. `workspace_cwd` is opaque workspace display text (like `cwd` #139), decoded but dropped at the emit.
+ * FIVE of the six decoded fields onward: `newSessionId`, `reason`, `occurredAt` and `workspaceCwd`, the
+ * four the delimiter slice #286 reads (#285), plus `conversation_id` by name as `conversationId` (#1192),
+ * the marker's own routing key naming WHOSE session rotated. Only `previous_session_id` is dropped at the
+ * emit — it has no consumer. The fail-closed `reason` closed-enum check plus the nullable `workspace_cwd`
+ * here are the boundary this slice defends. `workspace_cwd` is opaque workspace display text (like `cwd`
+ * #139), carried onward as `string | null` with the null PRESERVED rather than coerced to `''`; the
+ * routing key beside it is daemon-asserted and not rendered text, so that display-text warning attaches
+ * to the cwd and not to it.
  *
  * The `session-settings-updated` kind (#264) carries the decoded SessionSettingsUpdatedPayload — the
  * daemon's confirmation that a `set_session_settings` (#263) request landed. It carries ONLY `session_id`
@@ -576,9 +594,13 @@ interface FrameTimestamp {
  * permission/trust prompt `claude` blocks on. The fail-closed decode here (two closed-enum checks on
  * `class` / `source` + a per-option narrower over the ordered `options` array) is the boundary this
  * slice defends; `title` / `prompt` / `options[].label` are untrusted display text carried onward.
- * A `modal_shown` also carries a `conversation_id` (pyrycode#1065, #870) — decoded here, then dropped
- * at the emit until #871 carries it across IPC. BOTH renderer bridges no-op these arms; the real
- * consumer is the modal store + bridge (#223).
+ * A `modal_shown` also carries a `conversation_id` (pyrycode#1065, decoded by #870), and the consumer
+ * carries it onward by name as `conversationId` (#871) — a permission prompt is daemon state that must be
+ * filed against the conversation which raised it, since the operator may be looking at a different one
+ * (#674). It is a daemon-asserted OUTBOUND SCOPING key, not rendered text and not a correlation key:
+ * answering still goes by `modalId` alone. A `modal_dismissed` carries no `conversation_id` at all and
+ * none is invented for it. BOTH renderer bridges no-op these arms; the real consumer is the modal store +
+ * bridge (#223).
  *
  * The `slash-command-list` kind (#936) carries the decoded SlashCommandListPayload — the verbs the
  * workspace will accept for one conversation, where `model_list` inventories the identities claude will

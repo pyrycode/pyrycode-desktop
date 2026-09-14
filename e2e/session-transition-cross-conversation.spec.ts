@@ -26,7 +26,7 @@ import type {
 // THE STANDING RULE IS KEPT: a fake-tier spec may not supply an input production does not produce.
 // `session_transition` is exactly the frame the daemon pushes unprovoked on an idle eviction — the live
 // trigger for this defect, since desktop's Reset session sends `/clear` as ordinary text that claude
-// intercepts in process. The create round trip is the FAB's own, each `session_settings` answers a
+// intercepts in process. The create round trip is the plus's own, each `session_settings` answers a
 // `request_session_settings` this app actually sent, and the model list is the unsolicited push. Only
 // the TIMING of the marker is this test's, and the timing is the defect.
 //
@@ -201,7 +201,7 @@ test('an idle-eviction marker for another chat never steers this chat’s settin
   // drives the nav, so B is the open chat and A is the one left idle in the background — the defect's
   // exact state. Answer B's own ask with a DIFFERENT session id, and push B's model list so B's effort
   // control is operable. ---
-  await page.locator('.channel-list__fab').click()
+  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
   await expect
     .poll(() => requests.find((r) => r.conversationId !== SEED.id)?.envelopeId, {
       timeout: ROUNDTRIP_TIMEOUT_MS

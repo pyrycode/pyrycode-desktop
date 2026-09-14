@@ -71,7 +71,7 @@ test('real claude session checkbox grants repeated Bash use only in the current 
     await expect(page.locator('.channel-list__row-open')).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
 
     const create = async (count: number): Promise<string> => {
-      await page.getByRole('button', { name: 'New discussion', exact: true }).click()
+      await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
       await expect.poll(() => page.evaluate(() => (window as DriveWindow).permissionDrive.created.length),
         { timeout: HANDSHAKE_TIMEOUT_MS }).toBe(count)
       // Compare paths inside the page: failed assertions expose only a Boolean.

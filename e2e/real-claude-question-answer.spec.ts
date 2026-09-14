@@ -304,12 +304,12 @@ test('real claude changes model during a question and resumes with the original 
 
   // --- Create the conversation THROUGH THE UI (#448) — the operator flow, not a pre-bound seed. ---
   // The seeded row renders only after the real daemon's `conversations` reply arrives on the connected
-  // edge, so its visibility IS the connected gate; only then click the FAB, which fires a real create at
-  // the real daemon and navigates on `conversation_created`.
+  // edge, so its visibility IS the connected gate; only then click the workspace row's `Create chat` plus,
+  // which fires a real create at the real daemon and navigates on `conversation_created`.
   await expect(page.locator('.channel-list__row-open')).toBeVisible({
     timeout: HANDSHAKE_TIMEOUT_MS
   })
-  await page.getByRole('button', { name: 'New discussion' }).click()
+  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
   await expect(conversation).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
   await expect(sendButton).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
 

@@ -18,8 +18,8 @@ import type { Page } from '@playwright/test'
 // It fails on the pre-#758 code at step 5 — the flat store's reset left the returned-to thread empty.
 //
 // The drive is the sibling switch spec's (conversation-switch-remount.spec.ts): one seeded row, a second
-// conversation MINTED by the FAB (exactly one clickable seed, or launchPairedApp's strict row click
-// strict-violates at launch), and both activation paths — the FAB's create→nav and a sidebar row click.
+// conversation MINTED through the plus (exactly one clickable seed, or launchPairedApp's strict row click
+// strict-violates at launch), and both activation paths — the plus's create→nav and a sidebar row click.
 // The observable is the composer's OPTIMISTIC ECHO rather than a daemon reply: it is a real production
 // timeline row written by the real writer (composerSend → dispatchFor, keyed by the conversation it was
 // sent to), it needs no reply frame, and it is AC4 ("the composer's own echo appears in the thread it was
@@ -29,12 +29,14 @@ import type { Page } from '@playwright/test'
 // two message literals are non-secret display text; the pairing plumbing (synthetic token, fake static
 // key) lives in launchPairedApp and is never echoed.
 
-// The one clickable seed. Promoted + named so its title is a crisp filter target, distinct from the
-// minted row's. Fixed literals only — deterministic, no Date.now()/randomness.
+// The one clickable seed. #1426 — UNPROMOTED so it lands in the Chats tree, whose workspace row carries
+// the `Create chat` plus this spec now mints through; the deleted FAB needed no group to exist. Nothing
+// here reads the section, so the flip costs the drive nothing. Named so its title is a crisp filter
+// target, distinct from the minted row's. Fixed literals only — deterministic, no Date.now()/randomness.
 const SEED: ConversationSummary = {
   id: 'seed-conversation',
   name: 'Seeded channel',
-  is_promoted: true,
+  is_promoted: false,
   is_archived: false,
   cwd: '/fake/workspace',
   last_message_ts: '2026-07-07T12:00:00.000Z',
@@ -42,7 +44,7 @@ const SEED: ConversationSummary = {
   workspace_label: null
 }
 
-// The FAB-created row's displayed title: it is minted unnamed (name: null), so titleFor(null) = 'Untitled'.
+// The plus-created row's displayed title: it is minted unnamed (name: null), so titleFor(null) = 'Untitled'.
 const UNTITLED = 'Untitled'
 
 // Two distinct messages, one per thread, so a failure diagnostic names WHICH conversation's rows leaked
@@ -95,12 +97,12 @@ test("switching away from a chat and back shows that chat's own thread", async (
   await sendButton.click()
   await expect(userRows).toHaveText([bubbleTextExactly(SENT_IN_SEED)])
 
-  // --- 2. The CREATE path: the FAB mints a second conversation and the correlated conversation_created
+  // --- 2. The CREATE path: the workspace plus mints a second conversation and the correlated conversation_created
   // drives activate + `open`. It has no retained timeline, so its thread is EMPTY and fills from the next
   // live event — AC3. The seeded thread's row must NOT be borrowed into it; before #758 this step passed
   // for the wrong reason (the flat store had just been reset out from under the screen). The auto-wait
   // covers the whole create round trip. ---
-  await page.locator('.channel-list__fab').click()
+  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
   await expect(userRows).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(page.locator('.conversation__empty')).toBeVisible()
 

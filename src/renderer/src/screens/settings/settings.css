@@ -76,7 +76,9 @@
 
 /* The scroll body (Figma 17:9) — fills the remaining height below the top bar and holds the sections.
    pt-4 → --space-1; Figma's pb-32 has no exact token (the 4px scale stops at --space-6/24px), so map to
-   the nearest --space-6 (the .channel-list__fab ±token-mapping precedent) — an 8px delta below an empty
+   the nearest --space-6. No new token for an 8px delta; `.archive__tab-panel` cites THIS rule as the
+   precedent for the same mapping (#1426 deleted .channel-list__fab, which this used to cite instead, and
+   its ±mapping was for a radius rather than for this one) — an 8px delta below an empty
    scaffold section, immaterial until #334/#151/#152 fill the body. */
 .settings__body {
   flex: 1 1 auto;

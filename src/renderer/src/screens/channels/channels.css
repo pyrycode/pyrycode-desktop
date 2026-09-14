@@ -2,18 +2,19 @@
  * Channel List home screen styles (#141), mirrored from the mobile Figma node 15-8 body. Every
  * color / type / spacing value references a theme token from theme/tokens.css — no color/type/spacing
  * literal lives here; opacity is a de-emphasis device (the #218 precedent), not a color literal. The
- * carve-outs are structural geometry (1px dividers, the FAB's fixed 56px square) and the FAB's M3
- * elevation shadow, which has no token yet (#242, the first elevation consumer). The Figma's avatars,
+ * carve-outs are structural geometry (1px dividers, the 48px icon-button squares). The Figma's avatars,
  * body-preview text, top app bar, and "See all" link are deferred to other tickets; this stylesheet
- * covers the two-section list of label rows, the divider, the empty state, and the new-discussion FAB
- * (#242).
+ * covers the two-section list of label rows, the divider and the empty state.
+ *
+ * #1426 deleted the new-discussion FAB (#242) and its four rules. It was this file's only elevation
+ * consumer, so the M3 shadow carve-out went with it and there is no un-tokenised shadow left here.
  *
  * #1097 converged the ROW on the desktop node (103:2968) — a 24px row with a body-small label, a 6px
  * corner and 4px between consecutive rows — and deleted the mobile node's trailing last-activity time.
  * The 2026-09-05 inset fix converged the TREE'S PLACEMENT on the desktop sidebar node (103:2959): the
  * card's 20px inset, the section header's spacing, the channel list's 20px indent, the host dots'
  * trailing edge and the divider's 28px margins. The mobile 15-8 mirroring above still describes what is
- * left of the mobile screen: the FAB, the actions cluster and the empty state.
+ * left of the mobile screen: the actions cluster and the empty state.
  */
 
 /* The scroll column. Since #670 this <section> is the child of `.paired-shell__sidebar`, the shell's
@@ -27,9 +28,10 @@
    Every level of the tree — section header, host row, workspace row, channel row, divider — is laid out
    against this 360px content box, which is exactly the width the design draws them in, so the node's own
    x coordinates transfer without translation (`.channel-list__host-status` below relies on that). The
-   VERTICAL pair is not the design's 20: the top 4 is the sticky actions cluster's rest position and the
-   bottom 24 matches the FAB's sticky offset (its rule says why), and both controls are interim desktop
-   chrome the design places elsewhere. When they move, the vertical pair becomes --space-5 too.
+   VERTICAL pair is not the design's 20: the top 4 is the sticky actions cluster's rest position, and the
+   bottom 24 is what the deleted FAB's sticky offset asked for (#1426 removed the control, NOT the
+   padding — #1425 moves it). The actions cluster is interim desktop chrome the design places elsewhere.
+   When it moves, the vertical pair becomes --space-5 too.
    e2e/sidebar-tree-geometry.spec.ts pins every offset this inset produces.
 
    #1058 — NO background. This used to paint --color-surface, the same colour .paired-shell paints behind
@@ -44,7 +46,7 @@
    non-positioned descendant, which is steps 3 and 5. .channel-list__row — and, since #1178,
    .channel-list__workspace-head, since #1185 .channel-list__host, and since #1303
    .channel-list__section-header — are already relative,
-   and .channel-list__actions / .channel-list__fab are sticky at z-index: 1. Without this one declaration
+   and .channel-list__actions is sticky at z-index: 1. Without this one declaration
    the tree would sit UNDER a 30% black wash while the chat rows stayed bright: a worse
    defect than the flat sheet it replaces. MEASURED, not predicted — deleting this line and rebuilding
    turned e2e/paired-shell-card.spec.ts's hit-test on the host row from `.channel-list__host` to
@@ -61,8 +63,8 @@
    and tree order puts it after the wrapper's ::before. The same idiom, for the same reason, as
    .composer__input over .composer__row::before and .pairing-field__row.
 
-   DELIBERATELY NO z-index: with z-index auto this does not become a stacking context, so the sticky FAB
-   and actions cluster keep painting at the root's positive-z layer exactly as they did. And `relative` is
+   DELIBERATELY NO z-index: with z-index auto this does not become a stacking context, so the sticky
+   actions cluster keeps painting at the root's positive-z layer exactly as it did. And `relative` is
    not one of the properties that makes an ancestor a containing block for FIXED descendants, so
    .save-as-channel-overlay, .rename-conversation-overlay, (since #1179) .create-channel-overlay and
    (since #1308) .add-workspace-overlay still escape this column and cover the window. Do not "simplify" this to isolation: isolate +
@@ -214,7 +216,7 @@
   transform: none;
 }
 
-/* `display: block` is the file's icon convention (__save-icon / __fab-icon). */
+/* `display: block` is the file's icon convention (__save-icon / __settings-icon). */
 .channel-list__pair-icon {
   display: block;
 }
@@ -270,9 +272,9 @@
   margin-top: 0;
 }
 
-/* The server-rack glyph. `display: block` is the file's icon convention (__save-icon / __fab-icon); the
+/* The server-rack glyph. `display: block` is the file's icon convention (__save-icon / __settings-icon); the
    flex basis keeps it from shrinking. Its 12px box is set on the <svg> as structural component geometry
-   (the FAB's fixed 56px square precedent) — half the 24px of the interactive icon buttons, so it reads as
+   (the .channel-list__archive 48px-square precedent) — half the 24px of the interactive icon buttons, so it reads as
    a level marker rather than a control. Color inherits via currentColor. */
 .channel-list__host-icon {
   display: block;
@@ -476,7 +478,7 @@
   display: block;
 }
 
-/* `display: block` is the file's icon convention (__save-icon / __fab-icon). */
+/* `display: block` is the file's icon convention (__save-icon / __settings-icon). */
 .channel-list__host-edit-icon {
   display: block;
 }
@@ -541,7 +543,7 @@
   display: block;
 }
 
-/* `display: block` is the file's icon convention (__save-icon / __fab-icon). */
+/* `display: block` is the file's icon convention (__save-icon / __settings-icon). */
 .channel-list__host-add-icon {
   display: block;
 }
@@ -676,7 +678,7 @@
        tracking and weight but not family — without this the label renders in the UA button font.
      - `color`: a <button> resets it to the UA `buttontext`, and the folder glyph is fill="currentColor",
        so the glyph would mis-paint (visibly, in the dark scheme) where it used to inherit from
-       `.channel-list`. `__save`, `__rename`, `__archive`, `__settings` and `__fab` all set it for this.
+       `.channel-list`. `__save`, `__rename`, `__archive` and `__settings` all set it for this.
    The 6px radius is the Figma's `rounded-[6px]`, an EXACT --radius-xs with no ±token mapping. Since #1178
    deleted the hover fill it clips no background of its own and shapes the `:focus-visible` outline alone —
    `.channel-list__row-open`'s posture since #1171, and for the same reason.
@@ -817,7 +819,7 @@
   display: block;
 }
 
-/* `display: block` is the file's icon convention (__save-icon / __fab-icon). */
+/* `display: block` is the file's icon convention (__save-icon / __settings-icon). */
 .channel-list__workspace-create-icon {
   display: block;
 }
@@ -904,7 +906,7 @@
   display: block;
 }
 
-/* `display: block` is the file's icon convention (__save-icon / __fab-icon). */
+/* `display: block` is the file's icon convention (__save-icon / __settings-icon). */
 .channel-list__workspace-edit-icon {
   display: block;
 }
@@ -1395,9 +1397,10 @@
 /* The top-right actions cluster (#347) — hosts the Archive (#347) and Settings (#333) entries side by
    side. ChannelList has no top app bar, so this is the interim reachable entry to both screens. Two
    independent sticky children would stack awkwardly, so both icon buttons share ONE sticky flex-row
-   cluster. It is the FIRST child of the scroll column and kept in-flow (no portal — the FAB precedent),
-   pinned to the top-right corner by the two composed rules the Settings button carried before (mirroring
-   the FAB inverted to the top):
+   cluster. It is the FIRST child of the scroll column and kept in-flow (no portal — the #177 "overlay
+   inside the screen container" precedent), pinned to the top-right corner by the two composed rules the
+   Settings button carried before. Since #1426 deleted the FAB that was its mirror image at the bottom,
+   this is the list's only sticky child:
      - `align-self: flex-end` right-aligns it in the flex column;
      - `position: sticky; top` floats it over the rows and keeps it visible as the list scrolls under it.
    z-index lifts it above the rows; margin-right insets it from the window edge. */
@@ -1471,64 +1474,6 @@
 }
 
 .channel-list__settings-icon {
-  display: block;
-}
-
-/* The new-discussion FAB (Figma 15-106) — a floating add affordance over the list, pinned bottom-right
-   in all three list states. `.channel-list` is itself the overflow-y:auto scroll column, so an ordinary
-   absolute child would scroll away with the rows; instead the FAB stays an in-flow flex item (no portal,
-   no DOM restructure — the #177 "overlay inside the screen container" precedent) positioned by two
-   composed rules:
-     - `margin-top: auto` + `align-self: flex-end` push it to the bottom-right when the content is short
-       (not-loaded / empty / a few rows) — sticky alone would leave it at its top-of-flow position there,
-       since sticky only offsets during scroll overflow.
-     - `position: sticky; bottom` floats it over the rows and keeps it visible once the list overflows
-       and scrolls (auto margins collapse to 0 under overflow, so it sits after the last row and sticks).
-   z-index lifts it above the rows; the corner offsets are spacing tokens (right --space-4, bottom
-   --space-6 — the container's matching padding-bottom gives the same gap in the short state). 56px is
-   structural component geometry (the .settings__back 48px-square precedent). */
-.channel-list__fab {
-  position: sticky;
-  bottom: var(--space-6);
-  align-self: flex-end;
-  z-index: 1;
-  flex: 0 0 auto;
-  margin: auto var(--space-4) 0 0;
-  width: 56px;
-  height: 56px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  /* Figma specifies a 16px corner; the radius scale jumps 12→20 with no 16px slot, so map to the
-     nearest token --radius-md (20px) — a +4px delta (the pairing.css:55 ±token-mapping precedent). No
-     new shared radius token for a 4px delta. */
-  border-radius: var(--radius-md);
-  background: var(--color-primary-container);
-  color: var(--color-on-primary-container);
-  cursor: pointer;
-  /* M3 level-3 elevation (Figma) — the FAB is the first elevation consumer, so the two-layer shadow is
-     inlined as a structural literal (like the header's opacity/1px carve-outs, not a scheme color).
-     Defer extracting an --elevation-* token until a second consumer appears. */
-  box-shadow:
-    0 4px 8px 3px rgba(0, 0, 0, 0.15),
-    0 1px 3px 0 rgba(0, 0, 0, 0.3);
-}
-
-/* Hover lifts the FAB to M3 level-4 elevation — the standard FAB raise, kept in the same structural
-   shadow-literal carve-out (there is no primary-container-hover token to swap to, unlike .composer__send's
-   adjacent surface-container swap). */
-.channel-list__fab:hover {
-  box-shadow:
-    0 6px 10px 4px rgba(0, 0, 0, 0.15),
-    0 2px 3px 0 rgba(0, 0, 0, 0.3);
-}
-
-.channel-list__fab:focus-visible {
-  outline: 1px solid var(--color-outline);
-}
-
-.channel-list__fab-icon {
   display: block;
 }
 
@@ -2008,7 +1953,7 @@
 }
 
 /* The host-row dialog owns the full-window overlay; Modal owns panel sizing and scrolling.
-   The overlay escapes the sidebar and sits above its sticky FAB. */
+   The overlay escapes the sidebar and sits above its sticky actions cluster. */
 .add-workspace-overlay {
   position: fixed;
   inset: 0;

@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { mintChatInWorkspace } from './fixtures/mintChatRow'
 import type { ConversationSummary } from '../src/shared/wire/types'
 
 // Fake-stack UI e2e for COLLAPSING A WORKSPACE GROUP (#704). The unit tier server-renders, so it can pin
@@ -13,8 +14,8 @@ import type { ConversationSummary } from '../src/shared/wire/types'
 // fixture change: groups render expanded by default, so launch-time markup is byte-identical.
 //
 // THE TWO-TREES-ONE-WORKSPACE SETUP comes free from the shared fixture rather than from a new one. The
-// seed is promoted (→ the Channels tree) with cwd '/fake/workspace'; the FAB mints an unpromoted row
-// (→ the Chats tree) whose cwd is conversationStateFake's DEFAULT_CREATED_CWD, the SAME '/fake/workspace'.
+// seed is promoted (→ the Channels tree) with cwd '/fake/workspace'; the drive mints an unpromoted row
+// (→ the Chats tree) at that SAME '/fake/workspace', also conversationStateFake's DEFAULT_CREATED_CWD.
 // So both trees show a group labelled "workspace" — which is exactly AC3's scenario, and the reason this
 // spec asserts that label on both rows before relying on it.
 //
@@ -31,7 +32,7 @@ import type { ConversationSummary } from '../src/shared/wire/types'
 
 // EXACTLY ONE clickable seed: launchPairedApp reaches the thread by clicking a single strict
 // `.channel-list__row-open`, so a second seed would strict-violate at launch (the sibling specs'
-// constraint). The second conversation is therefore MINTED by the FAB. Promoted + named so it lands in the
+// constraint). The second conversation is therefore MINTED through the UI. Promoted + named so it lands in the
 // Channels tree with a crisp filter target. Fixed literals only — deterministic, no Date.now()/randomness.
 const SEED: ConversationSummary = {
   id: 'seed-conversation',
@@ -44,7 +45,7 @@ const SEED: ConversationSummary = {
   workspace_label: null
 }
 
-// The FAB-created row is minted unnamed (name: null), so titleFor(null) = 'Untitled'.
+// The created row is minted unnamed (name: null), so titleFor(null) = 'Untitled'.
 const UNTITLED = 'Untitled'
 
 // The workspace label both trees show: the last segment of '/fake/workspace' (workspaceLabelFor).
@@ -72,7 +73,7 @@ test('a workspace row folds its own group and does nothing else', async ({ launc
 
   // --- 1. Mint the second conversation. It is unpromoted, so it lands in the OTHER tree, under a group
   // with the SAME workspace label as the seed's — the shape AC3 is about. ---
-  await page.locator('.channel-list__fab').click()
+  await mintChatInWorkspace(page, SEED.cwd)
   await expect(conversationRows).toHaveCount(2, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
   // --- 2. Baseline. Two groups, one per tree, both expanded on a fresh start (AC4) — nothing pre-seeds a

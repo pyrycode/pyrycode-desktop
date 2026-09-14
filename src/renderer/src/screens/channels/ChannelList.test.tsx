@@ -137,7 +137,6 @@ const render = (
       onOpen={noop}
       onOpenSettings={noop}
       onOpenArchive={noop}
-      onNewConversation={noop}
       onCreateChat={noop}
       onCreateChannel={noop}
       onEditWorkspace={noop}
@@ -152,14 +151,11 @@ const render = (
     />
   )
 
-// The new-discussion FAB's accessible name (#242) — present in every list state (AC1/AC4).
-const FAB_MARKER = 'aria-label="New discussion"'
-
-// The Settings entry affordance's accessible name (#333) — present in every list state, like the FAB.
+// The Settings entry affordance's accessible name (#333) — present in every list state.
 const SETTINGS_ENTRY_MARKER = 'aria-label="Settings"'
 
-// The Archive entry affordance's accessible name (#347) — present in every list state, like the FAB and
-// the Settings entry, and DISTINCT from the gear's aria-label="Settings".
+// The Archive entry affordance's accessible name (#347) — present in every list state, like the Settings
+// entry, and DISTINCT from the gear's aria-label="Settings".
 const ARCHIVE_ENTRY_MARKER = 'aria-label="Archive"'
 
 // The per-row Save-as-channel affordance's accessible name (#274) — present on Recent (unpromoted)
@@ -270,7 +266,7 @@ const workspaceLabelsIn = (markup: string): string[] =>
 
 // Slices out each workspace row's OPENING TAG (#704) so its attribute set can be asserted WHOLE. The
 // assertion has to be tag-scoped rather than document-scoped: `aria-label` and `title` legitimately
-// appear elsewhere in the very same render (the FAB, the gear, Archive, Rename, Save-as), so a
+// appear elsewhere in the very same render (the gear, Archive, Rename, Save-as), so a
 // document-wide `not.toContain('aria-label')` would be plain wrong rather than strict — and weakening it
 // back into vacuity is the failure mode this helper exists to prevent. Scanning to the next `>` is exact
 // rather than approximate: React escapes `<` and `>` inside attribute VALUES too, so no value — however
@@ -332,7 +328,7 @@ const treesOf = (markup: string): { channels: string; chats: string } => {
 // The workspace plus's own opening tag, sliced so its attribute set can be asserted WHOLE — the
 // `workspaceRowTagsIn` treatment on the control instead of on the row. Tag-scoped rather than
 // document-scoped for that helper's stated reason: `aria-label` legitimately appears elsewhere in the
-// same render (the FAB, the gear, Archive), so a document-wide assertion would be plain wrong. Hoisted
+// same render (the gear, Archive), so a document-wide assertion would be plain wrong. Hoisted
 // with `treesOf` by #1179, which slices the same tags out of a single tree at a time.
 // #1303 — the section-header plus's accessible name, and the opening tags of the two buttons that wear
 // it. Both headers carry the SAME name by design, so this is a two-match marker everywhere and never a
@@ -604,17 +600,20 @@ describe('ChannelListView', () => {
     expect(countOf(recent, '>Save as channel</span>')).toBe(1)
   })
 
-  it('renders the new-discussion FAB with its accessible name in all three list states (AC1/AC4)', () => {
-    // The FAB is a sibling of the list body, so it is present whether the list is not-loaded, empty,
-    // or populated — the affordance to start a conversation must always be reachable.
-    expect(render(null)).toContain(FAB_MARKER)
-    expect(render([])).toContain(FAB_MARKER)
-    expect(render([row({ id: 'd1', name: 'a discussion' })])).toContain(FAB_MARKER)
+  it('draws no new-discussion FAB in any of the three list states (#1426 AC1)', () => {
+    // #1426 — the inverted form of the assertion #242 shipped. The FAB was a sibling of the list body and
+    // so present in every state; it is gone from every state, and the workspace row's own plus is the one
+    // way to start a chat. Asserted on BOTH the class and the accessible name because the suite's e2e
+    // locators used both, and a partial deletion that left either would be a control this tier still saw.
+    for (const html of [render(null), render([]), render([row({ id: 'd1', name: 'a discussion' })])]) {
+      expect(html).not.toContain('aria-label="New discussion"')
+      expect(html).not.toContain('channel-list__fab')
+    }
   })
 
   it('renders the Settings entry with its accessible name in all three list states (#333 AC1)', () => {
-    // Like the FAB, the Settings entry is a sibling of the list body, so it is reachable whether the
-    // list is not-loaded, empty, or populated.
+    // The Settings entry is a sibling of the list body, so it is reachable whether the list is
+    // not-loaded, empty, or populated.
     expect(render(null)).toContain(SETTINGS_ENTRY_MARKER)
     expect(render([])).toContain(SETTINGS_ENTRY_MARKER)
     expect(render([row({ id: 'd1', name: 'a discussion' })])).toContain(SETTINGS_ENTRY_MARKER)
@@ -649,8 +648,8 @@ describe('ChannelListView', () => {
   })
 
   it('renders the Archive entry with its accessible name in all three list states (#347 AC1)', () => {
-    // Like the FAB and the Settings entry, the Archive entry lives in the top-right actions cluster — a
-    // sibling of the list body — so it is reachable whether the list is not-loaded, empty, or populated.
+    // Like the Settings entry, the Archive entry lives in the top-right actions cluster — a sibling of
+    // the list body — so it is reachable whether the list is not-loaded, empty, or populated.
     expect(render(null)).toContain(ARCHIVE_ENTRY_MARKER)
     expect(render([])).toContain(ARCHIVE_ENTRY_MARKER)
     expect(render([row({ id: 'd1', name: 'a discussion' })])).toContain(ARCHIVE_ENTRY_MARKER)
@@ -2333,7 +2332,6 @@ describe('host-owned mutation availability', () => {
       expect(html).not.toContain('aria-label="Edit workspace"')
       expect(html.match(/class="channel-list__row-open"/g)).toHaveLength(2)
       expect(html).toContain('aria-expanded="true"')
-      expect(html).toMatch(/aria-label="New discussion"[^>]*disabled/)
     }
   )
 
@@ -2344,7 +2342,6 @@ describe('host-owned mutation availability', () => {
       const html = render(rows, open, ['offline', 'online'], statuses)
       expect(html.match(/aria-label="Rename"/g)).toHaveLength(1)
       expect(html.match(/aria-label="Create channel"/g)).toHaveLength(1)
-      expect(html).toMatch(/aria-label="New discussion"[^>]*disabled/)
     }
   })
 })

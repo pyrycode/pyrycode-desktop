@@ -18,9 +18,10 @@ test.use({ interactiveRunner: 'stream-json' })
 // the client renders it as a queued row, and dropping it dequeues BEFORE the turn ever drains to it. It
 // clones real-claude.spec.ts's precondition (pair against a freshly-spawned real `pyry` on `--model haiku`,
 // bridged to the built Electron window through #251's content-blind routing relay, then CREATE the
-// conversation through the New-discussion FAB and reach the connected `.conversation` with Send enabled)
-// and swaps only the turn body: start a turn, enqueue a second send while it runs, drop the queued row
-// before drain, then release the turn and prove the dropped send produced no assistant turn.
+// conversation through the workspace row's `Create chat` plus and reach the connected `.conversation`
+// with Send enabled) and swaps only the turn body: start a turn, enqueue a second send while it runs,
+// drop the queued row before drain, then release the turn and prove the dropped send produced no
+// assistant turn.
 //
 // THE HOLD IS A TEST-OWNED GATE FILE (#487), not a long prompt. A long TEXT turn is not viable on
 // `--model haiku`: it streams the whole reply in under the ~2s transcript-bind cold-start, so the turn
@@ -201,12 +202,13 @@ test('real claude enqueues a mid-turn send, drops it before drain, and runs no t
 
   // --- Create the conversation THROUGH THE UI (#448) — the operator flow, not a pre-bound seed. ---
   // The seeded row renders only after the real daemon's `conversations` reply arrives on the connected edge,
-  // so its visibility IS the connected gate; only then click the FAB, which fires a real create at the real
-  // daemon and navigates on `conversation_created`. Send is enabled once the thread is connected.
+  // so its visibility IS the connected gate; only then click the workspace row's `Create chat` plus, which
+  // fires a real create at the real daemon and navigates on `conversation_created`. Send is enabled once the
+  // thread is connected.
   await expect(page.locator('.channel-list__row-open')).toBeVisible({
     timeout: HANDSHAKE_TIMEOUT_MS
   })
-  await page.getByRole('button', { name: 'New discussion' }).click()
+  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
   await expect(conversation).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
   await expect(sendButton).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
 

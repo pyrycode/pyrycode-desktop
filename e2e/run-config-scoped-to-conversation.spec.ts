@@ -36,7 +36,7 @@ import type {
 // THE STANDING RULE IS KEPT: a fake-tier spec may not supply an input production does not produce. Every
 // frame is one the daemon really sends — `model_list` unprovoked, `session_settings` and
 // `session_settings_updated` correlated by `in_reply_to` to a request this app actually sent, and the
-// create round trip is the FAB's own. Only the TIMING of B's reply is this test's, and that timing is the
+// create round trip is the plus's own. Only the TIMING of B's reply is this test's, and that timing is the
 // defect.
 //
 // SECRET HYGIENE (the sibling specs' rule, carried verbatim): every assertion reads DOM text or a count.
@@ -192,10 +192,10 @@ test('a confirmed run-configuration override does not follow the operator into t
   await panel.getByRole('menuitem', { name: A_PICKED, exact: true }).click()
   await expect(label).toHaveText(A_PICKED, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
-  // --- 3. Switch to B, minted through the FAB's real create round trip: the correlated
+  // --- 3. Switch to B, minted through the plus's real create round trip: the correlated
   // `conversation_created` drives the nav, so B is the open chat. B's own ask goes out and is captured
   // unanswered, so B has a session-settings request in flight and no reply — the defect's exact state. ---
-  await page.locator('.channel-list__fab').click()
+  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
   await expect
     .poll(() => requests.find((r) => r.conversationId !== SEED.id)?.envelopeId, {
       timeout: ROUNDTRIP_TIMEOUT_MS

@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { mintChatInWorkspace } from './fixtures/mintChatRow'
 import type { ConversationSummary } from '../src/shared/wire/types'
 
 // Fake-stack UI e2e for THE DAEMON-HELD WORKSPACE LABEL reaching the sidebar (#1287). The unit tier
@@ -12,9 +13,9 @@ import type { ConversationSummary } from '../src/shared/wire/types'
 // One `test`, one launch, one sequential drive.
 //
 // THE TWO-TREES SETUP is `workspace-collapse.spec.ts`'s idiom verbatim, and it is load-bearing here rather
-// than incidental. The seed is promoted, so it lands in the Channels tree; the FAB mints an unpromoted row
-// into the Chats tree, whose cwd is `conversationStateFake`'s DEFAULT_CREATED_CWD — the SAME
-// '/fake/workspace'. The two trees are grouped SEPARATELY, so the Chats group's label comes from the
+// than incidental. The seed is promoted, so it lands in the Channels tree; the drive mints an unpromoted
+// row into the Chats tree at the SAME '/fake/workspace', also `conversationStateFake`'s
+// DEFAULT_CREATED_CWD. The two trees are grouped SEPARATELY, so the Chats group's label comes from the
 // MINTED row, not from the seed. That is the trap this spec exists to catch: a client that read the label
 // correctly but a fake that minted `null` would show the daemon name in one tree and the folder name in
 // the other. The fake holds one label per `cwd` exactly as the daemon does, so the minted row inherits it.
@@ -64,11 +65,11 @@ test('the workspace row shows the daemon label, not the folder name, in both tre
   // real IPC arm and the real store to get here. ---
   await expect(workspaceLabels).toHaveText([WORKSPACE_LABEL])
 
-  // --- 2. Mint the second conversation with the FAB. It is unpromoted, so it lands in the OTHER tree,
+  // --- 2. Mint the second conversation through Add workspace. It is unpromoted, so it lands in the OTHER tree,
   // under a group grouped independently of the first. The POSITIVE row count is ordered first, and it
   // auto-waits: the label assertion after it would otherwise read a one-tree sidebar and pass without
   // ever seeing the second group. ---
-  await page.locator('.channel-list__fab').click()
+  await mintChatInWorkspace(page, SEED.cwd)
   await expect(conversationRows).toHaveCount(2, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
   // --- 3. AC4. Both trees, asserted EXHAUSTIVELY rather than one at a time: the array form pins the

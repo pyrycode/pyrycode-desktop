@@ -14,8 +14,8 @@ test.use({ interactiveRunner: 'stream-json' })
 // daemon running real claude on `--model haiku`, bridged to the built Electron UI through #251's
 // content-blind routing relay. The window stands in for #854's headless phone.
 //
-// #448 rework: the drive now CREATES its conversation through the UI (the New-discussion FAB → the
-// daemon's conversation_created → nav) and sends into that real id. The old version sent into a
+// #448 rework: the drive now CREATES its conversation through the UI (the workspace row's `Create chat`
+// plus → the daemon's conversation_created → nav) and sends into that real id. The old version sent into a
 // conversation the fixture had pre-bound under the client's placeholder id — an accommodation that hid
 // the placeholder from this gate entirely (the operator found the broken send live). The fixture's
 // seed keeps a plain-UUID conversation for the connected gate; nothing is bound to a client constant.
@@ -124,17 +124,18 @@ test('real claude streams a reply into a UI-created conversation for two consecu
   // --- Create the conversation THROUGH THE UI (#448) — the operator flow, not a pre-bound seed. ---
   // Pairing lands on the Channel List. The fixture's seeded row renders only after the real daemon's
   // `conversations` reply arrives on the connected edge, so its visibility IS the connected gate (the
-  // launchPairedApp idiom); the FAB itself is present in all list states, so it must not be clicked
-  // before this gate or the create command would fire into a not-yet-connected bridge.
+  // launchPairedApp idiom); the `Create chat` plus is drawn by the seeded row's own workspace group, so
+  // waiting on that row is also what makes the control exist — clicking before this gate would fire the
+  // create command into a not-yet-connected bridge.
   await expect(page.locator('.channel-list__row-open')).toBeVisible({
     timeout: HANDSHAKE_TIMEOUT_MS
   })
-  // The FAB fires a real `create_conversation` at the real daemon; navigation is event-driven — the
+  // The plus fires a real `create_conversation` at the real daemon; navigation is event-driven — the
   // thread mounts ONLY when the daemon confirms with `conversation_created` (useConversationCreatedNav),
   // which also records the created conversation as active. The composer then sends under THAT real id;
   // a client regression to a placeholder id gets `send_message unknown conversation` from the real
   // daemon and no reply ever streams (the exact live failure #448 fixed).
-  await page.getByRole('button', { name: 'New discussion' }).click()
+  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
   await expect(conversation).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
   await expect(sendButton).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
 

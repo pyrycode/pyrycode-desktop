@@ -19,8 +19,9 @@ test.use({ interactiveRunner: 'stream-json' })
 //
 // It clones real-claude-interrupt.spec.ts's precondition (pair against a freshly-spawned real `pyry` on
 // `--model haiku`, bridged to the built Electron window through #251's content-blind routing relay, then
-// CREATE the conversation through the New-discussion FAB and reach the connected `.conversation` with
-// Send enabled) and swaps the body: run a turn, restart, then run another turn across the restart.
+// CREATE the conversation through the workspace row's `Create chat` plus and reach the connected
+// `.conversation` with Send enabled) and swaps the body: run a turn, restart, then run another turn
+// across the restart.
 //
 // THE FIRST TURN IS A PRECONDITION, NOT DECORATION. A conversation nobody has messaged has no child
 // process to rotate, and the daemon's handler is inert — the AC's own first arm, and the fake tier's.
@@ -136,12 +137,12 @@ test('real claude restarts on New session and the turn stream survives it', asyn
 
   // --- Create the conversation THROUGH THE UI (#448) — the operator flow, not a pre-bound seed. The
   // seeded row renders only after the real daemon's `conversations` reply arrives on the connected edge,
-  // so its visibility IS the connected gate; only then click the FAB, which fires a real create at the
-  // real daemon and navigates on `conversation_created`. ---
+  // so its visibility IS the connected gate; only then click the workspace row's `Create chat` plus, which
+  // fires a real create at the real daemon and navigates on `conversation_created`. ---
   await expect(page.locator('.channel-list__row-open')).toBeVisible({
     timeout: HANDSHAKE_TIMEOUT_MS
   })
-  await page.getByRole('button', { name: 'New discussion' }).click()
+  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
   await expect(conversation).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
   await expect(sendButton).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
 
@@ -150,8 +151,8 @@ test('real claude restarts on New session and the turn stream survives it', asyn
   await composer.fill(firstMessage)
   await sendButton.click()
 
-  // `>= 1` is sound HERE and only here: this conversation was minted by the FAB moments ago and has no
-  // history, so any non-empty assistant row is this turn's. Every later count is measured against the
+  // `>= 1` is sound HERE and only here: this conversation was minted through the plus moments ago and has
+  // no history, so any non-empty assistant row is this turn's. Every later count is measured against the
   // baseline below instead, because that property stops holding the moment a turn has landed.
   await expect
     .poll(() => nonEmptyAssistantCount(page), { timeout: TURN_TIMEOUT_MS })

@@ -1,8 +1,9 @@
 import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { mintChatInWorkspace } from './fixtures/mintChatRow'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 // The credential-light real-daemon tier (#439) driving the DESTRUCTIVE conversation lifecycle — archive →
-// restore → delete of a single FAB-created conversation — against a REAL spawned `pyry` on #251's
+// restore → delete of a single UI-created conversation — against a REAL spawned `pyry` on #251's
 // content-blind routing relay, gating on the `pyry` binary ALONE (no `claude`, no Anthropic credential).
 // This is the real-daemon twin of the merged fake-stack spec #452 (`conversation-archive-lifecycle.spec.ts`,
 // PR#454): the SAME chain, the SAME assertion surface, but the `conversationStateFake` is swapped for the
@@ -93,15 +94,17 @@ test('real daemon archive → restore → delete lifecycle reflects through the 
   await expect(page.getByRole('tab', { name: 'Discussions (0)', exact: true })).toBeVisible()
   await page.locator('.archive__back').click()
 
-  // --- FAB create-nav (AC2). The FAB dispatches requestNewConversation (name: null, cwd: null →
-  // daemon default = the harness -pyry-workdir) → create_conversation → the daemon mints a session RECORD
+  // --- Create-nav (AC2). Add workspace dispatches requestNewWorkspaceChat (name: null, cwd stated) at
+  // `daemon.workdir` — this spec sets no `seedCwdSubdir`, so that IS the seeded conversation's own cwd and
+  // also the directory a null cwd used to default to, which keeps the create inside ONE workspace group
+  // exactly as the deleted FAB's did → create_conversation → the daemon mints a session RECORD
   // (#677, no claude process; it spawns lazily on the first send_message, #439) and replies
   // conversation_created → useConversationCreatedNav sets it active and routes `thread` (and, independently,
   // #515's re-list lands the row in the store). Assert NAVIGATION into a thread, NOT list membership — the
   // route is `thread`, so the Channel List is unmounted and there is nothing to assert against there. The
   // overflow trigger is absent on the list and present on a thread, so its auto-wait IS the create-nav gate.
   // A timeout here = a missing create_conversation handler (#949-class), not a flake. ---
-  await page.locator('.channel-list__fab').click()
+  await mintChatInWorkspace(page, daemon.workdir)
   const overflowTrigger = page.locator('.conversation__overflow-trigger')
   await expect(overflowTrigger).toBeVisible()
 

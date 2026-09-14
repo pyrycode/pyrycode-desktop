@@ -1,8 +1,10 @@
 # Default-workspace store
 
 The renderer's persisted, client-owned "default workspace" preference — a `string | null` slice that
-survives an app restart, so a new discussion can open in the user's saved folder instead of always
-falling back to the daemon's server-side scratch default.
+survives an app restart. Originally fed a new discussion's `cwd` so it could open in the user's saved
+folder instead of the daemon's server-side scratch default; since #1426 deleted that call site, the
+value persists and the Settings row still reads/writes it, but nothing consumes it to create a
+conversation (see § Configuration and usage below).
 
 Introduced in [#403](../codebase/403.md), the **data half** of the Figma "Default workspace" setting
 (17:56). The Settings row that lets the user *change* the default is [#404](../codebase/404.md) — this
@@ -82,12 +84,15 @@ Two behaviors:
 
 - **Import surface:** `import { useDefaultWorkspaceStore, selectDefaultWorkspace } from
   '../../store/defaultWorkspaceStore'`.
-- **Read by [`ChannelList`](conversation-shell.md)** — the container reads
-  `useDefaultWorkspaceStore(selectDefaultWorkspace)` reactively (mirroring its existing
-  `useConversationListStore(selectConversations)` read) and passes the value into
-  [`requestNewConversation`](conversation-create.md) as the new discussion's `cwd`. The reactive hook,
-  not a `getState()` read at click time, so the FAB always closes over the current value — a future
-  #404 change to the default re-renders the container without extra wiring.
+- **No longer read by [`ChannelList`](conversation-shell.md), as of #1426.** Until
+  then the container read `useDefaultWorkspaceStore(selectDefaultWorkspace)` reactively and passed the
+  value into [`requestNewConversation`](conversation-create.md) as the new-discussion FAB's `cwd` — the
+  reactive hook, not a `getState()` read at click time, so the FAB always closed over the current value.
+  #1426 deleted the FAB, and with it that call site: `requestNewConversation`'s one surviving caller (the
+  Chats-tree workspace row's `Create chat` plus) sends the clicked group's own `cwd`, never this setting.
+  **This store now has no renderer reader at all** — the value still persists and the Settings row below
+  still writes and displays it, but nothing consumes it to create a conversation. Whether the row itself
+  should go is an open project question raised on #1426, not resolved here.
 - **The read/write seam for #404.** `defaultWorkspaceStore` **is** the seam — no additional export was
   needed. [#404](../codebase/404.md)'s `DefaultWorkspaceRowControl` reads
   `useDefaultWorkspaceStore(selectDefaultWorkspace)` to render the value (`"scratch"` when `null`), and
@@ -99,9 +104,8 @@ Two behaviors:
 
 ## Edge cases and limitations
 
-- **No default set (fresh install)** — `defaultWorkspace` is `null`; `requestNewConversation` dispatches
-  `cwd: null`, reproducing the pre-#403 behavior exactly (the daemon applies its server-side scratch
-  default). No regression to the existing FAB flow.
+- **No default set (fresh install)** — `defaultWorkspace` is `null`, same as ever; there is no longer a
+  caller that reads it into a `cwd` at all (see § Configuration and usage above).
 - **`localStorage` throwing (quota / disabled) is not handled** — deliberately no try/catch (see
   Mechanism above). The Electron renderer's `localStorage` is always available; the value is a single
   short path. If this ever surfaces, the fix is localized to `localStorageWorkspacePref`.
@@ -117,8 +121,9 @@ Two behaviors:
 - [Conversation create](conversation-create.md) / [#241 codebase notes](../codebase/241.md) — the
   `create_conversation{cwd}` wire contract this store's value ultimately feeds; unchanged by this
   ticket (no wire/command drift, per CLAUDE.md no-drift).
-- [New-discussion FAB](new-discussion-fab.md) / [#242 codebase notes](../codebase/242.md) — the FAB
-  whose `requestNewConversation` call this ticket widens with a required `defaultCwd` parameter.
+- [The create → nav bridge, formerly the new-discussion FAB](new-discussion-fab.md) / [#242 codebase
+  notes](../codebase/242.md) — the FAB whose `requestNewConversation` call this ticket widened with a
+  required `defaultCwd` parameter; the FAB was deleted in #1426, orphaning this store's value (see above).
 - [Server-info store](server-info-store.md) / [#340 codebase notes](../codebase/340.md) — the
   object-or-null single-setter store shape this store's structure clones.
 - [Recent-workspaces store](recent-workspaces-store.md) / [#382 codebase notes](../codebase/382.md) —

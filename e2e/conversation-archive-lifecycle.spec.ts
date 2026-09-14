@@ -1,9 +1,10 @@
 import { test, expect } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { mintChatInWorkspace } from './fixtures/mintChatRow'
 import type { ConversationSummary } from '../src/shared/wire/types'
 
 // Fake-stack UI e2e for the DESTRUCTIVE lifecycle (#452, split from #422): archive → restore → delete of a
-// single FAB-created conversation, driven end-to-end through renderer → IPC → main → Noise wire → decode →
+// single UI-created conversation, driven end-to-end through renderer → IPC → main → Noise wire → decode →
 // render against the stateful conversationStateFake (#434) on the launchPairedApp fixture (#433). Today only
 // pair-and-send and (via the sibling #451) create/rename have e2e coverage; archive, restore and delete are
 // unguarded. This is the fake-stack twin of the real-daemon lifecycle spec #440; both hit the same structural
@@ -54,7 +55,7 @@ const SEED: ConversationSummary = {
   workspace_label: null
 }
 
-// The FAB-created row's displayed title: it is minted unnamed (name: null) and #452 never renames it, so
+// The created row's displayed title: it is minted unnamed (name: null) and #452 never renames it, so
 // titleFor(null) = 'Untitled'. Used to scope the created row's row-open (distinct from SEED's title) and to
 // assert its absence after delete.
 const UNTITLED = 'Untitled'
@@ -81,15 +82,15 @@ test('archive → restore → delete lifecycle reflects through the stateful fak
   await expect(page.getByRole('tab', { name: 'Discussions (0)', exact: true })).toBeVisible()
   await page.locator('.archive__back').click()
 
-  // --- FAB create-nav. The FAB dispatches requestNewConversation (name: null) → create_conversation
-  // → the fake mints `created-1` (unnamed, non-promoted) and replies conversation_created →
+  // --- Create-nav. The Add workspace dialog dispatches requestNewWorkspaceChat (name: null) →
+  // create_conversation → the fake mints `created-1` (unnamed, non-promoted) and replies conversation_created →
   // useConversationCreatedNav sets it active and dispatches `open` → route `thread` (and, independently,
   // #515's re-list lands the row in the store). Assert NAVIGATION into a thread, NOT list membership: the
   // list re-renders on the re-list whether or not the app navigated, so a row assertion here would not
   // separate the two. (Since #670 the list stays MOUNTED beside the thread, which only sharpens the
   // point.) The overflow trigger is absent on the list and present on a thread, so its auto-wait IS the
   // create-nav gate. ---
-  await page.locator('.channel-list__fab').click()
+  await mintChatInWorkspace(page, SEED.cwd)
   const overflowTrigger = page.locator('.conversation__overflow-trigger')
   await expect(overflowTrigger).toBeVisible()
 

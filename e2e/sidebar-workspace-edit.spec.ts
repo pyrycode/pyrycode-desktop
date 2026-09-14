@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { decodeEnvelope } from '../src/main/transport/codec'
 import { test, expect, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { mintChatInWorkspace } from './fixtures/mintChatRow'
 import type { ConversationSummary } from '../src/shared/wire/types'
 import type { Locator } from '@playwright/test'
 
@@ -20,8 +21,8 @@ import type { Locator } from '@playwright/test'
 // ⭐ HOW BOTH TREES ARE REACHED FROM ONE CLICKABLE SEED. `launchPairedApp` navigates by clicking a single
 // strict `.channel-list__row-open`, so a second seeded row would strict-violate at launch. The seed is
 // therefore ONE promoted row (a Channels-tree group) at `/fake/workspace`, and the second tree is minted
-// afterwards through a real product control: the new-discussion FAB, whose created row lands at the
-// fake's `DEFAULT_CREATED_CWD` — the same `/fake/workspace` — and INHERITS that workspace's held label,
+// afterwards through a real product control: the host row's `Add workspace`, driven at that same
+// `/fake/workspace` — also the fake's `DEFAULT_CREATED_CWD` — so its created row INHERITS the held label,
 // which the fake does deliberately (its `labelFor` comment names this exact setup). This is
 // `workspace-collapse.spec.ts`'s idiom, reused rather than re-invented.
 //
@@ -31,7 +32,7 @@ import type { Locator } from '@playwright/test'
 // `launchPairedApp` and is never echoed. The `cwd` asserted below is a fixed fake remote path, never
 // resolved locally.
 
-// The workspace this drive renames — the fake's own create default, which is what lets the FAB mint the
+// The workspace this drive renames — the fake's own create default, which is what lets the drive mint the
 // second tree's group at the SAME path. A fixed literal: deterministic, no Date.now()/randomness.
 const WORKSPACE_CWD = '/fake/workspace'
 
@@ -127,10 +128,10 @@ test('the workspace row’s pen hides at rest, opens an Edit workspace dialog, a
   // pins the group count too. ---
   await expect(workspaceLabels).toHaveText([OLD_LABEL])
 
-  // --- 2. Mint the SECOND tree's group at the same workspace, through the real FAB. The fake lands the
-  // created row at its own default cwd and inherits that workspace's held label, so both trees now read
+  // --- 2. Mint the SECOND tree's group at the same workspace, through the real Add workspace dialog. The
+  // created row carries that cwd and inherits the workspace's held label, so both trees now read
   // OLD_LABEL — which is what makes step 9's "both trees" claim a move rather than a coincidence. ---
-  await page.getByRole('button', { name: 'New discussion' }).click()
+  await mintChatInWorkspace(page, WORKSPACE_CWD)
   await expect(workspaceLabels).toHaveText([OLD_LABEL, OLD_LABEL], {
     timeout: ROUNDTRIP_TIMEOUT_MS
   })
@@ -142,7 +143,7 @@ test('the workspace row’s pen hides at rest, opens an Edit workspace dialog, a
   await expect(page.getByRole('button', { name: EDIT_WORKSPACE_NAME })).toHaveCount(2)
 
   // --- 4. AC1: nothing shows at rest. The pointer is parked on the actions cluster, not on a row —
-  // reading an "at rest" opacity with the pointer still where the FAB click left it would assert the
+  // reading an "at rest" opacity with the pointer still where the create click left it would assert the
   // reveal rather than the base state. ---
   await actions.hover()
   expect(await computed(pens.first(), 'opacity')).toBe(HIDDEN_OPACITY)

@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { mintChatInWorkspace } from './fixtures/mintChatRow'
 import type { ConversationSummary } from '../src/shared/wire/types'
 import type { Locator } from '@playwright/test'
 
@@ -16,7 +17,7 @@ import type { Locator } from '@playwright/test'
 //
 // ONE launch, TWO sections. `launchPairedApp` reaches the thread by clicking a single STRICT
 // `.channel-list__row-open`, so the seed is one PROMOTED row (it renders under "Channels"), and the second
-// section is minted afterwards through the real product control: the new-discussion FAB creates an
+// section is minted afterwards through a real product control: the host row's `Add workspace` creates an
 // UNPROMOTED conversation, which the stateful fake re-lists under "Chats". Only with rows in both sections
 // does the divider render at all, and the divider's margins are half of what this file is for.
 //
@@ -113,14 +114,14 @@ test('the sidebar tree sits at the desktop card inset: 20px card, 28px list inde
   const divider = page.locator('.channel-list__divider')
 
   // Since #1070 the seed alone already renders BOTH sections, both host rows and the divider — every
-  // paired machine gets a row in each section whether or not it has conversations there. The FAB is still
+  // paired machine gets a row in each section whether or not it has conversations there. Add workspace is
   // what mints the second ROW, which is what the geometry below needs (an open row and a resting one, and
   // a workspace group in each section). Counted before any box is read.
   await expect(rows).toHaveCount(1)
   await expect(divider).toHaveCount(1)
   await expect(headers).toHaveCount(2)
   await expect(hosts).toHaveCount(2)
-  await page.getByRole('button', { name: 'New discussion' }).click()
+  await mintChatInWorkspace(page, WORKSPACE_CWD)
   await expect(rows).toHaveCount(2)
   await expect(headers).toHaveCount(2)
   await expect(hosts).toHaveCount(2)

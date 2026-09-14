@@ -36,7 +36,7 @@ import type {
 // THE STANDING RULE IS KEPT: a fake-tier spec may not supply an input production does not produce. Every
 // frame here is one the daemon really sends — `model_list` unprovoked, `session_settings` and
 // `session_settings_updated` correlated by `in_reply_to` to a request this app actually sent, and the
-// create round trips are the FAB's own.
+// create round trips are the plus's own.
 //
 // THE LEVELS ARE INVENTED, the sibling effort specs' rule: seeding the measured five would put back the
 // vocabulary #976 deleted and would let a client-side fallback pass this drive unnoticed. They are
@@ -164,7 +164,7 @@ test('a new chat opens at the last effort level used, and a chat with its own le
 }) => {
   // Every frame this app sent, in order — the only place the drive can learn what went out.
   const captured: Envelope[] = []
-  // Every request_session_settings, in order. The two chats the FAB mints are told apart by the order
+  // Every request_session_settings, in order. The two chats the plus mints are told apart by the order
   // they first ask: the first is B, the second is C.
   const requests: CapturedRequest[] = []
   const minted: string[] = []
@@ -205,7 +205,7 @@ test('a new chat opens at the last effort level used, and a chat with its own le
   // locator reads it throughout, and its COUNT is the mounted/not-mounted reading.
   const label = page.locator('.composer__effort-label')
   const panel = page.getByRole('menu', { name: 'Effort', exact: true })
-  const newChat = (): Promise<void> => page.locator('.channel-list__fab').click()
+  const newChat = (): Promise<void> => page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
 
   // --- 1. Chat A is open (launchPairedApp navigates by clicking the seeded row) and since #1166 opening
   // it asks for its run configuration, which the fake answered with A's own level. ---
@@ -225,7 +225,7 @@ test('a new chat opens at the last effort level used, and a chat with its own le
   // A got exactly the operator's own pick and nothing else — no default was applied on top of it.
   expect(settingsFramesFor(captured, SESSION_A)).toBe(1)
 
-  // --- 3. Mint chat B through the FAB's real create round trip. B reports NO effort of its own, and its
+  // --- 3. Mint chat B through the plus's real create round trip. B reports NO effort of its own, and its
   // list arrives once it has asked, so the levels the remembered value is validated against are B's. ---
   await newChat()
   await expect

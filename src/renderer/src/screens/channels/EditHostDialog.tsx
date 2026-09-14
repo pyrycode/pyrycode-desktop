@@ -217,6 +217,15 @@ export function EditHostDialogView({
  * on each side — the disable is UI, and `clearServer` is idempotent and matches by key in main, so a
  * second erase could not reach a different record even if one got through.
  *
+ * ⭐ THE IDLE VERB IS DISABLED WHILE A RENAME IS IN FLIGHT, and that one attribute is what makes the
+ * status union's invariant true of the two ROUND TRIPS and not merely of the cell. One union means
+ * `saving` and `unpairing` cannot both be the value; it does NOT by itself mean both invokes cannot be
+ * outstanding at once. Without this: OK → `saving` freezes the field and OK, then arming moves the cell to
+ * `confirming-unpair`, which UNFREEZES them while the rename invoke is still open — a second write can be
+ * launched, and the save's own resolution then lands on an arm that is no longer its own. Disabling the
+ * verb closes that at the source: a rename in flight admits no arm, and an erase in flight already
+ * disables the field and OK through `busy`, so at most one of the two can ever be launched.
+ *
  * `unpair-failed` renders the IDLE arm, which is AC4's wording read literally: the slot returns to the
  * button and the failure line appears beneath the field, so the button is its own retry. The Figma draws
  * only this idle state (the confirming one is undrawn by design), and the button matches the footer
@@ -236,7 +245,12 @@ function UnpairSlot({
   if (status !== 'confirming-unpair' && status !== 'unpairing') {
     return (
       <div className="edit-host__actions">
-        <button type="button" className="edit-host__unpair" onClick={unpair.onArm}>
+        <button
+          type="button"
+          className="edit-host__unpair"
+          onClick={unpair.onArm}
+          disabled={status === 'saving'}
+        >
           {UNPAIR_HOST_COPY.unpair}
         </button>
       </div>

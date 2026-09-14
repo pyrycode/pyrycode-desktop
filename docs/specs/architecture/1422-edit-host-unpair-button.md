@@ -271,7 +271,35 @@ says in as many words that nothing here can click and that interaction belongs i
 replaced with a markup assertion that the slot's Cancel and the footer's Cancel are separately
 addressable, which is the property `e2e/` then needs to target them apart.
 
-## Security review
+**2026-09-14, rework leg — one union makes the CELL exclusive, not the two ROUND TRIPS, and the
+destructive answer needed the rule the Styling section already called for.** Both from the verifier's
+review of PR #1424; both are corrections to this plan, not departures from it.
+
+1. *The design's central claim was true of the state and false of the invokes.* § Design argues for one
+   widened union on the ground that *"saving" and "unpairing" cannot both be true* becomes
+   unrepresentable. That holds for the value of `editHostStatus` and does **not** by itself hold for the
+   two round trips, which can genuinely be outstanding at once: with the idle verb live during
+   `'saving'`, arming moves the cell to `'confirming-unpair'`, which re-enables the Host name field and
+   OK **while the rename invoke is still open** — a second write becomes launchable, and from there the
+   save's resolution lands on `'unpairing'` and unfreezes an erase in flight, taking the unpair's own
+   failure line with it (its guard reads `prev === 'unpairing'`, and `prev` is `'failed'` by then).
+   AC4's failure half does not happen on that path. Two changes close it, and neither adds machinery:
+   the idle verb is `disabled` while `'saving'` (a rename in flight admits no arm; an erase in flight
+   already freezes the field and OK through `busy`, so at most one of the two can ever be launched), and
+   the save arrow's `'failed'` write becomes the same functional updater its unpair sibling already uses
+   (`prev === 'saving'`), so a resolution can only ever report against its own flight. The second is
+   deliberately **not** the #1299 window this plan's § Security review [Concurrency] deferred as
+   pre-existing: that one is a save resolution landing on a *reopened save*, still out of scope and
+   untouched. What is fixed is the save resolution landing on the `'unpairing'` arm — an arm this ticket
+   created, so guarding it is guarding this ticket's own state, exactly as the other two updaters do.
+2. *`.edit-host__unpair--confirm` was applied and pinned but never given a rule,* so the destructive
+   Confirm rendered byte-identical to the Cancel beside it and to the footer Cancel below — three
+   indistinguishable outlined buttons, two reading "Cancel". § Styling named the class; the omission was
+   an accident, not a decision. The rule follows `.settings__server-unpair--confirm`, the governing
+   precedent because Figma leaves this state undrawn, and moves **both** the text and the border to
+   `--color-error` (with the focus ring following) because this recipe is an outlined button where the
+   Settings row's is text-only — recolouring the text alone leaves a primary frame around an error word.
+   Re-captured at 900×560 through the static-render helper; the three buttons now read as two weights.
 
 **Verdict:** PASS
 

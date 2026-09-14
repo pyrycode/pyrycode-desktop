@@ -468,7 +468,15 @@ export function ChannelList({
             void requestSetHostLabel(window.pyry.setHostLabelFor, serverId, editHostName).then(
               (next) => {
                 if (next === null) {
-                  setEditHostStatus('failed')
+                  // #1422 — guarded for the same reason the unpair arm below is, now that one cell
+                  // spans two round trips: this write may only report against its OWN flight. The
+                  // dialog's disabled verb keeps a save and an erase from being launched together,
+                  // but the footer Cancel is never disabled, so a dismissal mid-save and a reopen can
+                  // still leave this resolution arriving over an erase that started afterwards.
+                  // Unguarded it would clear `unpairing` mid-flight — unfreezing the field, OK and
+                  // both answers, and swallowing the erase's own failure line, whose guard would then
+                  // no longer recognise the arm it left behind.
+                  setEditHostStatus((prev) => (prev === 'saving' ? 'failed' : prev))
                   return
                 }
                 hostLabelStore.getState().setHostLabelFor(serverId, next)

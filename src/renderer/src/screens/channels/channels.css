@@ -1974,6 +1974,21 @@
   outline-offset: 2px;
 }
 
+/* The destructive answer carries the error role, so Confirm never reads as the same weight of action as
+   the Cancel beside it — `.settings__server-unpair--confirm`'s rule, which is the governing precedent
+   because the Figma draws only the idle button and leaves this state undrawn. Both the text and the
+   border move: the recipe above is an OUTLINED button rather than the Settings row's text-only one, so
+   recolouring the text alone would leave a primary frame around an error-coloured word. The focus ring
+   follows for the same reason — a primary ring on an error button is the same half-applied role. */
+.edit-host__unpair--confirm {
+  border-color: var(--color-error);
+  color: var(--color-error);
+}
+
+.edit-host__unpair--confirm:focus-visible {
+  outline-color: var(--color-error);
+}
+
 /* The confirming arm's copy, alongside the two answers in the slot the button vacated. */
 .edit-host__unpair-prompt {
   color: var(--color-on-primary-container);

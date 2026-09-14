@@ -63,6 +63,9 @@ const UNPAIR_VERB = '>Unpair host</button>'
 const UNPAIR_PROMPT = '>Forget this host?</span>'
 const UNPAIR_CANCEL_DISABLED = /edit-host__unpair"[^>]*disabled/
 const UNPAIR_CONFIRM_DISABLED = /edit-host__unpair edit-host__unpair--confirm"[^>]*disabled/
+// The idle verb shares the Cancel answer's class, so it is pinned through its own text — the two never
+// render in the same markup, but a regex that cannot tell them apart would pass on the wrong one.
+const UNPAIR_VERB_DISABLED = /edit-host__unpair"[^>]*disabled[^>]*>Unpair host</
 
 // EVERY arm of the widened status, enumerated ONCE. `satisfies` rather than a bare annotation, so
 // widening the type without adding its arm here is a type error rather than a silently narrower sweep —
@@ -352,6 +355,21 @@ describe('EditHostDialogView — the unpair slot (#1422)', () => {
     // The new button is NOT in the footer, and the footer still has exactly its two actions.
     expect(markup.indexOf(UNPAIR_VERB)).toBeLessThan(markup.indexOf('modal__footer'))
     expect(countOf(markup, 'modal__action ')).toBe(2)
+  })
+
+  it('disables the idle verb while a rename is in flight, and only then (AC2, AC4)', () => {
+    // The one union makes the CELL exclusive; this attribute is what makes the two ROUND TRIPS exclusive.
+    // Armable during a save, the click would move the cell off `saving` and so re-enable the field and OK
+    // under an invoke that is still open — a second write launchable, and the save's own resolution then
+    // landing on an arm that is no longer its own.
+    expect(renderView('pyrybox', 'saving')).toMatch(UNPAIR_VERB_DISABLED)
+    // Every other arm that draws the verb leaves it live. `unpair-failed` especially: the button IS the
+    // retry AC4 asks for, so a disable that leaked into it would strand the operator on the failure line.
+    for (const status of ['idle', 'failed', 'unpair-failed'] as const) {
+      const markup = renderView('pyrybox', status)
+      expect(markup).toContain(UNPAIR_VERB)
+      expect(markup).not.toMatch(UNPAIR_VERB_DISABLED)
+    }
   })
 
   it('replaces the button with a prompt and two answers when armed (AC2)', () => {

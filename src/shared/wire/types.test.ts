@@ -27,6 +27,7 @@ import type {
   ModelAnnouncedPayload,
   ThinkingProgressPayload,
   RateLimitedPayload,
+  ContextUsageCategory,
   ContextUsagePayload,
   WireUnrecognizedSite,
   UnrecognizedMessagePayload,
@@ -351,7 +352,7 @@ describe('rate-limited wire vocabulary (#1318)', () => {
   })
 })
 
-describe('context-usage wire vocabulary (#1454)', () => {
+describe('context-usage wire vocabulary (#1454, #1455)', () => {
   it('admits the context_usage inbound envelope type', () => {
     // Compile-time membership: this assigns only if the member is part of EnvelopeType. Admission is
     // NOT compile-forced — `Envelope.type` is `EnvelopeType | string`, so an arm on an unadmitted
@@ -360,30 +361,49 @@ describe('context-usage wire vocabulary (#1454)', () => {
     expect(usage).toBe('context_usage')
   })
 
-  it("shapes ContextUsagePayload as this slice's five fields — no turn_id, and no inventories", () => {
-    // The three inventories (`categories` / `mcp_tools` / `memory_files`) and their three dropped
-    // counts ARE on the wire and are deliberately not declared here: a declared-but-unparsed field
-    // would be a type with no narrowing behind it. The follow-on slices add each with its parsing.
+  it('shapes ContextUsagePayload as the reading PLUS the category breakdown (#1455)', () => {
+    // #1454 declared the five-field reading alone and pinned `categories` as absent. #1455 decodes the
+    // first inventory, so that pin INVERTS here rather than being deleted. The remaining two
+    // inventories (`mcp_tools` / `memory_files`) and their two dropped counts are still on the wire and
+    // still deliberately undeclared: a declared-but-unparsed field would be a type with no narrowing
+    // behind it, so the declaration and the parsing land together. #1456 adds both with their parsing.
     const payload: ContextUsagePayload = {
       conversation_id: 'conversation-context',
       model: 'claude-opus-5',
       total_tokens: 128_400,
       max_tokens: 200_000,
-      percentage: 64
+      percentage: 64,
+      categories: [
+        { name: 'System prompt', tokens: 41_200 },
+        { name: 'Messages <&>', tokens: 9800 }
+      ],
+      dropped_categories: 3
     }
-    expect(payload).toEqual({
-      conversation_id: 'conversation-context',
-      model: 'claude-opus-5',
-      total_tokens: 128_400,
-      max_tokens: 200_000,
-      percentage: 64
-    })
+    // Wire order is the producer's descending-token order and a cut takes entries off the TAIL, so the
+    // rows are a sequence and never a set.
+    expect(payload.categories.map((row) => row.name)).toEqual(['System prompt', 'Messages <&>'])
+    // The count is INDEPENDENT of the retained length — two cuts' worth of loss beside two rows here —
+    // so `categories.length + dropped_categories` is the true size, not something to reconcile.
+    expect(payload.dropped_categories).toBe(3)
     // Conversation-scoped, not turn-scoped: receiving one neither opens nor closes a turn.
     expect(payload).not.toHaveProperty('turn_id')
-    expect(payload).not.toHaveProperty('categories')
+    expect(payload).not.toHaveProperty('mcp_tools')
+    expect(payload).not.toHaveProperty('memory_files')
   })
 
-  it('admits the EMPTY reading — two empty strings and three zeroes are VALUES, not absences', () => {
+  it('shapes ContextUsageCategory as two always-present keys — "" and 0 are VALUES (#1455)', () => {
+    // The daemon states both keys remain present even when `Name` is empty, so neither is optional and
+    // a truthiness test on either would read a legitimate row as malformed.
+    const row: ContextUsageCategory = { name: '', tokens: 0 }
+    expect(row).toEqual({ name: '', tokens: 0 })
+    // `name` is claude-authored descriptive text — a LABEL, never a selector a client branches on for
+    // authority, and never a Map key on a plain object. It is declared as a plain string precisely so
+    // the type system makes no promise the wire has not kept.
+    const hostile: ContextUsageCategory = { name: '<img src=x>', tokens: 1 }
+    expect(hostile.name).toBe('<img src=x>')
+  })
+
+  it('admits the EMPTY reading — empty strings, zeroes and an empty list are VALUES, not absences', () => {
     // The daemon's committed `context_usage_empty.json`. No field carries `omitempty`, so this is real
     // traffic: `0` is claude's reading of zero, never "unreported", and `''` is a real empty string.
     const empty: ContextUsagePayload = {
@@ -391,10 +411,17 @@ describe('context-usage wire vocabulary (#1454)', () => {
       model: '',
       total_tokens: 0,
       max_tokens: 0,
-      percentage: 0
+      percentage: 0,
+      categories: [],
+      dropped_categories: 0
     }
     expect([empty.conversation_id, empty.model]).toEqual(['', ''])
     expect([empty.total_tokens, empty.max_tokens, empty.percentage]).toEqual([0, 0, 0])
+    // `MarshalJSON` normalises a nil slice to `[]`, so the type is a plain array and never
+    // `ContextUsageCategory[] | null` — an empty list is the POSITIVE statement that claude reported no
+    // categories, and a consumer never has to branch on null to read it.
+    expect(empty.categories).toEqual([])
+    expect(empty.dropped_categories).toBe(0)
   })
 
   it('admits a percentage NOT derivable from the token pair — the reading is informational', () => {
@@ -407,10 +434,15 @@ describe('context-usage wire vocabulary (#1454)', () => {
       model: 'claude-opus-5',
       total_tokens: 128_400,
       max_tokens: 0,
-      percentage: 64
+      percentage: 64,
+      // The categories need not sum to `total_tokens` either, by the same contract — and a cut list
+      // makes the sum smaller still. One contribution beside a six-figure total is representable.
+      categories: [{ name: 'System prompt', tokens: 41_200 }],
+      dropped_categories: 0
     }
     expect(inconsistent.percentage).toBe(64)
     expect(inconsistent.max_tokens).toBe(0)
+    expect(inconsistent.categories[0].tokens).toBe(41_200)
   })
 })
 

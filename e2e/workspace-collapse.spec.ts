@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { mintChatInWorkspace } from './fixtures/mintChatRow'
 import type { ConversationSummary } from '../src/shared/wire/types'
 
 // Fake-stack UI e2e for COLLAPSING A WORKSPACE GROUP (#704). The unit tier server-renders, so it can pin
@@ -72,7 +73,7 @@ test('a workspace row folds its own group and does nothing else', async ({ launc
 
   // --- 1. Mint the second conversation. It is unpromoted, so it lands in the OTHER tree, under a group
   // with the SAME workspace label as the seed's — the shape AC3 is about. ---
-  await page.locator('.channel-list__fab').click()
+  await mintChatInWorkspace(page, SEED.cwd)
   await expect(conversationRows).toHaveCount(2, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
   // --- 2. Baseline. Two groups, one per tree, both expanded on a fresh start (AC4) — nothing pre-seeds a

@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { mintChatInWorkspace } from './fixtures/mintChatRow'
 import type { ConversationSummary } from '../src/shared/wire/types'
 
 // Fake-stack UI e2e for THE DAEMON-HELD WORKSPACE LABEL reaching the sidebar (#1287). The unit tier
@@ -64,11 +65,11 @@ test('the workspace row shows the daemon label, not the folder name, in both tre
   // real IPC arm and the real store to get here. ---
   await expect(workspaceLabels).toHaveText([WORKSPACE_LABEL])
 
-  // --- 2. Mint the second conversation with the FAB. It is unpromoted, so it lands in the OTHER tree,
+  // --- 2. Mint the second conversation through Add workspace. It is unpromoted, so it lands in the OTHER tree,
   // under a group grouped independently of the first. The POSITIVE row count is ordered first, and it
   // auto-waits: the label assertion after it would otherwise read a one-tree sidebar and pass without
   // ever seeing the second group. ---
-  await page.locator('.channel-list__fab').click()
+  await mintChatInWorkspace(page, SEED.cwd)
   await expect(conversationRows).toHaveCount(2, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
   // --- 3. AC4. Both trees, asserted EXHAUSTIVELY rather than one at a time: the array form pins the

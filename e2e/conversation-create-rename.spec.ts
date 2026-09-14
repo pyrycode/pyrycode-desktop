@@ -3,6 +3,7 @@ import { decodeEnvelope } from '../src/main/transport/codec'
 import { test, expect } from './fixtures/launchPairedApp'
 import { bubbleTextExactly } from './fixtures/bubbleText'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { mintChatInWorkspace } from './fixtures/mintChatRow'
 import type { ConversationSummary } from '../src/shared/wire/types'
 
 // Creation and both rename entry points through the real UI and fake transport.
@@ -104,7 +105,7 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
   // marked row's title tells them apart, since the created row is unnamed (UNTITLED) where SEED is named:
   // a create-nav regression leaves the mark on SEED reading 'Seeded channel' and reddens here. The
   // open-row read mirrors `conversation-switch-keeps-both-threads`'s `expectOnlyOpenRow`.
-  await page.locator('.channel-list__fab').click()
+  await mintChatInWorkspace(page, SEED.cwd)
   await expect(page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText(UNTITLED)
   await page.getByPlaceholder('Message…').fill('Chat history')
   await page.getByRole('button', { name: 'Send', exact: true }).click()

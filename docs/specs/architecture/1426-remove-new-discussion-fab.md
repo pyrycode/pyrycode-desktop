@@ -138,3 +138,42 @@ second is the one to take because it drives shipped product UI end to end and de
 The cause was a wall-clock miss, not a design change: the production deletion and the twenty-two migrated
 sites are complete and the build is green. `question-picks` additionally needs `DEFAULT_SEED` exported
 from `conversationStateFake.ts`, or an explicit seed literal, since it uses the fake bare.
+
+### 2026-09-14 — the last eight migrate through `Add workspace`, route 1, not route 2
+
+The entry above left two routes open for the eight promoted-seed sites and recommended route 2 (seed
+unpromoted, press the plus, promote back through `Save as channel`). **Route 1 is the one taken**, and the
+doubt recorded against it — "whether the fake honours an existing folder is unverified" — is resolved:
+`conversationStateFake`'s `create_conversation` arm mints unconditionally on its default
+`createOutcome: 'created'`, taking `cwd` from the payload with no path predicate at all. Its own comment
+states the posture, that deciding which paths the daemon accepts is server policy the client may not
+reimplement. So there was nothing to verify and no new fixture behaviour to depend on.
+
+Route 1 also turned out to be the *smaller* change, which inverted the recommendation. Three facts settled
+it:
+
+- `requestNewWorkspaceChat` sends `{ is_promoted: false, name: null, cwd }` — the same three fields the
+  FAB's `requestNewConversation` sent, with the cwd stated instead of defaulted to the same directory. The
+  minted row is the FAB's row field for field, through the same `conversationCreated` → create-nav bridge,
+  so **no assertion downstream of any press changed**.
+- `beginNaming` dismisses on an empty workspace name rather than entering its naming stage, so a blank
+  name closes the dialog on the create alone and sends no `rename_workspace`. The drive is three actions,
+  not the two-stage round trip the entry above assumed.
+- Every paired machine draws a host row — and its `Add workspace` plus — in **both** trees whether or not
+  it has conversations there, which `sidebar-add-workspace.spec.ts` opens by asserting. So the control is
+  reachable from an empty Chats tree, which is exactly the state that has no `Create chat` plus.
+
+Route 2 was rejected on inspection: promoting the seed back would invert which row is the named channel,
+and four of the eight (`conversation-create-rename`, `workspace-collapse`, `workspace-label`,
+`conversation-archive-lifecycle`) read the seed by title or by section.
+
+The drive is a shared helper, `e2e/fixtures/mintChatRow.ts` → `mintChatInWorkspace(page, cwd)`, rather
+than six lines repeated eight times; its docblock carries the reasoning above. Each site is then one line.
+`question-picks` needed neither the `DEFAULT_SEED` export nor a seed literal the entry above anticipated —
+taking a `cwd` argument, the helper only needed that spec's seeded directory named as a local constant.
+The real tier passes `daemon.workdir`: `real-daemon-conversation-lifecycle` sets no `seedCwdSubdir`, so
+the workdir is both the seed's own `cwd` and the directory the FAB's null cwd defaulted to, which keeps
+the create inside one workspace group as before.
+
+All 26 tests across the 15 touched fake-tier spec files pass, plus `ChannelList.test.tsx` (147) and
+`npm run build`. The real tier is the dispatcher's gate and is not run here.

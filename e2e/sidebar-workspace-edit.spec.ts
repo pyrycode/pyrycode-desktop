@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { decodeEnvelope } from '../src/main/transport/codec'
 import { test, expect, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { mintChatInWorkspace } from './fixtures/mintChatRow'
 import type { ConversationSummary } from '../src/shared/wire/types'
 import type { Locator } from '@playwright/test'
 
@@ -127,10 +128,10 @@ test('the workspace row’s pen hides at rest, opens an Edit workspace dialog, a
   // pins the group count too. ---
   await expect(workspaceLabels).toHaveText([OLD_LABEL])
 
-  // --- 2. Mint the SECOND tree's group at the same workspace, through the real FAB. The fake lands the
-  // created row at its own default cwd and inherits that workspace's held label, so both trees now read
+  // --- 2. Mint the SECOND tree's group at the same workspace, through the real Add workspace dialog. The
+  // created row carries that cwd and inherits the workspace's held label, so both trees now read
   // OLD_LABEL — which is what makes step 9's "both trees" claim a move rather than a coincidence. ---
-  await page.getByRole('button', { name: 'New discussion' }).click()
+  await mintChatInWorkspace(page, WORKSPACE_CWD)
   await expect(workspaceLabels).toHaveText([OLD_LABEL, OLD_LABEL], {
     timeout: ROUNDTRIP_TIMEOUT_MS
   })

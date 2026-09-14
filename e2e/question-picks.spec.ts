@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { mintChatInWorkspace } from './fixtures/mintChatRow'
 import { encodeEnvelope } from '../src/main/transport/codec'
 import type {
   QuestionDismissedPayload,
@@ -54,6 +55,10 @@ const FIXED_TS = '2026-07-07T12:00:00.000Z'
 // front of the operator at launch.
 const CONVERSATION_ID = 'seed-conversation'
 const SEEDED_TITLE = 'Seeded channel'
+// The bare `conversationStateFake()` default seed's own `cwd` — the workspace the second conversation is
+// minted into below. Restated here rather than imported: this spec takes the fake bare, and the seed is
+// the fixture's business, so a literal is the narrower coupling of the two.
+const SEEDED_CWD = '/fake/workspace'
 
 // Three nonces, one per arc. Distinct so each later batch is genuinely a FRESH batch for the SAME
 // conversation — which is the half of AC4 that a re-render of the first batch could never prove.
@@ -208,10 +213,10 @@ test('question panel: picks are live in both variants, survive a chat switch and
   await expect(otherField).toHaveValue(OTHER_TEXT)
   await expect(control('radio', 'Elixir')).toBeChecked()
 
-  // AC3, away — the FAB mints a second conversation and navigates to it WITHOUT leaving the thread route,
+  // AC3, away — Add workspace mints a second conversation and navigates to it WITHOUT leaving the thread route,
   // which remounts the whole conversation subtree (#670's keying). The batch is display-scoped, so the other
   // chat shows its own ordinary composer meanwhile and no panel at all.
-  await page.locator('.channel-list__fab').click()
+  await mintChatInWorkspace(page, SEEDED_CWD)
   await expect(panel).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(composer).toBeVisible()
   await expect(composer).toHaveValue('')

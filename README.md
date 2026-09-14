@@ -19,6 +19,21 @@ npm run build
 npm test
 ```
 
+### Windows installer
+
+```bash
+npm run dist:win
+```
+
+Runs `npm run build` and then `electron-builder --win`, producing an unsigned NSIS installer (x64 and
+arm64) under `dist/`. It is unsigned, so Windows SmartScreen warns on first launch — click **More info**,
+then **Run anyway**. There is no update feed: updating means installing a newer exe over the old one,
+which replaces the program files in place and leaves user data untouched.
+
+The installed app stores under `%APPDATA%\Pyrycode Desktop` — the diagnostic log, the secure-store
+blobs, and the saved hosts all live there, so a future incident on the Surface starts by looking under
+that directory.
+
 ## Pre-ship gate
 
 There is no CI (by policy), so before shipping run the gate locally:

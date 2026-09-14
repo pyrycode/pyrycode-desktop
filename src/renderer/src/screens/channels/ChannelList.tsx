@@ -556,7 +556,7 @@ export function ChannelList({
           // Cancel closes and sends nothing (AC1); a confirmed create closes it too (AC2). One handler
           // serves both — there is nothing to record on the way out, the new row arriving through the
           // daemon's confirmation and the thread being opened by `useConversationCreatedNav` in
-          // PairedShell, exactly as the FAB's create already is.
+          // PairedShell, exactly as the workspace row's own `Create chat` create is.
           onDismiss={() => setAddWorkspaceServerId(null)}
         />
       )}

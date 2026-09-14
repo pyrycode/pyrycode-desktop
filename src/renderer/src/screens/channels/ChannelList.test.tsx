@@ -154,8 +154,8 @@ const render = (
 // The Settings entry affordance's accessible name (#333) — present in every list state.
 const SETTINGS_ENTRY_MARKER = 'aria-label="Settings"'
 
-// The Archive entry affordance's accessible name (#347) — present in every list state, like the FAB and
-// the Settings entry, and DISTINCT from the gear's aria-label="Settings".
+// The Archive entry affordance's accessible name (#347) — present in every list state, like the Settings
+// entry, and DISTINCT from the gear's aria-label="Settings".
 const ARCHIVE_ENTRY_MARKER = 'aria-label="Archive"'
 
 // The per-row Save-as-channel affordance's accessible name (#274) — present on Recent (unpromoted)
@@ -266,7 +266,7 @@ const workspaceLabelsIn = (markup: string): string[] =>
 
 // Slices out each workspace row's OPENING TAG (#704) so its attribute set can be asserted WHOLE. The
 // assertion has to be tag-scoped rather than document-scoped: `aria-label` and `title` legitimately
-// appear elsewhere in the very same render (the FAB, the gear, Archive, Rename, Save-as), so a
+// appear elsewhere in the very same render (the gear, Archive, Rename, Save-as), so a
 // document-wide `not.toContain('aria-label')` would be plain wrong rather than strict — and weakening it
 // back into vacuity is the failure mode this helper exists to prevent. Scanning to the next `>` is exact
 // rather than approximate: React escapes `<` and `>` inside attribute VALUES too, so no value — however
@@ -328,7 +328,7 @@ const treesOf = (markup: string): { channels: string; chats: string } => {
 // The workspace plus's own opening tag, sliced so its attribute set can be asserted WHOLE — the
 // `workspaceRowTagsIn` treatment on the control instead of on the row. Tag-scoped rather than
 // document-scoped for that helper's stated reason: `aria-label` legitimately appears elsewhere in the
-// same render (the FAB, the gear, Archive), so a document-wide assertion would be plain wrong. Hoisted
+// same render (the gear, Archive), so a document-wide assertion would be plain wrong. Hoisted
 // with `treesOf` by #1179, which slices the same tags out of a single tree at a time.
 // #1303 — the section-header plus's accessible name, and the opening tags of the two buttons that wear
 // it. Both headers carry the SAME name by design, so this is a two-match marker everywhere and never a
@@ -612,8 +612,8 @@ describe('ChannelListView', () => {
   })
 
   it('renders the Settings entry with its accessible name in all three list states (#333 AC1)', () => {
-    // Like the FAB, the Settings entry is a sibling of the list body, so it is reachable whether the
-    // list is not-loaded, empty, or populated.
+    // The Settings entry is a sibling of the list body, so it is reachable whether the list is
+    // not-loaded, empty, or populated.
     expect(render(null)).toContain(SETTINGS_ENTRY_MARKER)
     expect(render([])).toContain(SETTINGS_ENTRY_MARKER)
     expect(render([row({ id: 'd1', name: 'a discussion' })])).toContain(SETTINGS_ENTRY_MARKER)
@@ -648,8 +648,8 @@ describe('ChannelListView', () => {
   })
 
   it('renders the Archive entry with its accessible name in all three list states (#347 AC1)', () => {
-    // Like the FAB and the Settings entry, the Archive entry lives in the top-right actions cluster — a
-    // sibling of the list body — so it is reachable whether the list is not-loaded, empty, or populated.
+    // Like the Settings entry, the Archive entry lives in the top-right actions cluster — a sibling of
+    // the list body — so it is reachable whether the list is not-loaded, empty, or populated.
     expect(render(null)).toContain(ARCHIVE_ENTRY_MARKER)
     expect(render([])).toContain(ARCHIVE_ENTRY_MARKER)
     expect(render([row({ id: 'd1', name: 'a discussion' })])).toContain(ARCHIVE_ENTRY_MARKER)

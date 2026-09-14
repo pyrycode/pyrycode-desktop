@@ -69,6 +69,75 @@ write at all. The store write itself is unaffected (it is keyed correctly, per a
 own open/closed/failed state can drift. Flagged for the next touch of this surface rather than fixed
 here.
 
+**The Unpair host button ([#1422](https://github.com/pyrycode/pyrycode-desktop/issues/1422)) widens
+`editHostStatus`'s type rather than adding a sibling cell.** `EditHostSaveStatus` was renamed
+`EditHostStatus` and gained three arms — `confirming-unpair`, `unpairing`, `unpair-failed` — beside the
+rename round trip's `idle`/`saving`/`failed`. One union rather than two cells makes "saving and unpairing
+are never both true" unrepresentable rather than merely maintained by a reset; the traded-off
+consequence is that arming the confirm after a failed rename drops the rename's own failure line, since
+the cell holds only one arm at a time. `UnpairSlot`, a non-exported inline component in
+`EditHostDialog.tsx` mirroring the Settings row's `UnpairAction` posture without importing its component
+or its CSS, renders the idle **Unpair host** button below the Host name field and above the footer,
+matching [Figma node 487-2078](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=487-2078). A
+click arms `confirming-unpair`, replacing the button with a prompt and two answers in the same slot.
+Confirming calls `runEditHostUnpair` (exported beside `requestSetHostLabel`), which maps
+[`runUnpairServer`](unpair-channel.md#the-three-renderer-callers)'s `'ok' | 'error'` onto this dialog's
+own two cells — close-on-success, `unpair-failed` on failure — without re-implementing the erase →
+refresh → route-or-clear sequence that helper owns. See [Unpair channel § The three renderer
+callers](unpair-channel.md#the-three-renderer-callers) for the container-side deps this dialog builds and
+why its `navigateToList` cannot be the Settings row's no-op.
+
+**A widened union making the *cell* exclusive did not, by itself, make the two *round trips* exclusive**,
+and closing that gap took a rework leg (verifier MUST FIX on the first review pass, closed in `d683045`).
+Arming the confirm while a rename save was outstanding re-enabled the Host name field and OK mid-invoke,
+permitting a second write; from there the unpair's own resolution could land on a cell the save's own
+unguarded resolution had since overwritten, silently dropping AC4's unpair failure line. The fix is
+`disabled={status === 'saving'}` on the idle Unpair host button — a rename in flight now admits no arm at
+all — plus making the save arrow's failure write a functional updater
+(`prev === 'saving' ? 'failed' : prev`), so a save can only ever report against its own flight. This
+guards the `'unpairing'` arm this ticket created; it is narrower than the pre-existing #1299 window (a
+save resolution landing on a *reopened save*), which remains open and out of scope.
+
+**Both outcome arms in `runEditHostUnpair`'s container-side callbacks are functional updaters, not plain
+writes**, because the footer Cancel stays enabled through the whole erase (`ipcRenderer.invoke` has no
+timeout) — an operator can dismiss the dialog mid-erase and reopen it against a *different* host before
+the late answer lands. `close: () => setEditHostServerId(prev => prev === serverId ? null : prev)` and
+the `'unpairing'`-guarded status write both no-op once `prev` no longer names the flight that launched
+them; the erase itself is unaffected either way, since it is keyed by the id captured in the render
+closure before the `await`. A narrower residual remains open, noted but not fixed: two hosts' dialogs
+opened and confirmed in sequence, where the first's late answer lands while the second's erase is *also*
+`'unpairing'`, can still write the second dialog's message. Severity stays "misleading message, never a
+wrong erase" throughout.
+
+**The destructive Confirm answer carries the error role.** `.edit-host__unpair--confirm` in
+`channels.css` moves both border and text to `--color-error`, plus the focus ring — the second rework
+MUST FIX. The class was applied in the first pass and pinned by a test with no CSS rule behind it, so
+Confirm rendered byte-identical to the Cancel beside it; only a rendered capture, not a class-name
+assertion, proved the stylesheet rule existed once it was added. The precedent is
+`.settings__server-unpair--confirm`, adapted because this recipe is an outlined button where the Settings
+row's is text-only — recolouring text alone would have left a primary-coloured frame around an
+error-coloured word.
+
+**Copy** lives in `UNPAIR_HOST_COPY`, `UNPAIR_COPY`'s idiom one surface over: client-owned,
+apostrophe-free, naming neither the label nor the server id, with *host* rather than *server* as this
+surface's own vocabulary. The failure line `Could not unpair this host` is a second constant beside
+`EDIT_HOST_ERROR_COPY`, rendered in the same message slot on a mutually exclusive arm.
+
+**Open, left for the next touch of this slot:** arming and disarming the confirm drops keyboard focus to
+`<body>`, since the focused button leaves the DOM — inherited from the Settings row rather than a
+regression, and left alone to keep the two slots' behaviour identical. The slot's Cancel and the footer's
+Cancel share the same accessible name (both plain "Cancel", told apart only by class), and a host-free
+`aria-label` would disambiguate for screen readers, at the cost of two tests that currently assert the
+dialog's complete `aria-label` list contains no host content.
+
+**Tests.** `EditHostDialog.test.tsx` covers all three unpair arms as static markup (the idle button, the
+confirming prompt-plus-answers, the in-flight disabled answers, and `unpair-failed`'s idle-button-plus-
+failure-line), the idle verb's disable during `'saving'`, and `runEditHostUnpair`'s three outcomes with
+plain spies. `e2e/sidebar-host-edit.spec.ts` adds a non-destructive arm/disarm/reopen drive — the
+click-does-not-unpair half of AC2 cannot be told apart from a working erase by any static render, so this
+is genuinely the only tier that can prove it — and two existing Tab-sequence assertions were corrected
+for the new control's position in the dialog's tab order.
+
 **CSS.** The caller retains `.edit-host-overlay` and its scrim in `channels.css`.
 `Modal` owns the panel, title, close control, actions and whole-panel scrolling.
 The 646px preferred width fits the 800px minimum app window. A short window scrolls
@@ -160,3 +229,6 @@ captures cannot substitute for this check against the built app's security polic
 - [Server-info store](server-info-channel.md) — `ServerInfoValue`'s `{ serverId, relayUrl }` shape, the
   `serverInfo` handler's field allowlist, and Settings' Connection → Server row, the one other surface
   showing this same pair.
+- [Unpair channel](unpair-channel.md) — `runUnpairServer`, the decision helper `runEditHostUnpair` calls
+  rather than re-implementing, and [§ The three renderer callers](unpair-channel.md#the-three-renderer-callers)
+  for how this dialog's deps compare to the Settings row's and the composer's.

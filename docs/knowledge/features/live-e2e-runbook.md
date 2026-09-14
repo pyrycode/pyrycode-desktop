@@ -71,6 +71,33 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
+**#1413 (2026-09-13/14) — the real tier's device credential now mints from the running daemon, not offline.**
+Upstream pyrycode#2393 (daemon `8a850505`) turned bare `pyry pair` into a running-service operation, which
+had reddened the whole tier at fixture setup (`pyry pair exited with code 1 … connect: no such file or
+directory`, first seen on the #1409 gate run against PR #1412). [real-claude-liveness-e2e.md](real-claude-liveness-e2e.md)
+§ "Fixture chain and teardown" and § "Daemon spawn — the load-bearing flags" carry the mechanism: the
+fixture now seeds the registry, spawns the daemon, waits for its control socket, and only then mints —
+**the tier now requires a daemon carrying pyrycode#2393.**
+
+The dispatcher's authenticated gate ran twice on this ticket's PR (#1415):
+
+- **`c9da89b`** — 19 executed, 18 passed, 1 failed. The one failure,
+  `real-daemon-add-workspace.spec.ts` at a strict-mode-ambiguous `getByRole('textbox')` locator, was a
+  pre-existing drift from #1372 that this repair merely *unmasked* (the tier had been dead at setup since
+  pyrycode#2393 shipped, so nothing had exercised that spec since), not a regression from this ticket's
+  fixture change. Fixed in the same PR at `c876bc9` by qualifying the locator's accessible name (see
+  [#1414](https://github.com/pyrycode/pyrycode-desktop/issues/1414)).
+- **`c876bc9`** — not yet re-run through the dispatcher's authenticated gate as of this writing; the
+  builder's own credential-light local run (`spawnClaude:false` specs only) came back 8 passed, 1 skipped
+  (the credential-gated `real-daemon-history-on-open.spec.ts`), 0 failed. The next full authenticated run
+  on this commit or later is the one that closes out AC2's live-tier confirmation.
+
+Daemon source revision used for the fixture repair's own RED→GREEN proof and for the builder's local runs:
+the dedicated test binary `pyry dev-8a850505` (clean revision `8a850505170c4041b852d899f60601c100894fb1`),
+kept deliberately pinned per the ticket's operator direction rather than tracking the daemon's tip. The
+dispatcher's own authenticated gate run does not record its daemon's source revision in its evidence —
+that provenance gap is unchanged by this ticket, same as the one #1371 already noted below.
+
 **#1371 (2026-09-12) — 19 tests executed, 19 passed, none failed or skipped.**
 The [dispatcher evidence](https://github.com/pyrycode/pyrycode-desktop/issues/1371#issuecomment-5648697088)
 records branch `c318680328` against main `9304c4d46d`. The added

@@ -35,7 +35,7 @@ test('real daemon creates missing workspace parents and reuses the directory for
     await host.hover()
     await host.locator('.channel-list__host-add').click()
     const dialog = page.getByRole('dialog', { name: 'Add workspace' })
-    await dialog.getByRole('textbox', { name: 'Workspace folder on the host', exact: false }).fill(destination)
+    await dialog.getByRole('textbox', { name: 'Workspace folder on the host (relative or absolute path):' }).fill(destination)
     await expect(dialog.locator('output')).toHaveText(destination)
     await dialog.getByRole('button', { name: 'OK', exact: true }).click()
     await expect(page.locator('.channel-list__row-open')).toHaveCount(attempt + 1, { timeout: 15_000 })

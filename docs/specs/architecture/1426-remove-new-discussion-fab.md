@@ -108,3 +108,33 @@ Pending, owned by the documentation stage. Not touched by this ticket.
 - `docs/knowledge/CATALOG.md` — the entry for `new-discussion-fab.md` follows whatever that file becomes.
 
 This list is the floor, not the ceiling; remaining overviews that mention the FAB in passing are that stage's judgment.
+
+## Revisions
+
+### 2026-09-14 — the companion-seed route is not available, and eight sites are unmigrated
+
+The migration table's third row proposed seeding a second unpromoted row at the same `cwd` to furnish a
+Chats-tree group for a promoted-only seed. **That route does not exist.** `launchPairedApp` drives its
+list→thread navigation by clicking an unfiltered `.channel-list__row-open` under Playwright strict mode,
+and its own comment records that a second row present at that moment breaks the click outright. Any
+fixture change adding a row at launch breaks every spec using the fixture.
+
+What was done instead: the table's first row (a locator swap) covered nineteen sites, and its second (flip
+the seed unpromoted where no assertion reads the section) covered three more —
+`conversation-switch-keeps-both-threads`, `conversation-switch-remount` and `real-claude-effort-default`.
+
+Eight sites are **left unmigrated** and will redden `npm run e2e`: `conversation-archive-lifecycle`,
+`conversation-create-rename`, `question-picks`, `sidebar-tree-geometry`, `sidebar-workspace-edit`,
+`workspace-collapse`, `workspace-label` and `real-daemon-conversation-lifecycle`. Each reads the seed's
+section or needs the workspace in both trees, so its seed must stay promoted. Two routes remain, and the
+second is the one to take because it drives shipped product UI end to end and depends on nothing unproven:
+
+1. The host row's `Add workspace` plus with the seed's own `cwd` typed in — `resolveWorkspacePath` passes
+   an absolute path through unchanged, but whether the fake honours an existing folder is unverified.
+2. Seed unpromoted, press the `Create chat` plus, then promote one row through `Save as channel` → "Use
+   shared scratch folder", which keeps the `cwd` (`sidebar-offline-mutations` asserts exactly that). This
+   reaches the both-trees state through shipped controls at about eight lines per spec.
+
+The cause was a wall-clock miss, not a design change: the production deletion and the twenty-two migrated
+sites are complete and the build is green. `question-picks` additionally needs `DEFAULT_SEED` exported
+from `conversationStateFake.ts`, or an explicit seed literal, since it uses the fake bare.

@@ -204,3 +204,49 @@ Not edited by this ticket.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-14
+
+## Revisions
+
+### 2026-09-14 — implementation
+
+**`win.target` now names its architectures.** The Design above left `win: { target: nsis }` and said
+nothing about arch, which meant the default: the *build host's*. The first real run made that visible —
+`electron-builder --win` on this Apple Silicon Mac reported `packaging platform=win32 arch=arm64` and
+produced a Windows-on-ARM payload, which an x64 Surface cannot run at all. That is the one way this
+config could silently hand the operator an installer that fails before it starts, so the arch list is
+spelled out as `[x64, arm64]`: one NSIS installer, native on either Surface generation, independent of
+which machine built it. No security-review finding moves — the archs share one asar, one `files`
+allowlist and one set of `isPackaged` gates.
+
+**Open question 1 — resolved, and it is the AC4 answer.** `npm run dist:win` gets as far as a complete
+packaged application and fails only at the final NSIS step. The app is packed, the Electron dist
+downloaded, `Pyrycode Desktop.exe` produced with all seven icon sizes embedded, and the
+`*.nsis.7z` payload written; then `makensis` fails to spawn with `Unknown system error -86` (EBADARCH).
+The cause is exact and is not a repo problem: electron-builder's bundled `mac/makensis` is a
+`Mach-O 64-bit executable x86_64`, and Rosetta 2 is absent from this machine
+(`/Library/Apple/usr/libexec/oah` does not exist). `softwareupdate --install-rosetta` on the Mac, or
+running `npm run dist:win` on Windows, both produce the exe; neither is a code change.
+
+**Open question 2 — resolved, `extraMetadata` stays.** Verified by control experiment rather than
+assumption: packing once with the line and once without, the packed `app.asar`'s `package.json` carries
+`"productName": "Pyrycode Desktop"` with it and has no `productName` at all without it. Without the
+line the installed app's `app.getName()` would fall back to `name` and its user data would land in
+`%APPDATA%\pyrycode-desktop`, not the `%APPDATA%\Pyrycode Desktop` the operator acceptance names.
+
+**Open question 3 — narrowed, not closed.** `noise-c.wasm/src/noise-c.wasm` is inside the asar, and its
+Emscripten glue resolves it as `__dirname + "/"` and reads it with `fs.readFileSync`, which is the path
+Electron's asar-aware `fs` patches in the main process — where `loadNoiseLib` is the only caller. So the
+expected outcome is that it loads, and `asarUnpack` stays out of the config until an installed launch
+says otherwise. The operator acceptance's pairing step is still the test.
+
+**Testing-strategy contingency — did not fire.** It was conditioned on the macOS run failing before the
+icon stage. It did not: the run reached and passed that stage, and the ICO was verified against the
+built exe directly — each of the seven entries' image bytes was found inside
+`dist/win-arm64-unpacked/Pyrycode Desktop.exe`. That is a stronger check than the proposed spec, on the
+real artifact, so no vitest spec is added.
+
+**Also verified against the packed artifact, since the packaging stage ran.** The asar's top level is
+exactly `node_modules`, `out` and `package.json` — no `src/`, no `e2e/`, no `build/` — so the `files`
+allowlist keeps the fake daemon, the fake relay and the fixtures out of a shipped build while the 1261
+production `node_modules` entries `externalizeDepsPlugin` requires do ship. electron-builder also
+strips `devDependencies` from the packed `package.json` on its own.

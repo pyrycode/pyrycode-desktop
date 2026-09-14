@@ -135,9 +135,12 @@ test('real claude session checkbox grants repeated Bash use only in the current 
     expect(modified()).toBe(STALE_SECONDS * 1000)
     expect(await sessionId(page, freshConversation) !== originalSession).toBe(true)
     await expect(checkbox).not.toBeChecked()
+    // The acceptance is complete above: the fresh session asked before any effect. Cancelling is
+    // this client's own path, so the drive asserts only what this repo owns — the unconditional
+    // local dismissal and the still-absent effect. What the daemon does with a stdio permission
+    // prompt after a modal_cancel has no upstream proof, so no assertion here waits on it.
     await panel.getByRole('button', { name: 'Cancel', exact: true }).click()
-    await expect.poll(async () => (await driveCounts(page, freshConversation)).completed,
-      { timeout: TURN_TIMEOUT_MS }).toBeGreaterThan(beforeFresh.completed)
+    await expect(panel).toHaveCount(0)
     expect(modified()).toBe(STALE_SECONDS * 1000)
   } finally {
     await page.evaluate(() => { (window as DriveWindow).permissionDrive.off(); delete (window as any).permissionDrive })

@@ -29,6 +29,7 @@ import type {
   RateLimitedPayload,
   ContextUsageCategory,
   ContextUsageMCPTool,
+  ContextUsageMemoryFile,
   ContextUsagePayload,
   WireUnrecognizedSite,
   UnrecognizedMessagePayload,
@@ -362,12 +363,11 @@ describe('context-usage wire vocabulary (#1454, #1455, #1459)', () => {
     expect(usage).toBe('context_usage')
   })
 
-  it('shapes ContextUsagePayload as the reading PLUS two inventories (#1459)', () => {
+  it('shapes ContextUsagePayload as the reading PLUS all THREE inventories (#1460)', () => {
     // #1454 declared the five-field reading alone and pinned all three inventories as absent; #1455
-    // inverted the `categories` pin and #1459 inverts the `mcp_tools` one. The LAST inventory
-    // (`memory_files`) and its dropped count are still on the wire and still deliberately undeclared: a
-    // declared-but-unparsed field would be a type with no narrowing behind it, so the declaration and
-    // the parsing land together. #1460 adds the pair with its parsing.
+    // inverted the `categories` pin, #1459 the `mcp_tools` one, and #1460 inverts the last. Every key
+    // the daemon writes is now declared AND parsed — declaration and parsing landed together each time,
+    // a declared-but-unparsed field being a type with no narrowing behind it.
     const payload: ContextUsagePayload = {
       conversation_id: 'conversation-context',
       model: 'claude-opus-5',
@@ -383,22 +383,53 @@ describe('context-usage wire vocabulary (#1454, #1455, #1459)', () => {
         { name: 'read_file', server_name: 'filesystem', tokens: 1450 },
         { name: 'query\ndocs', server_name: 'remote<mcp>', tokens: 620 }
       ],
-      dropped_mcp_tools: 5
+      dropped_mcp_tools: 5,
+      memory_files: [
+        { path: '/Users/dev/project/CLAUDE.md', type: 'project', tokens: 3100 },
+        { path: '../../../etc/passwd', type: 'user', tokens: 240 }
+      ],
+      dropped_memory_files: 7
     }
     // Wire order is the producer's descending-token order and a cut takes entries off the TAIL, so the
-    // rows are a sequence and never a set. Asserted for both inventories.
+    // rows are a sequence and never a set. Asserted for all three inventories.
     expect(payload.categories.map((row) => row.name)).toEqual(['System prompt', 'Messages <&>'])
     expect(payload.mcp_tools.map((row) => row.name)).toEqual(['read_file', 'query\ndocs'])
+    // The INVERSION #1460 owns, asserted rather than deleted: the traversal-shaped path this type once
+    // pinned as ABSENT is now a declared value, and it is declared as a plain `string` — path-shaped
+    // descriptive text, never a handle the type system promises resolves to a file.
+    expect(payload.memory_files.map((row) => row.path)).toEqual([
+      '/Users/dev/project/CLAUDE.md',
+      '../../../etc/passwd'
+    ])
     // Each count is INDEPENDENT of its OWN retained length — two cuts' worth of loss apiece — and the
-    // two are never cross-read. The daemon divides one envelope across three lists and can cut all
-    // three at once, so `3` here says nothing about `5` and neither says anything about a length.
+    // three are never cross-read. The daemon divides one envelope across three lists and can cut all
+    // three at once, so `3` says nothing about `5` or `7`, and none says anything about a length.
     expect(payload.dropped_categories).toBe(3)
     expect(payload.dropped_mcp_tools).toBe(5)
+    expect(payload.dropped_memory_files).toBe(7)
     // Conversation-scoped, not turn-scoped: receiving one neither opens nor closes a turn.
     expect(payload).not.toHaveProperty('turn_id')
-    // #1460's pin, deliberately NOT deleted with the `mcp_tools` one above — removing it would retire
-    // the last inventory's declaration guard a slice early.
-    expect(payload).not.toHaveProperty('memory_files')
+  })
+
+  it('shapes ContextUsageMemoryFile as three always-present keys — "" and 0 are VALUES (#1460)', () => {
+    // The daemon states all three keys remain present even when the strings are empty, so none is
+    // optional and a truthiness test on any would read a legitimate row as malformed. An empty `path`
+    // is emphatically not a lookup that resolved to the filesystem root — nothing resolves it at all.
+    const row: ContextUsageMemoryFile = { path: '', type: '', tokens: 0 }
+    expect(row).toEqual({ path: '', type: '', tokens: 0 })
+    // `path` IS PATH-SHAPED DESCRIPTIVE TEXT, NOT A FILE HANDLE, and this pin is what that sentence
+    // costs: the field NAME asserts a capability the value does not have. Nothing joins, cleans,
+    // resolves or opens it, so a traversal-shaped value, a `javascript:` URI wearing a path shape and a
+    // `__proto__` segment are all ordinary assignable values here — the type promises nothing beyond
+    // `string`, which is the honest promise. `type` carries the same constraint and is claude's own
+    // LABEL: open by definition, never a discriminant this repo's `kind`/`type` habit invites a
+    // `switch` on, and never an authority to branch security-relevant behaviour on.
+    const hostile: ContextUsageMemoryFile = {
+      path: '../../../etc/passwd',
+      type: 'javascript:alert(1)',
+      tokens: 1
+    }
+    expect([hostile.path, hostile.type]).toEqual(['../../../etc/passwd', 'javascript:alert(1)'])
   })
 
   it('shapes ContextUsageMCPTool as three always-present keys — "" and 0 are VALUES (#1459)', () => {
@@ -446,18 +477,22 @@ describe('context-usage wire vocabulary (#1454, #1455, #1459)', () => {
       categories: [],
       dropped_categories: 0,
       mcp_tools: [],
-      dropped_mcp_tools: 0
+      dropped_mcp_tools: 0,
+      memory_files: [],
+      dropped_memory_files: 0
     }
     expect([empty.conversation_id, empty.model]).toEqual(['', ''])
     expect([empty.total_tokens, empty.max_tokens, empty.percentage]).toEqual([0, 0, 0])
     // `MarshalJSON` normalises EVERY nil inventory slice to `[]`, so each type is a plain array and
-    // never `ContextUsageCategory[] | null` / `ContextUsageMCPTool[] | null` — an empty list is the
-    // POSITIVE statement that claude reported no categories, or no MCP tools, and a consumer never has
-    // to branch on null to read one.
+    // never `...[] | null` — an empty list is the POSITIVE statement that claude reported no
+    // categories, no MCP tools, or no memory files, and a consumer never has to branch on null to read
+    // one.
     expect(empty.categories).toEqual([])
     expect(empty.dropped_categories).toBe(0)
     expect(empty.mcp_tools).toEqual([])
     expect(empty.dropped_mcp_tools).toBe(0)
+    expect(empty.memory_files).toEqual([])
+    expect(empty.dropped_memory_files).toBe(0)
   })
 
   it('admits a percentage NOT derivable from the token pair — the reading is informational', () => {
@@ -471,18 +506,21 @@ describe('context-usage wire vocabulary (#1454, #1455, #1459)', () => {
       total_tokens: 128_400,
       max_tokens: 0,
       percentage: 64,
-      // Neither inventory need sum to `total_tokens` either, by the same contract — and a cut list
-      // makes the sum smaller still. One contribution beside a six-figure total is representable, and
-      // so is a negative one: the rows police type, never range.
+      // No inventory need sum to `total_tokens` either, by the same contract — and a cut list makes the
+      // sum smaller still. One contribution beside a six-figure total is representable, and so is a
+      // negative one: the rows police type, never range.
       categories: [{ name: 'System prompt', tokens: 41_200 }],
       dropped_categories: 0,
       mcp_tools: [{ name: 'read_file', server_name: 'filesystem', tokens: -1 }],
-      dropped_mcp_tools: 0
+      dropped_mcp_tools: 0,
+      memory_files: [{ path: '/w/CLAUDE.md', type: 'project', tokens: -1 }],
+      dropped_memory_files: 0
     }
     expect(inconsistent.percentage).toBe(64)
     expect(inconsistent.max_tokens).toBe(0)
     expect(inconsistent.categories[0].tokens).toBe(41_200)
     expect(inconsistent.mcp_tools[0].tokens).toBe(-1)
+    expect(inconsistent.memory_files[0].tokens).toBe(-1)
   })
 })
 

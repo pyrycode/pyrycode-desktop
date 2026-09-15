@@ -202,7 +202,7 @@ no unit test of its own.
 - [#157 codebase notes](../codebase/157.md) — parent split ticket (this transport slice / the
   Workspace Picker UI, #383).
 - [#379 codebase notes](../codebase/379.md) — implementation summary.
-- [Channel list § Workspace grouping](channel-list.md#workspace-grouping) — the sidebar's read of
+- [Channel list — workspace grouping](channel-list-workspace-grouping.md) — the sidebar's read of
   the workspace label this rename verb changes, and the daemon-side blank-label refusal this
   ticket's guard deliberately does not re-implement.
 - [Server-scoped command routing](daemon-connection-server-scoped-routing.md) — `renameWorkspace`

@@ -278,6 +278,12 @@ test('optional resets, dismissal, keyboard controls and constrained modal layout
     await expect(field).toHaveValue(FOLDER_SEGMENT)
     await field.fill(OLD_LABEL)
     await field.press('Tab')
+    // #1439 put the Archive workspace button between the field and the footer — `Modal` renders its
+    // children before `.modal__footer`, so the content slot's control is the next tab stop. The walk to
+    // OK is one Tab longer, and the extra stop is read POSITIVELY rather than silently added, so a
+    // button that fell out of the tab order reddens here instead of shifting the count back.
+    await expect(dialog.locator('.edit-workspace__archive')).toBeFocused()
+    await page.keyboard.press('Tab')
     await page.keyboard.press('Tab')
     await expect(ok).toBeFocused()
     await page.keyboard.press('Enter')
@@ -309,6 +315,88 @@ test('optional resets, dismissal, keyboard controls and constrained modal layout
   await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
   await page.keyboard.press('Enter')
   await expect(dialog).toHaveCount(0)
+})
+
+// #1439 — the dialog's Archive workspace button: arm, disarm, arm again, confirm. Only this tier can
+// answer the half that matters, that ARMING SENDS NOTHING: a static render cannot tell a click that
+// merely changes an arm from one that archives, because both leave identical markup behind them (the
+// Edit host dialog's own unpair drive states the same reason). `EditWorkspaceDialog.test.tsx` owns each
+// arm's markup and the selection rule; what is below is the round trip and the trees' answer to it.
+//
+// The second workspace is the CONTROL, and it is what makes "only that folder" a measurement rather than
+// an assumption: it is minted through the same real product control at a different path, so a build that
+// archived by host alone, or by every active row, would take it too.
+const OTHER_CWD = '/fake/other-workspace'
+const OTHER_SEGMENT = 'other-workspace'
+
+test('the Archive workspace button arms, disarms, and on confirm takes the group out of both trees', async ({
+  launchPairedApp
+}) => {
+  const fake = conversationStateFake({ conversations: [SEED] })
+  const archives: unknown[] = []
+  const renames: unknown[] = []
+  const { page } = await launchPairedApp({
+    buildReplyFrames: (frame) => {
+      const env = decodeEnvelope(frame)
+      if (env.type === 'archive_conversation') archives.push(env.payload)
+      if (env.type === 'rename_workspace') renames.push(env.payload)
+      return fake(frame)
+    }
+  })
+
+  const workspaceLabels = page.locator('.channel-list__workspace-label')
+  const dialog = page.getByRole('dialog', { name: 'Edit workspace' })
+  const slot = dialog.locator('.edit-workspace__actions')
+  const armButton = slot.getByRole('button', { name: 'Archive workspace', exact: true })
+  const slotCancel = slot.getByRole('button', { name: 'Cancel', exact: true })
+  const confirmButton = slot.getByRole('button', { name: 'Archive', exact: true })
+
+  await expect(workspaceLabels).toHaveText([OLD_LABEL])
+
+  // The control workspace FIRST, the target's second chat last, so the chat the pane is showing when the
+  // archive lands is one of the archived rows — `useConversationCreatedNav` routes `thread` on each mint.
+  // That ordering is what lets the last assertion read AC4's exit clause instead of assuming it.
+  await mintChatInWorkspace(page, OTHER_CWD)
+  await mintChatInWorkspace(page, WORKSPACE_CWD)
+  await expect(workspaceLabels).toHaveText([OLD_LABEL, OTHER_SEGMENT, OLD_LABEL], {
+    timeout: ROUNDTRIP_TIMEOUT_MS
+  })
+  await expect(page.locator('.conversation__thread')).toHaveCount(1)
+
+  // --- AC1/AC2: the pen opens the dialog on the idle button, and ARMING SENDS NOTHING. ---
+  await page.getByRole('button', { name: EDIT_WORKSPACE_NAME }).first().click()
+  await expect(armButton).toBeVisible()
+  await expect(slot).not.toContainText('Archive this workspace?')
+  await armButton.click()
+  await expect(slot).toContainText('Archive this workspace?')
+  await expect(armButton).toHaveCount(0)
+  await expect(slotCancel).toBeVisible()
+  await expect(confirmButton).toBeVisible()
+  expect(archives).toEqual([])
+
+  // --- AC2: the slot's Cancel returns it to the idle button and leaves the dialog open. Located through
+  // the slot's own class, since the footer's Cancel reads the same word while armed. ---
+  await slotCancel.click()
+  await expect(armButton).toBeVisible()
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'OK', exact: true })).toBeVisible()
+  expect(archives).toEqual([])
+
+  // --- AC3/AC4: arm again and confirm. The dialog closes at once, both of that folder's groups leave
+  // both trees once the daemon's refreshed list arrives, the control workspace stays, and no rename was
+  // sent even though the field still holds the label it was seeded with. ---
+  await armButton.click()
+  await confirmButton.click()
+  await expect(dialog).toHaveCount(0)
+  await expect(workspaceLabels).toHaveText([OTHER_SEGMENT], { timeout: ROUNDTRIP_TIMEOUT_MS })
+  expect(archives).toHaveLength(2)
+  expect(renames).toEqual([])
+
+  // AC4's last clause: the open chat was in that folder, so the pane left the thread through the shipped
+  // archived-exit path rather than sitting on a conversation the sidebar no longer lists.
+  await expect(page.locator('.conversation__thread')).toHaveCount(0, {
+    timeout: ROUNDTRIP_TIMEOUT_MS
+  })
 })
 
 // Shared refresh drops the event origin; re-enable after https://github.com/pyrycode/pyrycode-desktop/issues/1363.

@@ -1058,10 +1058,15 @@ export function hostRowEditSeed(value: HostLabelValue): string {
 // instances between machines whenever the paired list reorders. `ChannelList.test.tsx` pins the claim by
 // rendering a sentinel id and asserting it appears nowhere in the markup.
 // #1427 — THE POINTER-RELATIVE PLACEMENT OF `.channel-list__control-name`, and the one part of it a
-// stylesheet cannot do: the pointer's position is not available to CSS. Seven controls in this file wear
-// that pill and all seven spread `controlNamePlacement`, so there is one handler set and no per-control
+// stylesheet cannot do: the pointer's position is not available to CSS. Eight controls in this file wear
+// that pill and all eight spread `controlNamePlacement`, so there is one handler set and no per-control
 // wiring. `channels.css` owns the offsets, the mirror arithmetic and the reasons; this owns the numbers
 // only CSS cannot see.
+//
+// SPREADING THIS SET IS NOT THE WHOLE OF GIVING A CONTROL A PILL, and #1441 shipped a cut that assumed it
+// was: the eighth wearer arrived with this spread, the markup and the word all correct and its pill still
+// invisible, because the `display: none` → `block` trigger in `channels.css` enumerates selectors and had
+// never heard of the new token. A new control needs BOTH halves.
 //
 // ⭐ A DIRECT STYLE WRITE AND NEVER A REACT `style` PROP. `ChannelList.test.tsx` compares whole attribute
 // runs on these buttons, and a `style` prop would add a `style` attribute to the static markup and move

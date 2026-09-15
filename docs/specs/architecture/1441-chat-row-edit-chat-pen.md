@@ -249,6 +249,37 @@ counts each control's **own** token (`class="channel-list__chat-edit"` and `clas
 both unique), which is the same claim — a chat row carries both controls — made with a locator that can
 only be about that row. The name↔pill parity half is unchanged and covers **Edit chat** as planned.
 
+**2026-09-15, rework leg — the plan's Geometry section carried only half of what a new control needs, and
+the first cut shipped that half.** The section said the new token "joins the `.channel-list__row:hover`
+reveal rule as a third selector, and gets its own `:focus-visible` rule" — both of which reveal the
+**glyph**. It never named the *second* trigger rule, the one that flips the control's
+`.channel-list__control-name` from `display: none` to `block` on the control's own `:hover` /
+`:focus-visible`. So the Design section's claim that the chat pen wears the same pill in the same place
+was never made true: the pill's markup, its word and the `controlNamePlacement` spread all shipped
+correct and the pill was styled out of existence, reading nothing on hover or on focus. AC1's "its hover
+pill reads **Edit chat**" was unimplemented.
+
+The corrected design: the pen's block restates `.channel-list__rename` in **two** rules, not one — the
+control's own block *and* its pair of entries in the pill trigger. Stated generally, because this is the
+half of the idiom the plan got wrong: in this file a control and its pill are revealed by two different
+rules at two different scopes (the glyph by the ROW's hover, the name by the CONTROL's own), so
+"restates `.channel-list__rename`" is not finished at the control's own rule.
+
+**Why nothing went red, which is the part worth carrying forward.** The static tier renders the pill's
+markup whatever the stylesheet says, so `countOf(recent, '>Edit chat</span>')` passed on a pill that
+could never appear. In `e2e/sidebar-control-name-pill.spec.ts` the new pill was only ever *counted* and
+*asserted hidden*, and a permanently hidden pill satisfies both **vacuously**; the two blocks that read a
+pill's text were scoped to the other two controls, one of them deliberately re-scoped away from it by
+this very ticket. A visibility claim about a new element therefore needs a **text read on that element** —
+the assertion this leg adds, in both modalities, parked on the pen itself. It parks at `dx: 12` rather
+than the 4 its siblings use: the two boxes overlap by 8px, so the pen's own left 8px is over the chevron
+and a point there would resolve to the pen only by sibling order.
+
+Also corrected while in the rules: the placement comment's census (seven pill-bearing controls → eight,
+two 28×24 boxes → three) in `channels.css` and its twin above `controlNamePlacement` in
+`ChannelList.tsx`. Bookkeeping; the arithmetic the paragraph justifies is unaffected, the chat pen being
+the same 28×24 box as the two it already named.
+
 ## Open questions
 
 - **The chevron's fate on a chat row.** The drawing shows none and the Edit chat modal carries no Save as

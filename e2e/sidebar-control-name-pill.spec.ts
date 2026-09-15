@@ -73,11 +73,16 @@ const PILL_HEIGHT_PX = 24
 const OFFSET_X_PX = 12
 const OFFSET_Y_PX = 24
 
-// The two control names, restated here as the literals the operator reads rather than imported from the
+// The three control names, restated here as the literals the operator reads rather than imported from the
 // screen. A constant imported from the code under test would agree with itself if both moved together;
 // these are the words the criterion names.
 const RENAME_NAME = 'Rename'
 const SAVE_NAME = 'Save as channel'
+// #1441 — the Chats tree's pen. A THIRD constant and not a reuse of `RENAME_NAME`, mirroring the two
+// module-local constants the screen keeps: #1430 renames the Channels pen to `Edit channel` and must be
+// able to move that word alone, so a shared literal here would redden this file for a change that does
+// not touch the Chats tree at all.
+const EDIT_CHAT_NAME = 'Edit chat'
 
 // `pairedShell.css` gives the sidebar `flex: 0 0 400px`. Showing a pill must not move it.
 const SIDEBAR_WIDTH_PX = 400
@@ -234,6 +239,7 @@ test('a row control names itself in a pill that follows the pointer, clear of th
   const pills = page.locator('.channel-list__row .channel-list__control-name')
   const renames = page.locator('.channel-list__rename')
   const save = page.locator('.channel-list__save')
+  const chatEdit = page.locator('.channel-list__chat-edit')
   const sidebar = page.locator('.paired-shell__sidebar')
 
   // The launch seed: one row, TWO controls, two pills — already enough to prove the pills are MOUNTED and
@@ -254,7 +260,7 @@ test('a row control names itself in a pill that follows the pointer, clear of th
   // The chat pen's own token, asserted here because every count below depends on it: `.channel-list__rename`
   // staying at forty against forty-one rows is the whole reason #1441 gave the Chats tree a second token,
   // and the line above is what would redden if that token were ever shared.
-  await expect(page.locator('.channel-list__chat-edit')).toHaveCount(1)
+  await expect(chatEdit).toHaveCount(1)
 
   // The list really does overrun its own viewport, so "the first row" and "the last row" below are at
   // different scroll positions rather than both on screen at once. Asserted rather than assumed: a window
@@ -383,6 +389,56 @@ test('a row control names itself in a pill that follows the pointer, clear of th
   expectAtMirroredPointer(lastBox, lastPoint, 'last row pill')
   expectClearOfControl(lastBox, saveBox, 'last row pill')
   expectInsideWindow(lastBox, viewport, 'last row pill')
+
+  // --- ⭐ #1441, THE CHAT PEN'S OWN PILL, on the same chat row the mirror block just parked on — and the
+  // read the first cut of that ticket did not have. Its pen shipped with the pill's markup, its word and
+  // the placement spread all correct and the pill INVISIBLE: `.channel-list__control-name` is
+  // `display: none` in its base block and each control flips it through its own trigger pair, and the new
+  // token had been added to the glyph's reveal rule but not to that one. Every gate stayed green, because
+  // this file only ever COUNTED the chat pen's pill and asserted it hidden — both of which a pill hidden
+  // forever satisfies vacuously — while the two blocks that read a pill's TEXT were scoped to the other
+  // two controls. So this block is deliberately a text read on the pen itself, in both modalities: a
+  // count could not have caught it and neither could the static tier, which renders the markup whatever
+  // the stylesheet says.
+  //
+  // PARKED AT dx: 12 AND NOT THE 4 ITS SIBLINGS USE. The two controls' boxes overlap by 8px — the pen
+  // spans 0–28 from the row's right edge and the chevron 20–48 — so the pen's own left 8px is over the
+  // chevron, and a point there would read as "the pen" only by the pen being the later sibling. Twelve is
+  // clear of the chevron's box outright, which is what makes this a park on the pen rather than on a
+  // stacking order. ---
+  await parkOn(chatEdit, 'chat row pen', 12, 4)
+  const chatPill = chatEdit.locator('.channel-list__control-name')
+  await expect(chatPill).toBeVisible({ timeout: TIMEOUT_MS })
+  await expect(chatPill).toHaveText(EDIT_CHAT_NAME)
+  // The set read beside the positive one, this file's idiom: exactly one pill is up, so this is THAT
+  // control's pill and not the chevron's still showing from the block above.
+  expect((await displays(pills)).filter((display) => display !== 'none')).toEqual(['block'])
+  // Placement is proven four ways on the other two controls and the rule is one rule, so what is read
+  // here is only what is specific to a control the pill had never been shown on: it is clear of its own
+  // glyph and it is on screen. Both forms hold whichever side of the pointer this row's position puts it
+  // on, so neither restates the mirror's arithmetic or depends on the window's height.
+  const chatBox = await boxOf(chatPill, 'chat row pen pill')
+  expectClearOfControl(chatBox, await boxOf(chatEdit, 'chat row pen'), 'chat row pen pill')
+  expectInsideWindow(chatBox, viewport, 'chat row pen pill')
+
+  // ...and the keyboard half of the same trigger pair, which failed the same way and needs its own read:
+  // the pair is two selectors and naming only `:hover` would leave the focus case dark. Reached by Tab
+  // from the row's open button with the pointer parked off the list, `sidebar-row-geometry`'s and this
+  // file's shared reasoning about `:focus-visible` being a keyboard-modality heuristic. TWO tabs: the
+  // chevron is emitted first, so it takes the first one — asserted rather than skipped past, since that
+  // order is also what the mirror block above depends on.
+  await page.mouse.move(0, 0)
+  await expect(chatPill).toBeHidden({ timeout: TIMEOUT_MS })
+  await rows.last().locator('.channel-list__row-open').focus()
+  await page.keyboard.press('Tab')
+  await expect(save).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(chatEdit).toBeFocused()
+  await expect(chatPill).toBeVisible({ timeout: TIMEOUT_MS })
+  await expect(chatPill).toHaveText(EDIT_CHAT_NAME)
+  await chatEdit.evaluate((element: HTMLElement) => element.blur())
+  await expect(chatPill).toBeHidden({ timeout: TIMEOUT_MS })
+  await allHidden(pills, pillCount)
 
   // --- ...and on THE HIGHEST ROW A POINTER CAN REACH, mid-scroll — the case an above-the-row placement
   // clips, and the one no unscrolled read gets near: at `scrollTop: 0` the first row sits a header, a host

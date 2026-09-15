@@ -4,6 +4,7 @@ import {
   clipboard,
   dialog,
   ipcMain,
+  Menu,
   nativeImage,
   Notification,
   session,
@@ -47,6 +48,7 @@ import { saveDebugBundle } from './saveDebugBundle'
 import { emitDaemonEvent, bindServerOrigin } from './emitDaemonEvent'
 import { createLiveWindow } from './liveWindow'
 import { fireNotification, activateWindow, windowHasFocus } from './fireNotification'
+import { createContextMenuListener } from './editContextMenu'
 import { createDiagnosticLog } from './diagnosticLog'
 import { fileRotatingSink, stdoutSink } from './diagnosticLogSinks'
 import { logSessionStart } from './sessionBanner'
@@ -143,6 +145,18 @@ function createWindow(presentation: WindowPresentation): BrowserWindow {
     }
     return { action: 'deny' }
   })
+
+  // #1445: right-click opens the OS's own edit menu. The decision — whether a menu applies at all, and
+  // which items it carries — lives in editContextMenu.ts, which imports no `electron`; this is the only
+  // place that touches `Menu`. The window is named explicitly rather than letting `popup()` fall back to
+  // whichever window happens to be focused: the menu belongs to the window that was clicked.
+  mainWindow.webContents.on(
+    'context-menu',
+    createContextMenuListener((template) => {
+      const menu = Menu.buildFromTemplate(template)
+      return { popup: () => menu.popup({ window: mainWindow }) }
+    })
+  )
 
   // In development the renderer is served from the Vite dev server; a packaged app loads the
   // bundled file. The env-var override is honoured only when NOT packaged, so a stray

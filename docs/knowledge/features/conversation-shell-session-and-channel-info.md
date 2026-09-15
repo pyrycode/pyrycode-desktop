@@ -228,24 +228,49 @@ The fake-transport test also observes updates while open and switches both ways 
 conversations. Store and cleanup tests cover complete replacement, isolation, hostile Map keys and
 pairing reset. See [verification boundaries](development-verification.md#what-each-test-tier-proves).
 
-**Rename action ([#368](../codebase/368.md)), retitled Edit chat ([#1440](rename-conversation-dialog.md)).**
+**Rename action ([#368](../codebase/368.md)), retitled Edit chat ([#1440](rename-conversation-dialog.md)),
+split into Edit channel / Edit chat by conversation kind ([#1431](edit-channel-dialog.md)).**
 The Actions slot's first filler: a Material 3 tonal pill (Figma 20:89, `.channel-info__action`)
 rendered only when the container supplies an `onRename?` callback — supplied exactly in the
 `conversation !== null` branch, so the null-conversation graceful-empty case (above) offers no
-Edit-chat control either. Activating it seeds and opens the existing [Edit chat
+Edit action either. The pill's word and the dialog it opens both split on the same expression,
+`conversation.is_promoted` — the wire's only signal for "a saved channel" vs. "an ad-hoc
+discussion" (there is no `kind` enum), and the same field the view already reads `cwd`, `name` and
+`last_used_at` off a few lines up, so the word is derived from data already in scope rather than
+handed in as a second, possibly-disagreeing authority. A promoted channel reads **Edit channel** and
+mounts [#1476/#1477's `EditChannelDialog`](edit-channel-dialog.md) for the conversation's id,
+displayed name and server; anything else reads **Edit chat** and opens the existing [Edit chat
 dialog](rename-conversation-dialog.md) (`EditChatDialogView`, `RenameConversationDialogView` before
-\#1440) via a second screen-local `useState` pair (`renameOpen`/`renameName`) the `ChannelInfoSheet`
-container grows, mirroring `ChannelList.tsx`'s row-level rename state shape; Save dispatches the
-already-shipped `renameConversation` command (#359) via `requestRenameConversation`, imported
-verbatim rather than cloned. That helper's `row` param narrowed from `ConversationSummary` to
-`Pick<ConversationSummary, 'id'>` (it only ever read `.id`) so the sheet's `ConversationCreatedPayload`
-— a narrower 5-field shape lacking `is_archived`/`last_message_ts` — passes directly, no adapter, no
-cast; the existing `ChannelList` call site is unaffected (a wider shape still satisfies the narrower
-`Pick`). The pill's own prop name, `onRename`, is unchanged — it still opens the same rename-capable
-dialog, only the rendered word moved. No new transport, IPC, or wire code. See [#368 codebase
-notes](../codebase/368.md) for the full design and patterns established, and [Edit chat
-dialog](rename-conversation-dialog.md) for the #1440 retitle and its new Archive chat button (which
-now duplicates, inside this same dialog, the send-then-close-both sequence the Archive pill below
+\#1440), byte-for-byte as #1440 left it, Archive chat button included. Both arms seed and drive a
+single second screen-local `useState` pair (`renameOpen`/`renameName`) the `ChannelInfoSheet`
+container grows, mirroring `ChannelList.tsx`'s row-level rename state shape — no second cell for the
+channel arm. Save on either arm dispatches the already-shipped `renameConversation` command (#359)
+via `requestRenameConversation`, imported verbatim rather than cloned. That helper's `row` param
+narrowed from `ConversationSummary` to `Pick<ConversationSummary, 'id'>` (it only ever read `.id`)
+so the sheet's `ConversationCreatedPayload` — a narrower 5-field shape lacking
+`is_archived`/`last_message_ts` — passes directly, no adapter, no cast; the existing `ChannelList`
+call site is unaffected (a wider shape still satisfies the narrower `Pick`). The pill's own prop
+name, `onRename`, is unchanged across both arms — it still opens a rename-capable dialog, only the
+rendered word and, for a channel, the dialog itself moved. No new transport, IPC, or wire code.
+
+The channel arm carries one condition its chat twin does not: `serverId !== null && available`,
+where `serverId` is resolved at render time
+(`serverIdForOpenConversation(useConversationListStore(selectConversations), conversation?.id)`)
+because `EditChannelDialog` needs the host id as a prop to gate its own daemon subscription, and
+`available` is this sheet's existing `connected(…)` equivalent. `EditChatDialogView` instead carries
+that condition itself, as its `available` prop — the channel dialog has no such prop by design (see
+[Edit channel dialog](edit-channel-dialog.md)), so the sheet supplies the render gate from outside
+instead. Both are already true whenever the pill is clickable (`onRename` is withheld unless
+`available`), so the pair only ever fires as a *close on host loss*, never as a refusal to open. The
+channel arm's `onSave` restates `ChannelList`'s own save order — a live
+`connectedConversationHostNow(conversation.id)` re-check, then the dialog's own prompt write, then
+the rename, then dismissal — with one deliberate divergence from `ChannelList`: **no
+unchanged-name no-send.** The sheet has always sent its rename unconditionally regardless of which
+dialog answers it, and giving the channel arm alone a no-send comparison would make one pill mean two
+different things depending on what kind of conversation is open. See [#368 codebase
+notes](../codebase/368.md) for the Rename action's original design and patterns established, and
+[Edit chat dialog](rename-conversation-dialog.md) for the #1440 retitle and its Archive chat button
+(which now duplicates, inside that dialog, the send-then-close-both sequence the Archive pill below
 already used).
 
 **Archive action ([#366](../codebase/366.md)).** The Actions slot's second filler, landing one

@@ -262,13 +262,23 @@ failure.
 - **No length bound on the name.** The daemon-supplied name reaches a controlled input with no
   `maxlength`, unchanged from the `.rename-conversation__input` this restates — a layout question,
   not a trust one, and out of scope for this ticket.
-- **Opening the same channel through the Channel Info sheet still reaches the *other* dialog.** The
-  sheet's Actions pill (`ConversationScreen.tsx`) and `requestRenameConversation`'s other production
-  caller are untouched by #1476 — see [Edit chat dialog § Channels-row entry point
-  retired](rename-conversation-dialog.md#channels-row-entry-point-retired-1476). A channel opened from
-  its own sidebar row reaches this modal; the same channel opened from the sheet still reaches Edit
-  chat, Archive chat button included, until a later ticket unifies the two paths. #1477 did not
-  unify them — it only added the system prompt field to this modal.
+- **Opening the same channel through the Channel Info sheet now reaches this same dialog too**, as of
+  [#1431](conversation-shell-session-and-channel-info.md#channel-info-sheet-365). The sheet's Actions
+  pill (`ChannelInfoSheet` in `ConversationScreen.tsx`) splits on `conversation.is_promoted`, the same
+  field this page's own row split reads: a promoted channel reads **Edit channel** and mounts this
+  container for the conversation's id, displayed name and resolved server; anything else keeps
+  **Edit chat** and `EditChatDialogView`, Archive chat button included. The sheet supplies the host
+  condition itself (`serverId !== null && available`, resolved at render time) rather than this
+  dialog gaining an `available` prop — see the `available` discussion above, unchanged by this second
+  mount site. The sheet's save order restates this file's own (`ChannelList.tsx`'s) order — a live
+  `connectedConversationHostNow` re-check, the prompt write, then the rename — but the sheet's rename
+  has always sent unconditionally, so its arm has no unchanged-name no-send; that comparison stays a
+  `ChannelList`-only refinement. Two entry points now reach one dialog: the Channels row's own pen
+  (`ChannelList.tsx`) and, for a promoted channel only, the Channel Info sheet's edit pill. A chat
+  (non-promoted) opened from the sheet still reaches Edit chat, not this dialog — #1431 did not touch
+  that arm. See [Conversation shell — session boundaries and channel info § Rename
+  action](conversation-shell-session-and-channel-info.md#channel-info-sheet-365) for the sheet-side
+  half of this split.
 - **A reply that never comes leaves the box unreadable indefinitely.** There is no timeout, retry or
   error frame on the read — `SystemPromptSection`'s own accepted posture for this reply-only frame,
   inherited rather than re-decided. A malicious or slow relay that withholds `system_prompt` leaves

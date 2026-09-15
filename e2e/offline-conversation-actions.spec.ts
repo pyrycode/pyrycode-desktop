@@ -51,16 +51,27 @@ test('held reading, draft and queue survive offline actions, reopening and copyi
   await event(app, { type: 'turnState', serverId: FIRST_SERVER_ID, conversationId: SEEDED_ROW.id, state: 'thinking' })
   await page.getByPlaceholder('Message…').fill('Retained local draft')
   await info(app)
-  await page.locator('.channel-info__actions').getByRole('button', { name: 'Rename', exact: true }).click()
-  const rename = page.getByRole('dialog', { name: 'Rename', exact: true })
+  // #1440 retitled this dialog and its sheet pill to Edit chat. The sidebar pen keeps its own `Rename`
+  // accessible name (#1441 owns that), which is why this locator is still scoped to the sheet's actions.
+  await page.locator('.channel-info__actions').getByRole('button', { name: 'Edit chat', exact: true }).click()
+  const rename = page.getByRole('dialog', { name: 'Edit chat', exact: true })
+  const archiveChat = rename.getByRole('button', { name: 'Archive chat', exact: true })
   await rename.getByRole('textbox').fill('Held new name')
   await rename.getByRole('button', { name: 'OK', exact: true }).focus()
   const read = await observe(app)
   await connection(app, 'disconnected')
   await expect(rename.getByRole('button', { name: 'OK', exact: true })).toBeDisabled()
+  // #1440 AC3's interactive arm, in the one drive that holds this dialog open ACROSS a disconnect —
+  // the state a static render cannot reach. Archive chat is enabled-with-a-blank-name by design (it
+  // reads only the `available` half of OK's guard), so this is the single assertion that separates
+  // "disabled on unavailability" from "never disabled at all": held open, it goes dead alongside OK.
+  await expect(archiveChat).toBeDisabled()
   await page.keyboard.press('Enter')
   await page.keyboard.press('Space')
   await rename.getByRole('button', { name: 'OK', exact: true }).dispatchEvent('click')
+  // The `disabled` attribute is the affordance; the handler's own interaction-time re-check is the
+  // guarantee. Dispatching past the attribute proves the second one — nothing reaches `read()` below.
+  await archiveChat.dispatchEvent('click')
   await expect(rename.getByRole('textbox')).toHaveValue('Held new name')
   await rename.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(page.locator('.channel-info__actions').getByRole('button', { name: 'Archive', exact: true })).toHaveCount(0)

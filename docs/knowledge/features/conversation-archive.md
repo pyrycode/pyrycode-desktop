@@ -73,6 +73,20 @@ Archive action click (Channel Info sheet, #366)
   → archived row's is_archived flips to true on the next render
 ```
 
+## A second sender (#1440)
+
+The [Edit chat dialog](rename-conversation-dialog.md) gained its own outlined **Archive chat**
+button, calling the same `requestArchiveConversation` helper the Channel Info sheet already
+imports — no clone, no new helper. The dialog reaches it from both of its own entry points:
+`ChannelList.tsx`'s sidebar mount (gated on `canMutateHost(row.serverId)`) and
+`ConversationScreen.tsx`'s `ChannelInfoSheet` mount (gated on
+`connectedConversationHostNow(conversation.id) !== null`), each re-checking host availability at
+interaction time before sending, exactly as their own OK/rename handlers already do. Both close
+the dialog after sending; the sheet's handler closes the sheet too, the same sequence its own
+Archive pill already used before #1440. Nothing else about this transport changed: still one
+fire-and-forget command, still no correlation, still reflected by the existing `conversation_updated`
+re-list — a second caller of an unchanged verb, not a second verb.
+
 ## Related
 
 - [Conversation unarchive (transport)](conversation-unarchive.md) / [#346](../codebase/346.md) —
@@ -91,3 +105,5 @@ Archive action click (Channel Info sheet, #366)
 - [Conversation shell](conversation-shell-session-and-channel-info.md#channel-info-sheet-365) / [#366
   codebase notes](../codebase/366.md) — the Channel Info sheet's Archive action, this transport's
   live caller.
+- [Edit chat dialog](rename-conversation-dialog.md) — the second sender (#1440), the sidebar and
+  the sheet's own Edit chat modal, both dispatching through the same `requestArchiveConversation`.

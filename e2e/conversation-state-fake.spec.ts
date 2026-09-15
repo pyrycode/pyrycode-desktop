@@ -60,10 +60,11 @@ test('rename reflects through the stateful fake: new title in the list, old gone
   await expect(renamePencil).toBeVisible()
 
   // Drive the product rename UI: pencil → dialog → fill → Save. `fill` clears the prefilled current title.
+  // #1440 retitled the dialog to Edit chat; the pencil above keeps its own `Rename` name (#1441 owns that).
   await renamePencil.click()
-  await expect(page.getByRole('dialog', { name: 'Rename', exact: true })).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Edit chat', exact: true })).toBeVisible()
   await page.locator('.rename-conversation__input').fill(NEW_TITLE)
-  await page.getByRole('dialog', { name: 'Rename', exact: true }).getByRole('button', { name: 'OK', exact: true }).click()
+  await page.getByRole('dialog', { name: 'Edit chat', exact: true }).getByRole('button', { name: 'OK', exact: true }).click()
 
   // The new title renders. Auto-waits the full round-trip: rename_conversation → the fake applies the
   // rename to its held state → conversation_updated broadcast → shouldRefreshList → re-request

@@ -75,7 +75,7 @@ import { isConversationUnread } from '../../store/conversationUnread'
 // WorkspacePickerSheet both import from `channels/channelListViewModel`; `settings/DefaultWorkspaceRow`
 // imports a component out of `conversation/`), and lifting the three symbols into a shared module first
 // would be adjacent refactoring for no behaviour change. No cycle: ConversationScreen reaches back into
-// this directory only for `channelListViewModel` and `RenameConversationDialog`, neither of which imports
+// this directory only for `channelListViewModel` and `EditChatDialog`, neither of which imports
 // this file.
 // #1439 takes a FOURTH symbol from this module, the per-conversation archive send, for the reason the
 // paragraph above gives: the verb already exists and a second copy of the `archiveConversation` literal
@@ -88,10 +88,12 @@ import {
   type ConnectionLeg
 } from '../conversation/ConversationScreen'
 import { SaveAsChannelDialog } from './SaveAsChannelDialog'
-import { RenameConversationDialogView, requestRenameConversation } from './RenameConversationDialog'
+// #1440 renamed this module for its new title. `requestRenameConversation` KEEPS its name: it owns the
+// `renameConversation` wire literal, and renaming the helper would drift it from the verb it sends.
+import { EditChatDialogView, requestRenameConversation } from './EditChatDialog'
 import { CreateChannelDialog } from './CreateChannelDialog'
 // #1180 — the view and its send helper travel together, unlike #1179's split: this verb has exactly
-// one sender and no shipped twin to sit beside, which is `RenameConversationDialog`'s shape.
+// one sender and no shipped twin to sit beside, which is `EditChatDialog`'s shape.
 import {
   EditWorkspaceDialogView,
   requestArchiveWorkspace,
@@ -420,13 +422,26 @@ export function ChannelList({
         />
       )}
       {renameRow && connected(renameRow.serverId) && (
-        <RenameConversationDialogView
+        <EditChatDialogView
           name={renameName}
           onNameChange={setRenameName}
           onCancel={() => setRenameRow(null)}
           onSave={() => {
             if (!canMutateHost(renameRow.serverId)) return
             requestRenameConversation(window.pyry.sendCommand, renameRow, renameName)
+            setRenameRow(null)
+          }}
+          // #1440 — the archive arm. The SAME interaction-time re-check the save above carries, and
+          // `window.pyry` dereferenced here rather than during render, for the same two reasons. It
+          // sends ONE command and closes; no rename goes out whatever the field holds, nothing is
+          // written to a store and nothing navigates — the row leaves the active list on the daemon's
+          // `conversation_updated` re-list, and if this chat is the one on screen, `PairedShell`'s
+          // existing archived-active bridge is what leaves the thread. `requestArchiveConversation` is
+          // the symbol #1439 already imported for the workspace fan-out, so the dialog module still
+          // imports nothing from the conversation screen and the two directories stay cycle-free.
+          onArchive={() => {
+            if (!canMutateHost(renameRow.serverId)) return
+            requestArchiveConversation(window.pyry.sendCommand, renameRow.id)
             setRenameRow(null)
           }}
         />

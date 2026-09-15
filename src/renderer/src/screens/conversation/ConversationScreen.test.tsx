@@ -4353,8 +4353,8 @@ describe('ChannelInfoSheetView — the Channel Info sheet (#365)', () => {
       <ChannelInfoSheetView conversation={createdPayload()} onClose={noop} />
     )
     expect(markup).toContain('Actions')
-    // The Archive / Delete / Rename / Change-workspace tickets fill the slot; none exist here (AC5/AC6).
-    expect(markup).not.toContain('Rename')
+    // The Archive / Delete / Edit-chat / Change-workspace tickets fill the slot; none exist here (AC5/AC6).
+    expect(markup).not.toContain('Edit chat')
     expect(markup).not.toContain('Archive')
     expect(markup).not.toContain('Delete')
     expect(markup).not.toContain('Change workspace')
@@ -4388,42 +4388,43 @@ describe('ChannelInfoSheetView — the Channel Info sheet (#365)', () => {
     expect(markup).not.toContain('Memory')
   })
 
-  // #368: the Rename action fills the Actions slot #365 left empty. It is gated on the `onRename`
+  // #368: the rename action fills the Actions slot #365 left empty. It is gated on the `onRename`
   // callback, which the container supplies ONLY when there is an active conversation to rename — so
   // the button's presence maps one-to-one onto AC1 (present with a conversation, absent on the
   // list-opened null-conversation case).
-  it('renders a Rename action in the Actions slot when a conversation and onRename are supplied (AC1)', () => {
+  it('renders an Edit chat action in the Actions slot when a conversation and onRename are supplied (AC1)', () => {
     const markup = renderToStaticMarkup(
       <ChannelInfoSheetView conversation={createdPayload()} onClose={noop} onRename={noop} />
     )
-    // The tonal pill lands in the existing Actions mount point, labelled "Rename". The quote-terminated
+    // The tonal pill lands in the existing Actions mount point, labelled "Edit chat" since #1440 — the
+    // word moved with the dialog it opens, while `onRename` kept its prop name. The quote-terminated
     // class distinguishes the button (.channel-info__action) from the plural slot (.channel-info__actions).
     expect(markup).toContain('class="channel-info__action"')
-    expect(markup).toContain('>Rename</button>')
+    expect(markup).toContain('>Edit chat</button>')
   })
 
-  it('offers no Rename action when the active conversation is null (the graceful-empty guard, AC1)', () => {
+  it('offers no Edit chat action when the active conversation is null (the graceful-empty guard, AC1)', () => {
     // A list-opened thread (conversation === null) gets no onRename from the container, so the
-    // Actions header renders over an empty slot — no Rename control, consistent with #365's empty About.
+    // Actions header renders over an empty slot — no Edit chat control, consistent with #365's empty About.
     const markup = renderToStaticMarkup(<ChannelInfoSheetView conversation={null} onClose={noop} />)
     expect(markup).toContain('Actions')
     expect(markup).not.toContain('class="channel-info__action"')
-    expect(markup).not.toContain('Rename')
+    expect(markup).not.toContain('Edit chat')
   })
 
-  it('offers no Rename action when onRename is omitted, even with a conversation (callback-gated, AC1)', () => {
+  it('offers no Edit chat action when onRename is omitted, even with a conversation (callback-gated, AC1)', () => {
     // The button is gated on the callback, not the conversation alone — this proves the view honours
     // the container's null-guard contract rather than deriving the button from `conversation` itself.
     const markup = renderToStaticMarkup(
       <ChannelInfoSheetView conversation={createdPayload()} onClose={noop} />
     )
     expect(markup).not.toContain('class="channel-info__action"')
-    expect(markup).not.toContain('Rename')
+    expect(markup).not.toContain('Edit chat')
   })
 
   // #366: the Archive action fills the Actions slot's second row, reusing #368's `.channel-info__action`
-  // tonal pill verbatim. Like Rename it is callback-gated (`onArchive`), which the container supplies
-  // ONLY for an active conversation — so its presence maps one-to-one onto AC1. Rename and Archive now
+  // tonal pill verbatim. Like Edit chat it is callback-gated (`onArchive`), which the container supplies
+  // ONLY for an active conversation — so its presence maps one-to-one onto AC1. Edit chat and Archive now
   // share the class, so these assertions anchor on the label `>Archive</button>`, never on the class.
   it('renders an Archive action in the Actions slot when a conversation and onArchive are supplied (AC1)', () => {
     const markup = renderToStaticMarkup(

@@ -130,14 +130,13 @@ import type { ModalEvent } from './store/modalPrompts'
  * merely stale the comparison, it INVERTED it: the roster family joined the same reconcile-on-connect set
  * upstream (pyrycode#2077-#2080), so the paragraph next door now tells this identical story — a reconcile
  * that re-sends, and re-sends only for the server still here. The residue is the most ACTIONABLE this set
- * handles rather than the most sensitive:
- * a permission dialog is a live control, not stale display, so a retained one keeps the departed
- * daemon's untrusted `title` / `prompt` / `options[].label` on screen and answering it emits a
- * `modal_answer` for a `modalId` the currently paired daemon never issued, while
- * `selectHasOutstandingFor` lights the sidebar's input-required dot from the same slice, so the phantom
- * is visible before it is clicked. A retained suppression entry (`resolved`) is worse in the other
- * direction — it silently swallows a genuine `shown`, keyed by a daemon-side conversation id that a
- * re-pair to the same box reuses. This clear also reaches `rejections`, which the `connected` arm
+ * handles rather than the most sensitive: a permission dialog is a live control, not stale display, so
+ * a retained one keeps the departed daemon's untrusted `title` / `prompt` / `options[].label` on screen
+ * and answering it emits a `modal_answer` for a `modalId` the currently paired daemon never issued,
+ * while `selectHasOutstandingFor` lights the sidebar's input-required dot from the same slice, so the
+ * phantom is visible before it is clicked. A retained suppression entry (`resolved`) is worse in the
+ * other direction — it silently swallows a genuine `shown`, keyed by a daemon-side conversation id that
+ * a re-pair to the same box reuses. This clear also reaches `rejections`, which the `connected` arm
  * deliberately never touches and which therefore had never been collected at a pairing boundary either:
  * every slice of this store is scoped to the pairing that ended, so the arm returns it to its initial
  * state rather than covering two slices of three.
@@ -151,11 +150,11 @@ import type { ModalEvent } from './store/modalPrompts'
  * hands the state object back. The re-assertion story is now this store's ALONE — no frame in the
  * activity family is in the daemon's reconcile-on-connect set. It used to be filed as "the roster's
  * rather than the queue's"; #569 retires that pairing, since the roster joined the reconcile set
- * upstream and now behaves like the queue. One difference cuts
- * the other way: a fact IS eventually rewritten, by that conversation's own next `turnState`. For a
- * turn that ENDED while the operator was unpaired that event never comes, so a finished turn shows a
- * working dot indefinitely, and #676's sidebar draws it from `selectActivityFor` on a row the
- * operator can see without opening anything. The content is the LEAST sensitive this set handles —
+ * upstream and now behaves like the queue. One difference cuts the other way: a fact IS
+ * eventually rewritten, by that conversation's own next `turnState`. For a turn that ENDED
+ * while the operator was unpaired that event never comes, so a finished turn shows a working
+ * dot indefinitely, and #676's sidebar draws it from `selectActivityFor` on a row the operator
+ * can see without opening anything. The content is the LEAST sensitive this set handles —
  * four booleans, no daemon text at all — and the misdirection is the point instead: the dot claims a
  * machine the operator has left is working, keyed by a daemon-side conversation id that a re-pair to
  * the same box reuses. This clear also reaches an entry held for a conversation NO server's list

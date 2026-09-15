@@ -260,9 +260,12 @@ export function BackgroundTaskRosterData(): null {
     // subscribe time — on a first connect the server's slot holds no list yet (the list request rides
     // the same edge) so nothing is dropped; on a reconnect the slot still holds the previous episode's
     // rows, since only `clearAllConversations` at a pairing boundary empties it, so the reconnecting
-    // server's conversations are known even though nothing re-sends these frames. Nothing can
-    // interleave between the read and the write: both stores are written from this one synchronous
-    // dispatch, with no await between them.
+    // server's conversations are known before its re-sends arrive. That clause used to end "even
+    // though nothing re-sends these frames"; #569 retires the premise and INVERTS the emphasis — the
+    // retained list matters more now, not less, because a reconcile burst follows this reset on the
+    // same channel and the ids have to resolve before it lands. Nothing can interleave between the
+    // read and the write: both stores are written from this one synchronous dispatch, with no await
+    // between them.
     return subscribeBackgroundTaskRoster(
       window.pyry.onDaemonEvent,
       (snapshot) => backgroundTaskRosterStore.getState().setRoster(snapshot),

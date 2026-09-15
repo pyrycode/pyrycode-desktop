@@ -373,8 +373,7 @@ describe('clearPairingScopedState', () => {
     // `local_bash` command lines and patch text live on screen, attributed to a machine the operator
     // has left, with nothing to overwrite them — the daemon's reconcile-on-connect re-asserts rosters
     // (#569) but only for the conversations of the pairing that reported them, never a departed one's.
-    // Position is otherwise free
-    // among the in-memory clears; this is the half that is not.
+    // Position is otherwise free among the in-memory clears; this is the half that is not.
     const { deps, clearAllRosters, clearAllLastRead } = spyDeps()
 
     clearPairingScopedState(deps)

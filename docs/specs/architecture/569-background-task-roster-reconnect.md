@@ -407,3 +407,55 @@ made in passing about something else.
 **Verification for this leg:** `npx vitest run` on the three touched unit files (87 passed),
 `npm run build`, and a mechanical re-check that all four hunks are comment-only (`git diff -U0 -- src/`
 filtered to non-comment changed lines returns nothing). The e2e spec is untouched by this leg.
+
+### 2026-09-15 (rework leg 2) — two survivors, and the verb was the blind spot
+
+**The verifier's FAIL was correct and its count was again exact: two claims survived, and the sharper one
+was production source in the very file this PR had rewritten.** Both are now corrected, each keeping its
+conclusion and moving only its premise — the same edit shape applied fifteen times across three legs:
+
+- `backgroundTaskRosterBridge.ts` → `BackgroundTaskRosterData`'s composition-root comment, roughly a
+  hundred lines under the `subscribeBackgroundTaskRoster` docblock this PR rewrote to open "THE RE-SEND
+  ORDERING IS THE WHOLE POINT OF THAT `return`", still explained the list-slot retention with "even though
+  nothing re-sends these frames". Post-reconcile that clause is not merely stale but **backwards in
+  emphasis**: the retained list matters *more* now, because a burst follows the reset on the same channel
+  and the ids have to resolve before it lands. The replacement wording was sitting in the sibling this
+  family now matches — `queueBridge.ts` → `QueueData` carries the otherwise word-for-word paragraph ending
+  "before its re-sends arrive" — so it was adopted verbatim rather than re-invented.
+- `backgroundTaskRosterBridge.test.ts` → the `per-server reconnect scope (seam)` describe header carried
+  two falsehoods in one clause: "nothing ever re-sends these frames" is the retired premise stated flatly,
+  and "unlike the queue's case" is the exact comparison this PR inverted next door. Its **conclusion
+  survives and is now stated on its own footing**: the re-assertion rides the *reconnecting* server's own
+  edge, so it never reaches a server that did not reconnect, and a wrongly-cleared roster there is still
+  gone until claude next emits one.
+
+**The lesson is the verb, not the subject — and leg 1 had already learned the wrong half of it.** Leg 1's
+entry above concluded that the grep must be for the predicate rather than the subject, which was right and
+found three sites past the ticket's four. What it got wrong was treating the predicate as a fixed phrase
+set. Both survivors say **"re-send"**, where every site corrected in legs 1 and 2 said "re-assert",
+"repopulate" or "no re-assertion path" — so the leg-1 predicate list missed them on the **verb alone**,
+and so did the review that inherited it. And the comparison term cuts both ways now: once the roster joins
+the queue's behaviour, the same falsehood can be phrased as "unlike the **queue**" just as easily as
+"unlike the **roster**", which is how the test site hid. A predicate sweep has to cover the synonym set for
+the verb *and* both directions of the comparison:
+
+```
+grep -rniE "nothing (ever )?re-?(sends|asserts|emits|delivers)|unlike the (queue|roster)|no re-?(send|assertion)|repopulat" src/ e2e/
+```
+
+Run here broadened further still (adding `never re-sends`, `no repopulation`, `unlike that|this|the
+other`, `strictly worse`, `harsher`, `not in the … reconcile`) and read with whole paragraphs: **no
+further survivors.** Every remaining hit is either a quoted-and-explicitly-retired "used to read" citation
+or a true statement about the activity, queue, modal, usage-limit, model-list, marks, timeline or
+system-prompt family standing on its own family's facts — including `conversationActivityBridge.ts`'s
+copied-idiom sibling of the first site, which remains true for the activity family, and the three in
+`clearPairingScopedState.test.ts` that legs 1 and 2 both correctly left alone.
+
+**The NIT is fixed too.** The three orphan lines left by minimal-diff editing (`clearPairingScopedState.ts`
+→ the `#1140` and `#1145` paragraphs; `clearPairingScopedState.test.ts` → the throw-ordering case) are
+reflowed. Each reflow stops at the wrap point the original paragraph already had, so no line unrelated to
+a correction moved and no new orphan was created at the seam.
+
+**Verification for this leg:** `npx vitest run` on the three spec files covering the four touched files
+(108 passed), `npm run build`, and a mechanical re-check that every `src/` hunk is comment-only (`git diff
+-U0 -- src/` filtered to non-comment changed lines returns nothing). The e2e spec is untouched by this leg.

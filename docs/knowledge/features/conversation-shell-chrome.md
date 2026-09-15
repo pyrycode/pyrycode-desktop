@@ -12,7 +12,7 @@ Part of [Conversation shell](conversation-shell.md); see that document for what 
 ConversationScreen            .conversation        (flex column, full height, position: relative)
 ├── ThreadOverflowMenu         .conversation__overflow (trigger + menu, gated on onBack, #276; grew from 1 to 3 items in #962; the band's last survivor since #1064 deleted the leading arrow it used to balance; the card's own drawn in-flow top bar since #1444 — a 24px trigger justified to the trailing edge over a full-width 1px rule, no longer an absolute box)
 ├── ConnectionBannerControl    .conversation__banner (null unless not-connected, top of thread, #279; the first thing under the overflow menu's gate since #1061 deleted the header row that used to sit here — and, since #1064, the first thing in `.conversation` at all)
-├── WorkspaceChip              .conversation__workspace-chip (null unless empty + unpromoted, #278; onChange opens WorkspacePickerSheet, #383)
+├── (WorkspaceChip used to mount here, #278 — deleted outright by #1486; the empty thread's copy is now the first thing below the banner)
 ├── Timeline                  .conversation__thread (null when empty; the single thread surface since #179, #203)
 │   └── TimelineRow × N       .message-row--user/.bubble--user (userText, #179) · .message-row--daemon/.bubble--daemon (assistantText) · .tool-row/.tool-row__chip (toolCall, #218; resolved modifiers #230)
 ├── (ApiRetryIndicator / CompactingIndicator / StallIndicator — the three problem-state bubbles right after Timeline; unaffected by #796, see below)
@@ -25,7 +25,7 @@ ConversationScreen            .conversation        (flex column, full height, po
 │   └── ContextUsageControl     .composer__footer    (second child, below `.composer__row`; the other three desktop-layout slots (#682/#683/#685) stay empty, #811)
 ├── StatusSheet (if open)     .status-sheet-overlay (absolute overlay, #177)
 ├── ChannelInfoSheet (if open) .status-sheet-overlay (absolute overlay, #365)
-├── WorkspacePickerSheet (if open) .status-sheet-overlay (absolute overlay, #383)
+├── (WorkspacePickerSheet used to mount here when pickerOpen, #383 — its entry point deleted by #1486; `WorkspacePickerSheetView` survives only as Settings' Default workspace row's own picker)
 ├── BackgroundTaskPanel (if open)  .status-sheet-overlay (absolute overlay, interim chrome pending #580, #581)
 └── PermissionModal (if any)  .permission-modal-overlay (absolute overlay, last child, null when no outstanding prompt, #224)
 ```

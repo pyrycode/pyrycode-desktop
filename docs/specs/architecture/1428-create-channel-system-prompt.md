@@ -256,6 +256,18 @@ None outstanding. The two that shaped the design — whether the daemon echoes t
 and whether the predicate should gate dismissal as well as the write — are answered above from the
 real-daemon spec's assertions and AC2's wording respectively.
 
+## Revisions
+
+**2026-09-15, during implementation.** Two notes, neither changing a contract:
+
+- The gated write is a module-level `writePrompt(conversation, pending)` rather than an inline block in
+  the listener, so the guard order — pending arm, non-null prompt, `confirmsPending` — reads in one
+  place and the listener keeps its shape.
+- The visual comparison against the Figma frame turned up **one deviation, kept deliberately**:
+  `resize: vertical` paints the browser's corner grabber, which the drawing does not show. The
+  reasoning is in `channels.css` beside the rule. Nothing else deviates: fill, corner, padding, type,
+  the 8px label gap, the 12px gap under the name field and the 112px box all match.
+
 ## Security review
 
 **Verdict:** PASS (second pass; the first failed on the unwrapped write, fixed in **The two-step create**

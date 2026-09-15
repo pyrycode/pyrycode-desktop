@@ -30,6 +30,16 @@ describe('SaveAsChannelDialogView', () => {
     expect(markup).toContain('value="Investment Strategy Review"')
   })
 
+  // #1428 put the channel system prompt on the shared form behind an optional prop, and this dialog
+  // does not pass it: promotion has no create confirmation to hang the second write on, so Save as
+  // channel keeps the name field alone (#1429 is the ticket that gives it one).
+  it('renders the name field alone, with no system prompt field', () => {
+    const markup = renderView('Investment Strategy Review')
+    expect(markup).not.toContain('<textarea')
+    expect(markup).not.toContain('Channel system prompt:')
+    expect(markup).not.toContain('create-channel__textarea')
+  })
+
   // #1436 withdrew the folder choice: promotion always uses the row's own workspace, so the form
   // carries neither radio nor the folder round trip's error line.
   it('renders no location radio, no folder wording and no failure line', () => {

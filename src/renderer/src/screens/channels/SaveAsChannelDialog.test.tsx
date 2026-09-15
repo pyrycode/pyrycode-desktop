@@ -1,13 +1,22 @@
 import { describe, it, expect, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { MAX_SYSTEM_PROMPT_BYTES } from '@shared/wire/types'
 import { SaveAsChannelDialogView, requestPromoteConversation } from './SaveAsChannelDialog'
 
 // Static presentation and payload proof; interaction lives in save-as-channel-promote.spec.ts.
 const noop = (): void => {}
 
-function renderView(name: string): string {
+function renderView(name: string, systemPrompt = '', promptOverLimit = false): string {
   return renderToStaticMarkup(
-    <SaveAsChannelDialogView name={name} onNameChange={noop} onCancel={noop} onSave={noop} />
+    <SaveAsChannelDialogView
+      name={name}
+      systemPrompt={systemPrompt}
+      promptOverLimit={promptOverLimit}
+      onNameChange={noop}
+      onSystemPromptChange={noop}
+      onCancel={noop}
+      onSave={noop}
+    />
   )
 }
 
@@ -30,14 +39,45 @@ describe('SaveAsChannelDialogView', () => {
     expect(markup).toContain('value="Investment Strategy Review"')
   })
 
-  // #1428 put the channel system prompt on the shared form behind an optional prop, and this dialog
-  // does not pass it: promotion has no create confirmation to hang the second write on, so Save as
-  // channel keeps the name field alone (#1429 is the ticket that gives it one).
-  it('renders the name field alone, with no system prompt field', () => {
+  // #1428 put the channel system prompt on the shared form behind an optional prop and this dialog
+  // passed nothing; #1429 passes it, so the same field, treatment and accessible name now draw here.
+  it('renders the system prompt field between the name input and the actions (AC1)', () => {
     const markup = renderView('Investment Strategy Review')
-    expect(markup).not.toContain('<textarea')
-    expect(markup).not.toContain('Channel system prompt:')
-    expect(markup).not.toContain('create-channel__textarea')
+    expect(markup).toContain('Channel system prompt:')
+    expect(markup).toContain('create-channel__textarea')
+    // Ordering is part of the drawing: the label follows the name input and precedes the footer.
+    expect(markup.indexOf('create-channel__input')).toBeLessThan(markup.indexOf('create-channel__textarea'))
+    expect(markup.indexOf('create-channel__textarea')).toBeLessThan(markup.indexOf('modal__footer'))
+  })
+
+  it('renders an empty box for an empty draft, and never an autofocus on it (AC1)', () => {
+    const markup = renderView('Investment Strategy Review')
+    expect(markup).toContain('<textarea class="create-channel__textarea" rows="4"></textarea>')
+  })
+
+  // The draft may hold a pasted credential and reaches exactly one sink. React renders a controlled
+  // textarea's value as an escaped TEXT CHILD server-side — assert the escaped form, not the raw one.
+  it('renders the prompt draft as inert escaped text, never live markup (AC4)', () => {
+    const markup = renderView('A channel', '<img src=x onerror="alert(1)"> & co')
+    expect(markup).toContain('&lt;img src=x onerror=&quot;alert(1)&quot;&gt; &amp; co')
+    expect(markup).not.toContain('<img src=x')
+  })
+
+  it('shows no over-limit notice and leaves Save enabled under the bound (AC3)', () => {
+    const markup = renderView('A channel', 'Answer only in haiku.')
+    expect(markup).not.toContain('create-channel__notice')
+    expect(markup).not.toMatch(/modal__action--confirm"[^>]*disabled/)
+  })
+
+  it('shows the over-limit notice and disables Save past the bound (AC3)', () => {
+    const markup = renderView('A channel', 'far too long', true)
+    expect(markup).toContain('create-channel__notice')
+    expect(markup).toContain(`Over the ${MAX_SYSTEM_PROMPT_BYTES}-byte limit. Shorten it before saving.`)
+    expect(markup).toMatch(/modal__action--confirm"[^>]*disabled/)
+  })
+
+  it('keeps Save disabled for a blank name however the prompt reads (AC2)', () => {
+    expect(renderView('   ', 'Answer only in haiku.')).toMatch(/modal__action--confirm"[^>]*disabled/)
   })
 
   // #1436 withdrew the folder choice: promotion always uses the row's own workspace, so the form

@@ -291,3 +291,32 @@ against it rather than against the text being innocuous.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-15
+
+## Revisions
+
+### 2026-09-15 — the new e2e coverage is two tests, not one with three seeded rows
+
+§ Testing strategy planned "one new test, three unpromoted rows in one launch". That is not
+buildable: `launchPairedApp` bootstraps by clicking an **unfiltered** `.channel-list__row-open` under
+Playwright strict mode, so a launch seeded with more than one row fails inside the fixture before the
+spec's first line runs. The plan's premise — that a promoted row frees its index for the next seed —
+was right; what it missed is that the rows have to exist at launch, and only one may.
+
+Teaching the shared fixture to seed more was rejected: 29 specs pass through it, and widening a
+shared bootstrap for one spec's convenience is a blast radius far larger than this ticket.
+
+The coverage is therefore split in two, with no case dropped:
+
+- *a typed prompt rides the promotion, addressed to the promoted row* — one host, one row. Carries
+  the byte gate (at the bound, one 3-byte character over at fewer code units, notice + disabled OK),
+  the Figma captures at 1280 and at the 800px minimum, and the write.
+- *an empty or whitespace-only box promotes exactly as before and sends no write* — two hosts, one
+  row each, so both blank arms get a promotable row. Carries the discard-on-dismiss check too.
+
+This made the ordered request assertions **stronger** rather than weaker. The planned single array
+would have read `['promote', 'promote', 'promote', 'set_system_prompt']`, in which "the write goes
+out immediately after its own promote, and nothing else goes out" is an inference about position.
+Split, the typed test asserts exactly `['promote_conversation', 'set_system_prompt']` and each blank
+arm asserts exactly `['promote_conversation']` — the same claim stated directly.
+
+No production code changed as a result; § Design stands as committed.

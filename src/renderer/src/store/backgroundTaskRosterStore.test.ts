@@ -757,7 +757,10 @@ describe('backgroundTaskRosterStore', () => {
 
   // #1139 — the pairing-boundary drop. It exists because scoping the reconnect reset above removed the
   // self-heal that kept this store out of `clearPairingScopedState`: a new pairing's first `connected`
-  // resolves an empty conversation list and drops nothing, and NOTHING re-asserts a roster.
+  // resolves an empty conversation list and drops nothing, and the daemon's reconcile re-asserts a roster
+  // only for the conversations of the pairing that reported it, never a departed pairing's. That last
+  // clause used to read "and NOTHING re-asserts a roster"; #569 retired the premise and left both the
+  // drop and the assertions below exactly as they were.
   describe('clearAllRosters (pairing-boundary drop, #1139)', () => {
     it('returns every conversation to never-observed, listed or not (AC4)', () => {
       const store = createBackgroundTaskRosterStore()

@@ -372,3 +372,38 @@ with their conclusions and assertions untouched:
 proved nothing until the spec is shown to be capable of failing. Removing the re-asserted roster from the
 burst and re-running made it fail at the pill assertion (`Expected "1 task running"`, 20.6s) — which is
 exactly the ticket's feared failure mode, a re-assertion eaten by the clear. The burst restored, it passes.
+
+### 2026-09-15 (rework leg 1) — four more sites, and why the first sweep stopped short
+
+**The verifier's FAIL was correct and its count was exact: four claims survived, two of them inside
+docblocks this PR had itself edited.** All four are now corrected, each keeping its conclusion and moving
+only its premise — the same edit shape applied nine times in the first leg, bringing the set to thirteen:
+
+- `clearPairingScopedState`'s **#1320 usage-limit paragraph**, which latched "for the ROSTER's reason — a
+  re-assertion does not exist at all". #1320's own reason is untouched by this ticket and survives
+  verbatim; only the borrowed attribution moved, since that is no longer the roster's reason. The
+  #1420 paragraph below still borrows from #1320 rather than from the roster, so the chain needed no
+  further edit — checked rather than assumed.
+- `clearPairingScopedState`'s header **#1140 `modalStore` paragraph**, which read "so **unlike the roster**
+  this store has a repopulation path". Post-reconcile the two stories are the same one told twice, so the
+  comparison did not merely go stale, it inverted.
+- `PairedShell`'s `clearPairingDeps` → the `clearAllRosters` entry ("this family re-asserts nothing at
+  all"), rewritten to the shape its `dispatchModal` sibling eleven lines below already carried.
+- `backgroundTaskRosterStore.test.ts`'s `clearAllRosters (pairing-boundary drop, #1139)` describe header.
+  The other occurrence in that same file was corrected in the first leg; this one was missed.
+
+**The lesson is about the shape of the search, not its diligence.** The first leg already knew to grep the
+premise rather than `#569`, and said so in the entry above — that is why it found three sites past the
+ticket's four. What it still did was anchor on the *subject*: phrasings that name the roster. Three of
+these four never name it as a subject at all. Two state the claim while talking about a **different
+store**, where the roster appears only as the compared-against term ("unlike the roster", "the ROSTER's
+reason"), and one states it as a bare predicate about "this family" in a composition-root comment whose
+surrounding lines are about `clearPairingDeps`. A claim about family X routinely lives inside a paragraph
+about family Y, so the grep has to be for the **predicate** — "no re-assertion", "re-asserts nothing",
+"unlike the roster" — and every hit has to be read with its whole paragraph, because the matched line is
+frequently not the line that carries the falsehood. Subject-anchored greps cannot find a claim that is
+made in passing about something else.
+
+**Verification for this leg:** `npx vitest run` on the three touched unit files (87 passed),
+`npm run build`, and a mechanical re-check that all four hunks are comment-only (`git diff -U0 -- src/`
+filtered to non-comment changed lines returns nothing). The e2e spec is untouched by this leg.

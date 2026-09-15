@@ -124,9 +124,13 @@ import type { ModalEvent } from './store/modalPrompts'
  * the `connected` arm emptied the whole store; scoping that arm to the reconnecting server's own
  * conversations ends it exactly as next door — a new pairing's first `connected` resolves an empty
  * conversation list, matches no held prompt, and hands the state object back. The daemon's reconcile
- * DOES re-send outstanding prompts, so unlike the roster this store has a repopulation path; what it
- * does not have is one that reaches the DEPARTED server's prompts, because the reconcile re-sends only
- * the new server's. The residue is the most ACTIONABLE this set handles rather than the most sensitive:
+ * DOES re-send outstanding prompts, so this store has a repopulation path; what it does not have is one
+ * that reaches the DEPARTED server's prompts, because the reconcile re-sends only the new server's. That
+ * middle clause used to read "so UNLIKE the roster this store has a repopulation path", and #569 did not
+ * merely stale the comparison, it INVERTED it: the roster family joined the same reconcile-on-connect set
+ * upstream (pyrycode#2077-#2080), so the paragraph next door now tells this identical story — a reconcile
+ * that re-sends, and re-sends only for the server still here. The residue is the most ACTIONABLE this set
+ * handles rather than the most sensitive:
  * a permission dialog is a live control, not stale display, so a retained one keeps the departed
  * daemon's untrusted `title` / `prompt` / `options[].label` on screen and answering it emits a
  * `modal_answer` for a `modalId` the currently paired daemon never issued, while
@@ -282,9 +286,13 @@ export interface ClearPairingScopedStateDeps {
  * genuine `shown`, keyed by a daemon-side conversation id that a re-pair to the same box reuses — and
  * the rejection banners have never been collected anywhere, since the `connected` arm deliberately
  * never touched them. All three go, because all three are scoped to the pairing that ended.
- * The usage-limit readings (#1320) latch for the ROSTER's reason — a re-assertion does not exist at all
- * — and this store is the one member whose OWN lifecycle looks like it should cover the gap and does
- * not. It has two exits of its own and neither reaches here: the expiry is a read-time comparison
+ * The usage-limit readings (#1320) latch because a re-assertion does not exist at all, and this store is
+ * the one member whose OWN lifecycle looks like it should cover the gap and does not. That first clause
+ * used to name this "the ROSTER's reason"; since #569 it is no longer the roster's — that family joined
+ * the daemon's reconcile-on-connect set (pyrycode#2077-#2080), and the roster paragraph above now latches
+ * because its re-assertion does not REACH a departed pairing rather than because none exists. Only the
+ * borrowed comparison moved: #1320's own reason is untouched, and the reading below still borrows it from
+ * here. It has two exits of its own and neither reaches here: the expiry is a read-time comparison
  * against a `resetsAt` claude supplied, and a reading whose `resetsAt` is `0` (claude reported no reset)
  * has no instant to expire at, so it is readable forever; and the per-conversation `allowed` clear is
  * DAEMON-DRIVEN, so it collects nothing on a pairing whose daemon will never speak again — the daemon is

@@ -29,8 +29,8 @@ archive](conversation-archive.md) for this dialog's second sender of that verb.
 
 **Second entry point ([#368](../codebase/368.md)):** the [Channel Info sheet](conversation-shell-session-and-channel-info.md#channel-info-sheet-365)'s
 Actions slot gained a pill (Figma 20:89, reading **Edit chat** since #1440 — see below; **Rename**
-at the time #368 shipped it) that opens this same dialog (`EditChatDialogView`, `RenameConversationDialogView`
-before #1440) and dispatches through this same `requestRenameConversation`,
+at the time #368 shipped it) that opened this same dialog (`EditChatDialogView`, `RenameConversationDialogView`
+before #1440) and dispatched through this same `requestRenameConversation`,
 imported verbatim from this module — no clone, no second dialog. The sheet's active conversation
 is a `ConversationCreatedPayload` (5 fields), not a `ConversationSummary` (7 fields — adds
 `is_archived`/`last_message_ts`), so it wasn't structurally assignable to the row-side caller
@@ -40,6 +40,12 @@ narrowed from `ConversationSummary` to `Pick<ConversationSummary, 'id'>` (see th
 the `ChannelList` call site valid (a full `ConversationSummary` still satisfies the narrower
 `Pick`) and lets the sheet pass its payload directly, with no adapter. `requestPromoteConversation`
 keeps its richer `row` type unchanged — it genuinely reads `cwd` too, so only rename widens.
+**As of [#1431](edit-channel-dialog.md#edge-cases-and-limitations), the sheet's pill reaches this
+dialog only when the open conversation is not promoted** — a promoted channel now opens [Edit
+channel dialog](edit-channel-dialog.md) instead, mirroring the row-level split below. The pill's
+prop name, its `requestRenameConversation` dispatch and the `Pick<ConversationSummary, 'id'>`
+narrowing described in this paragraph are unchanged by that split; only which dialog answers the
+click depends on `conversation.is_promoted` now.
 
 ## What it does
 
@@ -157,10 +163,11 @@ This dialog's row-level entry point is now the Chats row's pen alone
 (`.channel-list__chat-edit`, since
 [#1441](channel-list-row-hover-control.md#1441-a-chats-row-now-carries-both-controls-not-one)). Its
 second entry point, the [Channel Info sheet](conversation-shell-session-and-channel-info.md#channel-info-sheet-365)'s
-Actions pill, is **unchanged** — it still opens this dialog for the currently open conversation
-whether that conversation is a chat or a channel. #1476 only retired the sidebar-row path for
-Channels rows, so — until a later ticket folds the sheet's channel path over too — opening a channel
-from its own sidebar row and opening the same channel from the sheet reach two different modals.
+Actions pill, followed the sidebar row's split
+([#1431](edit-channel-dialog.md#edge-cases-and-limitations)): it now opens this dialog only when the
+open conversation is not promoted, and opens [Edit channel dialog](edit-channel-dialog.md) instead
+when it is. A channel opened from its own sidebar row and the same channel opened from the sheet now
+reach the *same* modal, closing the gap this section used to describe.
 
 In `ChannelList.tsx`, `onRename` / `renameRow` / `renameName` below now serve the Chats tree alone;
 the Channels tree's pen has its own `onEditChannel` handler and its own `editChannelRow` /

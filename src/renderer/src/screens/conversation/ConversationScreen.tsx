@@ -144,6 +144,11 @@ import { formatLastActivity, titleFor } from '../channels/channelListViewModel'
 // #1440 renamed this module for its new title. `requestRenameConversation` KEEPS its name: it owns the
 // `renameConversation` wire literal, and renaming the helper would drift it from the verb it sends.
 import { EditChatDialogView, requestRenameConversation } from '../channels/EditChatDialog'
+// #1431 — the Channel info sheet's second edit modal, the same container `ChannelList` mounts from the
+// Channels pen. The CONTAINER and not the view: it owns the system prompt field's daemon subscription,
+// whose lifetime has to be the dialog's open lifetime. It imports nothing from this directory, so this
+// is the one-way seam `EditChatDialog` already crosses, not a cycle.
+import { EditChannelDialog } from '../channels/EditChannelDialog'
 import { WorkspacePickerSheet } from './WorkspacePickerSheet'
 import { BackgroundTaskPanel } from './BackgroundTaskPanel'
 import type { RendererCommand } from '@shared/ipc/commands'
@@ -2982,9 +2987,19 @@ export function ChannelInfoSheetView({
               // #1440 — the word moves, the wiring does not. The pill reads **Edit chat** because the
               // dialog it opens is now the Edit chat modal; `onRename` keeps its prop name because it
               // still opens the rename-capable dialog, and the Archive and Delete pills beside it are
-              // untouched. #1431 owns the channel case.
+              // untouched.
+              //
+              // #1431 ADDED THE CHANNEL WORD, DERIVED HERE RATHER THAN HANDED IN. `is_promoted` is the
+              // wire's only signal for "a saved channel" vs "an ad-hoc discussion" (there is no `kind`
+              // enum), and this view already reads `cwd`, `name` and `last_used_at` off the same
+              // payload a few lines up — so a `promoted?: boolean` prop would be a second authority on
+              // a fact already in scope, and the two could disagree. The optional chain is what keeps
+              // the null-conversation branch typed without a `!`; it can only be reached with a
+              // conversation anyway, since the pill stays gated on `onRename`, which the container
+              // supplies exactly in its `conversation !== null` branch. The container mounts the
+              // matching dialog off the SAME expression, so the word and the modal cannot drift.
               <button type="button" className="channel-info__action" onClick={onRename}>
-                Edit chat
+                {conversation?.is_promoted ? 'Edit channel' : 'Edit chat'}
               </button>
             )}
             {onArchive && (
@@ -3077,6 +3092,16 @@ function ChannelInfoSheet({
   // on the sheet's unmount (it only mounts while open). `window.pyry` is dereferenced only inside the
   // interaction callbacks below, never during render, so the pure view stays server-renderable.
   const available = useConversationActionAvailability(conversation?.id ?? null)
+  // #1431: the open chat's owning host, resolved at render time — `useSessionSettingsConnected`'s two
+  // lines, with both imports already in this file. `EditChannelDialog` needs the id as a prop (it gates
+  // its own daemon subscription on `event.serverId`), and `available` above answers only whether that
+  // host is connected, not which one it is. `selectConversations` is a bare field read, so this
+  // subscription re-renders the sheet only when the list itself changes — and the sheet is mounted only
+  // while it is open.
+  const serverId = serverIdForOpenConversation(
+    useConversationListStore(selectConversations),
+    conversation?.id ?? null
+  )
   const sessionFacts = useSessionFactsStore(selectSessionFactsFor(conversation?.id ?? null))
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameName, setRenameName] = useState('')
@@ -3145,7 +3170,52 @@ function ChannelInfoSheet({
           )
         }
       />
-      {renameOpen && conversation !== null && (
+      {/* #1431: the channel arm of the one pill. Split on the SAME `is_promoted` the label above reads,
+          so the word and the modal cannot disagree, and mounting #1476/#1477's container rather than a
+          view because the system prompt field it draws owns a daemon subscription whose lifetime must be
+          the dialog's open lifetime.
+
+          THE HOST CONDITION IS THIS ARM'S ALONE and deliberately unlike its chat twin's. That dialog
+          carries an `available` prop and goes dead in place on a disconnect; this one has no such prop
+          by design (its header explains why: one button, no gap between two disabled expressions), and
+          `edit-channel-dialog.md` records the contract that replaces it — "the dialog closes if the
+          row's host stops being connected", the render gate re-evaluating on every status change, plus
+          the live re-check the save takes below. `available` is this sheet's spelling of that gate; the
+          `serverId !== null` beside it is what narrows the prop to `string` without a `!` or an `as`.
+          Both are already true when the pill is clickable, since `onRename` is withheld unless
+          `available` — so the pair only ever fires as a CLOSE, never as a refusal to open. */}
+      {renameOpen && conversation !== null && conversation.is_promoted && serverId !== null &&
+        available && (
+        <EditChannelDialog
+          conversationId={conversation.id}
+          serverId={serverId}
+          name={renameName}
+          onNameChange={setRenameName}
+          // Cancel and the header close are one callback and send nothing; the draft dies with the
+          // cell, so a reopen re-seeds from the conversation's stored title. The SHEET stays standing —
+          // this closes the dialog alone, exactly as the chat arm's Cancel does.
+          onCancel={() => setRenameOpen(false)}
+          // `ChannelList`'s body restated in `ChannelList`'s order — the live host re-check first, then
+          // the container's prompt write (unreachable except from inside this guard, which is why it
+          // arrives as a parameter), then the rename, then the dismissal.
+          //
+          // ONE DELIBERATE DIVERGENCE: no unchanged-name no-send. The sheet has always sent its rename
+          // unconditionally — `requestRenameConversation`'s own header names `ConversationScreen` as one
+          // of the callers that do — and adding the comparison to this arm alone would make one pill
+          // mean two different things depending on which kind of conversation is open. The prompt write
+          // still takes its own decision and sends nothing when the box has not moved off what the
+          // daemon said.
+          onSave={(writePrompt) => {
+            if (connectedConversationHostNow(conversation.id) === null) return
+            writePrompt()
+            requestRenameConversation(window.pyry.sendCommand, conversation, renameName)
+            setRenameOpen(false)
+          }}
+        />
+      )}
+      {/* The chat arm, #1440's verbatim — including the `available` prop and the Archive chat button
+          `EditChannelDialog` has no equivalent for (#1438 draws that modal's own put-away control). */}
+      {renameOpen && conversation !== null && !conversation.is_promoted && (
         <EditChatDialogView
           name={renameName}
           available={available}

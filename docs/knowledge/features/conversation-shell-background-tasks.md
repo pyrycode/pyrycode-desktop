@@ -76,8 +76,12 @@ control in the region between the thread and the composer, so both `.background-
 its `useState` cell are untouched, only the affordance moved. This closes the reason the menu was
 originally passed over (it now generalises to three items instead of one) — see
 [Run-configuration row and background-task trigger retired](conversation-shell-chrome.md#run-configuration-row-and-background-task-trigger-retired-overflow-menu-grows-to-three-items-962)
-for the menu's design. Still carries no task-count badge; a badge would need its own roster
-subscription, left to #580, which also owns the panel's final trigger and may re-point this one again.
+for the menu's design. The `ThreadOverflowMenu` item itself still carries no task-count badge of its
+own. [#1435](conversation-shell-composer-status.md#background-task-count-pill-the-slots-last-occupant-1435)
+gave the panel a second trigger instead — a count pill in the composer status row's trailing slot,
+wired to the same `setPanelOpen(true)` this menu item calls — so a badge on the menu item itself, if
+ever wanted, is still open, left to #580, which also owns the panel's final presentation and may
+re-point either trigger again.
 
 **SECURITY.** For `taskType: local_bash`, `description` is the literal shell command claude ran —
 untrusted, model-influenced text the daemon bounds but does not sanitize. Rendered as auto-escaped

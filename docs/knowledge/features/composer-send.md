@@ -143,7 +143,7 @@ export function composerAvailability(status: ConnectionStatus): ComposerAvailabi
 | `disconnected` | `false` |
 | `error` | `false` |
 
-Through [#968](../codebase/968.md), `ComposerAvailability` also carried `hint: string | null` — a short "why unavailable" caption (`Connecting…` / `Not connected` / `Connection error`), rendered directly above the message box as `<p className="composer__hint" role="status">`. #968 retired the caption and the field: the connection state is said by [the banner](conversation-shell-chrome.md#connection-banner-279) (#279) in every non-connected arm and by [the status row's chip or button](conversation-shell-composer-status.md#composer-error-chip-797) (#797/#963) in the `error` arm, so the caption was a third read in `error` and a second read in `connecting`/`disconnected` — the banner is what survives in every arm. `ComposerAvailability` stays a one-field record rather than collapsing to a bare boolean: the call site already destructures from it, and the ruling was "drop the caption," not "redesign the gate." The function now reads `status.type` and nothing else, so there is no string on this path to leak — the docblock paragraph that used to reserve `ConnectionError.message` for the banner's exclusive use went with the field it was reserving.
+Through [#968](../codebase/968.md), `ComposerAvailability` also carried `hint: string | null` — a short "why unavailable" caption (`Connecting…` / `Not connected` / `Connection error`), rendered directly above the message box as `<p className="composer__hint" role="status">`. #968 retired the caption and the field: the connection state is said by [the banner](conversation-shell-chrome.md#connection-banner-279) (#279) in every non-connected arm and by [the status row's chip or button](conversation-shell-composer-error-chip.md#composer-error-chip-797) (#797/#963) in the `error` arm, so the caption was a third read in `error` and a second read in `connecting`/`disconnected` — the banner is what survives in every arm. `ComposerAvailability` stays a one-field record rather than collapsing to a bare boolean: the call site already destructures from it, and the ruling was "drop the caption," not "redesign the gate." The function now reads `status.type` and nothing else, so there is no string on this path to leak — the docblock paragraph that used to reserve `ConnectionError.message` for the banner's exclusive use went with the field it was reserving.
 
 Both facts (`canSend` and, before #968, `hint`) derive from the single `selectStatus` read, so there is one source of truth. A `default: assertNever(status)` arm makes a new `ConnectionStatus` arm a compile error — unchanged by #968.
 
@@ -155,9 +155,9 @@ A second pure predicate beside `composerAvailability`, over the same `Connection
 conversation screen should proactively surface a re-pair escape hatch. Through #167 that was a bare
 `Re-pair` text button beneath the composer; since
 [#963](https://github.com/pyrycode/pyrycode-desktop/issues/963) it is the filled button that takes the
-composer status row's error slot in place of [the chip](conversation-shell-composer-status.md#composer-error-chip-797)
+composer status row's error slot in place of [the chip](conversation-shell-composer-error-chip.md#composer-error-chip-797)
 — see [Conversation shell — composer § Actionable-error
-button](conversation-shell-composer-status.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963) for
+button](conversation-shell-composer-repair-button.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963) for
 the current surface and [Conversation shell — chrome § Re-pair
 control](conversation-shell-chrome.md#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963)
 for the retired one. This predicate itself is unchanged by that move, reused byte-for-byte.
@@ -252,7 +252,7 @@ Two of the three strings this module now owns about the single `ConnectionStatus
 `CONNECTION_BANNER_COPY` §6 and `COMPOSER_REPAIR_BUTTON_COPY` §9 — [#968](../codebase/968.md) retired the
 three `composerAvailability` captions that used to sit beside them, so the set shrank from five to three),
 but unlike §4–§7 these are plain constants, not predicates — no `shouldShowErrorChip` was added beside
-them. The gate is already the discriminant of the one arm the [composer status row's error chip](conversation-shell-composer-status.md#composer-error-chip-797)
+them. The gate is already the discriminant of the one arm the [composer status row's error chip](conversation-shell-composer-error-chip.md#composer-error-chip-797)
 belongs to (`status.type === 'error'`), so a named predicate would only restate that in an export and a
 test matrix.
 
@@ -300,7 +300,7 @@ copy, its zero-daemon-substring guarantee needs a sharper statement: `ComposerEr
 `status.type` alone and never touches the error arm, while this button's gate (`shouldOfferRepair`)
 *reads* `status.error.retryable` and `.code`. Those reads are confined to that predicate's boolean and
 reach no markup — see [Conversation shell — composer § Actionable-error
-button](conversation-shell-composer-status.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963) for
+button](conversation-shell-composer-repair-button.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963) for
 the structural argument and the sentinel test that pins it.
 
 ### 10. Attachments named on the outbound frame — `takeAttachments` ([#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039), reworked by [#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055))
@@ -416,7 +416,7 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 
 ## Edge cases and limitations
 
-- **Not connected** ([#31](../codebase/31.md); the caption retired by [#968](../codebase/968.md)) — while `selectStatus` is not `connected`, the send button is `disabled` and the `handleSubmit` early-return inerts the Enter path. No `sendCommand`, no echo, input not cleared. The textarea stays enabled (drafting allowed); the control re-enables reactively on connect. `composerAvailability` never touches `status.error`, so no daemon-supplied string reaches this gate at all; the same non-connected state shows the prominent [connection banner](conversation-shell-chrome.md#connection-banner-279) (#279), which is now the sole announcement of the transition, and in the `error` arm the status row directly above the message box carries [the chip or the re-pair button](conversation-shell-composer-status.md#composer-error-chip-797) (#797/#963).
+- **Not connected** ([#31](../codebase/31.md); the caption retired by [#968](../codebase/968.md)) — while `selectStatus` is not `connected`, the send button is `disabled` and the `handleSubmit` early-return inerts the Enter path. No `sendCommand`, no echo, input not cleared. The textarea stays enabled (drafting allowed); the control re-enables reactively on connect. `composerAvailability` never touches `status.error`, so no daemon-supplied string reaches this gate at all; the same non-connected state shows the prominent [connection banner](conversation-shell-chrome.md#connection-banner-279) (#279), which is now the sole announcement of the transition, and in the `error` arm the status row directly above the message box carries [the chip or the re-pair button](conversation-shell-composer-error-chip.md#composer-error-chip-797) (#797/#963).
 - **Whitespace-only / empty input** — early `return false`; no send, no dispatch, no clear (AC1).
 - **Send-bridge failure** — `try/catch` swallows it (`console.error`); the process does not crash and the optimistic echo still appends (AC4). There is deliberately **no** send-failure UI (no banner, retry, or echo rollback) — the store has no per-message delivery state this milestone. Since #1055, one thing **is** rolled back on this path: a `takeAttachments` take is undone via its own `rollback()`, and the echo's `attachments` field — unlike its `text` — is withheld, because a frame that never reached the bridge named no ids (§10).
 - **Daemon re-echoes the sent message** — the same-`message_id` copy is dropped by `appendUnique`; the thread shows one bubble (AC3).
@@ -468,11 +468,11 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 - [#31 codebase notes](../codebase/31.md) — the connection-status gate on this composer: `composerAvailability` + the disabled control. The inline "why" caption it originally shipped with was retired by [#968](../codebase/968.md).
 - [#968 codebase notes](../codebase/968.md) — drops the `composer__hint` caption and the `hint` field: the connection state is said once, by the banner (#279) and, in the `error` arm, by the status row (#797/#963).
 - [#167 codebase notes](../codebase/167.md) — the `shouldOfferRepair` predicate beside `composerAvailability`, and the original `Re-pair` affordance it gated (retired as a separate surface by #963, see below).
-- [Conversation shell § Actionable-error button](conversation-shell-composer-status.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963) / #963 — `shouldOfferRepair`'s current surface: a button in the composer status row's error slot, using `COMPOSER_REPAIR_BUTTON_COPY` (§9 above), replacing #167's block beneath the composer.
+- [Conversation shell § Actionable-error button](conversation-shell-composer-repair-button.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963) / #963 — `shouldOfferRepair`'s current surface: a button in the composer status row's error slot, using `COMPOSER_REPAIR_BUTTON_COPY` (§9 above), replacing #167's block beneath the composer.
 - [#279 codebase notes](../codebase/279.md) — the `shouldShowBanner`/`CONNECTION_BANNER_COPY` pair beside `composerAvailability`/`shouldOfferRepair`, and the [connection banner](conversation-shell-chrome.md#connection-banner-279) it gates.
 - [#512 codebase notes](../codebase/512.md) — the `shouldSubmitOnKeyDown` keystroke-intent predicate: the Enter that commits an IME composition no longer submits or suppresses the commit.
 - [#1072](https://github.com/pyrycode/pyrycode-desktop/issues/1072) — added the sibling `shouldInterruptOnKeyDown` predicate (§7) and its two bindings; see [Interrupt envelope § The render affordance](interrupt-envelope.md#the-render-affordance-307-merged-into-the-send-button-by-678) for the second binding and the ordering argument against the screen's other Escape claimants.
-- [Conversation shell § Composer error chip](conversation-shell-composer-status.md#composer-error-chip-797) / #797 — the fourth read of `ConnectionStatus`, using `COMPOSER_ERROR_CHIP_COPY`/`COMPOSER_ERROR_CHIP_PREFIX_COPY` (§8 above) in the composer status row's `trailing` slot.
+- [Conversation shell § Composer error chip](conversation-shell-composer-error-chip.md#composer-error-chip-797) / #797 — the fourth read of `ConnectionStatus`, using `COMPOSER_ERROR_CHIP_COPY`/`COMPOSER_ERROR_CHIP_PREFIX_COPY` (§8 above) in the composer status row's `trailing` slot.
 - [Conversation timeline holder](conversation-timeline-holder.md) / [#756 codebase notes](../codebase/756.md) — `dispatchFor`'s target: the keyed store the echo folds into, dual-write alongside the flat `dispatch`, still unread until #758.
 - [#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013) — the optional `now` clock on `ComposerSendDeps`, implementation summary above. [Thread timeline § Types](thread-timeline-internals.md#types) has the full `createdAt` contract; [conversation timeline store](conversation-timeline-store.md) has the mirror wiring for the assistant-side echo.
 - [Interrupt envelope](interrupt-envelope.md) — since [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678), the send button this page describes is one component with two variants: `ComposerSendButton` renders send at idle and the stop affordance (that page's subject) while a turn is running. `Composer` is the one render site for both.

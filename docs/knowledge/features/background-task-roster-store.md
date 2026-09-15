@@ -428,7 +428,10 @@ pairing ends (unpair only, since #1141 — pairing another server adds a server 
   attacker-influenceable input; the daemon's own per-frame cap (`maxTaskPatch`, 4 KiB) is per frame, not
   per task, so only "one held record per task" keeps the bound meaningful (#577).
 - **No reader wired in this slice.** Shipped populated and unread through #573/#576/#577 — #568 (the
-  panel) was still open. **#581 is now the first reader** — see below.
+  panel) was still open. **#581 is now the first reader** — see below. **#1435 is the second**: the
+  composer status row's trailing slot reads `tasks.size + droppedTasks` — the true roster size this
+  docblock names — as a plain count, never iterating `tasks` or reading `description`/`latestUpdate.patch`.
+  See [Composer status row § Background-task count pill](conversation-shell-composer-status.md#background-task-count-pill-the-slots-last-occupant-1435).
 
 ## Related
 

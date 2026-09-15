@@ -47,6 +47,11 @@ import {
   selectUsageLimitFor,
   type UsageLimitReading
 } from '../../store/usageLimitStore'
+import {
+  useBackgroundTaskRosterStore,
+  selectRosterFor,
+  type BackgroundTaskRosterEntry
+} from '../../store/backgroundTaskRosterStore'
 import { usageLimitNotice } from './usageLimitNotice'
 import {
   initialTimelineState,
@@ -511,8 +516,12 @@ export function ConversationScreen({
           <ComposerStatusArea
             isRunning={isTurnRunning(phase)}
             trailing={
+              /* #1435: the slot's last reading is the open conversation's background-task count, and the
+                 pill opens the SAME overlay the overflow menu's Background-tasks item does — this setter,
+                 verbatim. The control reads the roster itself, so only the callback goes down. */
               <ComposerErrorSlotControl
                 onRepairHost={onRepairHost} onCommand={sendText}
+                onOpenBackgroundTasks={() => setPanelOpen(true)}
               />
             }
           >
@@ -3983,6 +3992,57 @@ export function ComposerUsageLimitNotice({
   )
 }
 
+// #1435: the count of background tasks claude has alive in the open conversation — the slot's LAST
+// reading, drawn as the design's neutral Pill (347:6617) rather than in either error treatment, because a
+// running task is not a failure.
+//
+// A `count` PROP, not a store read, on ComposerUsageLimitNotice's reasoning and for its reason: zustand
+// v5's useStore reads getInitialState() under renderToStaticMarkup, so a store-bound container test can
+// reach exactly one arm, and this view's arms are only assertable if the number is injected. `onOpen` is
+// a prop for the second reason that view's `onRepair` sibling carries — it keeps every store and window
+// dereference out of this render path.
+//
+// NO DAEMON STRING CAN REACH THIS DOM, and here that is a property of the TYPE rather than of a
+// convention. The roster this number comes from also holds `description` — for `taskType: local_bash`
+// the literal command line claude ran — and `latestUpdate.patch`, both untrusted and model-influenced
+// (see backgroundTaskRosterStore's SECURITY paragraph). `count: number` is the whole boundary: no string
+// from that store is representable here. The only interpolation is `${count}` into a TEXT run, which
+// React escapes, and `className` is a single literal with NO interpolation — deliberately, since
+// interpolating into a class is the edit ComposerUsageLimitNotice's docblock records as one step from
+// putting an untrusted value in an attribute.
+//
+// `count <= 0` RETURNS NULL, and the comparison is `<= 0` rather than `=== 0` on purpose: the count is
+// `tasks.size + droppedTasks` and `dropped_tasks` decodes through a plain requireNumber (the type is
+// checked, the value is not), so a hostile or merely buggy daemon can drive the sum negative. Absent is
+// the right reading for both, and "never observed" collapses here too — the container resolves a null
+// roster to 0. NULL rather than an empty element, which is AC2 and is the same posture ContextUsageReading
+// takes one row down: the row's own height holds the slot, never a placeholder node.
+//
+// A <button>, and a real one rather than a div wearing a handler: keyboard activation, the UA focus ring
+// and the accessible name all come from the element. NOT `button-small` — that treatment is the 32px
+// error button, and AC5 keeps this row at the 24px it already reserves. No aria-label and no hidden
+// prefix: the visible text says what it is in plain words, so it is already the accessible name (the
+// ComposerUsageLimitNotice ruling, which is also why there is NO LIVE REGION here — the row is not a
+// place to queue announcements, and a count that moves with every turn would announce on each one).
+//
+// A SINGLE text run per arm, each a client-owned literal chosen by an explicit two-way conditional —
+// never one string with a spliced-in plural suffix. One run has one predictable serialisation, which is
+// what makes the exact-markup assertions in this file's specs stable (.composer-status__label's
+// discipline). No copy constant for two strings with one call site each: this module's copy constants
+// exist for strings asserted across FILES or that must be provably free of daemon text, and neither
+// applies (ContextUsageReading's ruling, verbatim).
+export function ComposerTaskCount({ count, onOpen }: {
+  count: number
+  onOpen: () => void
+}): JSX.Element | null {
+  if (count <= 0) return null
+  return (
+    <button type="button" className="composer-status__tasks" onClick={onOpen}>
+      {count === 1 ? '1 task running' : `${count} tasks running`}
+    </button>
+  )
+}
+
 // #963: the status row's right-hand slot, resolved. An error the operator can ACT on becomes a button in
 // the slot the chip otherwise holds (operator ruling 2026-09-02), which is what retires #167's separate
 // `.composer__repair` block beneath the composer — one control, in the place the operator already looks.
@@ -4023,7 +4083,8 @@ export function ComposerErrorSlot({
   notice,
   recovery,
   refusal,
-  history
+  history,
+  taskCount
 }: {
   status: ConnectionStatus
   onRepair: () => void
@@ -4031,6 +4092,7 @@ export function ComposerErrorSlot({
   recovery?: JSX.Element | null
   refusal?: JSX.Element | null
   history?: JSX.Element | null
+  taskCount?: JSX.Element | null
 }): JSX.Element | null {
   if (shouldOfferRepair(status)) {
     return (
@@ -4055,7 +4117,26 @@ export function ComposerErrorSlot({
   // about a usage window, which is also what keeps the added prop cheap: every pre-existing call site
   // passes `notice={null}` and no assertion in them moved. Required rather than optional, on the standing
   // rule that an optional prop is the silent-omission hole a type cannot catch.
-  return status.type === 'connected' ? recovery ?? refusal ?? notice ?? history ?? null : null
+  //
+  // #1435 APPENDS THE TASK COUNT TO THE END OF THIS CHAIN, and the end is the whole of its AC3: every
+  // reading already here outranks it, so a re-pair, an error, a recovery, a refusal, a notice or a
+  // history failure replaces it. ONE precedence rule, not a second beside it — and the count needs no
+  // connection gate of its own, since the whole chain already sits inside the `connected` arm and the
+  // three other arms still return null unchanged (AC2's connection half, for free).
+  //
+  // `taskCount` is OPTIONAL, matching `recovery` / `refusal` / `history` rather than `notice`. The
+  // paragraph above argues the other way and is left standing because its reasoning is sound in general;
+  // it loses HERE on cost — required would rewrite every pre-existing ComposerErrorSlot render in this
+  // file's specs to add `taskCount={null}`, for a hole one call site cannot fall into.
+  //
+  // AN ABSENT OCCUPANT MUST ARRIVE AS ACTUAL `null`, never as an element whose component renders
+  // nothing: `??` tests the ELEMENT, not what it renders, so a non-null placeholder wins the slot and
+  // hides everything below it. That rule is why ComposerErrorSlotControl checks its count before
+  // constructing the pill, and it is stated here rather than only there because this is the expression it
+  // constrains. At the chain's LAST position nothing is below to hide, so it is not yet load-bearing for
+  // precedence — it is kept because it is the rule the day a sixth occupant is appended, and because
+  // creating the element unconditionally would put an empty node in the slot AC2 requires be empty.
+  return status.type === 'connected' ? recovery ?? refusal ?? notice ?? history ?? taskCount ?? null : null
 }
 
 export function ComposerHistoryFailure({ retryable, onRetry }: {
@@ -4077,12 +4158,19 @@ export function ComposerHistoryFailure({ retryable, onRetry }: {
 // re-render the whole screen, timeline included, on every connection-status change.
 //
 // Repair delegates to the shell and preserves this host's saved credentials and held chats.
+//
+// #1435 threads ONE callback down and nothing else: this control already reads the open conversation for
+// the usage reading, so the roster it needs is a store read here rather than a prop, and the panel the
+// pill opens is the screen's own overlay — the same `setPanelOpen` the More actions item calls, so that
+// entry point and the panel itself are untouched.
 function ComposerErrorSlotControl({
   onRepairHost,
-  onCommand
+  onCommand,
+  onOpenBackgroundTasks
 }: {
   onRepairHost?: (serverId: string) => void
   onCommand: (command: string) => boolean
+  onOpenBackgroundTasks: () => void
 }): JSX.Element | null {
   const status = useOpenConnectionStatus()
   // #1321: the usage-limit reading for the conversation ON SCREEN, plus the instant it is read at. Two
@@ -4115,6 +4203,22 @@ function ComposerErrorSlotControl({
   const usageLimit = useUsageLimitStore(
     open === null ? NO_USAGE_LIMIT_READING : selectUsageLimitFor(open.id, nowSeconds)
   )
+  // #1435: the open conversation's background-task roster. The `usageLimit` read above's shape verbatim,
+  // and for the same reasons — a fresh selector identity per render costs a re-subscribe and never a
+  // loop, because `selectRosterFor` returns the HELD ENTRY ITSELF or `null`, both stable references, so
+  // useSyncExternalStore's Object.is check short-circuits even when another conversation's write produces
+  // a new outer map. Deliberately this shape and not BackgroundTaskPanel's useMemo'd selector: consistency
+  // with the sibling read three lines up beats consistency with a different component's.
+  const roster = useBackgroundTaskRosterStore(
+    open === null ? NO_TASK_ROSTER : selectRosterFor(open.id)
+  )
+  // THE TRUE ROSTER SIZE, which is `tasks.size + droppedTasks` and not `tasks.size` — the daemon caps a
+  // roster at 8 rows and reports the remainder in `droppedTasks`, so carrying only the held tasks would
+  // present a capped roster as the whole one (the store's own docblock states this at the field). A null
+  // entry means NO FRAME HAS EVER ARRIVED, which the store keeps distinct from "observed, nothing alive";
+  // both are 0 here and both are absent, a collapse this surface is entitled to make where the panel is
+  // not. A derived PRIMITIVE, so it is reference-stable with no memo.
+  const taskCount = roster === null ? 0 : roster.tasks.size + roster.droppedTasks
   const latest = useConversationTimelineStore((s) =>
     open === null ? undefined : s.timelines.get(open.id)?.timeline.latestTurnEnd
   )
@@ -4214,6 +4318,12 @@ function ComposerErrorSlotControl({
       }
       history={historyFailure === null ? null :
         <ComposerHistoryFailure retryable={historyFailure.retryable} onRetry={retryHistory} />}
+      /* The count is checked HERE and not left to the view's own guard: `??` tests the element, not what
+         it renders, so an unconditionally constructed pill would occupy the slot at a zero count — the
+         `historyFailure === null` line above exists for exactly this reason. The view guards too, which
+         is what makes it total and its absent arm assertable. */
+      taskCount={taskCount === 0 ? null :
+        <ComposerTaskCount count={taskCount} onOpen={onOpenBackgroundTasks} />}
     />
   )
 }
@@ -4223,6 +4333,12 @@ function ComposerErrorSlotControl({
 // with a re-subscribe per render for a value that is always the same `null`. Typed against the state-only
 // interface, exactly as `selectUsageLimitFor`'s return is.
 const NO_USAGE_LIMIT_READING = (): UsageLimitReading | null => null
+
+// #1435: the same constant for the roster read beside it, hoisted for the same reason — built inline it
+// would be a fresh function every render on the no-conversation-open arm, which useSyncExternalStore
+// answers with a re-subscribe per render for a value that is always the same `null`. Typed against
+// `selectRosterFor`'s return exactly, so the two arms of that read agree without a cast.
+const NO_TASK_ROSTER = (): BackgroundTaskRosterEntry | null => null
 
 // #811: the context-window reading, first occupant of the composer footer row (Figma 110:3497,
 // "Context: 84%"). The percentage USED, not remaining. Its arithmetic is contextUsagePercent —

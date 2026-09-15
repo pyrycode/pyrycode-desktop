@@ -205,7 +205,7 @@ Covered in `e2e/composer-message-box.spec.ts` beside the resting checks — geom
 
 The desktop layout's fixed-height row **below** the message box (Figma `110:3494`, 780×20, the third
 child of the `Input area` symbol after `Status area`/`ComposerStatusArea` and `Message input`) — not to
-be confused with [Composer status row](conversation-shell-composer-status.md#composer-status-row-796), which sits *above* the message box.
+be confused with [Composer status row](conversation-shell-composer-status-row.md#composer-status-row-796), which sits *above* the message box.
 The desktop layout puts six affordances in this row — Actions (#680), permission mode (#682), model and
 effort (#683, split into a model half and an effort half by #683's own children), this ticket's
 context-usage reading, and attach (#685, split into [#862](attachment-upload.md)'s headless flow and
@@ -316,7 +316,7 @@ surfaces. Reads [Run configuration store](run-config-store.md)'s app-lifetime `R
 (#810) — this ticket adds no store, no subscription, and no event of its own.
 
 **`.composer__footer` reserves its own height (20px) unconditionally**, the same `.composer-status`
-guarantee ([Composer status row](conversation-shell-composer-status.md#composer-status-row-796) above): a null reading cannot move
+guarantee ([Composer status row](conversation-shell-composer-status-row.md#composer-status-row-796) above): a null reading cannot move
 `.composer__row` because the row's box exists whether or not it holds a child. No vertical padding
 (no global box-sizing reset), `align-items: center`, `padding: 0 var(--space-4)` — aligned with the
 input's *text* start, deliberately not with `.composer-status`'s box-edge alignment; the two rows are

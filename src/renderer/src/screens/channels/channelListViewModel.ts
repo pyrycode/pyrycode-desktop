@@ -145,9 +145,38 @@ export function workspaceLabelFor(cwd: string): string | null {
  *     locally would make this desktop disagree with every other client about what the workspace is
  *     called, silently and only on this machine. Refusing a blank belongs to the verbs that SET one
  *     (#1288 / #1289) and to the dialog that sends it (#1180), where it can be refused to the user's face.
+ *
+ * `alsoFrom` (#1485) CONTRIBUTES KEYS AND LABELS AND NEVER ROWS. It is what makes one host's workspace set
+ * the union of the sidebar's two trees: the Channels tree is grouped with the Chats tree's rows as
+ * `alsoFrom` and the other way round, so a workspace created in one tree draws a head row — with its plus
+ * and its pen — in the other, expanding to nothing. Until this parameter, each tree derived its groups from
+ * its own partition alone, so the Add-workspace dialog's new folder (#1189, which starts a CHAT) was
+ * invisible under Channels and a channel-only workspace offered no Create-chat plus at all.
+ *
+ * THE SECOND LIST NEVER OVERWRITES ANYTHING THE FIRST PUT THERE — not a label, not a row, not a position.
+ * That asymmetry is what keeps each tree reading a name off a row IT holds; the two trees agree only
+ * because the daemon holds one label per `cwd`, and a "last wins" merge would make them disagree the
+ * moment a row arrived carrying a stale one. The two lists may therefore order one host's workspaces
+ * differently, each leading with the keys its own rows put there — accepted for this slice; a canonical
+ * order shared by both trees is a separate ticket.
+ *
+ * THE FALLBACK BUCKET IS NEVER PROPAGATED, and the skip is written as `segment === null` rather than as a
+ * test on `UNKNOWN_WORKSPACE_KEY` so the guarantee is structural in both directions. A non-null segment
+ * means the `cwd` HAS a usable segment, so it cannot be the empty string the bucket is keyed by — the
+ * secondary loop is incapable of reaching that key rather than merely declining to. The bucket is a
+ * collapse of rows this client cannot place, so mirroring it would draw a workspace row in a tree with
+ * nothing that could ever collapse into it, under a key naming no directory (AC4).
+ *
+ * WHAT MUST BE SPLIT BEFORE IT GETS HERE. The caller passes ONE HOST'S complement, never the whole other
+ * tree — `groupByServer` runs on both lists first. The key is a bare path and a path is unique only within
+ * one machine, so a cross-host union would draw one machine's directory under another's host row, and that
+ * row's plus routes by the HOST it is drawn under (`index.ts`'s `servers.route(command.serverId)`): the
+ * create would land in a directory the operator never chose, on a machine that was never told that path.
+ * `channelListViewModel.test.ts` pins the composition, since nothing at this function's own seam can.
  */
 export function groupByWorkspace(
-  rows: readonly ConversationSummary[]
+  rows: readonly ConversationSummary[],
+  alsoFrom: readonly ConversationSummary[] = []
 ): readonly WorkspaceGroup[] {
   const groups = new Map<string, { label: string; rows: ConversationSummary[] }>()
   for (const row of rows) {
@@ -160,6 +189,16 @@ export function groupByWorkspace(
     }
     const label = segment === null ? UNKNOWN_WORKSPACE_LABEL : (row.workspace_label ?? segment)
     groups.set(key, { label, rows: [row] })
+  }
+  // Second pass, and its ORDER IN THE SOURCE is the whole of the ordering rule: every key the primary list
+  // carries is already in the `Map`, so these `set` calls can only append. The same `Map` as above, never a
+  // plain object, for the reason the header states — `cwd` is arbitrary untrusted text and a `__proto__`
+  // key on an object resolves `Object.prototype`.
+  for (const row of alsoFrom) {
+    const segment = workspaceLabelFor(row.cwd)
+    if (segment === null) continue
+    if (groups.has(row.cwd)) continue
+    groups.set(row.cwd, { label: row.workspace_label ?? segment, rows: [] })
   }
   return Array.from(groups, ([key, group]) => ({ key, label: group.label, rows: group.rows }))
 }

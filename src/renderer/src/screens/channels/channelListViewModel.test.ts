@@ -312,6 +312,90 @@ describe('groupByWorkspace', () => {
     const groups = groupByWorkspace([row({ id: 'a', cwd: '/w/sb', workspace_label: '   ' })])
     expect(groups.map((g) => g.label)).toEqual(['   '])
   })
+
+  // --- #1485: the second list contributes KEYS AND LABELS, never rows. It is what makes one host's
+  // workspace set the union of both trees' rows, so a workspace created in the Chats tree draws a row —
+  // with its plus and its pen — in the Channels tree too, and the mirror case likewise. ---
+
+  it('mints a group from a key only the second list carries, holding NO rows (#1485)', () => {
+    const groups = groupByWorkspace([row({ id: 'a', cwd: '/w/alpha' })], [row({ id: 'b', cwd: '/w/beta' })])
+    expect(groups.map((g) => g.key)).toEqual(['/w/alpha', '/w/beta'])
+    expect(groups.map((g) => g.label)).toEqual(['alpha', 'beta'])
+    // The whole of the contract's second half: the mirrored group is a HEAD ROW and nothing beneath it.
+    expect(groups.map((g) => g.rows.map((r) => r.id))).toEqual([['a'], []])
+  })
+
+  it('omitting the second list is byte-identical to the one-list call (#1485)', () => {
+    // The back-compat every existing caller rests on — the parameter is additive, and a call that passes
+    // nothing must not acquire a behaviour. Asserted against the widened call with an EMPTY second list
+    // too, so "no argument" and "an empty argument" cannot drift apart.
+    const rows = [row({ id: 'a', cwd: '/w/alpha' }), row({ id: 'b', cwd: '/' })]
+    expect(groupByWorkspace(rows, [])).toEqual(groupByWorkspace(rows))
+  })
+
+  it('lets the PRIMARY list own the rows, the label and the position of a shared key (#1485)', () => {
+    // A key in both lists is ONE group. The secondary's row does not join it — it is drawn in its own
+    // tree — and the secondary's label does not overwrite the primary's, so each tree reads the name off
+    // a row it actually holds and the two agree only because the daemon holds one label per cwd.
+    const groups = groupByWorkspace(
+      [row({ id: 'a', cwd: '/w/sb', workspace_label: 'Second Brain' })],
+      [row({ id: 'b', cwd: '/w/sb', workspace_label: 'Disagreeing Label' })]
+    )
+    expect(groups).toHaveLength(1)
+    expect(groups[0].label).toBe('Second Brain')
+    expect(groups[0].rows.map((r) => r.id)).toEqual(['a'])
+  })
+
+  it('orders primary keys first, then secondary-only keys by their own first appearance (#1485)', () => {
+    // The order the ticket accepts for this slice: each tree leads with the keys its OWN rows put there.
+    // `beta` is seen first in the secondary list but follows both primary keys; `alpha` is already a
+    // primary key, so its second sighting moves nothing.
+    const groups = groupByWorkspace(
+      [row({ id: 'p1', cwd: '/w/alpha' }), row({ id: 'p2', cwd: '/w/gamma' })],
+      [
+        row({ id: 's1', cwd: '/w/beta' }),
+        row({ id: 's2', cwd: '/w/alpha' }),
+        row({ id: 's3', cwd: '/w/delta' }),
+        row({ id: 's4', cwd: '/w/beta' })
+      ]
+    )
+    expect(groups.map((g) => g.label)).toEqual(['alpha', 'gamma', 'beta', 'delta'])
+  })
+
+  it("labels a secondary-only group by ITS first row's workspace_label, falling back to the segment (#1485)", () => {
+    // #1287's preference, applied to the mirror by the same rule and read off the list that actually
+    // carries a row for the key — there is no other row to read it from.
+    const groups = groupByWorkspace(
+      [],
+      [
+        row({ id: 's1', cwd: '/w/sb', workspace_label: 'Second Brain' }),
+        row({ id: 's2', cwd: '/w/sb', workspace_label: 'Ignored' }),
+        row({ id: 's3', cwd: '/w/plain' })
+      ]
+    )
+    expect(groups.map((g) => g.key)).toEqual(['/w/sb', '/w/plain'])
+    expect(groups.map((g) => g.label)).toEqual(['Second Brain', 'plain'])
+  })
+
+  it('never propagates the unknown bucket from the second list (#1485, AC4)', () => {
+    // An unusable `cwd` on one side must not conjure a group on the other. The bucket is a collapse of
+    // rows this client cannot place, so mirroring it would draw a workspace row in a tree with nothing to
+    // collapse INTO it — and its key is the empty string, which names no directory.
+    const groups = groupByWorkspace(
+      [row({ id: 'a', cwd: '/w/alpha' })],
+      [row({ id: 'b', cwd: '/' }), row({ id: 'c', cwd: '   ' })]
+    )
+    expect(groups.map((g) => g.key)).toEqual(['/w/alpha'])
+  })
+
+  it("keeps the primary list's OWN unknown bucket (#1485, AC4's other direction)", () => {
+    // The skip above is on the SECONDARY list alone. A tree whose own rows put something in the bucket
+    // still draws it, exactly as before — and a secondary unusable row still adds nothing to it.
+    const groups = groupByWorkspace([row({ id: 'a', cwd: '//' })], [row({ id: 'b', cwd: '/' })])
+    expect(groups.map((g) => g.key)).toEqual([UNKNOWN_WORKSPACE_KEY])
+    expect(groups.map((g) => g.label)).toEqual([UNKNOWN_WORKSPACE_LABEL])
+    expect(groups[0].rows.map((r) => r.id)).toEqual(['a'])
+  })
 })
 
 describe('groupByServer (#1070)', () => {
@@ -352,6 +436,34 @@ describe('groupByServer (#1070)', () => {
     // Both groups carry the same key and the same label — that is the point. They are two groups anyway,
     // because they were never handed to one grouper.
     expect(grouped.map((groups) => groups[0].key)).toEqual([shared, shared])
+  })
+
+  it('takes #1485’s union PER HOST — one machine’s path never mints a group on another', () => {
+    // The composition the sidebar performs, and the reason the complement is split by server BEFORE it
+    // reaches `groupByWorkspace` rather than being handed over whole. `index.ts` routes a create as
+    // `servers.route(command.serverId)`, so the workspace row's plus sends its group's key to the host
+    // the row is drawn under. A cross-host union would draw Pyrybox's directory under Macbook and send
+    // that path to Macbook — a create in a directory the operator never chose, on a machine that was
+    // never told it. Structural, invisible at the call site, and therefore pinned here.
+    const secret = '/home/user/pyrybox-only'
+    const channels = [stamped(PYRYBOX, { id: 'p1', cwd: secret, is_promoted: true })]
+    const discussions = [stamped(MACBOOK, { id: 'm1', cwd: '/home/user/macbook-only' })]
+    const byHost = (
+      primary: readonly ReturnType<typeof stamped>[],
+      complement: readonly ReturnType<typeof stamped>[]
+    ): string[][] => {
+      const complementRows = new Map(
+        groupByServer([PYRYBOX, MACBOOK], complement).servers.map((s) => [s.serverId, s.rows])
+      )
+      return groupByServer([PYRYBOX, MACBOOK], primary).servers.map((s) =>
+        groupByWorkspace(s.rows, complementRows.get(s.serverId) ?? []).map((g) => g.key)
+      )
+    }
+    // Channels tree: Pyrybox draws its own promoted row's group; Macbook draws the group its OWN
+    // unpromoted row mirrors, and emphatically not Pyrybox's path.
+    expect(byHost(channels, discussions)).toEqual([[secret], ['/home/user/macbook-only']])
+    // Chats tree, the same claim with the lists swapped.
+    expect(byHost(discussions, channels)).toEqual([[secret], ['/home/user/macbook-only']])
   })
 
   it('gives a server with no rows in this section an empty group, never no group (AC2)', () => {

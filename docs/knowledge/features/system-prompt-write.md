@@ -407,6 +407,40 @@ reconstructed and the checks re-run after committing. The rule that follows: com
 implementation before running any revert-based mutation experiment, not merely before opening a PR —
 the plan-then-code commit discipline is what turned this into a reconstruction rather than a loss.
 
+## Live proof (#1433)
+
+The family — this write leg, [System prompt send](system-prompt-send.md)'s read leg, and #1078's Channel
+info editor — shipped end to end without ever being watched working against real claude. #1078 closed
+behind a green real-claude gate, but none of the tier's specs touched the prompt, so that green said
+nothing about this vertical. `e2e/real-claude-system-prompt.spec.ts` is the first behavioural proof, and it
+establishes two things with one marker token saved through Channel info:
+
+- **A prompt saved before a conversation's session has a child reaches claude when that child spawns** —
+  the first reply carries the marker. A freshly created conversation starts `stateEvicted` on the daemon
+  and defers its child to the first message (pyrycode#2085), so a prompt saved before that message is
+  composed into the spawn.
+- **A prompt saved while a session is already running does not reach it** — no reply in that session ever
+  carries the marker, because the marker exists only in the system prompt textarea, never in a composer
+  message, so a model cannot echo an instruction it was never shown.
+
+**What it does *not* establish, and why the spec's own title differs from the ticket's.** The ticket asked
+for the positive half to run after the **New session** control action, on the reasoning that `new_session`
+is the conversation's next session start and `set_system_prompt`'s own contract says a stored prompt takes
+effect there. The live gate ran exactly that shape and failed: `refreshSystemPrompt`, the only code that
+recomposes a session's appended system-prompt file from the stored value, has exactly one caller
+(`Pool.Activate`), which returns early for a session already `stateActive`. `new_session` never reaches
+it — `RestartFresh` relaunches the child from the frozen argv through the runner's own loop, and
+`RotateForNewSession` only rekeys, persists and notifies. **A prompt saved during a live session cannot
+currently reach the child that `New session` spawns**, contradicting the daemon's own contract. Filed
+upstream as `pyrycode/pyrycode#2436`.
+
+The shipped spec proves the family on the path the product actually has (first spawn) instead, keeps the
+original `New session` shape as an executable `test.fixme` naming #2436, and pairs the two conversations
+in one test so the same prompt text that produces nothing in a running session is also shown producing the
+marker at a spawn — closing the gap a lone negative assertion would have left (it would go green against a
+daemon with no prompt support at all). See [live-e2e-runbook.md § Current real-claude gate state](live-e2e-runbook.md)
+for the gate run detail.
+
 ## Related
 
 - [System prompt send](system-prompt-send.md) — the read half (#1230/#1231) this slice's write half

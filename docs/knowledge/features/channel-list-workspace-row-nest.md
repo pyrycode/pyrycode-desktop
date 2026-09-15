@@ -47,6 +47,37 @@ the design pinned no hover state at all) is deleted outright: the redrawn Hover 
 by its controls alone, drawing no fill; `:focus-visible` stays, per the file's convention of treating it
 as an outline rather than a statement about the drawn hover state.
 
+**#1487 re-derived that geometry without moving either landing point, and gave the row its own
+fold-state read — the row no longer draws identically in both disclosure states, and this page's account
+above is now history rather than the current rule.** The redrawn component takes the folder glyph out of
+the flex flow (`Row icon` 399:1034, absolutely positioned inside `.channel-list__workspace`, which is why
+that rule now carries `position: relative` — against the button, not `.channel-list__workspace-head`,
+whose own `position: relative` for the plus and the pen would otherwise land the glyph 30px too far left)
+and gives the label the row's whole 30px left padding instead of the 8 + 12 + 10 the old flow summed to.
+Both land the label at the same 50px from the card's content edge, so this is a change to how the row is
+*built*, not to where its parts sit. `gap` falls from 10 to 6 (`calc(var(--space-1) + 2px)`), now spent
+between the label and a new trailing chevron rather than between the glyph and the label. The glyph
+itself swaps with `expanded` — Font Awesome `folder-open-solid` (510:2214) open, the shipped Material
+`folder` path shut, a render branch rather than a transform because the two states are two different arts
+— and a down/right chevron (Figma `Chevron` 510:2328) follows the label at that 6px gap, turned a quarter
+by one `channels.css` rule keyed to `.channel-list__workspace[aria-expanded='false']` rather than by a
+second render branch, so `aria-expanded` stays the sole state signal. Both marks are `aria-hidden`, carry
+no text, and add no attribute to the button, so `class="channel-list__workspace"` stays the sole token
+`WORKSPACE_ROW_MARKER` pins. One ticket revision touches this section's own claims:
+`.channel-list__workspace-label` drops its `flex-grow` (`1 1 auto` → `0 1 auto`) — a stretched label had
+drawn identically to an unstretched one since #1178 because nothing followed it, and the chevron is what
+made that latent mismatch visible (it rendered ~230px right of the label on the first capture). The
+shrink and `min-width: 0` that "a long `cwd` truncates first" rests on are untouched; the button's own
+`flex: 1 1 auto` still spans the click target to the wrapper's far edge.
+
+**A workspace group with no rows in the tree being drawn renders no chevron, in either state** — the
+visible half of [#1485's union](channel-list-workspace-grouping.md), which is what first made such a
+group reachable in production (a `cwd` with rows in the *other* tree and none in this one). The row stays the disclosure button and still swaps
+its folder glyph, because it still folds; only the fold mark is withheld, since there is nothing under it
+to fold. `CollapsibleWorkspaceGroup` derives the flag itself — `Children.count(children) > 0` — rather
+than taking it as a prop, which is the whole reason the heavily-commented `CollapsibleWorkspaceGroup` call
+site in `renderServerTrees` gained nothing for this change.
+
 **The plus** (`.channel-list__workspace-create`, Figma "Icon Edgeless" 399:1065) is a 20×20
 (`--space-5`) absolutely positioned box at `right: 0; top: var(--space-1)`, centring a 16px glyph so it
 reproduces the drawing's rectangle (right 2, top 6 in the 28px row) with no pixel literal — the same
@@ -137,6 +168,12 @@ covering the dialog it opens, is [`e2e/sidebar-create-channel.spec.ts`](create-c
 - [Channel List — the row's desktop geometry](channel-list-desktop-row-geometry.md) — the map page.
 - [#1178 spec](../../specs/architecture/1178-workspace-row-nest-and-create-chat-plus.md) — the workspace
   row's own 20px nest and its create-chat plus.
+- [#1487 spec](../../specs/architecture/1487-workspace-row-fold-state-glyph-and-chevron.md) — the
+  fold-state glyph swap and chevron, and the re-derivation of this row's geometry once the glyph left
+  the flex flow.
+- [Channel List — workspace grouping](channel-list-workspace-grouping.md) (#1485) — the both-trees union
+  that first makes an empty workspace group reachable in production, the shape this row's withheld
+  chevron responds to.
 - [Create-channel dialog](create-channel-dialog.md) (#1179) — the Channels-tree plus's own dialog, the
   `requestNewChannel` command constructor and the `WorkspaceCreateControl` reshape this page documents.
 - [Channel List — the workspace row's plus names itself in a pill](channel-list-workspace-plus-pill.md)

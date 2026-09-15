@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+import type { ReactNode } from 'react'
 import type { SessionState, ConnectionStatus } from '../../store/sessionStore'
 import type { ConversationSummary } from '@shared/wire/types'
 import {
@@ -215,6 +216,24 @@ const CREATE_CHANNEL_MARKER = 'aria-label="Create channel"'
 // ONE marker for both trees, unlike the two plus names above: the pen says the same word in each, so
 // the per-tree question this file asks about it is "is it drawn in both?" rather than "which name?".
 const EDIT_WORKSPACE_MARKER = 'aria-label="Edit workspace"'
+
+// #1487 — the two folder glyphs the row swaps between, and the chevron that follows its label. WHOLE
+// opening runs rather than a width alone, the file's icon idiom: one marker fixes the class, the viewBox,
+// both box dimensions, the currentColor fill and the aria-hidden together, so a re-exported glyph, a
+// resize or a lost `aria-hidden` fails as a missing marker rather than passing a laxer check. The two
+// folder runs differ in every dimension AND in the viewBox — 13 × 11 on a Font Awesome art box against
+// 12 × 12 on the Material 24-unit one — so neither can match the other's slice.
+const WORKSPACE_FOLDER_OPEN_SVG =
+  '<svg class="channel-list__workspace-icon" viewBox="0 0 13 11" width="13" height="11" fill="currentColor" aria-hidden="true">'
+const WORKSPACE_FOLDER_CLOSED_SVG =
+  '<svg class="channel-list__workspace-icon" viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true">'
+const WORKSPACE_CHEVRON_SVG =
+  '<svg class="channel-list__workspace-chevron" viewBox="0 0 8 4" width="8" height="4" fill="currentColor" aria-hidden="true">'
+
+// The chevron counted WITHOUT its geometry, so "no chevron here" is asserted on the class alone and stays
+// true if a later ticket re-exports the art at another size. Its closing quote keeps it from matching any
+// longer token, the `WORKSPACE_ROW_MARKER` discipline one marker family up.
+const WORKSPACE_CHEVRON_MARKER = 'class="channel-list__workspace-chevron"'
 
 // The disclosure state the workspace row carries once it becomes a collapse control (#704). React
 // serialises `aria-expanded={boolean}` to the literal strings "true" / "false", so these are exact
@@ -2332,12 +2351,26 @@ describe('CollapsibleWorkspaceGroup (#704)', () => {
 
   // `defaultExpanded={undefined}` takes the same default-parameter path `renderBody` takes by omitting
   // the prop, so the no-argument call really does render the production shape.
-  const renderGroup = (label: string, defaultExpanded?: boolean): string =>
+  //
+  // #1487 gave the helper its third parameter so the EMPTY group — the one #1485's union made reachable
+  // in production, where a workspace has rows in the other tree and none in this one — is renderable
+  // here. It is defaulted, so the four cases below it call the helper exactly as they always did.
+  const renderGroup = (
+    label: string,
+    defaultExpanded?: boolean,
+    children: ReactNode = <span>{PROBE}</span>
+  ): string =>
     renderToStaticMarkup(
       <CollapsibleWorkspaceGroup label={label} defaultExpanded={defaultExpanded}>
-        <span>{PROBE}</span>
+        {children}
       </CollapsibleWorkspaceGroup>
     )
+
+  // The shape `renderServerTrees` hands an empty group: `group.rows.map(renderRow)` over no rows, which
+  // is an empty ARRAY and not `null` / `undefined` / `false`. Restating the production shape matters —
+  // `Children.count` reads those four differently, and a test that passed `null` would not be testing
+  // the case that ships.
+  const NO_ROWS: ReactNode = []
 
   it('renders the row expanded with its rows when no default is given (AC4)', () => {
     const markup = renderGroup(GROUP_LABEL)
@@ -2375,6 +2408,94 @@ describe('CollapsibleWorkspaceGroup (#704)', () => {
     expect(markup).toContain('&lt;b&gt;x&lt;/b&gt;')
     expect(markup).not.toContain('<b>x</b>')
     expect(workspaceRowTagsIn(markup)[0]).not.toContain('title=')
+  })
+
+  // #1487 — THE ROW NOW READS ITS OWN FOLD STATE, so the two shapes differ in their drawn marks as well
+  // as in `aria-expanded`. This is the seam the ticket names for it: `renderToStaticMarkup` never
+  // re-renders, so rendering the exported group at each `defaultExpanded` value is the only way the unit
+  // tier reaches both states at all.
+  //
+  // WHAT THIS TIER CAN AND CANNOT SEE. The glyph SWAP is a render branch and is asserted here. The
+  // chevron's DIRECTION is not: one glyph is drawn and `channels.css` rotates it off
+  // `[aria-expanded='false']`, so the attribute these cases pin IS the state signal the rotation reads.
+  // That is the deliberate design — one signal, no second branch to drift from it — and its cost is that
+  // the direction is proved by review of one declaration rather than by an assertion, the same standard
+  // this file holds every other CSS-only visual to.
+  describe('the drawn fold state (#1487)', () => {
+    it('draws the OPEN folder and a chevron when expanded (AC1)', () => {
+      const markup = renderGroup(GROUP_LABEL)
+      expect(workspaceRowTagsIn(markup)[0]).toContain(EXPANDED_MARKER)
+      expect(countOf(markup, WORKSPACE_FOLDER_OPEN_SVG)).toBe(1)
+      expect(countOf(markup, WORKSPACE_FOLDER_CLOSED_SVG)).toBe(0)
+      expect(countOf(markup, WORKSPACE_CHEVRON_SVG)).toBe(1)
+    })
+
+    it('draws the CLOSED folder and still a chevron when collapsed (AC1)', () => {
+      const markup = renderGroup(GROUP_LABEL, false)
+      expect(workspaceRowTagsIn(markup)[0]).toContain(COLLAPSED_MARKER)
+      expect(countOf(markup, WORKSPACE_FOLDER_CLOSED_SVG)).toBe(1)
+      expect(countOf(markup, WORKSPACE_FOLDER_OPEN_SVG)).toBe(0)
+      // The chevron is drawn in BOTH states and turns rather than appearing — the half an implementation
+      // that hung it off `expanded` alone would get wrong.
+      expect(countOf(markup, WORKSPACE_CHEVRON_SVG)).toBe(1)
+    })
+
+    it('adds nothing to the button in either state (AC4)', () => {
+      // The shipped equality one describe up already pins the two tags equal; this is the other half of
+      // AC4, asserted on the tag WHOLE: the swap is exactly the edit that invites a `--collapsed`
+      // modifier or a `data-expanded`, and either would silently zero `WORKSPACE_ROW_MARKER`'s counts
+      // across this file rather than failing one case.
+      for (const markup of [renderGroup(GROUP_LABEL), renderGroup(GROUP_LABEL, false)]) {
+        expect(countOf(markup, WORKSPACE_ROW_MARKER)).toBe(1)
+        const tag = workspaceRowTagsIn(markup)[0]
+        expect(tag).not.toContain('aria-label')
+        expect(tag).not.toContain('title=')
+        expect(tag).not.toContain('data-')
+        expect(tag).not.toContain('--')
+      }
+    })
+
+    it('gives neither mark a voice or any text (AC4)', () => {
+      // `aria-hidden` rides in each marker's opening run above, so this case adds the part a run cannot
+      // carry: that the elements are EMPTY. A glyph is <svg …>…paths…</svg>, and the only text node the
+      // row may hold is its label.
+      for (const markup of [renderGroup(GROUP_LABEL), renderGroup(GROUP_LABEL, false)]) {
+        expect(workspaceLabelsIn(markup)).toEqual([GROUP_LABEL])
+        for (const marker of [
+          WORKSPACE_FOLDER_OPEN_SVG,
+          WORKSPACE_FOLDER_CLOSED_SVG,
+          WORKSPACE_CHEVRON_SVG
+        ]) {
+          const at = markup.indexOf(marker)
+          if (at === -1) continue
+          const body = markup.slice(at + marker.length, markup.indexOf('</svg>', at))
+          expect(body.replace(/<path[^>]*>|<\/path>/g, '')).toBe('')
+        }
+      }
+    })
+
+    it('withholds the chevron from a group with no rows, in either state (AC5)', () => {
+      // #1485's union put this group on the board: a workspace whose rows all live in the OTHER tree
+      // still draws its head row here, over an empty mapped array. It has nothing to fold, so it draws
+      // no chevron — while staying the disclosure button, which is why the row and its glyph are
+      // re-asserted rather than assumed gone with the mark.
+      for (const expanded of [undefined, false]) {
+        const markup = renderGroup(GROUP_LABEL, expanded, NO_ROWS)
+        expect(countOf(markup, WORKSPACE_ROW_MARKER)).toBe(1)
+        expect(workspaceLabelsIn(markup)).toEqual([GROUP_LABEL])
+        expect(countOf(markup, WORKSPACE_CHEVRON_MARKER)).toBe(0)
+      }
+      // Asserted against the populated render so the case above is a WITHHOLD and not a count that was
+      // zero all along — the shape a `class` typo would otherwise pass.
+      expect(countOf(renderGroup(GROUP_LABEL), WORKSPACE_CHEVRON_MARKER)).toBe(1)
+    })
+
+    it('keeps the glyph swap on a group with no rows (AC5)', () => {
+      // Only the chevron is withheld. The folder still reads the fold state, because the row still folds
+      // — it simply folds nothing.
+      expect(countOf(renderGroup(GROUP_LABEL, undefined, NO_ROWS), WORKSPACE_FOLDER_OPEN_SVG)).toBe(1)
+      expect(countOf(renderGroup(GROUP_LABEL, false, NO_ROWS), WORKSPACE_FOLDER_CLOSED_SVG)).toBe(1)
+    })
   })
 })
 

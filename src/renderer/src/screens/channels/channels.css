@@ -667,17 +667,31 @@
    Workspace 399:1059 / 405:7456) — structurally the host row one indent deeper.
 
    THE GEOMETRY IS THE WHOLE POINT OF #1178 AND EVERY NUMBER IS DRAWN. The drawing gives the row
-   `pl-[8px] py-[4px] pr-[32px]` with a 10px gap, inside the wrapper's 20px nest. Measured from the card's
-   content edge that puts the 12px folder at 20 + 8 = 28 and the label at 28 + 12 + 10 = 50 — which is
-   exactly where `.channel-list__row-open` puts the channel titles beneath it, so THE WORKSPACE LABEL AND
-   THE CHANNEL TITLES SHARE ONE LEFT EDGE. That alignment is what the retune is for.
+   `py-[4px]` inside the wrapper's 20px nest, and the two horizontal numbers that decide where its parts
+   land are the folder's 8 and the label's 30. Measured from the card's content edge that puts the folder
+   at 20 + 8 = 28 and the label at 20 + 30 = 50 — which is exactly where `.channel-list__row-open` puts
+   the channel titles beneath it, so THE WORKSPACE LABEL AND THE CHANNEL TITLES SHARE ONE LEFT EDGE. That
+   alignment is what the retune is for, and `e2e/sidebar-tree-geometry.spec.ts` reads both numbers.
+
+   #1487 RE-DERIVED THAT SUM WITHOUT MOVING EITHER NUMBER. #1178 reached the label's 50 through the flow
+   — `pl-[8px]` + the 12px folder + a 10px gap — and the redrawn component takes the folder OUT of the
+   flow (Row icon 399:1034 is absolutely placed at left 8, top 4), so the padding now carries the whole
+   30 on its own: `--space-7 + 2px`, the drawn `pl-[30px]`, and the very sum 8 + 12 + 10 already made.
+   The `gap` is what is left over between the label and the chevron behind it, and it drops to the
+   drawing's 6 (`--space-1 + 2px`) accordingly. Both are written as sums for this file's standing reason:
+   the arithmetic is the point, not the pixel count, and the scale has no slot at either value.
+
+   `position: relative` IS LOAD-BEARING AND IS THE BUTTON'S, NOT THE HEAD ROW'S. The glyph is positioned
+   against this element's padding box; `.channel-list__workspace-head` above is already `position:
+   relative` for the plus and the pen, and resolving against it would land the glyph 30px to the left, at
+   the head's own edge. The button has no border, so its padding box starts at the wrapper's left edge and
+   `left: --space-2` reads as the drawn 8 straight off. `z-index` stays `auto`, so this opens no stacking
+   context and the two absolutely positioned SIBLING controls — not descendants — are untouched by it.
 
    This replaces the pre-redraw reading (a 24px left inset, a 16px right one, and a --space-3 gap chosen
    by a tie-break between 8 and 12 because 10 had no slot on the scale). The 2px deviation that tie-break
    introduced is what put the label at 48 against the titles' 50; `e2e/sidebar-tree-geometry.spec.ts`
-   recorded it as accepted beside `WORKSPACE_ICON_X` and it expires here. The gap is now written as the
-   SUM `--space-2 + 2px` so the arithmetic stays legible rather than hidden behind a new token — the same
-   shape, and the same reason, as `.channel-list__row-open`'s `calc(--space-2 + 6px + --space-2)`.
+   recorded it as accepted beside `WORKSPACE_ICON_X` and it expires here.
 
    THE RIGHT PADDING IS THE HOVER VARIANT'S 52 SINCE #1180, up from the Idle variant's 32, and it is
    written as the SUM `--space-8 + --space-5` — the slot the plus is positioned over, plus the pen's own
@@ -717,19 +731,29 @@
    zero here an unbounded daemon `cwd` widens the row and takes the 400px sidebar with it (the reach
    `.paired-shell__sidebar`'s `min-width: 0` comment already records for these three nowrap labels).
 
-   The row is styled IDENTICALLY in both disclosure states — the design draws one state and no chevron, so
-   there is nothing to differentiate. Should a collapsed appearance ever be designed, style it off
-   `.channel-list__workspace[aria-expanded='false']` and NEVER a second class token: the unit tests pin
+   THE ROW NO LONGER READS THE SAME IN BOTH DISCLOSURE STATES (#1487), and the collapsed appearance
+   landed exactly where the paragraph that stood here said one would: off
+   `.channel-list__workspace[aria-expanded='false']`, NEVER a second class token — the unit tests pin
    `class="channel-list__workspace"` as an exact attribute-value substring, which a modifier would stop
-   matching silently. */
+   matching silently. Two marks carry it, and only one of them is styled. The folder is a render branch
+   (two different arts, no transform between them), so `ChannelList.tsx` swaps it and this file says
+   nothing about which one it is. The chevron is ONE art turned a quarter by the rule beside its own block
+   below, which is what keeps `aria-expanded` the single state signal rather than one of two.
+
+   THE RIGHT PADDING IS UNTOUCHED BY THE REDRAW, deliberately. 399:1039 reads `pr-[32px]` — the Idle
+   variant's — and the 52 above is the Hover variant's, held in both states for the reason two paragraphs
+   up. A redraw of the resting state is not new evidence about the reserve; taking its 32 would re-truncate
+   a long label the moment the pointer arrived. */
 .channel-list__workspace {
   appearance: none;
   display: flex;
   align-items: center;
+  position: relative;
   flex: 1 1 auto;
   min-width: 0;
-  gap: calc(var(--space-2) + 2px);
-  padding: var(--space-1) calc(var(--space-8) + var(--space-5)) var(--space-1) var(--space-2);
+  gap: calc(var(--space-1) + 2px);
+  padding: var(--space-1) calc(var(--space-8) + var(--space-5)) var(--space-1)
+    calc(var(--space-7) + 2px);
   border: 0;
   border-radius: var(--radius-xs);
   background: none;
@@ -932,12 +956,63 @@
   display: block;
 }
 
-/* The folder glyph — the `.channel-list__host-icon` rule verbatim: `display: block` is the file's icon
-   convention, and the flex basis keeps it from shrinking when a long label competes for the row. Its 12px
-   box is structural component geometry set on the <svg>, matching the host row's level marker. */
+/* The folder glyph, OUT OF THE FLOW SINCE #1487 — which is the drawing's own construction, not a trick
+   to reach a number: `Row icon` 399:1034 is absolutely placed at left 8, top 4, a 20px-tall box centring
+   the art, while the label carries the row's whole 30px left padding. It also stops the two states'
+   different art boxes (13 × 11 open, 12 × 12 shut) from moving the label by a pixel as the row folds,
+   which they would do as flex items.
+
+   `left: --space-2` is the drawn 8, read against THIS BUTTON's padding box — see the block above for why
+   the positioned ancestor has to be the button and not the head row. Measured from the card's content
+   edge that is the wrapper's 20 + 8 = 28, `WORKSPACE_ICON_X` unchanged.
+
+   VERTICAL CENTRING BY PERCENTAGE RATHER THAN BY A LITERAL, and it reproduces the drawing in both states
+   from one declaration. The row's content box is 20 tall between `--space-1` paddings, so the 50% mark is
+   14 and the 11px open art lands at 8.5 — the drawn box's own centre (4 + (20 − 11) / 2) — while the 12px
+   shut art lands at 8, where flex centring already had it. A `top` literal would have had to be one
+   number or two.
+
+   `flex` is dropped rather than kept: an absolutely positioned child is not a flex item, so the basis
+   that used to stop the glyph shrinking now describes nothing. What replaces it is that the glyph is no
+   longer in the label's way at all. `display: block` stays, the file's icon convention. */
 .channel-list__workspace-icon {
   display: block;
+  position: absolute;
+  left: var(--space-2);
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* THE FOLD MARK (#1487, Figma `Chevron` 510:2328) — the row's last flex item, after the label at the 6px
+   gap the block above re-derives.
+
+   `flex: 0 0 auto` IS THE WHOLE OF "A LONG `cwd` TRUNCATES FIRST". The label is `flex: 1 1 auto` with
+   `min-width: 0` and its ellipsize quartet, so it is the only item that gives; an unbounded daemon
+   workspace name ellipsizes against a chevron that never moves. Its 8px box ends at the label's content
+   edge, 52 in from the row's trailing edge, and `.channel-list__workspace-edit`'s hit box starts at 45 —
+   so the mark and the pen never meet, in either state, the same clearance the label itself has.
+
+   `margin-top: 2px` IS THE DRAWING'S OWN NUMBER AND NOT A NUDGE INVENTED HERE. The node insets its art
+   2px inside a `justify-center` box, which lands the glyph 1px below the frame's centre; a 2px top margin
+   on a `center`-aligned flex item centres the MARGIN box and so lands the border box 1px below the row's
+   centre. The same 1px, from the same 2, with no halving written out.
+
+   THE COLLAPSED DIRECTION IS ONE QUARTER TURN OFF THE BUTTON'S OWN `aria-expanded`, and that attribute
+   rather than a second render branch is the point: the drawn direction cannot disagree with the state a
+   screen reader is told, because it reads it. `rotate(-90deg)` takes the drawn down chevron to a right
+   one about the element's own centre — the margin-nudged centre, so the 2px above survives the turn,
+   which is the misalignment `ChannelList.tsx` was told to fall back to a second path over and does not
+   hit. The reserved 8px box does not rotate with the art (a transform is not layout), so the label's
+   truncation point is the same in both states and folding a group cannot reflow its own label. The
+   rule is (0,3,0) over the base's (0,1,0). */
+.channel-list__workspace-chevron {
+  display: block;
   flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.channel-list__workspace[aria-expanded='false'] .channel-list__workspace-chevron {
+  transform: rotate(-90deg);
 }
 
 /* The label. Same type as the host label above it — the theme's label-large is an EXACT match for the
@@ -945,9 +1020,26 @@
    nesting levels read as one family. The one place this rule is NOT a copy of `.channel-list__host-label`
    is the ellipsize quartet, borrowed from `.channel-list__title`: the host's label is a six-character
    compile-time constant, but this one is unbounded untrusted daemon text and must be bounded rather than
-   blowing out the 400px sidebar. */
+   blowing out the 400px sidebar.
+
+   ⭐ #1487 DROPPED THE `flex-grow`, from `1 1 auto` to `0 1 auto`, and it is a correction rather than a
+   retune. While nothing followed the label its growth was invisible — a left-aligned text in a box
+   stretched to the row's far edge draws identically to one in a box its own size. The chevron made it
+   visible and wrong: a grown label parks the mark at the row's trailing edge, where the drawing packs it
+   against the text at the 6px gap (399:1039's items are `shrink-0` and start-packed, no spacer between
+   them). MEASURED, not predicted — the first static capture of this ticket drew the chevron ~230px right
+   of "Second Brain".
+
+   THE SHRINK AND THE `min-width: 0` ARE WHAT THE TICKET'S "A LONG `cwd` TRUNCATES FIRST" ACTUALLY RESTS
+   ON, and neither moves: `0 1 auto` still gives, and gives before the chevron's `0 0 auto` can. The
+   drawing models no truncation at all (its label cannot shrink either), so this is the one place the
+   implementation must be stricter than the art — the daemon's `cwd` is unbounded and the art's label is
+   twelve characters.
+
+   The row's click target is unaffected: `flex: 1 1 auto` on the BUTTON still spans it to the wrapper's
+   far edge, so the dead space right of the chevron toggles the fold exactly as it did. */
 .channel-list__workspace-label {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

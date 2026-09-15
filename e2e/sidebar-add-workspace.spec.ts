@@ -118,7 +118,9 @@ test('the host row’s plus starts a chat in a typed folder, and the workspace a
   // The workspace row. `allTextContents` over every group label is the arithmetic-safe read
   // (`sidebar-workspace-edit.spec.ts`'s idiom): the seeded group is still there, and the new one has
   // joined it — the last segment of the typed path, never the whole path.
-  await expect(workspaceLabels.filter({ hasText: NEW_FOLDER_LABEL })).toHaveCount(1, {
+  // TWO since #1485 — the dialog starts a CHAT, and the new folder is drawn under this host in the
+  // Channels tree as well. That doubling IS this ticket's first acceptance criterion.
+  await expect(workspaceLabels.filter({ hasText: NEW_FOLDER_LABEL })).toHaveCount(2, {
     timeout: ROUNDTRIP_TIMEOUT_MS
   })
   // The typed path itself reaches NO attribute anywhere in the sidebar (AC3's sink rule, read back in a
@@ -284,8 +286,10 @@ test('optional name uses the confirmed folder and refreshes only its host, even 
   expect(first.renames).toHaveLength(1)
   first.confirm(app)
   await expect(page.locator('.add-workspace-overlay')).toHaveCount(0)
-  await expect(page.locator('.channel-list__workspace-label').filter({ hasText: NEW_FOLDER_LABEL })).toHaveCount(1)
-  await expect(page.locator('.channel-list__workspace-label').filter({ hasText: 'Other host' })).toHaveCount(1)
+  // TWO since #1485 — a workspace is drawn under its host in BOTH trees now, so this label matches
+  // once per tree. The filter still isolates THIS folder from every other group in the sidebar.
+  await expect(page.locator('.channel-list__workspace-label').filter({ hasText: NEW_FOLDER_LABEL })).toHaveCount(2)
+  await expect(page.locator('.channel-list__workspace-label').filter({ hasText: 'Other host' })).toHaveCount(2)
 })
 
 test('blank names preserve existing shared labels and the UTF-16 boundary gates submission', async ({ launchPairedApp }) => {
@@ -302,7 +306,8 @@ test('blank names preserve existing shared labels and the UTF-16 boundary gates 
     await page.locator(nameField).fill(blank)
     await page.locator(confirmButton).click()
     await expect(page.locator('.add-workspace-overlay')).toHaveCount(0)
-    await expect(page.locator('.channel-list__workspace-label').filter({ hasText: 'Existing shared name' })).toHaveCount(1)
+    // TWO since #1485 — one per tree; see the NEW_FOLDER_LABEL read above.
+    await expect(page.locator('.channel-list__workspace-label').filter({ hasText: 'Existing shared name' })).toHaveCount(2)
   }
   expect(fake.creates).toHaveLength(2)
   expect(fake.renames).toHaveLength(0)
@@ -349,7 +354,8 @@ test('rejection and deadline allow naming-only retry and isolate foreign, unsoli
   await page.locator(confirmButton).click()
   await expect.poll(() => fake.renames.length).toBe(3)
   fake.confirm(app, 1)
-  await expect(page.locator('.channel-list__workspace-label').filter({ hasText: 'Corrected name' })).toHaveCount(1)
+  // TWO since #1485 — one per tree; see the NEW_FOLDER_LABEL read above.
+  await expect(page.locator('.channel-list__workspace-label').filter({ hasText: 'Corrected name' })).toHaveCount(2)
   await expect(page.locator(nameField)).toBeDisabled()
   fake.confirm(app, 2)
   await expect(page.locator('.add-workspace-overlay')).toHaveCount(0)
@@ -506,7 +512,8 @@ test('host-isolated results, uncertain deadline and late success keep the existi
   fake.release(app)
   await expect(page.locator('.add-workspace-overlay .modal')).toHaveCount(0)
   await expect(page.locator(OPEN_ROW)).toHaveText(UNTITLED)
-  await expect(page.locator('.channel-list__workspace-label').filter({ hasText: NEW_FOLDER_LABEL })).toHaveCount(1)
+  // TWO since #1485 — one per tree; see the read above.
+  await expect(page.locator('.channel-list__workspace-label').filter({ hasText: NEW_FOLDER_LABEL })).toHaveCount(2)
   fake.reject(app)
   await page.clock.runFor(30_000)
   await expect(page.locator('.add-workspace-overlay .modal')).toHaveCount(0)

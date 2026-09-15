@@ -110,14 +110,19 @@ test('sidebar ownership follows the target in both open-chat directions', async 
     await connection(app, online, 'connected')
     await connection(app, offline, 'disconnected')
     await page.getByRole('button', { name: offlineRow.name!, exact: true }).click()
-    await expect(page.locator('.channel-list__workspace-create')).toHaveCount(1)
-    await expect(page.locator('.channel-list__workspace-edit')).toHaveCount(1)
+    // TWO of each since #1485 — the connected host's group is drawn in BOTH trees now, so it carries a
+    // plus and a pen in each. The claim is unchanged and is still exact: the DISCONNECTED host's two
+    // groups carry neither, which is what these numbers not being four says.
+    await expect(page.locator('.channel-list__workspace-create')).toHaveCount(2)
+    await expect(page.locator('.channel-list__workspace-edit')).toHaveCount(2)
     await expect(page.locator('.channel-list__rename')).toHaveCount(1)
     // #1426 deleted the assertion that stood here: the global create was inert while two hosts were
     // paired. The plus that replaced it is per-row and carries no such state — it is withheld entirely
     // for a host that is not connected, which the three counts above already read.
     await commands.clear()
-    await page.locator('.channel-list__workspace-create').click({ force: true })
+    // `.first()` is the CHANNELS tree's plus — that tree renders above the divider — which is the one
+    // that opens `.create-channel__input`. The Chats mirror's plus creates a chat with no dialog.
+    await page.locator('.channel-list__workspace-create').first().click({ force: true })
     await page.locator('.create-channel__input').fill('Owned channel')
     await page.getByRole('button', { name: 'OK', exact: true }).click()
     await expect.poll(async () => (await commands.read()).filter(c => c.type === 'createConversation').length).toBe(1)

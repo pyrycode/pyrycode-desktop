@@ -82,7 +82,9 @@ test('a renameWorkspace command leaves as a rename_workspace frame the daemon an
   // CHANGED rather than that it merely reads as a string. It is also a POSITIVE auto-waiting read rather
   // than an absence, which would settle before the sidebar had rendered anything. The array form pins the
   // count too. ---
-  await expect(workspaceLabels).toHaveText([OLD_LABEL])
+  // TWO since #1485: the seed is promoted, so the Chats tree draws the same workspace as an empty
+  // mirror. Both must read the label, which is a strictly stronger claim than the single read was.
+  await expect(workspaceLabels).toHaveText([OLD_LABEL, OLD_LABEL])
 
   // --- 2. The window asks for the rename. The payload is passed as the evaluate ARGUMENT rather than
   // closed over (the `composer-file-drop.spec.ts` discipline) — a closed-over const is not in the page's
@@ -98,7 +100,7 @@ test('a renameWorkspace command leaves as a rename_workspace frame the daemon an
   // route would resolve nothing), or had the fresh literal dropped a field, no frame would have reached
   // the fake and this would still read OLD_LABEL. Nothing relaunched and no row was patched locally — the
   // reply only triggered the re-request whose answer landed this text. ---
-  await expect(workspaceLabels).toHaveText([NEW_LABEL], { timeout: RELIST_TIMEOUT_MS })
+  await expect(workspaceLabels).toHaveText([NEW_LABEL, NEW_LABEL], { timeout: RELIST_TIMEOUT_MS })
 
   // The negative half stated explicitly. Without it, "the row shows a string" would pass against a build
   // that dropped the field, since the folder name is a string too. Scoped to the label TEXT rather than to

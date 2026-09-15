@@ -39,12 +39,17 @@ test('addressed lists load both hosts and refresh a created workspace while anot
   await page.getByRole('dialog', { name: 'Add workspace' }).getByRole('button', { name: 'OK', exact: true }).click()
   await expect(page.getByRole('dialog', { name: 'Add workspace' })).toHaveCount(0)
   await expect(page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText('Untitled')
+  // TWO since #1485 — the dialog starts a CHAT, and the Channels tree now draws the new folder too.
+  // That is this ticket's first acceptance criterion, read from the spec that already drove the dialog.
   await expect(page.locator('.channel-list__workspace-label').filter({ hasText: 'new-workspace' }))
-    .toHaveCount(1)
+    .toHaveCount(2)
   expect(creates).toEqual([1, 0])
   expect(counts).toEqual([2, 1])
   // The flat sidebar sequence places the new workspace beneath its owning host.
-  const newWorkspace = page.locator('.channel-list__workspace-label').filter({ hasText: 'new-workspace' })
+  // `.first()` since #1485 put the same label in both trees. Either would answer the question this asks —
+  // both are drawn under the SAME machine, which is the per-host union's whole point — so the first is
+  // taken rather than the trees being told apart for a claim that holds in each.
+  const newWorkspace = page.locator('.channel-list__workspace-label').filter({ hasText: 'new-workspace' }).first()
   const containingHost = newWorkspace.locator('xpath=ancestor::div[@class="channel-list__workspace-head"]/preceding-sibling::div[contains(concat(" ", @class, " "), " channel-list__host ")][1]')
   await expect(containingHost.locator('.channel-list__host-label')).toHaveText('Connected host')
   await page.getByPlaceholder('Message…').fill('A valid draft')

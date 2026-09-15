@@ -126,11 +126,15 @@ test('the workspace row’s pen hides at rest, opens an Edit workspace dialog, a
   // fake seeded with NEW_LABEL all along. An auto-waiting text read rather than an absence: a
   // `toHaveCount(0)` opening settles before the sidebar has rendered anything at all. The array form
   // pins the group count too. ---
-  await expect(workspaceLabels).toHaveText([OLD_LABEL])
+  // TWO since #1485: the seed is promoted, so the Chats tree draws this workspace as an empty mirror.
+  await expect(workspaceLabels).toHaveText([OLD_LABEL, OLD_LABEL])
 
   // --- 2. Mint the SECOND tree's group at the same workspace, through the real Add workspace dialog. The
   // created row carries that cwd and inherits the workspace's held label, so both trees now read
-  // OLD_LABEL — which is what makes step 9's "both trees" claim a move rather than a coincidence. ---
+  // OLD_LABEL — which is what makes step 9's "both trees" claim a move rather than a coincidence. Since
+  // #1485 both trees already read it before the mint; what the mint still changes is that each tree's
+  // group now holds a ROW of its own rather than one of them being a mirror, which is the state the
+  // rename has to move through both of. ---
   await mintChatInWorkspace(page, WORKSPACE_CWD)
   await expect(workspaceLabels).toHaveText([OLD_LABEL, OLD_LABEL], {
     timeout: ROUNDTRIP_TIMEOUT_MS
@@ -236,7 +240,8 @@ test('optional resets, dismissal, keyboard controls and constrained modal layout
   const dialog = page.getByRole('dialog', { name: 'Edit workspace' })
   const field = dialog.getByRole('textbox', { name: 'Workspace name (optional):' })
   const ok = dialog.getByRole('button', { name: 'OK', exact: true })
-  await expect(labels).toHaveText([OLD_LABEL])
+  // TWO since #1485: the seed is promoted, so the Chats tree draws this workspace as an empty mirror.
+  await expect(labels).toHaveText([OLD_LABEL, OLD_LABEL])
   await page.setViewportSize({ width: 800, height: 600 })
   await pen.focus()
   await pen.press('Enter')
@@ -270,7 +275,7 @@ test('optional resets, dismissal, keyboard controls and constrained modal layout
     await field.fill(reset)
     const before = renames.length
     await ok.click()
-    await expect(labels).toHaveText([FOLDER_SEGMENT])
+    await expect(labels).toHaveText([FOLDER_SEGMENT, FOLDER_SEGMENT])
     await expect(dialog).toHaveCount(0)
     expect(renames.length).toBe(before + 1)
     expect(renames.at(-1)).toEqual({ path: WORKSPACE_CWD, label: null })
@@ -287,7 +292,7 @@ test('optional resets, dismissal, keyboard controls and constrained modal layout
     await page.keyboard.press('Tab')
     await expect(ok).toBeFocused()
     await page.keyboard.press('Enter')
-    await expect(labels).toHaveText([OLD_LABEL])
+    await expect(labels).toHaveText([OLD_LABEL, OLD_LABEL])
   }
 
   await pen.click()
@@ -351,14 +356,18 @@ test('the Archive workspace button arms, disarms, and on confirm takes the group
   const slotCancel = slot.getByRole('button', { name: 'Cancel', exact: true })
   const confirmButton = slot.getByRole('button', { name: 'Archive', exact: true })
 
-  await expect(workspaceLabels).toHaveText([OLD_LABEL])
+  // TWO since #1485: the seed is promoted, so the Chats tree draws this workspace as an empty mirror.
+  await expect(workspaceLabels).toHaveText([OLD_LABEL, OLD_LABEL])
 
   // The control workspace FIRST, the target's second chat last, so the chat the pane is showing when the
   // archive lands is one of the archived rows — `useConversationCreatedNav` routes `thread` on each mint.
   // That ordering is what lets the last assertion read AC4's exit clause instead of assuming it.
   await mintChatInWorkspace(page, OTHER_CWD)
   await mintChatInWorkspace(page, WORKSPACE_CWD)
-  await expect(workspaceLabels).toHaveText([OLD_LABEL, OTHER_SEGMENT, OLD_LABEL], {
+  // FOUR since #1485, and the sequence says where each group came from: Channels leads with its own
+  // promoted seed's OLD_LABEL and appends OTHER_SEGMENT as a mirror; Chats leads with its own two chats
+  // in mint order and appends nothing, OLD_LABEL already being one of its keys.
+  await expect(workspaceLabels).toHaveText([OLD_LABEL, OTHER_SEGMENT, OTHER_SEGMENT, OLD_LABEL], {
     timeout: ROUNDTRIP_TIMEOUT_MS
   })
   await expect(page.locator('.conversation__thread')).toHaveCount(1)
@@ -388,7 +397,10 @@ test('the Archive workspace button arms, disarms, and on confirm takes the group
   await armButton.click()
   await confirmButton.click()
   await expect(dialog).toHaveCount(0)
-  await expect(workspaceLabels).toHaveText([OTHER_SEGMENT], { timeout: ROUNDTRIP_TIMEOUT_MS })
+  // TWO, one per tree: the archived folder's rows are gone from BOTH trees, so neither tree has a key
+  // for it any more and the mirror leaves with the group — AC4's exit clause, unchanged by #1485. The
+  // control workspace survives in both, holding its chat in Chats and a mirror in Channels.
+  await expect(workspaceLabels).toHaveText([OTHER_SEGMENT, OTHER_SEGMENT], { timeout: ROUNDTRIP_TIMEOUT_MS })
   expect(archives).toHaveLength(2)
   expect(renames).toEqual([])
 
@@ -451,7 +463,9 @@ test('both workspace pens send exactly one rename to their selected host', async
     { secondServer: { buildReplyFrames: recording(secondSeed, 1) } }
   )
   await servers[1].daemon.pushFrame(seedConversationsFrame(secondSeed))
-  await expect(page.locator('.channel-list__workspace-label')).toHaveText([OLD_LABEL, OLD_LABEL])
+  // FOUR since #1485 — two machines, each drawing its workspace in both trees. The pens below are
+  // still indexed [host1, host2, host1, host2] in DOM order, so `nth(1)` remains the second host's.
+  await expect(page.locator('.channel-list__workspace-label')).toHaveText([OLD_LABEL, OLD_LABEL, OLD_LABEL, OLD_LABEL])
   const pens = page.getByRole('button', { name: EDIT_WORKSPACE_NAME })
   const dialog = page.getByRole('dialog', { name: 'Edit workspace' })
   // No reply is awaited by the dialog. The request payloads prove routing independently

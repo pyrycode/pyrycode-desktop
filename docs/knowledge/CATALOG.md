@@ -1328,8 +1328,10 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   workspace-scoped create controls (#1178/#1179) and the Add-workspace creation path (#1308), how a
   group leaves both trees when [the Edit workspace dialog's Archive workspace
   button](features/edit-workspace-dialog.md) (#1439) archives every row it groups, and the
-  `conversationStateFake` one-label-per-`cwd` fixture model. Content moved, none rewritten beyond
-  #1439's own addition.
+  `conversationStateFake` one-label-per-`cwd` fixture model. Since #1485, each host's workspace set is
+  the union of both trees' rows — a group with no rows in the tree being drawn still renders its head
+  row, plus and pen — and the page's e2e note on the wide count-sweep and strict-mode-locator hazard
+  that any future change to this derivation should expect.
 
 ## Architecture
 

@@ -96,18 +96,35 @@ for the direct path.
 
 Both of those are creators *within* an existing group. [#1308](channel-list-host-row.md#the-add-workspace-dialog-1308)
 added a **third**, one level up on the host row, that creates a group that has never existed: since this
-whole tree is derived from the conversation list alone, a workspace is drawn only while a live conversation
-sits in it, so a folder gets a row here for the first time the moment its first chat is created — never
-before. See that dialog's write-up for the caller.
+whole tree is derived from the conversation list alone, a workspace is drawn under a host only while a live
+conversation sits in it somewhere under that host, so a folder gets a row here for the first time the
+moment its first chat is created — never before. See that dialog's write-up for the caller.
 
-**A group leaves both trees the same way it arrives: by having no row left, not by any code that removes
-it.** [#1439](https://github.com/pyrycode/pyrycode-desktop/issues/1439)'s [Edit workspace dialog Archive
+**Both trees repeat the same workspace set, per host ([#1485](https://github.com/pyrycode/pyrycode-desktop/issues/1485)).**
+Before #1485, "somewhere under that host" meant *in the tree being drawn* — `renderServerTrees` derived
+each host's groups from that tree's own rows alone, so the dialog above (which starts a chat) left a new
+folder invisible under Channels, and a workspace holding only channels drew no group, and so no Create-chat
+plus, under Chats. `groupByWorkspace` now takes a second, optional list — the *other* tree's rows for the
+same host, never the whole other tree, since the key is a bare `cwd` and a path repeats across machines —
+and folds in every key and label that list holds but the primary list does not, with `rows: []`. A group
+with no rows in the tree being drawn still renders its head row, its plus and its pen, and expands to
+nothing; the two trees can order one host's workspaces differently, each leading with its own rows' keys,
+and the fallback (`UNKNOWN_WORKSPACE_KEY`) bucket is never propagated. See the `groupByWorkspace` and
+`renderServerTrees` docblocks in `channelListViewModel.ts` / `ChannelList.tsx` for the mechanism; this page
+tracks what it means for the two claims below.
+
+**A group leaves the sidebar the same way it arrives: by having no row left, not by any code that removes
+it — and since #1485 that "no row left" is judged per host across *both* trees, not per tree.**
+[#1439](https://github.com/pyrycode/pyrycode-desktop/issues/1439)'s [Edit workspace dialog Archive
 workspace button](edit-workspace-dialog.md#the-archive-slot-editworkspacedialogtsx-added-by-1439) sends
 one `archiveConversation` per active row this grouping would otherwise draw for that exact `cwd` on that
 host; once the daemon's list reflects them archived, `partitionActive` drops every one of them before
-`groupByWorkspace` ever runs, so the group is not hidden or filtered here — it simply has nothing left to
-accumulate into its `Map` entry on the next re-list, the same absence that keeps a folder's group off the
-trees before its first chat exists (§ above).
+`groupByWorkspace` (primary list and `alsoFrom` alike) ever runs, so the group is not hidden or filtered
+here — it simply has nothing left to accumulate into either tree's `Map` entry on the next re-list, the
+same absence that keeps a folder's group off both trees before its first chat exists (§ above). Archiving
+every row of a group that only ever held rows in *one* tree still empties both: the mirror in the other
+tree was drawing its head row from that tree's `alsoFrom` contribution, which stops being offered the
+moment the source tree has nothing left to contribute.
 
 **Fixture note.** `conversationStateFake` (`e2e/fixtures/conversationStateFake.ts`) has to hold one
 label per `cwd`, the same invariant the daemon holds, or the suite's two-trees idiom lies:
@@ -122,7 +139,26 @@ let a spec seed a state — two rows of one `cwd` disagreeing — the daemon can
 `promote_conversation` and `change_workspace` arms, which both reassign a row's `cwd`, re-resolve the
 label from that map too, so a row moved between workspaces takes its new workspace's name rather
 than carrying the old one. [`e2e/workspace-label.spec.ts`](https://github.com/pyrycode/pyrycode-desktop/issues/1287)
-is the spec this fixes for, and rides the same both-trees idiom to prove it.
+is the spec this fixes for, and rides the same both-trees idiom to prove it. `e2e/fixtures/mintChatRow.ts`'s
+`mintChatInWorkspace` still uses the host row's Add-workspace plus rather than a workspace row's own
+"Create chat" plus, but not for the reason once written there: before #1485 a tree drew a group — and
+therefore a plus — only for a workspace already holding a row in *that* tree, so a spec seeding one
+promoted row had no Chats-tree plus to press. The union closed that gap; the helper is now needed only
+because a workspace with no row in *either* tree still has no group anywhere, so minting into a
+brand-new folder still has no plus to press but the host row's.
+
+**Touching this derivation moves counts across most of the sidebar's e2e tier, and the two failure
+shapes are different (#1485).** Every spec asserting an exact count or an exhaustive list of
+`.channel-list__workspace*` elements reads one more per host whose seed lands rows in only one tree —
+that showed up as a normal, loud assertion mismatch. A second, quieter shape did not: several specs
+called `.locator('.channel-list__workspace-create').click()` or the equivalent on a class both trees'
+pluses now share, which was unambiguous while only one tree drew a group and became a Playwright
+strict-mode violation once the mirror existed — a different failure than a count going stale, and one
+label-count arithmetic alone does not predict. Those reads were scoped to the tree that owns the
+gesture (by accessible name, or by tree index — the Channels tree renders first in `renderBody`, so
+`.nth(0)` is Channels and `.nth(1)` is Chats) rather than loosened to `.first()`, which would let the
+assertion silently follow whichever tree happens to draw first instead of the one the spec means to
+exercise.
 
 [#1288](https://github.com/pyrycode/pyrycode-desktop/issues/1288) added the one seam this fixture still
 lacked: nothing let a spec change a held label *mid-test*, which a live rename from another client needs.

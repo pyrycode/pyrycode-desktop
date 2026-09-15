@@ -30,10 +30,6 @@ function controlled(id: string) {
       frames.forEach(frame => app.servers[host].daemon.pushFrame(frame))
       frames = []
     },
-    folder(app: PairedApp, host = 0) {
-      app.servers[host].daemon.pushFrame(encodeEnvelope({ id: 900, type: 'workspace_folder_created',
-        ts: '2026-09-13T00:00:00Z', in_reply_to: requests.at(-1)!.id, payload: { path: CANONICAL } }))
-    },
     reject(app: PairedApp, host = 0) {
       app.servers[host].daemon.pushFrame(encodeEnvelope({ id: 901, type: 'error',
         ts: '2026-09-13T00:00:00Z', in_reply_to: requests.at(-1)!.id,
@@ -55,13 +51,14 @@ async function open(app: PairedApp, index = 0) {
   const dialog = dialogOf(app)
   await expect(dialog.getByRole('textbox')).toBeFocused()
   await expect(dialog.getByRole('textbox')).toHaveValue('')
-  await expect(dialog.getByLabel('Use shared scratch folder')).toBeChecked()
+  // #1436 withdrew the folder choice: the name field is the whole form.
+  await expect(dialog.getByRole('radio')).toHaveCount(0)
   return dialog
 }
 
 // Real fake-transport round trips prove the outgoing host and payload; injected main events probe
 // renderer-only origin/stage guards that the transport would normally filter before delivery.
-test('default uses the exact workspace, keeps the name, retries rejection and opens confirmation', async ({ launchPairedApp }) => {
+test('creation uses the exact workspace, keeps the name, retries rejection and opens confirmation', async ({ launchPairedApp }) => {
   const fake = controlled('first-seed')
   const app = await launchPairedApp({ buildReplyFrames: fake.reply })
   const dialog = await open(app)
@@ -73,14 +70,14 @@ test('default uses the exact workspace, keeps the name, retries rejection and op
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
   await open(app)
   await app.page.setViewportSize({ width: 1280, height: 800 })
-  await app.page.screenshot({ path: '/tmp/builder-1351-modal-1280.png' })
+  await app.page.screenshot({ path: '/tmp/builder-1436-create-modal-1280.png' })
   await app.page.setViewportSize({ width: 800, height: 600 })
   await expect(dialog).toHaveCSS('width', '640px')
-  await app.page.screenshot({ path: '/tmp/builder-1351-modal-800.png' })
+  await app.page.screenshot({ path: '/tmp/builder-1436-create-modal-800.png' })
   await app.page.setViewportSize({ width: 800, height: 260 })
   expect(await dialog.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true)
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).scrollIntoViewIfNeeded()
-  await app.page.screenshot({ path: '/tmp/builder-1351-modal-short.png' })
+  await app.page.screenshot({ path: '/tmp/builder-1436-create-modal-short.png' })
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
   await app.page.setViewportSize({ width: 800, height: 600 })
   await open(app)
@@ -90,15 +87,25 @@ test('default uses the exact workspace, keeps the name, retries rejection and op
   expect(fake.requests[0]).toMatchObject({ type: 'create_conversation',
     payload: { cwd: CWD, name: 'Release planning', is_promoted: true } })
   await expect(dialog.getByRole('textbox')).toBeDisabled()
-  await expect(dialog.getByRole('radio').nth(0)).toBeDisabled()
-  await expect(dialog.getByRole('radio').nth(1)).toBeDisabled()
   await expect(ok).toBeDisabled()
   await ok.evaluate(button => { (button as HTMLButtonElement).click(); (button as HTMLButtonElement).click() })
+  // A folder reply is inert for this draft now that the folder stage is gone, and a reply carrying
+  // a foreign, absent or malformed host stamp cannot advance or dismiss it (the guards inherited
+  // from the deleted dedicated test).
   await event(app, { type: 'workspaceFolderCreated', serverId: FIRST_SERVER_ID, path: '/ignored' })
+  await event(app, { type: 'workspaceFolderRejected', serverId: FIRST_SERVER_ID })
+  for (const serverId of [SECOND_SERVER_ID, undefined, null, '', 42]) {
+    await event(app, { type: 'conversationCreateRejected', serverId })
+    await event(app, { type: 'conversationCreated', serverId, conversation: {
+      id: 'foreign', name: null, is_promoted: false, cwd: CWD,
+      workspace_label: null, last_used_at: '2026-09-13T00:00:00Z' } })
+  }
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole('alert')).toHaveCount(0)
   expect(fake.requests).toHaveLength(1)
   fake.reject(app)
   await expect(dialog.getByRole('alert')).toHaveText('Could not create that channel')
-  await app.page.screenshot({ path: '/tmp/builder-1351-rejected.png' })
+  await app.page.screenshot({ path: '/tmp/builder-1436-create-rejected.png' })
   await expect(ok).toBeEnabled()
   await ok.click()
   await expect.poll(() => fake.requests.length).toBe(2)
@@ -107,62 +114,7 @@ test('default uses the exact workspace, keeps the name, retries rejection and op
   await expect(app.page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText('Release planning')
 })
 
-test('dedicated creates missing parents first and uses only the selected host canonical reply', async ({ launchPairedApp }) => {
-  const first = controlled('first-seed')
-  const second = controlled('second-seed')
-  const app = await launchPairedApp({ buildReplyFrames: first.reply },
-    { secondServer: { buildReplyFrames: second.reply } })
-  await expect(app.page.getByRole('button', { name: 'Create channel', exact: true })).toHaveCount(2)
-  const dialog = await open(app, 1)
-  await event(app, { type: 'workspaceFolderCreated', serverId: SECOND_SERVER_ID, path: '/idle' })
-  expect(second.requests).toHaveLength(0)
-  await dialog.getByRole('textbox').fill(' Release planning ')
-  // Native radio keyboard behavior: ArrowDown switches to dedicated.
-  await dialog.getByLabel('Use shared scratch folder').focus()
-  await app.page.keyboard.press('ArrowDown')
-  await expect(dialog.getByLabel('Create a dedicated channel folder')).toBeChecked()
-  const ok = dialog.getByRole('button', { name: 'OK', exact: true })
-  await ok.click()
-  await expect.poll(() => second.requests.length).toBe(1)
-  expect(first.requests).toHaveLength(0)
-  expect(second.requests[0]).toMatchObject({ type: 'create_workspace_folder',
-    payload: { parent: CWD + '/channels', name: 'release-planning' } })
-  for (const serverId of [FIRST_SERVER_ID, undefined, null, '', 42]) {
-    await event(app, { type: 'workspaceFolderCreated', serverId, path: '/wrong' })
-    await event(app, { type: 'workspaceFolderRejected', serverId })
-  }
-  await event(app, { type: 'conversationCreateRejected', serverId: SECOND_SERVER_ID })
-  await event(app, { type: 'conversationCreated', serverId: SECOND_SERVER_ID, conversation: {
-    id: 'out-of-stage', name: null, is_promoted: false, cwd: CWD,
-    workspace_label: null, last_used_at: '2026-09-13T00:00:00Z' } })
-  await expect(dialog.getByRole('textbox')).toBeDisabled()
-  expect(second.requests).toHaveLength(1)
-  second.reject(app, 1)
-  await expect(dialog.getByRole('alert')).toHaveText('Could not create that folder')
-  expect(second.requests.filter(request => request.type === 'create_conversation')).toHaveLength(0)
-  await ok.click()
-  await expect.poll(() => second.requests.length).toBe(2)
-  second.folder(app, 1)
-  await expect.poll(() => second.requests.length).toBe(3)
-  expect(second.requests[2]).toMatchObject({ type: 'create_conversation',
-    payload: { cwd: CANONICAL, name: 'Release planning', is_promoted: true } })
-  await event(app, { type: 'workspaceFolderCreated', serverId: SECOND_SERVER_ID, path: '/duplicate' })
-  for (const serverId of [FIRST_SERVER_ID, undefined]) {
-    await event(app, { type: 'conversationCreateRejected', serverId })
-    await event(app, { type: 'conversationCreated', serverId, conversation: {
-      id: 'foreign', name: null, is_promoted: false, cwd: CWD,
-      workspace_label: null, last_used_at: '2026-09-13T00:00:00Z' } })
-  }
-  await expect(dialog).toBeVisible()
-  await expect(ok).toBeDisabled()
-  expect(second.requests).toHaveLength(3)
-  second.release(app, 1)
-  await expect(dialog).toHaveCount(0)
-  await expect(app.page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText('Release planning')
-  expect(first.requests).toHaveLength(0)
-})
-
-test('default creation on the first host cannot fall back to the most recently paired host', async ({ launchPairedApp }) => {
+test('creation addresses the clicked host in both directions', async ({ launchPairedApp }) => {
   const first = controlled('first-seed')
   const second = controlled('second-seed')
   const app = await launchPairedApp({ buildReplyFrames: first.reply },
@@ -179,23 +131,38 @@ test('default creation on the first host cannot fall back to the most recently p
   first.release(app)
   await expect(dialog).toHaveCount(0)
   await expect(app.page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText('First host channel')
+  // The other direction, inherited from the deleted dedicated test: the second host's workspace row
+  // addresses the second host with its own workspace. The reply is deliberately NOT released — both
+  // fakes mint `created-1`, and a second navigation in this launch would ride an artificial ID
+  // collision rather than proving routing.
+  const other = await open(app, 1)
+  await other.getByRole('textbox').fill('Second host channel')
+  await other.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect.poll(() => second.requests.length).toBe(1)
+  expect(second.requests[0]).toMatchObject({ type: 'create_conversation',
+    payload: { cwd: CWD, name: 'Second host channel', is_promoted: true } })
+  expect(first.requests).toHaveLength(1)
 })
 
 
-test('dismissal and disconnect abandon pending continuations, and a fresh opening resets choices', async ({ launchPairedApp }) => {
+test('dismissal and disconnect abandon pending continuations, and a fresh opening resets the draft', async ({ launchPairedApp }) => {
   const fake = controlled('first-seed')
   const app = await launchPairedApp({ buildReplyFrames: fake.reply }, { secondServer: {} })
   for (const closeName of ['Cancel', 'Close dialog']) {
     const dialog = await open(app)
     await dialog.getByRole('textbox').fill('Release planning')
-    await dialog.getByLabel('Create a dedicated channel folder').check()
     await dialog.getByRole('button', { name: 'OK', exact: true }).click()
     await expect.poll(() => fake.requests.length).toBe(closeName === 'Cancel' ? 1 : 2)
     await dialog.getByRole('button', { name: closeName, exact: true }).click()
     await expect(dialog).toHaveCount(0)
+    // Neither a late rejection nor an inert folder reply can resurrect the dismissed draft.
     await event(app, { type: 'workspaceFolderCreated', serverId: FIRST_SERVER_ID, path: CANONICAL })
-    expect(fake.requests.filter(request => request.type === 'create_conversation')).toHaveLength(0)
+    await event(app, { type: 'conversationCreateRejected', serverId: FIRST_SERVER_ID })
+    await expect(dialog).toHaveCount(0)
+    expect(fake.requests).toHaveLength(closeName === 'Cancel' ? 1 : 2)
   }
+  // Dismissal abandons the local continuation only; the globally mounted navigation bridge still
+  // opens the channel the daemon confirms for an already-sent request.
   let dialog = await open(app)
   await dialog.getByRole('textbox').fill('Release planning')
   await dialog.getByRole('button', { name: 'OK', exact: true }).click()
@@ -206,14 +173,13 @@ test('dismissal and disconnect abandon pending continuations, and a fresh openin
   await expect(dialog).toHaveCount(0)
   dialog = await open(app)
   await dialog.getByRole('textbox').fill('Release planning')
-  await dialog.getByLabel('Create a dedicated channel folder').check()
   await dialog.getByRole('button', { name: 'OK', exact: true }).click()
   await expect.poll(() => fake.requests.length).toBe(4)
   await event(app, { type: 'disconnected', serverId: FIRST_SERVER_ID })
   await expect(dialog).toHaveCount(0)
-  await event(app, { type: 'workspaceFolderCreated', serverId: FIRST_SERVER_ID, path: CANONICAL })
+  await event(app, { type: 'conversationCreateRejected', serverId: FIRST_SERVER_ID })
   await event(app, { type: 'connected', serverId: FIRST_SERVER_ID, ack: { protocol_version: 1 } })
-  await event(app, { type: 'workspaceFolderCreated', serverId: FIRST_SERVER_ID, path: CANONICAL })
+  await event(app, { type: 'conversationCreateRejected', serverId: FIRST_SERVER_ID })
   expect(fake.requests).toHaveLength(4)
   await expect(dialog).toHaveCount(0)
 })

@@ -1,19 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChannelForm, channelsParent } from './ChannelForm'
+import { ChannelForm } from './ChannelForm'
 import { Modal } from '../../components/Modal'
 import { requestNewChannel } from '../../store/conversationCreatedBridge'
 import { selectStatusFor, sessionStore } from '../../store/sessionStore'
-import { slugForChannel, type ChannelLocation } from './SaveAsChannelDialog'
 
 export function CreateChannelDialogView({
-  name, location, busy, error, onNameChange, onLocationChange, onCancel, onCreate
+  name, busy, error, onNameChange, onCancel, onCreate
 }: {
   name: string
-  location: ChannelLocation
   busy: boolean
   error: string | null
   onNameChange: (next: string) => void
-  onLocationChange: (next: ChannelLocation) => void
   onCancel: () => void
   onCreate: () => void
 }): JSX.Element {
@@ -27,14 +24,15 @@ export function CreateChannelDialogView({
         cancelAction={{ label: 'Cancel', onClick: onCancel }}
         confirmAction={{ label: 'OK', onClick: onCreate, disabled: busy || name.trim() === '' }}
       >
-        <ChannelForm name={name} location={location} busy={busy} error={error}
-          onNameChange={onNameChange} onLocationChange={onLocationChange} />
+        <ChannelForm name={name} busy={busy} error={error} onNameChange={onNameChange} />
       </Modal>
     </div>
   )
 }
 
-type Pending = { type: 'idle' } | { type: 'folder'; name: string } | { type: 'channel' }
+// One stage since #1436 removed the folder round trip: the channel is created in the clicked
+// workspace itself, so `createConversation` is the only command this draft ever sends.
+type Pending = { type: 'idle' } | { type: 'channel' }
 
 // This mounted draft owns only its continuation. The daemon owns already-sent operations,
 // and the existing navigation bridge owns opening confirmed channels.
@@ -44,7 +42,6 @@ export function CreateChannelDialog({ cwd, serverId, onDismiss }: {
   onDismiss: () => void
 }): JSX.Element {
   const [name, setName] = useState('')
-  const [location, setLocation] = useState<ChannelLocation>('scratch')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const pending = useRef<Pending>({ type: 'idle' })
@@ -64,21 +61,12 @@ export function CreateChannelDialog({ cwd, serverId, onDismiss }: {
     window.pyry.sendDiagnostic({ event: 'channel-create-closed', code })
     onDismissRef.current()
   }, [cleanup])
-  const fail = useCallback((stage: 'folder' | 'channel') => {
+  const fail = useCallback(() => {
     pending.current = { type: 'idle' }
     setBusy(false)
-    setError(stage === 'folder' ? 'Could not create that folder' : 'Could not create that channel')
-    window.pyry.sendDiagnostic({ event: 'channel-create-state', code: `${stage}-rejected` })
+    setError('Could not create that channel')
+    window.pyry.sendDiagnostic({ event: 'channel-create-state', code: 'channel-rejected' })
   }, [])
-  const createChannel = useCallback((displayName: string, path: string) => {
-    pending.current = { type: 'channel' }
-    window.pyry.sendDiagnostic({ event: 'channel-create-state', code: 'channel-requested' })
-    try {
-      requestNewChannel(window.pyry.sendCommand, displayName, path, serverId)
-    } catch {
-      fail('channel')
-    }
-  }, [serverId, fail])
 
   useEffect(() => {
     abandoned.current = false
@@ -90,14 +78,9 @@ export function CreateChannelDialog({ cwd, serverId, onDismiss }: {
         dismiss('disconnected')
         return
       }
-      const current = pending.current
-      if (current.type === 'folder') {
-        if (event.type === 'workspaceFolderCreated') createChannel(current.name, event.path)
-        else if (event.type === 'workspaceFolderRejected') fail('folder')
-      } else if (current.type === 'channel') {
-        if (event.type === 'conversationCreated') dismiss('confirmed')
-        else if (event.type === 'conversationCreateRejected') fail('channel')
-      }
+      if (pending.current.type !== 'channel') return
+      if (event.type === 'conversationCreated') dismiss('confirmed')
+      else if (event.type === 'conversationCreateRejected') fail()
     })
     const offStatus = sessionStore.subscribe((state) => {
       if (!abandoned.current && selectStatusFor(serverId)(state)?.type !== 'connected') {
@@ -106,11 +89,11 @@ export function CreateChannelDialog({ cwd, serverId, onDismiss }: {
     })
     unsubscribe.current = () => { offEvents(); offStatus() }
     return cleanup
-  }, [serverId, cleanup, dismiss, fail, createChannel])
+  }, [serverId, cleanup, dismiss, fail])
 
   return <CreateChannelDialogView
-    name={name} location={location} busy={busy} error={error}
-    onNameChange={setName} onLocationChange={setLocation}
+    name={name} busy={busy} error={error}
+    onNameChange={setName}
     onCancel={() => dismiss('cancelled')}
     onCreate={() => {
       const displayName = name.trim()
@@ -121,17 +104,14 @@ export function CreateChannelDialog({ cwd, serverId, onDismiss }: {
       }
       setBusy(true)
       setError(null)
-      if (location === 'scratch') {
-        createChannel(displayName, cwd)
-        return
-      }
-      pending.current = { type: 'folder', name: displayName }
-      window.pyry.sendDiagnostic({ event: 'channel-create-state', code: 'folder-requested' })
+      // The synchronous ref is set before dispatch, so a second activation cannot re-enter
+      // before React paints the disabled OK.
+      pending.current = { type: 'channel' }
+      window.pyry.sendDiagnostic({ event: 'channel-create-state', code: 'channel-requested' })
       try {
-        window.pyry.sendCommand({ type: 'createWorkspaceFolder', serverId,
-          payload: { parent: channelsParent(cwd), name: slugForChannel(displayName) } })
+        requestNewChannel(window.pyry.sendCommand, displayName, cwd, serverId)
       } catch {
-        fail('folder')
+        fail()
       }
     }}
   />

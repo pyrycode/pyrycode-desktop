@@ -1,17 +1,14 @@
-import type { ChannelLocation } from './SaveAsChannelDialog'
-
-export function channelsParent(cwd: string): string {
-  return cwd.replace(/\/+$/, '') + '/channels'
-}
-
-/** Shared fields only; each dialog owns submission and continuation. */
-export function ChannelForm({ name, location, busy, error, onNameChange, onLocationChange }: {
+/**
+ * Shared fields only; each dialog owns submission and continuation. The name field is the whole
+ * form: #1436 withdrew the workspace-relative folder choice, because a channel in
+ * `<workspace>/channels/<slug>/` opens a workspace group of its own — a workspace is a
+ * conversation's `cwd` as an exact string, and nothing below one belongs to it.
+ */
+export function ChannelForm({ name, busy, error, onNameChange }: {
   name: string
-  location: ChannelLocation
   busy: boolean
   error: string | null
   onNameChange: (next: string) => void
-  onLocationChange: (next: ChannelLocation) => void
 }): JSX.Element {
   return <>
     <label className="create-channel__field">
@@ -24,18 +21,6 @@ export function ChannelForm({ name, location, busy, error, onNameChange, onLocat
         disabled={busy}
         autoFocus
       />
-    </label>
-    <label className="create-channel__option">
-      <input type="radio" name="create-channel-location" value="scratch"
-        checked={location === 'scratch'} disabled={busy}
-        onChange={() => onLocationChange('scratch')} />
-      <span>Use shared scratch folder</span>
-    </label>
-    <label className="create-channel__option">
-      <input type="radio" name="create-channel-location" value="dedicated"
-        checked={location === 'dedicated'} disabled={busy}
-        onChange={() => onLocationChange('dedicated')} />
-      <span>Create a dedicated channel folder</span>
     </label>
     {error !== null && <p className="create-channel__error" role="alert">{error}</p>}
   </>

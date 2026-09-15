@@ -63,44 +63,34 @@ test('pre-opened mutation dialogs cannot submit by keyboard after disconnection'
   }
 })
 
-test('folder completion cannot promote an abandoned attempt offline or after reconnect', async ({ launchPairedApp }) => {
+// #1436 deleted this test's folder-round-trip body: Save as channel no longer requests a folder or
+// waits for one, so there is no pending promotion left to strand offline. What survives is its first
+// leg — the keyboard guard on a dialog that disconnected under the operator — plus the standing
+// claim that a late folder reply, which nothing asked for, still promotes nothing.
+test('a pre-opened save dialog cannot promote by keyboard after disconnection', async ({ launchPairedApp }) => {
   const app = await launchPairedApp({ buildReplyFrames: conversationStateFake({ conversations: [SEEDED_ROW] }) })
   const commands = await observeCommands(app)
   const { page } = app
   await page.locator('.channel-list__save').click({ force: true })
-  await page.getByRole('radio', { name: 'Use shared scratch folder' }).check()
+  await expect(page.getByRole('radio')).toHaveCount(0)
   await page.getByRole('button', { name: 'OK', exact: true }).focus()
   await connection(app, FIRST_SERVER_ID, 'disconnected')
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await page.keyboard.press('Enter')
-  expect((await commands.read()).filter(c => ['promoteConversation', 'createWorkspaceFolder'].includes(c.type))).toEqual([])
+  await event(app, { type: 'workspaceFolderCreated', serverId: FIRST_SERVER_ID, path: '/fake/delayed' })
   await connection(app, FIRST_SERVER_ID, 'connected')
+  await event(app, { type: 'workspaceFolderCreated', serverId: FIRST_SERVER_ID, path: '/fake/delayed' })
   await expect(page.locator('.channel-list__save')).toHaveCount(1)
-  for (const reconnectFirst of [false, true]) {
-    await page.locator('.channel-list__save').click({ force: true })
-    await page.getByRole('radio', { name: 'Create a dedicated channel folder' }).check()
-    await page.getByRole('button', { name: 'OK', exact: true }).click()
-    await expect.poll(async () => (await commands.read()).filter(c => c.type === 'createWorkspaceFolder').length).toBe(1)
-    expect((await commands.read()).find(c => c.type === 'createWorkspaceFolder')).toMatchObject({ serverId: FIRST_SERVER_ID })
-    await connection(app, FIRST_SERVER_ID, 'disconnected')
-    await expect(page.getByRole('dialog')).toHaveCount(0)
-    if (reconnectFirst) await connection(app, FIRST_SERVER_ID, 'connected')
-    await event(app, { type: 'workspaceFolderCreated', serverId: FIRST_SERVER_ID, path: '/fake/delayed' })
-    if (!reconnectFirst) await connection(app, FIRST_SERVER_ID, 'connected')
-    await expect(page.locator('.channel-list__save')).toHaveCount(1)
-    await expect(page.getByRole('dialog')).toHaveCount(0)
-    expect((await commands.read()).filter(c => c.type === 'promoteConversation')).toEqual([])
-    await commands.clear()
-  }
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  expect((await commands.read()).filter(c => ['promoteConversation', 'createWorkspaceFolder'].includes(c.type))).toEqual([])
+  // Reconnected, the same row promotes in its own workspace on an explicit reopening.
   await page.locator('.channel-list__save').click({ force: true })
-  await page.getByRole('radio', { name: 'Create a dedicated channel folder' }).check()
   await page.getByRole('button', { name: 'OK', exact: true }).click()
-  await expect.poll(async () => (await commands.read()).filter(c => c.type === 'createWorkspaceFolder').length).toBe(1)
-  await event(app, { type: 'workspaceFolderCreated', serverId: FIRST_SERVER_ID, path: '/fake/fresh' })
   await expect.poll(async () => (await commands.read()).filter(c => c.type === 'promoteConversation').length).toBe(1)
   expect((await commands.read()).find(c => c.type === 'promoteConversation')).toMatchObject({
-    payload: { conversation_id: SEEDED_ROW.id, cwd: '/fake/fresh' }
+    payload: { conversation_id: SEEDED_ROW.id, cwd: SEEDED_ROW.cwd }
   })
+  expect((await commands.read()).filter(c => c.type === 'createWorkspaceFolder')).toEqual([])
 })
 
 test('sidebar ownership follows the target in both open-chat directions', async ({ launchPairedApp }) => {
@@ -138,25 +128,12 @@ test('sidebar ownership follows the target in both open-chat directions', async 
   }
 })
 
-test('a batched disconnect and reconnect invalidates pending promotion before React paints', async ({ launchPairedApp }) => {
-  const app = await launchPairedApp({ buildReplyFrames: conversationStateFake({ conversations: [SEEDED_ROW] }) })
-  const commands = await observeCommands(app)
-  await app.page.locator('.channel-list__save').click({ force: true })
-  await app.page.getByRole('radio', { name: 'Create a dedicated channel folder' }).check()
-  await app.page.getByRole('button', { name: 'OK', exact: true }).click()
-  await expect.poll(async () => (await commands.read()).filter(c => c.type === 'createWorkspaceFolder').length).toBe(1)
-  await app.app.evaluate(({ BrowserWindow }, { channel, serverId }) => {
-    const contents = BrowserWindow.getAllWindows()[0].webContents
-    contents.send(channel, { type: 'disconnected', serverId })
-    contents.send(channel, { type: 'connected', serverId, ack: { protocol_version: 1 } })
-    contents.send(channel, { type: 'workspaceFolderCreated', serverId, path: '/fake/abandoned' })
-  }, { channel: DAEMON_EVENT_CHANNEL, serverId: FIRST_SERVER_ID })
-  await expect(app.page.getByRole('dialog')).toHaveCount(0)
-  await expect(app.page.locator('.channel-list__save')).toHaveCount(1)
-  expect((await commands.read()).filter(c => c.type === 'promoteConversation')).toEqual([])
-})
+// #1436 deleted the test that stood here. Its subject was a promotion left pending across a
+// disconnect and reconnect batched into one paint — state that no longer exists, because Save as
+// channel dispatches and closes in the same turn. The keyboard guard above covers what remains of
+// the batched-transition claim: the session subscription abandons the draft synchronously.
 
-test('chat creation and scratch promotion address the connected sidebar host while another chat is open offline', async ({ launchPairedApp }) => {
+test('chat creation and promotion address the connected sidebar host while another chat is open offline', async ({ launchPairedApp }) => {
   const app = await launchPairedApp({ buildReplyFrames: conversationStateFake({ conversations: [SEEDED_ROW] }) },
     { secondServer: { buildReplyFrames: conversationStateFake({ conversations: [SECOND_SEEDED_ROW] }) } })
   const { page } = app
@@ -171,13 +148,8 @@ test('chat creation and scratch promotion address the connected sidebar host whi
   await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
   const secondRow = page.locator('.channel-list__row').filter({ hasText: SECOND_SEEDED_ROW.name! })
   await secondRow.locator('.channel-list__save').click({ force: true })
-  await page.getByRole('radio', { name: 'Create a dedicated channel folder' }).check()
-  await page.getByRole('button', { name: 'OK', exact: true }).click()
-  await expect.poll(async () => (await commands.read()).filter(c => c.type === 'createWorkspaceFolder').length).toBe(1)
-  expect((await commands.read()).find(c => c.type === 'createWorkspaceFolder')).toMatchObject({ serverId: SECOND_SERVER_ID })
   await page.getByRole('button', { name: 'Cancel', exact: true }).click()
   await secondRow.locator('.channel-list__save').click({ force: true })
-  await page.getByRole('radio', { name: 'Use shared scratch folder' }).check()
   await page.getByRole('button', { name: 'OK', exact: true }).click()
   await expect.poll(async () => (await commands.read()).filter(c => c.type === 'promoteConversation').length).toBe(1)
   expect((await commands.read()).find(c => c.type === 'promoteConversation')).toMatchObject({

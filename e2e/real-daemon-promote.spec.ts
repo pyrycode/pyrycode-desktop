@@ -18,17 +18,16 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 // the content-blind relay, so the fake twin's in-process capture (`promoteFake`, the codec import) is
 // unavailable here. Every assertion reads DOM text / visibility / counts only.
 //
-// SCOPE: SCRATCH branch only — the dedicated ("Create a dedicated channel folder") branch is dropped. The
-// dedicated branch first sends `create_workspace_folder`, already real-wire-proven by sibling #441, and under
-// #949's Option B the daemon IGNORES the promote payload `cwd` — so the dedicated leg's "promote with the
-// daemon-returned path" contract has NO real-wire DOM surface here (its correctness is a client concern
-// covered by the fake twin #423). The dedicated branch would also couple two verbs (a failure could not be
-// attributed to the promote handler) and cost a second ~180s claude-less launch for redundant coverage.
-// Scratch sends `promote_conversation` ALONE, isolating the #949 gap cleanly.
+// SCOPE: the single remaining branch. #1436 withdrew the folder choice, so Save as channel has exactly one
+// arm: promote the chat in its own workspace. It sends `promote_conversation` ALONE, which is what isolates
+// the #949 gap cleanly — one verb, so a failure can only be attributed to the promote handler. (Until #1436
+// this spec deliberately picked that arm out of two and explained at length why it skipped the dedicated
+// one; there is no longer a choice to make.) `create_workspace_folder` remains real-wire-proven by sibling
+// #441, through the workspace picker's own create-folder dialog.
 //
 // WHY IT IS PROVABLE ON THIS TIER. The claude-less real-daemon tier has one observable — the DOM. A verb is
 // provable here only if its daemon reply gates a VISIBLE DOM transition with NO optimistic pre-render. The
-// scratch `onSave` arm (SaveAsChannelDialog.tsx:287-295) dispatches `promote_conversation` and closes the
+// `onSave` arm of `SaveAsChannelDialog` dispatches `promote_conversation` and closes the
 // dialog — it NEVER touches the list store. The seeded row moves "Chats" → "Channels" ONLY after
 // the daemon's reply drives the re-list:
 //     promote_conversation → daemon conversation_updated { is_promoted: true }
@@ -127,11 +126,10 @@ test('real daemon promotes a Recent discussion into a Channel over the real wire
   await saveControl(page).click()
   await expect(page.getByRole('dialog', { name: 'Save as channel', exact: true })).toBeVisible()
 
-  // --- Choose scratch + Save (AC2). The default is scratch; the two radios are labelled
-  // so target "Use shared scratch folder" by accessible name. The scratch arm fires promote_conversation
-  // { conversation_id, name: "Untitled", cwd: seedCwd } ALONE and synchronously closes the dialog (onPromoted)
-  // — NO round-trip store, NO optimistic list mutation. ---
-  await page.getByRole('radio', { name: 'Use shared scratch folder' }).check()
+  // --- Save (AC2). Since #1436 the modal is the name field and the actions, with no location choice to
+  // make, so OK fires promote_conversation { conversation_id, name: "Untitled", cwd: seedCwd } ALONE and
+  // synchronously closes the dialog (onPromoted) — NO round-trip store, NO optimistic list mutation. ---
+  await expect(page.getByRole('radio')).toHaveCount(0)
   await page.getByRole('button', { name: 'OK', exact: true }).click()
 
   // --- Assert the reply-gated promotion (AC3). The row moves Chats → Channels ONLY after the daemon's

@@ -1817,6 +1817,66 @@
   outline-offset: 2px;
 }
 
+/* #1477's channel system prompt — the drawing's `Text area large` instance (500:2151), restating
+   `.create-channel__textarea` declaration for declaration under this namespace rather than sharing a
+   selector with it. That restatement is the block header's own ruling, not an oversight: the two
+   dialogs' locator sets must not collide. Four rows over a 20px line plus 16px of vertical padding is
+   the drawing's 112px box, and the 12px between this field and the name field above it is the shared
+   Modal's `.modal__content` gap rather than a rule here.
+
+   It carries `.create-channel__textarea`'s one known deviation from the drawing for that rule's stated
+   reason: `resize: vertical` paints the browser's corner grabber, which the Figma box does not draw.
+   Kept deliberately — it is this codebase's own treatment for the same content, it cannot widen the
+   field or break the modal, and `resize: none` would leave a long prompt scrolling inside 112px with no
+   way to see more of it at once. `both` would let a drag carry the field past the modal. */
+.edit-channel__textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-4);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--color-on-primary) 41%, transparent);
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+  resize: vertical;
+  overflow-wrap: break-word;
+}
+
+.edit-channel__textarea:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* The dimming IS the reading gate's visible half: this box is disabled until the daemon answers, and
+   dimmed is what says so alongside the line below. Same 0.38 as every other disabled control here. */
+.edit-channel__textarea:disabled {
+  opacity: 0.38;
+}
+
+/* The over-bound notice: the error line's treatment without its alert role, since it appears while
+   typing rather than on a settled failure. `.create-channel__notice` restated, per the block header. */
+.edit-channel__notice {
+  margin: 0;
+  color: var(--color-error);
+}
+
+/* The reading line. Deliberately NOT the notice's `--color-error`: an outstanding read is progress, not
+   a failure — and for this reply-only frame it can stay outstanding forever without anything having gone
+   wrong. `--color-on-surface-variant` is the muted colour the channel info sheet gives its own
+   reading line. */
+.edit-channel__reading {
+  margin: 0;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+}
+
 /* Create and Save-as-channel placement; shared Modal owns the panel, header and actions. */
 .create-channel-overlay {
   position: fixed;

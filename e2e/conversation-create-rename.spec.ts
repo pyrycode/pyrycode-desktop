@@ -244,10 +244,15 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
   })
   expect(await channelDialog.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
   await channelInput.fill('  Renamed saved channel  ')
-  // TWO Tabs to OK, not the three the chat dialog needs: #1476's modal has nothing in the Modal's
-  // content slot but the field, so the document order is input → Cancel → OK. #1438 adds this dialog's
-  // own content-slot button and puts the third stop back. The scroll-into-view assertion below is what
-  // this walk is really for: in a 180px-tall window the focused footer button must still be reachable.
+  // TWO Tabs to OK, not the three the chat dialog needs, so the document order is input → Cancel → OK.
+  // #1477 put a SECOND field in the Modal's content slot — the Channel system prompt text area — and the
+  // walk is unchanged anyway, because that box is `disabled` until the daemon answers
+  // `request_system_prompt` and a disabled control stays OUT OF THE TAB ORDER. `conversationStateFake`
+  // answers that verb never, so at this tier the box is permanently in its reading arm. (A `readOnly`
+  // spelling of the same gate WOULD have taken a third stop here, which is why it is not one.) #1438 adds
+  // this dialog's own content-slot BUTTON, which is focusable, and puts a third stop back for real. The
+  // scroll-into-view assertion below is what this walk is really for: in a 180px-tall window the focused
+  // footer button must still be reachable.
   await channelInput.press('Tab')
   await expect(channelCancel).toBeFocused()
   await page.keyboard.press('Tab')

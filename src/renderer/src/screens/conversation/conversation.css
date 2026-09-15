@@ -96,94 +96,6 @@
   font-weight: var(--text-body-medium-weight);
 }
 
-/* #278 — the pre-first-message workspace chip: a Material 3 pill at the top of the empty new-discussion
-   thread showing the workspace `cwd` the discussion will run in, with a placeholder "Change" affordance
-   (the #157 Workspace Picker seam). No Figma node (the mobile file draws only the populated thread — the
-   documented #148 gap); sourced from the locked mobile design doc pill. The wrapper is flex: 0 0 auto
-   with the thread's horizontal inset (the .conversation__banner convention) — which since #1444 is the
-   card's own 20 on .conversation, so this rule states it by NOT padding rather than by matching a
-   --space-4 the thread no longer has — a flex row so the pill left-anchors and sizes to content, sitting
-   above the empty surface and pushing it down. */
-.conversation__workspace-chip {
-  flex: 0 0 auto;
-  display: flex;
-  padding: var(--space-3) 0 0;
-}
-
-/* The pill itself — the .tool-row__chip idiom (inline-flex, --space-2 gap, --space-2/--space-3 padding,
-   max-width/min-width/overflow bounding an unbounded untrusted cwd) with --radius-full for the Material 3
-   pill shape and the surface-container-high fill + outline-variant border of the connection banner. */
-.conversation__workspace-chip-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  max-width: 100%;
-  min-width: 0;
-  padding: var(--space-2) var(--space-3);
-  background: var(--color-surface-container-high);
-  border: 1px solid var(--color-outline-variant);
-  border-radius: var(--radius-full);
-  color: var(--color-on-surface);
-}
-
-/* The client-owned "Workspace" label — label-large on-surface, never shrinks or truncates. */
-.conversation__workspace-chip-label {
-  flex: 0 0 auto;
-  font-size: var(--text-label-large-size);
-  line-height: var(--text-label-large-line);
-  letter-spacing: var(--text-label-large-tracking);
-  font-weight: var(--text-label-large-weight);
-}
-
-/* The untrusted cwd run — ellipsizes rather than overflowing (the .tool-row__summary treatment) so an
-   arbitrarily long daemon path can't blow out the layout. Monospace, muted, to read as a path value. */
-.conversation__workspace-chip-cwd {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--color-on-surface-variant);
-  font-family: var(--font-mono);
-  font-size: var(--text-body-small-size);
-  line-height: var(--text-body-small-line);
-  letter-spacing: var(--text-body-small-tracking);
-  font-weight: var(--text-body-small-weight);
-}
-
-/* The "Change" affordance — a compact de-emphasized text button: a label-large pill of
-   on-surface-variant text with no fill and no border, gaining a surface tint only on hover. It cited
-   `.conversation__unpair` for that posture until #1061 deleted that rule; the recipe is restated here
-   rather than re-pointed, because this rule is now the one that carries it. This ticket ships it
-   :disabled (the #157 picker isn't built), which reads muted with no pointer affordance. */
-.conversation__workspace-chip-change {
-  flex: 0 0 auto;
-  padding: var(--space-1) var(--space-3);
-  border: none;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--color-on-surface-variant);
-  cursor: pointer;
-  font-family: var(--font-sans);
-  font-size: var(--text-label-large-size);
-  line-height: var(--text-label-large-line);
-  letter-spacing: var(--text-label-large-tracking);
-  font-weight: var(--text-label-large-weight);
-}
-
-.conversation__workspace-chip-change:hover:not(:disabled) {
-  background: var(--color-surface-container-highest);
-  color: var(--color-on-surface);
-}
-
-.conversation__workspace-chip-change:focus-visible {
-  outline: 1px solid var(--color-outline);
-}
-
-.conversation__workspace-chip-change:disabled {
-  color: var(--color-on-surface-variant);
-  cursor: not-allowed;
-}
-
 /* Scrollable thread. min-height: 0 is load-bearing: without it the flex item
    refuses to shrink and the whole window scrolls instead of this region.
 
@@ -229,8 +141,8 @@
 
    NO HORIZONTAL INSET ON THE ROWS: the card's 20px is theirs. The drawing's `Message area` (132:4171) is
    full-width inside the inset frame with no strip of its own, so the content box sits exactly on the
-   card's. Two rules that state their x as "the thread's" followed it out: `.conversation__banner` and
-   `.conversation__workspace-chip`.
+   card's. `.conversation__banner` is the rule that states its x as "the thread's" and followed it out
+   (`.conversation__workspace-chip` was the other until #1486 deleted the workspace row).
 
    BUT THE LEFT PADDING IS BORROWED BACK, and #1444 shipped without it once — the regression PR #1453's
    first push carried. This element clips on BOTH axes: `overflow-y: auto` makes the other axis compute to
@@ -627,8 +539,9 @@
    flex: 0 0 auto STATES the intent that this item never shrinks; it is not what MAKES AC5 true. Measured:
    removing it leaves the spec green, because a flex item's automatic minimum size already floors this box
    at its 45px specified width. It stays for two reasons that survive that measurement — it is this file's
-   vocabulary for a non-shrinking lead item (.bubble__copy, .conversation__workspace-chip-label and four
-   others), and the floor it duplicates is conditional in a way the declaration is not: a later
+   vocabulary for a non-shrinking lead item (.bubble__copy, .composer-status__icon and others; the count
+   that stood here is dropped rather than re-derived, because #1486's removal of three such rules is what
+   made it wrong), and the floor it duplicates is conditional in a way the declaration is not: a later
    `min-width: 0` copy-pasted onto this rule would remove the automatic minimum and let the name compress
    the icon, which is exactly the failure AC5 names. display: block is explicit rather than left to a flex
    item's automatic blockification, and it also removes the inline baseline gap the svg would add. */
@@ -677,8 +590,9 @@
    "restating a settled value is how it gets lost" (#607's precedent, followed by #623, #628, #629 and
    #630, at .bubble__markdown code and .bubble__markdown a). The row follows it.
 
-   DELIBERATELY NO nowrap / text-overflow either, unlike .conversation__workspace-chip-cwd and
-   .tool-row__summary, which bound an unbounded untrusted string by ellipsis. AC5 forbids that here: the
+   DELIBERATELY NO nowrap / text-overflow either, unlike .tool-row__summary and
+   .channel-info__row-value--mono, which bound an unbounded untrusted string by ellipsis. AC5 forbids that
+   here: the
    name must wrap in the column beside the icon, never truncate. The unbounded height that follows is
    accepted — a path component is capped at 255 bytes by every filesystem this app runs on, and the name is
    the operator's own file on their own machine.
@@ -2975,7 +2889,9 @@
    is free to roam and the pill is sitting over the status row; without this it could swallow a pointer
    event aimed at something there. It is a non-interactive overlay in every state, so nothing is lost.
 
-   ⭐ THE BOUND IS .conversation__workspace-chip-cwd'S CHAIN, the untrusted-cwd precedent — and deliberately
+   ⭐ THE BOUND IS .channel-info__row-value--mono'S CHAIN, the untrusted-cwd precedent — it is the Channel
+   info sheet's Workspace line, and it inherited that standing from .conversation__workspace-chip-cwd when
+   #1486 deleted the workspace row — and deliberately
    NOT .bubble__file-name's, which ships with no rule of its own, WRAPS by inheriting .bubble's break-word,
    and has a computed `normal` pinned by e2e/attachment-file-row.spec.ts. min-width: 0 is not restated from
    that chain: it is a flex-item declaration and this element is absolutely positioned, where shrink-to-fit
@@ -4840,7 +4756,8 @@
 }
 
 /* The mono row value — the Workspace cwd (Figma 20:61): --font-mono + body-small, truncating rather
-   than overflowing (the .conversation__workspace-chip-cwd treatment). */
+   than overflowing (the .tool-row__summary treatment; it read .conversation__workspace-chip-cwd's until
+   #1486 deleted the workspace row, leaving this rule as the app's only drawn cwd). */
 .channel-info__row-value--mono {
   min-width: 0;
   text-align: right;
@@ -5932,8 +5849,9 @@
 }
 
 /* A tab (#915) — the same typography, worn by a <button> once there is somewhere to jump. The
-   de-emphasized text-button recipe minus its pill — `.conversation__workspace-chip-change` above carries
-   the pill form (this cited `.conversation__unpair` for it until #1061 deleted that rule): the design's
+   de-emphasized text-button recipe minus its pill — `.modal-rejection__dismiss` above carries the pill
+   form (this cited `.conversation__unpair` for it until #1061 deleted that rule, then
+   `.conversation__workspace-chip-change` until #1486 deleted the workspace row): the design's
    Question label has no fill, no padding and no
    border in either state, so this strips the UA button chrome and adds nothing back but the pointer
    affordance and the repo's focus ring. text-align: left so a header that wraps stays flush with the row

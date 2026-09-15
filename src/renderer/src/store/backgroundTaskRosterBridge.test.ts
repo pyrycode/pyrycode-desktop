@@ -689,9 +689,12 @@ describe('subscribeBackgroundTaskRoster', () => {
     })
 
     // #1139 — two servers connected at once, a roster held for a conversation on each. The reconnect
-    // edge is per-connection since #1117, so it must leave the other server's rosters alone; and
-    // unlike the queue's case nothing ever re-sends these frames, so a wrongly-cleared roster is gone
-    // until claude next emits one.
+    // edge is per-connection since #1117, so it must leave the other server's rosters alone; and the
+    // re-assertion rides the RECONNECTING server's own edge, so it never reaches a server that did not
+    // reconnect and a wrongly-cleared roster there is still gone until claude next emits one. That
+    // middle clause used to read "unlike the queue's case nothing ever re-sends these frames"; #569
+    // retired it on both counts — the roster's case IS the queue's case now — and left the conclusion
+    // exactly as it stands.
     describe('per-server reconnect scope (seam)', () => {
       const twoServers = () =>
         seam([

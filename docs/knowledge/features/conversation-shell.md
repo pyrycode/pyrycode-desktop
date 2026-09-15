@@ -188,8 +188,12 @@ See [verification boundaries](development-verification.md#what-each-test-tier-pr
   Picker sheets. `panelOpen` is independent of the other three open-state booleans, so overlays could in
   principle stack — not reachable through normal use, no AC requires mutual exclusion. No terminal state
   is ever shown: a task leaves the list only by no longer appearing in the next roster, never by an
-  explicit "done" render. Stale-list-after-reconnect is a known, out-of-scope limitation shared with the
-  store itself (#569, blocked on a daemon change) — the panel does not paper over it.
+  explicit "done" render. Stale-list-after-reconnect is retired
+  ([#569](https://github.com/pyrycode/pyrycode-desktop/issues/569)): the store's held rosters
+  repopulate from the daemon's reconcile-on-connect burst, so the panel reads the two silences apart
+  across a reconnect too — `.background-task-panel__empty` ("No background tasks") for a
+  conversation reconciled with an explicit empty roster, `.background-task-panel__unobserved` ("No
+  background-task report yet") for one the daemon reports nothing for — never the pre-disconnect list.
 - **Thread scroll pin** keeps new content at the bottom only while following.
   Qualifying upward user input near the top requests one history page while the
   owning host is connected. Stable row keys, native nonzero anchoring and measured

@@ -151,9 +151,28 @@ export function translateBackgroundTaskUpdated(
 /**
  * Subscribe via the injected `onDaemonEvent`. A `connected` event is the (re)handshake edge (#573's
  * AC5): it resets and returns, so tasks from the reconnecting server's previous connection never
- * appear. Nothing repopulates afterwards: rosters are not in the daemon's reconcile-on-connect set and
- * this app advertises no `last_event_id` (#569 owns that gap), so there is no re-send ordering to
- * reason about here.
+ * appear.
+ *
+ * THE RE-SEND ORDERING IS THE WHOLE POINT OF THAT `return`, and this docblock used to say the opposite —
+ * "nothing repopulates afterwards, so there is no re-send ordering to reason about here". #569 retires
+ * that: since pyrycode#2077-#2080 the daemon reconciles this family on (re)connect, unicasting one
+ * `background_task_roster` per conversation whose bound session has reported one. So the clear and the
+ * burst now RACE in principle, and a roster applied ahead of the clear would be wiped by it — a silent
+ * failure, since the panel would simply read "No background-task report yet" while work was alive.
+ *
+ * What rules that out is that both ride THIS ONE LISTENER in arrival order: `daemonConnection` emits
+ * `connected` from its `handshake-complete` arm and every decoded frame as `message`, through the same
+ * synchronous sink, and the daemon streams the burst only after the reconnect `hello_ack`. The branch
+ * below therefore resets and returns before any reconciled roster is dispatched. That argument is
+ * available by reading, but the daemon reconciles off its own handshake tail — a different clock — so it
+ * is PROVED end-to-end in e2e/background-task-reconnect.spec.ts rather than trusted. Do not introduce an
+ * await, a queue, or a second listener on this path; any of them breaks the ordering silently.
+ *
+ * The burst is correlated by `conversation_id` and never by position (the daemon's registry order is not
+ * a contract), which `setRoster`'s unconditional replacement already satisfies. A conversation ABSENT
+ * from the burst stays dropped and reads `null` — "nothing has been reported", never "nothing is alive"
+ * — while one re-asserted with `tasks: []` reads observed-empty; keeping those two apart is why the
+ * `!== null` guards below must stay `!== null`.
  *
  * SCOPED TO THE RECONNECTING SERVER (#1139). Since #1117 the background process holds one live
  * connection per paired server, so `connected` means "THIS server's connection came back" and the reset
@@ -241,9 +260,12 @@ export function BackgroundTaskRosterData(): null {
     // subscribe time — on a first connect the server's slot holds no list yet (the list request rides
     // the same edge) so nothing is dropped; on a reconnect the slot still holds the previous episode's
     // rows, since only `clearAllConversations` at a pairing boundary empties it, so the reconnecting
-    // server's conversations are known even though nothing re-sends these frames. Nothing can
-    // interleave between the read and the write: both stores are written from this one synchronous
-    // dispatch, with no await between them.
+    // server's conversations are known before its re-sends arrive. That clause used to end "even
+    // though nothing re-sends these frames"; #569 retires the premise and INVERTS the emphasis — the
+    // retained list matters more now, not less, because a reconcile burst follows this reset on the
+    // same channel and the ids have to resolve before it lands. Nothing can interleave between the
+    // read and the write: both stores are written from this one synchronous dispatch, with no await
+    // between them.
     return subscribeBackgroundTaskRoster(
       window.pyry.onDaemonEvent,
       (snapshot) => backgroundTaskRosterStore.getState().setRoster(snapshot),

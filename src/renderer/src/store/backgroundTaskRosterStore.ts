@@ -304,12 +304,33 @@ export const initialBackgroundTaskRosterState: BackgroundTaskRosterState = { ros
  *
  * `resetRostersFor` (#573's AC5) is the `connected` edge: the relay re-emits `connected` on every
  * (re)handshake, so the reconnecting server's held rosters are dropped and every task it reported
- * before the drop — started-sourced ones included — stops being readable. Nothing repopulates them:
- * these frames are not in the daemon's reconcile-on-connect set (that set is outstanding `modal_shown`
- * per pyrycode#877 and `queue_state` per non-empty backlog per pyrycode#878) and this app advertises no
- * `last_event_id`, so a dropped conversation reads `null` until claude next emits a frame for it. That
- * is the correct, honest behaviour — retaining the pre-disconnect set would present a stale list as
- * live (#569 owns closing that gap, and it needs a daemon-side change).
+ * before the drop — started-sourced ones included — stops being readable. Retaining that set instead
+ * would present a stale list as live, which is why the drop is unconditional.
+ *
+ * THE ROSTER IS NOW REPOPULATED, and that is what makes the drop safe rather than merely honest (#569).
+ * This family JOINED the daemon's reconcile-on-connect set upstream (pyrycode#2077-#2080, beside the
+ * outstanding `modal_shown` of pyrycode#877 and the non-empty `queue_state` of pyrycode#878): on any
+ * (re)connection the daemon unicasts one `background_task_roster` for EVERY conversation whose bound
+ * session has reported one. Snapshot-shaped and correlated by `conversation_id`, so `setRoster`'s
+ * unconditional replacement applies it idempotently by construction and the burst's ORDER is immaterial —
+ * the daemon walks its registry in insertion order and that order is not a contract. A reconciled frame
+ * also carries NO `event_id` (it is kept out of the replay ring); `Envelope.event_id` is optional and
+ * nothing on this path reads it, so its absence is not malformedness.
+ *
+ * TWO SILENCES, AND THEY MUST NOT BE COLLAPSED — the reason `selectRosterFor` below keeps `null` apart
+ * from a present-but-empty entry, restated here because this is the paragraph a reader lands on when
+ * asking what a reconnect leaves behind. A session that reported an EMPTY roster is reconciled as an
+ * explicit empty snapshot (`tasks: []`) and reads "observed, nothing alive". A session that has NEVER
+ * reported one is simply ABSENT from the burst, stays dropped, and reads `null` — "nothing has been
+ * reported", never "nothing is alive". A relay that drops a reconciled frame degrades a conversation to
+ * the second reading, which is an honest under-report rather than a stale over-report.
+ *
+ * What is NOT re-asserted is a `background_task_started` frame: the reconcile carries rosters only, so a
+ * task the app had upgraded to started-sourced comes back roster-sourced, without its `toolCallId` or its
+ * fuller label. That is a real narrowing and it is pinned by this store's own test rather than merely
+ * stated. The ordering this depends on — the `connected` clear landing BEFORE the burst, since a roster
+ * applied ahead of it would be wiped — is proved end-to-end through the real transport by
+ * e2e/background-task-reconnect.spec.ts.
  *
  * SCOPED, not wholesale (#1139). #573 shipped this as a nullary clear of the WHOLE map, which was right
  * while the app had one connection; since #1117 it holds one per paired server and `connected` means
@@ -339,10 +360,13 @@ export const initialBackgroundTaskRosterState: BackgroundTaskRosterState = { ros
  * (#1138) sequence, repeated a third time. While the reconnect reset cleared the WHOLE map, a
  * re-pairing's first `connected` blanked every latched roster on its way past; scoped, that same edge
  * resolves the new pairing's empty conversation list, matches no held key, and hands the state object
- * straight back. Nothing else evicts a roster — this family has no re-assertion path of ANY kind, which
- * makes it strictly worse than the queue's case, where at least a non-empty conversation is re-sent. A
- * departed pairing's `local_bash` command lines and patch text would otherwise latch for the life of
- * the process. Run against `clearPairingScopedState`'s discriminator — "does a reconnect to the SAME
+ * straight back. Nothing else evicts a roster, and the re-assertion above does not reach this boundary:
+ * the daemon reconciles only for the conversations of the pairing that reported them, so a NEW pairing's
+ * first `connected` re-asserts nothing about the departed one's. This used to read "no re-assertion path
+ * of ANY kind, strictly worse than the queue's case"; #569 retires that comparison — the roster's
+ * re-assertion now exists and, exactly like the queue's, simply does not reach a pairing that ended. The
+ * clear is required for the unchanged reason: a departed pairing's `local_bash` command lines and patch
+ * text would otherwise latch for the life of the process. Run against `clearPairingScopedState`'s discriminator — "does a reconnect to the SAME
  * daemon need to clear it?" — the answer is now BOTH mechanisms, each covering what the other cannot:
  * the edge covers the reconnecting server's listed conversations, this covers everything at a pairing
  * change, including a roster held under a conversation no server's list ever carried.

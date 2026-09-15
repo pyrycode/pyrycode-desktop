@@ -649,8 +649,12 @@ describe('backgroundTaskRosterStore', () => {
     store.getState().resetRostersFor(new Set(['c1']))
     store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
 
-    // The cleared toolCallId does not come back: nothing repopulates a started frame after a
-    // (re)handshake, so the task reads roster-sourced again. That is #569's gap, stated honestly.
+    // The cleared toolCallId does not come back, and that is still exactly right after #569: the
+    // daemon's reconcile-on-connect re-asserts ROSTERS only (pyrycode#2077-#2080), never a
+    // `background_task_started`, so a task the app had upgraded to started-sourced comes back
+    // roster-sourced — without its `toolCallId` and with the row's tighter-capped label. This case
+    // used to call that "#569's gap"; it is not a gap any more but the reconcile's stated shape, and
+    // the assertion below is what pins the narrowing rather than merely describing it.
     expect(heldTask(store, 'c1', 't1')).toEqual(heldNoCut)
   })
 
@@ -753,7 +757,10 @@ describe('backgroundTaskRosterStore', () => {
 
   // #1139 — the pairing-boundary drop. It exists because scoping the reconnect reset above removed the
   // self-heal that kept this store out of `clearPairingScopedState`: a new pairing's first `connected`
-  // resolves an empty conversation list and drops nothing, and NOTHING re-asserts a roster.
+  // resolves an empty conversation list and drops nothing, and the daemon's reconcile re-asserts a roster
+  // only for the conversations of the pairing that reported it, never a departed pairing's. That last
+  // clause used to read "and NOTHING re-asserts a roster"; #569 retired the premise and left both the
+  // drop and the assertions below exactly as they were.
   describe('clearAllRosters (pairing-boundary drop, #1139)', () => {
     it('returns every conversation to never-observed, listed or not (AC4)', () => {
       const store = createBackgroundTaskRosterStore()

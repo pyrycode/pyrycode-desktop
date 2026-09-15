@@ -213,10 +213,13 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
   // #1139: every conversation's background-task roster, dropped as one — the same direct, nullary
   // shape as the five clears above, and the SECOND member whose store the `connected` edge also
   // clears. Scoping that edge to the reconnecting server (which is what #1139 does) is what stopped a
-  // re-pairing's first `connected` from blanking the map on its way past, and this family re-asserts
-  // nothing at all, so without this entry a departed pairing's command lines would latch for the life
-  // of the process. Adding it to THIS object is what makes the unpair path below drop it; the call
-  // site needed no edit.
+  // re-pairing's first `connected` from blanking the map on its way past, and the daemon's reconcile
+  // re-sends only the NEW server's rosters — this family joined that set upstream (pyrycode#2077-#2080)
+  // and #569 proved the ordering through the transport — so without this entry a departed pairing's
+  // command lines would latch for the life of the process. That used to read "this family re-asserts
+  // nothing at all"; the premise changed and the entry is exactly as required as it was, the same shape
+  // the `dispatchModal` entry below already carries. Adding it to THIS object is what makes the unpair
+  // path below drop it; the call site needed no edit.
   clearAllRosters: () => backgroundTaskRosterStore.getState().clearAllRosters(),
   // #1140: every outstanding permission prompt, its suppression bookkeeping and its rejection banners,
   // dropped as one — and the THIRD member whose store the `connected` edge also clears. It reaches its

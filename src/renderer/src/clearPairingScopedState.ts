@@ -101,12 +101,15 @@ import type { ModalEvent } from './store/modalPrompts'
  * `backgroundTaskRosterStore` (#1139) is the THIRD name to move off that self-healing list, and it is
  * the one the paragraph above used to cite BY NAME as the counter-example — a store the `connected`
  * edge cleared for its own reasons, whose bridge branch was the sole enforcement of #573's AC5. Scoping
- * that branch to the reconnecting server ended both claims, by exactly the `queueStore` argument one
- * notch harsher. The new pairing's first `connected` resolves an empty conversation list, matches no
- * held key, and hands the state object back; and where a DRAINED conversation was the queue's only
- * stale case, NOTHING re-asserts a roster ever — no frame in that family is in the daemon's
- * reconcile-on-connect set and this app advertises no `last_event_id` (#569 owns that gap) — so every
- * held roster latches, not merely an unlucky one. The content is the sharpest this set handles: a held
+ * that branch to the reconnecting server ended both claims, by exactly the `queueStore` argument — as of
+ * #569, no longer "one notch harsher" but the SAME notch. The new pairing's first `connected` resolves an
+ * empty conversation list, matches no held key, and hands the state object back; and while a roster IS
+ * now re-asserted (this family joined the daemon's reconcile-on-connect set upstream, pyrycode#2077-#2080),
+ * the reconcile covers only the conversations of the pairing that reported them, so nothing re-asserts a
+ * DEPARTED pairing's. This paragraph used to read "NOTHING re-asserts a roster ever … so every held
+ * roster latches, not merely an unlucky one", and the premise is what changed, never the conclusion:
+ * every held roster still latches across an unpair, now because the re-assertion does not reach the
+ * departed server rather than because none exists. The content is the sharpest this set handles: a held
  * task's `description` for `taskType: local_bash` IS the literal command line claude ran, and its
  * `latestUpdate.patch` is the same class of untrusted, model-influenced text under a structured-looking
  * shape, both left on screen attributed to a machine the operator has left. Scoping also leaves a
@@ -121,16 +124,19 @@ import type { ModalEvent } from './store/modalPrompts'
  * the `connected` arm emptied the whole store; scoping that arm to the reconnecting server's own
  * conversations ends it exactly as next door — a new pairing's first `connected` resolves an empty
  * conversation list, matches no held prompt, and hands the state object back. The daemon's reconcile
- * DOES re-send outstanding prompts, so unlike the roster this store has a repopulation path; what it
- * does not have is one that reaches the DEPARTED server's prompts, because the reconcile re-sends only
- * the new server's. The residue is the most ACTIONABLE this set handles rather than the most sensitive:
- * a permission dialog is a live control, not stale display, so a retained one keeps the departed
- * daemon's untrusted `title` / `prompt` / `options[].label` on screen and answering it emits a
- * `modal_answer` for a `modalId` the currently paired daemon never issued, while
- * `selectHasOutstandingFor` lights the sidebar's input-required dot from the same slice, so the phantom
- * is visible before it is clicked. A retained suppression entry (`resolved`) is worse in the other
- * direction — it silently swallows a genuine `shown`, keyed by a daemon-side conversation id that a
- * re-pair to the same box reuses. This clear also reaches `rejections`, which the `connected` arm
+ * DOES re-send outstanding prompts, so this store has a repopulation path; what it does not have is one
+ * that reaches the DEPARTED server's prompts, because the reconcile re-sends only the new server's. That
+ * middle clause used to read "so UNLIKE the roster this store has a repopulation path", and #569 did not
+ * merely stale the comparison, it INVERTED it: the roster family joined the same reconcile-on-connect set
+ * upstream (pyrycode#2077-#2080), so the paragraph next door now tells this identical story — a reconcile
+ * that re-sends, and re-sends only for the server still here. The residue is the most ACTIONABLE this set
+ * handles rather than the most sensitive: a permission dialog is a live control, not stale display, so
+ * a retained one keeps the departed daemon's untrusted `title` / `prompt` / `options[].label` on screen
+ * and answering it emits a `modal_answer` for a `modalId` the currently paired daemon never issued,
+ * while `selectHasOutstandingFor` lights the sidebar's input-required dot from the same slice, so the
+ * phantom is visible before it is clicked. A retained suppression entry (`resolved`) is worse in the
+ * other direction — it silently swallows a genuine `shown`, keyed by a daemon-side conversation id that
+ * a re-pair to the same box reuses. This clear also reaches `rejections`, which the `connected` arm
  * deliberately never touches and which therefore had never been collected at a pairing boundary either:
  * every slice of this store is scoped to the pairing that ended, so the arm returns it to its initial
  * state rather than covering two slices of three.
@@ -141,12 +147,14 @@ import type { ModalEvent } from './store/modalPrompts'
  * clear was the sole enforcement of the pairing boundary for it. That was the same accident three
  * times over, and scoping the edge to the reconnecting server's own conversations ends it identically:
  * a new pairing's first `connected` resolves an empty conversation list, matches no held key, and
- * hands the state object back. The re-assertion story is the roster's rather than the queue's — no
- * frame in this family is in the daemon's reconcile-on-connect set — with one difference that cuts
- * the other way: a fact IS eventually rewritten, by that conversation's own next `turnState`. For a
- * turn that ENDED while the operator was unpaired that event never comes, so a finished turn shows a
- * working dot indefinitely, and #676's sidebar draws it from `selectActivityFor` on a row the
- * operator can see without opening anything. The content is the LEAST sensitive this set handles —
+ * hands the state object back. The re-assertion story is now this store's ALONE — no frame in the
+ * activity family is in the daemon's reconcile-on-connect set. It used to be filed as "the roster's
+ * rather than the queue's"; #569 retires that pairing, since the roster joined the reconcile set
+ * upstream and now behaves like the queue. One difference cuts the other way: a fact IS
+ * eventually rewritten, by that conversation's own next `turnState`. For a turn that ENDED
+ * while the operator was unpaired that event never comes, so a finished turn shows a working
+ * dot indefinitely, and #676's sidebar draws it from `selectActivityFor` on a row the operator
+ * can see without opening anything. The content is the LEAST sensitive this set handles —
  * four booleans, no daemon text at all — and the misdirection is the point instead: the dot claims a
  * machine the operator has left is working, keyed by a daemon-side conversation id that a re-pair to
  * the same box reuses. This clear also reaches an entry held for a conversation NO server's list
@@ -250,11 +258,13 @@ export interface ClearPairingScopedStateDeps {
  * residue is a queue rail showing messages the operator's new server never queued and has no way to
  * retract — and because conversation ids are daemon-side, re-pairing to the same box reuses the id the
  * phantom is filed under.
- * The background-task rosters (#1139) latch for the SAME reason as those backlogs, with that notch
- * turned as far as it goes: their re-assertion does not exist at all. No frame in the family is in the
- * daemon's reconcile-on-connect set and this app advertises no `last_event_id` (#569 owns that gap), so
- * where a drained conversation was the queue's unlucky case, EVERY held roster is stale after an
- * unpair and none of them ever refreshes. Until #1139 the edge's own whole-map reset covered that gap
+ * The background-task rosters (#1139) latch for the SAME reason as those backlogs, and since #569 at the
+ * SAME notch rather than one past it: their re-assertion exists — the family joined the daemon's
+ * reconcile-on-connect set upstream (pyrycode#2077-#2080), which unicasts one roster per conversation
+ * whose bound session has reported one on every (re)connection — but it re-asserts only the NEW server's
+ * conversations, so nothing reaches what the departed one left. This paragraph used to read "their
+ * re-assertion does not exist at all … EVERY held roster is stale after an unpair and none of them ever
+ * refreshes"; the second half survives verbatim and the first is now false. Until #1139 the edge's own whole-map reset covered that gap
  * incidentally, the same accident #1138 removed next door. The residue is the sharpest content this set
  * handles: a held task's `description` for `taskType: local_bash` IS the literal command line claude
  * ran, and its `latestUpdate.patch` is the same class of untrusted, model-influenced text under a
@@ -275,9 +285,13 @@ export interface ClearPairingScopedStateDeps {
  * genuine `shown`, keyed by a daemon-side conversation id that a re-pair to the same box reuses — and
  * the rejection banners have never been collected anywhere, since the `connected` arm deliberately
  * never touched them. All three go, because all three are scoped to the pairing that ended.
- * The usage-limit readings (#1320) latch for the ROSTER's reason — a re-assertion does not exist at all
- * — and this store is the one member whose OWN lifecycle looks like it should cover the gap and does
- * not. It has two exits of its own and neither reaches here: the expiry is a read-time comparison
+ * The usage-limit readings (#1320) latch because a re-assertion does not exist at all, and this store is
+ * the one member whose OWN lifecycle looks like it should cover the gap and does not. That first clause
+ * used to name this "the ROSTER's reason"; since #569 it is no longer the roster's — that family joined
+ * the daemon's reconcile-on-connect set (pyrycode#2077-#2080), and the roster paragraph above now latches
+ * because its re-assertion does not REACH a departed pairing rather than because none exists. Only the
+ * borrowed comparison moved: #1320's own reason is untouched, and the reading below still borrows it from
+ * here. It has two exits of its own and neither reaches here: the expiry is a read-time comparison
  * against a `resetsAt` claude supplied, and a reading whose `resetsAt` is `0` (claude reported no reset)
  * has no instant to expire at, so it is readable forever; and the per-conversation `allowed` clear is
  * DAEMON-DRIVEN, so it collects nothing on a pairing whose daemon will never speak again — the daemon is

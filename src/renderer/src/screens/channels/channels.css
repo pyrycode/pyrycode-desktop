@@ -1680,46 +1680,15 @@
   font-weight: var(--text-body-medium-weight);
 }
 
-.create-channel__option {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  color: var(--color-on-surface);
-  font-size: var(--text-label-medium-size);
-  line-height: var(--text-label-medium-line);
-  letter-spacing: var(--text-label-medium-tracking);
-  font-weight: var(--text-label-medium-weight-emphasized);
-}
-
-.create-channel__option span {
-  padding-top: calc(var(--space-1) / 2);
-}
-
-.create-channel__option input {
-  appearance: none;
-  box-sizing: border-box;
-  flex-shrink: 0;
-  width: var(--space-5);
-  height: var(--space-5);
-  margin: 0;
-  border: 2px solid var(--color-tertiary);
-  border-radius: var(--radius-full);
-  padding: calc(var(--space-1) - 1px);
-  background-clip: content-box;
-}
-
-.create-channel__option input:checked {
-  background-color: var(--color-tertiary);
-}
-
-.create-channel__input:focus-visible,
-.create-channel__option input:focus-visible {
+/* #1436 removed the `.create-channel__option` radio rows. These two rules were shared selector
+   lists covering the radios as well; the input half stays, so the name field keeps its focus ring
+   and its disabled dimming. */
+.create-channel__input:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
 
-.create-channel__input:disabled,
-.create-channel__option input:disabled {
+.create-channel__input:disabled {
   opacity: 0.38;
 }
 

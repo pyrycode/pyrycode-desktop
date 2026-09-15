@@ -362,6 +362,7 @@ export function translateTimelineEvent(
     case 'questionShown':
     case 'questionDismissed':
     case 'rateLimited':
+    case 'contextUsage':
       // No timeline event: the session store (#19), download UI (#72), conversation-list store
       // (#208), modal store + bridge (#223, and the #249 rejection render), the create render slice
       // (#242), the #261 / #256 session-settings consumers (confirmed + rejected #269), the #293
@@ -428,6 +429,15 @@ export function translateTimelineEvent(
       // end, a `/clear` and a session transition, so state a turn rebuilds would drop it at the wrong
       // moment and every reducer arm would carry an extra field to prevent that. This case now exists
       // only so the assertNever guard makes a new arm a compile error.
+      // contextUsage (#1419) joins the group by the same queueState rule (#720) — no turn_id, opens
+      // and closes no turn, so a reading of how full the context window is is daemon STATE and not an
+      // item IN a turn, however plainly the turn that observed it is the one the operator is watching.
+      // Its no-op here is DORMANT rather than permanent: whether the reading draws as thread chrome
+      // (the apiRetry #493 / compacting #496 / thinkingProgress #1314 route) or through a subscriber
+      // of its own (the questionShown #885 / rateLimited #1320 route) is #1420's call, and claiming it
+      // here would decide that question for it. The lifetime argument that settled `rateLimited` does
+      // point the same way — a context window is conversation-scoped and outlives a turn end — but it
+      // is #1420's to make.
       return null
     case 'runConfigReceived':
       // Not a timeline event (#491). Present only because the assertNever guard makes a new arm a

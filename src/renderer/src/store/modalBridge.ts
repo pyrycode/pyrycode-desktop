@@ -175,6 +175,7 @@ export function translateModalEvent(
     case 'thinkingProgress':
     case 'toolProgress':
     case 'rateLimited':
+    case 'contextUsage':
       // No modal event: the session store (#19), download UI (#72), conversation-list store (#208),
       // timeline store (#202), create render slice (#242), the #259 session-id holder, the #261 /
       // #256 session-settings consumers (confirmed + rejected #269), the #293 queue store
@@ -227,6 +228,13 @@ export function translateModalEvent(
       // kind of thing a reader is tempted to raise AS a dialog: that is a render decision for #1321
       // to make on a surface of its own, and routing it through this store would hand it a permission
       // prompt's one-shot `modal_answer` resolution semantics, which nothing on the wire can settle.
+      // contextUsage (#1419) is the third reading in the group and lands on identical grounds: nothing
+      // daemon-side is waiting on an answer, there is no `modal_id` to resolve it against, and a
+      // report of how full the context window is gates no action claude wants to take. Its consumer is
+      // the #1420 store slice, so this no-op is PERMANENT. It earns the same extra line `rateLimited`
+      // did, because a near-full window is if anything a stronger invitation to raise AS a dialog:
+      // that is a render decision for #1421 to make on a surface of its own, and routing it through
+      // this store would hand a reading a permission prompt's one-shot resolution semantics.
       return null
     case 'runConfigReceived':
       // Not a modal event (#491). Present only because the assertNever guard makes a new arm a

@@ -338,6 +338,19 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // claude-authored strings, and the account's quota posture into a stack trace and a crash
       // reporter. This case is what keeps them out of it.
       return null
+    case 'contextUsage':
+      // No session-store action (#1419): the context-window reading's consumer is the #1420 store
+      // slice, not the session store — which holds CONNECTION status, and how full the window is is
+      // orthogonal to whether the socket is up. PERMANENTLY a no-op on the `rateLimited` grounds
+      // directly above: the arm is a READING with no rising and no falling edge, so there is no status
+      // scalar here for it to flip the way #317 flipped `stalled` and #493 flipped the retry status,
+      // and there never will be. Present only because the assertNever guard below makes a new arm a
+      // compile error — and on this arm that guard is at its least formal, because it stringifies the
+      // WHOLE event into an Error message and this is the LARGEST member of the union: a missing case
+      // would put the correlating conversation id, every MCP server name the operator wired up, and
+      // every memory-file path — which disclose who the user is and where they work — into a stack
+      // trace and a crash reporter. This case is what keeps them out of it.
+      return null
     default:
       return assertNever(event)
   }

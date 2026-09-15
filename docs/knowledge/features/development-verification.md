@@ -36,6 +36,20 @@ When doing a focused typecheck, distinguish errors in the changed file from know
 fixture errors. A fixture option in the wrong argument can be silently ignored.
 Read the fixture signature before supplying launch options.
 
+A test that derives its expected value from the same transformation the code under test
+performs re-implements that transformation rather than checking it. A wrong mapping is then
+reproduced faithfully on both sides and the test passes green. State the expected value
+independently, alongside the input, instead of computing one from the other.
+
+A heterogeneous `it.each` table whose rows do not share every field widens to a union type
+each row is missing keys from. This can be the only signal that a table-driven test is
+silently under-specified; do not treat the resulting type error as unrelated noise to
+work around.
+
+A `readonly` array field makes a `TargetType[]` cast in a test a compile error. Narrow on a
+discriminant field instead of casting — it typechecks, and unlike a cast it fails loudly if
+the value under test turns out to be the wrong union member.
+
 The dispatcher stops its mechanical gate sequence at the first failure.
 Later commands then have no verdict. Report which gates actually ran.
 Follow the verifier's current instructions for any remaining validation.

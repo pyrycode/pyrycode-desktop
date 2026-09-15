@@ -426,6 +426,26 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
         status: 'allowed_warning',
         limitType: 'seven_day',
         resetsAt: 1_755_900_000
+      },
+      // the context-window reading is PERMANENTLY no-op here (#1419) on the same grounds as the two
+      // readings above: nothing daemon-side is waiting on an answer and there is no `modal_id` to
+      // resolve it against, so a report of how full the window is gates no action claude wants to
+      // take. A near-full window is the strongest invitation in the group to raise AS a dialog, which
+      // is exactly why it is refused here — that is a render decision for #1421 on a surface of its
+      // own. Its consumer is the #1420 store slice.
+      {
+        type: 'contextUsage',
+        conversationId: 'conv-1',
+        model: 'claude-opus-5',
+        totalTokens: 128_400,
+        maxTokens: 200_000,
+        percentage: 64,
+        categories: [{ name: 'System prompt', tokens: 41_200 }],
+        droppedCategories: 3,
+        mcpTools: [{ name: 'read_file', server_name: 'filesystem', tokens: 1450 }],
+        droppedMcpTools: 5,
+        memoryFiles: [{ path: '../../../etc/passwd', type: 'user', tokens: 240 }],
+        droppedMemoryFiles: 7
       }
     ]
     for (const event of others) expect(translateModalEvent(event, noConversations)).toBeNull()

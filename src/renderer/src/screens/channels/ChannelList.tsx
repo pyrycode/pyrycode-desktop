@@ -1058,10 +1058,15 @@ export function hostRowEditSeed(value: HostLabelValue): string {
 // instances between machines whenever the paired list reorders. `ChannelList.test.tsx` pins the claim by
 // rendering a sentinel id and asserting it appears nowhere in the markup.
 // #1427 — THE POINTER-RELATIVE PLACEMENT OF `.channel-list__control-name`, and the one part of it a
-// stylesheet cannot do: the pointer's position is not available to CSS. Seven controls in this file wear
-// that pill and all seven spread `controlNamePlacement`, so there is one handler set and no per-control
+// stylesheet cannot do: the pointer's position is not available to CSS. Eight controls in this file wear
+// that pill and all eight spread `controlNamePlacement`, so there is one handler set and no per-control
 // wiring. `channels.css` owns the offsets, the mirror arithmetic and the reasons; this owns the numbers
 // only CSS cannot see.
+//
+// SPREADING THIS SET IS NOT THE WHOLE OF GIVING A CONTROL A PILL, and #1441 shipped a cut that assumed it
+// was: the eighth wearer arrived with this spread, the markup and the word all correct and its pill still
+// invisible, because the `display: none` → `block` trigger in `channels.css` enumerates selectors and had
+// never heard of the new token. A new control needs BOTH halves.
 //
 // ⭐ A DIRECT STYLE WRITE AND NEVER A REACT `style` PROP. `ChannelList.test.tsx` compares whole attribute
 // runs on these buttons, and a `style` prop would add a `style` attribute to the static markup and move
@@ -1738,6 +1743,48 @@ type SidebarRow = ConversationSummary & { readonly serverId?: string | null }
 const RENAME_CONTROL_LABEL = 'Rename'
 const SAVE_AS_CHANNEL_CONTROL_LABEL = 'Save as channel'
 
+// #1441 — the CHATS tree's pen, named in the same idiom and read twice for the same reason. TWO constants
+// and not one shared word, unlike `EDIT_WORKSPACE_CONTROL_LABEL` below, because the two trees edit two
+// different things: the pen above the divider opens a channel's dialog and the one below it opens a chat's.
+// The split is also what #1430 is sequenced after this ticket FOR — it changes the channel word alone, and
+// a shared constant would have made that a two-tree change with no way to say so.
+const EDIT_CHAT_CONTROL_LABEL = 'Edit chat'
+
+/**
+ * A row's trailing pen (#1441): what it is CALLED, which class tokens it wears, and what activating it
+ * does, as one value — `WorkspaceEditControl`'s shape one row family down, with the tokens added because
+ * the two trees' pens must NOT share a selector.
+ *
+ * WHY THE TOKENS TRAVEL WITH THE LABEL. Twelve shipped specs locate through `.channel-list__rename`, six
+ * of them `real-daemon-*`, and most read it as the proxy for "this row is a promoted Channels row" —
+ * counting it, or awaiting it as a bare strict locator. One token on both trees would match a chat row
+ * too and pull the real-claude gate into a renderer-only change. They are whole string literals in the
+ * two constants below and never an interpolation, so a grep for either token still finds it.
+ *
+ * Module-private, and the two that exist are built at `renderBody`'s two `renderServerTrees` calls — the
+ * single level that tells the two trees apart, which is what keeps both label constants module-local.
+ */
+type RowPenControl = {
+  readonly label: string
+  readonly className: string
+  readonly iconClassName: string
+  readonly onEdit: () => void
+}
+
+// The two trees' compile-time halves. The handler is spread on at each call site, where the row is in
+// scope; nothing daemon-derived reaches either object.
+const CHANNELS_ROW_PEN = {
+  label: RENAME_CONTROL_LABEL,
+  className: 'channel-list__rename',
+  iconClassName: 'channel-list__rename-icon'
+} as const
+
+const CHATS_ROW_PEN = {
+  label: EDIT_CHAT_CONTROL_LABEL,
+  className: 'channel-list__chat-edit',
+  iconClassName: 'channel-list__chat-edit-icon'
+} as const
+
 // #1178 — the workspace row's plus, named in the same idiom and for the same reasons. Read once today,
 // by the control's `aria-label`; #1181's pill becomes its second reader, which is why it is a constant
 // and not a literal at the call site. The words are the client's own and never the workspace label:
@@ -2065,10 +2112,11 @@ function renderBody(
           header locators single-match. */}
       <SectionHeader label="Channels" onPairNewHost={onPairNewHost} />
       {/* Saved Channels are already promoted — they pass no onSaveAsChannel (that affordance is Recent-
-          only), but they DO pass onRename, so each saved Channel row carries a Rename affordance (#360,
-          AC1) — the symmetric counterpart to Save-as-channel on Recent rows. Those two affordances are
-          also what the promote specs proxy "the row moved sections" on since #1070, the mutually
-          exclusive section headers having stopped being mutually exclusive. */}
+          only), but they DO pass a pen, so each saved Channel row carries one (#360, AC1). Since #1441 a
+          Recent row carries a pen too, so the PEN is no longer what tells the two sections apart — the
+          CHEVRON is, and so is the pen's own class token, which is why the Chats tree got its own
+          (`.channel-list__rename` is what the promote specs proxy "the row moved sections" on since
+          #1070, the mutually exclusive section headers having stopped being mutually exclusive). */}
       {/* #1179 — the Channels tree's own create, and the second half of the per-tree difference. The
           two control objects are built HERE, at the only level that knows which tree it is drawing, so
           the two client-owned label constants stay module-local to this file and neither reaches a
@@ -2083,7 +2131,9 @@ function renderBody(
           // `openConversationId` header names the same trap).
           isOpen={c.id === openConversationId}
           onOpen={() => onOpen(c)}
-          onRename={typeof c.serverId === 'string' && statuses.get(c.serverId)?.type === 'connected' ? () => onRename(c) : undefined}
+          // #1441 — the pen's WORD and TOKENS are chosen here, at the only level that knows which tree it
+          // is drawing, exactly like the two control objects below. The gate is unchanged.
+          pen={typeof c.serverId === 'string' && statuses.get(c.serverId)?.type === 'connected' ? { ...CHANNELS_ROW_PEN, onEdit: () => onRename(c) } : undefined}
         />
       ), onEditHost, onAddWorkspace, onRepairHost, { label: CREATE_CHANNEL_CONTROL_LABEL, onCreate: onCreateChannel },
         // #1180 — the same control object in both trees, built at each call site rather than hoisted,
@@ -2110,6 +2160,15 @@ function renderBody(
           isOpen={d.id === openConversationId}
           onOpen={() => onOpen(d)}
           onSaveAsChannel={typeof d.serverId === 'string' && statuses.get(d.serverId)?.type === 'connected' ? () => onSaveAsChannel(d) : undefined}
+          // #1441 — the Chats tree's pen, into the SAME `onRename` handler the Channels tree uses: it
+          // already re-checks the host with `canMutateHost` and already seeds the field with
+          // `titleFor(row.name)`, so a null-named chat prefills with its `Untitled` placeholder and
+          // nothing downstream of this callback is new. The tree difference is the control object alone.
+          //
+          // The SAME connected gate as the chevron above it, restated rather than hoisted so the two read
+          // identically — which is what makes "a Chats row whose host is not connected draws neither
+          // control" true by construction rather than by two conditions kept in step by hand.
+          pen={typeof d.serverId === 'string' && statuses.get(d.serverId)?.type === 'connected' ? { ...CHATS_ROW_PEN, onEdit: () => onRename(d) } : undefined}
         />
       ), onEditHost, onAddWorkspace, onRepairHost, { label: CREATE_CHAT_CONTROL_LABEL, onCreate: onCreateChat },
         { label: EDIT_WORKSPACE_CONTROL_LABEL, onEdit: onEditWorkspace })}
@@ -2205,9 +2264,10 @@ function ConversationStatusDotControl({
 // #1171 that sibling relation is also why the row's hover FILL sits on the wrapper: a fill on the button
 // would drop the moment the pointer crossed onto a control that is not its child.
 // `.channel-list__row` is a flex wrapper; the old row button-reset/hover/focus rules now live on
-// `.channel-list__row-open`. The two affordances are disjoint by section: Recent rows pass
-// `onSaveAsChannel` (→ Save-as renders, Rename absent); saved Channel rows pass `onRename` (→ Rename
-// renders, Save-as absent), so no row carries two trailing buttons (AC1).
+// `.channel-list__row-open`. The two affordances USED to be disjoint by section — Recent rows drew the
+// chevron alone and saved Channel rows the pen alone, so no row carried two trailing buttons. #1441 ended
+// that: a Chats row draws BOTH, the chevron moved 20px inside the pen to make room, and `Row` therefore
+// has to place two controls in one row's trailing band rather than one. A Channels row still draws one.
 //
 // #448 resolved the old "conversation-agnostic onOpen" interim: each row now passes ITSELF up through
 // onOpen, and PairedShell records it as the active conversation before navigating — so the thread's
@@ -2243,13 +2303,15 @@ function Row({
   isOpen,
   onOpen,
   onSaveAsChannel,
-  onRename
+  pen
 }: {
   row: ConversationSummary
   isOpen: boolean
   onOpen: () => void
   onSaveAsChannel?: () => void
-  onRename?: () => void
+  // #1441 — the bare `onRename` became a `RowPenControl`: BOTH trees draw a pen now, and they differ in
+  // the word and in the class tokens, so the handler alone no longer says which pen this is.
+  pen?: RowPenControl
 }): JSX.Element {
   return (
     <div className="channel-list__row">
@@ -2274,48 +2336,6 @@ function Row({
       >
         <span className="channel-list__title">{titleFor(row.name)}</span>
       </button>
-      {onRename && (
-        // Icon-only button — `aria-label` supplies the accessible name (the .channel-list__save pattern),
-        // since the glyph alone carries no text. Since #1171 the glyph is the DRAWING'S OWN export
-        // (Font Awesome `pen-solid`, the "Icon Edgeless" instance the Hover variant places at 12×12),
-        // replacing the Material `edit` pencil that stood in while no Figma node pinned this control.
-        // It is the CHANNELS tree's glyph: promoted rows are the ones that take a Rename.
-        //
-        // The control is invisible at rest and revealed by the ROW's hover or by its own keyboard focus
-        // (`channels.css` says why the reveal is `opacity` and never `display: none`). Nothing here
-        // changes for it: the reveal hangs off the wrapper's existing class, so no markup moves and the
-        // unit tier's attribute runs stay byte-identical.
-        <button
-          type="button"
-          className="channel-list__rename"
-          aria-label={RENAME_CONTROL_LABEL}
-          onClick={onRename}
-          {...controlNamePlacement}
-        >
-          <svg
-            className="channel-list__rename-icon"
-            viewBox="0 0 12 12"
-            width="12"
-            height="12"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path d="M8.27109 0.495906L7.21875 1.5462L10.4508 4.77193L11.5031 3.72164C11.8219 3.40585 12 2.97544 12 2.52632C12 2.07719 11.8219 1.64678 11.5031 1.33099L10.6664 0.495906C10.35 0.177778 9.91875 0 9.46875 0C9.01875 0 8.5875 0.177778 8.27109 0.495906ZM6.42422 2.33918L1.38047 7.37076C1.12969 7.62105 0.946875 7.9345 0.850781 8.27602L0.0210937 11.2655C-0.0328125 11.4596 0.0210937 11.6702 0.166406 11.8129C0.311719 11.9556 0.520312 12.0117 0.714844 11.9579L3.71016 11.1275C4.05234 11.0316 4.36406 10.8515 4.61719 10.5988L9.65625 5.56491L6.42422 2.33918Z" />
-          </svg>
-          {/* #1172 — the name pill, APPENDED after the glyph and never inserted before it: the unit tier
-              asserts each `<svg …>` opening run whole, and a child after the closing tag leaves both
-              byte-identical (the append discipline #1265 records for the composer's own pill). Hidden by
-              `channels.css` until this control's own `:hover` or `:focus-visible` — the CONTROL's, not
-              the row's, which is the whole of "hovering the title alone shows no pill".
-
-              `aria-hidden` is belt-and-braces rather than the mechanism: the button's `aria-label`
-              already overrides child text for the accessible name. It is what makes the claim true by
-              construction instead of by a computation rule a reader has to know. */}
-          <span className="channel-list__control-name" aria-hidden="true">
-            {RENAME_CONTROL_LABEL}
-          </span>
-        </button>
-      )}
       {onSaveAsChannel && (
         // Icon-only button — `aria-label` supplies the accessible name (the .channel-list__save pattern),
         // since the glyph alone carries no text. Since #1171 the glyph is the drawing's own export for
@@ -2351,6 +2371,57 @@ function Row({
               declaration for declaration in `channels.css`, and its comment says why). */}
           <span className="channel-list__control-name" aria-hidden="true">
             {SAVE_AS_CHANNEL_CONTROL_LABEL}
+          </span>
+        </button>
+      )}
+      {pen && (
+        // Icon-only button — `aria-label` supplies the accessible name (the .channel-list__save pattern),
+        // since the glyph alone carries no text. Since #1171 the glyph is the DRAWING'S OWN export
+        // (Font Awesome `pen-solid`, the "Icon Edgeless" instance the Hover variant places at 12×12),
+        // replacing the Material `edit` pencil that stood in while no Figma node pinned this control.
+        //
+        // The control is invisible at rest and revealed by the ROW's hover or by its own keyboard focus
+        // (`channels.css` says why the reveal is `opacity` and never `display: none`).
+        //
+        // #1441 — ONE BLOCK DRAWS BOTH TREES' PENS. Juhana's 2026-09-14 drawing instances the same Channel
+        // row component in the Chats section, so the glyph, the box, the pill's append discipline and the
+        // `controlNamePlacement` spread are identical in both; only the word and the two class tokens
+        // differ, and those arrive in `pen`. The CSS is restated per tree because two selectors is the only
+        // way to have two tokens; the markup is not, because one element with a parameterized token is —
+        // and a second block would be the thing that lets the two pens drift apart.
+        //
+        // IT IS EMITTED AFTER THE CHEVRON. Both controls are absolutely positioned, so this changes no
+        // layout — but on a chat row the chevron sits 20px to the LEFT of the pen, and emitting it first
+        // is what makes the tab order and the reading order follow the visual one. A Channels row's markup
+        // is byte-identical either way, only one of the two blocks rendering there.
+        <button
+          type="button"
+          className={pen.className}
+          aria-label={pen.label}
+          onClick={pen.onEdit}
+          {...controlNamePlacement}
+        >
+          <svg
+            className={pen.iconClassName}
+            viewBox="0 0 12 12"
+            width="12"
+            height="12"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M8.27109 0.495906L7.21875 1.5462L10.4508 4.77193L11.5031 3.72164C11.8219 3.40585 12 2.97544 12 2.52632C12 2.07719 11.8219 1.64678 11.5031 1.33099L10.6664 0.495906C10.35 0.177778 9.91875 0 9.46875 0C9.01875 0 8.5875 0.177778 8.27109 0.495906ZM6.42422 2.33918L1.38047 7.37076C1.12969 7.62105 0.946875 7.9345 0.850781 8.27602L0.0210937 11.2655C-0.0328125 11.4596 0.0210937 11.6702 0.166406 11.8129C0.311719 11.9556 0.520312 12.0117 0.714844 11.9579L3.71016 11.1275C4.05234 11.0316 4.36406 10.8515 4.61719 10.5988L9.65625 5.56491L6.42422 2.33918Z" />
+          </svg>
+          {/* #1172 — the name pill, APPENDED after the glyph and never inserted before it: the unit tier
+              asserts each `<svg …>` opening run whole, and a child after the closing tag leaves both
+              byte-identical (the append discipline #1265 records for the composer's own pill). Hidden by
+              `channels.css` until this control's own `:hover` or `:focus-visible` — the CONTROL's, not
+              the row's, which is the whole of "hovering the title alone shows no pill".
+
+              `aria-hidden` is belt-and-braces rather than the mechanism: the button's `aria-label`
+              already overrides child text for the accessible name. It is what makes the claim true by
+              construction instead of by a computation rule a reader has to know. */}
+          <span className="channel-list__control-name" aria-hidden="true">
+            {pen.label}
           </span>
         </button>
       )}

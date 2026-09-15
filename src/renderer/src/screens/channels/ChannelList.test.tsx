@@ -162,9 +162,16 @@ const ARCHIVE_ENTRY_MARKER = 'aria-label="Archive"'
 // discussion rows, absent on saved Channel rows (AC1).
 const SAVE_MARKER = 'aria-label="Save as channel"'
 
-// The per-row Rename affordance's accessible name (#360) — the symmetric counterpart to Save-as-channel:
-// present on saved (promoted) Channel rows, absent on Recent (unpromoted) discussion rows (AC1).
+// The per-row Rename affordance's accessible name (#360) — the CHANNELS tree's pen, present on saved
+// (promoted) Channel rows and absent on Recent (unpromoted) discussion rows (AC1). Since #1441 a chat row
+// carries a pen too, under its own word and its own token, so "absent" here is a real claim about which
+// tree names its pen `Rename` rather than about which rows draw one.
 const RENAME_MARKER = 'aria-label="Rename"'
+
+// #1441 — the CHATS tree's pen. Same glyph, same box, same handler, two things different: the word and
+// the class token. Both trees' rows draw a pen now, so each tree's marker is asserted against the other's
+// absence rather than against a bare presence.
+const EDIT_CHAT_MARKER = 'aria-label="Edit chat"'
 
 // The host row heading each tree (#710) — structural class names, not copy. These are counted as EXACT
 // attribute-value substrings: `renderToStaticMarkup` emits no comment markers, and the closing quote is
@@ -532,9 +539,25 @@ describe('ChannelListView', () => {
     expect(markup).toContain(RENAME_MARKER)
   })
 
-  it('omits the Rename affordance on a Recent (unpromoted) discussion row (AC1)', () => {
+  // #1441 INVERTED THIS TEST. A Recent row used to omit the pen outright; it now carries one, named
+  // `Edit chat` and under `.channel-list__chat-edit`. What stays absent is the CHANNELS word and the
+  // CHANNELS token — which is AC2's "that selector still matches Channels rows alone", asserted from the
+  // chat row's side, and the reason twelve shipped `.channel-list__rename` locators (six of them
+  // `real-daemon-*`) need no edit.
+  it('draws the chat pen, named Edit chat and under its own token, on a Recent row (AC1/AC2)', () => {
     const markup = render([row({ id: 'd1', name: 'a discussion', is_promoted: false })])
+    expect(markup).toContain(EDIT_CHAT_MARKER)
+    expect(markup).toContain('class="channel-list__chat-edit"')
     expect(markup).not.toContain(RENAME_MARKER)
+    expect(markup).not.toContain('class="channel-list__rename"')
+  })
+
+  // The same claim from the Channels side, and not redundant with it: one token leaking into the other
+  // tree fails exactly one of the two, which is what names the direction of the leak.
+  it('omits the chat pen and its token on a saved (promoted) Channel row (AC2)', () => {
+    const markup = render([row({ id: 'c1', name: 'a channel', is_promoted: true })])
+    expect(markup).not.toContain(EDIT_CHAT_MARKER)
+    expect(markup).not.toContain('class="channel-list__chat-edit"')
   })
 
   // #1171 — the drawing's own exports at the drawn 12×12, replacing #1097's 16px Material glyphs.
@@ -558,6 +581,17 @@ describe('ChannelListView', () => {
     const markup = render([row({ id: 'c1', name: 'a channel', is_promoted: true })])
     expect(markup).toContain(
       '<svg class="channel-list__rename-icon" viewBox="0 0 12 12" width="12" height="12"'
+    )
+  })
+
+  // #1441 — the chat pen is the SAME glyph at the same size (the drawing instances one Channel row
+  // component in both sections), so this run differs from the one above in the icon's class alone. That
+  // is exactly why the class is inside the asserted run: without it the two pens would satisfy each
+  // other's case and a tree that lost its own token would sail through both.
+  it("draws the chat pen as the drawing's 12px pen under its own icon token (AC1)", () => {
+    const markup = render([row({ id: 'd1', name: 'a discussion', is_promoted: false })])
+    expect(markup).toContain(
+      '<svg class="channel-list__chat-edit-icon" viewBox="0 0 12 12" width="12" height="12"'
     )
   })
 
@@ -588,16 +622,39 @@ describe('ChannelListView', () => {
     )
   })
 
+  // #1441 — the chat pen wears the same pill in the same place, appended after its own glyph's closing
+  // tag. One block in `Row` draws both pens, so the adjacency cannot drift between the trees by accident;
+  // this asserts it anyway, because "one block" is a claim about the source and this tier reads the output.
+  it('names the chat pen in an aria-hidden pill inside the button (AC1)', () => {
+    const markup = render([row({ id: 'd1', name: 'a discussion', is_promoted: false })])
+    expect(markup).toContain(
+      '</svg><span class="channel-list__control-name" aria-hidden="true">Edit chat</span>'
+    )
+  })
+
   // The pill text and the `aria-label` come off ONE constant each, so this is the drift guard: a row
   // carrying the control carries the accessible name and the pill text, and the two read the same words.
   // Counted rather than merely contained — a second pill on a row that draws one control would show here.
-  it('keeps each control’s pill text and accessible name in step (#1172 AC1)', () => {
+  //
+  // Since #1441 the Chats row carries TWO controls, so its half of this guard counts two names and two
+  // pills. That count is the detector for the assumption the chevron's 20px inset rests on — both
+  // controls are revealed together on a chat row — and it is what would redden if a future ruling
+  // dropped the chevron without moving it back.
+  it('keeps each control’s pill text and accessible name in step (#1172 AC1, #1441 AC3)', () => {
     const saved = render([row({ id: 'c1', name: 'a channel', is_promoted: true })])
     expect(countOf(saved, RENAME_MARKER)).toBe(1)
     expect(countOf(saved, '>Rename</span>')).toBe(1)
+    expect(countOf(saved, 'class="channel-list__rename"')).toBe(1)
     const recent = render([row({ id: 'd1', name: 'a discussion', is_promoted: false })])
     expect(countOf(recent, SAVE_MARKER)).toBe(1)
     expect(countOf(recent, '>Save as channel</span>')).toBe(1)
+    expect(countOf(recent, EDIT_CHAT_MARKER)).toBe(1)
+    expect(countOf(recent, '>Edit chat</span>')).toBe(1)
+    // BOTH of the chat row's controls, counted by their own tokens rather than by the pill class the
+    // other six sidebar controls share — a document-wide count of that class would answer about the whole
+    // sidebar. This pair is the detector for the assumption the chevron's 20px inset rests on.
+    expect(countOf(recent, 'class="channel-list__chat-edit"')).toBe(1)
+    expect(countOf(recent, 'class="channel-list__save"')).toBe(1)
   })
 
   it('draws no new-discussion FAB in any of the three list states (#1426 AC1)', () => {
@@ -2326,6 +2383,10 @@ describe('host-owned mutation availability', () => {
       if (status) statuses.set(DEFAULT_SERVER, status as ConnectionStatus)
       const html = render([row({ is_promoted: true }), row({ id: 'chat', is_promoted: false })], null, [DEFAULT_SERVER], statuses)
       expect(html).not.toContain('aria-label="Rename"')
+      // #1441 — the chat pen reads the SAME connected gate as the two beside it, so it is withheld with
+      // them. Listed rather than assumed: a pen wired to a bare handler instead of the gated one would
+      // leave a control that opens a dialog against an unreachable host, and nothing else here would say so.
+      expect(html).not.toContain('aria-label="Edit chat"')
       expect(html).not.toContain('aria-label="Save as channel"')
       expect(html).not.toContain('aria-label="Create chat"')
       expect(html).not.toContain('aria-label="Create channel"')

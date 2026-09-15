@@ -1210,7 +1210,18 @@
    there when the pointer arrives at it. Keyboard focus reveals it too, so Tab still reaches it. */
 .channel-list__save {
   position: absolute;
-  right: 0;
+  /* #1441 — 20px INSIDE THE PEN, not at the row's edge. A Chats row now carries both controls, and the
+     drawing puts the pen at the edge, so the chevron gives way. `--space-2` of padding-right and
+     `flex-end` carry the glyph the rest of the way: its right edge lands 28px in, exactly 20 further than
+     the pen's 8. Unconditional, because both controls read the same connected gate and a chat row that
+     draws the chevron always draws the pen beside it.
+
+     The two BOXES overlap by 8px (this one spans 20–48 from the row's right edge, the pen's 0–28) and the
+     pen, emitted after it, wins there. Neither GLYPH is covered: this one sits at 28–40 and the pen's at
+     8–20, each outside the other's box. The row's trailing padding stays 28 — `sidebar-row-geometry` pins
+     it — so this glyph's last 12px sit over the tail of a long title, which is the accepted cost of
+     keeping the chevron at all (Juhana's call pending on #1441). */
+  right: var(--space-5);
   /* #1427 — THE TRANSFORM-FREE FORM OF THE SAME CENTRING, and it is not a tidy-up. A non-`none`
      `transform` makes an element a containing block for FIXED-position descendants and a stacking context,
      and this control's `.channel-list__control-name` child is `position: fixed` since #1427 — so the
@@ -1269,14 +1280,57 @@
   opacity: 1;
 }
 
-/* The reveal itself. One rule for both controls: they are disjoint by section, so a row only ever has
-   one of them, and splitting this in two would say the two sections behave differently when they do not. */
+/* #1441 — THE CHATS TREE'S PEN. Its own selector and not a share of `.channel-list__rename`, and the
+   reason is the shipped suite rather than taste: twelve specs locate through that token, six of them
+   `real-daemon-*`, and most read it as the proxy for "this row is a promoted Channels row" — counting it
+   (`save-as-channel-promote` asserts exactly one while a second host's chat row is on screen;
+   `sidebar-control-name-pill` counts forty against forty-one rows) or awaiting it as a bare strict
+   locator. Sharing it would match a chat row too, redden both, and pull six `real-*` specs — and with
+   them the real-claude gate — into a renderer-only change.
+
+   The block RESTATES `.channel-list__rename` above declaration for declaration, which is this file's
+   shipped idiom for exactly this: that rule already restates `.channel-list__save`, and
+   `.channel-list__workspace-edit` restates it again one row family up. The token follows the same family's
+   `<subject>-edit` naming (`.channel-list__host-edit`, `.channel-list__workspace-edit`). Nothing about the
+   treatment differs — same 28 × 24 box at the row's right edge, same transform-free centring and its
+   #1427 reason, same `--color-primary`, same `opacity` reveal. */
+.channel-list__chat-edit {
+  position: absolute;
+  right: 0;
+  top: calc(50% - var(--space-3));
+  width: var(--space-7);
+  height: var(--space-6);
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 var(--space-2) 0 0;
+  border: none;
+  background: none;
+  color: var(--color-primary);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.channel-list__chat-edit:focus-visible {
+  outline: 1px solid var(--color-outline);
+  opacity: 1;
+}
+
+/* The reveal itself. One rule for all three controls. It used to say the two were disjoint by section, so
+   a row only ever had one of them — #1441 ended that: a Chats row carries the chevron AND the pen, and
+   they are revealed together. What the single rule says now is that the reveal is the ROW's, identical on
+   every control it holds, which is the property splitting it would put at risk. */
 .channel-list__row:hover .channel-list__save,
-.channel-list__row:hover .channel-list__rename {
+.channel-list__row:hover .channel-list__rename,
+.channel-list__row:hover .channel-list__chat-edit {
   opacity: 1;
 }
 
 .channel-list__rename-icon {
+  display: block;
+}
+
+.channel-list__chat-edit-icon {
   display: block;
 }
 
@@ -1309,14 +1363,14 @@
    --space-6 (24px) is the TALLEST control's own height, which makes "the pill's box never touches the
    control's box" true on every control rather than at the pointer positions a test happens to drive: the
    pointer is inside the control, so the control's bottom edge is at most its own height below the pointer,
-   and an offset of at least that height puts the pill's top edge at or below it. `.channel-list__save` and
-   `.channel-list__rename` are --space-7 x --space-6; the other five controls are --space-5 square. At a
-   20px offset the two 24px-tall controls break the guarantee whenever the pointer is in their top 4px,
-   which is ordinary pointer travel arriving from the row above. The horizontal --space-3 carries no such
-   requirement and is the drawing's own clearance.
+   and an offset of at least that height puts the pill's top edge at or below it. `.channel-list__save`,
+   `.channel-list__rename` and `.channel-list__chat-edit` are --space-7 x --space-6; the other five
+   controls are --space-5 square. At a 20px offset the three 24px-tall controls break the guarantee
+   whenever the pointer is in their top 4px, which is ordinary pointer travel arriving from the row above.
+   The horizontal --space-3 carries no such requirement and is the drawing's own clearance.
 
    ⭐ THE THREE CUSTOM PROPERTIES ARE WRITTEN BY `ChannelList.tsx`, WHICH IS WHY THIS IS NOT CSS ALONE —
-   the pointer's position is not available to a stylesheet. One handler on all seven controls writes
+   the pointer's position is not available to a stylesheet. One handler on all eight controls writes
    `clientX`/`clientY` into `--control-name-pointer-x`/`-y` on the BUTTON's own inline style (a direct
    style write and never a React `style` prop, which would move the static markup `ChannelList.test.tsx`
    pins), and the pill inherits them. EVERY `var()` HERE CARRIES A FALLBACK and that is load-bearing: an
@@ -1402,17 +1456,30 @@
    deliberately different scopes rather than an inconsistency.
 
    `:focus-visible` and not `:focus`, matching the control's own opacity rule directly above it: the same
-   pseudo-class turns the control opaque and its pill `block`, so the keyboard case cannot half-fire. Four
+   pseudo-class turns the control opaque and its pill `block`, so the keyboard case cannot half-fire. Six
    selectors rather than a descendant-of-any-button form — `.channel-list__row-open` is a button too, and
-   naming the two controls says which elements can carry a pill.
+   naming the three controls says which elements can carry a pill.
 
    #1181 gave the WORKSPACE row's plus the same pill and its own trigger pair, written beside that
    control rather than joined onto this list — same reason: each rule names the elements that can carry
-   one, so the set stays readable where the control is. This rule is still the row's two and only. */
+   one, so the set stays readable where the control is. This rule is the row's own three.
+
+   ⭐ #1441'S PEN IS NAMED HERE AND THAT IS THE WHOLE OF ITS PILL — a lesson the first cut of that ticket
+   paid for. The pill's markup, its word and the `controlNamePlacement` spread all ship from ONE
+   parameterized block in `ChannelList.tsx`, so the chat pen's pill is identical to the Channels pen's in
+   every respect a render can see; what is not shared is the SELECTOR, and this rule enumerates selectors
+   rather than inheriting from the block above. A control that restates `.channel-list__rename`'s block
+   therefore has to restate its trigger too — the restatement is not finished at the control's own rule —
+   and the first cut stopped at the rule, shipping the pill as dead markup that read nothing on hover or
+   on focus. `e2e/sidebar-control-name-pill.spec.ts` parks on the chat pen and reads its pill's TEXT,
+   which is the only tier that can see this: the static tier renders the markup whatever the stylesheet
+   says, and counting a pill or asserting it hidden both pass vacuously on one that is hidden forever. */
 .channel-list__save:hover .channel-list__control-name,
 .channel-list__save:focus-visible .channel-list__control-name,
 .channel-list__rename:hover .channel-list__control-name,
-.channel-list__rename:focus-visible .channel-list__control-name {
+.channel-list__rename:focus-visible .channel-list__control-name,
+.channel-list__chat-edit:hover .channel-list__control-name,
+.channel-list__chat-edit:focus-visible .channel-list__control-name {
   display: block;
 }
 

@@ -279,3 +279,52 @@ criterion.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-15
+
+## Revisions
+
+### 2026-09-15 — the count sweep completed (rework 1)
+
+Driven by the verifier's triage finding on PR #1498: the fake-transport tier went red on three specs the
+sweep had missed (`sidebar-workspace-plus-name-pill`, `workspace-label`, `workspace-updated-relist`), all
+confirmed as this PR's doing against baseline `6e66bad`. **No production code changed in this leg** — the
+derivation and the render are as committed; only expectation churn and stale prose moved. What the design
+gained is one decision and one correction it did not previously state:
+
+**The two trees are told apart positionally, and that is now written down.** There is no per-tree ancestor
+element: `renderBody` draws both trees as sibling runs inside one `.channel-list__tree`, separated by a
+`.channel-list__divider`, so a spec that needs one tree's group reads `.nth(0)` for Channels and `.nth(1)`
+for Chats. `sidebar-row-geometry` already relied on this in the first leg; `workspace-label` now does too.
+Naming it here because it is the shape of every future re-base of this kind, and because it is the reason
+a *scoped* read is available at all when an exhaustive one stops discriminating.
+
+**`workspace-label.spec.ts` needed a judgment call, not a number** (the verifier's point 3). Its step 1
+pinned `[WORKSPACE_LABEL]` before the mint and step 3 `[WORKSPACE_LABEL, WORKSPACE_LABEL]` after it; under
+the union step 1 also reads two, so re-basing it would have made the two steps character-identical and the
+spec would have stopped distinguishing "the minted row's group arrived" from "the mirror was always there".
+Resolved by scoping step 1 per tree (the Channels group, then the Chats mirror named explicitly) and
+keeping step 3 exhaustive, with the discriminating claim moved onto step 2's auto-waiting row count — which
+is the only read that *can* carry it, the two states rendering identical text. The trap the spec was
+written for is untouched: after the mint the Chats tree owns a row at that key, so the primary list owns
+the label and a fake minting `null` still reddens step 3.
+
+**One consequence the verifier did not name, found by sweeping the real tier for control ambiguity rather
+than for label counts.** `real-daemon-workspace-rename.spec.ts` does `editWorkspace.click()` on a
+`getByRole('button', { name: 'Edit workspace' })`. The union draws a pen per tree, so that click would
+have gone strict-mode-red — a failure the label arithmetic alone would not have predicted. Scoped to
+`.first()` (the Channels tree's pen) with the equivalence stated: both pens close over the same
+`group.key` and the same `serverId`, so either opens the dialog on the same `cwd`, and the `nameField`
+read below is what proves which workspace it opened on.
+
+**The rest of the real tier is safe, and this was checked rather than assumed.** Every `real-claude-*`
+spec that clicks a `Create chat` plus seeds one UNPROMOTED row with `seedCwdSubdir` unset (both are the
+`realDaemon` fixture's defaults), so each host has exactly one workspace key: the Chats tree draws the
+real group and the Channels tree the mirror, whose plus reads `Create channel`. `Create chat` stays
+unique. Ambiguity would need two keys on one host, which no spec in that tier seeds.
+
+Also corrected, in the same family as the first leg's `mintChatRow.ts` fix: `real-daemon-create-channel`'s
+pre-read gave the *reason* for its unique plus as "a promoted-only list gives the Chats tree no group and
+therefore no 'Create chat' plus of its own" — the claim this ticket retires. The plus is unique because
+each tree names its own control, not because the other tree is empty.
+
+The real tier's three specs are re-based but **unrun** — that tier is the dispatcher's, and this agent
+holds no Claude credential. Their arithmetic is derived from the seed shape each one declares.

@@ -15,10 +15,17 @@ import type { ConversationSummary } from '../src/shared/wire/types'
 // THE TWO-TREES SETUP is `workspace-collapse.spec.ts`'s idiom verbatim, and it is load-bearing here rather
 // than incidental. The seed is promoted, so it lands in the Channels tree; the drive mints an unpromoted
 // row into the Chats tree at the SAME '/fake/workspace', also `conversationStateFake`'s
-// DEFAULT_CREATED_CWD. The two trees are grouped SEPARATELY, so the Chats group's label comes from the
-// MINTED row, not from the seed. That is the trap this spec exists to catch: a client that read the label
-// correctly but a fake that minted `null` would show the daemon name in one tree and the folder name in
-// the other. The fake holds one label per `cwd` exactly as the daemon does, so the minted row inherits it.
+// DEFAULT_CREATED_CWD. Once the Chats tree holds a row of its own at that key, the Chats group's label
+// comes from the MINTED row, not from the seed: #1485 made the group SET a union across both trees, but it
+// left the label owned by the tree whose own rows put the key there. That is the trap this spec exists to
+// catch: a client that read the label correctly but a fake that minted `null` would show the daemon name
+// in one tree and the folder name in the other. The fake holds one label per `cwd` exactly as the daemon
+// does, so the minted row inherits it.
+//
+// WHAT #1485 CHANGED HERE is the launch state, not the trap. Before the mint the Chats tree already draws
+// a MIRROR of the seed's group — the seed's key, the seed's label, no row beneath it — so the label text
+// alone can no longer tell "the mirror was always there" from "the minted row's group arrived". Step 1 is
+// scoped per tree for that reason, and step 2's row count is what carries the discriminating claim.
 //
 // SECRET HYGIENE (carried from the siblings): every assertion reads rendered display text and DOM counts.
 // The label is a non-secret display literal that never leaves the fake; no message is sent, so nothing
@@ -60,15 +67,30 @@ test('the workspace row shows the daemon label, not the folder name, in both tre
 
   const workspaceLabels = page.locator('.channel-list__workspace-label')
   const conversationRows = page.locator('.channel-list__row')
+  // POSITIONAL, and only because nothing better exists: the two trees are sibling runs inside one
+  // `.channel-list__tree` with a `.channel-list__divider` between them, so no ancestor element tells them
+  // apart. `renderBody` draws the Channels tree first, so index 0 is its group and index 1 the Chats one.
+  const channelsWorkspaceLabel = workspaceLabels.nth(0)
+  const chatsWorkspaceLabel = workspaceLabels.nth(1)
 
   // --- 1. The Channels tree at launch. The list reply carried the label through the real decoder, the
-  // real IPC arm and the real store to get here. ---
-  await expect(workspaceLabels).toHaveText([WORKSPACE_LABEL])
+  // real IPC arm and the real store to get here. SCOPED TO ONE TREE since #1485: the union draws a group
+  // in both trees for every workspace on the host, so an exhaustive read here would be character-identical
+  // to step 3's and the two steps would stop being different assertions. The count is still pinned
+  // separately, which is what the array form used to buy — a THIRD group appearing fails here. ---
+  await expect(workspaceLabels).toHaveCount(2)
+  await expect(channelsWorkspaceLabel).toHaveText(WORKSPACE_LABEL)
 
-  // --- 2. Mint the second conversation through Add workspace. It is unpromoted, so it lands in the OTHER tree,
-  // under a group grouped independently of the first. The POSITIVE row count is ordered first, and it
-  // auto-waits: the label assertion after it would otherwise read a one-tree sidebar and pass without
-  // ever seeing the second group. ---
+  // #1485's MIRROR, named rather than merely counted: the SEED's key and the SEED's label drawn under the
+  // other tree with no row beneath it. Step 3 reads the same text off a group that by then has a row of
+  // its own, so the text cannot tell the two states apart and the row count below is what does.
+  await expect(chatsWorkspaceLabel).toHaveText(WORKSPACE_LABEL)
+
+  // --- 2. Mint the second conversation through Add workspace. It is unpromoted, so it lands in the OTHER
+  // tree, at the key the mirror above already holds — and once that tree owns a row there, the group's
+  // label comes from the MINTED row rather than from the seed. The POSITIVE row count is ordered first and
+  // it auto-waits; since #1485 it is also the ONLY read that separates the mirror from a real group, both
+  // of them rendering the same text. ---
   await mintChatInWorkspace(page, SEED.cwd)
   await expect(conversationRows).toHaveCount(2, { timeout: ROUNDTRIP_TIMEOUT_MS })
 

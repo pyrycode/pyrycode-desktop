@@ -96,7 +96,10 @@ const promotedRows = (): ConversationSummary[] =>
 // `daemonConnection`'s inbound `conversations` arm dispatches on the inner frame's `type` with no
 // correlation-id match, so an unsolicited one is consumed exactly like a reply. The seeded row rides
 // along FIRST so the open conversation is not orphaned; being unpromoted it keeps the Chats tree's group
-// (and its "Create chat" plus) while the 40 promoted ones mint the Channels group and its own.
+// (and its "Create chat" plus) while the 40 promoted ones FILL the Channels group with rows. Since #1485
+// they no longer MINT that group — the seed's own key is drawn in both trees, so the Channels head and its
+// plus are there from launch — but they are still what makes the tree overrun its scroller, which is the
+// precondition every geometry read below rests on.
 const twoTreeFrame = (): Uint8Array =>
   encodeEnvelope({
     id: 1,
@@ -220,12 +223,21 @@ test('the workspace plus names itself in a pill that follows the pointer, clear 
     '.channel-list__workspace-create .channel-list__control-name'
   )
 
-  // --- The launch seed: one unpromoted row, so the Chats tree has the only group — already enough to
-  // prove the pill is MOUNTED before anything is hovered, and that the Channels tree draws neither. ---
+  // --- The launch seed: one unpromoted row, whose workspace the Chats tree holds a ROW in and the
+  // Channels tree draws as #1485's empty MIRROR. So BOTH heads carry a plus already, each wearing its own
+  // tree's name — which is all this read is for: the pills are MOUNTED before anything is hovered, and the
+  // two names are distinct from the first frame. Before #1485 the Channels count here was 0 and the push
+  // below was what minted that group; it now fills a group that already existed, which is why the row
+  // count is the read that proves the push landed and the control counts no longer can be. ---
   await expect(createChat).toHaveCount(1)
-  await expect(createChannel).toHaveCount(0)
-  await expect(pills).toHaveCount(1)
+  await expect(createChannel).toHaveCount(1)
+  await expect(pills).toHaveCount(2)
 
+  // The push is still load-bearing for the two preconditions the geometry needs — 40 rows is what makes
+  // the tree overrun its scroller (asserted below) and pushes the Chats head below the fold — but the four
+  // reads after it are unchanged-state reads now rather than arrivals: one workspace for every row, so the
+  // union is the same single key it was at launch. Kept because a push that split the group, or landed a
+  // row under no host, would move them.
   daemon.pushFrame(twoTreeFrame())
   await expect(page.locator('.channel-list__row')).toHaveCount(PROMOTED_ROW_COUNT + 1, {
     timeout: TIMEOUT_MS

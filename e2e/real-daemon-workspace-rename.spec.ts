@@ -152,11 +152,13 @@ test('real daemon relabels a workspace driven from the Edit workspace dialog, vi
   // signature A above (a stale binary), not a missing rename handler. ---
   await expect(renameControl).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
 
-  // --- THE PRE-READ (AC2's "before"), positive and auto-waiting. One workspace group, labelled after the
-  // seed's own subdirectory — the array form pins the group count at one as well as the text. This is what
-  // proves the fixture put the seed where this spec thinks it did, so the identical read after the save is
-  // a claim about the DAEMON rather than about the seed. ---
-  await expect(workspaceLabels).toHaveText([SEED_FOLDER])
+  // --- THE PRE-READ (AC2's "before"), positive and auto-waiting. One workspace KEY, labelled after the
+  // seed's own subdirectory — the array form pins the group count as well as the text. TWO entries since
+  // #1485, off ONE row: the Channels group the promoted seed sits in, and the Chats tree's empty mirror of
+  // it, which resolves its label off that same row. This is what proves the fixture put the seed where this
+  // spec thinks it did, so the identical read after the save is a claim about the DAEMON rather than about
+  // the seed. ---
+  await expect(workspaceLabels).toHaveText([SEED_FOLDER, SEED_FOLDER])
 
   // ⭐ The trap, asserted rather than trusted (see the header): a NEW_LABEL equal to the folder segment
   // would make Save send `label: null`, the daemon would CLEAR the label, and the row would fall back to
@@ -165,12 +167,16 @@ test('real daemon relabels a workspace driven from the Edit workspace dialog, vi
   expect(NEW_LABEL).not.toBe(SEED_FOLDER)
   expect(SEED_FOLDER).not.toBe(DAEMON_WORKDIR_LABEL)
 
-  // --- Open the dialog from the workspace row's pen (AC1). Exactly ONE pen: a promoted-only list gives
-  // the Chats tree no group, and the unknown-workspace group (which is withheld a pen) does not arise
-  // here. Playwright counts an opacity-0 element as visible and moves the pointer onto it before clicking,
-  // which hovers the row on the way, so no explicit hover is needed. ---
-  await expect(editWorkspace).toHaveCount(1)
-  await editWorkspace.click()
+  // --- Open the dialog from the workspace row's pen (AC1). TWO pens since #1485, one per tree: this host
+  // has one workspace key and both trees draw it, the Chats one as an empty mirror. The pen clicked is the
+  // CHANNELS tree's — `renderBody` draws that tree first — and which one is reached is immaterial to this
+  // drive: both close over the same `group.key` and the same `serverId`, so either opens the dialog on the
+  // same `cwd` seeded with the same current label, and `nameField` below is what proves it did. The pen is
+  // still withheld from the unknown-workspace group, which does not arise here. Playwright counts an
+  // opacity-0 element as visible and moves the pointer onto it before clicking, which hovers the row on
+  // the way, so no explicit hover is needed. ---
+  await expect(editWorkspace).toHaveCount(2)
+  await editWorkspace.first().click()
   await expect(dialog).toBeVisible()
 
   // --- The SECOND pre-read: the field opens seeded with the row's CURRENT label, which proves the dialog
@@ -188,9 +194,11 @@ test('real daemon relabels a workspace driven from the Edit workspace dialog, vi
   // --- ⭐ THE CLOSING POSITIVE READ (AC2), and the only assertion below that is false before the round trip
   // resolves: rename_workspace → the daemon's registry mutation → the correlated workspace_updated →
   // #1288's inbound re-list → the reply → re-render. Nothing was patched locally; this client never awaits
-  // or correlates the reply, so the text below can only have come from the daemon's own list. A timeout
-  // here is failure signature B. ---
-  await expect(workspaceLabels).toHaveText([NEW_LABEL], { timeout: ROUNDTRIP_TIMEOUT_MS })
+  // or correlates the reply, so the text below can only have come from the daemon's own list. BOTH entries
+  // move, which is its own small claim: the Chats mirror resolves its label off the renamed row rather than
+  // caching one, so the re-list reaches it exactly as it reaches the group the row lives in. A timeout here
+  // is failure signature B. ---
+  await expect(workspaceLabels).toHaveText([NEW_LABEL, NEW_LABEL], { timeout: ROUNDTRIP_TIMEOUT_MS })
 
   // --- AC2's negative half, stated explicitly. Redundant against the array equality above and kept anyway,
   // as both fake-tier siblings keep it: it is the assertion that NAMES the two failures — a label the save

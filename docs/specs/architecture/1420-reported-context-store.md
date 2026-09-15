@@ -316,6 +316,30 @@ beyond the injected `onDaemonEvent` spy — there is no transport or IPC boundar
 2. **Does `App.test.tsx` pin the headless-leaf set?** A grep found no reference to `UsageLimitData`,
    so probably not. Confirm when the suite runs; if it does, the pin is updated rather than loosened.
 
+## Revisions
+
+**2026-09-15 — both open questions resolved; no design change.**
+
+1. *Does #1421 need a whole-map read surface?* No, and none was built.
+   `selectReportedContextFor` is the only export that reads `readings`; there is no `selectAll*`, no
+   iteration over the map anywhere in the module, and no fallback to the active conversation. The
+   `useReportedContextStore` hook takes an arbitrary selector, exactly as `useUsageLimitStore` does —
+   that is the family's shape, not a surface this ticket adds.
+2. *Does `App.test.tsx` pin the headless-leaf set?* No. It passes unchanged with the new leaf
+   mounted, so no pin was loosened or edited.
+
+**One departure from the plan's letter, decided during implementation and recorded here rather than
+absorbed:** the `clearPairingScopedState` docblock's rotted ordinal was fixed by **dropping** the
+count rather than correcting it, and the same edit was made to the pinned test's comment. The plan
+named both options; this is the one taken, and the header now says why reinstating a total is not an
+improvement. The seven pre-existing inline "thirteen in-memory clears" position notes were left
+untouched as planned, and the new entry's own note is written count-free so it cannot rot.
+
+A second, smaller departure: `reportedContextBridge.test.ts` captures its listener through a
+`fakeBridge` helper with an `emit` closure (the `usageLimitBridge.test.ts` idiom) rather than a bare
+`let listener`. A bare binding narrows to `never` after an assignment TypeScript cannot see inside the
+callback, which `npm run build` catches and vitest does not.
+
 ## Documentation handoff
 
 The ticket body carries no `## Documentation handoff` section and no documentation-only acceptance

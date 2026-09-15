@@ -432,12 +432,19 @@ export function translateTimelineEvent(
       // contextUsage (#1419) joins the group by the same queueState rule (#720) — no turn_id, opens
       // and closes no turn, so a reading of how full the context window is is daemon STATE and not an
       // item IN a turn, however plainly the turn that observed it is the one the operator is watching.
-      // Its no-op here is DORMANT rather than permanent: whether the reading draws as thread chrome
-      // (the apiRetry #493 / compacting #496 / thinkingProgress #1314 route) or through a subscriber
-      // of its own (the questionShown #885 / rateLimited #1320 route) is #1420's call, and claiming it
-      // here would decide that question for it. The lifetime argument that settled `rateLimited` does
-      // point the same way — a context window is conversation-scoped and outlives a turn end — but it
-      // is #1420's to make.
+      // Its no-op here is PERMANENT as of #1420, which made the call this comment used to hold open:
+      // the reading goes to a SUBSCRIBER OF ITS OWN (`reportedContextBridge` → `reportedContextStore`),
+      // the questionShown (#885) / rateLimited (#1320) route, and NOT to thread chrome through this
+      // bridge, the route apiRetry (#493), compacting (#496) and thinkingProgress (#1314) each
+      // eventually took. The deciding fact is LIFETIME rather than layout, exactly as it was for
+      // `rateLimited` one arm over: a context window is conversation-scoped and outlives a turn end, a
+      // `/clear` and a session transition, so state a turn rebuilds would drop the reading at the wrong
+      // moment and every reducer arm would carry TEN extra fields to prevent that. This case now exists
+      // only so the assertNever guard makes a new arm a compile error — and it matters more here than
+      // on any neighbouring arm, because that guard stringifies the WHOLE event into an Error message
+      // and this is the largest arm on the union and the one carrying the most disclosive fields.
+      // DELETING THE CASE would put every memory-file path and every MCP server name into a stack trace
+      // and a crash reporter.
       return null
     case 'runConfigReceived':
       // Not a timeline event (#491). Present only because the assertNever guard makes a new arm a

@@ -41,6 +41,10 @@ import {
   selectActivityFor
 } from './store/conversationActivityStore'
 import { createUsageLimitStore, selectUsageLimitFor } from './store/usageLimitStore'
+import {
+  createReportedContextStore,
+  selectReportedContextFor
+} from './store/reportedContextStore'
 import { initialTimelineState, type ThreadItem } from './store/threadTimeline'
 import type {
   BackgroundTask,
@@ -109,6 +113,7 @@ function spyDeps(): {
   dispatchModal: ReturnType<typeof vi.fn>
   clearAllActivity: ReturnType<typeof vi.fn>
   clearAllUsageLimits: ReturnType<typeof vi.fn>
+  clearAllReportedContext: ReturnType<typeof vi.fn>
   dispatchSession: ReturnType<typeof vi.fn>
   clearAllLastRead: ReturnType<typeof vi.fn>
 } {
@@ -126,6 +131,7 @@ function spyDeps(): {
   const dispatchModal = vi.fn()
   const clearAllActivity = vi.fn()
   const clearAllUsageLimits = vi.fn()
+  const clearAllReportedContext = vi.fn()
   const dispatchSession = vi.fn()
   const clearAllLastRead = vi.fn()
   return {
@@ -144,6 +150,7 @@ function spyDeps(): {
       dispatchModal,
       clearAllActivity,
       clearAllUsageLimits,
+      clearAllReportedContext,
       dispatchSession,
       clearAllLastRead
     },
@@ -161,6 +168,7 @@ function spyDeps(): {
     dispatchModal,
     clearAllActivity,
     clearAllUsageLimits,
+    clearAllReportedContext,
     dispatchSession,
     clearAllLastRead
   }
@@ -187,7 +195,7 @@ function fakeLastReadStorage(seed: ReadonlyMap<string, LastReadMark> = new Map()
 }
 
 describe('clearPairingScopedState', () => {
-  it('performs all fifteen clears exactly once, with the exact reset actions (AC1, AC2)', () => {
+  it('performs every clear exactly once, with the exact reset actions (AC1, AC2)', () => {
     const {
       deps,
       dispatchTimeline,
@@ -204,6 +212,7 @@ describe('clearPairingScopedState', () => {
       dispatchModal,
       clearAllActivity,
       clearAllUsageLimits,
+      clearAllReportedContext,
       dispatchSession,
       clearAllLastRead
     } = spyDeps()
@@ -268,6 +277,12 @@ describe('clearPairingScopedState', () => {
     // the pairing ends is attributed to the newly paired daemon's account, and nothing writes the map
     // until that daemon's own next reading arrives.
     expect(clearAllUsageLimits).toHaveBeenCalledWith()
+    expect(clearAllReportedContext).toHaveBeenCalledTimes(1)
+    // #1420, the same nullary property as the whole-map clears above. What the ids it declines to take
+    // would steer here is which MACHINE'S window composition survives the boundary: a held reading
+    // carries that daemon's model identity, its MCP `server_name`s and its memory-file `path`s, and
+    // nothing writes the map again until the newly paired daemon's own next turn ends.
+    expect(clearAllReportedContext).toHaveBeenCalledWith()
     expect(dispatchSession).toHaveBeenCalledTimes(1)
     expect(dispatchSession).toHaveBeenCalledWith({ type: 'reset' })
     expect(clearAllLastRead).toHaveBeenCalledTimes(1)
@@ -277,14 +292,16 @@ describe('clearPairingScopedState', () => {
     expect(clearAllLastRead).toHaveBeenCalledWith()
   })
 
-  it('the pairing-scoped set is exactly these fifteen stores', () => {
+  it('the pairing-scoped set is exactly these stores', () => {
     // The tripwire the whole design rests on: this interface IS the enumeration of what "the pairing
-    // ended" means, so a SIXTEENTH pairing-scoped store added to `ClearPairingScopedStateDeps` fails
+    // ended" means, so a FURTHER pairing-scoped store added to `ClearPairingScopedStateDeps` fails
     // to compile here until it is added to the literal, and then fails this assertion until it is also
     // asserted called above — rather than being silently declared and never invoked. #779 was the
-    // seventh, #955 the eighth, #977 the ninth, #1086 the tenth, #1138 the eleventh, #1139 the
-    // twelfth, #1140 the thirteenth, #1145 the fourteenth and #1320 the fifteenth, and each
-    // updated this pin, which is the intended cost of adding one; loosening it is not.
+    // seventh, and #955, #977, #1086, #1138, #1139, #1140, #1145, #1320 and #1420 each followed,
+    // every one of them updating this pin — the intended cost of adding a member; loosening it is not.
+    // THE RUNNING ORDINALS ARE GONE FROM THIS COMMENT ON PURPOSE, the same edit #1420 made to the
+    // helper's own docblock: the sorted literal below IS the count, and a tally restated beside it
+    // decays silently (that docblock's had already slipped by one before #1420 arrived).
     //
     // The pin's stated MOTIVE has changed even though its value has not. It read as a guard against
     // two independent call sites diverging on which stores they cleared, which is the bug #531 fixed;
@@ -302,6 +319,7 @@ describe('clearPairingScopedState', () => {
       'clearAllConversations',
       'clearAllLastRead',
       'clearAllModelLists',
+      'clearAllReportedContext',
       'clearAllRosters',
       'clearAllSlashCommandLists',
       'clearAllTimelines',
@@ -411,6 +429,23 @@ describe('clearPairingScopedState', () => {
     clearPairingScopedState(deps)
 
     expect(clearAllUsageLimits.mock.invocationCallOrder[0]).toBeLessThan(
+      clearAllLastRead.mock.invocationCallOrder[0]
+    )
+  })
+
+  it('the reported-context clear runs BEFORE the one effect that can throw (#1420)', () => {
+    // The same constraint a seventh time, and this store has the least recourse of any member if the
+    // ordering slips: `clearAllLastRead` is the only effect that reaches outside memory
+    // (`localStorage`) and so the only one that can throw, and a throw placed before this clear would
+    // leave the departed machine's model identity, MCP server names and memory-file paths held as the
+    // current window's composition. Unlike #1320 next door there is no second exit to recover through
+    // — the arm has no benign value, every frame is a reading, and the daemon that would send the next
+    // one has gone.
+    const { deps, clearAllReportedContext, clearAllLastRead } = spyDeps()
+
+    clearPairingScopedState(deps)
+
+    expect(clearAllReportedContext.mock.invocationCallOrder[0]).toBeLessThan(
       clearAllLastRead.mock.invocationCallOrder[0]
     )
   })
@@ -971,6 +1006,77 @@ describe('clearPairingScopedState', () => {
     ).toBeNull()
     expect(selectUsageLimitFor('c-dated', 1_700_000_000)(usageLimits.getState())).toBeNull()
   })
+
+  it('real stores: no context-window reading from the ended pairing is readable, and this store has no exit of its own that could have collected one (#1420 AC3)', () => {
+    const reportedContext = createReportedContextStore()
+    // A reading carrying the content that makes retention a leak rather than a stale label: the
+    // departed machine's model identity, an MCP server name naming what the operator wired up, and a
+    // memory-file path naming who they are and where they work.
+    reportedContext.getState().setReportedContext({
+      conversationId: 'c-ran-a-turn',
+      model: 'claude-opus-5',
+      totalTokens: 22_950,
+      maxTokens: 200_000,
+      percentage: 11,
+      categories: [{ name: 'Messages', tokens: 18_000 }],
+      droppedCategories: 0,
+      mcpTools: [{ name: 'query', server_name: 'internal-infra', tokens: 900 }],
+      droppedMcpTools: 0,
+      memoryFiles: [{ path: '/Users/someone/Workspace/CLAUDE.md', type: 'project', tokens: 1200 }],
+      droppedMemoryFiles: 0
+    })
+    // A second conversation, to prove the clear is total rather than scoped to one key.
+    reportedContext.getState().setReportedContext({
+      conversationId: 'c-also-ran',
+      model: '',
+      totalTokens: 0,
+      maxTokens: 0,
+      percentage: 0,
+      categories: [],
+      droppedCategories: 0,
+      mcpTools: [],
+      droppedMcpTools: 0,
+      memoryFiles: [],
+      droppedMemoryFiles: 0
+    })
+
+    // FIRST, the half that makes this store's membership NECESSARY rather than defensive, and it is
+    // sharper here than for the reading next door: that store has two exits of its own that merely
+    // fail to reach this boundary, and this one has NO other exit at all. There is no benign value on
+    // the arm — every frame is a reading — so nothing but this clear can ever drop a held record.
+    expect(selectReportedContextFor('c-ran-a-turn')(reportedContext.getState())).not.toBeNull()
+    expect(selectReportedContextFor('c-also-ran')(reportedContext.getState())).not.toBeNull()
+
+    clearPairingScopedState(
+      realDeps(
+        createTimelineStore(),
+        createConversationTimelineStore(),
+        createSessionIdStore(),
+        createAnnouncedModelStore(),
+        createActiveConversationStore(),
+        createSessionStore(),
+        createConversationLastReadStore(),
+        createSlashCommandListStore(),
+        createModelListStore(),
+        createConversationListStore(),
+        createQueueStore(),
+        createBackgroundTaskRosterStore(),
+        createModalStore(),
+        createConversationActivityStore(),
+        createUsageLimitStore(),
+        reportedContext
+      )
+    )
+
+    // SECOND, the half this ticket adds. Nothing re-asserts a reading on a new pairing — the daemon
+    // fans one out at a turn end and there is no request half to ask for one — so without this clear
+    // the departed machine's window composition would be attributed to the newly paired one, under
+    // conversation ids a re-pair to the same box reuses. Each entry reads back as ABSENT rather than
+    // as an empty-but-present reading, which is the distinction #1421's fallback branches on.
+    expect(reportedContext.getState().readings.size).toBe(0)
+    expect(selectReportedContextFor('c-ran-a-turn')(reportedContext.getState())).toBeNull()
+    expect(selectReportedContextFor('c-also-ran')(reportedContext.getState())).toBeNull()
+  })
 })
 
 function realDeps(
@@ -994,8 +1100,10 @@ function realDeps(
   modals: ReturnType<typeof createModalStore> = createModalStore(),
   // #1145's fourteenth, defaulted for the same reason.
   activity: ReturnType<typeof createConversationActivityStore> = createConversationActivityStore(),
-  // #1320's fifteenth, defaulted for the same reason.
-  usageLimits: ReturnType<typeof createUsageLimitStore> = createUsageLimitStore()
+  // #1320's, defaulted for the same reason.
+  usageLimits: ReturnType<typeof createUsageLimitStore> = createUsageLimitStore(),
+  // #1420's, defaulted for the same reason.
+  reportedContext: ReturnType<typeof createReportedContextStore> = createReportedContextStore()
 ): ClearPairingScopedStateDeps {
   return {
     dispatchTimeline: (event) => timeline.getState().dispatch(event),
@@ -1012,6 +1120,7 @@ function realDeps(
     dispatchModal: (event) => modals.getState().dispatch(event),
     clearAllActivity: () => activity.getState().clearAllActivity(),
     clearAllUsageLimits: () => usageLimits.getState().clearAllUsageLimits(),
+    clearAllReportedContext: () => reportedContext.getState().clearAllReportedContext(),
     dispatchSession: (action) => session.getState().dispatch(action),
     clearAllLastRead: () => lastRead.getState().clearAllLastRead()
   }

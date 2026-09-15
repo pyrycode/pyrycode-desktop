@@ -1692,7 +1692,51 @@
   opacity: 0.38;
 }
 
+/* #1428's channel system prompt — the "Text area large" instance, restating the name input's fill,
+   corner, padding and body-medium type as a sibling rule (this file's idiom for a twin control). Four
+   rows over a 20px line plus 16px of vertical padding is the drawing's 112px box. `resize: vertical`
+   and the break-word are borrowed from `.system-prompt__input`, which stays sheet-scoped and
+   untouched; `both` would let a drag carry the field past the modal.
+
+   ONE KNOWN DEVIATION FROM THE DRAWING: `resize: vertical` paints the browser's corner grabber, which
+   the Figma box does not draw. Kept deliberately — it is this codebase's own treatment for the same
+   content, it cannot widen the field or break the modal, and the alternative (`resize: none`) leaves a
+   long prompt scrolling inside 112px with no way to see more of it at once. */
+.create-channel__textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-4);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--color-on-primary) 41%, transparent);
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+  resize: vertical;
+  overflow-wrap: break-word;
+}
+
+.create-channel__textarea:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.create-channel__textarea:disabled {
+  opacity: 0.38;
+}
+
 .create-channel__error {
+  margin: 0;
+  color: var(--color-error);
+}
+
+/* The over-bound notice: the error line's treatment without its alert role, since it appears while
+   typing rather than on a settled failure. */
+.create-channel__notice {
   margin: 0;
   color: var(--color-error);
 }

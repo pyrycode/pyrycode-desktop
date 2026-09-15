@@ -45,9 +45,12 @@ keeps its richer `row` type unchanged — it genuinely reads `cwd` too, so only 
 
 - Each saved (promoted) Channel row in the Channel List renders a trailing icon-only "Rename"
   affordance (`aria-label="Rename"`, a Material pencil glyph — no Figma node pins this row-level
-  control; 19:14 is the dialog only). Recent (unpromoted) discussion rows render no Rename
-  affordance — the exact symmetric counterpart of [Save-as-channel](save-as-channel-dialog.md),
-  which lives only on Recent rows, so no row ever carries two trailing buttons.
+  control; 19:14 is the dialog only). Since
+  [#1441](channel-list-row-hover-control.md#1441-a-chats-row-now-carries-both-controls-not-one), a
+  Recent (unpromoted) discussion row carries this same pen too, alongside its existing
+  Save-as-channel chevron — named **Edit chat** there rather than **Rename**, and under its own
+  class token — so the two trailing controls are no longer disjoint by section. See that page for
+  the geometry and the reason for the second token.
 - Both entry points open the [shared Modal](modal-presentation.md) at a preferred width of
   640px, with the title **Edit chat** (**Rename** before #1440), header close button and divider,
   a filled **Channel name:** field (including for chats), and centred outlined **Cancel** / filled
@@ -146,11 +149,15 @@ directories cycle-free (`ChannelList.tsx` already imported `requestArchiveConver
 ### `ChannelList.tsx` — `Row` extension
 
 `Row` already restructured into a flex wrapper with sibling children when
-[Save-as-channel](save-as-channel-dialog.md) shipped (#274). This ticket adds a second optional
+[Save-as-channel](save-as-channel-dialog.md) shipped (#274). This ticket added a second optional
 sibling, `onRename?: () => void`, rendered as `.channel-list__rename` alongside (not replacing)
-`.channel-list__save`. `renderBody` passes `onSaveAsChannel` only to `discussions.map(...)` (Recent
-rows) and `onRename` only to `channels.map(...)` (saved Channel rows) — the two affordance sets are
-disjoint by section, so a row structurally carries at most one trailing button, never both.
+`.channel-list__save`, passed only to `channels.map(...)` (saved Channel rows) — at the time the
+two affordance sets were disjoint by section, so a row structurally carried at most one trailing
+button. [#1441](channel-list-row-hover-control.md#1441-a-chats-row-now-carries-both-controls-not-one)
+ended that: the bare `onRename` became a `pen?: RowPenControl` object carrying its own label and
+class tokens, and `discussions.map(...)` (Recent rows) now receives one too
+(`.channel-list__chat-edit`, **Edit chat**) alongside its `onSaveAsChannel` chevron — see that page
+for the current shape and why the two trees keep separate class tokens and label constants.
 
 ### `ChannelList.tsx` — container state
 
@@ -167,7 +174,10 @@ const [renameName, setRenameName] = useState('')
   repeated verbatim.
 - No mutual-exclusion logic exists between the two dialogs, and none is needed: an open dialog's
   `position: fixed; inset: 0` overlay covers the whole window, so the row affordance behind it
-  isn't clickable while a dialog is open, and the two affordance sets are disjoint by row anyway.
+  isn't clickable while a dialog is open — the overlay argument holds by itself, independent of
+  whether a row's two trailing controls are disjoint (since
+  [#1441](channel-list-row-hover-control.md#1441-a-chats-row-now-carries-both-controls-not-one)
+  they no longer are, on a Chats row).
 - The container returns a fragment: the list view, then both dialogs as conditional siblings —
   `saveRow && <SaveAsChannelDialog …/>` and `renameRow && connected(renameRow.serverId) &&
   <EditChatDialogView …/>`. `onCancel` clears `renameRow` (dispatches nothing). `onSave` calls
@@ -241,14 +251,16 @@ Saved Channel row's Rename affordance click → container: setRenameRow(row); se
 - **Escape remains parent-owned.** The sidebar dialog has no Escape handler; its inert backdrop
   does not dismiss it. In conversation info, the enclosing `ChannelInfoSheet` document listener
   closes the sheet on Escape, unmounting its Rename dialog too.
-- **The sidebar affordance is fixed to saved Channel rows.** Chats use the existing
-  conversation-info Rename action.
 - **An archive the daemon never confirms leaves the row in place** — the same answer the rename
   beside it already gives. No timeout, retry or rejection surface is added for the archive path
   either (#1440).
-- **The sidebar row's own pen keeps its `Rename` accessible name and `.channel-list__rename`
-  tokens.** #1440 retitled the dialog and the sheet's action word only; the row-level pens are
-  #1441 (chat tree) and #1430 (channel tree), both sequenced after #1440.
+- **The sidebar row's own pen names itself differently per tree, from two separate constants.**
+  #1440 retitled the dialog and the sheet's action word to **Edit chat**; the Channels row's own
+  pen kept `Rename`/`.channel-list__rename` at that point. #1441 then gave the Chats row this same
+  pen directly (no longer routed only through the conversation-info sheet's own Rename action),
+  named **Edit chat** and under its own `.channel-list__chat-edit` token, so the two sidebar words
+  can diverge without a shared constant. The Channels row's pen stays `Rename` until #1430 renames
+  it to **Edit channel**.
 - **Static markup cannot prove event wiring or scrolling.** Static tests cover accessible
   names, shared chrome, blank validation and escaping; helper tests assert the exact trimmed
   command and target id. `e2e/conversation-create-rename.spec.ts` exercises both entry points
@@ -269,6 +281,9 @@ Saved Channel row's Rename affordance click → container: setRenameRow(row); se
 - [Save-as-channel dialog](save-as-channel-dialog.md) / [#274 codebase notes](../codebase/274.md)
   — the original precedent for the `Row` sibling-affordance shape and the
   `position: fixed`/`z-index` overlay precedent this ticket reused without re-deriving.
+- [Channel List — the row's 8px inset and its hover-revealed control § #1441](channel-list-row-hover-control.md#1441-a-chats-row-now-carries-both-controls-not-one)
+  — the Chats row's own pen into this same dialog, its geometry, and the `.channel-list__chat-edit`
+  token.
 - [Conversation list store](conversation-list-store.md) / [#275 codebase notes](../codebase/275.md)
   — the `conversation_updated` re-request that reflects the renamed title; this dialog never
   mutates the list itself.

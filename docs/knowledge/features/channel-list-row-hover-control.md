@@ -97,6 +97,50 @@ opacity-on-focus set (asserted over both rows at once, per this file's no-`nth()
 and a click at the dot's own centre still moving `aria-current`. Rounded deltas are normalised against
 `-0` before any `toBe(0)` (the #868 rule).
 
+### #1441: A Chats row now carries both controls, not one
+
+Juhana's 2026-09-14 desktop sidebar drawing reuses this same Channel row component in the Chats section,
+so a Chats row's hover now reveals its existing Save-as-channel chevron *and* a second pen, opening the
+Edit chat modal ([#1440](rename-conversation-dialog.md)) rather than Save as channel. Before this the two
+trailing controls were disjoint by section — Recent rows drew the chevron alone, saved Channel rows the
+pen alone — and `ChannelList.tsx`'s own comment on the trailing-control markup said as much; that claim is
+now false for a Chats row and the comment was corrected in place. A Channels row is unaffected: it still
+draws the pen alone, since only one of the two control blocks ever renders per row.
+
+**The chat pen gets its own class token, `.channel-list__chat-edit`, rather than sharing
+`.channel-list__rename`.** Twelve specs locate through `.channel-list__rename`, six of them
+`real-daemon-*`, and most read it as the proxy for "this row is a promoted Channels row" — counting it
+(`save-as-channel-promote` asserts exactly one while a second host's chat row is on screen;
+`sidebar-control-name-pill` counts forty against forty-one rows) or awaiting it as a bare strict locator.
+Sharing the token would match a chat row too, and pull six `real-*` specs — and with them the real-claude
+gate — into what is otherwise a renderer-only change. The new token follows the `<subject>-edit` idiom
+`.channel-list__workspace-edit`/`.channel-list__host-edit` already wear, and its `channels.css` block
+restates `.channel-list__rename`'s declaration for declaration — this file's shipped idiom for exactly
+this (`.channel-list__rename` already restates `.channel-list__save`). See
+[the control's own name pill § #1441](channel-list-control-name-pill.md) for the reveal-rule half of that
+restatement the first cut of this ticket missed.
+
+**The chevron moved 20px inside the pen** to make room. `.channel-list__save` takes `right:
+var(--space-5)` (20px) in place of `right: 0`; its unchanged `padding: 0 var(--space-2) 0 0` and
+`justify-content: flex-end` carry its glyph's right edge the rest of the way to a 28px inset — 20px past
+the pen's 8px. The two 28×24 boxes overlap by 8px (the pen spans 0–28 from the row's right edge, the
+chevron 20–48), the pen — emitted second in the DOM — on top; neither *glyph* is covered, since the pen's
+sits at 8–20 and the chevron's at 28–40, each outside the other's box. `Row` emits the chevron before the
+pen so tab order and reading order both follow the left-to-right visual order. The row's 28px trailing
+padding did not widen to fit both controls — out of scope, still pinned by `sidebar-row-geometry` — so
+with both revealed the chevron's glyph overlaps the tail of a long title; accepted as the cost of keeping
+the chevron on a chat row at all (an open question for Juhana — the Figma shows no chevron there).
+
+**One JSX block draws both trees' pens**, parameterized by a `RowPenControl` (`{label, className,
+iconClassName, onEdit}`) built at `renderBody`'s two `renderServerTrees` call sites — the one level that
+tells the trees apart — rather than two independent blocks. `RENAME_CONTROL_LABEL` and the new
+`EDIT_CHAT_CONTROL_LABEL` stay two separate module constants (not one shared word, unlike
+`EDIT_WORKSPACE_CONTROL_LABEL`), so [#1430](https://github.com/pyrycode/pyrycode-desktop/issues/1430) can
+retitle the Channels pen to **Edit channel** without touching the Chats tree's word. The pen reaches the
+same `onRename` handler both trees already shared — it re-checks the host with `canMutateHost` and seeds
+the field with `titleFor(row.name)` (the `Untitled` fallback included), so a Chats row's pen needed no new
+downstream code, only a second caller.
+
 ## Related
 
 - [Channel List — the row's desktop geometry](channel-list-desktop-row-geometry.md) — the map page.

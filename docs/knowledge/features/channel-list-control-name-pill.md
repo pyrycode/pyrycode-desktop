@@ -3,12 +3,14 @@
 Split out of [Channel List — the row's desktop geometry](channel-list-desktop-row-geometry.md), the map
 page for this row's geometry history, once that page grew past the doc-guard's 50000-byte cap
 (`npm run check:docs`). Read the map page first for the surrounding context. This page is the shared home
-for `.channel-list__control-name`, worn by all seven sidebar controls that carry it: the row's own
-Rename/Save-as-channel pair (#1172, this ticket), the workspace row's plus (#1181), the host row's pen and
+for `.channel-list__control-name`, worn by all eight sidebar controls that carry it: the row's own
+Rename/Save-as-channel pair (#1172, this ticket), the Chats tree's own Edit-chat pen
+(`.channel-list__chat-edit`, #1441), the workspace row's plus (#1181), the host row's pen and
 plus (#1190), and the section header's plus (#1304) — see
+[Channel List — the row's 8px inset and its hover-revealed control](channel-list-row-hover-control.md#1441-a-chats-row-now-carries-both-controls-not-one),
 [Channel List — the host row](channel-list-host-row.md) and
 [Channel List — the section header's pair-new-host control](channel-list-section-header-pair-control.md)
-for those four controls' own geometry.
+for those controls' own geometry.
 
 Since [#1171](channel-list-row-hover-control.md) each trailing control is a bare 12px glyph, invisible until the row's hover reveals it. This
 names it: hovering (or keyboard-focusing) **the control itself, never the row** shows a Pill (Figma
@@ -43,13 +45,14 @@ hovered control's pill covered roughly the trailing 104px of that row's title, f
 sat on the 36×24 control.
 
 **Superseded by [#1427](https://github.com/pyrycode/pyrycode-desktop/issues/1427): the pill follows the
-pointer instead, on all seven controls that wear it, not just these two.** It is `position: fixed`, its
+pointer instead, on all controls that wear it, not just these two.** It is `position: fixed`, its
 top-left corner `--space-3` right of and `--space-6` below the pointer's current position and moving with
 it; mirrored to a bottom-left anchor — `top` one `--space-6` *above* the pointer, `translate: 0
 calc(var(--control-name-mirror, 0) * -100%)` — when the offset placement would leave the window's bottom
 edge; and seeded from the control's own bottom-right corner on keyboard focus, since there is no pointer
-position to read there. `--space-6` is the *tallest* control's height (`.channel-list__save`/
-`.channel-list__rename` are `--space-6` tall, the other five `--space-5`), which is what makes "the pill's
+position to read there. `--space-6` is the *tallest* control's height (`.channel-list__save`,
+`.channel-list__rename` and `.channel-list__chat-edit` are `--space-6` tall, the other five `--space-5`),
+which is what makes "the pill's
 box never touches the control's box" true by arithmetic on every control rather than at the pointer
 positions a test happens to drive. `ChannelList.tsx`'s `placeControlName` writes the pointer position into
 `--control-name-pointer-x`/`-y` on the control's own inline style — a direct `style.setProperty`, never a
@@ -121,6 +124,42 @@ and inside the window — plus a second `page.mouse.move` on the same control an
 follows; the bottom-edge mirror is driven on the last row at full scroll, with the unmirrored placement's
 overflow asserted first so a taller window reddens the spec rather than passing vacuously.
 
+**#1441 gave the Chats tree's own pen this same pill under its own label, `EDIT_CHAT_CONTROL_LABEL`
+("Edit chat") — never merged with `RENAME_CONTROL_LABEL`, despite both naming a pen in the same idiom.**
+The two trees edit two different things (a channel's dialog above the divider, a chat's below it), and
+the split is what lets [#1430](https://github.com/pyrycode/pyrycode-desktop/issues/1430) rename the
+Channels word to **Edit channel** without touching the Chats tree's word — a shared constant would have
+made that a two-tree change with no way to say so. Both labels stay module-local to `ChannelList.tsx`,
+read twice each (the control's `aria-label` and its pill), so the drawn and spoken names cannot drift
+apart on either tree.
+
+**Wearing this pill is two rules, not one, and the second is easy to miss — #1441's first cut missed it.**
+A control's pill is revealed at two different scopes: the *glyph* by the row's own `:hover`
+([the row's hover-revealed control](channel-list-row-hover-control.md)'s reveal rule), the *pill* by the
+control's own `:hover`/`:focus-visible` — this file's trigger rule, which enumerates selectors rather than
+inheriting from the control's own block. `.channel-list__chat-edit` shipped correctly in every other rule
+this control needed — its own block, its `:focus-visible` rule, the row-hover reveal, the icon's
+`display: block` — and was missing from only this one. The result was invisible in review of the diff
+itself: the markup, the word and the `controlNamePlacement` spread were all correct, and the pill was
+styled out of existence, reading nothing on hover or on focus. **A new pill-bearing control has to restate
+an existing one's block in *both* rules — the control's own, and its pair of entries in this trigger —
+"restates `.channel-list__rename`" is not finished at the control's own rule.**
+
+**Why every gate stayed green over a dead pill.** The static tier renders a pill's markup whatever the
+stylesheet says, so a drift guard counting pill text and `aria-label` together is satisfied by a pill that
+can never appear. In the e2e spec the new pill was only ever *counted* and *asserted hidden* — both
+vacuous on a pill hidden forever — and the two blocks that read a pill's *text* were scoped to the other
+two controls (one of them deliberately re-scoped away from the new control by this same ticket). A
+visibility claim about a new element needs a text read on that element while it is meant to be showing;
+counting it or asserting it hidden is not coverage of "it appears," only of "it exists."
+
+`e2e/sidebar-control-name-pill.spec.ts` now parks a probe on the chat pen itself and reads its pill's text
+in both modalities (hover, then keyboard focus via two Tabs from the row's open button — the chevron
+precedes the pen in DOM order since [#1441](channel-list-row-hover-control.md#1441-a-chats-row-now-carries-both-controls-not-one)).
+It parks at `dx: 12` rather than the 4px its siblings use: the pen's and the chevron's boxes overlap by
+8px, so a point in the pen's own left 8px would resolve to the pen only by sibling order, not by being
+clear of the other control.
+
 ## Related
 
 - [Channel List — the row's desktop geometry](channel-list-desktop-row-geometry.md) — the map page.
@@ -129,6 +168,11 @@ overflow asserted first so a taller window reddens the spec rather than passing 
   placement, the mirror, and the transform-free centring of `.channel-list__save`/`.channel-list__rename`.
 - [Channel List — the row's 8px inset and its hover-revealed control](channel-list-row-hover-control.md)
   (#1171) — the bare glyph this pill names, and the transform removal #1427 needed there.
+- [Channel List — the row's 8px inset and its hover-revealed control § #1441](channel-list-row-hover-control.md#1441-a-chats-row-now-carries-both-controls-not-one)
+  — the Chats tree's own pen, this treatment's sixth wearer (and eighth overall), and the two-rule reveal
+  lesson its first cut paid for.
+- [#1441 spec](../../specs/architecture/1441-chat-row-edit-chat-pen.md) — the chat pen's own token and
+  label, and the rework leg's `## Revisions` entry recording this same two-rule gap.
 - [Channel List — the workspace row's plus names itself in a pill](channel-list-workspace-plus-pill.md)
   (#1181) — this treatment's second wearer.
 - [Channel List — the host row and its connection dots § The row's pen and plus on hover](channel-list-host-row.md#the-rows-pen-and-plus-on-hover-1185)

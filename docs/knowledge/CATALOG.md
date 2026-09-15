@@ -1299,6 +1299,15 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   spawn (`EBADARCH`), after the entire packaging stage — including both archs' icon embedding — already
   succeeded. (#1416)
 
+- [Channel List — workspace grouping](features/channel-list-workspace-grouping.md) — split out of
+  [Channel List home screen](features/channel-list.md) to stay under the doc-guard's byte cap:
+  `workspaceLabelFor`/`groupByWorkspace`, the daemon-label-vs-key security split (#1287), the
+  workspace-scoped create controls (#1178/#1179) and the Add-workspace creation path (#1308), how a
+  group leaves both trees when [the Edit workspace dialog's Archive workspace
+  button](features/edit-workspace-dialog.md) (#1439) archives every row it groups, and the
+  `conversationStateFake` one-label-per-`cwd` fixture model. Content moved, none rewritten beyond
+  #1439's own addition.
+
 ## Architecture
 
 _None yet._

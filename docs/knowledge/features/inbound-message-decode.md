@@ -293,9 +293,10 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
   that displaces the `session_settings`/`screen_snapshot` transcript-scan route (decided 2026-09-14).
   **This slice reads the frame's reading only** — `conversation_id`, `model`, `total_tokens`,
   `max_tokens`, `percentage`. The frame's three inventories (`categories`, `mcp_tools`, `memory_files`)
-  and their three dropped counts are on every real frame and are deliberately not declared or read yet:
-  the fresh five-field literal tolerates and drops them, which the follow-on slices (#1455, #1459, #1460)
-  decode. Provenance
+  and their three dropped counts were on every real frame from the start and were deliberately not
+  declared or read at this slice: the fresh five-field literal tolerated and dropped them, which the
+  follow-on slices (#1455, #1459, #1460) went on to decode — after which every key the daemon writes is
+  declared and read. Provenance
   is mixed within the one payload — `conversation_id` is daemon-authored, `model` is claude-authored and
   unsanitized — and the reading is informational: no range check and no cross-field check on the three
   integers, since the daemon neither recomputes nor normalizes claude's figures. Takes no
@@ -313,7 +314,7 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
   whole frame closed. The rows arrive as a prefix in descending-token order; `dropped_categories`
   accumulates two independent cuts and is never cross-checked against the retained length. One malformed
   row throws the whole frame rather than yielding a partial breakdown. `mcp_tools`/`memory_files` and
-  their two dropped counts remain undeclared, for #1459 and #1460 respectively. Full account in [Extension
+  their two dropped counts followed in #1459 and #1460 respectively. Full account in [Extension
   history](inbound-message-decode-history.md).
 - [#1459](https://github.com/pyrycode/pyrycode-desktop/issues/1459) extended it once more, additively:
   the payload's second inventory, `mcp_tools: ContextUsageMCPTool[]` plus its own
@@ -324,5 +325,23 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
   against the retained length, nor against `dropped_categories`. `server_name` is decoded as **inert**:
   its name collides with the actuation-crossing `ServerName` on the daemon's MCP reconnect payload, so it
   is never an actuation target, never an authorization input, and never joined against `mcp_status`, the
-  same constraint `name` already carries. `memory_files` and its dropped count remain undeclared, for
-  #1460. Full account in [Extension history](inbound-message-decode-history.md).
+  same constraint `name` already carries. `memory_files` and its dropped count followed in #1460, the
+  frame's last inventory, `../../../etc/passwd` included. Full account in [Extension
+  history](inbound-message-decode-history.md).
+- [#1460](https://github.com/pyrycode/pyrycode-desktop/issues/1460) extended it once more, additively —
+  the last of the frame's three inventories: `memory_files: ContextUsageMemoryFile[]` plus its own
+  `dropped_memory_files: number`, via a per-row narrower, `parseContextUsageMemoryFile` —
+  `parseContextUsageMCPTool`'s shape with different key names (`path`, `type`, `tokens`). After this
+  slice every key the daemon writes is declared and read. `memory_files` is never `null` — an empty array
+  is claude's positive report of no memory files, while `null`/absent/non-array fails the whole frame
+  closed; the rows arrive as a prefix in descending-token order and `dropped_memory_files` is never
+  cross-checked against the retained length or against either sibling count. `path` is decoded as
+  **inert** — path-shaped descriptive text, never a file handle: nothing joins, cleans, resolves or opens
+  it, and the daemon's committed fixture carries `../../../etc/passwd`, crossing byte-for-byte and
+  unnormalised, pinned by a test that checks both literal equality and non-normalisation structurally.
+  `type` beside it is claude's label, never a discriminant — a field spelled `type` looks like one in a
+  file whose every other `type` narrows an envelope, and it is not. A memory-file `path` is the strongest
+  disclosure ground on the frame: it names who the user is and where they work, the fixture value alone
+  leaking a home-directory username and a project name, and a POSIX path may legitimately contain a
+  newline, extending the MCP inventory's forge-a-log-record ground to this field too. Full account in
+  [Extension history](inbound-message-decode-history.md).

@@ -436,31 +436,47 @@ escaping owed at the render sink (#1421), not here — and that embedded newline
 reach a log field for an *integrity* reason as well as a privacy one: the diagnostic stream is
 line-delimited JSON, so a logged tool name could forge a record.
 
-**THE FRAME CARRIES TWO MORE KEYS THAT ARE STILL DELIBERATELY NOT DECLARED HERE.** `memory_files` and its
-own dropped count ride the same wire; `parseContextUsagePayload` returns a fresh nine-field literal, so
-the two are tolerated and dropped rather than copied through. A declared-but-unparsed field would put a
-type on the wire surface with no narrowing behind it, so the declaration and the parsing of this last
-inventory land together in [#1460](https://github.com/pyrycode/pyrycode-desktop/issues/1460), not split
-across tickets. `../../../etc/passwd` as a `memory_files` path remains that slice's must-review item.
+**Extended once more by [#1460](https://github.com/pyrycode/pyrycode-desktop/issues/1460), additively —
+the last of the frame's three inventories.** `ContextUsagePayload` gains `memory_files:
+ContextUsageMemoryFile[]` plus its own `dropped_memory_files: number`, via a per-row narrower,
+`parseContextUsageMemoryFile` — `parseContextUsageMCPTool`'s shape with different key names: an
+`isRecord` gate, two `requireString`s (`path`, `type`), one `requireNumber` (`tokens`).
+`ContextUsageMemoryFile` takes no `Wire` prefix, the same reasoning as its two siblings. **Every key the
+daemon writes is now declared and read** — the "two more keys deliberately not declared" statement this
+section once carried is gone rather than decremented, and `parseContextUsagePayload` returns a fresh
+eleven-field literal, still copying nothing through.
 
-`name` (on either inventory's rows) is claude-authored descriptive text that crossed the subprocess trust
-boundary, bounded by the producer and neither validated nor sanitized upstream — inert text only, safe
-to render but never a lookup key, a React `key`, a `Map`-or-plain-object index, a path, a filename or a
-log field. Decoding makes the row's *shape* trusted, never its *content*; the committed fixture's
-`Messages <&>` (categories) and `query\ndocs` / `remote<mcp>` (MCP tools) each cross byte-for-byte,
-unescaped, and the escaping is owed at the render sink (#1421), not here. A category figure and a
-per-tool figure both join `model` and the three reading integers in the never-logged set — a per-row
-token count discloses how the window is composed, a finer side-channel than the reading's own three
-integers.
+**What is new is `path`, and it is decoded as INERT — path-shaped descriptive text, never a file
+handle.** The daemon's own comment states the constraint: nothing joins, cleans, resolves or opens it,
+because doing so would imply the frame acts on a real file, which it does not. The committed fixture
+carries `../../../etc/passwd`; it crosses byte-for-byte and unnormalised, pinned by a test that checks
+both literal equality and non-normalisation structurally (no `path.resolve` equivalence, no leading-slash
+gain). `type` beside it carries the same constraint and is a LABEL, never a discriminant to `switch` on,
+however much a field spelled `type` looks like one in a file whose every other `type` narrows an
+envelope. A memory-file `path` is the **strongest disclosure ground on the frame** — it names who the
+user is and where they work, the fixture value alone leaking a home-directory username and a project
+name — and a POSIX path may legitimately contain a newline, extending the MCP inventory's
+forge-a-log-record ground to this field too.
+
+`name` (on either label-bearing inventory's rows), `path` and `type` are all claude- or workspace-authored
+descriptive text that crossed the subprocess trust boundary, bounded by the producer and neither
+validated nor sanitized upstream — inert text only, safe to render but never a lookup key, a React `key`,
+a `Map`-or-plain-object index, a path, a filename or a log field. Decoding makes each row's *shape*
+trusted, never its *content*; the committed fixture's `Messages <&>` (categories), `query\ndocs` /
+`remote<mcp>` (MCP tools) and `../../../etc/passwd` (memory files) each cross byte-for-byte, unescaped,
+and the escaping is owed at the render sink (#1421), not here. A category figure, a per-tool figure and a
+per-file figure all join `model` and the three reading integers in the never-logged set — a per-row token
+count discloses how the window is composed, a finer side-channel than the reading's own three integers.
 
 **PROVENANCE IS MIXED WITHIN THE ONE PAYLOAD**, the field-level fact a reader is likeliest to get wrong:
-`conversation_id` is daemon-authored, `model` and every row's `name` are claude-authored descriptive text
-that crossed the subprocess trust boundary and are neither validated nor sanitized upstream, and every
-`server_name` is workspace configuration inert despite its colliding name (see #1459 above). Assuming one
-provenance for the whole struct errs in the harmful direction most of the time — promoting one of these
-strings to a checked value. `model` stays inert text: never a lookup key, a Map key, a path, an icon
-name, an attribute or a URL, and never an identity to match against a model menu (`model_announced`
-remains that authority).
+`conversation_id` is daemon-authored, `model`/every row's `name`/every `type` are claude-authored
+descriptive text that crossed the subprocess trust boundary and are neither validated nor sanitized
+upstream, every `server_name` is workspace configuration inert despite its colliding name (see #1459
+above), and every memory-file `path` is likewise workspace-authored — a real path on the operator's own
+filesystem, never claude's own words. Assuming one provenance for the whole struct errs in the harmful
+direction most of the time — promoting one of these strings to a checked value. `model` stays inert text:
+never a lookup key, a Map key, a path, an icon name, an attribute or a URL, and never an identity to match
+against a model menu (`model_announced` remains that authority).
 
 **THE READING IS INFORMATIONAL — no range check and no cross-field check on any of the three integers.**
 The daemon neither recomputes nor normalizes claude's figures, so nothing may assume `percentage` is
@@ -474,17 +490,19 @@ to the render slice (#1421), where `contextUsagePercent` already documents it.
 **Takes no `FrameTimestamp`**, the `thinking_progress`/`rate_limited` precedent — the mix-in marks exactly
 the arms `decodeHistoryEvent` draws, and this kind gains no arm there (a regression pin: even a
 fully well-formed stored `context_usage` still skips). Content-free-logged as `inbound-decoded(code:
-'context_usage')` before the `default` branch; neither `conversation_id`, `model`, any row's `name` or
-`server_name`, nor any of the three integers ever reaches a log line — `model` and every row's `name` are
-unsanitized claude-influenced text, every `server_name` is workspace-configuration disclosure, and the
-three integers disclose how much private work is in the window, a side-channel as unwelcome as the
-correlating `conversation_id` beside them. Ships dormant, the same two-step already taken for
-`question_shown` (#884/#885), `modal_shown` (#870/#871) and `thinking_progress`/`rate_limited`
-themselves: `daemonConnection.ts`'s inbound switch has no catch-all, so the reading stops here until the
-IPC carry slice claims it. This decode spans four slices replacing #1254's first criterion, on the
-`rate_limited` precedent: the reading and category breakdown (#1454/#1455), the MCP-tool inventory here
-(#1459), the memory-file inventory (#1460), then IPC carry #1419, store #1420, surfaces #1421. Architect (builder)
-self-review PASS, no MUST FIX findings. Full account in [Extension
+'context_usage')` before the `default` branch; neither `conversation_id`, `model`, any row's `name`,
+`server_name`, `path` or `type`, nor any of the three integers ever reaches a log line — `model` and every
+row's `name`/`type` are unsanitized claude-influenced text, every `server_name` is
+workspace-configuration disclosure, every `path` names the operator's own filesystem (the strongest such
+ground on the frame), and the three integers disclose how much private work is in the window, a
+side-channel as unwelcome as the correlating `conversation_id` beside them. Ships dormant, the same
+two-step already taken for `question_shown` (#884/#885), `modal_shown` (#870/#871) and
+`thinking_progress`/`rate_limited` themselves: `daemonConnection.ts`'s inbound switch has no catch-all, so
+the reading stops here until the IPC carry slice claims it. This decode spanned four slices replacing
+\#1254's first criterion, on the `rate_limited` precedent: the reading and category breakdown
+(#1454/#1455), the MCP-tool inventory (#1459), the memory-file inventory (#1460) — after which every key
+the daemon writes is declared and read — then IPC carry #1419, store #1420, surfaces #1421. Architect
+(builder) self-review PASS, no MUST FIX findings. Full account in [Extension
 history](inbound-message-decode-history.md).
 
 **[#965](https://github.com/pyrycode/pyrycode-desktop/issues/965) widens `daemon-error` by a field, not a

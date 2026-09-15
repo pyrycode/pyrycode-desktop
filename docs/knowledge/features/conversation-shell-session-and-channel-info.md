@@ -228,20 +228,25 @@ The fake-transport test also observes updates while open and switches both ways 
 conversations. Store and cleanup tests cover complete replacement, isolation, hostile Map keys and
 pairing reset. See [verification boundaries](development-verification.md#what-each-test-tier-proves).
 
-**Rename action ([#368](../codebase/368.md)).** The Actions slot's first filler: a Material 3 tonal
-pill (Figma 20:89, `.channel-info__action`) rendered only when the container supplies an `onRename?`
-callback — supplied exactly in the `conversation !== null` branch, so the null-conversation
-graceful-empty case (above) offers no Rename control either. Activating it seeds and opens the
-existing [Rename dialog](rename-conversation-dialog.md) (`RenameConversationDialogView`, #360) via a
-second screen-local `useState` pair (`renameOpen`/`renameName`) the `ChannelInfoSheet` container
-grows, mirroring `ChannelList.tsx`'s row-level rename state shape; Save dispatches the already-shipped
-`renameConversation` command (#359) via `requestRenameConversation`, imported verbatim rather than
-cloned. That helper's `row` param narrowed from `ConversationSummary` to `Pick<ConversationSummary,
-'id'>` (it only ever read `.id`) so the sheet's `ConversationCreatedPayload` — a narrower 5-field
-shape lacking `is_archived`/`last_message_ts` — passes directly, no adapter, no cast; the existing
-`ChannelList` call site is unaffected (a wider shape still satisfies the narrower `Pick`). No new
-transport, IPC, or wire code. See [#368 codebase notes](../codebase/368.md) for the full design and
-patterns established.
+**Rename action ([#368](../codebase/368.md)), retitled Edit chat ([#1440](rename-conversation-dialog.md)).**
+The Actions slot's first filler: a Material 3 tonal pill (Figma 20:89, `.channel-info__action`)
+rendered only when the container supplies an `onRename?` callback — supplied exactly in the
+`conversation !== null` branch, so the null-conversation graceful-empty case (above) offers no
+Edit-chat control either. Activating it seeds and opens the existing [Edit chat
+dialog](rename-conversation-dialog.md) (`EditChatDialogView`, `RenameConversationDialogView` before
+\#1440) via a second screen-local `useState` pair (`renameOpen`/`renameName`) the `ChannelInfoSheet`
+container grows, mirroring `ChannelList.tsx`'s row-level rename state shape; Save dispatches the
+already-shipped `renameConversation` command (#359) via `requestRenameConversation`, imported
+verbatim rather than cloned. That helper's `row` param narrowed from `ConversationSummary` to
+`Pick<ConversationSummary, 'id'>` (it only ever read `.id`) so the sheet's `ConversationCreatedPayload`
+— a narrower 5-field shape lacking `is_archived`/`last_message_ts` — passes directly, no adapter, no
+cast; the existing `ChannelList` call site is unaffected (a wider shape still satisfies the narrower
+`Pick`). The pill's own prop name, `onRename`, is unchanged — it still opens the same rename-capable
+dialog, only the rendered word moved. No new transport, IPC, or wire code. See [#368 codebase
+notes](../codebase/368.md) for the full design and patterns established, and [Edit chat
+dialog](rename-conversation-dialog.md) for the #1440 retitle and its new Archive chat button (which
+now duplicates, inside this same dialog, the send-then-close-both sequence the Archive pill below
+already used).
 
 **Archive action ([#366](../codebase/366.md)).** The Actions slot's second filler, landing one
 merge after Rename and reusing its `.channel-info__action` tonal pill (Figma 20:94) verbatim — no

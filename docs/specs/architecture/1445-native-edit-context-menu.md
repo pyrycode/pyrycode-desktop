@@ -174,6 +174,26 @@ stands in for an e2e spec because the native popup is invisible to Playwright. N
    enabled?** Leaning no: the non-empty trimmed selection *is* the enablement test in that branch, and
    reading the flag as well would give one decision two sources of truth. Record the resolution.
 
+## Revisions
+
+**2026-09-15 — both open questions resolved in Phase B. The design is unchanged; these record the
+answers, not departures from it.**
+
+1. **The root's closure stays a wrapper, and now says why in a comment.** Electron's `Menu` does satisfy
+   `PoppableMenu` on its own (`popup(options?)` has an all-optional parameter, so it is assignable to a
+   zero-argument `popup()`), which is exactly what makes the wrapper look redundant to a later reader. It
+   is not: returning the bare `Menu` would drop `{ window: mainWindow }` and let the popup land on
+   whichever window happened to be focused. The wiring comment in `createWindow` now states that.
+2. **Copy outside an editable field is emitted unconditionally enabled, not gated on `editFlags.canCopy`**
+   — as leaned. In that branch the non-empty trimmed selection *is* the enablement test, and reading the
+   flag as well would give one decision two sources of truth that could disagree. The reasoning sits on
+   `editContextMenuTemplate` so the next reader does not re-open it.
+
+One thing the plan assumed and the build has now proved rather than argued: `ContextMenuParams` is
+assignable to the narrow `EditContextParams`, and the returned listener is assignable to Electron's
+`'context-menu'` signature, both with no cast. The test file pins the first as a compile-time check so an
+Electron field rename fails `npm run build` in the unit rather than only at the wiring site.
+
 ## Security review
 
 **Verdict:** PASS

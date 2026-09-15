@@ -24,7 +24,8 @@ import {
  *
  * ⭐ THE SUPPRESSED SET IS A CONTIGUOUS RUN, NEVER A SCATTER, AND THAT IS THE WHOLE SAFETY ARGUMENT.
  * `entries` arrives newest-first, so the run this walks off the FRONT is a chronological SUFFIX of the
- * page, which leaves the survivors a chronological PREFIX. `reduceHistoryPage` folds them left from
+ * page, which leaves the survivors a chronological PREFIX — plus, since #1437, the operator's own messages
+ * from inside that run, which fold last and depend on nothing. `reduceHistoryPage` folds them left from
  * `initialTimelineState`, and a prefix folds against exactly the state it would have seen inside the
  * whole page: every entry a survivor could depend on is itself a survivor. Filtering entry-by-entry does
  * NOT have that property, and the two losses it admits are both real —
@@ -50,10 +51,51 @@ import {
  * key are two entries this client cannot tell apart, and a comparison that cannot separate them must
  * draw both rather than guess which one the live row was. Here it also ENDS the run, which is the same
  * posture every other stop takes — an entry whose `ts` will not key (`joinKeyFor` returns `undefined`),
- * one whose key was evicted from the bounded live set, one whose live fold changed nothing so no key was
- * ever recorded, and the operator's own `message`, which the emit never stamps: all of them draw, along
- * with everything older. A duplicated row is a cosmetic fault, a silently dropped one is a lost message,
- * and this is a dedup on entirely remote-supplied input.
+ * one whose key was evicted from the bounded live set, and one whose live fold changed nothing so no key
+ * was ever recorded: all of them draw, along with everything older. A duplicated row is a cosmetic fault,
+ * a silently dropped one is a lost message, and this is a dedup on entirely remote-supplied input.
+ *
+ * ⭐ THE OPERATOR'S OWN `message` IS THE ONE ENTRY STEPPED OVER (#1437), kept without ending the run, and
+ * it is the exception that made the run rule wrong on its own terms. The emit never stamps
+ * `messageReceived` — the daemon writes the operator's message to its log and pushes no `message` frame on
+ * the interactive lane — so no live key of that type can EVER exist, and under the plain stop rule a page
+ * whose newest entry was the operator's own message stopped the walk at once. In a short chat that page is
+ * the whole conversation already on screen, so the reply and its tool rows survived the join and drew a
+ * second time at the head, unstamped, above the message they answer. `withoutHeldEchoes` removed the
+ * page's copies of the operator's own rows by `message_id` and has no such check for anything else.
+ *
+ * THE SURVIVORS ARE THEN A PREFIX PLUS INDEPENDENT ROWS, which is the ⭐ safety argument above reproduced
+ * for the new shape rather than abandoned. Stepping over an entry inside the run means the survivors are
+ * no longer a suffix of the page, so this builds its result as a FILTER rather than a `slice` — and what
+ * it keeps is the chronological prefix (the stop entry and everything older) plus the message entries from
+ * inside the run, which are chronologically NEWER than the stop and therefore fold LAST. The prefix folds
+ * against exactly the state it would have seen inside the whole page, unchanged. The trailing message rows
+ * are independent of it in both directions: `translateTimelineEvent` maps a message to a `userText` row,
+ * `reduceTimeline`'s `userText` arm is a fresh tail-append that reads no existing item, and no `toolUse`,
+ * `toolResult`, `assistantDelta` or `turnEnd` arm reads a `userText` row. The three pieces of state a
+ * `userText` fold does touch — `localSendPending`, `stoppingBanner`, `latestTurnEnd` — are scalars, and
+ * `reduceHistoryPage` folds against a scratch state and returns only `items`, so none can escape the page.
+ * So NEITHER of the two losses named above becomes reachable: an orphaned result needs a dropped
+ * `toolUse`, a turn read backwards needs a surviving older delta beneath a dropped newer one, and both
+ * need a NON-message entry to be stepped over. None is. The whole type is safe, not just `role: 'user'`:
+ * the daemon's only producer of a `message` log entry is the operator-message write, and a
+ * `role: 'assistant'` one — the shape a hostile daemon would plant — folds to `null` and draws nothing.
+ *
+ * THE STEP-OVER IS KEYED ON THE TYPE, NEVER ON "THIS ENTRY COULD NOT BE KEYED", and the broader spelling
+ * that looks equivalent is exploitable. A hostile daemon could stamp an over-length `ts` on an
+ * `assistantDelta` belonging to a turn whose newer deltas it also serves; an unkeyed-step-over would walk
+ * past that older delta, drop the newer ones against their real live keys, and the survivor would fold
+ * into a bubble placed ABOVE the live bubble holding the newer text — A TURN READ BACKWARDS, made
+ * daemon-triggerable. `event.type` is this client's own discriminant from a closed union that #1227's
+ * main-side decode already narrowed; only the `ts` half is remote.
+ *
+ * NO HELD-ECHO INPUT, DELIBERATELY. The walk learns nothing about `message_id`: `withoutHeldEchoes` in
+ * `prependHistoryFor` already decides about operator rows by that id, and one owner for that decision is
+ * the point. A message with no held echo — one sent from another client — survives both and draws.
+ *
+ * `sessionTransition` also ends the run and is NOT stepped over, for a different reason: `joinKeyToRecord`
+ * declines a key whose conversation was inferred rather than asserted, so its live twin may have drawn
+ * while recording nothing. #1192's second deliverable is what changes that.
  *
  * IT DROPS ON THE PAGE SIDE, NEVER THE LIVE SIDE, and that is AC3 rather than an implementation
  * convenience: the live row stays exactly where the live stream put it, and the page's copy — which
@@ -74,13 +116,24 @@ export function withoutLiveEntries(
     const key = joinKeyFor(entry.event.type, entry.ts)
     if (key !== undefined) seen.set(key, (seen.get(key) ?? 0) + 1)
   }
-  let drawn = 0
+  let inRun = true
+  const next: HistoryTimelineEntry[] = []
   for (const entry of entries) {
+    if (!inRun) {
+      next.push(entry)
+      continue
+    }
+    if (entry.event.type === 'messageReceived') {
+      next.push(entry)
+      continue
+    }
     const key = joinKeyFor(entry.event.type, entry.ts)
-    if (key === undefined || seen.get(key) !== 1 || !liveKeys.has(key)) break
-    drawn += 1
+    if (key === undefined || seen.get(key) !== 1 || !liveKeys.has(key)) {
+      inRun = false
+      next.push(entry)
+    }
   }
-  return drawn === 0 ? entries : entries.slice(drawn)
+  return next.length === entries.length ? entries : next
 }
 
 /**

@@ -23,6 +23,14 @@ function entry(id: number, event: HistoryTimelineEntry['event']): HistoryTimelin
   return { id, ts: `2026-09-07T10:00:0${id}Z`, event }
 }
 
+/** One stored `message` entry — the operator's own turn, the one arm no live frame produces (#1223). */
+function ownMessage(id: number, messageId: string): HistoryTimelineEntry {
+  return entry(id, {
+    type: 'messageReceived',
+    message: { message_id: messageId, role: 'user', text: 'sent from here' }
+  })
+}
+
 /** The live half of the key for each entry, as `subscribeTimeline` would have minted it (#1225). */
 function liveKeysFor(...entries: HistoryTimelineEntry[]): ReadonlySet<string> {
   const keys = new Set<string>()
@@ -308,21 +316,68 @@ describe('withoutLiveEntries — joining a served page to what the live stream a
     // `daemonConnection.test.ts`. `withoutLiveEntries` has no type-level exclusion and would drop the
     // entry if handed a key spelled for it; what this asserts is the consequence of that emit-side
     // guarantee against a REALISTIC key set — one holding keys only for the two arms the live lane does
-    // stamp. The entry survives, and since no live key can exist for it, it also STOPS the run, so the
-    // older delta beneath it survives too. This is the structural reason
-    // `e2e/real-daemon-history-on-open.spec.ts`'s closing toHaveCount(1) survives the join.
+    // stamp. The entry survives.
+    //
+    // #1437 INVERTED THE SECOND HALF of this case. The message no longer STOPS the run: it is stepped
+    // over, so `drawn` — held live, and previously saved only by the stop — is now dropped, and `older`
+    // survives on its own merits (the live lane keyed it, but the walk never reaches it: `own` is
+    // stepped over, `drawn` is dropped, and nothing else is newer than `older`). What the entry keeps is
+    // the guarantee this case is named for: it is never itself suppressed, in any position.
     const drawn = entry(3, DELTA_2)
-    const own: HistoryTimelineEntry = {
-      id: 2,
-      ts: '2026-09-07T10:00:02Z',
-      event: {
-        type: 'messageReceived',
-        message: { message_id: 'm-1', role: 'user', text: 'history marker' }
-      }
-    }
+    const own = ownMessage(2, 'm-1')
     const older = entry(1, DELTA_1)
 
-    expect(withoutLiveEntries([drawn, own, older], liveKeysFor(drawn, older))).toEqual([own, older])
+    expect(withoutLiveEntries([drawn, own, older], liveKeysFor(drawn, older))).toEqual([own])
+  })
+
+  // #1437 — the operator's own message is STEPPED OVER rather than ending the run. It can carry no live
+  // key (the daemon pushes no `message` frame), so under the #1225 rule it stopped the walk at once
+  // whenever it was the log's newest entry, and a page asked for in a short chat right after sending —
+  // the whole conversation, already on screen — survived the join whole and drew again at the head.
+  it('⭐ steps over the operator\'s own message, so the run reaches the reply already on screen (#1437)', () => {
+    // The reported shape: a reply with two tool rows beneath the 18:41 message that followed it.
+    const own = ownMessage(5, 'm-1')
+    const drawn = [
+      entry(4, { type: 'turnEnd', turnId: 't', stopReason: 'end_turn' }),
+      entry(3, {
+        type: 'toolResult', turnId: 't', toolUseId: 'u1', isError: false,
+        resultSummary: '3 lines', resultDetail: undefined
+      }),
+      entry(2, {
+        type: 'toolUse', turnId: 't', toolUseId: 'u1', name: 'read',
+        inputSummary: 'f.ts', input: undefined
+      }),
+      entry(1, DELTA_1)
+    ]
+
+    // The message alone survives, so the page folds to the one row `withoutHeldEchoes` then removes by
+    // `messageId` — no assistant bubble, no tool row and no turn boundary reaches the slice (AC1).
+    expect(withoutLiveEntries([own, ...drawn], liveKeysFor(...drawn))).toEqual([own])
+    expect(reduceHistoryPage([own, ...drawn], liveKeysFor(...drawn))).toEqual([
+      { kind: 'userText', text: 'sent from here', messageId: 'm-1', createdAt: undefined, attachments: undefined }
+    ])
+  })
+
+  it('keeps an operator message with no held echo, and everything older the live lane did not key (#1437)', () => {
+    // A message sent from another client: nothing dedups it downstream, so it must still draw as a user
+    // row. `undrawn` ends the run beneath it and survives with it (AC3).
+    const own = ownMessage(3, 'm-2')
+    const drawn = entry(2, DELTA_2)
+    const undrawn = entry(1, DELTA_1)
+
+    expect(withoutLiveEntries([own, drawn, undrawn], liveKeysFor(drawn))).toEqual([own, undrawn])
+  })
+
+  it('leaves the stop rule unchanged for a non-message entry beneath a stepped-over message (#1437)', () => {
+    // The step-over widens what the run can REACH PAST, never what it can drop. `undrawn` still ends the
+    // walk, so the held `older` beneath it survives — the #1225 run rule, asserted through a message —
+    // and nothing having been dropped, the page comes back by reference (AC4).
+    const own = ownMessage(3, 'm-3')
+    const undrawn = entry(2, DELTA_2)
+    const older = entry(1, DELTA_1)
+    const page = [own, undrawn, older]
+
+    expect(withoutLiveEntries(page, liveKeysFor(older))).toBe(page)
   })
 
   it('refuses to key an over-length ts, so a hostile timestamp suppresses nothing', () => {

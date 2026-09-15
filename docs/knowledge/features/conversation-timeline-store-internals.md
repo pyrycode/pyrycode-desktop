@@ -340,6 +340,26 @@ the middle of the page but not the newest entry — now suppresses nothing, and 
 exactly what they did before this ticket. The strongest available statement about this function: its
 output is either the joined page or the un-joined one, never a page with new content lost or reordered.
 
+**The operator's own `message` entry is kept and stepped over, never let end the run (#1437).** The daemon
+pushes no `message` frame on the interactive lane, so `liveJoinKeyFor` can never mint a key for a
+`messageReceived` entry — under the plain stop rule above, that entry always failed the "held" condition and
+ended the run at once. A page whose newest entry was the operator's own message is exactly what a short
+chat serves on an upward scroll near the top, so the whole conversation already on screen — the reply and
+its tool rows — survived the join and drew a second time at the head, unstamped, above the message it
+answers. The walk now special-cases the type, not "this entry could not be keyed": a `messageReceived`
+entry is kept without ending the run, and every other entry keeps the three-condition stop rule unchanged.
+Because a stepped-over message can sit ahead of older survivors, the survivors are no longer a plain
+suffix, so the result is built as an order-preserving **filter** rather than a `slice`. The safety argument
+still holds: the prefix (the stop entry and everything older) folds exactly as before, and the message rows
+from inside the run are chronologically newer, fold last, and are independent in both directions —
+`translateTimelineEvent` maps a message to a `userText` row that no `toolUse`/`toolResult`/`assistantDelta`/
+`turnEnd` arm of `reduceTimeline` reads, and `reduceHistoryPage` discards the scalars that arm does touch.
+The step-over is keyed on `event.type`, a client-owned discriminant, never on the daemon-supplied `ts` —
+keying it on "unkeyed" instead would let a hostile daemon walk an `assistantDelta` past its own stop
+condition and reproduce "a turn read backwards" on purpose. `withoutHeldEchoes` in `prependHistoryFor`
+remains the sole owner of removing the operator's own row by `message_id`; the walk learns nothing about it,
+so a message sent from another client — no held echo — still survives and draws.
+
 `subscribeHistoryPage` gains a fourth, **optional trailing** parameter, `getLiveKeys?: (conversationId:
 string) => ReadonlySet<string>` — the same idiom a third time, deliberately not a third callback
 alongside `applyPage`/`settleFailure`. `useHistoryPageBridge` supplies it from a new
@@ -358,8 +378,15 @@ current keys, not whichever were live when it mounted.
 | Live fold changed nothing, in either `dispatchFor` branch | No key recorded. |
 | Slice resolved from the screen, not the event's own attribution | No key recorded (the ⭐ guard). |
 | The overlap is a GAP rather than the page's newest run | The run stops there; the gap and everything older draw twice. |
+| Newest run holds the operator's own `message` entry (#1437) | Kept, stepped over — it does not end the run; every other entry keeps the stop rule. |
 
 Every row draws a duplicate rather than dropping a message — a cosmetic fault, never a lost one.
+
+**Two fail-open rules can compose into the exact fault each one individually refuses (#1437).** The run
+rule refuses to cut a hole in a page, and the unstamped `messageReceived` arm refuses to let a live fold of
+the operator's own message suppress the page's copy — each is safe alone, but their product was a page
+whose newest entry is a `message` stopping the run at once, so the whole page behind it drew a second time.
+Worth re-checking the pair whenever a new fail-open rule joins this join, not just the rule in isolation.
 
 ## Data flow
 

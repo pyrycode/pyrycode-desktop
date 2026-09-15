@@ -71,6 +71,41 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
+**#1433 (2026-09-15) — the tier grows to 20 executed specs in 20 files (21 declared); the stored-prompt family gets its first live proof, and the live gate found a real daemon bug.**
+`e2e/real-claude-system-prompt.spec.ts` proves the [system prompt write](system-prompt-write.md) family end
+to end: a prompt saved through Channel info produces nothing in a session that was already running, and the
+same text produces a marker reply once a session actually spawns with it. The ticket asked for the positive
+half on `New session`; the first live run failed there, and the failure was the daemon, not the spec — see
+§ Current real-claude gate state's own detail in [system-prompt-write.md](system-prompt-write.md#live-proof-1433)
+and the rework rationale in the spec's file header.
+
+Two gate runs:
+
+- **`4746fd3673` — RED.** 20 executed, 19 passed, 1 failed: this spec's original shape (positive half after
+  `New session`) at the post-rotation marker assertion. The dispatcher parked the ticket back in
+  In Development with `needs-rework:builder`, `needs-real-claude` retained.
+- **`d2be2eccb0` — GREEN.** 20 executed, 20 passed, 0 failed, 1 skipped (the reworked spec's own
+  `test.fixme`, which does not execute and does not count against the floor). Merged with `origin/main`
+  `9cd86aa55c` (0 commits behind), exit 0, wall clock 112.4s. The dispatcher moved the ticket to
+  In Documentation and removed `needs-real-claude`.
+
+**Why the RED was a daemon bug, not a spec bug.** `refreshSystemPrompt` — the only code that recomposes a
+session's `--append-system-prompt-file` from the stored value — has exactly one caller, `Pool.Activate`,
+which returns early for a session already in `stateActive`. `new_session` never reaches it:
+`handleNewSession` → `StartNewSession` → `Runner.RestartFresh` relaunches the child from the frozen argv
+through the runner's own loop, never through `Pool.Activate`, and `Pool.RotateForNewSession` only rekeys,
+persists and notifies. So a prompt saved during a live session cannot reach the child that `New session`
+spawns — contradicting `set_system_prompt`'s own contract that it "takes effect at the conversation's NEXT
+session start". Filed upstream as `pyrycode/pyrycode#2436`. The rework moved the positive half to a
+conversation's **first** spawn instead (a minted session starts `stateEvicted` and pyrycode#2085 defers its
+child to the first message, which is the flow `refreshSystemPrompt`'s own doc names as the one it serves),
+kept the negative half on its original vehicle, and left the original `New session` shape as an executable
+`test.fixme` pointing at #2436 — flipping it back to `test` is the whole fix once the daemon change lands.
+
+**`PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED` is owed a bump from 10 to 20** — the tier's executed count, matching
+the discipline that a PR adding a `real-*` spec must say so. The floor lives in the fork's dispatcher
+configuration, not this repo.
+
 **#1409 (2026-09-14) — the dispatcher's authenticated gate PASSED, confirming AC4's session-permission checkbox live.**
 `real-claude-permission-modal.spec.ts`'s `real claude session checkbox grants repeated Bash use only in
 the current session` now opts the fixture into `stdio_permission_prompt: true` (retaining the stream

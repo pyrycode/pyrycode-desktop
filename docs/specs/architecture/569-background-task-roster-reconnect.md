@@ -331,3 +331,44 @@ not previously exist.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-15
+
+## Revisions
+
+### 2026-09-15 — the AC4 baseline, and two more stale sites than the ticket named
+
+**`.conversation__thread` is present at zero timeline items; the plan said it was absent.** § Testing
+strategy planned AC4's baseline as "`.conversation__thread` mounts only once an item exists, so its
+absence plus a zero `[data-thread-role]` count is the baseline". That is what
+`useThreadScrollPin`'s docblock states, and it is not what the DOM does — the first run of the spec found
+one `.conversation__thread` on an empty thread, with `.conversation__empty` visible inside it. The
+assertion is now the honest form and a better one regardless: the container's CHILD COUNT is captured
+before the drop and compared against itself afterwards, beside a zero bubble count so the baseline cannot
+already be nonzero and hide a later addition. No production behaviour is involved; only the spec's
+reading of the empty state changed.
+
+**Three sites beyond the four the ticket named carry the same stale claim, and AC5 reaches them.** The
+ticket's Technical Notes list four; AC5 is broader ("no claim survives in the tree that this family has no
+re-assertion path"). Grepping the premise rather than the ticket number found three more, all corrected
+with their conclusions and assertions untouched:
+
+- `clearPairingScopedState`'s **#1145 activity paragraph**, which files the activity store's re-assertion
+  story as "the roster's rather than the queue's". The claim about the activity family is still true; the
+  comparison is not, since the roster now behaves like the queue.
+- `clearPairingScopedState.test.ts`'s **throw-ordering case**, asserting the roster clear has "no
+  re-assertion path of any kind to overwrite them".
+- `clearPairingScopedState.test.ts`'s **pairing-boundary roster case**, asserting "NOTHING re-asserts a
+  roster … and this app sends no `last_event_id`".
+
+### Open questions, resolved
+
+1. **Does the `connected` clear reach the conversations the burst is silent about?** Yes. The silent
+   conversation held a task before the drop and reads "No background-task report yet" afterwards, which is
+   only reachable through the clear. That assertion turned out to be load-bearing twice over: it is AC3's
+   second silence *and* the half of the ordering proof that shows the clear ran at all.
+2. **Is the footer pill reachable after a reconnect?** Yes — no history occupant appears, because the
+   spec's fake answers every `request_history` with an empty page. The pill is kept as the reconnect gate.
+
+**Falsifiability check, run rather than argued.** A proof ticket whose spec passes on the first run has
+proved nothing until the spec is shown to be capable of failing. Removing the re-asserted roster from the
+burst and re-running made it fail at the pill assertion (`Expected "1 task running"`, 20.6s) — which is
+exactly the ticket's feared failure mode, a re-assertion eaten by the clear. The burst restored, it passes.

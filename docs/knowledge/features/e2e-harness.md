@@ -136,6 +136,35 @@ Reported API categories have synthesized upstream contract evidence, not live
 captures establishing the account's state. See [stopped records](conversation-shell-timeline-render.md#stopped-turn-records)
 and [recovery](conversation-shell-composer-status.md#stopped-turn-recovery).
 
+### Tolerating a transient inspection-context loss on reads
+
+`app.evaluate` can raise Playwright's `Execution context was destroyed, most likely because of a
+navigation.` while the launched app is demonstrably alive — a `launch-fate` attachment on an observed
+failure reported `runningAtOutcome: true`, `exitCode: 0`, no teardown failures. `retries` is `0` off
+CI, so one such read turns a green branch red with no `flaky` line.
+[#1380](https://github.com/pyrycode/pyrycode-desktop/issues/1380) hit this first, in
+`pairing-authentication.spec.ts`'s `readAuthentication` (see [pairing input
+screen](pairing-input-screen.md#edge-cases-and-limitations)), and tolerated the exact message on
+**reads only**: a mutation must never be replayed — a retried `app.evaluate` that installs a counting
+wrapper would wrap the wrapper, and a retried click or pushed frame would double the thing under test.
+
+[#1502](https://github.com/pyrycode/pyrycode-desktop/issues/1502) lifted that rule into a shared
+module once a second site hit the identical race. `e2e/fixtures/mainProcessRead.ts` exports
+`readMainProcess(app, read)`: it returns what `read` produced, or the sentinel `NOT_YET_AVAILABLE`
+when the raised error's message contains `Execution context was destroyed`; any other error,
+including a non-`Error` throw, rethrows unchanged and at once. `app` is typed as a one-method
+structural evaluator rather than `ElectronApplication`, so `mainProcessRead.test.ts` (vitest, the
+`daemonCapabilityGate.ts`/`.test.ts` shape) drives every branch — a completed value including a falsy
+`0`, the tolerated message, and a fatal error — with a plain stub, since the race itself does not
+reproduce on demand. Bounding the retry stays the caller's job and visible at the call site:
+`chat-history-recording.spec.ts`'s confirmed-deletion counter reads pass `{ timeout: 5_000 }`, the
+bound #1380 used, so a genuinely dead app still fails inside five seconds instead of waiting out the
+test timeout.
+
+`readAuthentication` keeps its own private copy of the same tolerance — migrating it onto the shared
+helper was explicitly out of scope for #1502, since that spec was already green. Fold it in when a
+third site needs this.
+
 ## Configuration and usage
 
 - **Run the suite:** `npm run e2e` = `npm run build && playwright test`. The build is chained so e2e never runs against a stale `out/` — a silently-stale build is a worse failure than a slower run.

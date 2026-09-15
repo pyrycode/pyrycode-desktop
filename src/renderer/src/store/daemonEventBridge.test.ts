@@ -351,6 +351,46 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     ).toBeNull()
   })
 
+  it('contextUsage → null (consumed by the #1420 store slice, not the session store)', () => {
+    expect(
+      translateDaemonEvent({
+        type: 'contextUsage',
+        conversationId: 'conv-1',
+        model: 'claude-opus-5',
+        totalTokens: 128_400,
+        maxTokens: 200_000,
+        percentage: 64,
+        categories: [{ name: 'System prompt', tokens: 41_200 }],
+        droppedCategories: 3,
+        mcpTools: [{ name: 'read_file', server_name: 'filesystem', tokens: 1450 }],
+        droppedMcpTools: 5,
+        memoryFiles: [{ path: '../../../etc/passwd', type: 'user', tokens: 240 }],
+        droppedMemoryFiles: 7
+      })
+    ).toBeNull()
+    // A window at 0 with three EMPTY inventories is no more a session action than a full one: each
+    // `[]` is the positive statement that claude reported no rows, and each `0` is a genuine reading
+    // rather than an absence, so neither shape may be read here as "nothing arrived". Neither flips a
+    // connection scalar — how full the context window is is orthogonal to whether the socket is up,
+    // which is what makes this no-op permanent rather than dormant.
+    expect(
+      translateDaemonEvent({
+        type: 'contextUsage',
+        conversationId: 'conv-1',
+        model: '',
+        totalTokens: 0,
+        maxTokens: 0,
+        percentage: 0,
+        categories: [],
+        droppedCategories: 0,
+        mcpTools: [],
+        droppedMcpTools: 0,
+        memoryFiles: [],
+        droppedMemoryFiles: 0
+      })
+    ).toBeNull()
+  })
+
   it('backgroundTaskStarted → null (consumed by the #567 background-task store, not the session store)', () => {
     expect(
       translateDaemonEvent({

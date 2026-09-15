@@ -31,7 +31,10 @@ import type {
   WireQuestion,
   WireSlashCommand,
   WireModelOption,
-  SessionPromptStatus
+  SessionPromptStatus,
+  ContextUsageCategory,
+  ContextUsageMCPTool,
+  ContextUsageMemoryFile
 } from '../wire/types'
 
 /** Validated shape, untrusted content: render only as bounded text, never attributes or logs. */
@@ -1570,6 +1573,132 @@ type BaseDaemonEvent =
       status: string
       limitType: string
       resetsAt: number
+    }
+  // The context-window arm (#1419) — claude's own report of how full the window is, plus the three
+  // inventories that say how it got that way. Decoded across #1454 (the reading), #1455 (the category
+  // breakdown), #1459 (the MCP-tool inventory) and #1460 (the memory-file inventory), and carried here.
+  //
+  // A READING, NOT A STATE TRANSITION, exactly as `rateLimited` above: no rising and no falling edge,
+  // no `turn_id`, opening and closing no turn — daemon STATE by the queueState rule (#720). Fanned out
+  // to `interactive`-capable clients after every turn end.
+  //
+  // ALL ELEVEN WIRE FIELDS CROSS, and unlike `rateLimited` nothing is left behind: the frame carries no
+  // truncation marker to drop and every field has a consumer in #1420 / #1421.
+  //
+  // TOP-LEVEL FIELDS ARE snake→camel; THE THREE ROW TYPES ARE REUSED VERBATIM with their snake_case
+  // fields. That is not an inconsistency to fix but the settled house rule for nested arrays, with two
+  // precedents on this union (`queueState.queued` and `backgroundTaskRoster.tasks`): the row narrower
+  // already stripped each row to its known fields, so there is nothing to drop and no mapping to write.
+  // Hence `server_name` INSIDE its row while `mcp_tools` → `mcpTools` at the top level; the acronym
+  // lowercases in a FIELD name (mechanical snake→camel) and stays capitalised in the TYPE name
+  // (`ContextUsageMCPTool`), which is the existing split rather than a new one. `readonly` on each
+  // array mirrors both precedents; the row interfaces stay mutable, exactly as `QueuedItem` does.
+  //
+  // NO `daemonTs`, and the omission is the design. That mix-in marks the arms `decodeHistoryEvent`
+  // draws, which need (`type`, `ts`) as the join key between a served page and what the live stream
+  // already drew; the decode arm takes no FrameTimestamp, so there is no page half to join against and
+  // stamping it would advertise a join nothing can perform. `rateLimited` and `thinkingProgress`, not
+  // `apiRetry`, are the precedent for this arm's shape.
+  //
+  // PROVENANCE IS MIXED WITHIN THIS ONE ARM, and it is the field-level fact a reader is likeliest to
+  // get wrong. `conversationId` is DAEMON-authored — the mapper fills it from the daemon's own registry
+  // record, never from claude's bytes. `model`, every row label, every `server_name` and every `path`
+  // and `type` are CLAUDE- or WORKSPACE-authored. Assuming one provenance for the whole arm errs in a
+  // harmful direction half the time, because it promotes the rest to a value they were never checked
+  // to be.
+  //
+  // THE READING IS INFORMATIONAL AND NOTHING RECONCILES. `percentage` is NOT derivable from
+  // `totalTokens` / `maxTokens` — the daemon neither recomputes nor normalizes claude's integers, and a
+  // client that recomputes disagrees with the figure claude reported, which is the whole reason this
+  // frame displaces the transcript route. The categories need not sum to the total. EACH DROPPED COUNT
+  // IS INDEPENDENT AND NOT INFERABLE: each accumulates the producer's own caps PLUS the mapper's frame-
+  // byte budget, so an inventory's true size is `list.length + its OWN dropped count`, a retained
+  // list's LENGTH IS NO EVIDENCE OF COMPLETENESS in either direction, and no count says anything about
+  // another's length. ROWS ARRIVE AS A PREFIX IN THE PRODUCER'S DESCENDING-TOKEN ORDER, any cut taking
+  // entries off the TAIL — so a shortened list is never a list with holes, and re-sorting or
+  // de-duplicating destroys the only ordering signal a consumer gets.
+  //
+  // `0` IS A VALUE AND `[]` IS A VALUE. An empty inventory is the POSITIVE STATEMENT that claude
+  // reported no rows, never the absence a frame that never arrived yields, and a dropped count of `0`
+  // is a genuine zero. Nothing may test either for truthiness.
+  //
+  // NEVER ALLOCATE, ITERATE OR SIZE ANYTHING FROM ANY OF THE SIX INTEGERS — `attachment_chunk`'s
+  // never-allocate-from-a-claim rule, and sharper here than anywhere it has applied before: a DROPPED
+  // COUNT IS A COUNT OF ROWS THAT ARE NOT PRESENT, so the natural "…and 3 more" rendering invites
+  // `Array(droppedCategories)` or a loop to that bound, which is an allocation sized by an unbounded
+  // daemon-supplied number. Render the figure; never a structure sized by it. Two formatting traps ride
+  // along: a `maxTokens` of `0` yields `Infinity` from the obvious ratio (the renderer's own
+  // `contextUsagePercent` already documents this), and none of the six is range-checked in either
+  // direction — a `percentage` over 100, a total exceeding the max and a negative are all representable
+  // and none is rejected.
+  //
+  // NOT DEDUPED: one event per decoded frame, verbatim repeats included. The daemon fans this out after
+  // every turn end, so consecutive frames legitimately repeat AND legitimately FALL (a window shrinks
+  // at a `/clear` or a compaction); the transport holds no coalescing, timer or per-conversation memo
+  // to make it otherwise. Suppressing a repeat would eat the report that says the reading is current,
+  // and filtering a fall would eat ordinary traffic.
+  //
+  // SECURITY — THE UNTRUSTED CONTENT IS NESTED, which has no precedent on this union and is the thing a
+  // reader will miss. `model` is one untrusted string on the arm itself; every other one is INSIDE a
+  // row of one of the three inventories, so a consumer that has internalised "the untrusted fields are
+  // the string-typed ones on the arm" will handle exactly one of them. The daemon bounds all of them at
+  // construction but neither validates nor sanitizes any, so each stays untrusted, model- or
+  // workspace-authored text: safe to render as INERT TEXT, never fed to an HTML sink (no innerHTML /
+  // dangerouslySetInnerHTML), never into an attribute or a URL, and never a CSS class or an icon name.
+  // Three per-row prohibitions are forwarded rather than delegated, each stated in full on its row type
+  // in ../wire/types:
+  //   - `name` is a tool or category LABEL, never a handle to call anything by.
+  //   - `server_name` IS INERT DESPITE ITS NAME. It spells the same field as the daemon's
+  //     `MCPReconnectPayload.ServerName`, which crosses an ACTUATION seam verbatim — and having the
+  //     same spelling as a field that actuates is not having its meaning. It must NEVER be fed to an
+  //     MCP verb (a reconnect, a tool invocation, a server lookup) or joined against `mcp_status` on
+  //     the strength of having appeared here.
+  //   - `path` IS NOT A FILE HANDLE. It is path-shaped descriptive text that nothing joins, cleans,
+  //     resolves or opens — reporting what claude READ rather than granting access to anything — so it
+  //     is never an `href`, a `shell.openExternal` target, a `path.join` argument, a filename or a
+  //     cache key. A path-shaped string is not a path-constrained one: the daemon constrains neither
+  //     scheme nor shape, so a `javascript:` URI, a `file://` URL and a UNC path all arrive as an
+  //     ordinary `path`. The `type` beside it is a LABEL, NEVER A DISCRIMINANT — a field spelled `type`
+  //     in this repo invites `switch (row.type)`, which is exactly wrong: it is an OPEN set a claude
+  //     release widens by definition, and it carries no authority, no trust level and no scope.
+  // IF A CONSUMER INDEXES ANY INVENTORY BY ANY OF ITS STRINGS, THE INDEX IS A `Map`, never a plain
+  // object, and the same goes for a React `key`: a legend keyed by category name, a panel grouped by
+  // `server_name` and a list keyed by `path` are all the obvious view models, and `__proto__` and
+  // `../..` are ordinary values in all three. `model` IS ALSO NOT AN IDENTITY — `modelAnnounced`
+  // remains the authority on which model is running, and this is descriptive text beside a token count,
+  // never a key to match a model menu against. The whole frame is a REPORT, NEVER A CONTROL INPUT: no
+  // security-relevant behaviour may branch on any field. `conversationId` is a daemon-asserted ROUTING
+  // KEY, never rendered text and never an authorization signal; REQUIRED, never optional, for the
+  // reason every routing key on this union is — an optional one invites `?? activeConversation`
+  // fallbacks, the misattribution to remove.
+  //
+  // NOTHING DECODED REACHES A LOG on any path: `emitDaemonEvent` is log-free by construction and the
+  // decode-side line is pinned content-free. The grounds ESCALATE across the frame. The three integers
+  // disclose how much private work is in the window; each per-row figure discloses how the window is
+  // COMPOSED rather than merely how full it is; a `server_name` is WORKSPACE CONFIGURATION, disclosing
+  // what the operator WIRED UP, so a server named after internal infrastructure must not ride into a
+  // bundle an operator may send off-box; and a `path` is the strongest on the frame — it discloses WHO
+  // THE USER IS AND WHERE THEY WORK. It is also an INTEGRITY rule and not only a privacy one: the
+  // diagnostic stream is line-delimited JSON, and both the committed MCP fixture's EMBEDDED NEWLINE and
+  // the newline a POSIX path may legitimately contain could FORGE A RECORD.
+  //
+  // Ships dormant — all four exhaustive bridges no-op it until #1420. That is not a formality: the
+  // `assertNever` guard stringifies the WHOLE event into an `Error` message, and this is the LARGEST
+  // arm on the union and the one carrying the most disclosive fields, so a missing case would put every
+  // path and every server name into a stack trace and a crash reporter.
+  | {
+      type: 'contextUsage'
+      conversationId: string
+      model: string
+      totalTokens: number
+      maxTokens: number
+      percentage: number
+      categories: readonly ContextUsageCategory[]
+      droppedCategories: number
+      mcpTools: readonly ContextUsageMCPTool[]
+      droppedMcpTools: number
+      memoryFiles: readonly ContextUsageMemoryFile[]
+      droppedMemoryFiles: number
     }
 
 /**

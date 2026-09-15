@@ -410,12 +410,31 @@ describe('translateQuestionEvent — every other arm returns null (the inverse f
         status: 'allowed_warning',
         limitType: 'seven_day',
         resetsAt: 1_755_900_000
+      },
+      // the context-window reading is PERMANENTLY no-op here (#1419) and is the arm in this table
+      // furthest from an ask: unsolicited, nothing outstanding, no answer to give, and it reports a
+      // condition of the WINDOW rather than anything claude wants from the operator. The daemon fans
+      // it out after every turn end. The frame is a report, never a control input. Its consumer is the
+      // #1420 store slice.
+      {
+        type: 'contextUsage',
+        conversationId: 'conv-1',
+        model: 'claude-opus-5',
+        totalTokens: 128_400,
+        maxTokens: 200_000,
+        percentage: 64,
+        categories: [{ name: 'System prompt', tokens: 41_200 }],
+        droppedCategories: 3,
+        mcpTools: [{ name: 'read_file', server_name: 'filesystem', tokens: 1450 }],
+        droppedMcpTools: 5,
+        memoryFiles: [{ path: '../../../etc/passwd', type: 'user', tokens: 240 }],
+        droppedMemoryFiles: 7
       }
     ]
 
     // The count is asserted so a future arm silently dropped from this table cannot pass unnoticed:
-    // 46 union arms minus the 3 owned above.
-    expect(others).toHaveLength(43)
+    // 47 union arms minus the 3 owned above.
+    expect(others).toHaveLength(44)
     for (const event of others) expect(translateQuestionEvent(event)).toBeNull()
   })
 })

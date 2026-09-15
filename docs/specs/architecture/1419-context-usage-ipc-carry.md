@@ -75,8 +75,22 @@ deliverable (a union arm nothing emits) is consumed by exactly one sibling in th
 the floor rule, and the floor beats the ceiling: merged back, overage recorded here, built as one
 ticket. This is #1319's argument unchanged, and it held there. Every other boundary holds — **no new
 exported type** (one arm on an existing union; the three row types are already exported from
-`wire/types.ts`), five consumer edits, four acceptance criteria, no new reject branch, ~550 lines of
-total written work.
+`wire/types.ts`), five consumer edits, four acceptance criteria, no new reject branch.
+
+**The line estimate was wrong and the actual is recorded here rather than quietly left stale.**
+Planned ~550 lines of total written work; actual **~1120** — this plan at ~350 lines plus ~790 of
+implementation, about double. Where it went: the arm's contract docblock (~115 lines) and the emit's
+(~65) carry three inventories' worth of per-row prohibitions where #1319 carried four scalars' worth,
+and the test file (~400) needs the daemon's full eleven-field capture plus an empty one as fixtures,
+an inside-a-row smuggling assertion the flat arms did not need, and a per-inventory empty-beside-
+non-zero case. #1319 — the nearest analogue, and the one the estimate was taken from — actually cost
+~780 total, so the miss is the inventory fan-out rather than a surprise about the shape of the work.
+That trips the 800-line ceiling, and it is recorded rather than acted on for the reason the paragraph
+above already gives: **the floor forbids the split that the ceiling would ask for.** The arm and the
+four bridge arms do not compile apart, and the only other cut yields a slice consumed by exactly one
+sibling. Floor beats ceiling, so the overage is stated and the ticket ships whole. Neither cap was
+near-missed in practice — the run finished well inside its turn and wall-clock budget — which is the
+evidence that the binding constraint here was never the one the line count proxies for.
 
 No ADR is warranted: this arm settles nothing the union's existing rules do not already decide. The
 one genuinely new question it raises — how the window reconciles this reading against the renderer's
@@ -272,6 +286,25 @@ the bridges.
 - How the reading reconciles against the renderer's existing `contextUsagePercent`, which derives one
   from session settings. Explicitly **#1421's**, named in § Context and left untouched here — this
   slice reads neither that function nor its inputs.
+
+## Revisions
+
+**2026-09-15, during implementation — no design change.** The arm, the emit and the four bridge
+dispositions landed exactly as designed above: eleven fields, top-level snake→camel with the three row
+types reused verbatim, `readonly` arrays passed by reference, no `daemonTs`, nothing narrowed, four
+no-ops. Two implementation notes the verifier will see in the diff:
+
+- The out-of-range test table states each row's **expected camel delta alongside its wire patch**
+  rather than deriving the first from the second. A derivation would re-implement the emit's own
+  snake→camel mapping inside the test, so a mapping the emit got wrong would be reproduced faithfully
+  and pass green. (The first draft derived it, and did not typecheck either — a heterogeneous
+  `it.each` table widens to a union whose members lack each other's keys.)
+- The inside-a-row assertion **narrows on the `type` discriminant instead of casting**. A cast fights
+  the `readonly` rows, and would also pass quietly if some other arm were emitted.
+
+Both Open Questions below are left open **by design**; nothing in the implementation decided either.
+`timelineBridge`'s no-op is recorded DORMANT accordingly, and nothing here reads, touches or
+reconciles against the renderer's existing `contextUsagePercent`.
 
 ## Security review
 

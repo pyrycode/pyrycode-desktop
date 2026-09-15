@@ -364,6 +364,11 @@ function rateLimitedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'rate_limited', ts: FIXED_TS, payload })
 }
 
+/** A `context_usage` plaintext, wrapping an arbitrary payload (#1419). */
+function contextUsagePlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'context_usage', ts: FIXED_TS, payload })
+}
+
 /** A `background_task_started` plaintext, wrapping an arbitrary payload (#564). */
 function backgroundTaskStartedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'background_task_started', ts: FIXED_TS, payload })
@@ -2415,6 +2420,402 @@ describe('createDaemonConnection — rate_limited stream (#1319)', () => {
         type: 'message',
         plaintext: rateLimitedPlaintext({ ...LIMITED, resets_at: '1755900000' })
       })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — context_usage stream (#1419)', () => {
+  /**
+   * The daemon's committed `internal/protocol/testdata/context_usage.json` capture (#1454 the reading,
+   * #1455 the breakdown, #1459 the MCP-tool inventory, #1460 the memory-file inventory). Its
+   * adversarial values are upstream ON PURPOSE and every one of them must cross this boundary
+   * byte-for-byte: `Messages <&>` carries markup metacharacters, the MCP row an EMBEDDED NEWLINE and
+   * `remote<mcp>`, and the memory-file row `../../../etc/passwd`. Escaping or normalising any of them
+   * here would be doing it at the wrong layer — the render sink is where it is owed (CLAUDE.md's
+   * 2026-08-20 operator ruling) — and would corrupt the value for every non-HTML sink besides.
+   *
+   * `3`, `5` and `7` each sit beside exactly TWO retained rows, which is what makes this fixture also
+   * the case proving nothing reconciles a count against a length, nor the three counts against each
+   * other.
+   */
+  const USAGE = {
+    conversation_id: 'conv-1',
+    model: 'claude-opus-5',
+    total_tokens: 128_400,
+    max_tokens: 200_000,
+    percentage: 64,
+    categories: [
+      { name: 'System prompt', tokens: 41_200 },
+      { name: 'Messages <&>', tokens: 9800 }
+    ],
+    dropped_categories: 3,
+    mcp_tools: [
+      { name: 'read_file', server_name: 'filesystem', tokens: 1450 },
+      { name: 'query\ndocs', server_name: 'remote<mcp>', tokens: 620 }
+    ],
+    dropped_mcp_tools: 5,
+    memory_files: [
+      { path: '/Users/dev/project/CLAUDE.md', type: 'project', tokens: 3100 },
+      { path: '../../../etc/passwd', type: 'user', tokens: 240 }
+    ],
+    dropped_memory_files: 7
+  }
+
+  /** The event the fixture above must produce, verbatim. Top-level fields are snake→camel; THE THREE
+   *  ROW TYPES ARE REUSED WITH THEIR snake_case FIELDS (`server_name` inside its row), which is the
+   *  settled house rule for nested arrays that `queueState.queued` and `backgroundTaskRoster.tasks`
+   *  already follow. */
+  const CARRIED = {
+    type: 'contextUsage',
+    conversationId: 'conv-1',
+    model: 'claude-opus-5',
+    totalTokens: 128_400,
+    maxTokens: 200_000,
+    percentage: 64,
+    categories: [
+      { name: 'System prompt', tokens: 41_200 },
+      { name: 'Messages <&>', tokens: 9800 }
+    ],
+    droppedCategories: 3,
+    mcpTools: [
+      { name: 'read_file', server_name: 'filesystem', tokens: 1450 },
+      { name: 'query\ndocs', server_name: 'remote<mcp>', tokens: 620 }
+    ],
+    droppedMcpTools: 5,
+    memoryFiles: [
+      { path: '/Users/dev/project/CLAUDE.md', type: 'project', tokens: 3100 },
+      { path: '../../../etc/passwd', type: 'user', tokens: 240 }
+    ],
+    droppedMemoryFiles: 7
+  }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(diagnosticLog?: DiagnosticLog): Promise<ReturnType<typeof build>> {
+    const ctx = build({ diagnosticLog })
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('decodes a context_usage into exactly one contextUsage event carrying all eleven fields', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: contextUsagePlaintext(USAGE) })
+
+    const events = emitted(sink).slice(before)
+    // A strict toEqual on the whole event, asserted POSITIVELY: the arm has exactly the eleven modeled
+    // properties and NO `daemonTs`, which this assertion pins for free (an extra defined property
+    // fails a toEqual). The omission is the decode's design carried forward — that arm takes no
+    // FrameTimestamp, because there is no served-page half for a (type, ts) key to join against, so
+    // stamping it would advertise a join nothing can perform.
+    expect(events).toEqual([CARRIED])
+    // Every adversarial string crosses byte-for-byte: unescaped, unnormalised, and in the case of the
+    // traversal-shaped path, unjoined and unresolved. #1419 is where `path` first crosses
+    // contextBridge, and it crosses as descriptive text rather than as a file handle.
+    const carried = JSON.stringify(events)
+    expect(carried).toContain('Messages <&>')
+    expect(carried).toContain('query\\ndocs')
+    expect(carried).toContain('remote<mcp>')
+    expect(carried).toContain('../../../etc/passwd')
+  })
+
+  it('emits exactly the eleven modeled properties — no snake key and no smuggled top-level key crosses', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: contextUsagePlaintext({ ...USAGE, turn_id: 'must-not-cross', smuggled: 'must-not-cross' })
+    })
+
+    const events = emitted(sink).slice(before)
+    // One assertion proving two things at once: the snake spellings do not cross at the top level, and
+    // the emit is a literal built from named fields rather than a spread of the decoded payload — a
+    // spread would carry all eleven wire keys under their wire names.
+    expect(Object.keys(events[0]).sort()).toEqual([
+      'categories',
+      'conversationId',
+      'droppedCategories',
+      'droppedMcpTools',
+      'droppedMemoryFiles',
+      'maxTokens',
+      'mcpTools',
+      'memoryFiles',
+      'model',
+      'percentage',
+      'totalTokens',
+      'type'
+    ])
+    expect(JSON.stringify(events)).not.toContain('must-not-cross')
+  })
+
+  it('does not carry a key smuggled INSIDE a row of any of the three inventories', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: contextUsagePlaintext({
+        ...USAGE,
+        categories: [{ name: 'System prompt', tokens: 41_200, smuggled: 'must-not-cross' }],
+        mcp_tools: [
+          { name: 'read_file', server_name: 'filesystem', tokens: 1450, smuggled: 'must-not-cross' }
+        ],
+        memory_files: [
+          { path: '/Users/dev/CLAUDE.md', type: 'project', tokens: 3100, smuggled: 'must-not-cross' }
+        ]
+      })
+    })
+
+    // THE ASSERTION THE PASS-BY-REFERENCE DESIGN RESTS ON. The three arrays cross UNMAPPED — the
+    // `queued` / `tasks` precedent — and that is safe only because each row parser returns a FRESH
+    // two- or three-field literal built from named requireString / requireNumber reads, so no
+    // reference to the JSON.parse result survives into the array. Were any parser to return its input
+    // record, a key planted inside a row (`__proto__` as an own data property being the one that
+    // matters) would ride across IPC into whatever index #1420 builds. That property belongs to the
+    // decoder, not to this emit, so it is pinned from THIS side too: a future decoder change that
+    // breaks it reddens here, where the value actually crosses the boundary.
+    const events = emitted(sink).slice(before)
+    expect(JSON.stringify(events)).not.toContain('must-not-cross')
+    // Narrowed on the discriminant rather than cast: the rows are `readonly`, and a cast would also
+    // quietly pass if some other arm were emitted.
+    const event = events[0]
+    if (event.type !== 'contextUsage') throw new Error(`expected contextUsage, got ${event.type}`)
+    expect(Object.keys(event.categories[0]).sort()).toEqual(['name', 'tokens'])
+    expect(Object.keys(event.mcpTools[0]).sort()).toEqual(['name', 'server_name', 'tokens'])
+    expect(Object.keys(event.memoryFiles[0]).sort()).toEqual(['path', 'tokens', 'type'])
+  })
+
+  it('carries empty inventories beside NON-ZERO dropped counts (neither is an absence)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: contextUsagePlaintext({
+        ...USAGE,
+        categories: [],
+        mcp_tools: [],
+        memory_files: []
+      })
+    })
+
+    // An empty inventory is the POSITIVE STATEMENT that claude reported no rows, never the absence a
+    // frame that never arrived yields — and a non-zero count beside it is the case that proves a
+    // retained list's LENGTH IS NO EVIDENCE OF COMPLETENESS in either direction. These are the
+    // assertions that redden if someone later reads an empty list as proof nothing was dropped,
+    // collapses `[]` into `null`, or drops a list for being falsy.
+    expect(emitted(sink).slice(before)).toEqual([
+      { ...CARRIED, categories: [], mcpTools: [], memoryFiles: [] }
+    ])
+  })
+
+  it('carries the all-empty capture: three zeroes, two empty strings, three empty lists', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: contextUsagePlaintext({
+        conversation_id: '',
+        model: '',
+        total_tokens: 0,
+        max_tokens: 0,
+        percentage: 0,
+        categories: [],
+        dropped_categories: 0,
+        mcp_tools: [],
+        dropped_mcp_tools: 0,
+        memory_files: [],
+        dropped_memory_files: 0
+      })
+    })
+
+    // The daemon's committed `context_usage_empty.json`. No field carries `omitempty`, so every one of
+    // these is a VALUE: `0` is claude's reading of zero and `''` is a string it sent. A truthiness
+    // test anywhere on this leg would read ordinary traffic as malformed and drop the frame.
+    expect(emitted(sink).slice(before)).toEqual([
+      {
+        type: 'contextUsage',
+        conversationId: '',
+        model: '',
+        totalTokens: 0,
+        maxTokens: 0,
+        percentage: 0,
+        categories: [],
+        droppedCategories: 0,
+        mcpTools: [],
+        droppedMcpTools: 0,
+        memoryFiles: [],
+        droppedMemoryFiles: 0
+      }
+    ])
+  })
+
+  it('carries a frame naming an UNKNOWN conversation — the store decides retention, not the transport', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: contextUsagePlaintext({ ...USAGE, conversation_id: 'conv-never-heard-of' })
+    })
+
+    // The transport holds no conversation registry and must not pre-empt the store's decision by
+    // filtering: whether a reading for a conversation this window does not host is kept, dropped or
+    // held is #1420's call, and a frame silently eaten here would make that call unmakeable. The id is
+    // a daemon-asserted ROUTING KEY and its membership in any known set is NOT checked here.
+    expect(emitted(sink).slice(before)).toEqual([
+      { ...CARRIED, conversationId: 'conv-never-heard-of' }
+    ])
+  })
+
+  it.each([
+    ['an unmeasured model', 'some-model-nobody-has-shipped'],
+    ['a model cut to nothing', '']
+  ])('carries %s across unchanged — nothing is narrowed on this boundary', async (_label, model) => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: contextUsagePlaintext({ ...USAGE, model }) })
+
+    // `model` is claude-authored descriptive text with NO client-side allow-list: narrowing it here
+    // would drop the first frame naming a model this build has never heard of, and it is not an
+    // identity in any case — `model_announced` remains the authority on what is running.
+    expect(emitted(sink).slice(before)).toEqual([{ ...CARRIED, model }])
+  })
+
+  it('carries a row `type` outside every known set — a LABEL, never a discriminant', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    const memory_files = [{ path: '/tmp/x.md', type: 'a-kind-invented-next-release', tokens: 1 }]
+    drivers[0].emit({ type: 'message', plaintext: contextUsagePlaintext({ ...USAGE, memory_files }) })
+
+    // A field spelled `type` on an interface in this repo is a standing invitation to misread — the
+    // inbound union narrows on `kind` and every envelope narrows on `type` — so `switch (row.type)`
+    // reads as idiomatic here and is exactly wrong. It is an OPEN set a claude release widens by
+    // definition, and a client-side closed set would fail-close a valid future frame.
+    expect(emitted(sink).slice(before)).toEqual([{ ...CARRIED, memoryFiles: memory_files }])
+  })
+
+  // Each row states the wire patch AND the camel delta it must produce, rather than re-deriving the
+  // second from the first: a re-derivation would re-implement the emit's own snake→camel mapping in
+  // the test, so a mapping the emit got wrong would be reproduced faithfully and pass.
+  const outOfRange: ReadonlyArray<
+    [string, Partial<typeof USAGE>, Partial<typeof CARRIED>]
+  > = [
+    ['a percentage over 100', { percentage: 140 }, { percentage: 140 }],
+    [
+      'a total exceeding the max',
+      { total_tokens: 400_000, max_tokens: 200_000 },
+      { totalTokens: 400_000, maxTokens: 200_000 }
+    ],
+    ['a zero max beside a non-zero total', { max_tokens: 0 }, { maxTokens: 0 }],
+    [
+      'a negative reading',
+      { total_tokens: -1, percentage: -1 },
+      { totalTokens: -1, percentage: -1 }
+    ],
+    ['an absurd magnitude', { total_tokens: 8.64e15 }, { totalTokens: 8.64e15 }],
+    [
+      'absurd dropped counts',
+      { dropped_categories: 8.64e15, dropped_mcp_tools: -1 },
+      { droppedCategories: 8.64e15, droppedMcpTools: -1 }
+    ]
+  ]
+
+  it.each(outOfRange)('carries %s across without policing its range', async (_label, patch, expected) => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: contextUsagePlaintext({ ...USAGE, ...patch }) })
+
+    // The daemon neither recomputes nor normalizes claude's integers, so none of the six is
+    // range-checked in either direction and this boundary invents no check of its own. A consumer
+    // must guard ITS OWN arithmetic — a `maxTokens` of 0 yields Infinity from the obvious ratio, and
+    // `percentage` must never be recomputed from the pair, since a client that recomputes disagrees
+    // with the figure claude reported. Nothing here allocates, iterates or sizes anything from any of
+    // them, and a dropped count in particular is a count of rows that are NOT PRESENT.
+    expect(emitted(sink).slice(before)).toEqual([{ ...CARRIED, ...expected }])
+  })
+
+  it('does NOT dedup: a falling reading followed by a verbatim repeat emits all three', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    for (const total_tokens of [128_400, 12_000, 12_000]) {
+      drivers[0].emit({ type: 'message', plaintext: contextUsagePlaintext({ ...USAGE, total_tokens }) })
+    }
+
+    // Three frames, three events — no coalescing, no dedupe, no timer, no last-value memo, and none
+    // keyed by conversation. The daemon fans this out after EVERY turn end, so a repeat is the report
+    // that says the reading is still current and a FALL is ordinary traffic (a window shrinks at a
+    // /clear or a compaction). Suppressing the repeat would eat the first; filtering the fall would
+    // eat the second — the thinking_progress mistake one arm over, where `estimated_tokens` restarts
+    // near zero four times inside a single committed capture.
+    expect(emitted(sink).slice(before)).toEqual([
+      CARRIED,
+      { ...CARRIED, totalTokens: 12_000 },
+      { ...CARRIED, totalTokens: 12_000 }
+    ])
+  })
+
+  it('logs no decoded field on the carry path — not the id, the model, a server_name or a path', async () => {
+    const cap = captureLog()
+    const { drivers } = await connected(cap.log)
+    cap.records.length = 0
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: contextUsagePlaintext({
+        ...USAGE,
+        conversation_id: 'conv-secret-id',
+        model: 'model-must-not-log',
+        mcp_tools: [{ name: 'tool-must-not-log', server_name: 'server-must-not-log', tokens: 1 }],
+        memory_files: [{ path: '/Users/secret-human/private-project/NOTES.md', type: 'user', tokens: 1 }]
+      })
+    })
+
+    // The grounds ESCALATE across this frame and all four are real. The integers disclose how much
+    // private work is in the window; each per-row figure discloses how the window is COMPOSED rather
+    // than merely how full it is; a `server_name` is WORKSPACE CONFIGURATION, disclosing what the
+    // operator wired up; and a `path` is the strongest — it discloses WHO THE USER IS AND WHERE THEY
+    // WORK. The exclusion is also an INTEGRITY rule, since the diagnostic stream is line-delimited
+    // JSON and both the MCP row's embedded newline and the newline a POSIX path may legitimately
+    // contain could FORGE A RECORD. This leg adds no log call of its own (emitDaemonEvent is log-free
+    // by construction) and the decode-side record is content-free; this asserts the end-to-end claim
+    // the two halves make separately.
+    const logged = JSON.stringify(cap.records)
+    expect(logged).not.toContain('conv-secret-id')
+    expect(logged).not.toContain('model-must-not-log')
+    expect(logged).not.toContain('tool-must-not-log')
+    expect(logged).not.toContain('server-must-not-log')
+    expect(logged).not.toContain('secret-human')
+    // Not vacuous: the frame WAS decoded and recorded, under a client-owned code literal.
+    expect(cap.records.some((r) => r.event === 'inbound-decoded' && r.code === 'context_usage')).toBe(
+      true
+    )
+  })
+
+  it.each([
+    ['a JSON-string total_tokens', { total_tokens: '128400' }],
+    ['a mistyped field inside ONE category row', { categories: [{ name: 'System prompt', tokens: '1' }] }],
+    ['a mistyped field inside ONE mcp_tools row', { mcp_tools: [{ name: 'x', server_name: 7, tokens: 1 }] }],
+    ['a null memory_files inventory', { memory_files: null }]
+  ])('drops a context_usage malformed by %s without emitting or throwing (fail-closed)', async (_label, patch) => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    // Fail-closed is INHERITED and unchanged: a malformed frame — at the top level OR inside a single
+    // row of one inventory — throws in the decoder, which the caller already catches and drops without
+    // emitting. This slice adds no new failure mode, so the emit is reached only with an
+    // already-validated payload.
+    expect(() =>
+      drivers[0].emit({ type: 'message', plaintext: contextUsagePlaintext({ ...USAGE, ...patch }) })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)
   })

@@ -1695,6 +1695,83 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               resetsAt: inbound.rateLimited.resets_at
             })
             return
+          case 'context-usage':
+            // The context-window data path (#1419, decoded across #1454 / #1455 / #1459 / #1460).
+            // Emit a fresh ELEVEN-property literal carrying the routing key, the model, the three
+            // reading integers, the three inventories and the three dropped counts — each copied BY
+            // NAME from the already-decoded, already-validated payload, never a spread of
+            // inbound.contextUsage (the assistant-delta idiom), so a decoder that later grows a field
+            // cannot smuggle it across IPC. The decode stays fail-closed upstream: a missing or
+            // mistyped field — at the top level OR inside a single row of one inventory — drops the
+            // whole frame without emitting.
+            //
+            // ALL ELEVEN CROSS. Unlike `rate-limited` directly above, nothing is left behind: this
+            // frame carries no truncation marker to drop and every field has a consumer in #1420 /
+            // #1421. Top-level keys are snake→camel; THE THREE ARRAYS PASS THROUGH BY REFERENCE,
+            // UNMAPPED, with their row types' snake_case fields intact (`server_name` inside its row)
+            // — the `queued` / `tasks` precedent two arms down, and the settled house rule for nested
+            // arrays. That is safe HERE for a reason that belongs to the decoder rather than to this
+            // emit: parseContextUsageCategory, parseContextUsageMCPTool and parseContextUsageMemoryFile
+            // each return a FRESH two- or three-field literal built from named requireString /
+            // requireNumber reads, so no reference to the JSON.parse result survives into any array,
+            // there is nothing left to strip, and a key planted INSIDE a row cannot ride across. Were
+            // any of those to return its input record instead, this emit would have to re-map each
+            // row; the round-trip test pins the property from this side so a future decoder change
+            // that broke it reddens here, where the value actually crosses the boundary.
+            //
+            // NOTHING IS NARROWED HERE. `model`, every row label, every `server_name`, every `path`
+            // and every `type` cross VERBATIM: no allow-list, no normalising, no lowercasing. `type`
+            // in particular stays an open string — a client-side closed set would fail-close a valid
+            // future frame, the drift risk CLAUDE.md / ADR 0002 rank above cosmetic robustness. The
+            // six integers cross unpoliced in both directions: `0` is claude's reading of zero rather
+            // than an absence, and an empty inventory is the POSITIVE statement that claude reported
+            // no rows — so a truthiness test anywhere on this leg would read ordinary traffic as
+            // missing. Nothing here ALLOCATES, ITERATES OR SIZES anything from any integer, and a
+            // dropped count especially is a count of rows that are NOT PRESENT; that prohibition rides
+            // the arm's contract forward.
+            //
+            // NO `daemonTs` — the decode arm takes no FrameTimestamp, because a stored context_usage
+            // has no served-page half for a (type, ts) key to join against; the `rate-limited` arm
+            // directly above, not `api-retry`, is the precedent for this literal's shape.
+            //
+            // `conversation_id` crosses as `conversationId`: a daemon-asserted routing key, not
+            // rendered text, and its membership in any known-conversation set is deliberately NOT
+            // checked here — whether a reading for a conversation this window does not host is kept is
+            // #1420's call, and a frame filtered here would make that call unmakeable. It reaches no
+            // sink on this leg: all four exhaustive bridges no-op the arm until #1420.
+            //
+            // NOTHING DECODED REACHES A LOG, here or upstream — emitDaemonEvent is log-free by
+            // construction and the decode's line is content-free. The grounds escalate across this
+            // frame: the integers disclose how much private work is in the window, each per-row figure
+            // how it is COMPOSED, a `server_name` what the operator WIRED UP, and a `path` WHO THE USER
+            // IS AND WHERE THEY WORK. It is an INTEGRITY rule too, this stream being line-delimited
+            // JSON: the committed MCP fixture's embedded newline and the newline a POSIX path may
+            // legitimately contain could each forge a record.
+            //
+            // DELIBERATELY STATELESS: no dedup, no coalescing, no timer, no last-value memo, and none
+            // keyed by the id either. The daemon fans this out after EVERY turn end, so consecutive
+            // frames legitimately repeat and legitimately FALL — a window shrinks at a `/clear` or a
+            // compaction. Suppressing a repeat would starve the consumer of the report that says the
+            // reading is current; filtering a fall would eat ordinary traffic, the thinking_progress
+            // mistake two arms up. A rate limit on a flooding daemon would be the only mutable state
+            // on this leg, keyed by a daemon-supplied id and fed by a daemon-supplied stream. Not
+            // compile-forced (this inner switch has no assertNever) — the round-trip test guards this
+            // emit.
+            emitDaemonEvent(sink, {
+              type: 'contextUsage',
+              conversationId: inbound.contextUsage.conversation_id,
+              model: inbound.contextUsage.model,
+              totalTokens: inbound.contextUsage.total_tokens,
+              maxTokens: inbound.contextUsage.max_tokens,
+              percentage: inbound.contextUsage.percentage,
+              categories: inbound.contextUsage.categories,
+              droppedCategories: inbound.contextUsage.dropped_categories,
+              mcpTools: inbound.contextUsage.mcp_tools,
+              droppedMcpTools: inbound.contextUsage.dropped_mcp_tools,
+              memoryFiles: inbound.contextUsage.memory_files,
+              droppedMemoryFiles: inbound.contextUsage.dropped_memory_files
+            })
+            return
           case 'background-task-started':
             // The background-task open data path (#564). Emit a fresh literal carrying all six fields,
             // copied BY NAME from the already-decoded, already-validated payload — never a spread of

@@ -185,6 +185,7 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
     case 'thinkingProgress':
     case 'toolProgress':
     case 'rateLimited':
+    case 'contextUsage':
       // No question event. The session store, timeline store, conversation-list store, queue store,
       // relay-link store, background-task store, announced-model store and the modal store consume
       // these — not the question store. `conversationCreateRejected` (#1307) is the newest member and
@@ -231,6 +232,12 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
       // invites a prompt — but the daemon settles it: the frame is a REPORT, never a control input,
       // and no behaviour may branch on it. Its consumer is the #1320 store slice, so the no-op is
       // PERMANENT.
+      //
+      // `contextUsage` (#1419) reads the group the same way: UNSOLICITED, arriving with nothing
+      // outstanding and offering no answer to give. The daemon fans it out after every turn end, so it
+      // is the arm here that is furthest from an ask — it reports a condition of the WINDOW rather
+      // than anything claude wants from the operator, and the frame is a REPORT, never a control
+      // input. Its consumer is the #1420 store slice, so the no-op is PERMANENT.
       return null
     case 'systemPromptWriteConfirmed':
     case 'systemPromptWriteRejected':

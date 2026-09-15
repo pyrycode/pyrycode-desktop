@@ -625,6 +625,23 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
         status: 'allowed_warning',
         limitType: 'seven_day',
         resetsAt: 1_755_900_000
+      },
+      // the context-window reading ships DORMANT (#1419) on the same terms: whether it draws as thread
+      // chrome through this bridge or through a subscriber of its own is #1420's call. Daemon STATE by
+      // the queueState rule (#720) either way — no turn_id, opens and closes no turn.
+      {
+        type: 'contextUsage',
+        conversationId: 'conv-1',
+        model: 'claude-opus-5',
+        totalTokens: 128_400,
+        maxTokens: 200_000,
+        percentage: 64,
+        categories: [{ name: 'System prompt', tokens: 41_200 }],
+        droppedCategories: 3,
+        mcpTools: [{ name: 'read_file', server_name: 'filesystem', tokens: 1450 }],
+        droppedMcpTools: 5,
+        memoryFiles: [{ path: '../../../etc/passwd', type: 'user', tokens: 240 }],
+        droppedMemoryFiles: 7
       }
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
@@ -1251,6 +1268,36 @@ describe('subscribeTimeline', () => {
     // state ref), AND no chat row exists. The first half is what makes "no store the window reads is
     // written differently than before this slice" an assertion rather than a claim — the shape
     // thinkingProgress's own dormancy test had at #1313, before #1314 reversed it by claiming the arm.
+    expect(store.getState()).toBe(before)
+    expect(selectItems(store.getState())).toHaveLength(0)
+  })
+
+  it('#1419: a contextUsage daemon event creates NO timeline item and writes NO store (dormant)', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    const before = store.getState()
+    bridge.emit({
+      type: 'contextUsage',
+      conversationId: 'conv-1',
+      model: 'claude-opus-5',
+      totalTokens: 128_400,
+      maxTokens: 200_000,
+      percentage: 64,
+      categories: [{ name: 'Messages <&>', tokens: 9800 }],
+      droppedCategories: 3,
+      mcpTools: [{ name: 'query\ndocs', server_name: 'remote<mcp>', tokens: 620 }],
+      droppedMcpTools: 5,
+      memoryFiles: [{ path: '../../../etc/passwd', type: 'user', tokens: 240 }],
+      droppedMemoryFiles: 7
+    })
+
+    // Both halves, as elsewhere: the bridge filtered it out so no dispatch reached the reducer (same
+    // state ref), AND no chat row exists. The first half is what makes "no store the window reads is
+    // written differently than before this slice" an assertion rather than a claim. The adversarial
+    // row values are carried here deliberately — this is the assertion that nothing on the dormant
+    // path reaches a render sink with them.
     expect(store.getState()).toBe(before)
     expect(selectItems(store.getState())).toHaveLength(0)
   })

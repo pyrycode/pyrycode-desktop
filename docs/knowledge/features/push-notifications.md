@@ -311,6 +311,9 @@ navigating to the thread.
 
 ## Related
 
+- [Native edit context menu](edit-context-menu.md) — `editContextMenu.ts`, a later module in this one's
+  injected-Electron family, copying this module's `fireNotification.test.ts` fake-constructor test idiom
+  (#1445).
 - [Live window](live-window.md) — the holder both `windowHasFocus`/`activateWindow` calls route
   through since [#519](../codebase/519.md), and why its two faces answer `isDestroyed()` differently.
 - [Command channel](command-channel.md) — the `notify` `RendererCommand` member + `isNotifyPayload`

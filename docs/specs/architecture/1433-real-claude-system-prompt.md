@@ -233,8 +233,88 @@ credential and a real relay leg, so it can leak, and the review is about that.
   addition. A **hostile daemon response** is in scope in one narrow sense — the daemon's reply text reaches
   a DOM sink — and is already discharged by the operator ruling of 2026-08-20 in `CLAUDE.md`: daemon text
   may be rendered, escaped and length-bounded, and the assistant bubble is exactly such a sink. This spec
-  reads that text into a **string comparison in the page context** and back out as a count or a boolean, so
-  no daemon string reaches an assertion message, a log, a filename or a cache key.
+  reads that text into a **module-private helper (`assistantTexts`) whose every caller reduces it to
+  counts before anything reaches an assertion**, so no daemon string reaches an assertion message, a log,
+  a filename or a cache key. (Corrected 2026-09-15 per the verifier's NIT: the original sentence said the
+  comparison happens "in the page context", which was true of only one of the two helpers. The protective
+  property is the reduction to counts, not where the comparison runs; see Revisions R2.)
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-15
+
+## Revisions
+
+### 2026-09-15 — R1: the positive half moves off `New session` (live gate FAIL)
+
+**What drove it.** The dispatcher's real-claude gate ran the tier at `4746fd3673`: 20 executed, 19 passed,
+this spec the one failure, at AC3's `expect(await markerAfterDelimiter(page, marker)).toBe(true)`. The turn
+completed in 9.3 s — in line with the 7.3 s sibling — the cursor cleared and the delimiter count was 1, so a
+real reply arrived after `New session` and simply did not carry the marker.
+
+**Root cause: upstream in the pyry daemon, and structural.** Open question 1 (model non-compliance) and the
+verifier's NIT #2 both pointed at the message wording first; the daemon source settles it against them.
+
+- `refreshSystemPrompt` (`internal/sessions/systemprompt.go`) is the only thing that recomposes a session's
+  `--append-system-prompt-file` from the conversations registry. It has exactly one caller, `Pool.Activate`,
+  and it returns early for a session in `stateActive`.
+- `new_session` reaches neither. `handleNewSession` → `StartNewSession` → `Runner.RestartFresh`, which
+  rotates the session id and cancels the live child so the runner's **own** Run loop relaunches from the
+  frozen argv — "never a Pool lock", as its doc says. `Pool.RotateForNewSession` only rekeys, persists and
+  notifies.
+- The session stays `stateActive` across the rotation (`stateActive` = "claude is (or should be) running";
+  only `Evict` leaves it), so even the next message's `Activate` skips the refresh.
+
+So a prompt saved during a live session **cannot** reach the child that `New session` spawns. This
+contradicts the daemon's own `set_system_prompt` contract — "takes effect at the conversation's NEXT session
+start" — and `new_session` mints a fresh session id and emits `session_transition`, so it *is* that next
+start. No pyry test pins the rotation's prompt behaviour. Filed upstream; linked from the PR.
+
+**What changed here.** Per § Scope Discipline the fix is not this ticket's (it is not even this repo's), so
+the blocked shape is captured rather than abandoned, and the ticket's user story — "reaches claude at its
+next session start **and not before**" — is proven on paths the product actually has:
+
+- The **positive** half moves to a conversation's **first** spawn. A minted session starts `stateEvicted`
+  (`pool.go`'s `buildSession`) and pyrycode#2085 defers the child to the first message, so a prompt saved
+  before that message *is* composed in at the spawn — the flow `refreshSystemPrompt`'s own doc says it
+  exists to serve, and the shape `real-claude-effort-default.spec.ts` already drives for session settings.
+- The **negative** half keeps its original vehicle (save against a live session, next reply carries
+  nothing) — the half that passed live.
+- They are now two conversations in **one** test, and that pairing is the point: the same prompt text that
+  produces nothing in A's running session produces the marker in B's spawn, so A's zero is a statement about
+  *when* the daemon applies a prompt rather than about whether it can. The original design had no such
+  control and would have gone green against a daemon that stored nothing at all.
+- `New session` survives as a `test.fixme` with the flow written out, so flipping it back to `test` is the
+  whole change once the daemon lands the fix.
+
+**Also corrected, from the same gate run:** no message constrains the shape of a reply any more. The first
+draft inherited the sibling's "Reply with the single word ready", which fights a stored prompt reading
+"begin every reply with `<token>`". That tension was the verifier's NIT #2 and Open question 1; it is now
+removed at the source rather than deferred — the messages are plain questions and the stored prompt says the
+token applies to short answers too. Open question 1 is therefore **resolved by design**, not by the live run.
+
+**Diagnosability, which the first run had none of.** `markerAfterDelimiter` returned a bare boolean, so the
+failure printed `true` vs `false` and named no cause. Assertions now read a `MarkerReading` — `replies`,
+`withMarker`, `withStem` — three numbers and no text, so the hygiene property is unchanged while a failure
+distinguishes "no reply read" from "marker present with a different nonce" (the prompt *did* reach claude;
+a model transcription fault) from "no marker stem at all" (not applied, or the instruction declined).
+
+### 2026-09-15 — R2: Security review wording corrected
+
+The Security review's [Threat model alignment] bullet said the marker comparison happens "in the page
+context". That was true of `markerAfterDelimiter` and not of `markerRowCount`, which filtered in the Node
+test process (the verifier's NIT #1). The sentence is corrected in place above. The protective property was
+never where the comparison runs — it is that reply text is held only by a module-private helper and is
+reduced to counts before it reaches any assertion — and that property holds unchanged in R1's shape, where
+`readMarkers` is a pure reducer and `MarkerReading` is what every assertion reads. **Verdict unchanged:
+PASS.** R1 adds no production file, no IPC arm, no new trust boundary; the second conversation is created
+through the same shipped control and the second save carries the same spec-authored non-secret literal.
+
+### AC coverage after R1
+
+| AC | Status |
+|---|---|
+| 1 — tier membership, fixture, runner, no capabilities | met, unchanged |
+| 2 — a save does not reach the running session | met, same vehicle, now non-vacuous |
+| 3 — first reply after **New session** carries the marker | **blocked upstream**; `test.fixme` + filed bug. The user story's positive half is met at a first spawn instead |
+| 4 — stale daemon fails in the reading arm, naming itself | met, now in `saveStoredPrompt` and exercised twice |
+| 5 — real tier green, fake tier collects no real spec, no production change | met |

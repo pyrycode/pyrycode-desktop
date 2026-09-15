@@ -91,6 +91,10 @@ import { SaveAsChannelDialog } from './SaveAsChannelDialog'
 // #1440 renamed this module for its new title. `requestRenameConversation` KEEPS its name: it owns the
 // `renameConversation` wire literal, and renaming the helper would drift it from the verb it sends.
 import { EditChatDialogView, requestRenameConversation } from './EditChatDialog'
+// #1476 — the Channels tree's own modal. `requestRenameConversation` stays imported from the module
+// above and is reused verbatim by both: it owns the `renameConversation` literal, reads only `.id` and
+// already trims, so the retitle costs no second command constructor and no second wire path.
+import { EditChannelDialogView } from './EditChannelDialog'
 import { CreateChannelDialog } from './CreateChannelDialog'
 // #1180 — the view and its send helper travel together, unlike #1179's split: this verb has exactly
 // one sender and no shipped twin to sit beside, which is `EditChatDialog`'s shape.
@@ -259,6 +263,18 @@ export function ChannelList({
   // seeded from the row's displayed title on open (a null-name row prefills with its "Untitled" placeholder).
   const [renameRow, setRenameRow] = useState<SidebarRow | null>(null)
   const [renameName, setRenameName] = useState('')
+  // #1476 — the Edit channel dialog's own per-interaction pair, a SECOND pair beside the one above and
+  // not a widening of it: since #1441 both trees draw a pen, and since this ticket they open two
+  // different modals, so one cell could not say which is open. Independent of the pair above for the
+  // reason its five siblings already carry — an open dialog's fixed-inset overlay covers the window, so
+  // no two can be open at once and no mutual-exclusion logic is needed.
+  //
+  // TWO cells and not three: the seed AC2 compares against is `titleFor(editChannelRow.name)`, derived
+  // from the row this cell already holds rather than copied into a cell of its own. The held row is a
+  // snapshot taken at open time, so that expression yields at OK exactly what it yielded at open — a
+  // third cell would be one more thing to clear on host loss and one more thing to forget.
+  const [editChannelRow, setEditChannelRow] = useState<SidebarRow | null>(null)
+  const [editChannelName, setEditChannelName] = useState('')
   // The Create-channel dialog's own per-interaction target (#1179), independent of the two above for
   // their stated reason: an open dialog's fixed-inset overlay covers the window, so no two can be open
   // at once and no mutual-exclusion logic is needed. The target retains the host and workspace to
@@ -320,6 +336,9 @@ export function ChannelList({
       typeof id !== 'string' || state.statuses.get(id)?.type !== 'connected'
     if (saveRow && unavailable(saveRow.serverId)) setSaveRow(null)
     if (renameRow && unavailable(renameRow.serverId)) setRenameRow(null)
+    // #1476: AC3's host-loss close, HERE rather than in a second effect — one subscription clears every
+    // dialog's target, so a disconnect can never leave one of them holding a stale row.
+    if (editChannelRow && unavailable(editChannelRow.serverId)) setEditChannelRow(null)
     if (createChannelTarget && unavailable(createChannelTarget.serverId)) setCreateChannelTarget(null)
     // #1439: the arm goes with the target on the host-loss path (AC2), in the same statement — a reset
     // written anywhere else is one an edit to this branch can forget.
@@ -327,7 +346,7 @@ export function ChannelList({
       setEditWorkspaceTarget(null)
       setEditWorkspaceArchive('idle')
     }
-  }), [saveRow, renameRow, createChannelTarget, editWorkspaceTarget])
+  }), [saveRow, renameRow, editChannelRow, createChannelTarget, editWorkspaceTarget])
   return (
     <>
       {/* #834: the headless one-shot that fills the host row's label, mounted HERE — the SettingsScreen
@@ -413,6 +432,15 @@ export function ChannelList({
           setRenameRow(row)
           setRenameName(titleFor(row.name))
         }}
+        // #1476 — the CHANNELS tree's pen, into a handler of its own rather than the `onRename` above it.
+        // The two seed identically; what differs is the modal each opens, which is the whole ticket. The
+        // seed is `titleFor(row.name)` (AC2's "including the Untitled fallback"), and the OK guard below
+        // re-derives that same expression from the same captured row rather than reading a copy.
+        onEditChannel={(row) => {
+          if (!canMutateHost(row.serverId)) return
+          setEditChannelRow(row)
+          setEditChannelName(titleFor(row.name))
+        }}
       />
       {saveRow && connected(saveRow.serverId) && (
         <SaveAsChannelDialog
@@ -443,6 +471,40 @@ export function ChannelList({
             if (!canMutateHost(renameRow.serverId)) return
             requestArchiveConversation(window.pyry.sendCommand, renameRow.id)
             setRenameRow(null)
+          }}
+        />
+      )}
+      {/* #1476 — the Channels tree's own modal, a sibling of the chat dialog above and not a variant of
+          it. The SAME render gate its five siblings carry, so AC3's "closes if the row's host stops
+          being connected" holds on the very next paint even before the subscription above fires. */}
+      {editChannelRow && connected(editChannelRow.serverId) && (
+        <EditChannelDialogView
+          name={editChannelName}
+          onNameChange={setEditChannelName}
+          // Cancel and the header close are ONE callback and send nothing (AC2). The draft dies with the
+          // cell, so a reopen re-seeds from the row's stored title rather than from the abandoned draft.
+          onCancel={() => setEditChannelRow(null)}
+          onSave={() => {
+            // FIRST, the interaction-time re-check — a LIVE store read, deliberately a different fabric
+            // from the render gate above, which is React state and can be a paint behind a status flip.
+            // This dialog's OK carries no `available` disabled arm of its own (see `EditChannelDialog`'s
+            // header), so this line is the only thing standing between a disconnect and a send.
+            if (!canMutateHost(editChannelRow.serverId)) return
+            // THEN AC2's "only when the trimmed name differs from the title the field was seeded with".
+            // `titleFor(editChannelRow.name)` is the seed by construction — the same expression, over the
+            // same captured row, that `onEditChannel` seeded the field from. So OK on an untouched
+            // unnamed row sends nothing rather than naming that channel `Untitled`, and an edit that
+            // only adds edge whitespace sends nothing either.
+            //
+            // The check lives HERE, beside the send, and NOT inside `requestRenameConversation`:
+            // `ConversationScreen` and the Chats tree are that helper's other callers and keep sending
+            // unconditionally. The helper is reused verbatim — it owns the `renameConversation` literal
+            // and the trim, so this ticket adds no wire type, no envelope and no IPC arm.
+            if (editChannelName.trim() !== titleFor(editChannelRow.name)) {
+              requestRenameConversation(window.pyry.sendCommand, editChannelRow, editChannelName)
+            }
+            // Dismissal is unconditional: BOTH arms close. An unchanged name is a no-op, not a refusal.
+            setEditChannelRow(null)
           }}
         />
       )}
@@ -676,7 +738,8 @@ export function ChannelListView({
   onEditHost,
   onAddWorkspace,
   onSaveAsChannel,
-  onRename
+  onRename,
+  onEditChannel
 }: {
   // Widened to `ServerConversationSummary` in all but name: the rows arrive carrying their server stamp
   // (#1086), and `groupByServer`'s structural constraint is what reads it — this prop stays typed as the
@@ -742,6 +805,12 @@ export function ChannelListView({
   onAddWorkspace: (serverId: string) => void
   onSaveAsChannel: (row: SidebarRow) => void
   onRename: (row: SidebarRow) => void
+  // #1476 — open the Edit channel dialog for a CHANNELS row. REQUIRED for its siblings' reason: a
+  // defaulted prop would let a future caller silently render a Channels tree whose pen opens nothing.
+  // It is the per-tree twin of `onRename`, which now serves the Chats tree alone; `renderBody` hands
+  // this one to the Channels `renderServerTrees` call and that one to the Chats call, which is the
+  // single level that tells the two trees apart. Neither sends a command — each dialog's OK does.
+  onEditChannel: (row: SidebarRow) => void
 }): JSX.Element {
   return (
     <section className="channel-list" aria-label="Conversations">
@@ -784,7 +853,8 @@ export function ChannelListView({
           onAddWorkspace,
           onRepairHost,
           onSaveAsChannel,
-          onRename
+          onRename,
+          onEditChannel
         )}
       </div>
     </section>
@@ -1737,10 +1807,17 @@ type SidebarRow = ConversationSummary & { readonly serverId?: string | null }
 // control's `aria-label` and by the pill that names it on hover, so the two cannot drift: a screen reader
 // and a pointer are told the same word by construction rather than by two literals kept in step by hand.
 //
-// NOT merged with anything. `.conversation`'s own Rename entry in the thread overflow menu carries the
-// same six characters, and folding the two together would couple two surfaces' copy across a cross-screen
-// import for one word — the ruling `HOST_ROW_FALLBACK_LABEL` already records for `SERVER_ROW_LABEL`.
-const RENAME_CONTROL_LABEL = 'Rename'
+// NOT merged with anything. `.conversation`'s own Edit chat entry in the thread overflow menu and
+// `EditChannelDialog`'s own title both carry words this one shares, and folding any of them together
+// would couple two surfaces' copy across an import for a coincidence of wording — the ruling
+// `HOST_ROW_FALLBACK_LABEL` already records for `SERVER_ROW_LABEL`.
+//
+// #1476 RENAMED THIS CONSTANT WITH ITS VALUE, from `RENAME_CONTROL_LABEL`/'Rename': channels are not
+// renamed, they are edited, under their own word and into their own modal (Juhana, 2026-09-14). A
+// constant left named for the retired word is exactly the drift this file keeps one-constant-per-control
+// to prevent. Its two readers are its declaration and `CHANNELS_ROW_PEN` below; the pen's CLASS TOKENS
+// are untouched, twelve specs reading `.channel-list__rename` as "this row is promoted".
+const EDIT_CHANNEL_CONTROL_LABEL = 'Edit channel'
 const SAVE_AS_CHANNEL_CONTROL_LABEL = 'Save as channel'
 
 // #1441 — the CHATS tree's pen, named in the same idiom and read twice for the same reason. TWO constants
@@ -1774,7 +1851,7 @@ type RowPenControl = {
 // The two trees' compile-time halves. The handler is spread on at each call site, where the row is in
 // scope; nothing daemon-derived reaches either object.
 const CHANNELS_ROW_PEN = {
-  label: RENAME_CONTROL_LABEL,
+  label: EDIT_CHANNEL_CONTROL_LABEL,
   className: 'channel-list__rename',
   iconClassName: 'channel-list__rename-icon'
 } as const
@@ -2085,7 +2162,12 @@ function renderBody(
   onAddWorkspace: (serverId: string) => void,
   onRepairHost: ((serverId: string) => void) | undefined,
   onSaveAsChannel: (row: SidebarRow) => void,
-  onRename: (row: SidebarRow) => void
+  // #1441 gave both trees a pen into this ONE handler; #1476 split it back in two, because the two pens
+  // now open two different modals. `onRename` is the CHATS tree's from here on, `onEditChannel` the
+  // Channels tree's — handed to the two `renderServerTrees` calls below, the level that already tells
+  // the trees apart by building `CHATS_ROW_PEN` and `CHANNELS_ROW_PEN` there.
+  onRename: (row: SidebarRow) => void,
+  onEditChannel: (row: SidebarRow) => void
 ): JSX.Element | null {
   // A view-only empty list leaves the store's not-yet-loaded meaning intact while saved hosts render.
   // Filter archived rows out of the active list (#469) — they live only in the Archive screen.
@@ -2133,7 +2215,10 @@ function renderBody(
           onOpen={() => onOpen(c)}
           // #1441 — the pen's WORD and TOKENS are chosen here, at the only level that knows which tree it
           // is drawing, exactly like the two control objects below. The gate is unchanged.
-          pen={typeof c.serverId === 'string' && statuses.get(c.serverId)?.type === 'connected' ? { ...CHANNELS_ROW_PEN, onEdit: () => onRename(c) } : undefined}
+          // #1476 — and so is its HANDLER now: this tree's pen opens the Edit channel modal, the Chats
+          // tree's below still opens Edit chat. The word travels in `CHANNELS_ROW_PEN`, the modal in the
+          // handler, and this is the one level that knows both.
+          pen={typeof c.serverId === 'string' && statuses.get(c.serverId)?.type === 'connected' ? { ...CHANNELS_ROW_PEN, onEdit: () => onEditChannel(c) } : undefined}
         />
       ), onEditHost, onAddWorkspace, onRepairHost, { label: CREATE_CHANNEL_CONTROL_LABEL, onCreate: onCreateChannel },
         // #1180 — the same control object in both trees, built at each call site rather than hoisted,
@@ -2160,10 +2245,11 @@ function renderBody(
           isOpen={d.id === openConversationId}
           onOpen={() => onOpen(d)}
           onSaveAsChannel={typeof d.serverId === 'string' && statuses.get(d.serverId)?.type === 'connected' ? () => onSaveAsChannel(d) : undefined}
-          // #1441 — the Chats tree's pen, into the SAME `onRename` handler the Channels tree uses: it
-          // already re-checks the host with `canMutateHost` and already seeds the field with
-          // `titleFor(row.name)`, so a null-named chat prefills with its `Untitled` placeholder and
-          // nothing downstream of this callback is new. The tree difference is the control object alone.
+          // #1441 — the Chats tree's pen. It shared `onRename` with the Channels tree until #1476 gave
+          // that tree its own modal and its own handler; from here on `onRename` is THIS tree's alone and
+          // still opens `EditChatDialogView`. The handler is otherwise unchanged — it re-checks the host
+          // with `canMutateHost` and seeds the field with `titleFor(row.name)`, so a null-named chat
+          // still prefills with its `Untitled` placeholder.
           //
           // The SAME connected gate as the chevron above it, restated rather than hoisted so the two read
           // identically — which is what makes "a Chats row whose host is not connected draws neither

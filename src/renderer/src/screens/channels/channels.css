@@ -87,8 +87,9 @@
    the FAB, so there is no positive-z child left in this subtree and the declaration's remaining job is
    simply not to trap the four fixed overlays. `relative` is not one of the properties that makes an
    ancestor a containing block for FIXED descendants, so .save-as-channel-overlay,
-   .rename-conversation-overlay, (since #1179) .create-channel-overlay and (since #1308)
-   .add-workspace-overlay still escape this column and cover the window. Do not "simplify" this to
+   .rename-conversation-overlay, (since #1179) .create-channel-overlay, (since #1308)
+   .add-workspace-overlay and (since #1476) .edit-channel-overlay still escape this column and cover the
+   window. Do not "simplify" this to
    isolation: isolate + z-index: -1; that form appears nowhere in this repo. */
 .channel-list {
   height: 100%;
@@ -1748,6 +1749,70 @@
 }
 
 .rename-conversation__archive:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* #1476 — the Edit channel dialog (500:2120), the Channels pen's own modal. Its six rules RESTATE the
+   `.rename-conversation*` recipe above declaration for declaration rather than sharing it, and that is a
+   LOCATOR decision, not a styling one: six shipped specs find the CHAT dialog through that prefix, and
+   one selector serving both dialogs would make every one of them match whichever modal happened to be
+   open. #1438 adds this namespace's own outlined button below the field; #1477 adds its text area.
+
+   The duplication is therefore load-bearing and must not be "simplified" into a shared class or a
+   comma-joined selector list — the same ruling `.channel-list__rename` carries for restating
+   `.channel-list__save`, and the one the Edit host dialog's knowledge page states as a rule. */
+.edit-channel-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+}
+
+/* A dedicated scrim so the opaque panel sibling is never dimmed and no bare color literal is needed.
+   40% via opacity (not a color literal). */
+.edit-channel-overlay__scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--color-scrim);
+  opacity: 0.4;
+}
+
+.edit-channel__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.edit-channel__label {
+  color: var(--color-on-primary-container);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight-emphasized);
+}
+
+.edit-channel__input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-4);
+  padding-right: calc(var(--space-7) * 2);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--color-on-primary) 41%, transparent);
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
+.edit-channel__input:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }

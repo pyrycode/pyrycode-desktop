@@ -308,9 +308,7 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   `EMPTY_*` constant, being a stable reference for free. The `connected` (re)handshake edge clears every
   conversation's held entry wholesale (same-reference no-op if already empty) and is the **sole
   enforcement** of a security requirement: without it, a previous pairing's literal shell-command
-  `description` text would survive into a new pairing. Deliberately does not repopulate after a reconnect —
-  neither frame is in the daemon's reconcile-on-connect set and this app sends no `last_event_id` (#569,
-  open, needs a daemon change). Split from #567 (#573, security-sensitive, PASS, code review PASS with zero
+  `description` text would survive into a new pairing. Split from #567 (#573, security-sensitive, PASS, code review PASS with zero
   findings, see [codebase notes](codebase/573.md)); shipped **holding wire `BackgroundTask` rows verbatim
   by reference (snake_case)**, with the two scalar arms (`backgroundTaskStarted`/`backgroundTaskUpdated`)
   dormant, awaiting #574 (open at the time, since split).
@@ -380,7 +378,8 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   `resetRosters` erased every other server's rosters permanently (nothing in this family is re-sent on
   connect). Renamed to `resetRostersFor(conversationIds)`, fed by a new `originOf` read of #1068's stamp
   through #1086's `selectConversationIdsFor`, the [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138)
-  `queueStore` fix applied here one notch harsher. Scoping retired the self-heal that had kept this store
+  `queueStore` fix applied here at the time one notch harsher — [#569](https://github.com/pyrycode/pyrycode-desktop/issues/569)
+  later retired that comparison (see below). Scoping retired the self-heal that had kept this store
   out of `clearPairingScopedState` (it used to be that helper's own named counter-example): the store now
   also gained a nullary `clearAllRosters`, the dep set's **twelfth** member, closing the gap a new
   pairing's first `connected` would otherwise leave — a departed pairing's `local_bash` command lines and
@@ -390,6 +389,27 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   floor-outranks-ceiling rule — the two halves are inseparable). See [Background-task roster
   store](features/background-task-roster-store.md) and [Paired shell §
   Related](features/paired-shell.md#related).
+  **[#569](https://github.com/pyrycode/pyrycode-desktop/issues/569) proved the reconnect reconcile lands
+  safely through the real transport.** Upstream (pyrycode#2077-#2080), `background_task_roster` joined
+  the daemon's reconcile-on-connect set: on any (re)connection the daemon unicasts one roster per
+  conversation whose bound session has reported one, correlated by `conversation_id` and applied through
+  the unchanged `setRoster` path, so burst order is immaterial. The two silences the store already kept
+  apart (`null` vs. a present-but-empty entry) now survive a reconnect too: a conversation reconciled with
+  an explicit empty roster reads observed-empty, one absent from the burst stays dropped and reads `null`.
+  `backgroundTaskStarted`/`backgroundTaskUpdated` are **not** in the reconcile set, so a started-sourced
+  task loses its `toolCallId` and fuller label across a reconnect — a real narrowing, pinned by a test.
+  **No production code changed** — the store, bridge and panel already composed correctly; what needed
+  proof was that the `connected` clear and the reconciled burst land in that order through the real
+  transport, since a roster applied ahead of the clear would be wiped by it. One new Playwright spec,
+  `e2e/background-task-reconnect.spec.ts`, drives a genuine reconnect via `launchPairedApp`'s
+  `reconnectResendFrames` (#416's harness) and proves it, plus falsifiability-checked by re-running with
+  the re-asserted roster dropped from the burst (it then fails at exactly the feared symptom). Thirteen
+  docblocks and test descriptions across four files — including the `queueStore` "one notch harsher"
+  comparison above, now the *same* notch — had asserted the opposite and were corrected in place across
+  three rework legs, the last two catching survivors a predicate-only grep missed (the comparison
+  direction, and the verb "re-send" beside "re-assert"). Size S (proof-only, comment-only in all three
+  touched production files). See [Background-task roster store](features/background-task-roster-store.md#what-it-does)
+  and [Conversation shell](features/conversation-shell.md).
 
 - [Relay-link store](features/relay-link-store.md) — the renderer's held copy of the relay-**socket** leg's link status, split from #149 alongside #328 (transport, shipped) → #330 (two-dot render, shipped): a dedicated `relayLinkStore` (`RelayLinkStatus | null`, `null` = not-connected-yet sentinel, single unconditional `setRelayLinkStatus` — most-recent-category-wins) plus a reactive-only headless bridge (`translateRelayLink`/`subscribeRelayLink`/`RelayLinkData`) that observes the [daemon-event channel](features/daemon-event-channel.md)'s `relayLinkChanged` arm (#328) — the arm's first real consumer, all three exhaustive bridges keep no-op'ing it. Near-verbatim clone of [session-id store](features/session-id-store.md)'s DI-factory → singleton → hook → selector shape (not `conversationListStore`'s request-gated shape — the arm is an unsolicited push). Deliberately does not model the daemon-session leg, which stays in [session store](features/session-store.md)'s `ConnectionStatus`; #330 combines both at render time (`relayLeg`/`daemonLeg`) and decided **not** to reconcile relay-dot presentation after a fatal session close — the leg is left stale, not cleared, per #328's forward note, and #330 renders that staleness honestly rather than suppressing it. `RelayLinkData` mounts as a sixth headless App-level sibling alongside `ConversationListData`/`SessionIdData`/`QueueData`/`ScreenSnapshotData`. Not security-sensitive; no Figma (headless, no render surface). Shipped dormant (#329, code review PASS, no findings, see [codebase notes](codebase/329.md)); gained its first reader in #330 (see [codebase notes](codebase/330.md)). Since #1134, `status` is joined by a `statuses: Map<RelayLinkOrigin, RelayLinkStatus>` filed by the [#1068](features/daemon-event-channel-plumbing.md) stamp, the same shape [session store](features/session-store.md#one-slot-per-server-since-1133) and [live window](features/live-window.md#one-slot-per-server-since-1121) already use — `selectRelayLinkStatus` is untouched, `selectRelayLinkStatusFor` is new and has no production caller yet (expected: #1070).
 - [Screen-snapshot store](features/screen-snapshot-store.md) — **removed.** The renderer's held copy of the daemon's latest rendered-screen `text`, split from #318 (itself split from #147): a dedicated `screenSnapshotStore` (`{text,ts} | null`, `null` = not yet received, single unconditional `setSnapshot` — most-recent-wins, empty `text` held verbatim not dropped) plus a reactive-only headless bridge (`translateScreenSnapshot`/`subscribeScreenSnapshot`/`ScreenSnapshotData`) that observed the [daemon-event channel](features/daemon-event-channel.md)'s `screenSnapshotReceived` arm (#316). Structurally closest to [session-id store](features/session-id-store.md) (#259) — reactive-only, no request half at all. Shipped dormant at #323 (code review PASS, [codebase notes](codebase/323.md)); #324 was its sole reader until [#618](codebase/618.md) removed it, leaving it reader-less; [#619](codebase/619.md) then deleted the store and bridge outright (396 lines across four files). The event and inbound wire types are unaffected — see [screen snapshot fetch](features/screen-snapshot-fetch.md) — but the outbound `requestSnapshot` command and its `RequestSnapshotPayload` wire type are now also gone, removed by [#620](codebase/620.md); **[#621](codebase/621.md) then removed the `screenSnapshotReceived` event itself** (and its sibling `snapshotReceived`), along with the three bridges' no-op arms for both — **[#622](codebase/622.md) took the remaining inbound decode and the `screen_snapshot`/`ScreenSnapshotPayload` wire types out last**, the fifth and final removal slice. [#637](codebase/637.md) closed the series' comment debt: 23 transport-module comments that cited the deleted `requestSnapshot` as their design precedent, re-anchored onto `buildSendMessage`/`sendMessageEnvelope` where the cited property still holds, deleted (not swapped) at the two sites where it didn't — zero behavior change, proved by a comment-stripped residue diff. [#635](codebase/635.md) closed the remaining comment debt from the #618–#622 store/bridge/wire removal series itself (a disjoint site set from #637's #620-series sweep): 18 sites across 9 files re-anchored onto `runConfigStore`/`queueBridge`/`sessionIdBridge`/`QueueData` where a live co-exemplar or property-restatement was available, corrected where a comment asserted a now-false fact about this client (`announcedModelBridge.ts`'s `App.tsx` mount list, `runConfigSnapshot.ts`'s stale live-screen claim), and left two sites byte-identical where the comment described true daemon behaviour or history rather than this client's modeling — zero behavior change, same comment-stripped residue-diff proof.

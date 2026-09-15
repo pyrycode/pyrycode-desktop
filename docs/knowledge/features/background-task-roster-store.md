@@ -48,12 +48,23 @@ facet: like `queue_state`, this family is daemon *state* (SSOT pyrycode #720), n
 stream, so it gets its own store rather than folding into `reduceTimeline`.
 
 On the `connected` daemon edge, the store drops the **reconnecting server's own** held rosters, started-
-sourced and roster-sourced tasks alike, and does **not** repopulate: neither frame is in the daemon's
-reconcile-on-connect set (that set is outstanding `modal_shown` per pyrycode#877 and `queue_state` per
-non-empty backlog per pyrycode#878), and this app advertises no `last_event_id`, so no replay arrives
-either. A conversation reads "nothing observed" after its server's reconnect until claude next emits a
-frame — the honest behaviour, since retaining the pre-disconnect set would present a stale list as live.
-Closing that gap needs a daemon-side change and is #569's subject, not this store's.
+sourced and roster-sourced tasks alike — and, since #569, the daemon's own reconcile repopulates them
+safely rather than leaving the drop as the last word. Upstream (pyrycode#2077-#2080),
+`background_task_roster` joined the daemon's reconcile-on-connect set (beside outstanding `modal_shown`
+per pyrycode#877 and `queue_state` per non-empty backlog per pyrycode#878): on any (re)connection the
+daemon unicasts one roster per conversation whose bound session has reported one, snapshot-shaped and
+correlated by `conversation_id`, so `setRoster`'s unconditional replacement applies it idempotently and
+the burst's order — the daemon walks its registry in insertion order, not a contract — is immaterial.
+**Two silences, and they stay apart.** A session that reported an *explicit empty* roster reconciles to
+`tasks: []` and reads "observed, nothing alive" ("No background tasks"). A session that has *never*
+reported one is simply *absent* from the burst, stays dropped, and reads `null` — "nothing has been
+reported", never "nothing is alive" ("No background-task report yet"). The `backgroundTaskStarted`/
+`backgroundTaskUpdated` scalars are **not** in the reconcile set, so a task the app had upgraded to
+started-sourced comes back roster-sourced after a reconnect, without its `toolCallId` or fuller label — a
+real narrowing, pinned by a store test rather than merely stated. What makes the drop safe rather than
+destructive is that the clear and the reconciled burst ride one listener in arrival order — proved
+end-to-end through the real transport, not merely argued from the two call sites' code, by
+`e2e/background-task-reconnect.spec.ts`.
 
 Since [#1117](daemon-connection-routing.md) the app holds one live connection per paired server, so
 `connected` means "*this* server's connection came back", not the app's one connection coming back — the
@@ -67,9 +78,12 @@ one week earlier. Scoping the edge retired the self-heal that had kept this stor
 conversation list, matches no held roster, and would otherwise drop nothing at all. So the store also
 joined that set — a second, nullary setter drops **every** conversation's held roster wholesale at a
 pairing boundary (unpairing, or pairing another server), closing the gap the scoped edge opened. This
-family has no re-assertion path of any kind, so unlike `queueStore`'s drained-conversation case, every
-roster latched for the life of the process until this clear was added — a departed pairing's `local_bash`
-command lines and `patch` text otherwise attributed, indefinitely, to a machine the operator has left.
+family had no re-assertion path of any kind, so unlike `queueStore`'s drained-conversation case, every
+roster latched for the life of the process until this clear was added. Since #569 the daemon's reconcile
+re-asserts a roster, but only for the conversations of the *pairing that reported them* — a new pairing's
+first `connected` still resolves an empty conversation list and drops nothing — so the clear remains
+required for the unchanged reason: a departed pairing's `local_bash` command lines and `patch` text would
+otherwise still be attributed, indefinitely, to a machine the operator has left.
 
 ## How it works
 
@@ -340,7 +354,13 @@ relay (re)handshake → daemonConnection.ts emits connected DaemonEvent, stamped
     → backgroundTaskRosterStore.resetRostersFor(ids)   [only the listed keys dropped — started-sourced
                                                          tasks and recorded patches go with them — or
                                                          same-ref no-op if none match]
-  → NOT repopulated: none of the three frames is in the daemon's reconcile-on-connect set (#569 territory)
+  → then the daemon's reconcile burst arrives on the SAME channel, one background_task_roster per
+    conversation whose bound session has reported one (pyrycode#2077-#2080, #569): each lands through
+    the ordinary setRoster(snapshot) path above, correlated by conversationId and not by burst position
+  → a conversation ABSENT from the burst stays dropped → selectRosterFor reads null ("No background-task
+    report yet"); one re-asserted with tasks: [] reads observed-empty ("No background tasks")
+  → backgroundTaskStarted/backgroundTaskUpdated are NOT in the reconcile set, so a started-sourced task's
+    toolCallId and fuller label do not survive — it comes back roster-sourced only
 
 pairing ends (unpair only, since #1141 — pairing another server adds a server rather than ending one) → clearPairingScopedState()   [#1139]
   → backgroundTaskRosterStore.clearAllRosters()   [every conversation's roster dropped, or same-ref
@@ -385,10 +405,16 @@ pairing ends (unpair only, since #1141 — pairing another server adds a server 
 - **`patch`'s `truncatedFields` reports the cap cut only.** The daemon also scrubs invalid UTF-8 by
   deletion, so `patch` may differ from claude's bytes without appearing in that list — it is recorded,
   never cross-checked against the patch text.
-- **No repopulation after a reconnect.** Unlike `queue_state`, none of the three frames is in the daemon's
-  reconcile-on-connect set, and this app sends no `last_event_id`, so no replay arrives either. A
-  conversation reads `null` from `selectRosterFor` after its server's reconnect until claude next emits a
-  frame. Closing that gap is #569's subject and needs a daemon-side change.
+- **Repopulated after a reconnect, roster-only, since [#569](https://github.com/pyrycode/pyrycode-desktop/issues/569).**
+  Like `queue_state`, `background_task_roster` joined the daemon's reconcile-on-connect set upstream
+  (pyrycode#2077-#2080): on any (re)connection the daemon unicasts one roster per conversation whose
+  bound session has reported one, and each lands through the ordinary `setRoster` path. The two silences
+  stay apart — a conversation reconciled with an explicit empty roster reads observed-empty; one absent
+  from the burst stays dropped and reads `null` from `selectRosterFor` until claude next emits a frame.
+  `backgroundTaskStarted`/`backgroundTaskUpdated` are **not** in the reconcile set, so a started-sourced
+  task's `toolCallId` and fuller label do not survive a reconnect — it comes back roster-sourced, a real
+  narrowing pinned by a store test. Proved end-to-end through the real transport (not merely modeled) by
+  `e2e/background-task-reconnect.spec.ts`.
 - **A roster held for a conversation in no server's list survives every scoped reset**
   ([#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139)) — the accepted consequence of
   scoping the reconnect edge by the conversation list rather than by anything wider, and a real case here
@@ -403,9 +429,11 @@ pairing ends (unpair only, since #1141 — pairing another server adds a server 
   the `connected` edge's nullary whole-map clear meant a re-pairing's first `connected` blanked every
   latched roster on its way past, so a dedicated pairing-boundary clear would have been dead code. Once
   the edge scoped to the reconnecting server's own conversations, the new pairing's first `connected`
-  instead resolves an *empty* conversation list and drops nothing — and because this family has no
-  re-assertion path of any kind, a departed pairing's rosters would otherwise render indefinitely, forever
-  attributed to a machine the operator has left. #1139 closed it with `clearAllRosters` (see § How it
+  instead resolves an *empty* conversation list and drops nothing — and, at the time, this family had no
+  re-assertion path of any kind, so a departed pairing's rosters would otherwise have rendered
+  indefinitely, forever attributed to a machine the operator has left. Since #569 the daemon's reconcile
+  does re-assert a roster, but only for the conversations of the pairing that reported them, so a departed
+  pairing's is never reached and the same risk stands. #1139 closed it with `clearAllRosters` (see § How it
   works) — the same sequence [`conversationListStore`'s AC5](conversation-list-store.md#edge-cases-and-limitations)
   and [`queueStore`](queue-store.md#edge-cases-and-limitations) each ran through one ticket earlier: a
   store's exclusion from `clearPairingScopedState` is a claim about a *different* mechanism keeping it
@@ -445,9 +473,11 @@ pairing ends (unpair only, since #1141 — pairing another server adds a server 
   from it: `selectBacklogFor`'s `?? EMPTY_BACKLOG` collapse, which would silently violate this store's
   AC5 (never-observed vs. observed-empty). [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138)
   scoped `queueStore`'s own `connected` reset one week before
-  [#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139) ran the identical argument here, one
-  notch harsher: `queue_state` at least re-asserts a non-empty conversation, so only a *drained*
-  conversation went stale between #1138's two mechanisms, where this family re-asserts nothing, ever.
+  [#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139) ran the identical argument here, at
+  the time one notch harsher: `queue_state` re-asserted a non-empty conversation while this family
+  re-asserted nothing, ever. [#569](https://github.com/pyrycode/pyrycode-desktop/issues/569) retired that comparison — the roster now has a
+  re-assertion path too, so the two families sit at the *same* notch: each re-asserts on the reconnecting
+  server's edge and neither reaches a conversation whose pairing has since ended.
 - [Modal store + bridge](modal-store-bridge.md) — the rejected alternative posture for the `connected`
   edge (folded into the translator as a `reconnected` action); this store takes the `queueBridge` posture
   instead, since each translator returns a value rather than a member of an action union.
@@ -474,8 +504,10 @@ pairing ends (unpair only, since #1141 — pairing another server adds a server 
   `docs/specs/architecture/1139-background-task-roster-reconnect-reset-scoped-to-server.md` — scopes the
   `connected` reset to the reconnecting server (`resetRostersFor`, replacing the nullary `resetRosters`)
   and adds the pairing-boundary `clearAllRosters`, applying [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138)'s
-  `queueStore` fix here on the harsher case: this family has no re-assertion path at all, and the content
-  at risk (`description`/`patch`) is a literal shell command line, not a queued message's `text`. Security
+  `queueStore` fix here on what was then the harsher case: this family had no re-assertion path at all,
+  and the content at risk (`description`/`patch`) is a literal shell command line, not a queued message's
+  `text`. [#569](https://github.com/pyrycode/pyrycode-desktop/issues/569) later gave the family a re-assertion path, narrowing but not closing the gap
+  this ticket's `clearAllRosters` covers. Security
   review PASS with one MUST FIX (the pairing boundary), fixed in the design as shipped; two OUT OF SCOPE
   findings deferred to #1089 (a hostile daemon's own conversation-list contents narrowing a reset's scope,
   and the store's pre-existing conversation-id-only keying letting a daemon cross-attribute a roster to
@@ -490,5 +522,13 @@ pairing ends (unpair only, since #1141 — pairing another server adds a server 
   panel](conversation-shell-background-tasks.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583) — the store's first real reader: the shell of
   #568's panel (split three ways: #581 → #582 → #583), reading `selectRosterFor(conversationId)` and
   rendering only `description` + `taskType` per held task. `droppedTasks`/`truncatedFields` remain
-  unread until #582; `latestUpdate`/`patch` remain unread until #583. #569 (open) owns repopulation
-  after a reconnect and needs a daemon-side change first.
+  unread until #582; `latestUpdate`/`patch` remain unread until #583. Since [#569](https://github.com/pyrycode/pyrycode-desktop/issues/569), the panel
+  reads a still-live task list after a reconnect too, because the daemon's own reconcile repopulates the
+  store the panel reads from.
+- **#569** — proved that the `connected`-edge clear and the daemon's reconcile-on-connect burst
+  (pyrycode#2077-#2080) land in that order through the real transport, so a roster re-asserted at connect
+  time is never wiped by the clear that precedes it. No production code changed: the store, the bridge
+  and the panel already composed correctly (see § What it does, § How it works → Data flow, and § Edge
+  cases above, all updated in place). One new spec, `e2e/background-task-reconnect.spec.ts`, drives a
+  genuine reconnect through `launchPairedApp`'s `reconnectResendFrames` (#416's harness) and pins the two
+  silences apart across it. Plan: `docs/specs/architecture/569-background-task-roster-reconnect.md`.

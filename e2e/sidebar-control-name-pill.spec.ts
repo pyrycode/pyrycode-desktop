@@ -76,12 +76,13 @@ const OFFSET_Y_PX = 24
 // The three control names, restated here as the literals the operator reads rather than imported from the
 // screen. A constant imported from the code under test would agree with itself if both moved together;
 // these are the words the criterion names.
-const RENAME_NAME = 'Rename'
+// #1476 moved the Channels pen's word from `Rename` to `Edit channel` — the change the split below was
+// made FOR, and the proof it was worth making: this line moved and the Chats line under it did not.
+const EDIT_CHANNEL_NAME = 'Edit channel'
 const SAVE_NAME = 'Save as channel'
-// #1441 — the Chats tree's pen. A THIRD constant and not a reuse of `RENAME_NAME`, mirroring the two
-// module-local constants the screen keeps: #1430 renames the Channels pen to `Edit channel` and must be
-// able to move that word alone, so a shared literal here would redden this file for a change that does
-// not touch the Chats tree at all.
+// #1441 — the Chats tree's pen. A THIRD constant and not a reuse of the one above, mirroring the two
+// module-local constants the screen keeps: the Channels pen's word moves on its own, so a shared literal
+// here would redden this file for a change that does not touch the Chats tree at all.
 const EDIT_CHAT_NAME = 'Edit chat'
 
 // `pairedShell.css` gives the sidebar `flex: 0 0 400px`. Showing a pill must not move it.
@@ -281,7 +282,7 @@ test('a row control names itself in a pill that follows the pointer, clear of th
   const firstPoint = await parkOn(renames.first(), 'first row rename', 4, 4)
   const firstPill = pills.first()
   await expect(firstPill).toBeVisible({ timeout: TIMEOUT_MS })
-  await expect(firstPill).toHaveText(RENAME_NAME)
+  await expect(firstPill).toHaveText(EDIT_CHANNEL_NAME)
   expect((await displays(pills)).filter((display) => display !== 'none')).toEqual(['block'])
 
   // --- AC2, the drawing, as computed values. The two colours are the transposition detector above; the
@@ -512,7 +513,7 @@ test('a row control names itself in a pill that follows the pointer, clear of th
   await page.keyboard.press('Tab')
   await expect(renames.first()).toBeFocused()
   await expect(firstPill).toBeVisible({ timeout: TIMEOUT_MS })
-  await expect(firstPill).toHaveText(RENAME_NAME)
+  await expect(firstPill).toHaveText(EDIT_CHANNEL_NAME)
   expect((await displays(pills)).filter((display) => display !== 'none')).toEqual(['block'])
 
   // --- AC3's placement: with the pointer parked off the list there is no pointer position, so the same
@@ -536,6 +537,7 @@ test('a row control names itself in a pill that follows the pointer, clear of th
   // nine shipped specs that address these controls take. Since #1427 the pill sits OFF the control rather
   // than over it, so this is no longer the read that proves `pointer-events: none`; it is kept because the
   // pill now lands on whatever the offset point reaches. ---
+  // #1476 — the Channels pen opens the EDIT CHANNEL modal, under its own overlay token.
   await renames.first().click()
-  await expect(page.locator('.rename-conversation-overlay')).toBeVisible({ timeout: TIMEOUT_MS })
+  await expect(page.locator('.edit-channel-overlay')).toBeVisible({ timeout: TIMEOUT_MS })
 })

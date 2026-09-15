@@ -35,7 +35,10 @@ test('pre-opened mutation dialogs cannot submit by keyboard after disconnection'
   const commands = await observeCommands(app)
   const { page } = app
   const cases = [
-    ['.channel-list__rename', '.rename-conversation__input', 'OK', 'renameConversation'],
+    // #1476 — the Channels pen's dialog is now Edit channel, under `.edit-channel*`. Its OK still sends
+    // `renameConversation` (the helper is reused verbatim), and a `New label` fill always differs from the
+    // seeded title, so the send is armed exactly as before and the offline case still has one to suppress.
+    ['.channel-list__rename', '.edit-channel__input', 'OK', 'renameConversation'],
     ['.channel-list__workspace-create', '.create-channel__input', 'OK', 'createConversation'],
     ['.channel-list__workspace-edit', '.edit-workspace__input', 'OK', 'renameWorkspace']
   ]

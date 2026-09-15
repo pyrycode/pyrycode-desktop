@@ -367,7 +367,7 @@ need to. The label reaches the DOM only as an auto-escaped React child, never an
 2026-08-20, #696's MUST FIX). See [#703 codebase notes](../codebase/703.md) for the full
 fallback-key trap and selector-hazard writeup.
 
-Since [#1178](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178)
+Since [#1178](channel-list-workspace-row-nest.md)
 and [#1179](create-channel-dialog.md), each `WorkspaceRow` optionally draws a trailing create
 control keyed on this same `group.key` — a "Create chat" plus on a Chats-tree row, a "Create
 channel" plus opening a dialog on a Channels-tree row — withheld on both trees from the
@@ -571,7 +571,7 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
 - [Channel List — the host row and its connection dots](channel-list-host-row.md) — the full detail
   behind § The host row and its connection dots above: #710/#718's original build, #834's operator-typed
   label, and #1199's per-server-id keying of both the label and the two dots.
-- [Channel List — the row's desktop geometry § The workspace row's own nest and its create-chat plus](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178)
+- [Channel List — the workspace row's own nest and its create-chat plus](channel-list-workspace-row-nest.md)
   (#1178) — the Chats-tree workspace plus, the `renderServerTrees` create seam § Workspace grouping
   above now threads.
 - [Create-channel dialog](create-channel-dialog.md) (#1179) — the Channels-tree workspace plus and the

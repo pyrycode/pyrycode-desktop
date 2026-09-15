@@ -78,44 +78,48 @@ can carry a pill). Unlike the row and workspace controls there is no glyph-revea
 selector — this control draws at rest — so the pill's trigger is the *only* hover/focus rule on it. Shown
 and hidden are `display: block`/`none`, never opacity, so a hidden pill reports no box at all.
 
-**Placement is a stated deviation from the three shipped instances**, discovered by measurement rather
-than assumed. The shipped form centres the pill on its control's own band (`top: 50%` +
-`translateY(-50%)`); here that band collides with `.channel-list__actions`, the Channels header's
+**Placement was a stated deviation from the three shipped instances, as shipped by #1304**, discovered by
+measurement rather than assumed. The shipped form centred the pill on its control's own band (`top: 50%` +
+`translateY(-50%)`); here that band collided with `.channel-list__actions`, the Channels header's
 immediately preceding sibling. The flow read — "gapless column, no margins, so the cluster's bottom edge is
-the header's top edge" — is wrong: the cluster is `position: sticky; top: var(--space-1)`, and a sticky
+the header's top edge" — was wrong: the cluster was `position: sticky; top: var(--space-1)`, and a sticky
 offset resolves against the scrollport's **content** box, i.e. inside `.channel-list`'s own `--space-1` top
-padding, so at scroll top the cluster sits `--space-1` *past* its flow position. Read off a running window
-at scroll top: the cluster's bottom edge is at 76; band-centring puts the pill's top at 70; top-aligning
-(`top: 0`) puts it at 72 — both under a cluster painting at `z-index: 1`, and reachably so (the cluster's
-buttons are transparent at rest but fill on `:hover`, while the pill can be up on the plus's
-`:focus-visible`). So the pill hangs **below** the control instead — `top: 100%; transform: none`, landing
-at 92, clear of the cluster by the plus's own height — overriding only those two declarations; the ground,
-ink, type, padding, radius, `right: 0`, `pointer-events: none` and `nowrap` are all the shared block's.
-Declined: `top: var(--space-1)` (centred in the header's 32px box) clears the cluster too, but only by an
-exact tangency a one-pixel change would reopen, while covering the glyph it names.
+padding, so at scroll top the cluster sat `--space-1` *past* its flow position. Read off a running window
+at scroll top: the cluster's bottom edge was at 76; band-centring put the pill's top at 70; top-aligning
+(`top: 0`) put it at 72 — both under a cluster painting at `z-index: 1`, and reachably so (the cluster's
+buttons were transparent at rest but filled on `:hover`, while the pill could be up on the plus's
+`:focus-visible`). So the pill hung **below** the control instead — `top: 100%; transform: none`, landing
+at 92, clear of the cluster by the plus's own height — overriding only those two declarations.
 
-**Superseded by [#1443](https://github.com/pyrycode/pyrycode-desktop/issues/1443), which retired the
-reason without retiring the placement.** `.channel-list__actions` is now the card's own Top bar, sits
-outside the scroller entirely, and overlaps nothing — every pill in the tree is below it because the
-whole tree is, so the clearance this section measured against a live sticky collision is now satisfied
-by construction. The `top: 100%` deviation ships exactly as it was: re-centring it onto the shared band
-is deliberately a separate ticket (#1443's ruling), not a consequence of the collision going away. The
-spec's geometry block keeps the same assertion — the pill's top edge pinned to the plus's bottom — since
-it still catches the one way the old collision could return, a bar that grows back down into the tree.
+**Superseded by [#1443](https://github.com/pyrycode/pyrycode-desktop/issues/1443), then retired outright by
+[#1427](channel-list-control-name-pill.md).** #1443 moved `.channel-list__actions` to the card's own Top
+bar, outside the scroller and overlapping nothing, which satisfied the clearance this section measured
+against a live sticky collision by construction — but left the `top: 100%` deviation standing, since
+re-centring it onto the shared band was ruled a separate ticket. **#1427 is that ticket, and it did not
+re-centre the deviation — it deleted it**, along with the band itself: this control now wears the same
+pointer-following placement as all seven controls (`position: fixed`, seeded from the pointer or, on
+keyboard focus, the control's own bottom-right corner). `.channel-list__pair`'s `top: 100%; transform:
+none` override has nothing left to override and is gone. See [the control's own name
+pill](channel-list-control-name-pill.md) for the shared mechanism — the offset tokens, the measured
+bottom-edge mirror, and why a fixed pill needs no per-control deviation to clear anything it used to
+collide with.
 
-**The move downward changes what the pill sits under, not just what it clears.** `.channel-list` is
-deliberately not a stacking context (`position: relative; z-index: auto`), and `.channel-list__section-header`
-and `.channel-list__host` are both `position: relative` with `z-index: auto` — the same stacking-context
-slot — so tree order decides and the first host row's subtree paints *after* the header's. The pill's 24px
-(top 92, header top 72) falls inside the header's 12px bottom padding and 12px of the first host row, which
-puts it under that row's own `position: absolute` furniture — `.channel-list__host-status` (the connection
-dots) and `.channel-list__host-add` — rather than the other way around. `pointer-events: none` is what
-keeps a click through the pill landing on the plus regardless of what's on top; no `z-index` fixes the
-paint order without also lifting the pill over the sticky actions cluster it was moved to clear. See
+**The paint-order argument below is retired with the same ticket, not merely superseded.** `.channel-list`
+is deliberately not a stacking context (`position: relative; z-index: auto`), and
+`.channel-list__section-header` and `.channel-list__host` are both `position: relative` with `z-index:
+auto` — the same stacking-context slot this control's pill used to participate in when it was `position:
+absolute` and painted in tree order. A `position: fixed` pill escapes that slot entirely and participates
+in the root stacking context instead, ordered by its own `z-index: 1` against `.paired-shell__pane` and the
+tree's overlay rules — see [the control's own name pill](channel-list-control-name-pill.md). The relation
+this paragraph used to describe (the pill falling under the first host row's own furniture,
+`.channel-list__host-status`/`.channel-list__host-add`, in tree-order paint) no longer holds, because the
+pill is no longer positioned inside that furniture's own flow at all; `pointer-events: none` was and
+remains what keeps a click through the pill landing on whatever is actually underneath it. See
 [Channel List — the host row § Geometry](channel-list-host-row.md) for that row's own furniture.
 [#1190](https://github.com/pyrycode/pyrycode-desktop/issues/1190) later gave that row its own pill in the
-same file, reusing its own band rather than this control's `top: 100%` deviation — the two pills are never
-up at once over the same furniture, since a section's first host row sits a full header box below the
+same file, reusing the shared band rather than this control's (by-then-superseded) `top: 100%` deviation —
+both controls now share one placement mechanism since #1427, and a section's first host row sits a full
+header box below the
 header's own plus.
 
 **The colour trap, read by name rather than by export.** `get_design_context` on the Pill node
@@ -180,13 +184,14 @@ The real-daemon tier is untouched.
 continuous drive** — the `sidebar-workspace-plus-name-pill.spec.ts` model. Pushes an unsolicited tall
 `conversations` envelope first so "at scroll top" is a scroller position rather than a list that never
 moved, then drives both headers' pills through mount/hidden, hover, computed style (the colour-trap
-detector), geometry (24px tall, top edge on the header's top edge, right edge on the header's right edge,
-and the **actions-edge criterion** — the pill's top at or below `.channel-list__actions`'s bottom, which is
-the assertion the deviation exists for and the one band-centring reddens), trigger scope (hovering the
-label alone shows nothing), keyboard `:focus-visible` via a real `Tab`, and a click-through proving
-`pointer-events: none` still lands on the plus. Neither sibling pill spec
-(`sidebar-control-name-pill.spec.ts`, `sidebar-workspace-plus-name-pill.spec.ts`) needed an edit — both
-were already scoped to their own control's class, unlike #1181's edit to the row spec.
+detector), trigger scope (hovering the label alone shows nothing), keyboard `:focus-visible` via a real
+`Tab`, and a click-through proving `pointer-events: none` still lands on the plus. **The geometry block was
+rewritten by [#1427](channel-list-control-name-pill.md)**: the 24px-tall, top-edge-on-header-edge and
+actions-edge-criterion reads this paragraph used to describe are gone along with the deviation they
+detected, replaced by the same pointer-offset, disjoint-from-control and inside-window reads every pill
+spec now shares — see that page's testing section. #1427 also edited both sibling pill specs
+(`sidebar-control-name-pill.spec.ts`, `sidebar-workspace-plus-name-pill.spec.ts`) for the same reason,
+which this section's own prior claim that neither needed an edit no longer describes.
 
 ## Related
 
@@ -198,7 +203,7 @@ were already scoped to their own control's class, unlike #1181's edit to the row
   [#1190](channel-list-host-row.md#the-rows-pen-and-plus-on-hover-1185) then gave that row its own pill,
   reusing the shared band rather than this control's `top: 100%` deviation.
 - [Channel List — the row's desktop geometry § The workspace row's own nest and its create-chat
-  plus](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178)
+  plus](channel-list-workspace-row-nest.md)
   (#1178) — the class-isolation precedent (`channel-list__workspace-head`) and the same glyph path.
 - [Paired shell — the pairServer route](paired-shell-pair-server-route.md) — the screen this control's
   plus opens.
@@ -213,6 +218,6 @@ were already scoped to their own control's class, unlike #1181's edit to the row
   Revisions section records the placement moving from top-aligned to `top: 100%` after the actions-cluster
   measurement contradicted the original flow arithmetic.
 - [Channel List — the row's desktop geometry § The workspace row's plus names itself in a
-  pill](channel-list-desktop-row-geometry.md#the-workspace-rows-plus-names-itself-in-a-pill-1181) (#1181) —
+  pill](channel-list-workspace-plus-pill.md) (#1181) —
   the shipped `.channel-list__control-name` treatment this ticket's pill reuses verbatim bar two
   placement declarations.

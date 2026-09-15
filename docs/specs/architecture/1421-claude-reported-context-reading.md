@@ -229,6 +229,25 @@ changed) — **pending, for the documentation stage**, not this one.
    and the `conversationId={null}` render selects nothing through `NO_REPORTED_CONTEXT`. Verify by running
    the file whole.
 
+## Revisions
+
+**2026-09-15 — both Open Questions resolved, no design change.**
+
+1. **Fake-tier capability gate:** there is none on the inbound side. The `context_usage` frame is decoded
+   and fanned to `reportedContextBridge` unconditionally — the fanout gate is the daemon's, not the
+   client's — so the e2e pushes the frame with no seeded capability and no new fixture wiring.
+2. **Module-level `vi.mock` of `reportedContextStore` in `RunConfigSections.test.tsx`:** disturbs nothing.
+   All 100 assertions in that file pass unchanged; the `conversationId={null}` render selects nothing and
+   the seeded-id render asserts only model labels.
+
+One implementation-time simplification, recorded because it departs from the plan's Design text: the plan
+specified a hoisted `NO_REPORTED_CONTEXT` constant for the no-conversation arm, beside
+`NO_USAGE_LIMIT_READING` and `NO_TASK_ROSTER`. It is not needed and was not written. Those two exist
+because their reads have no `useMemo` and so would rebuild the closure every render; both of this ticket's
+reads are inside a `useMemo` keyed on `[conversationId]`, which already gives the closure one identity per
+id. Both call sites therefore use the inline `() => null` form — which is `RunConfigSections`' own shipped
+idiom for exactly this arm, at the announced-model and model-list selectors beside it.
+
 ## Security review
 
 **Verdict:** PASS

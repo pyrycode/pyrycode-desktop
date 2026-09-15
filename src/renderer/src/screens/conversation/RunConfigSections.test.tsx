@@ -1341,7 +1341,11 @@ describe('RunConfigView — running model (#560)', () => {
 // separately.
 // vi.hoisted, because vi.mock's factory is lifted above every module-level binding and would otherwise
 // read this id before initialisation.
-const { SEEDED_CONVERSATION_ID } = vi.hoisted(() => ({ SEEDED_CONVERSATION_ID: 'conv-975' }))
+const { SEEDED_CONVERSATION_ID, ZERO_MAX_CONVERSATION_ID } = vi.hoisted(() => ({
+  SEEDED_CONVERSATION_ID: 'conv-975',
+  // #1421, hoisted for the same reason: vi.mock's factory is lifted above every module-level binding.
+  ZERO_MAX_CONVERSATION_ID: 'conv-1421-zero-max'
+}))
 
 vi.mock('../../store/modelListStore', async (importActual) => {
   const actual = await importActual<typeof import('../../store/modelListStore')>()
@@ -1374,7 +1378,80 @@ vi.mock('../../store/modelListStore', async (importActual) => {
   }
 })
 
+// #1421: the reported reading for the same seeded conversation, seeded the same way and for the same
+// reason — the server renderer reads the state captured at store CREATION, so the seed goes in as the
+// factory's init and only the hook binding is overridden, keeping the real selector. 146K of 200K reads
+// 73%, the Figma 20:152 triple; `percentage` is seeded to a DISAGREEING 1 because the gauge must recompute
+// from the token pair and never display claude's own field.
+vi.mock('../../store/reportedContextStore', async (importActual) => {
+  const actual = await importActual<typeof import('../../store/reportedContextStore')>()
+  const { useStore } = await import('zustand')
+  const store = actual.createReportedContextStore({
+    readings: new Map([
+      [
+        SEEDED_CONVERSATION_ID,
+        {
+          model: '',
+          totalTokens: 146_000,
+          maxTokens: 200_000,
+          percentage: 1,
+          categories: [],
+          droppedCategories: 0,
+          mcpTools: [],
+          droppedMcpTools: 0,
+          memoryFiles: [],
+          droppedMemoryFiles: 0
+        }
+      ],
+      // A second conversation whose reading is present but degenerate: claude answered with a maximum of
+      // zero. AC3's sharp edge — it must still WIN and resolve to the unavailable state, never fall back.
+      [
+        ZERO_MAX_CONVERSATION_ID,
+        {
+          model: '',
+          totalTokens: 146_000,
+          maxTokens: 0,
+          percentage: 1,
+          categories: [],
+          droppedCategories: 0,
+          mcpTools: [],
+          droppedMcpTools: 0,
+          memoryFiles: [],
+          droppedMemoryFiles: 0
+        }
+      ]
+    ])
+  })
+  return {
+    ...actual,
+    useReportedContextStore: <T,>(selector: (s: ReturnType<typeof store.getState>) => T): T =>
+      useStore(store, selector)
+  }
+})
+
 describe('RunConfigSections (container)', () => {
+  // #1421: the gauge takes claude's figure. The whole usage line in ONE assertion, deliberately — the
+  // criterion is that the percentage and the two token figures cannot disagree WITH EACH OTHER, and three
+  // separate assertions would pass on a gauge that drew 73% beside the settings pair's abbreviations.
+  //
+  // The settings snapshot is null under server render (windowTokens: 0), which is the shipped unavailable
+  // branch, so this line can only appear if the reading is actually read.
+  it('draws the reported reading as a consistent percentage-and-tokens triple (#1421, AC2)', () => {
+    const markup = renderToStaticMarkup(<RunConfigSections conversationId={SEEDED_CONVERSATION_ID} />)
+    expect(markup).toContain('73% used (146K of 200K tokens)')
+    expect(markup).not.toContain('Context usage unavailable')
+    // The gauge's two sinks take the clamped percentage, never a raw daemon figure.
+    expect(markup).toContain('aria-valuenow="73"')
+    expect(markup).toContain('width:73%')
+  })
+
+  it('shows the unavailable state for a present reading whose maximum is zero (#1421, AC3)', () => {
+    const markup = renderToStaticMarkup(<RunConfigSections conversationId={ZERO_MAX_CONVERSATION_ID} />)
+    expect(markup).toContain('Context usage unavailable')
+    expect(markup).not.toContain('% used')
+    expect(markup).not.toContain('NaN')
+  })
+
   it('renders the list published for the conversation it was given (#975)', () => {
     const markup = renderToStaticMarkup(<RunConfigSections conversationId={SEEDED_CONVERSATION_ID} />)
     expect(markup).toContain('Seeded label')

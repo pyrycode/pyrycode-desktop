@@ -12,6 +12,8 @@ import {
   selectAnnouncedModelFor,
   type AnnouncedModel
 } from '../../store/announcedModelStore'
+import { useReportedContextStore, selectReportedContextFor } from '../../store/reportedContextStore'
+import { contextTokenSource } from './contextTokenSource'
 import {
   useRunSettingsWriteStore,
   runSettingsWriteStore,
@@ -806,6 +808,15 @@ export function RunConfigSections({ conversationId }: { conversationId: string |
     [conversationId]
   )
   const models = useModelListStore(selectModels)
+  // #1421: a THIRD instance of the same useMemo-stable per-id selector idiom, for claude's own context
+  // reading — the display source since #1421, with the snapshot's transcript-derived pair as the fallback.
+  // A fresh closure each render would churn the subscription; a null conversation selects nothing through
+  // the same path, with no invented key and no second branch downstream.
+  const selectReported = useMemo(
+    () => (conversationId === null ? () => null : selectReportedContextFor(conversationId)),
+    [conversationId]
+  )
+  const reported = useReportedContextStore(selectReported)
 
   const effective = selectEffectiveSettings(snapshot, writeState)
   // #558: derived from the SAME writeState reference in the SAME render pass as `effective` — that is
@@ -814,6 +825,20 @@ export function RunConfigSections({ conversationId }: { conversationId: string |
   // value with no marker, which is exactly the state this ticket exists to prevent.
   const pending = selectPendingFields(writeState)
   const errorField = selectError(writeState)
+  // #1421: WHICH pair the gauge draws, decided by the same function the composer footer's reading calls —
+  // so the two surfaces cannot disagree for one conversation. Resolved HERE and handed down as the two
+  // primitive props the view already takes, which is what keeps RunConfigView props-in/markup-out and
+  // ContextWindowSection untouched (the announced/models discipline one scope up).
+  //
+  // It also settles the gauge's INTERNAL consistency for free: the section derives its percentage from the
+  // same two integers it abbreviates into `(X of Y tokens)`, so one winning pair makes the drawn triple
+  // consistent by construction rather than by three edits that agree (Figma 20:152).
+  //
+  // The fallback fires on an ABSENT reading only. A present reading whose maximum is zero still wins and
+  // lands in ContextWindowSection's shipped unavailable branch via contextUsagePercent's window guard —
+  // never back on the transcript figure. The `?? 0` coalescing the container used to spell here now lives
+  // inside contextTokenSource, written once for both surfaces.
+  const contextTokens = contextTokenSource(reported, snapshot)
 
   const onChange =
     // Both null and '' withhold the handler: null is "never observed", '' is the daemon saying it
@@ -827,8 +852,8 @@ export function RunConfigSections({ conversationId }: { conversationId: string |
       model={effective.model}
       effort={effective.effort}
       yolo={effective.yolo}
-      usedTokens={snapshot?.usedTokens ?? 0}
-      windowTokens={snapshot?.windowTokens ?? 0}
+      usedTokens={contextTokens.usedTokens}
+      windowTokens={contextTokens.windowTokens}
       onChange={onChange}
       errorField={errorField}
       pending={pending}

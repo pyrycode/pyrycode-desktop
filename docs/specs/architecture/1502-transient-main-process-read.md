@@ -139,6 +139,20 @@ verifier's deterministic gate.
   implementation; if it does not hold, the helper takes a thunk instead and the spec closes over
   `app` at the call site. Record the outcome under `## Revisions` if the shape changes.
 
+## Revisions
+
+**2026-09-15 — the open question resolves in the affirmative; no design change.** `ElectronApplication`
+does satisfy the narrow `MainProcessEvaluator` type, so the spec passes its real `app` unchanged and
+the vitest cover drives the same wrapper with a plain stub. Confirmed by a one-off
+`tsc --noEmit --strict` over `mainProcessRead.ts`, its cover and the spec, with `src/preload/*.d.ts`
+in scope for `window.pyry`: no error in either new file, and none at the `readMainProcess` call site.
+The eight errors that invocation does report are pre-existing, in the spec's *other* tests
+(`env.payload` typed `unknown`, an implicit `any`, a `string | undefined`), and are an artefact of
+checking a directory no tsconfig project includes — neither `tsconfig.node.json` nor
+`tsconfig.web.json` covers `e2e/`, and neither vitest nor Playwright typechecks. Bringing `e2e/`
+under a typecheck gate would fix real latent errors but is a separate decision and squarely out of
+this ticket's scope; the thunk-shaped fallback the question named was therefore not needed.
+
 ## Documentation handoff
 
 The ticket body has no **Documentation handoff** section and no documentation-only acceptance

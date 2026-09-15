@@ -2,6 +2,7 @@ import { test, expect, SEEDED_ROW, SECOND_SEEDED_ROW, seedConversationsFrame, ty
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { ChatHistoryResult } from '../src/shared/chatHistory'
 import { pairAnotherServerFromSettings } from './fixtures/pairingArrival'
+import { readMainProcess } from './fixtures/mainProcessRead'
 
 const ts = '2026-07-07T12:00:00.000Z'
 const frame = (type: string, payload: Record<string, unknown>, in_reply_to?: number) =>
@@ -54,6 +55,10 @@ test('confirmed deletion removes saved content through restart without waiting f
       return result
     })
   })
+  // Read the counter through the tolerant helper: Electron can transiently lose its inspection
+  // context while the app stays alive. Only the READS may retry — the wrapper install above is a
+  // mutation and stays the single un-retried call it is.
+  const removals = () => readMainProcess(app, () => (globalThis as any).__conversationRemovals)
   await page.locator('.conversation__overflow-trigger').click()
   await page.getByRole('menuitem', { name: 'Channel info' }).click()
   await page.getByRole('button', { name: 'Delete', exact: true }).click()
@@ -61,10 +66,12 @@ test('confirmed deletion removes saved content through restart without waiting f
   await page.getByRole('button', { name: 'Delete', exact: true }).click()
   await expect.poll(() => deleteReplyTo).toBeDefined()
   expect(snapshotText(await read(page))).toBe('saved before confirmed deletion')
-  expect(await app.evaluate(() => (globalThis as any).__conversationRemovals)).toBe(0)
+  // Bounded, so a genuinely dead app still fails fast. The counter only ever increments, so polling
+  // to 0 is the same claim the single read made: nothing has been removed yet.
+  await expect.poll(removals, { timeout: 5_000 }).toBe(0)
   confirmed = true
   await daemon.pushFrame(frame('conversation_deleted', { id: SEEDED_ROW.id }, deleteReplyTo))
-  await expect.poll(() => app.evaluate(() => (globalThis as any).__conversationRemovals)).toBe(1)
+  await expect.poll(removals, { timeout: 5_000 }).toBe(1)
   expect(await read(page)).toEqual({ status: 'missing' })
   expect(await page.evaluate(serverId => window.pyry.chatHistory({ operation: 'readList', serverId }), serverId))
     .toMatchObject({ status: 'stored', snapshot: { conversations: [] } })

@@ -573,7 +573,12 @@ failed cleanup must preserve content without a success diagnostic. The recording
 Playwright test holds confirmation after the delete command, proves retention, then
 waits for the actual `removeConversation` result to be `ok` before asserting absence
 and restarting. Renderer disappearance or an early missing read cannot prove cleanup
-or ordering; the scenario withholds list refresh responses throughout deletion.
+or ordering; the scenario withholds list refresh responses throughout deletion. Its two
+`__conversationRemovals` counter reads go through the shared `readMainProcess` helper, bounded at
+five seconds, so a transient loss of Electron's inspection context does not redden the scenario (see
+[E2E test harness § Tolerating a transient inspection-context loss on
+reads](e2e-harness.md#tolerating-a-transient-inspection-context-loss-on-reads)); the counting
+wrapper's own install stays a single un-retried call.
 
 [`savedTimelineRestorer.test.ts`](../../../src/renderer/src/store/savedTimelineRestorer.test.ts)
 covers explicit admission, row identity metadata and coverage, equal-id host

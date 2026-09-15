@@ -326,7 +326,12 @@ The field's keyboard-focus indicator is an **outset** `box-shadow` on `:focus-wi
   add-host and repair, another connected host, sticky rejection/absence/timeout, Retry
   with one save, cancellation/new interaction, stale same-host status and authentication
   before the save response. Its onboarding read retries only Playwright's exact transient
-  “Execution context was destroyed” error within five seconds; mutations still fail.
+  “Execution context was destroyed” error within five seconds, via its own local
+  `readAuthentication`; mutations still fail. [E2E test harness § Tolerating a transient
+  inspection-context loss on reads](e2e-harness.md#tolerating-a-transient-inspection-context-loss-on-reads)
+  is now the rule's canonical home — `chat-history-recording.spec.ts`'s confirmed-deletion reads hit
+  the identical race through the shared `mainProcessRead.ts` helper (\#1502); `readAuthentication`
+  itself was not migrated onto it, out of scope while this spec stays green.
   `e2e/pairing-modal.spec.ts` proves
   focus containment/restoration, inert background, busy guards, retry, fresh reopening,
   late submit handling and reachable footer actions at 800×400. Sidebar/navigation and

@@ -1,5 +1,6 @@
 import './channels.css'
 import {
+  Children,
   Fragment,
   useEffect,
   useState,
@@ -1577,15 +1578,38 @@ function HostConnectionDotsControl({ serverId }: { serverId: string }): JSX.Elem
 //   - NO log line for the toggle. Any useful one carries the label or the `cwd` — daemon content in a
 //     log, which ADR 0007's content-free rule and CLAUDE.md both forbid. This row emits none.
 //
-// The class token stays SOLE — no `--collapsed` modifier, in either state. `ChannelList.test.tsx:76` pins
-// `class="channel-list__workspace"` as an EXACT attribute-value substring, so a second token would stop
-// matching it and silently zero #703's counts rather than failing them. There is nothing to style
-// differently anyway: the Figma draws one state and no chevron. A collapsed appearance, if one is ever
-// designed, styles off `[aria-expanded='false']`.
+// The class token stays SOLE — no `--collapsed` modifier, in either state. `ChannelList.test.tsx`'s
+// `WORKSPACE_ROW_MARKER` pins `class="channel-list__workspace"` as an EXACT attribute-value substring, so
+// a second token would stop matching it and silently zero #703's counts rather than failing them.
 //
-// The glyph is a seventh inline Material path in this file's idiom — the `folder` shape, its `d` copied
-// from WorkspacePickerSheet's module-local FolderIcon but sized 12px to match the host row's level marker
-// rather than that file's 24px control.
+// #1487 GAVE THE ROW A COLLAPSED APPEARANCE, and it lands exactly where that rule said one would: off
+// `[aria-expanded='false']`, never off a class. Two marks read the fold now — the folder glyph, swapped
+// here, and a chevron after the label, turned by ONE declaration in `channels.css` keyed to that
+// attribute. Which half is done where is the design and not an accident:
+//   - THE FOLDER IS A RENDER BRANCH because the two states are two different arts (Font Awesome
+//     `folder-open-solid` open, the shipped Material `folder` shut — Juhana's brief, 2026-09-15), and no
+//     transform turns one into the other.
+//   - THE CHEVRON IS ONE ART AND A ROTATION, so `aria-expanded` stays the SOLE state signal. A second
+//     render branch would be a parallel signal free to drift from the attribute a screen reader is told;
+//     a rotation reading that attribute cannot. The cost, stated rather than hidden: the drawn DIRECTION
+//     is invisible to `renderToStaticMarkup`, so the unit tier pins the attribute and the mark's
+//     presence and leaves the turn to one reviewed CSS declaration — the standard this file already
+//     holds every other CSS-only visual to, the plus's hover reveal included.
+//
+// THE CHEVRON IS WITHHELD FROM A GROUP WITH NO ROWS (`hasRows`), a shape #1485's union made reachable in
+// production: a workspace with rows in the OTHER tree and none in this one draws its head row here over
+// an empty mapped array. That row has nothing to fold, so it shows no fold mark — while staying the
+// disclosure button, and while still swapping its folder, because it still folds. The flag is derived
+// from `children` one component up rather than threaded from `renderServerTrees`; see
+// `CollapsibleWorkspaceGroup`'s docblock for why that is what keeps its call site untouched.
+//
+// THE GLYPH IS OUT OF FLOW SINCE #1487 and the label carries the row's left padding instead — the redrawn
+// component's own construction (Row icon 399:1034, absolutely placed at left 8, top 4). It lands where it
+// already landed, 8 in from the wrapper's nest with the label at 30, so this is a change to how the row
+// is BUILT and not to where its parts sit; `channels.css` re-derives the sum. The open art is the
+// design's own export at 13 × 11. The shut one is the seventh inline Material path in this file's idiom —
+// the `folder` shape, its `d` copied from WorkspacePickerSheet's module-local FolderIcon but sized 12px
+// to match the host row's level marker rather than that file's 24px control.
 //
 // #1178 GAVE THE ROW A WRAPPER, and the wrapper is what nests it. The drawing (Workspace 399:1059,
 // placed as 405:7456 inside the `pl-[20px]` wrapper 405:7469) runs the row from 20px in from the card's
@@ -1639,12 +1663,18 @@ function HostConnectionDotsControl({ serverId }: { serverId: string }): JSX.Elem
 function WorkspaceRow({
   label,
   expanded,
+  // #1487 — does this group have rows in the tree being drawn? It names the FACT rather than the mark,
+  // because what it gates is the chevron and what decides it is "is there anything to fold". Required
+  // rather than optional: every caller knows the answer (there is one), and a default would be a second
+  // way to draw a fold mark over nothing.
+  hasRows,
   onToggle,
   create,
   edit
 }: {
   label: string
   expanded: boolean
+  hasRows: boolean
   onToggle: () => void
   create?: WorkspaceCreateControl
   edit?: WorkspaceEditControl
@@ -1657,17 +1687,53 @@ function WorkspaceRow({
         aria-expanded={expanded}
         onClick={onToggle}
       >
-        <svg
-          className="channel-list__workspace-icon"
-          viewBox="0 0 24 24"
-          width="12"
-          height="12"
-          fill="currentColor"
-          aria-hidden="true"
-        >
-          <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
-        </svg>
+        {expanded ? (
+          // Font Awesome `folder-open-solid` (510:2214), the design's own export at its drawn 13 × 11.
+          <svg
+            className="channel-list__workspace-icon"
+            viewBox="0 0 13 11"
+            width="13"
+            height="11"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M0.567308 5.6392L0 7.33631V2.52381C0 1.67526 0.689904 0.985352 1.53846 0.985352H4.8726C5.20433 0.985352 5.52885 1.09352 5.79567 1.29304L6.71875 1.98535C6.85096 2.08631 7.01442 2.1392 7.18029 2.1392H10C10.8486 2.1392 11.5385 2.8291 11.5385 3.67766V4.06227H2.75481C1.76202 4.06227 0.879808 4.69689 0.564904 5.6392H0.567308ZM10.7067 10.9854H1.60096C0.8125 10.9854 0.257212 10.2137 0.507212 9.46612L1.66106 6.00458C1.81731 5.53343 2.25962 5.21612 2.75481 5.21612H11.8606C12.649 5.21612 13.2043 5.98776 12.9543 6.73535L11.8005 10.1969C11.6442 10.668 11.2019 10.9854 10.7067 10.9854Z" />
+          </svg>
+        ) : (
+          // The shipped Material `folder`, kept byte for byte at its 12px box and 24-unit viewBox.
+          <svg
+            className="channel-list__workspace-icon"
+            viewBox="0 0 24 24"
+            width="12"
+            height="12"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
+          </svg>
+        )}
         <span className="channel-list__workspace-label">{label}</span>
+        {hasRows && (
+          // #1487 — the fold mark (Chevron 510:2328), DOWN as drawn; `channels.css` rotates it a quarter
+          // turn off the button's `[aria-expanded='false']` for the collapsed state, which is the whole
+          // of "one state signal". Decorative and silent: the disclosure it belongs to already says
+          // everything, so a name here would be a second voice for one control.
+          //
+          // The drawn art is 7.967 × 3.985 and the box is the integers it rounds to, so the glyph draws
+          // within 0.04px of its export; the ~0.05px the rounded tips reach outside the viewBox clips
+          // rather than carrying an `overflow` attribute for a sub-pixel. It is the row's LAST flex item
+          // and never shrinks (`channels.css`), so a long `cwd` truncates before it does.
+          <svg
+            className="channel-list__workspace-chevron"
+            viewBox="0 0 8 4"
+            width="8"
+            height="4"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M4.38533 3.8393C4.16311 4.03385 3.80222 4.03385 3.58 3.8393L0.166667 0.850973C-0.0555557 0.656421 -0.0555557 0.340467 0.166667 0.145915C0.388889 -0.048638 0.749779 -0.048638 0.972001 0.145915L3.98356 2.78249L6.99511 0.147471C7.21733 -0.0470815 7.57822 -0.0470815 7.80044 0.147471C8.02267 0.342024 8.02267 0.657977 7.80044 0.85253L4.38711 3.84086L4.38533 3.8393Z" />
+          </svg>
+        )}
       </button>
       {create && (
         // Icon-only button — `aria-label` supplies the accessible name (the `.channel-list__save`
@@ -1829,6 +1895,16 @@ export function CollapsibleWorkspaceGroup({
       <WorkspaceRow
         label={label}
         expanded={expanded}
+        // #1487 — "has this group anything to fold?", read off the children this component ALREADY holds
+        // rather than taken as a prop. That is the whole reason `renderServerTrees`' heavily-commented
+        // call site gains nothing for this ticket: the value it would have passed is `group.rows.length`,
+        // and `group.rows.map(renderRow)` is already here. #1488 rules the other way for the host row,
+        // whose children are a <Fragment> and cannot be counted — the two are not in conflict.
+        //
+        // `Children.count` and not `children.length`: `children` is typed `ReactNode`, so the array is a
+        // property of today's sole caller rather than of the contract, and the helper reads a single
+        // element as 1 without the call site having to wrap it.
+        hasRows={Children.count(children) > 0}
         create={create}
         edit={edit}
         // Functional updater, never `setExpanded(!expanded)`: the latter reads a value captured at render

@@ -220,11 +220,35 @@ Pending for the documentation stage, not done here:
 - Same topic — the withheld chevron on an empty workspace group recorded as the visible half of #1485's
   union.
 
+## Revisions
+
+**2026-09-15 — `.channel-list__workspace-label` drops its `flex-grow`, `1 1 auto` → `0 1 auto`.**
+
+The ticket's technical notes say the label keeps `flex: 1 1 auto`, and the Design above took that as given.
+The first static capture showed why it cannot stand: a grown label fills the row, so the chevron rendered
+~230px right of "Second Brain", parked against the trailing padding. The drawing packs the two against
+each other at the 6px gap — 399:1039's items are `shrink-0` and start-packed, with no spacer between them
+— which is what AC3's "sits after the label at a 6px gap" describes. While nothing followed the label the
+grow was invisible (left-aligned text draws the same in a stretched box), which is why it survived #1178
+unnoticed.
+
+`0 1 auto` keeps everything the note was protecting: the shrink and `min-width: 0` are what "a long `cwd`
+truncates first" actually rests on, and they are untouched, so the label still gives — and gives before
+the chevron's `0 0 auto` can. The button's own `flex: 1 1 auto` is a different declaration and stays, so
+the row's click target still spans to the wrapper's far edge and the dead space right of the chevron
+still toggles.
+
+Checked against every consumer of the class before changing it: `e2e/sidebar-tree-geometry.spec.ts` reads
+the label's `.x` only, and the other nine specs that locate on it filter by text, count, hover or click —
+none reads its width.
+
 ## Open questions
 
-- **Does the chevron's 8px layout box crowd the pen at 45?** Resolved in Design above by arithmetic (the
-  label's content edge is 52 in, the pen's hit box starts at 45) rather than left open; the static
-  capture is the check.
-- **Is `Children.count` or `Children.toArray(children).length` the right read?** `count` is chosen
-  because the sole caller passes a mapped array, where the two agree. If the capture or the build shows a
-  caller shape where they differ, the answer changes and this section records it.
+- **Does the chevron's 8px layout box crowd the pen at 45?** **Resolved — no.** The arithmetic said the
+  label's content edge is 52 in against the pen's 45, and the capture confirms it: the truncated long
+  label's chevron ends 52 in from the card's content edge.
+- **Is `Children.count` or `Children.toArray(children).length` the right read?** **Resolved —
+  `Children.count`.** The sole caller passes `group.rows.map(renderRow)`, where the two agree, and `count`
+  additionally reads a single non-array element as 1 without the call site having to wrap it. The unit
+  tier renders the production shape (an empty array) rather than a `null` stand-in, so the case that
+  ships is the case asserted.

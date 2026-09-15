@@ -1,13 +1,23 @@
 # Save-as-channel dialog
 
 The unpromoted chat row's **Save as channel** action in [Channel List](channel-list.md)
-collects a name and workspace folder choice, then [promotes the existing conversation](conversation-promote.md).
-It preserves the conversation identifier and history, without creating a replacement conversation,
-copying files or changing the existing daemon file/session semantics.
+collects a name, then [promotes the existing conversation](conversation-promote.md) in its own
+workspace — the chat's exact current `row.cwd`. It preserves the conversation identifier and
+history, without creating a replacement conversation, copying files or changing the existing
+daemon file/session semantics.
 
-[Create channel](create-channel-dialog.md) offers the same location choices and shares the form
-and workspace-parent helper. Its container creates a new channel and waits for confirmation;
-Save as channel promotes an existing chat and closes on dispatch.
+[Create channel](create-channel-dialog.md) shares the same name-only form. Its container
+creates a new channel and waits for confirmation; Save as channel promotes an existing chat and
+closes on dispatch.
+
+Until 2026-09-14 the dialog also offered a dedicated `<workspace>/channels/<slug>/` subfolder
+destination, created through `createWorkspaceFolder` before promoting into the returned path. It
+was withdrawn (#1436) for the same reason as [Create channel](create-channel-dialog.md): neither
+this client nor the daemon has a workspace entity beyond a conversation's `cwd` as an exact string,
+so a channel in that subfolder rendered as a brand-new workspace group rather than living under the
+chat's own workspace. Both dialogs now always promote or create into the workspace folder itself,
+which was already the default branch. Existing channels already sitting in a dedicated folder are
+not moved.
 
 ## What it does
 
@@ -15,141 +25,121 @@ Each opening prefills and focuses **Channel name:** with `titleFor(row.name)`, i
 `Untitled` for a null or blank title. The shared `Modal` supplies the **Save as channel** header,
 close control, divider and centered **Cancel**/**OK** buttons. Its preferred width is 640px,
 constrained to the window; short windows scroll the panel. `ChannelForm` supplies the filled
-input and labelled native radios in this order, with the first selected:
+input, and nothing else — no location choice remains.
 
-| Choice | Request destination |
-| --- | --- |
-| **Use shared scratch folder** | The chat's exact current `row.cwd`, passed directly to promotion. No folder is created. |
-| **Create a dedicated channel folder** | Requests a folder beneath the chat workspace's `channels` subfolder, then passes the returned canonical path to promotion. |
+OK requires a nonblank trimmed name. The `Untitled` fallback is nonblank, so it is immediately
+valid. Cancel and header close remain available. Dismissal, unmount and host disconnection abandon
+the local continuation; reconnect cannot resume it. Already-sent remote operations are not undone.
 
-“Shared scratch folder” means this chat's workspace itself, not a separate host scratch
-folder. There is no fixed-path preview. OK requires a nonblank trimmed name. The `Untitled`
-fallback is nonblank, so it is immediately valid.
-
-Dedicated creation disables the input, radios and OK while pending. Folder rejection sends
-no promotion, displays the client-owned “Could not create that folder” with `role="alert"`,
-and restores editing and retry. Cancel and header close remain available while pending.
-Dismissal, unmount and host disconnection abandon the local continuation; reconnect cannot
-resume it. Already-sent remote operations are not undone.
-
-Both choices send the original conversation identifier and trimmed display name, then close
-on promotion dispatch. The dialog never optimistically edits the list. The existing
-`conversation_updated` broadcast triggers the [conversation-list refresh](conversation-list-store.md),
-which moves the same row from Chats to Channels without duplication.
+OK sends the original conversation identifier and trimmed display name to promotion with the row's
+`cwd` verbatim, then closes on dispatch — there is no round trip to wait on and no busy state.
+The dialog never optimistically edits the list. The existing `conversation_updated` broadcast
+triggers the [conversation-list refresh](conversation-list-store.md), which moves the same row
+from Chats to Channels without duplication.
 
 ## How it works
 
 `ChannelList` retains the selected row, including `cwd` and `serverId`, and mounts the dialog
 only for a connected owning host. The save affordance is a sibling of the row-open button,
 not a nested interactive control; promoted rows have no save affordance. Each opening mounts
-a fresh container, discarding previous name and location edits.
+a fresh container, discarding previous name edits.
 
 ### Presentation and CSS
 
-`SaveAsChannelDialogView` receives name, location, folder round-trip state and callbacks.
-It renders `Modal` and the shared `ChannelForm`; neither presentation component accesses
-transport. The form renders operator input through React's escaped input value, uses native
-radio keyboard behavior and requests autofocus. Submission remains in the dialog container.
+`SaveAsChannelDialogView` receives name and callbacks only — no location, no folder round-trip
+state, no busy flag; it passes `busy={false}` and `error={null}` into `ChannelForm`. It renders
+`Modal` and the shared `ChannelForm`; neither presentation component accesses transport. The form
+renders operator input through React's escaped input value and requests autofocus. Submission
+remains in the dialog container.
 
 Both dialogs use `.create-channel-overlay` and `.create-channel__*` form styles in
 `channels.css`, with shared modal chrome in `components/modal.css`. The overlay is fixed with
 `z-index: 2` so it escapes the sidebar scroll column. Its scrim does not dismiss on click.
-The old `.save-as-channel*` panel, action and preview styles are removed.
+The `.create-channel__option` radio rules the withdrawn location choice used are gone, but the
+`:focus-visible`/`:disabled` rules for `.create-channel__input` were shared selector lists with
+those radio rules, not a clean block — see [Create channel](create-channel-dialog.md) for the
+trap that trimming rather than deleting them avoided.
 
 ### Requests and replies
 
 `requestPromoteConversation(sendCommand, conversationId, name, cwd)` sends
 `promoteConversation` with `{ conversation_id: conversationId, name: name.trim(), cwd }`.
-Promotion routes by conversation identifier. The scratch branch passes `row.cwd` verbatim,
-including any trailing slash.
+Promotion routes by conversation identifier. It passes `row.cwd` verbatim, including any
+trailing slash — the only surviving branch, now the whole flow (#1436 withdrew the folder branch
+that once passed a daemon-returned canonical path instead). Diagnostics carry only static
+lifecycle codes (`sidebar-promotion`: `sent`, `abandoned`), never names, paths or daemon error
+text.
 
-`requestCreateChannelFolder(sendCommand, channelName, cwd, serverId)` sends
-`createWorkspaceFolder` with the retained row's host as a top-level IPC field. Its payload uses
-`channelsParent(cwd)` from `ChannelForm.tsx`: remove trailing slashes and append `/channels`.
-`slugForChannel` trims and lowercases the name, converts runs outside ASCII letters/digits
-to hyphens, removes edge hyphens, and falls back to `channel` if empty. Both dialogs use these
-same helpers; only the folder element is converted, not the display name.
-
-For workspace `/home/alex/projects/demo` and name ` Release planning `, the folder request is
-`{ parent: '/home/alex/projects/demo/channels', name: 'release-planning' }`. The existing
-remote operation owns missing-parent creation, existing-directory reuse and canonicalization.
-Only a successful reply from the retained host permits promotion, with display name
-`Release planning` and the returned `path` verbatim, even when it differs from the requested
-parent and slug. These are client request guarantees, not a file-copy or session-migration
-operation; see the [real-daemon coverage boundary](real-daemon-credential-light-e2e.md).
-
-The container sets a synchronous pending ref before dispatching `createRequested` to
-`newFolderStore` and sending the folder command. This prevents duplicate submissions before
-React paints disabled controls. Its listener filters original main-stamped events by the
-retained `serverId`, pending state and abandonment before `subscribeNewFolder` discards host
-identity. The bridge ignores unrelated event types. Wrong-host, unstamped and non-pending
-replies cannot continue the draft, even when two hosts share identical paths.
-
-A created-state effect rechecks pending, abandonment and current host connectivity, clears
-pending, then promotes with `roundTrip.path` and calls `onPromoted`. Rejection clears pending
-and permits an explicit retry. The active conversation's host is irrelevant to either branch.
-Diagnostics carry only static lifecycle codes, never names, paths or daemon error text.
+There is no busy state and no wait: `onSave` dispatches the command and calls `onPromoted`
+synchronously, closing the dialog. There is no correlated rejection to listen for, and no
+`newFolderStore` read, subscription or reset — that store's remaining owner is the workspace
+picker's `CreateFolderDialog`; see [the store's own doc](new-folder-store.md).
 
 ### Draft lifetime
 
-Cancel/header close synchronously mark the draft abandoned, clear pending and reset the
-folder round trip before calling `onDismiss`. Unmount removes the daemon-event and session
-subscriptions and resets the singleton store so the next opening starts idle.
+Cancel/header close synchronously mark the draft abandoned before calling `onDismiss`. Unmount
+removes the session subscription.
 
-A synchronous session subscription abandons pending work on any non-connected transition.
-This is necessary even with render-time gating: disconnect and reconnect before React paints
-could otherwise hide host loss from the promotion effect. A late completion while offline
-or after reconnect cannot promote the abandoned draft. A fresh explicit opening is required.
+A synchronous session subscription abandons the draft on any non-connected transition, and
+`onSave` re-checks connectivity through `isHostConnected` before dispatching. This is necessary
+even with render-time gating: a disconnect and reconnect batched before React paints could
+otherwise let a keyboard-focused Save fire after the host is gone. There is no async
+continuation left to abandon past that point — promotion is fire-and-forget, so the ref's only
+job is guarding the synchronous window between disconnect and an already-focused Save.
 
 ## Testing
 
-`SaveAsChannelDialog.test.tsx` covers presentation, blank validation, busy controls, accessible
-errors, escaping and helper payloads, including trailing workspace separators and slug conversion.
-Static rendering can assert the autofocus attribute, but cannot prove actual focus, callbacks
-or cancellation; those require the interaction tier.
+`SaveAsChannelDialog.test.tsx` covers presentation, blank validation, accessible errors, escaping
+and the `requestPromoteConversation` payload, including a trailing-workspace-separator case, plus
+an assertion that the rendered form carries no `type="radio"`. Static rendering can assert the
+autofocus attribute, but cannot prove actual focus, callbacks or cancellation; those require the
+interaction tier.
 
-`e2e/save-as-channel-promote.spec.ts` controls folder replies and captures requests to prove
-both destinations, the original conversation ID, list refresh without duplicates, rejection/retry,
-frozen controls, keyboard radios, ignored events and idle/pending dismissal followed by reopening.
-Two hosts with identical workspace paths expose wrong-host routing. A renderer barrier follows
-injected events before command-absence assertions.
+`e2e/save-as-channel-promote.spec.ts` captures requests to prove the promotion payload (original
+conversation ID, verbatim `cwd`, trimmed name), list refresh without duplicates, and idle
+dismissal followed by reopening with the `Untitled` default restored. A canonical reply different
+from the requested path is no longer relevant to this flow — there is no folder round trip left to
+prove — but the spec still injects a `workspaceFolderCreated` after dismissal to confirm it stays
+inert: since #1436 this dialog neither requests a folder nor waits on one. The main promotion test
+also promotes a second host's row in its tail, so cross-host routing-by-conversation-id — inherited
+from the deleted dedicated-folder test — still has coverage; the first row's save affordance is
+gone once promoted, which is what shifts the second row to index 0 for that tail cheaply.
 
-A promoted row alone does not prove canonical-path use: a fake can accept the wrong path and
-still update the row. Assert the promotion payload directly using a canonical reply that differs
-from the requested path, alongside the original ID and trimmed name. The fake proves client
-requests and continuation behavior, not daemon filesystem/session behavior.
+`e2e/sidebar-offline-mutations.spec.ts` keeps its keyboard-after-disconnect coverage: a pre-opened
+save dialog cannot promote by keyboard once the host has disconnected. The batched
+disconnect/reconnect test that previously covered a pending dedicated promotion was deleted with
+that branch — nothing async is left to race. It observes renderer `sendCommand` calls through a
+conditional CDP function-call breakpoint, before IPC/transport filtering; counting only daemon
+receipts could pass with a broken UI gate.
 
-`e2e/sidebar-offline-mutations.spec.ts` retains delayed completion and batched reconnect checks.
-It observes renderer `sendCommand` calls through a conditional CDP function-call breakpoint,
-before IPC/transport filtering. Counting only daemon receipts could pass with a broken UI gate.
-
-The shared-form change also affects Create channel interaction coverage. Modal integration
-checks should identify Save as channel by dialog role and accessible name; the paired-shell
-hit test separately checks that `.create-channel-overlay` receives hits outside the sidebar.
-The promotion spec captures normal, minimum-width, short-window and rejected states, and
-checks that scrolling leaves Cancel reachable. `real-daemon-promote.spec.ts` covers the scratch
-promotion branch separately; its DOM assertions do not prove the dedicated request payload.
+The shared-form change also affects Create channel interaction coverage. Modal integration checks
+should identify Save as channel by dialog role and accessible name; the paired-shell hit test
+separately checks that `.create-channel-overlay` receives hits outside the sidebar. The promotion
+spec captures normal, minimum-width and short-window states, and checks that scrolling leaves
+Cancel reachable. `real-daemon-promote.spec.ts` covers the same scratch promotion branch, now the
+only branch, separately in the real tier.
 
 ## Edge cases and limitations
 
 - Promotion closes on dispatch, without a new acknowledgement or correlated rejection protocol.
   If the daemon never confirms, the row remains in Chats. `conversation_updated` is an unsolicited
   broadcast; see [promotion correlation](conversation-promote.md#correlation-is-deliberately-absent-the-reply-is-a-broadcast-not-a-response).
-- Folder replies expose no renderer request identifier. Matching is host plus pending operation;
-  concurrent same-host operations remain indistinguishable. An older reply arriving during a
-  newer draft's pending folder operation can satisfy that newer wait.
-- Neither folder creation nor promotion has a timeout or automatic retry. A missing folder reply
-  leaves a dismissible pending dialog. Retrying does not roll back earlier remote work.
+- There is no busy state and no error line in this dialog: promotion is fire-and-forget, so there
+  is nothing to be pending on and nothing a rejection could clear. `ChannelForm`'s error paragraph
+  is unused here; only Create channel drives it.
 - Escape and scrim clicks do not dismiss. The input has autofocus but no select-all or
   Enter-to-submit handler; keyboard activation of the focused OK button submits.
-- Slug conversion is client-owned, not a shared mobile normalization contract. The daemon-returned
-  path remains authoritative for the subsequent request.
+- Existing channels already sitting in a dedicated folder from before the #1436 withdrawal are
+  not moved.
 
 ## Related
 
-- [Create channel](create-channel-dialog.md) — shared fields and folder construction, separate creation lifecycle.
+- [Create channel](create-channel-dialog.md) — shared form, separate creation lifecycle, the same
+  folder-choice withdrawal.
 - [Conversation promote](conversation-promote.md) — command and broadcast contract.
 - [Conversation list store](conversation-list-store.md) — refresh after promotion.
-- [New-folder store](new-folder-store.md) — folder round-trip state and bridge.
+- [New-folder store](new-folder-store.md) — folder round-trip state and bridge, now used only by
+  the workspace picker's `CreateFolderDialog`.
 - [Channel row geometry](channel-list-desktop-row-geometry.md) — save affordance placement.
-- [Modal and workspace choices spec](../../specs/architecture/1353-save-as-channel-modal.md).
+- [Drop the folder choice spec](../../specs/architecture/1436-drop-channel-folder-choice.md)
+  — the withdrawal decision and its rationale.

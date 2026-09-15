@@ -175,6 +175,7 @@ daemon rejects → correlated daemon-error → workspaceFolderRejected DaemonEve
   this store's first real consumer: mounts `NewFolderData` dialog-scoped, dispatches `createRequested`/
   `reset`, and reads `selectNewFolderRoundTrip` to drive the dialog's in-flight/error states.
 - [#288 codebase notes](../codebase/288.md) / [Save-as-channel dialog](save-as-channel-dialog.md) —
-  this store's second real consumer, confirming the "each consumer mounts the bridge dialog-scoped
-  and resets to idle on unmount" posture generalizes: the picker (#398) and the Channel List (#288)
-  can't be open at once, so the shared app-singleton never carries stale state between them.
+  this store's second real consumer from #288 until #1436 withdrew Save as channel's dedicated-folder
+  branch on 2026-09-14. `CreateFolderDialog` (#398) is this store's sole remaining consumer, which is
+  what makes the "Mount lifecycle" section above ("the dialog is the sole consumer") literally true
+  again rather than a simplification.

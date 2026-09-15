@@ -53,7 +53,7 @@ confirmed present, byte-for-byte, inside both built exes.
 
 Both binaries are rendered from Figma node 504:2189 by the committed `scripts/render-app-icon.mjs`
 (`npx electron scripts/render-app-icon.mjs`), re-rendered in [#1446](https://github.com/pyrycode/pyrycode-desktop/issues/1446)
-to replace the flat tile #1416 shipped before that node existed. The 256² frame has 4px rounded corners
+to replace the flat tile #1416 shipped before that node existed. The 256² frame has 64px rounded corners, widened from 4px on 2026-09-15 when the node gained them,
 over a `--color-surface` base; a radial gradient centred above the middle at (128, 91) — solid
 `--color-primary-container` out to 11% of its radius, fading to fully transparent `#003355` by 62% — is
 transcribed verbatim from the node's own gradient stops rather than reimplemented, so nothing here is an

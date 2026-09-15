@@ -63,9 +63,13 @@ describe('the committed application icons', () => {
     expect(entries.map((entry) => entry.bitCount)).toEqual(ICO_SIZES.map(() => 32))
   })
 
-  it('rounds the tile — the outermost corner pixel is fully transparent', () => {
+  it('rounds the tile with the node\'s 64px corners', () => {
     expect(pixel(256, 0, 0)[3]).toBe(0)
     expect(pixel(256, 255, 255)[3]).toBe(0)
+    // Along the bottom-left diagonal the 64px arc crosses at (18.7, 236.3): three pixels outside it
+    // is clear, two inside is solid. The 4px corners the icon had before were opaque at both.
+    expect(pixel(256, 16, 239)[3]).toBe(0)
+    expect(pixel(256, 20, 235)[3]).toBe(0xff)
   })
 
   it('draws the mark in its raw #7AB8E8', () => {
@@ -73,15 +77,21 @@ describe('the committed application icons', () => {
   })
 
   it('grounds the tile in --color-surface out at the corners', () => {
-    // Past the gradient's transparent stop, so the ground shows through unblended.
-    expect(pixel(256, 8, 248)).toEqual([0x10, 0x14, 0x18, 0xff])
+    // The 64px rounding clips the tile before the gradient's transparent stop, so no opaque pixel
+    // shows the ground unblended any more. The nearest opaque pixel to the corner is within a few
+    // units of it on every channel; a wrong ground colour lands tens away.
+    const [r, g, b, a] = pixel(256, 20, 236)
+    expect(a).toBe(0xff)
+    expect(Math.abs(r - 0x10)).toBeLessThanOrEqual(4)
+    expect(Math.abs(g - 0x14)).toBeLessThanOrEqual(4)
+    expect(Math.abs(b - 0x18)).toBeLessThanOrEqual(8)
   })
 
   it('lights the tile with the gradient rather than a flat fill', () => {
     // Both are background: above the mark's 32px inset, and down in the far corner. A flat tile —
     // which is what this icon was before #1446 — makes these two equal.
     const lit = pixel(256, 128, 16)
-    const unlit = pixel(256, 8, 248)
+    const unlit = pixel(256, 20, 236)
     expect(lit[2] - unlit[2]).toBeGreaterThan(40)
     expect(lit[3]).toBe(0xff)
   })

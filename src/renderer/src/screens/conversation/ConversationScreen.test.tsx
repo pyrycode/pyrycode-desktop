@@ -24,6 +24,7 @@ import {
   shouldShowThinking,
   StatusSheet,
   ComposerErrorSlot,
+  ComposerTaskCount,
   ComposerUsageLimitNotice,
   ConnectionBanner,
   ComposerErrorChip,
@@ -3556,6 +3557,160 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
         )
       ).toBe('')
     })
+  })
+
+  // #1435's AC3 — the task count is the slot's LAST reading, so every occupant above outranks it. A
+  // SENTINEL pill element, the #1321 technique one describe up: this block asserts the ordering and
+  // nothing about the pill's own markup, which the ComposerTaskCount describe below owns. Every arm is
+  // written in BOTH directions, the #963 rule this describe opens with — a slot that rendered two
+  // occupants would pass a one-directional check.
+  describe('the task count is the lowest-priority occupant (#1435 AC3)', () => {
+    const pill = <p>TASK_COUNT_SENTINEL</p>
+    const above = <p>HIGHER_READING_SENTINEL</p>
+
+    it('yields to the actionable-error button on a terminal, non-retryable error', () => {
+      const markup = renderToStaticMarkup(
+        <ComposerErrorSlot
+          status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
+          onRepair={() => {}}
+          notice={null}
+          taskCount={pill}
+        />
+      )
+      expect(markup).toContain(COMPOSER_REPAIR_BUTTON_COPY)
+      expect(markup).not.toContain('TASK_COUNT_SENTINEL')
+    })
+
+    it('yields to the connection-error chip on a retryable daemon error', () => {
+      const markup = renderToStaticMarkup(
+        <ComposerErrorSlot
+          status={{
+            type: 'error',
+            error: { code: 'server.binary_offline', message: 'offline', retryable: true }
+          }}
+          onRepair={() => {}}
+          notice={null}
+          taskCount={pill}
+        />
+      )
+      expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
+      expect(markup).not.toContain('TASK_COUNT_SENTINEL')
+    })
+
+    // The four connected-arm readings, each proven to outrank the pill on its own. Driven off the prop
+    // NAME so a future reordering of the `??` chain reddens here rather than silently demoting one of
+    // them past the count.
+    it.each([['recovery'], ['refusal'], ['notice'], ['history']] as const)(
+      'yields to the %s reading while connected',
+      (slot) => {
+        const markup = renderToStaticMarkup(
+          <ComposerErrorSlot
+            status={{ type: 'connected', ack }}
+            onRepair={() => {}}
+            notice={slot === 'notice' ? above : null}
+            recovery={slot === 'recovery' ? above : null}
+            refusal={slot === 'refusal' ? above : null}
+            history={slot === 'history' ? above : null}
+            taskCount={pill}
+          />
+        )
+        expect(markup).toContain('HIGHER_READING_SENTINEL')
+        expect(markup).not.toContain('TASK_COUNT_SENTINEL')
+      }
+    )
+
+    it('fills the slot while connected with every reading above it absent (AC1)', () => {
+      const markup = renderToStaticMarkup(
+        <ComposerErrorSlot
+          status={{ type: 'connected', ack }}
+          onRepair={() => {}}
+          notice={null}
+          taskCount={pill}
+        />
+      )
+      expect(markup).toBe('<p>TASK_COUNT_SENTINEL</p>')
+    })
+
+    // AC2's connection half, in the strict exact-empty form: the count says nothing about a link that is
+    // down, and #279's banner is up on both arms saying so.
+    it.each([
+      ['disconnected', { type: 'disconnected' } as ConnectionStatus],
+      ['connecting', { type: 'connecting' } as ConnectionStatus]
+    ])('renders nothing at all while %s — not the pill, not an empty element', (_label, status) => {
+      expect(
+        renderToStaticMarkup(
+          <ComposerErrorSlot status={status} onRepair={() => {}} notice={null} taskCount={pill} />
+        )
+      ).toBe('')
+    })
+
+    // The prop is OPTIONAL, matching `recovery` / `refusal` / `history` — omitting it must leave the
+    // pre-#1435 render byte-identical, which is what let every existing call site in this file stand
+    // unchanged. The exact empty string is the assertion, since a `?? null` that had become `?? <></>`
+    // would pass a not.toContain.
+    it('renders nothing at all while connected with the prop omitted entirely', () => {
+      expect(
+        renderToStaticMarkup(
+          <ComposerErrorSlot status={{ type: 'connected', ack }} onRepair={() => {}} notice={null} />
+        )
+      ).toBe('')
+    })
+  })
+})
+
+// #1435: the task count's own pure view. An injected count, the ComposerUsageLimitNotice discipline and
+// for its reason — zustand v5's useStore reads getInitialState() under renderToStaticMarkup, so a
+// store-bound container test can reach exactly one arm, and the count's arms are only assertable if the
+// number is a prop.
+describe('ComposerTaskCount — the background-task reading in the status row (#1435)', () => {
+  it('reads "n tasks running" for a count above one (AC1)', () => {
+    const markup = renderToStaticMarkup(<ComposerTaskCount count={6} onOpen={() => {}} />)
+    expect(markup).toContain('6 tasks running')
+  })
+
+  // The singular is a distinct run, not a suffix trimmed off the plural, so it is asserted in both
+  // directions: "1 tasks running" is the failure this catches and it contains the singular as a
+  // substring, which a one-directional check would pass on.
+  it('reads "1 task running" for exactly one task (AC1)', () => {
+    const markup = renderToStaticMarkup(<ComposerTaskCount count={1} onOpen={() => {}} />)
+    expect(markup).toContain('1 task running')
+    expect(markup).not.toContain('1 tasks running')
+  })
+
+  // AC2, in the STRICT exact-empty form the neighbouring describes use. A not.toContain would pass on a
+  // rendered-but-empty pill, which is precisely the criterion's failure mode — and it is why the
+  // container creates no element at a zero count either (the `??` chain does not filter one).
+  it('renders nothing at all at a zero count — not an empty element (AC2)', () => {
+    expect(renderToStaticMarkup(<ComposerTaskCount count={0} onOpen={() => {}} />)).toBe('')
+  })
+
+  // The count reaches this view as `tasks.size + droppedTasks`, and `dropped_tasks` decodes through a
+  // plain requireNumber — so a hostile or buggy daemon can drive the sum negative. It reads as absent,
+  // never as "-3 tasks running".
+  it('renders nothing at all at a negative count', () => {
+    expect(renderToStaticMarkup(<ComposerTaskCount count={-3} onOpen={() => {}} />)).toBe('')
+  })
+
+  // AC5's class half, in both directions: a task count is not an error and must not wear the error
+  // pair's treatment. The base class is what carries the Pill's ground, ink and 24px box, so a render
+  // that dropped it would still pass every copy assertion above.
+  it('wears the neutral Pill class and not the error chip treatment (AC5)', () => {
+    const markup = renderToStaticMarkup(<ComposerTaskCount count={6} onOpen={() => {}} />)
+    expect(markup).toContain('composer-status__tasks')
+    expect(markup).not.toContain('composer-status__error')
+    expect(markup).not.toContain('button-small')
+  })
+
+  // AC4's element half. A real <button>, not a div wearing a click handler: keyboard activation, the
+  // focus ring and the accessible name all come from the element rather than from the class. The name is
+  // the visible text, so there is no aria-label to drift from it and no hidden prefix — the copy says
+  // what it is in plain words (the ComposerUsageLimitNotice ruling).
+  it('is a real button whose accessible name is its visible text (AC4)', () => {
+    const markup = renderToStaticMarkup(<ComposerTaskCount count={6} onOpen={() => {}} />)
+    expect(markup).toContain('<button')
+    expect(markup).toContain('type="button"')
+    expect(markup).not.toContain('aria-label')
+    expect(markup).not.toContain('composer-status__error-prefix')
   })
 })
 

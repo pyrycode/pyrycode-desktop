@@ -1779,6 +1779,61 @@
   white-space: nowrap;
 }
 
+/* #1435 — the background-task count, the slot's LAST reading, drawn as the design's `Pill` (347:6617).
+   Its OWN block rather than a geometry lifted out of a neighbour, on .composer-status__usage's own
+   ruling for the same decision: this occupant shares no colour with either error treatment, so sharing
+   would couple two things that draw differently for the sake of a few declarations. What it does share
+   is the Pill's declarations with .composer__attachment-name two regions down, and those are read off
+   the node: px-[8px] py-[4px] → --space-2 / --space-1, rounded-[6px] → --radius-xs, M3/body/small at
+   WEIGHT 400 → the --text-body-small-* run at regular (the one value that differs from .button-small,
+   which sets the emphasized weight).
+
+   THE TOKEN PAIR IS READ BY NAME. The export bakes #cfe4ff as the ground and #134a74 as the ink, which
+   is this app's pair TRANSPOSED — the light scheme, the trap .composer__attachment-name, .status-row and
+   .composer-status__usage--exhausted each already record. By name it is a dark ground under light text,
+   which is what the rendered node shows. Neither hex appears here.
+
+   NO height DECLARATION, and that is AC5's second half: 16px of line plus 4px twice is exactly 24 under
+   this repo's absent global box-sizing reset, which is the rest height .composer-status already reserves
+   — so this occupant never grows the row the way #963's 32px button does. Adding a height beside the
+   padding would render a 32px pill, the trap .button-small--error's comment records one variant up.
+
+   flex: 0 1 auto WITH min-width: 0 AND THE ELLIPSIS CHAIN, a deliberate divergence from the chip's and
+   the button's flex: 0 0 auto, and NOT a copy-paste slip. It is #1321's rework leg applied in advance
+   rather than re-learned: an unshrinkable occupant in THIS slot has already pushed the row 79px past its
+   pane, and that string was the client's own copy. Nothing here can grow anywhere near as wide — the one
+   variable is a number, and JS Number→String is bounded at ~24 characters — so this chain is very
+   unlikely ever to bind; it costs two declarations and it means the count yields to the row before the
+   row yields to the window. white-space: nowrap is the rest of AC5: the pill cannot wrap to a second
+   line and take the row's height with it. The shrink order is unchanged for everyone else, since
+   .composer-status__activity keeps its own floor.
+
+   A <button> needs the font and border reset, because the UA stylesheet gives form controls their own
+   font and a border that would put this box over 24. cursor: pointer because it is a control and the
+   operator has to know. NO hover rule: the design's component set draws ONE state, `Default`, so a hover
+   treatment would be a client decision this ticket has no mandate for (the .button-small--error
+   precedent, which HAS a hover only because its own node draws one). NO `outline: none` either — the
+   focus ring is load-bearing for a keyboard operator and the UA's is the only treatment the design
+   gives us. */
+.composer-status__tasks {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  border-radius: var(--radius-xs);
+  background: var(--color-primary-container);
+  color: var(--color-on-primary-container);
+  font-family: inherit;
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* The exhausted arm — the one reading that means the operator is actually blocked, so it takes the error
    PAIR by token name, the chip's own treatment. Never the export's #ffdad6/#ba1a1a, which are the light
    scheme (the standing rule .composer-status and .status-row already record). */

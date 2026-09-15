@@ -148,6 +148,9 @@ const render = (
       onPairNewHost={noop}
       onSaveAsChannel={noop}
       onRename={noop}
+      // #1476 — the Channels tree's own pen handler, split back out of `onRename`. Defaulted to `noop`
+      // here for its siblings' reason: it is REQUIRED on the view, so the container must decide.
+      onEditChannel={noop}
     />
   )
 
@@ -162,11 +165,15 @@ const ARCHIVE_ENTRY_MARKER = 'aria-label="Archive"'
 // discussion rows, absent on saved Channel rows (AC1).
 const SAVE_MARKER = 'aria-label="Save as channel"'
 
-// The per-row Rename affordance's accessible name (#360) — the CHANNELS tree's pen, present on saved
-// (promoted) Channel rows and absent on Recent (unpromoted) discussion rows (AC1). Since #1441 a chat row
-// carries a pen too, under its own word and its own token, so "absent" here is a real claim about which
-// tree names its pen `Rename` rather than about which rows draw one.
-const RENAME_MARKER = 'aria-label="Rename"'
+// The per-row pen's accessible name on the CHANNELS tree (#360) — present on saved (promoted) Channel
+// rows and absent on Recent (unpromoted) discussion rows (AC1). Since #1441 a chat row carries a pen too,
+// under its own word and its own token, so "absent" here is a real claim about which tree names its pen
+// this way rather than about which rows draw one.
+//
+// #1476 moved the word from `Rename` to `Edit channel`: channels are edited, not renamed, and the pen now
+// opens a modal of its own. The two markers stay disjoint BY THE TERMINATING QUOTE — `Edit chat"` is not
+// a prefix of `Edit channel"` — which is what keeps every count below single-tree.
+const EDIT_CHANNEL_MARKER = 'aria-label="Edit channel"'
 
 // #1441 — the CHATS tree's pen. Same glyph, same box, same handler, two things different: the word and
 // the class token. Both trees' rows draw a pen now, so each tree's marker is asserted against the other's
@@ -273,7 +280,7 @@ const workspaceLabelsIn = (markup: string): string[] =>
 
 // Slices out each workspace row's OPENING TAG (#704) so its attribute set can be asserted WHOLE. The
 // assertion has to be tag-scoped rather than document-scoped: `aria-label` and `title` legitimately
-// appear elsewhere in the very same render (the gear, Archive, Rename, Save-as), so a
+// appear elsewhere in the very same render (the gear, Archive, Edit channel, Save-as), so a
 // document-wide `not.toContain('aria-label')` would be plain wrong rather than strict — and weakening it
 // back into vacuity is the failure mode this helper exists to prevent. Scanning to the next `>` is exact
 // rather than approximate: React escapes `<` and `>` inside attribute VALUES too, so no value — however
@@ -534,9 +541,9 @@ describe('ChannelListView', () => {
     expect(markup).not.toContain(SAVE_MARKER)
   })
 
-  it('renders the Rename affordance on a saved (promoted) Channel row (AC1)', () => {
+  it('renders the Edit channel pen on a saved (promoted) Channel row (AC1, #1476)', () => {
     const markup = render([row({ id: 'c1', name: 'a channel', is_promoted: true })])
-    expect(markup).toContain(RENAME_MARKER)
+    expect(markup).toContain(EDIT_CHANNEL_MARKER)
   })
 
   // #1441 INVERTED THIS TEST. A Recent row used to omit the pen outright; it now carries one, named
@@ -548,7 +555,7 @@ describe('ChannelListView', () => {
     const markup = render([row({ id: 'd1', name: 'a discussion', is_promoted: false })])
     expect(markup).toContain(EDIT_CHAT_MARKER)
     expect(markup).toContain('class="channel-list__chat-edit"')
-    expect(markup).not.toContain(RENAME_MARKER)
+    expect(markup).not.toContain(EDIT_CHANNEL_MARKER)
     expect(markup).not.toContain('class="channel-list__rename"')
   })
 
@@ -577,7 +584,7 @@ describe('ChannelListView', () => {
   // The chevron's art is 12.12 × 7.2 and the pen's is a 12-unit square, so only the pen's viewBox
   // starts at the origin: the chevron is centred in its 12px box by the viewBox's own y origin
   // (-2.46 of 12.12, above and below), which keeps the exported path byte-identical.
-  it("draws the Rename control as the drawing's 12px pen (#1171 AC2)", () => {
+  it("draws the Edit channel pen as the drawing's 12px pen (#1171 AC2)", () => {
     const markup = render([row({ id: 'c1', name: 'a channel', is_promoted: true })])
     expect(markup).toContain(
       '<svg class="channel-list__rename-icon" viewBox="0 0 12 12" width="12" height="12"'
@@ -615,10 +622,10 @@ describe('ChannelListView', () => {
     )
   })
 
-  it('names the Rename control in an aria-hidden pill inside the button (#1172 AC1/AC4)', () => {
+  it('names the Edit channel pen in an aria-hidden pill inside the button (#1172 AC1/AC4)', () => {
     const markup = render([row({ id: 'c1', name: 'a channel', is_promoted: true })])
     expect(markup).toContain(
-      '</svg><span class="channel-list__control-name" aria-hidden="true">Rename</span>'
+      '</svg><span class="channel-list__control-name" aria-hidden="true">Edit channel</span>'
     )
   })
 
@@ -642,8 +649,8 @@ describe('ChannelListView', () => {
   // dropped the chevron without moving it back.
   it('keeps each control’s pill text and accessible name in step (#1172 AC1, #1441 AC3)', () => {
     const saved = render([row({ id: 'c1', name: 'a channel', is_promoted: true })])
-    expect(countOf(saved, RENAME_MARKER)).toBe(1)
-    expect(countOf(saved, '>Rename</span>')).toBe(1)
+    expect(countOf(saved, EDIT_CHANNEL_MARKER)).toBe(1)
+    expect(countOf(saved, '>Edit channel</span>')).toBe(1)
     expect(countOf(saved, 'class="channel-list__rename"')).toBe(1)
     const recent = render([row({ id: 'd1', name: 'a discussion', is_promoted: false })])
     expect(countOf(recent, SAVE_MARKER)).toBe(1)
@@ -2130,7 +2137,7 @@ describe('ChannelListView', () => {
       expect(countOf(markup, ROW_MARKER)).toBe(3)
       expect(countOf(markup, ROW_OPEN_MARKER)).toBe(3)
       expect(countOf(markup, SAVE_MARKER)).toBe(2)
-      expect(countOf(markup, RENAME_MARKER)).toBe(1)
+      expect(countOf(markup, EDIT_CHANNEL_MARKER)).toBe(1)
       expect(countOf(markup, HOST_ROW_MARKER)).toBe(2)
       expect(countOf(markup, SECTION_HEADER_MARKER)).toBe(2)
       expect(hostDotTagsIn(markup)).toHaveLength(4)
@@ -2234,7 +2241,7 @@ describe('the open chat’s row (#1098)', () => {
   })
 
   it('marks the open row in EITHER tree, not just the Chats one (AC2)', () => {
-    // `c1` is promoted, so it renders under "Channels" with the Rename affordance rather than
+    // `c1` is promoted, so it renders under "Channels" with the Edit channel pen rather than
     // Save-as-channel. One `Row` component serves both trees, so a per-tree special case would be a
     // regression rather than a feature — this pins that there is none.
     const chunks = rowChunksIn(render(threeRows(), 'c1'))
@@ -2282,7 +2289,7 @@ describe('the open chat’s row (#1098)', () => {
     }
     // And the two trailing affordances are untouched — the fill spans them, it does not replace them.
     expect(countOf(open, SAVE_MARKER)).toBe(2)
-    expect(countOf(open, RENAME_MARKER)).toBe(1)
+    expect(countOf(open, EDIT_CHANNEL_MARKER)).toBe(1)
   })
 
   it('never interpolates the conversation id into the markup', () => {
@@ -2382,7 +2389,7 @@ describe('host-owned mutation availability', () => {
       const statuses = new Map<string, ConnectionStatus>()
       if (status) statuses.set(DEFAULT_SERVER, status as ConnectionStatus)
       const html = render([row({ is_promoted: true }), row({ id: 'chat', is_promoted: false })], null, [DEFAULT_SERVER], statuses)
-      expect(html).not.toContain('aria-label="Rename"')
+      expect(html).not.toContain(EDIT_CHANNEL_MARKER)
       // #1441 — the chat pen reads the SAME connected gate as the two beside it, so it is withheld with
       // them. Listed rather than assumed: a pen wired to a bare handler instead of the gated one would
       // leave a control that opens a dialog against an unreachable host, and nothing else here would say so.
@@ -2401,7 +2408,7 @@ describe('host-owned mutation availability', () => {
     const statuses = new Map([['online', { type: 'connected', ack: {} } as ConnectionStatus]])
     for (const open of ['offline', 'online']) {
       const html = render(rows, open, ['offline', 'online'], statuses)
-      expect(html.match(/aria-label="Rename"/g)).toHaveLength(1)
+      expect(html.match(/aria-label="Edit channel"/g)).toHaveLength(1)
       expect(html.match(/aria-label="Create channel"/g)).toHaveLength(1)
     }
   })

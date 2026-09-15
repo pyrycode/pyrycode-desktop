@@ -72,15 +72,17 @@ test('real daemon persists a rename round-trip, visible in the channel list', as
   const runNonce = Date.now()
   const NEW_TITLE = `renamed ${runNonce}`
 
-  // --- Drive the product rename UI: pencil → dialog → fill → Save. #1440 retitled the dialog to Edit
-  // chat; the pencil keeps its own `Rename` accessible name, which #1441 owns. This file is a `real-*`
-  // spec, so `npm run e2e` ignores it by filename and only `npm run e2e:real:gate` executes this edit. ---
+  // --- Drive the product rename UI: pencil → dialog → fill → Save. #1476 retitled the Channels pen's
+  // dialog to Edit channel and moved it to the `.edit-channel*` namespace; the pencil keeps its own
+  // `.channel-list__rename` token. This file is a `real-*` spec, so `npm run e2e` ignores it by filename
+  // and only `npm run e2e:real:gate` executes this edit. ---
   await renamePencil.click()
-  await expect(page.getByRole('dialog', { name: 'Edit chat', exact: true })).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Edit channel', exact: true })).toBeVisible()
   // `fill` clears the prefilled current title before typing.
-  await page.locator('.rename-conversation__input').fill(NEW_TITLE)
-  // Save is enabled because NEW_TITLE is non-blank.
-  await page.getByRole('dialog', { name: 'Edit chat', exact: true }).getByRole('button', { name: 'OK', exact: true }).click()
+  await page.locator('.edit-channel__input').fill(NEW_TITLE)
+  // OK is enabled because NEW_TITLE is non-blank, and it SENDS because the per-run nonce guarantees the
+  // typed name differs from the seeded title — the #1476 unchanged-name no-send path is not this drive's.
+  await page.getByRole('dialog', { name: 'Edit channel', exact: true }).getByRole('button', { name: 'OK', exact: true }).click()
 
   // --- Assert the new title renders (AC3). Auto-waits the rename round-trip: command → daemon
   // rename_conversation → conversation_updated broadcast → shouldRefreshList → re-request → updated reply →

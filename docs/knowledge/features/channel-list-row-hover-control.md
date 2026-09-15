@@ -133,13 +133,19 @@ the chevron on a chat row at all (an open question for Juhana — the Figma show
 
 **One JSX block draws both trees' pens**, parameterized by a `RowPenControl` (`{label, className,
 iconClassName, onEdit}`) built at `renderBody`'s two `renderServerTrees` call sites — the one level that
-tells the trees apart — rather than two independent blocks. `RENAME_CONTROL_LABEL` and the new
-`EDIT_CHAT_CONTROL_LABEL` stay two separate module constants (not one shared word, unlike
-`EDIT_WORKSPACE_CONTROL_LABEL`), so [#1430](https://github.com/pyrycode/pyrycode-desktop/issues/1430) can
-retitle the Channels pen to **Edit channel** without touching the Chats tree's word. The pen reaches the
-same `onRename` handler both trees already shared — it re-checks the host with `canMutateHost` and seeds
-the field with `titleFor(row.name)` (the `Untitled` fallback included), so a Chats row's pen needed no new
-downstream code, only a second caller.
+tells the trees apart — rather than two independent blocks. `RENAME_CONTROL_LABEL` and
+`EDIT_CHAT_CONTROL_LABEL` stayed two separate module constants (not one shared word, unlike
+`EDIT_WORKSPACE_CONTROL_LABEL`) for exactly the reason anticipated here:
+[#1476](edit-channel-dialog.md) (split from #1430) retitled the Channels pen to
+**Edit channel**, renaming `RENAME_CONTROL_LABEL` itself to `EDIT_CHANNEL_CONTROL_LABEL` — a rename
+rather than a revalue, since its only two readers were its own declaration and the pen's
+`RowPenControl` — without touching the Chats tree's `EDIT_CHAT_CONTROL_LABEL`. At the same ticket the
+two pens' handlers also split: the Chats pen still reaches the shared `onRename`, re-checking the
+host with `canMutateHost` and seeding the field with `titleFor(row.name)` (the `Untitled` fallback
+included) exactly as described here at the time; the Channels pen now reaches its own
+`onEditChannel`, opening the [Edit channel dialog](edit-channel-dialog.md) rather than the [Edit chat
+dialog](rename-conversation-dialog.md). The two still seed identically — only the modal each opens
+differs, which is the whole point of the split.
 
 ## Related
 

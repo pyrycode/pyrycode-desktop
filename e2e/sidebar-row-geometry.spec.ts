@@ -468,7 +468,7 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   await expect(page.getByRole('dialog', { name: 'Save as channel', exact: true })).toBeVisible()
 })
 
-test('a Channels row holds the Rename control inside the same 24px row', async ({
+test('a Channels row holds the Edit channel pen inside the same 24px row', async ({
   launchPairedApp
 }) => {
   // The second seed, PROMOTED — it renders under "Channels" with the Rename affordance and no
@@ -492,21 +492,21 @@ test('a Channels row holds the Rename control inside the same 24px row', async (
   await expect(page.locator('.channel-list__save')).toHaveCount(0)
   await expect(page.locator('.channel-list__chat-edit')).toHaveCount(0)
 
-  // AC4, second half: the Rename control sits inside the 24px row without growing it. Same assertions as
+  // AC4, second half: the Edit channel pen sits inside the 24px row without growing it. Same assertions as
   // the Save control's, against the rule that carries its own copy of the treatment — so reverting either
   // rule alone reddens exactly one of the two blocks.
   const rowHeight = async (): Promise<number> => (await boxOf(row, 'sidebar row')).height
   await expect.poll(rowHeight).toBeLessThanOrEqual(ROW_HEIGHT_PX + GEOMETRY_TOLERANCE_PX)
   expectAbout(await rowHeight(), ROW_HEIGHT_PX)
 
-  const renameBox = await boxOf(rename, 'Rename control')
+  const renameBox = await boxOf(rename, 'Edit channel pen')
   expect(renameBox.height).toBeLessThanOrEqual(ROW_HEIGHT_PX + GEOMETRY_TOLERANCE_PX)
 
   // #1171's AC2 on the Channels tree: the drawn 12×12 pen, its right edge 8px in from the row's right
   // edge, its box centred on the row, in `--color-primary`. One `Row` serves both trees, so this and the
   // chevron's block above differ only in which glyph the section places — a per-tree divergence in the
   // BOX would be the regression, and it would show as one of the two blocks reddening alone.
-  const penBox = await boxOf(page.locator('.channel-list__rename-icon'), 'Rename glyph')
+  const penBox = await boxOf(page.locator('.channel-list__rename-icon'), 'Edit channel glyph')
   const penRowBox = await boxOf(row, 'sidebar row')
   expectAbout(penBox.width, GLYPH_PX)
   expectAbout(penBox.height, GLYPH_PX)
@@ -516,7 +516,7 @@ test('a Channels row holds the Rename control inside the same 24px row', async (
 
   // #1098 on the CHANNELS tree — one `Row` serves both trees, so a per-tree special case would be a
   // regression rather than a feature, and this seed is the only promoted row either block launches with.
-  // It also pins the fill spanning a Rename control rather than a Save-as-channel one: same clause of
+  // It also pins the fill spanning the Edit channel pen rather than a Save-as-channel one: same clause of
   // AC1, the other affordance.
   expect(await computed(row, 'background-color')).toBe(OPEN_FILL_RGB)
   expect(await computed(page.locator('.channel-list__title'), 'font-weight')).toBe(LABEL_WEIGHT_OPEN)
@@ -550,9 +550,11 @@ test('a Channels row holds the Rename control inside the same 24px row', async (
   expect(await computed(rename, 'opacity')).toBe(SHOWN_OPACITY)
 
   // And it still opens its dialog — reached with a plain click and no hover first, the same path the nine
-  // shipped specs that address these controls take.
+  // shipped specs that address these controls take. Since #1476 that dialog is EDIT CHANNEL, under its own
+  // overlay token; the Chats block below still reaches Edit chat, which is what keeps the two pens' two
+  // modals an assertion rather than a claim.
   await rename.click()
-  await expect(page.locator('.rename-conversation-overlay')).toBeVisible()
+  await expect(page.locator('.edit-channel-overlay')).toBeVisible()
 })
 
 // #1441's AC1, its behaviour clause: the chat row's pen OPENS the Edit chat modal #1440 shipped, seeded

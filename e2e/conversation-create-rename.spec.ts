@@ -34,7 +34,7 @@ const NEW_TITLE = 'Created then renamed'
 // from SEED, which is named, when reading which row the sidebar marks as open.
 const UNTITLED = 'Untitled'
 
-test('create → nav into thread, rename via the Channel-info sheet, both rows re-list, archive from both entry points', async ({
+test('create → nav into thread, rename via the Channel-info sheet, both rows re-list, archive from the Channel-info sheet', async ({
   launchPairedApp
 }) => {
   // Seed the stateful fake with one promoted row; its buildReplyFrames answers the connected-edge
@@ -81,6 +81,14 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
     await page.locator('.conversation').getByRole('button', { name: 'Edit chat', exact: true }).click()
     await expect(dialog).toBeVisible()
   }
+  // #1476 — the SIDEBAR pen's modal is a different dialog from the sheet's, with its own title and its
+  // own `.edit-channel*` namespace, so it needs its own locator set rather than a retitle of the one
+  // above. Keeping both in one drive is the point: this spec has the chat dialog and the channel dialog
+  // on screen in turn, and a handler that opened the wrong one from either entry point reddens here.
+  const channelDialog = page.getByRole('dialog', { name: 'Edit channel', exact: true })
+  const channelInput = channelDialog.getByRole('textbox', { name: 'Channel name:', exact: true })
+  const channelOk = channelDialog.getByRole('button', { name: 'OK', exact: true })
+  const channelCancel = channelDialog.getByRole('button', { name: 'Cancel', exact: true })
 
   // launchPairedApp lands IN the seeded row's thread (it clicked the seeded promoted row to reach it),
   // with activeConversation = SEED. The app-singleton conversation-list store already holds SEED (listed
@@ -130,12 +138,14 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
   // AC4 — sheet rename round-trip. The Edit chat pill is one of three `.channel-info__action` buttons
   // (Edit chat / Archive / Delete), so `.channel-info__action` is NOT unique — target it by its
   // accessible name, SCOPED to the chat pane. #670 destroyed the invariant that used to stand here
-  // ("the list is unmounted while the thread + sheet are up, so no `.channel-list__rename` competes"):
-  // the two-pane shell keeps the list mounted beside the thread, and every list row carries an
-  // `aria-label="Rename"` pencil, so an unscoped query matches 1 + N buttons and strict mode fails. The
-  // Channel-info sheet renders INSIDE ConversationScreen, so `.conversation` is a valid scoping root.
-  // The pill opens the same EditChatDialogView the list-row pen uses, prefilled "Untitled"
-  // (the created row is unnamed); `.fill` replaces the prefill.
+  // ("the list is unmounted while the thread + sheet are up, so no list pen competes"): the two-pane
+  // shell keeps the list mounted beside the thread, so an unscoped query matches 1 + N buttons and strict
+  // mode fails. Since #1441 the competing pens are the CHATS tree's, which is named `Edit chat` verbatim;
+  // since #1476 the Channels tree's read `Edit channel` and no longer collide at all. The scope is kept
+  // for the Chats pens, which still do. The Channel-info sheet renders INSIDE ConversationScreen, so
+  // `.conversation` is a valid scoping root. The pill opens the same `EditChatDialogView` the CHATS pen
+  // uses — the Channels pen left for its own modal at #1476 — prefilled "Untitled" (the created row is
+  // unnamed); `.fill` replaces the prefill.
   await openChatEditDialog()
   await expect(input).toHaveValue(UNTITLED)
   await expect(input).not.toBeFocused()
@@ -206,42 +216,46 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
     const window = BrowserWindow.getAllWindows()[0]
     window.setSize(800, 600)
   })
+  // The pen keeps its `.channel-list__rename` token (twelve specs read it as "this row is promoted");
+  // since #1476 it opens Edit channel rather than Edit chat.
   const pencil = page.locator('.channel-list__rename')
   await pencil.click()
-  await expect(input).toHaveValue(SEED.name)
-  await input.press('Escape')
-  await expect(dialog).toBeVisible()
-  await page.locator('.rename-conversation-overlay__scrim').click({ position: { x: 2, y: 2 } })
-  await expect(dialog).toBeVisible()
-  const box = await dialog.boundingBox()
+  await expect(channelInput).toHaveValue(SEED.name)
+  await channelInput.press('Escape')
+  await expect(channelDialog).toBeVisible()
+  await page.locator('.edit-channel-overlay__scrim').click({ position: { x: 2, y: 2 } })
+  await expect(channelDialog).toBeVisible()
+  const box = await channelDialog.boundingBox()
   expect(box?.width).toBe(640)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await mkdir('/tmp/builder-1352-visual', { recursive: true })
   await page.screenshot({ path: '/tmp/builder-1352-visual/rename-800x600.png' })
-  await input.fill('Discard sidebar draft')
-  await cancel.click()
+  // AC2's reopen clause: a Cancel sends nothing and the next open starts from the row's STORED title,
+  // not from the abandoned draft.
+  await channelInput.fill('Discard sidebar draft')
+  await channelCancel.click()
   await pencil.click()
-  await expect(input).toHaveValue(SEED.name)
+  await expect(channelInput).toHaveValue(SEED.name)
   expect(renames).toHaveLength(1)
   await app.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows()[0]
     window.setMinimumSize(800, 180)
     window.setSize(800, 180)
   })
-  expect(await dialog.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
-  await input.fill('  Renamed saved channel  ')
-  // Three Tabs to OK since #1440, not two — the content slot's Archive chat is the new first stop
-  // (see the chain above). The scroll-into-view assertion below is what this walk is really for: in a
-  // 180px-tall window the focused footer button must still be reachable, and the added stop means the
-  // walk now crosses one more focusable element on the way there.
-  await input.press('Tab')
+  expect(await channelDialog.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
+  await channelInput.fill('  Renamed saved channel  ')
+  // TWO Tabs to OK, not the three the chat dialog needs: #1476's modal has nothing in the Modal's
+  // content slot but the field, so the document order is input → Cancel → OK. #1438 adds this dialog's
+  // own content-slot button and puts the third stop back. The scroll-into-view assertion below is what
+  // this walk is really for: in a 180px-tall window the focused footer button must still be reachable.
+  await channelInput.press('Tab')
+  await expect(channelCancel).toBeFocused()
   await page.keyboard.press('Tab')
-  await page.keyboard.press('Tab')
-  await expect(ok).toBeFocused()
-  await expect(ok).toBeInViewport()
+  await expect(channelOk).toBeFocused()
+  await expect(channelOk).toBeInViewport()
   await page.screenshot({ path: '/tmp/builder-1352-visual/rename-800x180-scrolled.png' })
   await page.keyboard.press('Enter')
-  await expect(dialog).toHaveCount(0)
+  await expect(channelDialog).toHaveCount(0)
   await expect.poll(() => renames).toEqual([
     { conversation_id: 'created-1', name: NEW_TITLE },
     { conversation_id: SEED.id, name: 'Renamed saved channel' }
@@ -251,10 +265,12 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
   await expect(page.locator('.channel-list').getByText('Renamed saved channel', { exact: true })).toBeVisible()
   await expect(page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText(NEW_TITLE)
   await pencil.click()
-  await expect(input).toHaveValue('Renamed saved channel')
-  await dialog.getByRole('button', { name: 'Close dialog' }).focus()
+  await expect(channelInput).toHaveValue('Renamed saved channel')
+  // #1476's other no-send path, on the way past: the header close sends nothing whatever the field
+  // holds — here it holds the seeded title untouched, which is ALSO the "unchanged name" case.
+  await channelDialog.getByRole('button', { name: 'Close dialog' }).focus()
   await page.keyboard.press('Enter')
-  await expect(dialog).toHaveCount(0)
+  await expect(channelDialog).toHaveCount(0)
   expect(renames).toHaveLength(2)
   expect(listed).toEqual(originalRows.map((row) => ({
     ...row, name: row.id === SEED.id ? 'Renamed saved channel' : NEW_TITLE
@@ -264,49 +280,44 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
   await page.locator('.channel-list__row-open').filter({ hasText: NEW_TITLE }).click()
   await expect(userRows).toHaveText([bubbleTextExactly('Chat history')])
 
-  // --- #1440: the Archive chat button, from BOTH entry points, on the drive that has both identities on
-  // screen at once — the sidebar's promoted seed and the open, unpromoted created chat. Two identities is
-  // the whole point: a handler that archived "the open conversation" from either entry point would pass a
-  // single-row fixture, and reddens here on the sidebar arm's payload.
+  // --- #1440's Archive chat button. It had TWO entry points until #1476 took one away: the sidebar pen
+  // now opens Edit channel, which carries no Archive chat button at all (that ticket's AC2, pinned in
+  // `EditChannelDialog.test.tsx`), so the Channel info sheet is this button's only route from here. The
+  // sidebar arm is DELETED rather than retitled — there is nothing on the new dialog for it to drive.
+  // #1438 draws this modal's own put-away button under `.edit-channel*`, and owns re-proving it.
   //
-  // `mutations` is the non-vacuity net around all three steps. It has held exactly two renames since the
-  // rename assertions above; anything this section sends beyond the two archives lands in it. ---
+  // Both halves of #1440's AC2 survive on the sheet's arm, in the same order: the Cancel that sends
+  // nothing, then the click that sends exactly one.
+  //
+  // `mutations` is the non-vacuity net around both steps. It has held exactly two renames since the
+  // rename assertions above; anything this section sends beyond the one archive lands in it. ---
   expect(mutations).toEqual(['rename_conversation', 'rename_conversation'])
 
-  // AC2, the negative half: Cancel closes and sends NOTHING. Asserted BEFORE the sends below, so the
+  // The sheet is this button's entry point, so it is opened ONCE here and both halves below run from
+  // it: cancelling the dialog closes the dialog alone and leaves the sheet standing.
+  await page.locator('.conversation__overflow-trigger').click()
+  await page.getByRole('menuitem', { name: 'Channel info' }).click()
+  await expect(page.locator('.conversation')).toHaveCount(1)
+
+  // AC2, the negative half: Cancel closes and sends NOTHING. Asserted BEFORE the send below, so the
   // empty `archives` here is a state the drive reached with the button already on screen and clickable
   // — not the emptiness of a spec that never opened the dialog.
-  await pencil.click()
+  await openChatEditDialog()
   await expect(archiveChat).toBeEnabled()
   await cancel.click()
   await expect(dialog).toHaveCount(0)
   expect(archives).toEqual([])
 
-  // AC2 from the SIDEBAR: one archive_conversation for the row the pen was on, and the dialog closes.
-  // The field is left exactly as the dialog seeded it, which is also AC3's point — an unchanged name
-  // leaves Archive chat clickable — and no rename accompanies the archive whatever the field holds.
-  await pencil.click()
-  await expect(input).toHaveValue('Renamed saved channel')
-  await archiveChat.click()
-  await expect(dialog).toHaveCount(0)
-  await expect.poll(() => archives).toEqual([{ conversation_id: SEED.id }])
-
-  // AC2 from the CHANNEL INFO SHEET: the pill now reads Edit chat, the dialog it opens carries the same
-  // button, and this one closes the SHEET as well. The sheet renders inside ConversationScreen, so the
+  // AC2 from the CHANNEL INFO SHEET: the pill reads Edit chat, the dialog it opens carries the button,
+  // and this one closes the SHEET as well. The sheet renders inside ConversationScreen, so the
   // `.conversation` 1→0 delta below proves both the sheet's dismissal and the open thread's exit — the
   // latter driven by the existing archived-active bridge on the daemon's re-list, not by this handler.
-  await page.locator('.conversation__overflow-trigger').click()
-  await page.getByRole('menuitem', { name: 'Channel info' }).click()
-  await expect(page.locator('.conversation')).toHaveCount(1)
   await openChatEditDialog()
   await archiveChat.click()
   await expect(dialog).toHaveCount(0)
   await expect(page.locator('.conversation')).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
-  await expect.poll(() => archives).toEqual([
-    { conversation_id: SEED.id },
-    { conversation_id: 'created-1' }
-  ])
+  await expect.poll(() => archives).toEqual([{ conversation_id: 'created-1' }])
   expect(mutations).toEqual([
-    'rename_conversation', 'rename_conversation', 'archive_conversation', 'archive_conversation'
+    'rename_conversation', 'rename_conversation', 'archive_conversation'
   ])
 })

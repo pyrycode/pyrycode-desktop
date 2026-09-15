@@ -58,9 +58,13 @@ the host, separate from connection dots and repair; see [local read failures](ch
 - Each Recent (unpromoted) row carries a trailing [Save-as-channel](save-as-channel-dialog.md)
   affordance; saved Channel rows carry none. Added by [#274](../codebase/274.md) — see § The row's
   save affordance below.
-- Each saved (promoted) Channel row carries a trailing [Rename](rename-conversation-dialog.md)
-  affordance; Recent rows carry none — the exact symmetric counterpart, so no row ever carries two
-  trailing buttons. Added by [#360](../codebase/360.md).
+- Each saved (promoted) Channel row carries a trailing pen opening the [Edit channel
+  dialog](edit-channel-dialog.md), reading **Edit channel** since
+  [#1476](edit-channel-dialog.md) (**Rename** before it). Added by [#360](../codebase/360.md). Since
+  [#1441](channel-list-row-hover-control.md#1441-a-chats-row-now-carries-both-controls-not-one) a
+  Recent row carries this same pen shape too, reading **Edit chat** and opening the [Edit chat
+  dialog](rename-conversation-dialog.md) instead, alongside its own Save-as-channel chevron — so the
+  two trailing-control sets are no longer disjoint by section. See § The row's save affordance below.
 - Each section now draws **one host row per paired server**, in pairing order, directly below the
   section label and above that machine's own conversation rows (Figma `106:3094` repeated per
   machine in `103:2959`). Both the row and its subtree repeat once per section on purpose — the two
@@ -200,14 +204,26 @@ An interactive control cannot nest inside a `<button>`, so `Row` is no longer a 
 now a `.channel-list__row` flex wrapper around sibling children — `.channel-list__row-open` (the
 original button, `onClick={onOpen}`, `flex: 1 1 auto; min-width: 0` so the title still ellipsizes),
 an optional trailing icon-only `.channel-list__save` (`aria-label="Save as channel"`), and an
-optional trailing icon-only `.channel-list__rename` (`aria-label="Rename"`, added by
-[#360](../codebase/360.md)). `Row` gained `onSaveAsChannel?: () => void` and (later)
-`onRename?: () => void`; `renderBody` passes `onSaveAsChannel` only to the Recent `.map` and
-`onRename` only to the Channels `.map` — the two affordance sets are disjoint by section, so each
-row carries at most one trailing button, structurally, not merely hidden by CSS. The container owns
-each dialog's open/name state as its own local `useState` pair, rendered as siblings of
-`ChannelListView`. See [Save-as-channel dialog](save-as-channel-dialog.md) and
-[Rename dialog](rename-conversation-dialog.md) for the dialogs themselves, and
+optional trailing icon-only pen carrying the `.channel-list__rename` token (added by
+[#360](../codebase/360.md); its own `.channel-list__chat-edit` token on a Recent row, added by
+[#1441](channel-list-row-hover-control.md#1441-a-chats-row-now-carries-both-controls-not-one)). The
+class tokens are historical and do not move with the word: a Channels row's pen reads **Edit
+channel** since [#1476](edit-channel-dialog.md) (**Rename** before it) and opens the [Edit channel
+dialog](edit-channel-dialog.md) through its own `onEditChannel` handler; a Chats row's pen reads
+**Edit chat** and opens the [Edit chat dialog](rename-conversation-dialog.md) through `onRename`,
+which now serves the Chats tree alone. Both pens draw from one `RowPenControl` shape (label,
+class tokens, handler) built per tree at `renderBody`'s two `renderServerTrees` call sites — the one
+level that tells the trees apart — see [the row's hover-revealed
+control](channel-list-row-hover-control.md) for the shared markup.
+
+Since #1441 the two trailing-control sets are **not** disjoint by section: a Recent row carries both
+its own Save-as-channel chevron and this pen, while a Channels row carries the pen alone (there is
+nothing to save on an already-promoted row). `renderBody` passes `onSaveAsChannel` to the Recent
+`.map` alone and a pen handler to both maps, so at most two trailing controls render per row, never
+the Save-as-channel chevron on a Channels row. The container owns each dialog's open/name state as
+its own local `useState` pair, rendered as siblings of `ChannelListView`. See [Save-as-channel
+dialog](save-as-channel-dialog.md), [Edit channel dialog](edit-channel-dialog.md) and [Edit chat
+dialog](rename-conversation-dialog.md) for the dialogs themselves, and
 [#274](../codebase/274.md)/[#360](../codebase/360.md) codebase notes for lessons learned.
 
 ### The row's desktop geometry (`channels.css`/`ChannelList.tsx`, converged by [#1097](https://github.com/pyrycode/pyrycode-desktop/issues/1097))

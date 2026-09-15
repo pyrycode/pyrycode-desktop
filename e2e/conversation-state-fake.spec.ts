@@ -60,11 +60,13 @@ test('rename reflects through the stateful fake: new title in the list, old gone
   await expect(renamePencil).toBeVisible()
 
   // Drive the product rename UI: pencil → dialog → fill → Save. `fill` clears the prefilled current title.
-  // #1440 retitled the dialog to Edit chat; the pencil above keeps its own `Rename` name (#1441 owns that).
+  // #1476 — the Channels pen opens the EDIT CHANNEL modal, under its own `.edit-channel*` namespace.
+  // The pencil keeps its `.channel-list__rename` token (twelve specs read it as "this row is promoted");
+  // what moved is the word and the dialog behind it.
   await renamePencil.click()
-  await expect(page.getByRole('dialog', { name: 'Edit chat', exact: true })).toBeVisible()
-  await page.locator('.rename-conversation__input').fill(NEW_TITLE)
-  await page.getByRole('dialog', { name: 'Edit chat', exact: true }).getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: 'Edit channel', exact: true })).toBeVisible()
+  await page.locator('.edit-channel__input').fill(NEW_TITLE)
+  await page.getByRole('dialog', { name: 'Edit channel', exact: true }).getByRole('button', { name: 'OK', exact: true }).click()
 
   // The new title renders. Auto-waits the full round-trip: rename_conversation → the fake applies the
   // rename to its held state → conversation_updated broadcast → shouldRefreshList → re-request

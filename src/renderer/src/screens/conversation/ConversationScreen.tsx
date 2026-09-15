@@ -3211,10 +3211,30 @@ function ChannelInfoSheet({
             requestRenameConversation(window.pyry.sendCommand, conversation, renameName)
             setRenameOpen(false)
           }}
+          // #1438 gave this dialog its own put-away button, and a REQUIRED prop — so this sheet is a
+          // caller of it by compile error rather than by choice, which is exactly the point: one modal
+          // must not grow a button on one of its two mount sites and not the other. The estimate on that
+          // ticket forecast no change here; it had not traced that #1431 made this the container's
+          // second mount site.
+          //
+          // The chat arm's sequence below, restated verbatim for the channel: re-check the host at
+          // interaction time, send ONE command, close the dialog AND the sheet — a sheet left standing
+          // describes a row on its way out. No rename and no prompt write go out whatever the fields
+          // hold, nothing is stored and nothing navigates here; `useArchivedActiveConversationExit`
+          // leaves the thread on the daemon's word. The guard is deliberately THIS surface's
+          // (`connectedConversationHostNow`, which acts on the open conversation) and not the sidebar's
+          // `canMutateHost` — the two are not interchangeable and neither is imported across.
+          onArchive={() => {
+            if (connectedConversationHostNow(conversation.id) === null) return
+            requestArchiveConversation(window.pyry.sendCommand, conversation.id)
+            setRenameOpen(false)
+            onClose()
+          }}
         />
       )}
-      {/* The chat arm, #1440's verbatim — including the `available` prop and the Archive chat button
-          `EditChannelDialog` has no equivalent for (#1438 draws that modal's own put-away control). */}
+      {/* The chat arm, #1440's verbatim — including the `available` prop that its two buttons' differing
+          disabled expressions need and `EditChannelDialog` deliberately still has no equivalent for
+          (#1438 answered that forecast "no": its own button carries no disabled arm at all). */}
       {renameOpen && conversation !== null && !conversation.is_promoted && (
         <EditChatDialogView
           name={renameName}

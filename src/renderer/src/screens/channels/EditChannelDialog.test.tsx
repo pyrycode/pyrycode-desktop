@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+import { isValidElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   EditChannelDialogView,
@@ -33,8 +34,46 @@ function renderView(name: string, prompt: EditChannelPrompt = READING): string {
       onNameChange={noop}
       onCancel={noop}
       onSave={noop}
+      onArchive={noop}
     />
   )
+}
+
+// #1438's button, whose text IS its accessible name — no `aria-label`, which would put a string into an
+// attribute. Spelled once here because it is a load-bearing e2e locator in two specs.
+const ARCHIVE_LABEL = 'Archive channel'
+
+/**
+ * #1438 — the archive button's own props, read off the view's ELEMENT TREE rather than out of rendered
+ * markup. `renderToStaticMarkup` discards every handler and nothing in this repo can click, so a walk of
+ * the tree the pure view returns is the only way this environment can prove a handler is BOUND rather
+ * than merely drawn. It recurses through `props.children`, which is also how it reaches inside `Modal`:
+ * the dialog's content is that element's `children` PROP, unrendered and therefore still readable.
+ *
+ * Returns the props object so the caller can both compare `onClick` by identity and invoke it. The `as`
+ * casts are the tier's allowance — this test knows the shapes it built.
+ */
+function archiveButtonProps(
+  props: Parameters<typeof EditChannelDialogView>[0]
+): { onClick?: () => void; disabled?: boolean } | null {
+  const hits: Array<{ onClick?: () => void; disabled?: boolean }> = []
+  const visit = (node: ReactNode): void => {
+    if (Array.isArray(node)) {
+      node.forEach(visit)
+      return
+    }
+    if (!isValidElement(node)) return
+    const elementProps = node.props as {
+      className?: string
+      onClick?: () => void
+      disabled?: boolean
+      children?: ReactNode
+    }
+    if (elementProps.className === 'edit-channel__archive') hits.push(elementProps)
+    visit(elementProps.children)
+  }
+  visit(EditChannelDialogView(props))
+  return hits[0] ?? null
 }
 
 describe('EditChannelDialogView', () => {
@@ -98,11 +137,15 @@ describe('EditChannelDialogView', () => {
     expect(renderView('a name')).not.toMatch(/modal__action--confirm"[^>]*disabled/)
   })
 
-  // AC2's closing clause, and the reason this dialog is a new file rather than a prop on the old one:
-  // #1440's Archive chat button belongs to the CHAT dialog and must not follow the pen here. #1438
-  // draws this modal's own outlined button, under the `.edit-channel*` namespace, not this one.
-  it('draws no Archive chat button and none of the chat dialog namespace (AC2)', () => {
+  // #1476's AC2, and the reason this dialog is a new file rather than a prop on the old one: #1440's
+  // Archive chat button belongs to the CHAT dialog and must not follow the pen here. Since #1438 this
+  // modal HAS a put-away button, under its own word and its own namespace — so the two literals staying
+  // DISJOINT is now the assertion, not their absence. They are disjoint only from their fifth-from-last
+  // character on (`Archive cha|t` against `Archive cha|nnel`), which is the same razor-thin margin the
+  // `Edit chat` / `Edit channel` pens keep and the same one a careless reword would close.
+  it('draws no Archive chat button and none of the chat dialog namespace (#1476 AC2)', () => {
     const markup = renderView('kitchenclaw refactor')
+    expect(markup).toContain(ARCHIVE_LABEL)
     expect(markup).not.toContain('Archive chat')
     expect(markup).not.toContain('rename-conversation')
   })
@@ -216,6 +259,85 @@ describe('EditChannelDialogView', () => {
     const markup = renderView('a name', read('secret-prompt-text'))
     expect(markup).not.toMatch(/aria-label="[^"]*secret-prompt-text/)
     expect(markup).not.toMatch(/value="[^"]*secret-prompt-text/)
+  })
+
+  // --- #1438's Archive channel button.
+
+  // Copy, namespace and the ABSENCE of a disabled attribute, in one exact-markup assertion rather than
+  // three loose `toContain`s: the whole element is short enough to pin, and pinning it is what makes
+  // "no disabled arm of its own" an assertion about the element rather than about the string nearby.
+  it('renders the outlined Archive channel button under its own namespace (AC1)', () => {
+    const markup = renderView('a name', read('stored text'))
+    expect(markup).toContain('class="edit-channel__actions"')
+    expect(markup).toContain(
+      `<button type="button" class="edit-channel__archive">${ARCHIVE_LABEL}</button>`
+    )
+  })
+
+  // AC1's placement — the drawing's `Actions` frame is the LAST child of `Content`, below the text area
+  // and above the centred footer. Asserted as document order, which is also the TAB order: a stop that
+  // landed after Cancel would put a channel's put-away inside the dialog's answer row.
+  it('places the button below the text area and above the footer actions (AC1)', () => {
+    const markup = renderView('a name', read('stored text'))
+    const textarea = markup.indexOf('edit-channel__textarea')
+    const archive = markup.indexOf('edit-channel__archive')
+    const cancel = markup.indexOf('modal__action--cancel')
+    expect(textarea).toBeGreaterThan(-1)
+    expect(archive).toBeGreaterThan(textarea)
+    expect(cancel).toBeGreaterThan(archive)
+  })
+
+  // AC1's headline. The button reads NEITHER half of OK's disabled expression: a blank name is OK's
+  // condition and the reading arm is nobody's, and putting a channel away has nothing to do with what
+  // the two fields currently hold. Reusing OK's expression here is the regression this pins.
+  it('stays live on a blank name and while the prompt is still being read (AC1)', () => {
+    for (const markup of [renderView(''), renderView('   ', READING), renderView('a name', READING)]) {
+      expect(markup).toMatch(/edit-channel__archive/)
+      expect(markup).not.toMatch(/edit-channel__archive"[^>]*disabled/)
+    }
+    // ...while OK's own arms are untouched by its presence.
+    expect(renderView('')).toMatch(/modal__action--confirm"[^>]*disabled/)
+    expect(renderView('a name', read('too long', true))).toMatch(
+      /modal__action--confirm"[^>]*disabled/
+    )
+  })
+
+  // The copy IS the accessible name. An `aria-label` would put a string into an attribute, which this
+  // dialog's other two assertions already forbid for daemon-authored text and which a client-owned
+  // constant has no reason to need either.
+  it('takes its accessible name from its text, with no aria-label anywhere (AC1)', () => {
+    const markup = renderView('a name', read('stored text'))
+    expect(markup).toContain(`>${ARCHIVE_LABEL}</button>`)
+    expect(markup).not.toMatch(/aria-label="[^"]*Archive/)
+  })
+
+  // AC2's intent at this tier: the button is BOUND to the injected callback and to nothing else. Proven
+  // off the element tree, since the click itself belongs to Playwright. Three spies, so "fires exactly
+  // one thing" is an assertion about all three rather than about the one that was expected to fire.
+  it('binds the injected onArchive, and rendering fires none of the callbacks (AC2)', () => {
+    const onArchive = vi.fn()
+    const onSave = vi.fn()
+    const onCancel = vi.fn()
+    const props = {
+      name: 'a name',
+      prompt: read('stored text'),
+      onNameChange: noop,
+      onCancel,
+      onSave,
+      onArchive
+    }
+    renderToStaticMarkup(<EditChannelDialogView {...props} />)
+    expect(onArchive).not.toHaveBeenCalled()
+
+    const button = archiveButtonProps(props)
+    expect(button).not.toBeNull()
+    expect(button?.disabled).toBeUndefined()
+    expect(button?.onClick).toBe(onArchive)
+    button?.onClick?.()
+    expect(onArchive).toHaveBeenCalledTimes(1)
+    expect(onArchive).toHaveBeenCalledWith()
+    expect(onSave).not.toHaveBeenCalled()
+    expect(onCancel).not.toHaveBeenCalled()
   })
 })
 

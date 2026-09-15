@@ -23,6 +23,25 @@ import { systemPromptWriteStore } from '../../store/systemPromptWriteStore'
 const EDIT_CHANNEL_TITLE = 'Edit channel'
 
 /**
+ * #1438's button, and the SECOND load-bearing e2e locator in this file — its text is the button's
+ * accessible name (no `aria-label`, which would put a string into an attribute), so it is what
+ * `getByRole('button', { name: … })` matches in two specs. Client-owned and interpolating NEITHER the
+ * channel's name NOR its id.
+ *
+ * ARCHIVE, NOT REMOVE, settled by the refiner on 2026-09-15 against the ticket's own filed title: the
+ * drawing letters it this way, the sibling chat dialog one module over already ships `Archive chat` for
+ * the identical act, and the act really is an archive — the channel lands in the Archive screen's
+ * Channels tab and Restore brings it back. `Remove` beside Channel info's genuinely destructive `Delete`
+ * would make the gentler of the two sound like the harsher.
+ *
+ * It is disjoint from `EDIT_CHAT_COPY.archive` only from its fifth-from-last character on
+ * (`Archive cha|t` against `Archive cha|nnel`) — the same razor-thin margin the two pens' `Edit chat` /
+ * `Edit channel` labels keep, and the same one a careless reword would close. Both this file's tests and
+ * the chat dialog's assert the two literals apart on exactly that.
+ */
+const ARCHIVE_CHANNEL_LABEL = 'Archive channel'
+
+/**
  * #1477's three client-owned lines, apostrophe-free (renderToStaticMarkup escapes `'` → `&#x27;`). NO
  * DAEMON STRING REACHES ANY OF THEM.
  *
@@ -62,17 +81,21 @@ export type EditChannelPrompt =
 /**
  * Controlled presentation; callers retain draft, focus and dismissal ownership.
  *
- * `EditChatDialogView`'s shape MINUS `onArchive` and MINUS `available`, and a separate module rather
- * than a prop on it, because the two dialogs' class namespaces must not collide: six shipped specs find
- * the chat dialog through `.rename-conversation*`, and #1438 already specifies `.edit-channel*` for the
- * button it adds below this field. Two locator sets is the whole reason for two files.
+ * `EditChatDialogView`'s shape MINUS `available`, and a separate module rather than a prop on it,
+ * because the two dialogs' class namespaces must not collide: six shipped specs find the chat dialog
+ * through `.rename-conversation*`, and #1438's own outlined button below the fields wears
+ * `.edit-channel*`. Two locator sets is the whole reason for two files.
  *
- * NO `available` PROP. Its twin carries one because #1440's AC3 lives in the GAP between two buttons'
- * disabled expressions — OK reads `blank || !available`, Archive chat reads `!available` alone. This
- * dialog has one button and no such gap, so the prop would have one value and no caller. Its host guard
- * is the container's pair instead: the render gate on `connected(…)`, plus the `canMutateHost` re-check
- * the save callback takes at interaction time against the LIVE store rather than against React state.
- * #1438 adds the prop when it adds the second button that needs it.
+ * NO `available` PROP — and #1438 ANSWERED THAT FORECAST "NO" RATHER THAN ADDING ONE. The earlier text
+ * here predicted the prop arriving with "the second button that needs it". It does not need it. The twin
+ * carries one because #1440's AC3 lives in the GAP between two buttons' disabled expressions — OK reads
+ * `blank || !available`, Archive chat reads `!available` alone. #1438's AC1 removes that gap outright:
+ * its button CARRIES NO DISABLED ARM OF ITS OWN, being live on a blank name and while the prompt read is
+ * still outstanding, because those are OK's conditions and not its. With no disabled expression there is
+ * nothing for the prop to feed, and a second host authority in the render could only disagree with the
+ * interaction-time re-check that is already the only thing standing between a disconnect and a send.
+ * The host guard stays the container's pair: the render gate on `connected(…)`, plus each caller's live
+ * re-check at interaction time rather than against React state.
  *
  * #1477 DID NOT ADOPT `ChannelForm`, which draws this same field for the create dialog. Doing so would
  * have moved this dialog onto `.create-channel*` locators against the ruling above, and widening that
@@ -85,13 +108,23 @@ export function EditChannelDialogView({
   prompt,
   onNameChange,
   onCancel,
-  onSave
+  onSave,
+  onArchive
 }: {
   name: string
   prompt: EditChannelPrompt
   onNameChange: (next: string) => void
   onCancel: () => void
   onSave: () => void
+  // #1438: the archive button's effect. REQUIRED, not optional — the `EditWorkspaceArchive` rule the
+  // chat dialog restates: a view that cannot act is a bug, so forgetting to wire it is a COMPILE ERROR
+  // rather than an inert button. That matters more here than it did there, because this view's container
+  // has TWO mount sites (the sidebar row's pen and, since #1431, the Channel info sheet's edit pill), and
+  // an optional prop would have shipped a dead button on whichever one nobody remembered.
+  //
+  // NULLARY, because the dialog is open against exactly ONE conversation, whose id both callers already
+  // hold; a parameter would be a value the caller reads straight back out of its own state.
+  onArchive: () => void
 }): JSX.Element {
   return (
     <div className="edit-channel-overlay">
@@ -166,6 +199,26 @@ export function EditChannelDialogView({
         {prompt.state === 'read' && prompt.overLimit && (
           <p className="edit-channel__notice">{SYSTEM_PROMPT_OVER_LIMIT}</p>
         )}
+        {/* #1438 — the content frame's own `Actions` row (502:2168), the drawing's LAST child of
+            `Content`: below the text area, above the centred footer, with the drawing's 8px top inset.
+            The two notice lines stay between it and the text area they describe.
+
+            ⭐ NO `disabled` ARM, ON ANY BRANCH, and that is the whole shape of AC1 rather than an
+            omission. OK's two conditions — a blank name, a prompt past the byte bound — are OK's: putting
+            a channel away has nothing to do with what either field currently holds, and it is live while
+            the prompt read is still outstanding for the same reason. Reusing OK's expression here is the
+            regression the static tests are pointed at. The host guard is not missing either; it is taken
+            at INTERACTION TIME by each caller's own re-check, against the live session store rather than
+            against a render snapshot.
+
+            Its classes share no name with the Edit chat, Edit host or Edit workspace dialogs — the
+            Playwright-locator rule the Edit host dialog's knowledge page states and `channels.css`
+            restates twice. The text is the accessible name; no `aria-label`. */}
+        <div className="edit-channel__actions">
+          <button type="button" className="edit-channel__archive" onClick={onArchive}>
+            {ARCHIVE_CHANNEL_LABEL}
+          </button>
+        </div>
       </Modal>
     </div>
   )
@@ -272,13 +325,30 @@ export function EditChannelDialog({
   name,
   onNameChange,
   onCancel,
-  onSave
+  onSave,
+  onArchive
 }: {
   conversationId: string
   serverId: string
   name: string
   onNameChange: (next: string) => void
   onCancel: () => void
+  /**
+   * #1438's archive intent, forwarded VERBATIM to the view and given no guard, no send and no log of its
+   * own here. Both live with the caller, deliberately: the two mount sites re-check different halves of
+   * the same question — `ChannelList` with `canMutateHost`, which also emits the one content-free
+   * `sidebar-mutation` diagnostic on refusal, and the Channel info sheet with
+   * `connectedConversationHostNow`, because it acts on the open conversation — and this container is in
+   * no position to choose between them. Importing either would also reach across a boundary this module
+   * keeps closed: `ChannelList` already imports this file, and nothing in this directory imports from
+   * `screens/conversation/`.
+   *
+   * NOTHING ON THIS PATH MAY CALL `writePrompt`. The archive sends exactly one command and dismisses;
+   * saving the in-progress draft on the way past would put the operator's system prompt — which #1477's
+   * own header treats as possibly holding a pasted credential — onto the wire from a click that promised
+   * to send nothing else. The draft simply dies with this container's unmount.
+   */
+  onArchive: () => void
   /**
    * #1476's OK — its host re-check, its own rename comparison and its dismissal — with this ticket's
    * prompt write handed IN to be run inside that same guard.
@@ -335,6 +405,7 @@ export function EditChannelDialog({
       name={name}
       onNameChange={onNameChange}
       onCancel={onCancel}
+      onArchive={onArchive}
       prompt={
         prompt.type === 'reading'
           ? { state: 'reading' }

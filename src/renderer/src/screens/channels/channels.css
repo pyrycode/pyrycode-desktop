@@ -1877,6 +1877,53 @@
   letter-spacing: var(--text-body-medium-tracking);
 }
 
+/* #1438 — this dialog's own archive slot, the content frame's `Actions` row (502:2168): left-aligned
+   below the text area, above the centred footer, with the drawing's 8px top inset. `align-items: center`
+   plus no stretch is what keeps the button its own width rather than the column's — the drawing's frame
+   hugs its one child. `.rename-conversation__actions` restated declaration for declaration under this
+   namespace, per the block header above: a LOCATOR decision, not a styling one. */
+.edit-channel__actions {
+  display: flex;
+  align-items: center;
+  padding-top: var(--space-2);
+}
+
+/* The footer Cancel's outlined recipe against the same tokens (.modal__action--cancel), because the
+   design draws this button as that button one frame higher — `.rename-conversation__archive` restated,
+   which is itself `.edit-host__unpair` restated. A class from another dialog's namespace is exactly the
+   coupling the header's rule exists to avoid.
+
+   ONE rule of that sibling is deliberately NOT carried: its `:disabled` arm. That button goes dead with
+   OK when the host is gone; THIS ONE HAS NO DISABLED STATE AT ALL (its host guard is taken at interaction
+   time, not in the render), so a `:disabled` selector here would be a rule for a state the markup cannot
+   reach. Its sibling's three OTHER omissions from the Cancel recipe hold for the same reasons they did
+   there: `max-width` / `overflow-wrap` defend a long daemon-supplied HOST name and this label is a
+   client-owned constant of known length, and `flex-shrink: 0` answered a prompt sharing a row with two
+   buttons where this row holds one button and nothing to squeeze it. */
+.edit-channel__archive {
+  box-sizing: border-box;
+  padding: calc(var(--space-2) - 1px) calc(var(--space-5) - 1px);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight-emphasized);
+}
+
+.edit-channel__archive:hover {
+  opacity: 0.88;
+}
+
+.edit-channel__archive:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
 /* Create and Save-as-channel placement; shared Modal owns the panel, header and actions. */
 .create-channel-overlay {
   position: fixed;

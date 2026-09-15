@@ -3,6 +3,7 @@ import { conversationStateFake } from './fixtures/conversationStateFake'
 import { mintChatInWorkspace } from './fixtures/mintChatRow'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type {
+  ArchiveConversationPayload,
   ConversationUpdatedPayload,
   Envelope,
   RequestSystemPromptPayload,
@@ -132,6 +133,17 @@ function mutations(captured: Envelope[]): string[] {
     .filter((t) => t === 'rename_conversation' || t === 'set_system_prompt')
 }
 
+/**
+ * Every `archive_conversation` payload the fake received, in wire order (#1438). Deliberately its OWN
+ * reader rather than a third arm on `mutations` above: that helper is the NON-VACUITY NET for "the
+ * archive rode alone", and a net that counted the archive itself could not say so.
+ */
+function archives(captured: Envelope[]): ArchiveConversationPayload[] {
+  return captured
+    .filter((e) => e.type === 'archive_conversation')
+    .map((e) => e.payload as ArchiveConversationPayload)
+}
+
 test('the Edit channel modal reads, seeds, writes and clears a channel system prompt', async ({
   launchPairedApp
 }) => {
@@ -256,4 +268,90 @@ test('the Edit channel modal reads, seeds, writes and clears a channel system pr
       'rename_conversation',
       'rename_conversation'
     ])
+})
+
+/**
+ * #1438's Archive channel button, and the assertion `edit-channel-dialog.md`'s Lessons learned records
+ * as DELETED rather than moved: that a dialog's put-away acts on THE ROW THE CONTROL WAS ON, never on
+ * whichever conversation the chat pane holds. #1440 had that proof on the Channels pen's sidebar arm;
+ * #1476 took the pen away from the chat dialog and the arm went with it, leaving the Channel info sheet
+ * as that button's only entry point — and the sheet is ALWAYS the open conversation, so it cannot tell
+ * the two apart even in principle.
+ *
+ * This drive can, and that is why it lives in this file rather than in `conversation-create-rename`:
+ * the seeded promoted channel carries the pen while a separately minted chat holds the open slot, so
+ * `seed-conversation` and `created-1` are two different conversations throughout. The spec is written to
+ * FAIL if the send ever resolves its id from the active conversation instead of from the captured row.
+ *
+ * A SECOND `test()` rather than more steps on the one above, because the shipped drive ends with the
+ * channel renamed twice and its prompt cleared; a fresh launch is what keeps this one's wire log short
+ * enough for `mutations` to mean "nothing else went out at all".
+ */
+test('the Edit channel modal archives the row it was opened on, not the open conversation', async ({
+  launchPairedApp
+}) => {
+  const captured: Envelope[] = []
+  const asks: Ask[] = []
+  const { page, daemon } = await launchPairedApp({ buildReplyFrames: capturingFake(captured, asks) })
+
+  // The minted chat takes the open slot (`useConversationCreatedNav` routes to it on `conversationCreated`),
+  // which is the whole premise: from here on, the row the modal opens on and the conversation on screen
+  // are different conversations.
+  await mintChatInWorkspace(page, CHANNEL_CWD)
+  await expect
+    .poll(() => asks.some((a) => a.conversationId === OTHER_ID), { timeout: ROUNDTRIP_TIMEOUT_MS })
+    .toBe(true)
+  await expect(page.locator('.conversation')).toHaveCount(1)
+
+  const dialog = page.getByRole('dialog', { name: 'Edit channel', exact: true })
+  const nameField = page.locator('.edit-channel__input')
+  const promptField = page.locator('.edit-channel__textarea')
+  const ok = dialog.getByRole('button', { name: 'OK', exact: true })
+  const archive = dialog.getByRole('button', { name: 'Archive channel', exact: true })
+  const pen = page.locator('.channel-list__rename')
+
+  await pen.click()
+  await expect(dialog).toBeVisible()
+
+  // --- AC1: NO DISABLED ARM OF ITS OWN. A blank name with the read still outstanding is the one frame
+  // that holds both of OK's conditions at once, so asserting here proves the button reads neither of
+  // them. `getByRole` finding it at all is also its accessible-name assertion — the copy IS the name,
+  // there is no `aria-label` to fall back on.
+  await nameField.fill('')
+  await expect(promptField).toBeDisabled()
+  await expect(ok).toBeDisabled()
+  await expect(archive).toBeEnabled()
+
+  // Seed the box and then move BOTH fields off what the daemon said, so the no-send assertions below are
+  // about a loaded, edited dialog rather than an untouched one. Without this the empty `mutations` would
+  // be vacuous: an untouched name and an unread prompt send nothing on ANY path.
+  const channelAsk = asks.filter((a) => a.conversationId === CHANNEL_ID).at(-1)
+  expect(channelAsk).toBeDefined()
+  if (channelAsk !== undefined) daemon.pushFrame(systemPromptFrame(channelAsk, STORED_PROMPT))
+  await expect(promptField).toHaveValue(STORED_PROMPT, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await nameField.fill('A name that is never sent')
+  await promptField.fill(TYPED_PROMPT)
+
+  await archive.click()
+  await expect(dialog).toHaveCount(0)
+
+  // --- AC2: EXACTLY ONE command, naming the CHANNEL (`seed-conversation`) and not the open conversation
+  // (`created-1`). An implementation that read the active conversation would put `created-1` here, and a
+  // strict `toEqual` on the whole array is what makes that a failure rather than a near miss.
+  await expect
+    .poll(() => archives(captured), { timeout: ROUNDTRIP_TIMEOUT_MS })
+    .toEqual([{ conversation_id: CHANNEL_ID }])
+  // AC2's other half: neither verb rode along, whatever the two fields held — and they held an edited
+  // name and an edited prompt, per the step above.
+  expect(mutations(captured)).toEqual([])
+
+  // --- AC2's tail: the row leaves the sidebar when the refreshed list arrives. Driven entirely by
+  // shipped wiring — the fake flips `is_archived`, `shouldRefreshList` re-requests on
+  // `conversation_updated`, and `channelListViewModel` filters archived rows out of both sections.
+  await expect(page.locator('.channel-list').getByText(CHANNEL_NAME, { exact: true })).toHaveCount(0, {
+    timeout: ROUNDTRIP_TIMEOUT_MS
+  })
+  // ...while the OPEN conversation is untouched. The positive half of the row-versus-open-conversation
+  // assertion: the thread on screen is still there, because the row that went away was not its row.
+  await expect(page.locator('.conversation')).toHaveCount(1)
 })

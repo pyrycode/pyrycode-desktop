@@ -19,8 +19,9 @@ Each opening starts with an empty, focused **Channel name** field. The shared `M
 centered Cancel/OK actions. The filled input uses the existing theme tokens; short windows scroll
 the panel. OK requires a nonblank trimmed name.
 
-Since #1428 this dialog alone (not Save as channel) also renders an optional **Channel system
-prompt** filled text area under the name field, restating the name input's fill, corner and type.
+Since #1428 this dialog also renders an optional **Channel system prompt** filled text area under
+the name field, restating the name input's fill, corner and type — since #1429
+[Save as channel](save-as-channel-dialog.md) renders the same field too, on its own container.
 Leaving it empty or holding only whitespace creates the channel exactly as before. Typed text is
 bounded at `MAX_SYSTEM_PROMPT_BYTES`, counted the way the channel info sheet's system-prompt
 section counts it — UTF-8 bytes, not UTF-16 code units — and going over disables OK with a
@@ -51,8 +52,10 @@ shared, while submission stays in each container.
 `ChannelForm` takes the system prompt as one optional bundled `prompt` prop (`value`, `overLimit`,
 `onChange`) rather than three parallel optional props — a value with no over-limit state, or a
 handler with no accessible name, is what parallel optionals would permit. Omitted entirely, the
-form renders exactly as it did before #1428, which is how `SaveAsChannelDialog` keeps the name
-field alone without `ChannelForm` knowing which dialog it is inside.
+form renders name-only, exactly as it did before #1428 — the shape `ChannelForm` still has no idea
+which dialog it is inside. Since #1429 [Save as channel](save-as-channel-dialog.md) passes the prop
+too, so today both containers render the field; the omitted case remains reachable for any future
+consumer of `ChannelForm` with no need for the prompt.
 
 The workspace plus and disclosure remain sibling controls, so creating does not toggle the
 workspace fold. The shared `WorkspaceCreateControl` bundles a label and callback: two parallel
@@ -152,8 +155,8 @@ name input and the actions and are disabled alongside it while busy; the over-li
 only when over the bound, with OK disabled alongside it; `systemPromptOverLimit` is checked at
 empty, at the bound, one byte over, and on a multi-byte value whose UTF-8 length diverges from its
 code-unit length; `confirmsPending` is checked on a match, a name mismatch, a `cwd` mismatch,
-`is_promoted: false`, and `idle`. `SaveAsChannelDialog.test.tsx` checks that its modal renders no
-textarea and no prompt label — the shared form stays unchanged for that dialog.
+`is_promoted: false`, and `idle`. Since #1429 `SaveAsChannelDialog.test.tsx` covers the same field
+on its own container — see [Save as channel § Testing](save-as-channel-dialog.md#testing).
 
 `e2e/sidebar-create-channel.spec.ts` holds real fake-transport replies to cover the request,
 rejection/retry, frozen controls, duplicate prevention, dismissal, reopening and disconnect
@@ -200,8 +203,10 @@ the daemon's promoted-create branch and reads its stored fields back.
 ## Related
 
 - [Channel List](channel-list.md) — workspace and host grouping and the owning target state.
-- [Save as channel](save-as-channel-dialog.md) — promotion flow, and the same folder-choice withdrawal;
-  its modal renders the shared `ChannelForm` with no `prompt` prop, so it never gains the text area.
+- [Save as channel](save-as-channel-dialog.md) — promotion flow, and the same folder-choice
+  withdrawal; since #1429 its modal renders the same `prompt` prop on `ChannelForm` and writes the
+  prompt synchronously after its promote, with no `confirmsPending`-style attribution gate — the
+  conversation already exists and its `id` is a prop, never a value a reply supplied.
 - [New-discussion FAB](new-discussion-fab.md) — existing confirmed-conversation navigation.
 - [System prompt write](system-prompt-write.md) — the transport leg `submitSystemPrompt` rides, the
   tri-state contract (`null` clears, `''` stores empty, text is verbatim), and the known limitation

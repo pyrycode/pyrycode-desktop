@@ -9,7 +9,7 @@ import type { Locator } from '@playwright/test'
 // plus, appended after the glyph, `aria-hidden`, its text off the same `create.label` as the
 // `aria-label`, #1178/#1179's markers byte-identical) and everything below is what only a running window
 // can answer: that the control's own hover and focus show and hide it, that each tree's plus draws its
-// own name, and that it lands inside the scroller that clips it.
+// own name, and — since #1427 — that it lands off the pointer rather than on the glyph it names.
 //
 // A DEDICATED FILE rather than an addition to `e2e/sidebar-control-name-pill.spec.ts`, on #1179's
 // precedent: that spec owns the ROW controls' pills, must pass with its assertions untouched, and its
@@ -18,24 +18,23 @@ import type { Locator } from '@playwright/test'
 // thing #1181 changed there is its `pills` locator, now scoped to `.channel-list__row`; the comment on
 // that line says why.
 //
-// ⭐ A BOUNDING BOX IS NOT A DETECTOR FOR A CLIP, which is why the geometry here is containment inside
-// THE SCROLLER and never `toBeVisible()` or "inside the window" — #1172's and
-// `e2e/composer-attachment-name.spec.ts`'s finding for the same treatment: a layout box comes back
-// whether or not an ancestor clipped the pixels away. The scroller is `overflow-y: auto`, which forces
-// `overflow-x` off `visible` too, so it clips on BOTH axes, and `.paired-shell__sidebar` is a second
-// `overflow: hidden` outside it. The tighter ancestor is the one asserted against.
+// ⭐ #1427 RETIRED THE BAND AND THE SCROLLER-CONTAINMENT READS THIS FILE SHIPPED WITH. The pill follows
+// the POINTER now — `position: fixed`, its top-left corner --space-3 right of and --space-6 below the
+// pointer's current position — so it is deliberately OUTSIDE `.channel-list__tree` whenever the pointer
+// sits near that scroller's bottom edge, and containment inside it is no longer a true thing to assert.
+// The three reads that replaced it are `expectAtPointer`, `expectClearOfControl` and `expectInsideWindow`.
 //
-// ⭐ SINCE #1443 THE SCROLLER IS `.channel-list__tree`, NOT `.channel-list`. The drawn top bar split the
-// column in two: `.channel-list` is the padded card column and no longer scrolls or clips at all, and the
-// tree wrapper inside it is the scrollport. `scrollTreeTo`, the overflow precondition, `expectInsideTree`
-// and the horizontal-scroll read all name it, through ONE `tree` locator so they cannot drift apart —
-// writing `scrollTop` to an element that does not scroll is a SILENT no-op, so a read left on the column
-// would fail open rather than red.
+// ⭐ AND THE OFFSET READ IS ITSELF THE CLIP DETECTOR, which is why dropping the scroller containment costs
+// nothing. A bounding box still comes back from a clipped element — #1172's finding for this treatment,
+// and the reason the old reads existed — but `.paired-shell__sidebar`'s padding box starts 20px in from
+// the window on both axes, so any ancestor that became a containing block for this fixed box would shift
+// it off the pointer by at least that inset and redden `expectAtPointer` by a wide margin.
 //
-// ⭐ AND THE BAND IS WHAT MAKES CONTAINMENT TRUE ON THE ROWS NO TEST VISITS. The pill sits inside the
-// head row's own 28px band (a 24px box centred on the plus, whose centre is the row's), so containment
-// follows from the row being in view at ANY scroll position rather than from the one this drive parks at.
-// Both are asserted and neither stands in for the other — #1172's measured ruling, carried up a level.
+// ⭐ THE POINTER IS PARKED BY AN EXPLICIT `page.mouse.move`, never by `hover()`'s own centring, so every
+// offset read's expected value is a point THIS FILE chose. `hover()` still leads, because it is what
+// scrolls an off-screen control into view. `scrollTreeTo` and the overflow precondition still name
+// `.channel-list__tree` through ONE `tree` locator — writing `scrollTop` to an element that does not
+// scroll is a SILENT no-op, so a read left on the padded column would fail open rather than red.
 //
 // ONE test() block, ONE launch, ONE continuous drive: each launch pays a full handshake, and the ordering
 // is load-bearing throughout — every absence assertion sits AFTER a positive, auto-waiting read of the
@@ -52,9 +51,14 @@ const TIMEOUT_MS = 15_000
 const CREATE_CHANNEL_NAME = 'Create channel'
 const CREATE_CHAT_NAME = 'Create chat'
 
-// 4 + the 16px body-small line + 4 — the same 24 the row's own pills derive, which is what puts this one
-// inside the 28px head row's band rather than over a neighbour.
+// 4 + the 16px body-small line + 4 — the drawn 24, still read here because the TREATMENT is what #1427
+// left alone. It no longer carries a placement claim.
 const PILL_HEIGHT_PX = 24
+
+// --space-3 and --space-6 resolved. `channels.css` cites the offsets by token name and the pixels live
+// only here, which is what makes these reads an independent check of the rule rather than a restatement.
+const OFFSET_X_PX = 12
+const OFFSET_Y_PX = 24
 
 // `pairedShell.css` gives the sidebar `flex: 0 0 400px`. Showing a pill must not move it.
 const SIDEBAR_WIDTH_PX = 400
@@ -102,6 +106,8 @@ const twoTreeFrame = (): Uint8Array =>
   })
 
 type Box = { x: number; y: number; width: number; height: number }
+type Point = { x: number; y: number }
+type Size = { width: number; height: number }
 
 // `boundingBox()` returns null for a detached or hidden node. Throwing beats `!` and beats a sentinel,
 // because every consumer below does arithmetic on the result. The message names the LOCATOR's role.
@@ -123,15 +129,38 @@ const allHidden = async (pills: Locator): Promise<void> => {
   expect(await displays(pills)).toEqual(['none', 'none'])
 }
 
-// THE CRITERION. Not `toBeVisible()`, not "inside the window" — see this file's header.
-const expectInsideTree = (pill: Box, tree: Box, role: string): void => {
-  expect(pill.x, `${role}: left edge`).toBeGreaterThanOrEqual(tree.x - EPSILON_PX)
-  expect(pill.y, `${role}: top edge`).toBeGreaterThanOrEqual(tree.y - EPSILON_PX)
+// THE CRITERION, in three reads — see this file's header for why it is no longer containment inside the
+// scroller. Each answers a different way for the placement to be wrong.
+
+// One: the pill's top-left corner is the offset point off the pointer's own position.
+const expectAtPointer = (pill: Box, pointer: Point, role: string): void => {
+  expect(pill.x, `${role}: left edge off the pointer`).toBeCloseTo(pointer.x + OFFSET_X_PX, 0)
+  expect(pill.y, `${role}: top edge off the pointer`).toBeCloseTo(pointer.y + OFFSET_Y_PX, 0)
+}
+
+// Two: the pill does not cover the glyph it names — THE WHOLE OF THIS TICKET. Written as an intersection
+// of no positive area on at least one axis, which reads the same whichever side of the control the pill
+// ended up on; a four-way edge comparison would have to know the placement to be written at all.
+const expectClearOfControl = (pill: Box, control: Box, role: string): void => {
+  const overlapX =
+    Math.min(pill.x + pill.width, control.x + control.width) - Math.max(pill.x, control.x)
+  const overlapY =
+    Math.min(pill.y + pill.height, control.y + control.height) - Math.max(pill.y, control.y)
+  expect(Math.min(overlapX, overlapY), `${role}: overlap with the control`).toBeLessThanOrEqual(
+    EPSILON_PX
+  )
+}
+
+// Three: it is on screen. The window, not the scroller: a fixed box resolves against the viewport and
+// escapes every `overflow` ancestor on purpose, which is what lets it sit off the pointer at all.
+const expectInsideWindow = (pill: Box, viewport: Size, role: string): void => {
+  expect(pill.x, `${role}: left edge`).toBeGreaterThanOrEqual(-EPSILON_PX)
+  expect(pill.y, `${role}: top edge`).toBeGreaterThanOrEqual(-EPSILON_PX)
   expect(pill.x + pill.width, `${role}: right edge`).toBeLessThanOrEqual(
-    tree.x + tree.width + EPSILON_PX
+    viewport.width + EPSILON_PX
   )
   expect(pill.y + pill.height, `${role}: bottom edge`).toBeLessThanOrEqual(
-    tree.y + tree.height + EPSILON_PX
+    viewport.height + EPSILON_PX
   )
 }
 
@@ -140,10 +169,28 @@ const scrollTreeTo = (tree: Locator, offset: 'top' | 'bottom'): Promise<void> =>
     el.scrollTop = where === 'top' ? 0 : el.scrollHeight
   }, offset)
 
-test('the workspace plus names itself in a pill on hover and on focus, inside the scroller', async ({
+test('the workspace plus names itself in a pill that follows the pointer, clear of the plus', async ({
   launchPairedApp
 }) => {
   const { page, daemon } = await launchPairedApp()
+
+  // The window's own box, read once. `expectInsideWindow`'s bound, and the thing the bottom-edge mirror
+  // in `e2e/sidebar-control-name-pill.spec.ts` is measured against.
+  const viewport = await page.evaluate(() => ({
+    width: window.innerWidth,
+    height: window.innerHeight
+  }))
+
+  // Park the pointer at a point THIS FILE names inside a control, and answer where it is. `hover()` leads
+  // so an off-screen control is scrolled in and the hover chain is established; the explicit move after it
+  // is what makes every offset read's expected value a chosen number rather than Playwright's centring.
+  const parkOn = async (control: Locator, role: string, dx: number, dy: number): Promise<Point> => {
+    await control.hover()
+    const box = await boxOf(control, role)
+    const point = { x: Math.round(box.x + dx), y: Math.round(box.y + dy) }
+    await page.mouse.move(point.x, point.y)
+    return point
+  }
 
   const tree = page.locator('.channel-list__tree')
   const sidebar = page.locator('.paired-shell__sidebar')
@@ -202,25 +249,33 @@ test('the workspace plus names itself in a pill on hover and on focus, inside th
 
   // --- AC1, the hover, on the CHANNELS tree's plus with the list scrolled to the top. The positive read
   // comes first; the set read beside it is what makes this "that control's pill" rather than "a pill
-  // somewhere", and the exact text is what says each tree draws ITS OWN name. ---
+  // somewhere", and the exact text is what says each tree draws ITS OWN name. The arrival is the PARK, so
+  // the geometry below is read at the pill's FIRST appearance on this control rather than after a move
+  // that followed one — AC1's "from the moment the pill first appears". ---
   await scrollTreeTo(tree, 'top')
-  await createChannel.hover()
+  const first = await parkOn(createChannel, 'channels workspace plus', 4, 4)
   await expect(channelsPill).toBeVisible({ timeout: TIMEOUT_MS })
   await expect(channelsPill).toHaveText(CREATE_CHANNEL_NAME)
   expect((await displays(pills)).filter((display) => display !== 'none')).toEqual(['block'])
 
-  // --- AC2, the band and the criterion, on the first Channels-tree workspace row at scroll top. The box
-  // is the drawn 24; its vertical CENTRE coincides with the head row's, which is the band claim (the plus
-  // is a 20px box at --space-1 down a 28px row, so its centre IS the row's); its right edge coincides
-  // with the head row's, so it grows leftward and reaches neither horizontal edge. Then containment.
-  // The band is what generalises this to rows this drive never parks on — re-pointing the rule at a
-  // placement one row up satisfies the containment here and fails the centre. ---
-  const pillBox = await boxOf(channelsPill, 'channels workspace pill')
-  const headBox = await boxOf(channelsHead, 'channels workspace head row')
-  expect(pillBox.height).toBeCloseTo(PILL_HEIGHT_PX, 0)
-  expect(pillBox.y + pillBox.height / 2).toBeCloseTo(headBox.y + headBox.height / 2, 0)
-  expect(pillBox.x + pillBox.width).toBeCloseTo(headBox.x + headBox.width, 0)
-  expectInsideTree(pillBox, await boxOf(tree, 'sidebar tree'), 'channels workspace pill')
+  // --- AC1's geometry. The pill's top-left corner answers at the offset off that parked point, its box is
+  // CLEAR of the 20px plus it names — the whole of this ticket — and it is on screen. The box is still the
+  // drawn 24 tall, the treatment #1427 left alone. ---
+  const plusBox = await boxOf(createChannel, 'channels workspace plus')
+  const firstPill = await boxOf(channelsPill, 'channels workspace pill')
+  expect(firstPill.height).toBeCloseTo(PILL_HEIGHT_PX, 0)
+  expectAtPointer(firstPill, first, 'channels workspace pill')
+  expectClearOfControl(firstPill, plusBox, 'channels workspace pill')
+  expectInsideWindow(firstPill, viewport, 'channels workspace pill')
+
+  // --- AC1's other half: it FOLLOWS. A second park 8px along the same control and a re-read of the box,
+  // which is what a placement computed once on enter would fail while passing every read above. ---
+  const second = await parkOn(createChannel, 'channels workspace plus', 12, 12)
+  expect(second.y, 'the second park is a different point').not.toBe(first.y)
+  const secondPill = await boxOf(channelsPill, 'channels workspace pill')
+  expectAtPointer(secondPill, second, 'channels workspace pill, followed')
+  expectClearOfControl(secondPill, plusBox, 'channels workspace pill, followed')
+  expectInsideWindow(secondPill, viewport, 'channels workspace pill, followed')
 
   // --- AC2's other half, read WHILE that pill is up: the sidebar has not widened and the scroller has
   // gained no horizontal scroll. An out-of-flow box adds scrollable overflow only where it overflows
@@ -263,6 +318,19 @@ test('the workspace plus names itself in a pill on hover and on focus, inside th
   await expect(channelsPill).toBeVisible({ timeout: TIMEOUT_MS })
   await expect(channelsPill).toHaveText(CREATE_CHANNEL_NAME)
   expect((await displays(pills)).filter((display) => display !== 'none')).toEqual(['block'])
+
+  // --- AC3's placement: with the pointer parked off the list there is no pointer position, so the same
+  // offset is taken from the CONTROL'S OWN bottom-right corner — one placement rule for both modalities,
+  // and the glyph still uncovered. The disjointness read is the same one the hover case makes. ---
+  const focusedPlus = await boxOf(createChannel, 'channels workspace plus')
+  const focusedPill = await boxOf(channelsPill, 'channels workspace pill')
+  expectAtPointer(
+    focusedPill,
+    { x: focusedPlus.x + focusedPlus.width, y: focusedPlus.y + focusedPlus.height },
+    'channels workspace pill, focused'
+  )
+  expectClearOfControl(focusedPill, focusedPlus, 'channels workspace pill, focused')
+  expectInsideWindow(focusedPill, viewport, 'channels workspace pill, focused')
 
   await createChannel.evaluate((element: HTMLElement) => element.blur())
   await expect(channelsPill).toBeHidden({ timeout: TIMEOUT_MS })

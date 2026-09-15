@@ -7,7 +7,7 @@ by reusing the existing `open` transition. Introduced alongside the new-discussi
 \#347) as that control's engine room; the FAB itself is gone, but this bridge is not — it is the shared
 nav wiring behind every surviving way to start a conversation on the [Channel List](channel-list.md): the
 Chats-tree workspace row's `Create chat` plus
-([#1178](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178)),
+([#1178](channel-list-workspace-row-nest.md)),
 the Channels-tree plus's [Create-channel dialog](create-channel-dialog.md) (#1179), and the host row's
 [Add workspace dialog](channel-list-host-row.md#the-add-workspace-dialog-1308) (#1308).
 
@@ -129,8 +129,8 @@ diagram above is one representative path, not the only one.
   router; `useConversationCreatedNav` drives its `dispatch({ type: 'open' })`.
 - [Channel List home screen](channel-list.md) / [#141 codebase notes](../codebase/141.md) — the screen
   every one of this bridge's callers lives on.
-- [Channel List — the row's desktop geometry § The workspace row's own nest and its create-chat
-  plus](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178)
+- [Channel List — the workspace row's own nest and its create-chat
+  plus](channel-list-workspace-row-nest.md)
   (#1178) — `requestNewConversation`'s sole production caller today.
 - [Create-channel dialog](create-channel-dialog.md) (#1179) and [Channel List — the host row § The Add
   workspace dialog](channel-list-host-row.md#the-add-workspace-dialog-1308) (#1308) — the other two

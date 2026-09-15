@@ -1,6 +1,6 @@
 # Edit workspace dialog
 
-The [workspace row's pen](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178)
+The [workspace row's pen](channel-list-workspace-row-nest.md)
 in either sidebar tree opens the [shared Modal](modal-presentation.md) to edit an
 optional workspace label. The selected host and exact remote `cwd` remain the save
 target; neither is displayed. Renaming changes the label, never the folder's name or location.
@@ -32,7 +32,7 @@ and centred outlined Cancel / filled OK buttons. Host and folder layers are abse
 ### The pen — `WorkspaceRow`'s second optional trailing control (`ChannelList.tsx`)
 
 A module-private `WorkspaceEditControl = { readonly label: string; readonly onEdit: () => void }` —
-[`WorkspaceCreateControl`](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178)'s
+[`WorkspaceCreateControl`](channel-list-workspace-row-nest.md)'s
 shape one control over, but its **own** type rather than a shared one: the two controls are
 independently withheld in principle and say different words, so bundling them would couple two
 affordances that differ in everything but position. `onEdit` is nullary, so no component below
@@ -80,7 +80,7 @@ label the instant the pointer arrived, which is worse than truncating it slightl
 unconditionally is what makes "no glyph of the label is painted under either control" true at rest as
 well as on hover (AC3). The label's content box ends 52 in; the pen's hit box starts 45 in.
 
-The pen's name pill reuses the shared `.channel-list__control-name` class and [#1181](channel-list-desktop-row-geometry.md#the-workspace-rows-plus-names-itself-in-a-pill-1181)'s
+The pen's name pill reuses the shared `.channel-list__control-name` class and [#1181](channel-list-workspace-plus-pill.md)'s
 append-after-the-`<svg>` discipline, triggered off the **pen's own** `:hover`/`:focus-visible` (never
 the row's) — hovering the row's label shows nothing.
 

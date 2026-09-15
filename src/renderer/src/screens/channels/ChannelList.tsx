@@ -1,5 +1,12 @@
 import './channels.css'
-import { Fragment, useEffect, useState, type ReactNode } from 'react'
+import {
+  Fragment,
+  useEffect,
+  useState,
+  type FocusEvent,
+  type PointerEvent,
+  type ReactNode
+} from 'react'
 import type { ConversationSummary } from '@shared/wire/types'
 import {
   useConversationListStore,
@@ -972,6 +979,59 @@ export function hostRowEditSeed(value: HostLabelValue): string {
 // The alternative is worse than the doc edit: an index key would cross-wire fold state and per-row
 // instances between machines whenever the paired list reorders. `ChannelList.test.tsx` pins the claim by
 // rendering a sentinel id and asserting it appears nowhere in the markup.
+// #1427 — THE POINTER-RELATIVE PLACEMENT OF `.channel-list__control-name`, and the one part of it a
+// stylesheet cannot do: the pointer's position is not available to CSS. Seven controls in this file wear
+// that pill and all seven spread `controlNamePlacement`, so there is one handler set and no per-control
+// wiring. `channels.css` owns the offsets, the mirror arithmetic and the reasons; this owns the numbers
+// only CSS cannot see.
+//
+// ⭐ A DIRECT STYLE WRITE AND NEVER A REACT `style` PROP. `ChannelList.test.tsx` compares whole attribute
+// runs on these buttons, and a `style` prop would add a `style` attribute to the static markup and move
+// every one of them. Event handlers are not serialized by `renderToStaticMarkup`, so spreading this set
+// changes no byte of the static tier — and there is no React state and no re-render per pointer move.
+const CONTROL_NAME_POINTER_X = '--control-name-pointer-x'
+const CONTROL_NAME_POINTER_Y = '--control-name-pointer-y'
+const CONTROL_NAME_MIRROR = '--control-name-mirror'
+
+// The three custom properties the pill inherits, written on the control's own inline style.
+//
+// THE MIRROR IS MEASURED, NOT DERIVED: the placement is written unmirrored, the pill's own bottom is read
+// back — `getBoundingClientRect` forces the style and layout update, so the read is of what was just
+// written — and the mirror is set when that bottom has left the window. Probing from unmirrored EVERY
+// time is what makes the decision self-correcting per move rather than sticky. Reading the laid-out box
+// instead of recomputing it is also what keeps every pixel value for the offsets and for the pill's own
+// height out of this file: they are tokens in the stylesheet and literals in the specs, nowhere else.
+function placeControlName(control: HTMLElement, x: number, y: number): void {
+  control.style.setProperty(CONTROL_NAME_POINTER_X, `${x}px`)
+  control.style.setProperty(CONTROL_NAME_POINTER_Y, `${y}px`)
+  control.style.setProperty(CONTROL_NAME_MIRROR, '0')
+  const pill = control.querySelector<HTMLElement>('.channel-list__control-name')
+  if (pill === null) return
+  if (pill.getBoundingClientRect().bottom > window.innerHeight) {
+    control.style.setProperty(CONTROL_NAME_MIRROR, '1')
+  }
+}
+
+const controlNamePlacement = {
+  // ENTER AS WELL AS MOVE. A `pointermove` is not guaranteed before `:hover` paints the pill, and an
+  // unwritten property would leave the stylesheet's fallback placing it off the window's corner rather
+  // than off the pointer. Enter seeds before that first paint; the fallback is only the net under it.
+  onPointerEnter: (event: PointerEvent<HTMLButtonElement>): void =>
+    placeControlName(event.currentTarget, event.clientX, event.clientY),
+  onPointerMove: (event: PointerEvent<HTMLButtonElement>): void =>
+    placeControlName(event.currentTarget, event.clientX, event.clientY),
+  // With no pointer there is no pointer position, so the control's own bottom-right corner takes the same
+  // offset — one placement rule for both modalities, and the glyph still uncovered. It YIELDS TO A LIVE
+  // POINTER: clicking a control focuses it, and without the guard that focus would jerk the pill off the
+  // pointer and onto the corner while the pointer is still sitting on the control.
+  onFocus: (event: FocusEvent<HTMLButtonElement>): void => {
+    const control = event.currentTarget
+    if (control.matches(':hover')) return
+    const box = control.getBoundingClientRect()
+    placeControlName(control, box.right, box.bottom)
+  }
+} as const
+
 const ADD_WORKSPACE_CONTROL_LABEL = 'Add workspace'
 const EDIT_HOST_CONTROL_LABEL = 'Edit host'
 
@@ -1026,6 +1086,7 @@ export function HostRow({
             className="channel-list__host-edit"
             aria-label={EDIT_HOST_CONTROL_LABEL}
             onClick={onEditHost}
+            {...controlNamePlacement}
           >
             <svg
               className="channel-list__host-edit-icon"
@@ -1068,6 +1129,7 @@ export function HostRow({
             className="channel-list__host-add"
             aria-label={ADD_WORKSPACE_CONTROL_LABEL}
             onClick={onAddWorkspace}
+            {...controlNamePlacement}
           >
             <svg
               className="channel-list__host-add-icon"
@@ -1428,6 +1490,7 @@ function WorkspaceRow({
           className="channel-list__workspace-create"
           aria-label={create.label}
           onClick={create.onCreate}
+          {...controlNamePlacement}
         >
           <svg
             className="channel-list__workspace-create-icon"
@@ -1475,6 +1538,7 @@ function WorkspaceRow({
           className="channel-list__workspace-edit"
           aria-label={edit.label}
           onClick={edit.onEdit}
+          {...controlNamePlacement}
         >
           {/* The drawing's own export (Font Awesome pen, the 14 × 14 "Icon Edgeless" the Hover variant
               places at right 28, top 7.01). The path is `.channel-list__rename-icon`'s — the same glyph
@@ -1822,6 +1886,7 @@ function SectionHeader({
         className="channel-list__pair"
         aria-label={PAIR_NEW_HOST_CONTROL_LABEL}
         onClick={onPairNewHost}
+        {...controlNamePlacement}
       >
         {/* The drawing's `399:1045` "Icon Edgeless" plus — the same glyph #1178 shipped for the
             workspace row, so `.channel-list__workspace-create-icon`'s 16-unit path is reused verbatim
@@ -2147,6 +2212,7 @@ function Row({
           className="channel-list__rename"
           aria-label={RENAME_CONTROL_LABEL}
           onClick={onRename}
+          {...controlNamePlacement}
         >
           <svg
             className="channel-list__rename-icon"
@@ -2189,6 +2255,7 @@ function Row({
           className="channel-list__save"
           aria-label={SAVE_AS_CHANNEL_CONTROL_LABEL}
           onClick={onSaveAsChannel}
+          {...controlNamePlacement}
         >
           <svg
             className="channel-list__save-icon"

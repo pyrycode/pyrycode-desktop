@@ -163,7 +163,7 @@ existing null fall-through list. The real consumer at #241 time was
 [the create → nav bridge](new-discussion-fab.md) (#242, then the new-discussion FAB's bridge), which
 subscribes directly via `window.pyry.onDaemonEvent`, not through any of the three exhaustive bridges
 above. `requestNewConversation` got a second caller in
-[#1178](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178):
+[#1178](channel-list-workspace-row-nest.md):
 each sidebar workspace row's hover-revealed plus, sending that group's own `cwd` rather than the client's
 saved default — the first caller to pass this constructor a `cwd` that is daemon-asserted text rather than
 a client-side setting, verbatim and unnormalised, relying on `isCreateConversationPayload` and the
@@ -294,7 +294,7 @@ for pending-entry lifetime and the accepted concurrent-caller limitation.
 - [The create → nav bridge, formerly the new-discussion FAB](new-discussion-fab.md) / [#242 codebase
   notes](../codebase/242.md) — the renderer consumer: fires `createConversation`, navigates on
   `conversationCreated`. The FAB itself, its original caller, was deleted in #1426.
-- [Channel List — the row's desktop geometry § The workspace row's own nest and its create-chat plus](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178)
+- [Channel List — the workspace row's own nest and its create-chat plus](channel-list-workspace-row-nest.md)
   (#1178) — the second caller, sending a workspace group's own `cwd` instead of the saved default.
 - [Create-channel dialog](create-channel-dialog.md) (#1179) — `requestNewChannel`, the sibling
   constructor sending the command's other fixed payload shape (`is_promoted: true` plus a name); the

@@ -1,6 +1,6 @@
 # Create-channel dialog
 
-The [Channels-tree workspace plus](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178)
+The [Channels-tree workspace plus](channel-list-workspace-row-nest.md)
 creates a named, promoted channel on the clicked host, either in that workspace itself or
 in a dedicated folder beneath it. Existing channels and files are never moved.
 

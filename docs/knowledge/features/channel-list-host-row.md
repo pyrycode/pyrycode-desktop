@@ -239,7 +239,7 @@ server this row names, not any other paired machine.
 ## The row's pen and plus on hover (#1185)
 
 The host row was the last row family in the sidebar tree with no controls of its own — the workspace row
-below it grew a create plus ([#1178](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178))
+below it grew a create plus ([#1178](channel-list-workspace-row-nest.md))
 and an edit pen ([#1180](edit-workspace-dialog.md)); the channel rows had carried theirs since #1172. This
 ticket brings the same pair up one level, into the slot the two connection dots (§ above) occupy at rest,
 matching the redrawn Host component (Figma 399:1366, Hover variant 399:1408).
@@ -316,9 +316,9 @@ control, where a per-row block says where it lives. The plus (`.channel-list__ho
 The pen (`.channel-list__host-edit`) sits at `right: calc(var(--space-7) - 3px); top: var(--space-1)`,
 centring its 14px glyph at right 28, 10px clear of the plus. Both filled `--color-primary`, no
 background, no hover circle, `fill="currentColor"`/`aria-hidden="true"` on the SVGs, the file's
-`:focus-visible` outline convention. **Both wear `.channel-list__control-name` — the shipped pill
-(#1172) — since [#1190](#the-rows-pen-and-plus-on-hover-1185).**
-[#1181](channel-list-desktop-row-geometry.md#the-workspace-rows-plus-names-itself-in-a-pill-1181) gave the
+`:focus-visible` outline convention. **Both wear `.channel-list__control-name` — the shipped
+[pill](channel-list-control-name-pill.md) (#1172) — since [#1190](#the-rows-pen-and-plus-on-hover-1185).**
+[#1181](channel-list-workspace-plus-pill.md) gave the
 workspace pair one first; #1190 brought it up to the host row with no new drawing declaration, appending
 one `<span className="channel-list__control-name" aria-hidden="true">` after each control's `</svg>` —
 appended, not prepended, which is load-bearing: `ChannelList.test.tsx` pins each glyph's whole opening run,
@@ -334,33 +334,35 @@ otherwise see. While one pill is up it covers the other control's glyph or the t
 machine label — accepted on #1172's and #1181's precedent, since `pointer-events: none` on the shared
 block lets a click or a hit test land on the row underneath regardless.
 
-**The band placement is reused verbatim, and the Channels host row clears the sticky actions cluster
-with room to spare.** The Channels section header's own plus hangs its name pill *below* its control
-(`top: 100%`) rather than on the shared band
+**The band placement was reused verbatim, as shipped by #1190, and the Channels host row cleared the
+sticky actions cluster with room to spare.** The Channels section header's own plus hung its name pill
+*below* its control (`top: 100%`) rather than on the shared band
 ([#1304](channel-list-section-header-pair-control.md#the-hoverfocus-name-pill-channelscsschannellisttsx-added-by-1304)),
-because the sticky `.channel-list__actions` cluster's `top` resolves against the scrollport's *content*
-box and so lands 4px *inside* that header at scroll top. The first host row of a section sits one whole
+because the sticky `.channel-list__actions` cluster's `top` resolved against the scrollport's *content*
+box and so landed 4px *inside* that header at scroll top. The first host row of a section sat one whole
 header box lower — 20px of content line plus 12px of bottom padding, with
 `.channel-list__section-header + .channel-list__host` taking no margin — so at scroll top this pill's top
-edge clears the cluster's bottom edge by ~30px (measured on the running window: row centre y 118, pill top
+edge cleared the cluster's bottom edge by ~30px (measured on the running window: row centre y 118, pill top
 y 106, cluster bottom y 76). #1304's `top: 100%` deviation was therefore not needed here: the shared band
-(`right: 0; top: 50%; transform: translateY(-50%)`) is reused unmodified, and
-`e2e/sidebar-host-row-control-name-pill.spec.ts` reads that clearance back as a runtime relation between
-the two edges rather than trusting the prediction — a cluster that grows or a sticky offset that changes
-would redden it. Which of the spec's own assertions actually catches a wrong placement is row-specific
-and not interchangeable with the header's own spec: re-pointing the pen's pill at #1304's `top: 100%;
-transform: none` reddens the **band** assertion here, by exactly 22px, and leaves the actions-edge and
-containment reads green — the opposite of what the same mutation does on the section header, where 30px
-of slack from the header sitting between the row and the cluster means no placement a reader would
-plausibly write closes the gap. Each pill spec has to re-measure its own detector rather than copy a
-sibling's answer.
+(`right: 0; top: 50%; transform: translateY(-50%)`) was reused unmodified. Which of the spec's own
+assertions actually caught a wrong placement was row-specific and not interchangeable with the header's own
+spec: re-pointing the pen's pill at #1304's `top: 100%; transform: none` reddened the **band** assertion
+here, by exactly 22px, and left the actions-edge and containment reads green — the opposite of what the
+same mutation did on the section header, where 30px of slack from the header sitting between the row and
+the cluster meant no placement a reader would plausibly write closed the gap.
 
-**Superseded by [#1443](https://github.com/pyrycode/pyrycode-desktop/issues/1443).** The bar moved
-outside the scroller entirely, so the 30px of slack measured above became the whole tree: the clearance
-now holds by construction rather than against a live sticky edge. The assertion is kept rather than
-deleted — it still reads a relation between two live boxes and would catch a bar that grew back down into
-the tree — but as this paragraph already states, it was never the detector for a wrong placement here;
-the band assertion is, and stays unchanged by #1443.
+**Superseded by [#1443](https://github.com/pyrycode/pyrycode-desktop/issues/1443), then again by
+[#1427](channel-list-control-name-pill.md).** #1443 moved the sticky bar outside the scroller entirely, so
+the 30px of slack measured above became the whole tree: the clearance held by construction rather than
+against a live sticky edge, but the band-vs-`top:100%` divergence between this row and the section header
+stayed live. **#1427 retired that divergence along with the band itself**: this row's pen and plus now wear
+the same pointer-following placement as all seven controls — see [the control's own name
+pill](channel-list-control-name-pill.md) for the shared mechanism (`position: fixed`, the `--space-3`/
+`--space-6` offsets, the measured bottom-edge mirror, `z-index: 1`). There is no longer a `top: 100%`
+deviation on the section header's own plus for this row's band to differ from, since that deviation was
+deleted with nothing left to override. `e2e/sidebar-host-row-control-name-pill.spec.ts`'s band and
+actions-edge reads were replaced by the pointer-offset, disjoint-from-control and inside-window checks
+[the control's own name pill](channel-list-control-name-pill.md)'s testing section describes.
 
 **The row's right padding goes from 0 to 52px** (`calc(var(--space-8) + var(--space-5))`,
 `.channel-list__workspace`'s own value) **in both states, not only on hover** — reserving the trailing
@@ -375,7 +377,7 @@ pixel.** `margin-left: auto` depended on the row having no other trailing conten
 the row reserves 52px of padding unconditionally, an in-flow auto margin would have parked the dots at
 the *padding* edge, 52px short of where they are drawn. `right: 0` resolves against the row's padding
 box — its content edge — so the pair stays exactly where #718 and the 2026-09-05 inset fix put it, and
-[`host-label-sidebar.spec.ts`'s `ROW_INSET_PX = 0`](channel-list-desktop-row-geometry.md#the-trees-inset-channelscss-the-2026-09-05-inset-fix)
+[`host-label-sidebar.spec.ts`'s `ROW_INSET_PX = 0`](channel-list-tree-inset.md)
 stays literally true. See that page's own note on the now-superseded "right padding goes to 0" bullet.
 
 **DOM order is pen, then plus** — the reverse of `WorkspaceRow`'s plus-first order. Both controls are
@@ -443,7 +445,7 @@ gating, host-scoped results, the 30-second uncertain outcome, explicit retry and
   screen's dots via the shared mapping with no edit at the time.
 - [#1199 spec](../../specs/architecture/1199-host-row-names-one-server.md) — the per-server re-keying of
   both the label read and the two connection-dot reads.
-- [Channel List § Workspace row's own nest and its create-chat plus](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178) /
+- [Channel List § Workspace row's own nest and its create-chat plus](channel-list-workspace-row-nest.md) /
   [Edit workspace dialog](edit-workspace-dialog.md) (#1180) — the workspace row's plus/pen pair, one level
   down, that #1185 brought up to the host row; the template rather than a loose analogy.
 - #1185 spec — put the pen/plus swap above the two connection dots, guarded on a control actually being

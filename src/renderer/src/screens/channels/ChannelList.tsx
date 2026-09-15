@@ -1984,6 +1984,12 @@ type WorkspaceEditControl = {
  */
 function renderServerTrees(
   rows: readonly SidebarRow[],
+  // #1485 — THE OTHER TREE'S ROWS, which this tree draws workspace HEAD ROWS from and never rows. Data, so
+  // it sits beside `rows` and ahead of every callback, where `serverIds` already sits. REQUIRED rather than
+  // an optional trailing complement: both call sites supply one, and an optional parameter would be a
+  // further way to render a sidebar whose two trees disagree about which workspaces a machine has — the
+  // reason `onEditHost` and `onAddWorkspace` were placed ahead of the optional control objects too.
+  otherRows: readonly SidebarRow[],
   serverIds: readonly string[],
   statuses: SessionState['statuses'],
   renderRow: (row: SidebarRow) => JSX.Element,
@@ -2016,14 +2022,39 @@ function renderServerTrees(
   edit?: { readonly label: string; readonly onEdit: (cwd: string, label: string, serverId: string | undefined) => void }
 ): JSX.Element {
   const { servers, unattributed } = groupByServer(serverIds, rows)
-  const workspaceGroups = (serverRows: readonly SidebarRow[], serverId?: string): JSX.Element[] =>
+  // #1485 — THE COMPLEMENT, SPLIT BY THE SAME HOSTS BEFORE IT REACHES `groupByWorkspace`, and that split is
+  // the security property rather than tidiness. A workspace row's plus and pen route by the host the row is
+  // drawn under (`index.ts`: `servers.route(command.serverId)`), while the group key is a bare path that
+  // repeats across machines — so handing the whole other tree to the grouper would draw Pyrybox's directory
+  // under Macbook's host row and send that path to Macbook, a create in a directory the operator never
+  // chose on a machine never told it. `groupByServer` is called with the SAME client-held `serverIds`, so
+  // its docblock's join direction holds here unchanged: a row's stamp can select among existing keys and
+  // can never mint one.
+  //
+  // A `Map` keyed by id rather than index parity between two arrays. Both calls are built from one
+  // `serverIds` in one order, so `servers[i]` and the complement's `servers[i]` do agree today — which is
+  // exactly the kind of agreement that is true until someone filters one of them. The complement's OWN
+  // `unattributed` is discarded; see the `workspaceGroups(unattributed)` call at the bottom.
+  const otherByServer = new Map(
+    groupByServer(serverIds, otherRows).servers.map((s) => [s.serverId, s.rows])
+  )
+  const workspaceGroups = (
+    serverRows: readonly SidebarRow[],
+    serverId?: string,
+    // #1485 — this host's complement. Defaulted to empty for the unattributed run alone, which passes
+    // none; every host passes one.
+    otherServerRows: readonly SidebarRow[] = []
+  ): JSX.Element[] =>
     // `key={group.key}` pins the fold's IDENTITY as well as its position: a group whose rows change
     // (renamed, added, archived) or whose position moves keeps its instance and its fold, because React
     // reconciles by key and not by index. A group that leaves the list is unmounted and its fold is
     // discarded — correct for ephemeral disclosure state. The two key namespaces cannot collide: React
     // scopes keys per sibling list, so the group keys (cwd strings) and the row keys (c.id) never share
     // one, and neither shares one with the server fragments a level up.
-    groupByWorkspace(serverRows).map((group) => (
+    // #1485 — the group set is the UNION of this host's rows in both trees. A group with no rows here still
+    // draws its head row, its plus and its pen, and `CollapsibleWorkspaceGroup` renders `{expanded &&
+    // children}` over an empty mapped array, so it expands to nothing with no branch added there.
+    groupByWorkspace(serverRows, otherServerRows).map((group) => (
       <CollapsibleWorkspaceGroup
         key={group.key}
         label={group.label}
@@ -2073,9 +2104,13 @@ function renderServerTrees(
             onAddWorkspace={onAddWorkspace}
             onRepairHost={onRepairHost}
           />
-          {workspaceGroups(server.rows, server.serverId)}
+          {workspaceGroups(server.rows, server.serverId, otherByServer.get(server.serverId) ?? [])}
         </Fragment>
       ))}
+      {/* THE UNATTRIBUTED RUN TAKES NO COMPLEMENT (#1485). These rows name no machine, so a union here
+          would merge two UNKNOWN machines' paths — precisely the cross-host merge the per-host split above
+          exists to prevent, arrived at by omission instead of by a hostile stamp. #1068 stamps every daemon
+          event main-side, so the bucket is unreachable in production anyway. */}
       {workspaceGroups(unattributed)}
     </>
   )
@@ -2247,7 +2282,11 @@ function renderBody(
           two control objects are built HERE, at the only level that knows which tree it is drawing, so
           the two client-owned label constants stay module-local to this file and neither reaches a
           component that also handles a `cwd`. */}
-      {renderServerTrees(channels, serverIds, statuses, (c) => (
+      {/* #1485 — the Chats partition rides along as this tree's COMPLEMENT: a workspace holding only chats
+          draws its head row here too, with the Create-channel plus and the pen below. `renderBody` already
+          holds both partitions from one `partitionActive` call, so the union costs no new data and nothing
+          is threaded further up. */}
+      {renderServerTrees(channels, discussions, serverIds, statuses, (c) => (
         <Row
           key={c.id}
           row={c}
@@ -2274,13 +2313,19 @@ function renderBody(
           — renaming that vocabulary was explicitly out of scope.
 
           The two trees group independently (operator, 2026-08-21): the server and workspace levels repeat
-          here rather than being shared, so a machine — and a workspace — with rows in both trees appears
-          in both. Since #704 their DISCLOSURE is independent too, for free: this is a different sibling
+          here rather than being shared, so a machine — and a workspace — appears in both. Since #1485 that
+          holds for a workspace with rows in only ONE tree as well: the levels still repeat rather than
+          being shared, and what the trees now share is the SET of keys per host, not the groups themselves
+          — each tree builds its own instances, holding its own rows and its own fold.
+          Since #704 their DISCLOSURE is independent too, for free: this is a different sibling
           list from the Channels one above, so the same `cwd` in both yields two CollapsibleWorkspaceGroup
           instances holding two separate booleans. #1070 extends that property across servers by the same
           mechanism and with nothing to implement for it. */}
       <SectionHeader label="Chats" onPairNewHost={onPairNewHost} />
-      {renderServerTrees(discussions, serverIds, statuses, (d) => (
+      {/* #1485 — the complement, the other way round. This is the direction the Add-workspace dialog
+          needed: it starts a CHAT, so its new folder landed here and the Channels tree above never learned
+          of it. */}
+      {renderServerTrees(discussions, channels, serverIds, statuses, (d) => (
         <Row
           key={d.id}
           row={d}

@@ -488,9 +488,11 @@ describe('ChannelListView', () => {
       expect(markup).toContain('>Channels<')
       expect(markup).toContain('>Chats<')
       expect(markup).toContain('channel-list__divider')
-      // The empty section is empty — one host row, and no workspace row or conversation row under it.
+      // One host row per tree, and since #1485 one workspace row per tree too: the single row's workspace
+      // mirrors into the empty section as a head row with nothing beneath it. The ROW count is what still
+      // says the other section holds no CONVERSATION — the claim this assertion was always making.
       expect(countOf(markup, HOST_ROW_MARKER)).toBe(2)
-      expect(countOf(markup, WORKSPACE_ROW_MARKER)).toBe(1)
+      expect(countOf(markup, WORKSPACE_ROW_MARKER)).toBe(2)
       expect(countOf(markup, ROW_MARKER)).toBe(1)
     }
   })
@@ -1172,10 +1174,15 @@ describe('ChannelListView', () => {
       // path is unique only within one machine, so a tree that grouped before splitting by server would
       // render ONE workspace row here holding both machines' conversations.
       const markup = twoServers({ cwd: '/home/user/project' })
-      expect(countOf(markup, WORKSPACE_ROW_MARKER)).toBe(2)
+      // FOUR since #1485, not two, and the doubling is per TREE and not per host: both rows are chats, so
+      // each machine's group mirrors into the Channels tree. The claim is unchanged and is carried by the
+      // ROW count below — two conversations under two separate groups, never one group holding both
+      // machines'. A cross-host union would have shown up here as a group drawn under a machine that has
+      // no row for that path at all.
+      expect(countOf(markup, WORKSPACE_ROW_MARKER)).toBe(4)
       expect(countOf(markup, ROW_MARKER)).toBe(2)
-      // Both groups render the same label — that is the point; they are two groups anyway.
-      expect(workspaceLabelsIn(markup)).toEqual(['project', 'project'])
+      // Every group renders the same label — that is the point; they are separate groups anyway.
+      expect(workspaceLabelsIn(markup)).toEqual(['project', 'project', 'project', 'project'])
     })
 
     it('gives a machine with nothing in a section its row alone (AC2)', () => {
@@ -1188,7 +1195,11 @@ describe('ChannelListView', () => {
       )
       expect(countOf(channelsPart, HOST_ROW_MARKER)).toBe(2)
       expect(countOf(channelsPart, ROW_MARKER)).toBe(0)
-      expect(countOf(channelsPart, WORKSPACE_ROW_MARKER)).toBe(0)
+      // #1485 mirrored the two chats' workspaces up here as head rows. The AC2 claim this test makes is
+      // about CONVERSATION rows — "its row alone" is the host row and no chat under it — and that is the
+      // assertion above. Kept as an exact number rather than deleted: it is what would catch a mirror
+      // drawn for a machine that has no row for that path in either tree.
+      expect(countOf(channelsPart, WORKSPACE_ROW_MARKER)).toBe(2)
     })
 
     it('renders an unstamped or unknown-machine row rather than dropping it', () => {
@@ -1272,14 +1283,17 @@ describe('ChannelListView', () => {
         row({ id: 'd1', is_promoted: false, cwd: '/home/me/alpha' })
       ])
       expect(countOf(shared, WORKSPACE_ROW_MARKER)).toBe(2)
-      // Splitting the promoted pair across two workspaces adds a third group, in the Channels tree only.
+      // Splitting the promoted pair across two workspaces adds a group to EACH tree since #1485: `beta`
+      // holds only channels, so the Chats tree draws it as a head row with nothing beneath it rather than
+      // leaving it out — which is the whole of AC2. The label order is what shows where each landed: the
+      // Chats tree leads with `alpha`, the key its own row put there, and `beta` follows as the mirror.
       const split = render([
         row({ id: 'c1', is_promoted: true, cwd: '/home/me/alpha' }),
         row({ id: 'c2', is_promoted: true, cwd: '/home/me/beta' }),
         row({ id: 'd1', is_promoted: false, cwd: '/home/me/alpha' })
       ])
-      expect(countOf(split, WORKSPACE_ROW_MARKER)).toBe(3)
-      expect(workspaceLabelsIn(split)).toEqual(['alpha', 'beta', 'alpha'])
+      expect(countOf(split, WORKSPACE_ROW_MARKER)).toBe(4)
+      expect(workspaceLabelsIn(split)).toEqual(['alpha', 'beta', 'alpha', 'beta'])
     })
 
     it('sits below its tree host row and above that group conversation rows (AC1)', () => {
@@ -1348,7 +1362,10 @@ describe('ChannelListView', () => {
         row({ id: 'c1', is_promoted: true, cwd: '/home/me/sb', workspace_label: 'Second Brain' }),
         row({ id: 'c2', is_promoted: true, cwd: '/home/me/alpha', workspace_label: null })
       ])
-      expect(workspaceLabelsIn(markup)).toEqual(['Second Brain', 'alpha'])
+      // Both rows are channels, so since #1485 the Chats tree mirrors both groups — and the mirrors read
+      // the SAME two sources, which is the half of #1287 the mirror could silently have dropped: a mirror
+      // labelled from `workspaceLabelFor` alone would read `sb` here.
+      expect(workspaceLabelsIn(markup)).toEqual(['Second Brain', 'alpha', 'Second Brain', 'alpha'])
     })
 
     it('escapes a hostile workspace_label as TEXT and never lets it reach an attribute', () => {
@@ -1423,10 +1440,15 @@ describe('ChannelListView', () => {
       // attribute at all — the `aria-label={`Collapse ${label}`}` a disclosure control invites.
       const markup = render([row({ id: 'd1', name: 'x', cwd: '/home/me/<img src=x onerror=boom>' })])
       const tags = workspaceRowTagsIn(markup)
-      expect(tags).toHaveLength(1)
-      expect(tags[0]).not.toContain('img')
-      expect(tags[0]).not.toContain('onerror')
-      expect(tags[0]).not.toContain('boom')
+      // TWO since #1485 — the Channels tree mirrors this chat's workspace — and the loop is the point
+      // rather than the count: the mirror is an independently built element carrying the same untrusted
+      // `cwd`, so asserting `tags[0]` alone would leave the newer of the two sinks unchecked.
+      expect(tags).toHaveLength(2)
+      for (const tag of tags) {
+        expect(tag).not.toContain('img')
+        expect(tag).not.toContain('onerror')
+        expect(tag).not.toContain('boom')
+      }
       // …while the label itself still renders, escaped, as the button's text child.
       expect(markup).toContain('&lt;img src=x onerror=boom&gt;')
     })
@@ -1505,11 +1527,16 @@ describe('ChannelListView', () => {
         row({ id: 'd1', name: 'x', is_promoted: false, cwd: '/home/me/<img src=x onerror=boom>' })
       ])
       const tags = createTagsIn(markup)
-      expect(tags).toHaveLength(1)
-      expect(tags[0]).not.toContain('img')
-      expect(tags[0]).not.toContain('onerror')
-      expect(tags[0]).not.toContain('boom')
-      expect(tags[0]).not.toContain('title=')
+      // TWO since #1485: this tree's Create-chat plus and the Channels mirror's Create-channel plus, both
+      // built from the same untrusted `cwd`. Looped rather than indexed, so the mirror's control is held
+      // to the same four-sink rule as the original.
+      expect(tags).toHaveLength(2)
+      for (const tag of tags) {
+        expect(tag).not.toContain('img')
+        expect(tag).not.toContain('onerror')
+        expect(tag).not.toContain('boom')
+        expect(tag).not.toContain('title=')
+      }
     })
   })
 
@@ -1577,12 +1604,17 @@ describe('ChannelListView', () => {
         row({ id: 'c1', name: 'x', is_promoted: true, cwd: '/home/me/<img src=x onerror=boom>' })
       ])
       const tags = createTagsIn(markup)
-      expect(tags).toHaveLength(1)
-      expect(tags[0]).toContain(CREATE_CHANNEL_MARKER)
-      expect(tags[0]).not.toContain('img')
-      expect(tags[0]).not.toContain('onerror')
-      expect(tags[0]).not.toContain('boom')
-      expect(tags[0]).not.toContain('title=')
+      // TWO since #1485, and they are the two DIFFERENT pluses: the Channels tree draws Create channel on
+      // its own group, the Chats tree draws Create chat on the mirror. Both are asserted clean; which is
+      // which is pinned separately below, so this reads only the hygiene claim.
+      expect(tags).toHaveLength(2)
+      expect(tags.filter((tag) => tag.includes(CREATE_CHANNEL_MARKER))).toHaveLength(1)
+      for (const tag of tags) {
+        expect(tag).not.toContain('img')
+        expect(tag).not.toContain('onerror')
+        expect(tag).not.toContain('boom')
+        expect(tag).not.toContain('title=')
+      }
       // …while the label itself still renders, escaped, as the disclosure button's text child.
       expect(markup).toContain('&lt;img src=x onerror=boom&gt;')
     })
@@ -1671,11 +1703,15 @@ describe('ChannelListView', () => {
         })
       ])
       const tags = editTagsIn(markup)
-      expect(tags).toHaveLength(1)
-      expect(tags[0]).not.toContain('img')
-      expect(tags[0]).not.toContain('onerror')
-      expect(tags[0]).not.toContain('script')
-      expect(tags[0]).not.toContain('title=')
+      // TWO since #1485 — the pen is not a per-tree difference, so the mirror draws one too, built from
+      // the same hostile `cwd` and the same hostile `workspace_label`. Both are held to the rule.
+      expect(tags).toHaveLength(2)
+      for (const tag of tags) {
+        expect(tag).not.toContain('img')
+        expect(tag).not.toContain('onerror')
+        expect(tag).not.toContain('script')
+        expect(tag).not.toContain('title=')
+      }
       // …while the label itself still renders, escaped, as the disclosure button's text child.
       expect(markup).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
     })
@@ -1695,6 +1731,143 @@ describe('ChannelListView', () => {
         expect(tag).not.toContain('aria-label')
         expect(tag).not.toContain('title=')
       }
+    })
+  })
+
+  describe('workspaces repeat under both trees (#1485)', () => {
+    const HOSTILE = '/home/me/<img src=x onerror=boom>'
+
+    it('draws a chat-only workspace in the Channels tree, with its plus and its pen (AC1)', () => {
+      // The Add-workspace dialog's shape: its create is a CHAT, so until this ticket the folder existed
+      // only under Chats and the Channels tree never learned of it.
+      const markup = render([row({ id: 'd1', name: 'x', is_promoted: false, cwd: '/home/me/alpha' })])
+      expect(workspaceLabelsIn(markup)).toEqual(['alpha', 'alpha'])
+      const channelsPart = markup.slice(
+        markup.indexOf('>Channels<'),
+        markup.indexOf('channel-list__divider')
+      )
+      expect(countOf(channelsPart, WORKSPACE_ROW_MARKER)).toBe(1)
+      expect(countOf(channelsPart, CREATE_CHANNEL_MARKER)).toBe(1)
+      expect(editTagsIn(channelsPart)).toHaveLength(1)
+      // …and the mirror holds no conversation row: the chat stays in the tree that owns it.
+      expect(countOf(channelsPart, ROW_MARKER)).toBe(0)
+    })
+
+    it('draws a channel-only workspace in the Chats tree, with its plus and its pen (AC2)', () => {
+      const markup = render([row({ id: 'c1', name: 'x', is_promoted: true, cwd: '/home/me/alpha' })])
+      const chatsPart = markup.slice(markup.indexOf('>Chats<'))
+      expect(countOf(chatsPart, WORKSPACE_ROW_MARKER)).toBe(1)
+      expect(countOf(chatsPart, CREATE_CHAT_MARKER)).toBe(1)
+      expect(editTagsIn(chatsPart)).toHaveLength(1)
+      expect(countOf(chatsPart, ROW_MARKER)).toBe(0)
+    })
+
+    it('renders a mirrored group as a head row and nothing beneath it (AC3)', () => {
+      // AC3's first half. The second half — that toggling its chevron draws nothing and throws nothing —
+      // needs a click, so it belongs to the Playwright tier; what this tier can own is that the group is
+      // EXPANDED and still empty, which is the state a toggle would be flipping out of.
+      const markup = render([
+        row({ id: 'd1', name: 'x', is_promoted: false, cwd: '/home/me/alpha' }),
+        row({ id: 'd2', name: 'y', is_promoted: false, cwd: '/home/me/alpha' })
+      ])
+      const channelsPart = markup.slice(
+        markup.indexOf('>Channels<'),
+        markup.indexOf('channel-list__divider')
+      )
+      expect(countOf(channelsPart, WORKSPACE_ROW_MARKER)).toBe(1)
+      expect(channelsPart).toContain(EXPANDED_MARKER)
+      expect(channelsPart).not.toContain(COLLAPSED_MARKER)
+      expect(countOf(channelsPart, ROW_MARKER)).toBe(0)
+      // Both rows stayed in the tree that holds them — the mirror took keys and labels, never rows.
+      expect(countOf(markup.slice(markup.indexOf('>Chats<')), ROW_MARKER)).toBe(2)
+    })
+
+    it('never mirrors the unknown-workspace bucket into the other tree (AC4)', () => {
+      // An unusable `cwd` on one side must not conjure a group on the other: the bucket is a collapse of
+      // rows this client cannot place, and its key names no directory. The tree whose OWN row is in the
+      // bucket still draws it — that is the half this must not break while removing the other.
+      const markup = render([row({ id: 'd1', name: 'x', is_promoted: false, cwd: '' })])
+      expect(countOf(markup, WORKSPACE_ROW_MARKER)).toBe(1)
+      expect(workspaceLabelsIn(markup)).toEqual([UNKNOWN_WORKSPACE_LABEL])
+      expect(
+        countOf(
+          markup.slice(markup.indexOf('>Channels<'), markup.indexOf('channel-list__divider')),
+          WORKSPACE_ROW_MARKER
+        )
+      ).toBe(0)
+    })
+
+    it('mirrors a usable workspace while leaving the bucket behind, in one render (AC4)', () => {
+      // The mixed case the skip is easiest to get wrong in: one unusable row and one usable one on the
+      // same side. Only the usable key crosses.
+      const markup = render([
+        row({ id: 'd1', name: 'x', is_promoted: false, cwd: '' }),
+        row({ id: 'd2', name: 'y', is_promoted: false, cwd: '/home/me/alpha' })
+      ])
+      // Channels renders first and holds no row of its own, so it draws the single mirror and nothing
+      // else; Chats then draws its bucket (first appearance) followed by `alpha`. Three rows, not four.
+      expect(workspaceLabelsIn(markup)).toEqual(['alpha', UNKNOWN_WORKSPACE_LABEL, 'alpha'])
+    })
+
+    it('takes the union PER HOST — one machine’s path never draws under another', () => {
+      // The security property the per-host split exists for, at the render seam. A workspace row's plus
+      // and pen route by the host the row is drawn under, so a cross-host union would offer a create in
+      // Pyrybox's directory on Macbook. Asserted on the LABEL sequence, which says where each landed.
+      const markup = render(
+        [
+          row({ id: 'p1', name: 'x', is_promoted: true, serverId: DEFAULT_SERVER, cwd: '/home/me/alpha' }),
+          row({ id: 'm1', name: 'y', is_promoted: false, serverId: SECOND_SERVER, cwd: '/home/me/beta' })
+        ],
+        null,
+        [DEFAULT_SERVER, SECOND_SERVER]
+      )
+      // Channels: Pyrybox draws its own `alpha`, Macbook draws only the mirror of its OWN `beta`.
+      // Chats: the same two, each still under the machine that has a row for it. Four rows, never six —
+      // six is what a union taken across hosts would produce.
+      expect(workspaceLabelsIn(markup)).toEqual(['alpha', 'beta', 'alpha', 'beta'])
+      expect(countOf(markup, WORKSPACE_ROW_MARKER)).toBe(4)
+    })
+
+    it('withholds the mirror’s plus and pen when the host it is drawn under is disconnected', () => {
+      // The mirror inherits the gate of the host it is DRAWN under, not the one its origin row came from,
+      // because the gate is evaluated against the host being rendered. Free by construction, and exactly
+      // the kind of free that regresses silently — so it is pinned. Both machines' groups still render.
+      const markup = render(
+        [
+          row({ id: 'p1', name: 'x', is_promoted: true, serverId: DEFAULT_SERVER, cwd: '/home/me/alpha' }),
+          row({ id: 'm1', name: 'y', is_promoted: false, serverId: SECOND_SERVER, cwd: '/home/me/beta' })
+        ],
+        null,
+        [DEFAULT_SERVER, SECOND_SERVER],
+        new Map([[DEFAULT_SERVER, { type: 'connected', ack: {} } as ConnectionStatus]])
+      )
+      expect(countOf(markup, WORKSPACE_ROW_MARKER)).toBe(4)
+      // Two controls of each kind, not four: only the connected machine's two groups carry them.
+      expect(createTagsIn(markup)).toHaveLength(2)
+      expect(editTagsIn(markup)).toHaveLength(2)
+    })
+
+    it('keeps an untrusted cwd out of the MIRROR’s attributes too', () => {
+      // The mirror is a second element built from the same daemon text by the same code path. The
+      // four-sink rule applies to it unchanged, and asserting it here is what keeps a future "the mirror
+      // could carry the origin's key in a data- attribute to correlate the two" from shipping.
+      const markup = render([row({ id: 'd1', name: 'x', is_promoted: false, cwd: HOSTILE })])
+      const channelsPart = markup.slice(
+        markup.indexOf('>Channels<'),
+        markup.indexOf('channel-list__divider')
+      )
+      for (const tag of [
+        ...workspaceRowTagsIn(channelsPart),
+        ...createTagsIn(channelsPart),
+        ...editTagsIn(channelsPart)
+      ]) {
+        expect(tag).not.toContain('img')
+        expect(tag).not.toContain('onerror')
+        expect(tag).not.toContain('boom')
+        expect(tag).not.toContain('data-')
+      }
+      // …while the mirrored label still renders, escaped, as the head row's text child.
+      expect(channelsPart).toContain('&lt;img src=x onerror=boom&gt;')
     })
   })
 

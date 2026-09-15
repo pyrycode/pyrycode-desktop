@@ -40,7 +40,11 @@ test('real daemon creates missing workspace parents and reuses the directory for
     await dialog.getByRole('button', { name: 'OK', exact: true }).click()
     await expect(page.locator('.channel-list__row-open')).toHaveCount(attempt + 1, { timeout: 15_000 })
     await expect(dialog).toHaveCount(0)
-    await expect(page.locator('.channel-list__workspace-label').filter({ hasText: 'nested-project' })).toHaveCount(1)
+    // TWO since #1485: the dialog starts a CHAT in the new folder, so the Chats tree holds the row and the
+    // Channels tree draws the same workspace as an empty mirror. Still an exact count rather than a
+    // `toBeVisible` — one group per tree is the claim, and attempt 2 reusing the directory must not add a
+    // third. The `toHaveCount(0)` pre-read above stays 0: no row anywhere puts that key in either tree yet.
+    await expect(page.locator('.channel-list__workspace-label').filter({ hasText: 'nested-project' })).toHaveCount(2)
     const active = page.locator('.channel-list__row-open[aria-current="true"]')
     await expect(active).toHaveText('Untitled')
     await expect.poll(() => active.evaluate((node, previous) => node === previous, previousChat)).toBe(false)

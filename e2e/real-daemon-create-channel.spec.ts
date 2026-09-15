@@ -26,15 +26,20 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 // ignores a payload `cwd` on `promote_conversation` deliberately (pyrycode/pyrycode#949), and
 // `real-daemon-promote.spec.ts`'s header records it.
 //
-// #1283's `seedCwdSubdir` moves the seed one level DOWN, so the two outcomes render differently:
+// #1283's `seedCwdSubdir` moves the seed one level DOWN, so the two outcomes render differently. Since
+// #1485 every workspace on a host is drawn under BOTH trees, and a promoted-only list gives the Chats tree
+// no rows — so it draws each group as an empty MIRROR, and the ordered label list is the Channels run
+// followed by the Chats run:
 //
-//   honoured  → `.channel-list__workspace-label` reads ['<WORKSPACE_LABEL>'] — one group, both rows in it
-//   defaulted → it reads ['<WORKSPACE_LABEL>', 'work'] — the created row minted a second group
+//   honoured  → `.channel-list__workspace-label` reads ['<WORKSPACE_LABEL>', '<WORKSPACE_LABEL>'] — one
+//               group holding both rows, mirrored once
+//   defaulted → it reads ['<WORKSPACE_LABEL>', 'work', '<WORKSPACE_LABEL>', 'work'] — the created row
+//               minted a second group, mirrored in turn
 //
-// The assertion is `toHaveText([WORKSPACE_LABEL])` on the whole ordered label list, NOT a count, and the
-// shape is deliberately self-diagnosing: a defaulted create fails with `work` in the diff (the daemon
-// ignored the payload), while a daemon that canonicalised the path would fail with the SAME label twice
-// (one workspace split into two groups). A bare `toHaveCount(1)` reports both as the same number.
+// The assertion is `toHaveText([…])` on the whole ordered label list, NOT a count, and the shape is
+// deliberately self-diagnosing: a defaulted create fails with `work` in the diff (the daemon ignored the
+// payload), while a daemon that canonicalised the path would fail with the SAME label FOUR times (one
+// workspace split into two groups, each mirrored). A bare count reports every one of them as a number.
 //
 // This rests on a read of the daemon rather than a guess: `CreateConversation` resolves `cwd := defaultCwd`
 // and overwrites it with `*p.Cwd` when the payload sets one, recording that string byte-for-byte — no
@@ -44,8 +49,9 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 // trust-mark), and the seed sits inside the daemon's own workdir, so it is confined by construction.
 //
 // A SINGLE PROMOTED SEED, not the second seeded workspace the ticket sketches: one seed already separates
-// the two outcomes, and a second would put a group in the CHATS tree as well — adding a "Create chat" plus
-// and another `.channel-list__workspace-label` to reason around for no extra discrimination.
+// the two outcomes, and a second would add a second KEY — two groups per tree, four labels — to reason
+// around for no extra discrimination. #1485 retired the older form of this reason: the single seed already
+// puts a group and a "Create chat" plus in the Chats tree, as its mirror.
 //
 // AND NOT A STRUCTURAL ATTRIBUTION OF THE ROW TO ITS GROUP: `renderServerTrees` renders a FLAT run of
 // siblings (host, workspace head, rows, …) — 28 e2e specs depend on that ancestry — so there is no
@@ -146,12 +152,14 @@ test('real daemon creates a promoted, named channel in the requested workspace o
   // thread), so this gate stands in for the fake twin's land-in-thread. ---
   await expect(renameControl).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
 
-  // --- Baseline (AC2's "before"). ONE group, labelled after the seed's subdirectory: this is what proves
-  // the fixture put the seed where this spec thinks it did, so the identical read after the create is a
-  // claim about the DAEMON rather than about the seed. One row; the plus is unique (a promoted-only list
-  // gives the Chats tree no group and therefore no "Create chat" plus of its own); and no Save control,
-  // the promoted seed's half of the affordance split. ---
-  await expect(workspaceLabels).toHaveText([WORKSPACE_LABEL])
+  // --- Baseline (AC2's "before"). ONE group per tree, both labelled after the seed's subdirectory: this
+  // is what proves the fixture put the seed where this spec thinks it did, so the identical read after the
+  // create is a claim about the DAEMON rather than about the seed. The second entry is #1485's empty mirror
+  // in the Chats tree, resolving its label off this same row. One row; the plus is unique because each tree
+  // names its OWN control — the mirror wears "Create chat", never a second "Create channel" (the older
+  // reason given here, that a promoted-only list leaves the Chats tree without a group at all, is the very
+  // claim #1485 retired); and no Save control, the promoted seed's half of the affordance split. ---
+  await expect(workspaceLabels).toHaveText([WORKSPACE_LABEL, WORKSPACE_LABEL])
   expect(WORKSPACE_LABEL).not.toBe(DAEMON_DEFAULT_LABEL)
   await expect(rows).toHaveCount(1)
   await expect(createChannel).toHaveCount(1)
@@ -194,11 +202,12 @@ test('real daemon creates a promoted, named channel in the requested workspace o
   await expect(renameControl).toHaveCount(2)
   await expect(saveControl).toHaveCount(0)
 
-  // --- ⭐ AC3, the `cwd` arm, and the only assertion that can see it. Still exactly one workspace group,
-  // still labelled after the requested one — so the create carried the clicked group's key rather than
-  // null. A daemon that ignored it lands the row under its own `-pyry-workdir` and this reads
-  // [WORKSPACE_LABEL, 'work']. See the header for why the whole label list, and not a count. ---
-  await expect(workspaceLabels).toHaveText([WORKSPACE_LABEL])
+  // --- ⭐ AC3, the `cwd` arm, and the only assertion that can see it. Still exactly one workspace KEY —
+  // one group per tree, both labelled after the requested one — so the create carried the clicked group's
+  // key rather than null. A daemon that ignored it lands the row under its own `-pyry-workdir` and this
+  // reads [WORKSPACE_LABEL, 'work', WORKSPACE_LABEL, 'work']. See the header for why the whole label list,
+  // and not a count. ---
+  await expect(workspaceLabels).toHaveText([WORKSPACE_LABEL, WORKSPACE_LABEL])
 
   // --- The dialog closed on Create (AC1). Ordered last: it is about to be gone anyway, so it proves
   // nothing on its own — it is here to catch a dialog that stayed open behind the created row. ---

@@ -68,8 +68,11 @@ test('an unsolicited workspace_updated re-lists, so a rename from elsewhere land
 
   // --- 1. The OLD label at launch, carried through the real decoder, the real IPC arm and the real store
   // by the `list_conversations` reply. Load-bearing: it is what makes step 3 a proof that the label
-  // CHANGED rather than that it merely reads as a string. The array form pins the count too. ---
-  await expect(workspaceLabels).toHaveText([OLD_LABEL])
+  // CHANGED rather than that it merely reads as a string. The array form pins the count too — TWO since
+  // #1485, off ONE row: the Channels group the promoted seed sits in, and the Chats tree's empty mirror of
+  // it. Both resolve their label from the same seed, so the pair moves together and the OLD/NEW
+  // discrimination this spec rests on is untouched. ---
+  await expect(workspaceLabels).toHaveText([OLD_LABEL, OLD_LABEL])
 
   // --- 2. The daemon renames the workspace and pushes the frame UNSOLICITED, exactly as it does when the
   // rename came from another client. One call moves the fake's held state and hands back the frame, so
@@ -77,8 +80,10 @@ test('an unsolicited workspace_updated re-lists, so a rename from elsewhere land
   daemon.pushFrame(fake.renameWorkspace(WORKSPACE_CWD, NEW_LABEL))
 
   // --- 3. AC4. The row now reads the NEW label. Nothing relaunched, nothing reconnected, and no row was
-  // patched locally — the frame only triggered the re-request whose reply landed this text. ---
-  await expect(workspaceLabels).toHaveText([NEW_LABEL], { timeout: RELIST_TIMEOUT_MS })
+  // patched locally — the frame only triggered the re-request whose reply landed this text. Both entries
+  // move, which is its own small claim: the mirror resolves its label from the seed's row rather than
+  // caching one, so a re-list reaches it exactly as it reaches the group the row lives in. ---
+  await expect(workspaceLabels).toHaveText([NEW_LABEL, NEW_LABEL], { timeout: RELIST_TIMEOUT_MS })
 
   // The negative half stated explicitly. Without it, "the row shows a string" would pass against a build
   // that dropped the field, since the folder name is a string too. Scoped to the label TEXT rather than to

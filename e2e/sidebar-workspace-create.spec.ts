@@ -97,8 +97,16 @@ test('the workspace row’s plus hides at rest, shows on hover and on focus, and
   const rows = page.locator('.channel-list__row')
   const head = page.locator('.channel-list__workspace-head')
   const workspaceRow = page.locator('.channel-list__workspace')
-  const create = page.locator('.channel-list__workspace-create')
-  const glyph = page.locator('.channel-list__workspace-create-icon')
+  // The CHATS tree's disclosure button — the row that owns the `Create chat` plus. Since #1485 the bare
+  // locator above matches both trees' groups and is kept for the COUNTS; every gesture and state read
+  // below goes through this one, so it cannot drift onto the Channels mirror.
+  const chatsWorkspaceRow = workspaceRow.nth(1)
+  // SCOPED TO THIS TREE'S PLUS since #1485. The class is shared by both trees' create controls and the
+  // Channels tree now draws a mirror of this workspace, so the bare class is two-match. The accessible
+  // NAME is what tells them apart — which is also the discrimination AC3 above reads — so the geometry
+  // and opacity below are measured on the `Create chat` plus this spec is about, never on the mirror's.
+  const create = page.getByRole('button', { name: CREATE_CHAT_NAME, exact: true })
+  const glyph = create.locator('.channel-list__workspace-create-icon')
   const actions = page.locator('.channel-list__actions')
 
   // --- 1. AC3: the control is in the ACCESSIBILITY TREE at rest — before any hover, and read by role and
@@ -106,8 +114,11 @@ test('the workspace row’s plus hides at rest, shows on hover and on focus, and
   // tree's single group has it and the Channels tree's host row draws no group at all. ---
   await expect(page.getByRole('button', { name: CREATE_CHAT_NAME })).toHaveCount(1)
   await expect(rows).toHaveCount(1)
-  await expect(workspaceRow).toHaveCount(1)
-  await expect(head).toHaveCount(1)
+  // TWO workspace rows since #1485 — the Channels tree mirrors this chat's group as a head row with
+  // nothing beneath it. Exactly ONE `Create chat` plus even so: the mirror is a Channels-tree group, so
+  // its plus is `Create channel`, which is what keeps this spec's control single-match.
+  await expect(workspaceRow).toHaveCount(2)
+  await expect(head).toHaveCount(2)
 
   // --- 2. AC2: nothing shows at rest. The pointer is parked on the actions cluster, not on a row — the
   // fixture's launch click left it over the seeded row, and reading an "at rest" opacity with the pointer
@@ -118,7 +129,9 @@ test('the workspace row’s plus hides at rest, shows on hover and on focus, and
   // --- 3. AC2: hovering the ROW reveals it, and the reveal is a SCOPE claim as much as a visibility one —
   // hung off the control's own `:hover` it would fire only once the pointer had already arrived at a
   // 20px box it could not see. Hovering the row's LABEL, not the control, is what says that. ---
-  await page.locator('.channel-list__workspace-label').hover()
+  // `.nth(1)` is the CHATS tree's label — the row that owns the plus measured here. The Channels
+  // mirror renders first since #1485, and hovering it would reveal that group's control, not this one.
+  await page.locator('.channel-list__workspace-label').nth(1).hover()
   expect(await computed(create, 'opacity')).toBe(SHOWN_OPACITY)
 
   // --- 4. AC2: the glyph's drawn rectangle. 16 × 16, its right edge 2px in from the row's right edge,
@@ -126,7 +139,7 @@ test('the workspace row’s plus hides at rest, shows on hover and on focus, and
   // display-none control would report no box at all and the opacity mechanism is what keeps it laid out.
   // The ROW is the reference box (`.channel-list__workspace-head`, which spans the nest to the content
   // edge), never the window: the inset is the drawing's, measured against the thing it is drawn in. ---
-  const headBox = await boxOf(head, 'workspace head row')
+  const headBox = await boxOf(head.nth(1), 'workspace head row')
   const glyphBox = await boxOf(glyph, 'create glyph')
   expectAbout(glyphBox.width, GLYPH_PX)
   expectAbout(glyphBox.height, GLYPH_PX)
@@ -145,7 +158,7 @@ test('the workspace row’s plus hides at rest, shows on hover and on focus, and
   // real Tab press from the disclosure button rather than by a bare `.focus()`: `:focus-visible` is a
   // keyboard-MODALITY heuristic, and a programmatic focus after a pointer interaction does not satisfy
   // it — such a test would read Chromium's mood rather than the rule. ---
-  await workspaceRow.focus()
+  await chatsWorkspaceRow.focus()
   await actions.hover()
   await page.keyboard.press('Tab')
   await expect(create).toBeFocused()
@@ -153,7 +166,7 @@ test('the workspace row’s plus hides at rest, shows on hover and on focus, and
 
   // --- 7. AC4: clicking the plus creates a chat IN THIS WORKSPACE. The fold's state is captured before
   // the click so the "did not change" claim below compares against a value read from the same run. ---
-  expect(await workspaceRow.getAttribute('aria-expanded')).toBe('true')
+  expect(await chatsWorkspaceRow.getAttribute('aria-expanded')).toBe('true')
   await create.click()
 
   // THE POSITIVE, AUTO-WAITING READ COMES FIRST. Everything after it is an unchanged-state assertion,
@@ -169,10 +182,13 @@ test('the workspace row’s plus hides at rest, shows on hover and on focus, and
   // carried this group's key rather than `null` — which the fake would have resolved to its own
   // `/fake/workspace` default, minting a SECOND group. Row count and thread-opening are both blind to
   // that difference; this count is not.
-  await expect(workspaceRow).toHaveCount(1)
-  await expect(head).toHaveCount(1)
+  // TWO, not four: the created row joined the SEED's group rather than minting a second one. The claim
+  // is unchanged by #1485's mirror — a null cwd resolved to `/fake/workspace` would have produced FOUR
+  // here (two groups, each mirrored), which is still the difference row count and navigation are blind to.
+  await expect(workspaceRow).toHaveCount(2)
+  await expect(head).toHaveCount(2)
 
   // AC4's last clause: the plus is a SIBLING of the disclosure button, never a child, so the click never
   // reached the fold's handler.
-  expect(await workspaceRow.getAttribute('aria-expanded')).toBe('true')
+  expect(await chatsWorkspaceRow.getAttribute('aria-expanded')).toBe('true')
 })

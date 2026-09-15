@@ -5,14 +5,17 @@ import type { Page } from '@playwright/test'
  * (#1426). The replacement for the eight FAB presses that the workspace row's `Create chat` plus could
  * not take over.
  *
- * WHY THIS CONTROL AND NOT THE PLUS. `renderServerTrees` builds each workspace group's create control
- * from `groupByWorkspace` applied to ONE partition, so a tree draws a group — and therefore a plus —
- * only for a workspace that already has a row in that tree. Eight specs seed a single PROMOTED row, so
- * their Chats tree is empty: it has no group, hence no `Create chat` plus to press. The Channels tree's
- * plus is not a substitute (`CREATE_CHANNEL_CONTROL_LABEL` opens a naming dialog and mints a PROMOTED
- * row). The host row's plus is the only shipped control that mints into an empty tree — every paired
- * machine draws a host row in BOTH trees whether or not it has conversations there, which is the
- * precondition `sidebar-add-workspace.spec.ts` opens by asserting.
+ * WHY THIS CONTROL AND NOT THE PLUS. The original reason was that a tree drew a group — and therefore a
+ * plus — only for a workspace that already had a row in THAT tree, so the eight specs seeding a single
+ * PROMOTED row had an empty Chats tree with no `Create chat` plus to press. #1485 closed that gap: each
+ * host's workspace set is now the union of both trees' rows, so those specs DO have a Chats-tree plus.
+ * The helper stands for a different reason, and this paragraph now states that one. A workspace with no
+ * row in either tree still has no group anywhere, and a folder gets a group for the first time only when
+ * its first conversation is created — so the host row's plus remains the only shipped control that mints
+ * into a workspace that does not exist yet, which is what `mintChatInWorkspace(page, cwd)` is for when
+ * its `cwd` names a new folder. The Channels tree's plus is not a substitute either way
+ * (`CREATE_CHANNEL_CONTROL_LABEL` opens a naming dialog and mints a PROMOTED row). Every caller keeps
+ * working unchanged: the host plus mints the same row it always did.
  *
  * WHY THE MINTED ROW IS THE FAB'S ROW, FIELD FOR FIELD. `requestNewWorkspaceChat` sends
  * `{ is_promoted: false, name: null, cwd }` — the same three fields the FAB's `requestNewConversation`

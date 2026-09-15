@@ -635,7 +635,21 @@ and reconnect send zero history requests; only fresh qualifying input requests a
 Overlap fixtures must place the live overlap at the newest end of the newest-first
 page. Putting an unmatched older entry first exercises the intentional
 stop-at-first-unmatched rule in `withoutLiveEntries`, producing a duplicate instead
-of testing overlap suppression.
+of testing overlap suppression. A `messageReceived` entry is the one exception to
+that stop rule (#1437): the daemon never pushes a live frame for the operator's own
+message, so that entry no longer ends the walk — it is kept and stepped over, and an
+unmatched entry beneath it still stops the walk as before. A fixture placing the
+operator's own message at the newest end therefore does not, by itself, exercise
+stop-at-first-unmatched; put the unmatched entry there instead.
+
+A unit test's comment can cite an e2e spec as corroboration for a stop-rule assertion
+that the spec never actually reaches. `e2e/real-daemon-history-on-open.spec.ts`
+archives before re-opening, so its page always joins against an empty live key set
+and `withoutLiveEntries` returns on the `liveKeys.size === 0` early exit before the
+walk runs at all — it was never evidence about the walk's stop rule, and the #1437
+fix (above) inverted the unit assertion that comment was defending. Check that a
+cited spec's fixture actually drives the code path the comment claims, rather than
+trusting the citation.
 
 The exact `DurableThreadItem`/`ThreadItem` equality assertion lives in
 [`store/chatHistoryContract.test.ts`](../../../src/renderer/src/store/chatHistoryContract.test.ts).

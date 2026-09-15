@@ -237,6 +237,18 @@ Pending for the documentation stage — not written here:
 - `docs/knowledge/features/channel-list-control-name-pill.md` records the chat pen's name beside the two
   already there, and the per-tree two-constant shape #1430 relies on.
 
+## Revisions
+
+**2026-09-15, during implementation — the drift guard counts tokens, not pills.** The plan said the
+`keeps each control's pill text and accessible name in step` guard would count *two pills* on a chat row.
+It cannot: `.channel-list__control-name` is worn by six other sidebar controls (the host row's pen and
+plus, the workspace row's plus and pen, the two section headers' plus), so a document-wide count of that
+class answers about the whole sidebar — it came back 7 on a one-row render. `rowChunksIn` does not fix it
+either, its last chunk running to the end of the markup rather than to the end of the row. The guard now
+counts each control's **own** token (`class="channel-list__chat-edit"` and `class="channel-list__save"`,
+both unique), which is the same claim — a chat row carries both controls — made with a locator that can
+only be about that row. The name↔pill parity half is unchanged and covers **Edit chat** as planned.
+
 ## Open questions
 
 - **The chevron's fate on a chat row.** The drawing shows none and the Edit chat modal carries no Save as

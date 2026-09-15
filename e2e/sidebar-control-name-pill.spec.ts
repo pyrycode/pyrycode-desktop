@@ -91,6 +91,11 @@ const EPSILON_PX = 1.5
 // overflow: a taller window must still scroll here.
 const PROMOTED_ROW_COUNT = 40
 
+// #1441 — the trailing controls one CHAT row carries: the Save-as-channel chevron and, since that ticket,
+// the Edit chat pen beside it. Each wears its own `.channel-list__control-name`, so this is what the tall
+// list's pill total counts on top of one-per-promoted-row.
+const CHAT_ROW_CONTROLS = 2
+
 // One workspace for every row — the fixture's own, so the pushed rows land in the SAME group as the
 // seeded one and the tree is one host row over one workspace row rather than a forest.
 const WORKSPACE_CWD = SEEDED_ROW.cwd
@@ -231,16 +236,25 @@ test('a row control names itself in a pill that follows the pointer, clear of th
   const save = page.locator('.channel-list__save')
   const sidebar = page.locator('.paired-shell__sidebar')
 
-  // The launch seed: one row, one control, one pill — already enough to prove the pill is MOUNTED and
-  // hidden before anything is hovered.
+  // The launch seed: one row, TWO controls, two pills — already enough to prove the pills are MOUNTED and
+  // hidden before anything is hovered. Two since #1441: `SEEDED_ROW` is `is_promoted: false`, so it is a
+  // CHAT row, and a chat row now carries the pen beside the chevron.
   await expect(rows).toHaveCount(1)
-  await expect(pills).toHaveCount(1)
+  await expect(pills).toHaveCount(CHAT_ROW_CONTROLS)
 
   daemon.pushFrame(tallListFrame())
   const rowCount = PROMOTED_ROW_COUNT + 1
+  // #1441 — the list holds forty promoted rows carrying one control each and ONE chat row carrying two, so
+  // the per-row pill total parts company with the row count. One named constant rather than four edited
+  // literals, so the arithmetic is stated once and a future third control on either row edits one line.
+  const pillCount = PROMOTED_ROW_COUNT + CHAT_ROW_CONTROLS
   await expect(rows).toHaveCount(rowCount, { timeout: TIMEOUT_MS })
   await expect(renames).toHaveCount(PROMOTED_ROW_COUNT)
   await expect(save).toHaveCount(1)
+  // The chat pen's own token, asserted here because every count below depends on it: `.channel-list__rename`
+  // staying at forty against forty-one rows is the whole reason #1441 gave the Chats tree a second token,
+  // and the line above is what would redden if that token were ever shared.
+  await expect(page.locator('.channel-list__chat-edit')).toHaveCount(1)
 
   // The list really does overrun its own viewport, so "the first row" and "the last row" below are at
   // different scroll positions rather than both on screen at once. Asserted rather than assumed: a window
@@ -251,8 +265,8 @@ test('a row control names itself in a pill that follows the pointer, clear of th
   // --- Resting: every pill is MOUNTED and every pill is hidden. A count AND a hidden-ness, not one or
   // the other: the count proves the elements exist to be shown (an absent pill satisfies a hidden-ness
   // vacuously), and `display: none` is what the two triggers below have to change. ---
-  await expect(pills).toHaveCount(rowCount)
-  await allHidden(pills, rowCount)
+  await expect(pills).toHaveCount(pillCount)
+  await allHidden(pills, pillCount)
 
   // --- AC1, the hover, on the FIRST row with the list scrolled to the top. The positive read comes
   // first; the set read beside it is what makes this "that control's pill" rather than "a pill somewhere".
@@ -332,7 +346,7 @@ test('a row control names itself in a pill that follows the pointer, clear of th
   // `.channel-list__row:hover` — the scope the GLYPH's own reveal uses, and the natural thing to copy —
   // would light this row's pill and fail here. ---
   await rows.first().locator('.channel-list__title').hover()
-  await allHidden(pills, rowCount)
+  await allHidden(pills, pillCount)
 
   // --- ⭐ AC2, THE BOTTOM-EDGE MIRROR, on the LAST row with the list scrolled to the end — the only place
   // in any of the four drives where a control sits near enough to the window's bottom edge for the offset
@@ -348,7 +362,11 @@ test('a row control names itself in a pill that follows the pointer, clear of th
   expect(await tree.evaluate((el) => el.scrollTop)).toBeGreaterThan(0)
   const saveBox = await boxOf(save, 'last row save')
   const lastPoint = await parkOn(save, 'last row save', 4, saveBox.height - 1)
-  const lastPill = pills.last()
+  // ⭐ SCOPED TO THE CONTROL BEING PARKED ON, not to `pills.last()`, since #1441. That row carries two
+  // controls now and the pen is emitted after the chevron, so the last pill in document order is the PEN's
+  // — `pills.last()` would silently start asserting the wrong control's name. Reading the pill through its
+  // own control says which control it belongs to, which is what this block meant by "last" all along.
+  const lastPill = save.locator('.channel-list__control-name')
   await expect(lastPill).toBeVisible({ timeout: TIMEOUT_MS })
   await expect(lastPill).toHaveText(SAVE_NAME)
 
@@ -425,7 +443,7 @@ test('a row control names itself in a pill that follows the pointer, clear of th
   // hidden-ness measures the pointer leaving rather than a pill that was never up. ---
   await page.mouse.move(0, 0)
   await expect(highPill).toBeHidden({ timeout: TIMEOUT_MS })
-  await allHidden(pills, rowCount)
+  await allHidden(pills, pillCount)
 
   // --- AC1, the keyboard: focus shows it and blur hides it, with the pointer parked off the list — so
   // this can only be `:focus-visible` firing, never a stray hover. Reached by focusing the row's open
@@ -456,7 +474,7 @@ test('a row control names itself in a pill that follows the pointer, clear of th
 
   await renames.first().evaluate((element: HTMLElement) => element.blur())
   await expect(firstPill).toBeHidden({ timeout: TIMEOUT_MS })
-  await allHidden(pills, rowCount)
+  await allHidden(pills, pillCount)
 
   // --- The control still OPENS its dialog, reached with a plain click and no hover first — the path the
   // nine shipped specs that address these controls take. Since #1427 the pill sits OFF the control rather

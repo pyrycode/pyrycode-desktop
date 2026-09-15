@@ -15,7 +15,13 @@ import type { Locator } from '@playwright/test'
 // its label by value, and it seeds a deliberately single unpromoted row for a stated reason; folding a
 // row-geometry drive into it would mean rewriting that framing rather than adding to it.
 //
-// TWO test() blocks, each its own launchPairedApp launch, because AC4's two halves need two different
+// THREE test() blocks, each its own launchPairedApp launch. The third, added by #1441, drives the chat
+// row's new pen through to a rename; it is the one block that reads TEXT back, and the hygiene rule below
+// is unbent by it rather than relaxed — its seed is NULL-named, so the field it asserts holds the app's
+// own `Untitled` placeholder, and the name it types is the spec's own literal. Nothing daemon-derived is
+// read, which is what that rule is about.
+//
+// The first TWO need separate launches because AC4's two halves need two different
 // seeds and one launch cannot carry both. The Save-as-channel affordance renders only on an UNPROMOTED
 // row (under "Chats") and Rename only on a PROMOTED one (under "Channels"), and launchPairedApp reaches
 // the thread by clicking a single STRICT `.channel-list__row-open`, so a two-seed single launch
@@ -68,6 +74,19 @@ const HOVER_FILL_RGB = 'rgb(19, 74, 116)'
 // pointer onto it before clicking, which hovers the row on the way).
 const GLYPH_PX = 12
 const GLYPH_RIGHT_INSET_PX = 8
+
+// #1441 — the chevron's inset on a chat row, now that the pen shares the trailing band with it and takes
+// the edge. 20 further in than the pen's 8, which is the gap `channels.css` writes as `right:
+// var(--space-5)` on a box whose padding already holds the first 8. Its own constant rather than
+// `GLYPH_RIGHT_INSET_PX + 20`: the two are independent numbers off the same drawing, and summing them
+// would say the chevron's place is derived from the pen's when it is only measured beside it.
+const CHEVRON_RIGHT_INSET_PX = 28
+
+// `channelListViewModel.ts`'s `UNNAMED_LABEL`, restated rather than imported: this file runs under
+// Playwright's own transpiler, where the `@shared` alias that module's type import uses does not resolve.
+// A client-owned compile-time constant either way, which is what makes reading it back hygienic.
+const UNNAMED_LABEL = 'Untitled'
+
 const GLYPH_RGB = 'rgb(157, 203, 252)'
 const HIDDEN_OPACITY = '0'
 const SHOWN_OPACITY = '1'
@@ -157,9 +176,15 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   const dot = page.locator('.channel-list__row .conversation-status-dot')
   const save = page.locator('.channel-list__save')
   const saveIcon = page.locator('.channel-list__save-icon')
+  // #1441 — the chat row's own pen, under its own token. `.channel-list__rename` is asserted ABSENT here
+  // and the Channels block asserts this one absent, which is the two halves of "each tree's pen carries
+  // its own selector" — the property twelve shipped locators, six of them `real-daemon-*`, rest on.
+  const chatEdit = page.locator('.channel-list__chat-edit')
 
   await expect(row).toHaveCount(1)
   await expect(save).toHaveCount(1)
+  await expect(chatEdit).toHaveCount(1)
+  await expect(page.locator('.channel-list__rename')).toHaveCount(0)
 
   // --- 1. AC1's height. Polled, because it is the first box read after the list renders. This assertion
   // is a real detector ONLY because no rule declares a height: it is the sum of the label's line box and
@@ -256,12 +281,36 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   const glyphRowBox = await boxOf(row, 'sidebar row')
   expectAbout(glyphBox.width, GLYPH_PX)
   expectAbout(glyphBox.height, GLYPH_PX)
+  // #1441 MOVED THIS NUMBER, and it is the one read in this file that changed rather than being added:
+  // the chevron gave the row's edge to the pen and sits 20px inside it. A chevron left at `right: 0`
+  // would sit UNDER the pen's box and draw its glyph over the pen's, and only this read would say so.
   expectAbout(
     glyphRowBox.x + glyphRowBox.width - (glyphBox.x + glyphBox.width),
-    GLYPH_RIGHT_INSET_PX
+    CHEVRON_RIGHT_INSET_PX
   )
   expectAbout(glyphBox.y + glyphBox.height / 2, glyphRowBox.y + glyphRowBox.height / 2)
   expect(await computed(save, 'color')).toBe(GLYPH_RGB)
+
+  // --- 5b. #1441's AC1: the chat row's PEN, beside the chevron above and keeping #1171's geometry — the
+  // drawn 12×12 glyph, its right edge 8px in from the row's right edge, its box centred on the row, in the
+  // same `--color-primary`. Read as its own block against `GLYPH_RIGHT_INSET_PX` while the chevron above
+  // reads `CHEVRON_RIGHT_INSET_PX`, so the two controls' places fail independently and a failure names
+  // which one moved. ---
+  const penBox = await boxOf(chatEdit, 'chat pen control')
+  expect(penBox.height).toBeLessThanOrEqual(ROW_HEIGHT_PX + GEOMETRY_TOLERANCE_PX)
+  const penGlyphBox = await boxOf(page.locator('.channel-list__chat-edit-icon'), 'chat pen glyph')
+  expectAbout(penGlyphBox.width, GLYPH_PX)
+  expectAbout(penGlyphBox.height, GLYPH_PX)
+  expectAbout(
+    glyphRowBox.x + glyphRowBox.width - (penGlyphBox.x + penGlyphBox.width),
+    GLYPH_RIGHT_INSET_PX
+  )
+  expectAbout(penGlyphBox.y + penGlyphBox.height / 2, glyphRowBox.y + glyphRowBox.height / 2)
+  expect(await computed(chatEdit, 'color')).toBe(GLYPH_RGB)
+  // The two glyphs really are disjoint, not merely at two stated insets — the claim the 8px overlap of
+  // their BOXES makes worth asserting. Arithmetic on the two rectangles rather than on the constants, so
+  // a stylesheet that satisfied both insets by some other means would still have to keep them apart.
+  expect(penGlyphBox.x).toBeGreaterThanOrEqual(glyphBox.x + glyphBox.width)
 
   // --- 6. AC5: the dot's centre sits on the ROW's centre. #1097 ruled that from a frame whose dot was
   // dropped 3px (a 14px-tall wrapper the app does not draw, with its circle at cy=11), rejecting the
@@ -335,6 +384,11 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   await page.mouse.move(0, 0)
   expect(await computedAll(save, 'opacity')).toEqual([HIDDEN_OPACITY, HIDDEN_OPACITY])
   await expect(save).toHaveCount(2)
+  // #1441 — the pen inherits the mechanism wholesale, and asserting it here rather than trusting the
+  // restated block is what would catch a new token left out of the shared reveal rule: it would be
+  // permanently visible (no `opacity: 0` reached it) or permanently hidden (no reveal did).
+  expect(await computedAll(chatEdit, 'opacity')).toEqual([HIDDEN_OPACITY, HIDDEN_OPACITY])
+  await expect(chatEdit).toHaveCount(2)
 
   // Hovering a row reveals ITS control and leaves the other row's alone — sorted, so this is a set claim
   // and not an ordering one. A reveal hung off the wrong scope (the control's own `:hover`, or the whole
@@ -342,6 +396,10 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   await resting.hover()
   const opacities = await computedAll(save, 'opacity')
   expect([...opacities].sort()).toEqual([HIDDEN_OPACITY, SHOWN_OPACITY])
+  // BOTH of the hovered row's controls come up together, which is the arrangement the chevron's 20px
+  // inset exists for. One reveal rule carries all three selectors, so this is also what says the pen was
+  // added to that rule rather than given a second one that could drift out of step with it.
+  expect([...(await computedAll(chatEdit, 'opacity'))].sort()).toEqual([HIDDEN_OPACITY, SHOWN_OPACITY])
 
   // --- 11. #1171's AC3, the clause the whole fill move exists for: the fill does not drop as the
   // pointer travels from the title onto the glyph. The control is a SIBLING of the button, not its
@@ -427,8 +485,12 @@ test('a Channels row holds the Rename control inside the same 24px row', async (
 
   await expect(row).toHaveCount(1)
   await expect(rename).toHaveCount(1)
-  // The disjointness the affordance's own contract rests on, restated as this block's precondition.
+  // The disjointness the affordance's own contract rests on, restated as this block's precondition. Since
+  // #1441 the CHEVRON is what is disjoint by section, the pen no longer being so — and the second line is
+  // the other half of that: the Chats tree's token does not reach a Channels row, which is what keeps
+  // `.channel-list__rename` meaning "promoted row" for the twelve shipped locators that read it that way.
   await expect(page.locator('.channel-list__save')).toHaveCount(0)
+  await expect(page.locator('.channel-list__chat-edit')).toHaveCount(0)
 
   // AC4, second half: the Rename control sits inside the 24px row without growing it. Same assertions as
   // the Save control's, against the rule that carries its own copy of the treatment — so reverting either
@@ -491,4 +553,54 @@ test('a Channels row holds the Rename control inside the same 24px row', async (
   // shipped specs that address these controls take.
   await rename.click()
   await expect(page.locator('.rename-conversation-overlay')).toBeVisible()
+})
+
+// #1441's AC1, its behaviour clause: the chat row's pen OPENS the Edit chat modal #1440 shipped, seeded
+// with the row's displayed title, and a rename typed there reaches the daemon and comes back on the row.
+// Geometry and a reveal that silently opened nothing would satisfy every assertion in the first block.
+//
+// A THIRD LAUNCH rather than a drive folded into that block, for the reason the second one needs its own:
+// that block mints a second row partway through, and from there "the chat row" is two rows with no way to
+// name one that this file's hygiene posture allows. One seeded row is unambiguous.
+//
+// THE SEED IS NULL-NAMED on purpose — it is what makes the `Untitled` fallback AC1 names an assertion
+// rather than a claim about a code path, and it is also why this block reads text at all without reading
+// anything daemon-derived. The rename round trip is real: `conversationStateFake` applies
+// `rename_conversation` to its held list and answers the app's re-request from the updated state, so the
+// title below comes back off the wire rather than out of a local optimistic write.
+test("a Chats row's pen opens Edit chat on the row's title and renames through it", async ({
+  launchPairedApp
+}) => {
+  const TYPED_NAME = 'Renamed from the row'
+  const buildReplyFrames = conversationStateFake({
+    conversations: [seed({ is_promoted: false, name: null })]
+  })
+  const { page } = await launchPairedApp({ buildReplyFrames })
+
+  const row = page.locator('.channel-list__row')
+  const title = page.locator('.channel-list__title')
+  const chatEdit = page.locator('.channel-list__chat-edit')
+  await expect(row).toHaveCount(1)
+  await expect(chatEdit).toHaveCount(1)
+  // The row's DISPLAYED title, which is the placeholder a null-named row draws — asserted before the
+  // dialog so "seeded with the row's displayed title" below is a comparison against something read, not
+  // against a constant that happens to match.
+  await expect(title).toHaveText(UNNAMED_LABEL)
+
+  // Clicked with no hover first — the path every shipped spec that addresses these controls takes, and
+  // what the `opacity` reveal (rather than a `display: none` one) is what makes possible.
+  await chatEdit.click()
+  const dialog = page.getByRole('dialog', { name: 'Edit chat', exact: true })
+  await expect(dialog).toBeVisible()
+  const input = dialog.getByRole('textbox', { name: 'Channel name:', exact: true })
+  await expect(input).toHaveValue(UNNAMED_LABEL)
+
+  await input.fill(TYPED_NAME)
+  await dialog.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  // The row still reads its title from the daemon's re-list, so this is the whole round trip: the pen's
+  // handler seeded the field, the dialog's Save sent `rename_conversation`, the fake applied it, and the
+  // re-list came back. A pen wired to a dialog that sends nothing would leave the placeholder here.
+  await expect(title).toHaveText(TYPED_NAME)
+  await expect(row).toHaveCount(1)
 })

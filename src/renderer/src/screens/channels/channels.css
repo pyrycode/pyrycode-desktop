@@ -1797,6 +1797,66 @@
   outline-offset: 2px;
 }
 
+/* #1439 — the archive slot, drawn as the content frame's own `Actions` row (487:2239): left-aligned
+   below the name field, with the drawing's 8px top inset. Its classes share no name with the Edit host,
+   Edit channel or Edit chat dialogs, the Playwright-locator rule on the Edit host dialog knowledge page:
+   this slot's Cancel is located THROUGH this container, which is what tells it from the footer's. */
+.edit-workspace__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+}
+
+/* The footer Cancel's outlined recipe against the same tokens (.modal__action--cancel), because the
+   design draws this button as that button — `.edit-host__unpair` restated rather than shared, since a
+   class from another dialog's namespace is exactly the coupling the rule above exists to avoid. BOTH
+   confirming answers wear it unmodified: the act is reversible, so neither takes the error role the
+   unpair slot's Confirm carries. There is no `:disabled` rule because no arm disables anything — the
+   confirm closes the dialog in the same tick, so there is no in-flight state to draw. */
+.edit-workspace__archive {
+  box-sizing: border-box;
+  /* ⭐ THE ANSWERS DO NOT SHRINK, and this line is a rendered-capture finding rather than a copied one:
+     the unpair slot's recipe carries `overflow-wrap: anywhere` against a long HOST NAME, but its prompt
+     is four words. This prompt is a sentence that wraps, and a shrinkable button beside it had the flex
+     row squeeze both answers until their own client-owned labels broke mid-word (Canc/el, Archi/ve). No
+     static markup assertion can see that; only the capture can. The labels are constants of known
+     length, so holding their intrinsic width costs nothing at the 640px panel's narrowest. */
+  flex-shrink: 0;
+  padding: calc(var(--space-2) - 1px) calc(var(--space-5) - 1px);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight-emphasized);
+}
+
+.edit-workspace__archive:hover {
+  opacity: 0.88;
+}
+
+.edit-workspace__archive:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* The confirming arm's copy, alongside the two answers in the slot the button vacated. It can wrap at
+   640px, so the row above centres its items rather than stretching them. */
+.edit-workspace__archive-prompt {
+  /* The sentence takes the space the two fixed-width answers leave and wraps inside it. */
+  flex: 1 1 auto;
+  color: var(--color-on-primary-container);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
 /* #800 — the status dot leading each chat and channel row (Figma 106:3051), drawn from #799's resolved
    `ConversationStatus`. The drawn instance is a 6px circle stroked 1px in #9DCBFC — exactly
    --color-primary — and #1174 read the redrawn Channel list frame (103:2985) as carrying that stroke in

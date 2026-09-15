@@ -226,6 +226,25 @@ Pending the documentation stage, per the ticket's own handoff section:
 - Is a cap on the number of frames one confirm sends warranted? See the security review's Network & I/O
   finding; resolved there as no.
 
+## Revisions
+
+**2026-09-15 — the answers do not shrink (`.edit-workspace__archive`).** The plan said "restate
+`.edit-host__unpair`'s recipe"; restating it verbatim was wrong. That recipe carries `overflow-wrap:
+anywhere` for a long host name, and its prompt is four words, so its answers never shrink. This prompt is
+a sentence, and in the same flex row the two answers were squeezed until their own client-owned labels
+broke mid-word — `Canc/el`, `Archi/ve`. The rule now sets `flex-shrink: 0` on the button and drops
+`overflow-wrap: anywhere` and `max-width: 100%`, with `flex: 1 1 auto` on the prompt so the sentence takes
+what is left and wraps there. Found by the rendered capture, which is the only thing that could: every
+markup assertion passed against the broken draw.
+
+**2026-09-15 — the e2e drive reads AC4's exit clause directly.** The plan's Testing strategy stopped at
+the trees and the frames. The drive now mints the control workspace's chat FIRST and the target's second
+chat LAST, so the conversation the pane is showing is one of the archived rows, and asserts
+`.conversation__thread` goes from one to none after the confirm. The Open Question about also visiting the
+Archive screen is resolved as stated there — no; the archived rows' arrival on that screen is
+`conversation-archive-lifecycle.spec.ts`'s subject, and a second navigation would cost this drive its
+focus for a second proof of shipped behaviour.
+
 ## Security review
 
 **Verdict:** PASS

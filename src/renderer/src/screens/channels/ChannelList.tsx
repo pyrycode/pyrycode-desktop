@@ -77,13 +77,27 @@ import { isConversationUnread } from '../../store/conversationUnread'
 // would be adjacent refactoring for no behaviour change. No cycle: ConversationScreen reaches back into
 // this directory only for `channelListViewModel` and `RenameConversationDialog`, neither of which imports
 // this file.
-import { relayLeg, daemonLeg, type ConnectionLeg } from '../conversation/ConversationScreen'
+// #1439 takes a FOURTH symbol from this module, the per-conversation archive send, for the reason the
+// paragraph above gives: the verb already exists and a second copy of the `archiveConversation` literal
+// would be a second enumeration of one wire contract. It is bound into a one-argument closure at the
+// confirm site, so the Edit workspace dialog module imports nothing from the conversation screen.
+import {
+  relayLeg,
+  daemonLeg,
+  requestArchiveConversation,
+  type ConnectionLeg
+} from '../conversation/ConversationScreen'
 import { SaveAsChannelDialog } from './SaveAsChannelDialog'
 import { RenameConversationDialogView, requestRenameConversation } from './RenameConversationDialog'
 import { CreateChannelDialog } from './CreateChannelDialog'
 // #1180 — the view and its send helper travel together, unlike #1179's split: this verb has exactly
 // one sender and no shipped twin to sit beside, which is `RenameConversationDialog`'s shape.
-import { EditWorkspaceDialogView, requestRenameWorkspace } from './EditWorkspaceDialog'
+import {
+  EditWorkspaceDialogView,
+  requestArchiveWorkspace,
+  requestRenameWorkspace,
+  type EditWorkspaceArchiveStatus
+} from './EditWorkspaceDialog'
 // #1299 — the same shape one level up the tree, and the host row pen's FIRST caller. Its write helper
 // takes an injected transport rather than `sendCommand`: nothing on that path reaches the daemon.
 import {
@@ -258,6 +272,21 @@ export function ChannelList({
     serverId: string | undefined
   } | null>(null)
   const [editWorkspaceName, setEditWorkspaceName] = useState('')
+  // #1439 — the archive slot's arm, a THIRD cell beside that pair rather than a widening of one of them:
+  // the two above hold the dialog's target and its draft, and neither has an arm to widen (this dialog's
+  // rename has no round trip, which is what the Edit host dialog's single `EditHostStatus` union exists to
+  // keep exclusive). It is seeded `idle` on every open by the same `onEditWorkspace` handler that seeds
+  // the other two — what makes AC2's "a reopen starts idle" true with no reset code of its own — and
+  // cleared wherever the target is, so the cell never holds an arm for a dialog that is closed.
+  const [editWorkspaceArchive, setEditWorkspaceArchive] =
+    useState<EditWorkspaceArchiveStatus>('idle')
+  // Both exits from the Edit workspace dialog clear both cells, so the two can never disagree about
+  // whether it is open. Not folded into the `sessionStore` subscription below: that arm fires from an
+  // event rather than from a click, and it is inside a callback with its own dependency list.
+  const closeEditWorkspace = (): void => {
+    setEditWorkspaceTarget(null)
+    setEditWorkspaceArchive('idle')
+  }
   // The Edit-host dialog's own per-interaction cells (#1299), independent of the four above for their
   // stated reason: an open dialog's fixed-inset overlay covers the window, so no two can be open at once
   // and no mutual-exclusion logic is needed. `editHostServerId` is the MACHINE being renamed — the id the
@@ -290,7 +319,12 @@ export function ChannelList({
     if (saveRow && unavailable(saveRow.serverId)) setSaveRow(null)
     if (renameRow && unavailable(renameRow.serverId)) setRenameRow(null)
     if (createChannelTarget && unavailable(createChannelTarget.serverId)) setCreateChannelTarget(null)
-    if (editWorkspaceTarget && unavailable(editWorkspaceTarget.serverId)) setEditWorkspaceTarget(null)
+    // #1439: the arm goes with the target on the host-loss path (AC2), in the same statement — a reset
+    // written anywhere else is one an edit to this branch can forget.
+    if (editWorkspaceTarget && unavailable(editWorkspaceTarget.serverId)) {
+      setEditWorkspaceTarget(null)
+      setEditWorkspaceArchive('idle')
+    }
   }), [saveRow, renameRow, createChannelTarget, editWorkspaceTarget])
   return (
     <>
@@ -351,6 +385,8 @@ export function ChannelList({
           if (!canMutateHost(serverId)) return
           setEditWorkspaceTarget({ cwd, serverId })
           setEditWorkspaceName(label)
+          // #1439 — the third cell, seeded with the other two so every open starts on the idle button.
+          setEditWorkspaceArchive('idle')
         }}
         // #1299 — the host row's pen OPENS A DIALOG and writes nothing: the machine is fixed by the row
         // that was clicked, and the new name still has to be typed. All three cells are seeded together,
@@ -410,8 +446,9 @@ export function ChannelList({
       {editWorkspaceTarget !== null && connected(editWorkspaceTarget.serverId) && (
         <EditWorkspaceDialogView
           name={editWorkspaceName}
+          status={editWorkspaceArchive}
           onNameChange={setEditWorkspaceName}
-          onCancel={() => setEditWorkspaceTarget(null)}
+          onCancel={closeEditWorkspace}
           onSave={() => {
             if (!canMutateHost(editWorkspaceTarget.serverId)) return
             requestRenameWorkspace(
@@ -420,7 +457,33 @@ export function ChannelList({
               editWorkspaceName,
               editWorkspaceTarget.serverId
             )
-            setEditWorkspaceTarget(null)
+            closeEditWorkspace()
+          }}
+          // #1439 — arming and disarming send NOTHING; only the confirm reaches the daemon (AC2).
+          archive={{
+            onArm: () => setEditWorkspaceArchive('confirming-archive'),
+            onCancel: () => setEditWorkspaceArchive('idle'),
+            onConfirm: () => {
+              // The same guard the rename above carries, plus the narrowing `onCreateChannel` already
+              // writes: `canMutateHost` refuses anything that is not a CONNECTED string id, so an
+              // unattributed group never reaches the send — and the explicit `=== undefined` is what
+              // tells the compiler so, since the guard returns a boolean rather than a predicate.
+              const serverId = editWorkspaceTarget.serverId
+              if (!canMutateHost(serverId) || serverId === undefined) return
+              // `window.pyry` is dereferenced HERE, at interaction time, never during render — the
+              // `onCreateChat` discipline. The rows are the union this container already reads; the
+              // helper keeps the ones on this host, in this exact folder, that are not archived yet.
+              requestArchiveWorkspace(
+                (conversationId) =>
+                  requestArchiveConversation(window.pyry.sendCommand, conversationId),
+                conversations ?? [],
+                editWorkspaceTarget.cwd,
+                serverId
+              )
+              // No rename is sent on this path, whatever the field holds (AC3), and the dialog closes at
+              // once: the send is fire-and-forget, so there is nothing to await and no arm to wait in.
+              closeEditWorkspace()
+            }
           }}
         />
       )}

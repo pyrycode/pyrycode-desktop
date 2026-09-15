@@ -1,7 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { RendererCommand } from '@shared/ipc/commands'
-import { EditWorkspaceDialogView, requestRenameWorkspace } from './EditWorkspaceDialog'
+import {
+  EditWorkspaceDialogView,
+  requestArchiveWorkspace,
+  requestRenameWorkspace,
+  type ArchivableRow,
+  type EditWorkspaceArchive,
+  type EditWorkspaceArchiveStatus
+} from './EditWorkspaceDialog'
 
 // The CreateChannelDialog test twin (#1179's idiom, itself #360's): server-render the pure view with
 // injected props — no DOM harness, no store, no clicks (the `node` env fires none). Which rows draw the
@@ -10,13 +17,19 @@ import { EditWorkspaceDialogView, requestRenameWorkspace } from './EditWorkspace
 // the send helper's payload (AC4/AC5).
 const noop = (): void => {}
 
-function renderView(name: string): string {
+// #1439's slot renders the arm it is given and reports intents; a static render fires none of the
+// three, so the injected object is inert here and the clicks are `e2e/sidebar-workspace-edit.spec.ts`'s.
+const inertArchive: EditWorkspaceArchive = { onArm: noop, onCancel: noop, onConfirm: noop }
+
+function renderView(name: string, status: EditWorkspaceArchiveStatus = 'idle'): string {
   return renderToStaticMarkup(
     <EditWorkspaceDialogView
       name={name}
+      status={status}
       onNameChange={noop}
       onCancel={noop}
       onSave={noop}
+      archive={inertArchive}
     />
   )
 }
@@ -97,6 +110,149 @@ describe('EditWorkspaceDialogView', () => {
     expect(renderView('😀'.repeat(65))).toMatch(/modal__action--confirm"[^>]*disabled/)
   })
 
+})
+
+// #1439 — the archive slot's two arms, the only tier that can read them: a static render proves WHICH
+// markup each arm draws, and `e2e/sidebar-workspace-edit.spec.ts` proves that arming sends nothing and
+// confirming sends. The arms are mutually exclusive by the union's shape, so each assertion below states
+// both halves — what the arm draws AND what it must not.
+describe('EditWorkspaceDialogView — the archive slot', () => {
+  const PROMPT = 'Archive this workspace? Its chats and channels move to the Archive screen.'
+  const occurrences = (markup: string, needle: string): number => markup.split(needle).length - 1
+
+  it('renders the idle Archive workspace button below the field and above the footer (AC1)', () => {
+    const markup = renderView('Second Brain')
+    expect(markup).toContain('edit-workspace__actions')
+    expect(markup).toContain('<button type="button" class="edit-workspace__archive">Archive workspace</button>')
+    expect(markup).not.toContain(PROMPT)
+    // Inside the shared content slot, which is what puts it after the field and before the footer —
+    // `Modal` renders children before `.modal__footer`, so the DOM order IS the drawn and tab order.
+    const content = markup.indexOf('modal__content')
+    expect(content).toBeGreaterThan(-1)
+    expect(markup.indexOf('edit-workspace__field')).toBeGreaterThan(content)
+    expect(markup.indexOf('edit-workspace__actions')).toBeGreaterThan(
+      markup.indexOf('edit-workspace__field')
+    )
+    expect(markup.indexOf('modal__footer')).toBeGreaterThan(markup.indexOf('edit-workspace__actions'))
+  })
+
+  it('replaces the button with a prompt and two answers in the same slot (AC2)', () => {
+    const markup = renderView('Second Brain', 'confirming-archive')
+    expect(markup).toContain(`class="edit-workspace__archive-prompt">${PROMPT}</span>`)
+    expect(markup).not.toContain('>Archive workspace</button>')
+    expect(markup).toContain('>Archive</button>')
+    // One slot, not two: the answers sit in the container the button vacated.
+    expect(occurrences(markup, 'edit-workspace__actions')).toBe(1)
+    expect(occurrences(markup, 'class="edit-workspace__archive"')).toBe(2)
+  })
+
+  it('keeps the confirm answer on the outlined recipe rather than an error role (AC2)', () => {
+    // The act is reversible, so the answer takes no modifier at all — and a modifier class with no CSS
+    // rule behind it is what #1422's second rework leg was, which is why the absence is pinned here.
+    const markup = renderView('Second Brain', 'confirming-archive')
+    expect(markup).not.toContain('edit-workspace__archive--')
+  })
+
+  it('names the two answers apart from the footer Cancel only by their slot (AC2)', () => {
+    // Both Cancels read the same word; the class on the container is what tells them apart, which is
+    // the locator contract the e2e drive depends on.
+    const idle = renderView('Second Brain')
+    const armed = renderView('Second Brain', 'confirming-archive')
+    expect(occurrences(idle, '>Cancel</button>')).toBe(1)
+    expect(occurrences(armed, '>Cancel</button>')).toBe(2)
+    expect(armed).toContain('<span class="edit-workspace__archive-prompt">')
+  })
+
+  it('leaves the field, Cancel, OK and the close control untouched in both arms (AC1)', () => {
+    for (const markup of [renderView('Second Brain'), renderView('Second Brain', 'confirming-archive')]) {
+      expect(markup).toContain('>Workspace name (optional):</span>')
+      expect(markup).toContain('value="Second Brain"')
+      expect(markup).toContain('modal__action--cancel')
+      expect(markup).toContain('>OK</button>')
+      expect(markup).toContain('>Edit workspace</h2>')
+      // Every button's TEXT is its accessible name; the only `aria-label` in the dialog stays the
+      // shared close control's, so no `cwd`, label or id can reach an attribute (AC5).
+      expect(occurrences(markup, 'aria-label=')).toBe(1)
+      expect(markup).toContain('aria-label="Close dialog"')
+    }
+  })
+
+  it('says “this workspace”, naming neither the label nor the path, apostrophe-free (AC5)', () => {
+    const markup = renderView('Second Brain', 'confirming-archive')
+    expect(markup).toContain('Archive this workspace?')
+    expect(markup).not.toContain('Second Brain</span>')
+    expect(markup).not.toContain('/home/me')
+    // `renderToStaticMarkup` escapes ' → &#x27;, so client copy is written without one.
+    expect(markup).not.toContain('&#x27;')
+  })
+})
+
+describe('requestArchiveWorkspace', () => {
+  const HOST = 'host-a'
+  const CWD = '/home/me/second-brain'
+  const row = (over: Partial<ArchivableRow> & { id: string }): ArchivableRow => ({
+    cwd: CWD,
+    is_archived: false,
+    serverId: HOST,
+    ...over
+  })
+
+  /** The ids the helper asks to archive, in order — a plain spy, no store and no `window`. */
+  const archived = (
+    rows: readonly ArchivableRow[],
+    cwd: string = CWD,
+    serverId: string = HOST
+  ): string[] => {
+    const ids: string[] = []
+    requestArchiveWorkspace((id) => ids.push(id), rows, cwd, serverId)
+    return ids
+  }
+
+  it('asks once per active row in that folder on that host, ids verbatim and in order (AC3)', () => {
+    expect(archived([row({ id: 'chat-1' }), row({ id: 'channel-2' })])).toEqual(['chat-1', 'channel-2'])
+  })
+
+  it('asks nothing for an empty list', () => {
+    expect(archived([])).toEqual([])
+  })
+
+  it('skips rows already archived in that folder (AC3)', () => {
+    expect(archived([row({ id: 'gone', is_archived: true }), row({ id: 'live' })])).toEqual(['live'])
+  })
+
+  it('skips another workspace on the same host, matching the cwd EXACTLY (AC3)', () => {
+    // A trailing separator is a different group to `groupByWorkspace`, which keys on the raw `cwd` and
+    // normalises nothing — so the selection must disagree with it in no way.
+    const rows = [
+      row({ id: 'sibling', cwd: '/home/me/second-brain-notes' }),
+      row({ id: 'trailing', cwd: `${CWD}/` }),
+      row({ id: 'child', cwd: `${CWD}/sub` }),
+      row({ id: 'mine' })
+    ]
+    expect(archived(rows)).toEqual(['mine'])
+  })
+
+  it('skips another host and every unattributed row, even at the same path (AC3)', () => {
+    const rows = [
+      row({ id: 'other-host', serverId: 'host-b' }),
+      row({ id: 'unstamped', serverId: undefined }),
+      row({ id: 'null-stamped', serverId: null }),
+      row({ id: 'mine' })
+    ]
+    expect(archived(rows)).toEqual(['mine'])
+  })
+
+  it('passes a hostile-looking id through as an opaque routing value', () => {
+    // The id is daemon-asserted text used as nothing but the payload's `conversation_id`: no join, no
+    // lookup path, no interpolation into copy.
+    const hostile = '../../etc/passwd'
+    expect(archived([row({ id: hostile })])).toEqual([hostile])
+  })
+
+  it('matches a traversal-shaped cwd by equality rather than resolving it', () => {
+    const odd = '/home/me/../../etc'
+    expect(archived([row({ id: 'odd', cwd: odd }), row({ id: 'mine' })], odd)).toEqual(['odd'])
+  })
 })
 
 describe('requestRenameWorkspace', () => {

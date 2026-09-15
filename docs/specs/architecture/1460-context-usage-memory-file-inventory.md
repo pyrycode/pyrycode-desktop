@@ -279,3 +279,32 @@ unread, and the `path`/`type` inert-text decode and its traversal-fixture pin ar
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-15
+
+## Revisions
+
+**2026-09-15 — Open questions resolved during implementation. No design change.**
+
+1. **`type` needs no rename in the decoded literal.** The wire types mirror the daemon field-for-field,
+   and `type` is an ordinary property name in TypeScript — the collision is with a READING HABIT, not
+   with a language rule or another field on this type, so a rename would break the mirror to solve
+   nothing. Addressed where the plan expected: `ContextUsageMemoryFile`'s docblock states it is a label
+   and never a discriminant, `InboundDaemonMessage`'s arm repeats it for the IPC-carry slice, and a
+   narrowing test pins that no closed set is applied.
+2. **The traversal pin asserts BOTH.** Literal equality alone would not catch every way a decoder could
+   "helpfully" touch the value, so the test also asserts structurally: the path still starts with `..`,
+   still contains a `../` segment, and has not gained a leading slash. The three failure signatures —
+   resolving against a root, collapsing `..` segments, rebasing onto `/` — are each excluded by name.
+
+**Security review SHOULD FIX items, all discharged in this implementation:**
+
+- *Prohibition on all three docblocks:* `InboundDaemonMessage`'s `context-usage` arm now carries the
+  `path`-is-not-a-handle and `type`-is-not-a-discriminant prohibitions and names #1419 / #1421 as the
+  slices that inherit rather than re-decide them.
+- *Filesystem-layout disclosure ground:* stated in `ContextUsagePayload`'s and
+  `parseContextUsagePayload`'s log paragraphs as the strongest such ground on the frame, and the AC3
+  message test's secret is home-directory-shaped (`/Users/a-real-username/clients/...`) so the pin is
+  against the real hazard.
+- *URL-shaped and newline-bearing values:* the adversarial-crossing test is a table covering
+  `javascript:`, `file://`, an attacker `http://` host, an embedded newline with a forged log record, a
+  UNC path and a `__proto__` segment, and the prohibition names `href` and `openExternal` specifically
+  rather than saying "not a link".

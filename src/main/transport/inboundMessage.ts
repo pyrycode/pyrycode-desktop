@@ -46,6 +46,7 @@ import type {
   RateLimitedPayload,
   ContextUsageCategory,
   ContextUsageMCPTool,
+  ContextUsageMemoryFile,
   ContextUsagePayload,
   UnrecognizedMessagePayload,
   SessionTransitionPayload,
@@ -487,22 +488,21 @@ interface FrameTimestamp {
  * here until the carry slice claims it.
  *
  * The `context-usage` kind (#1454) carries the decoded ContextUsagePayload — claude's own report of what
- * is in the context window, published after every turn end on the interactive path. THE READING AND TWO
- * OF ITS THREE INVENTORIES: #1455 decodes `categories` / `dropped_categories` and #1459 `mcp_tools` /
- * `dropped_mcp_tools`, while the frame's last inventory (`memory_files`) and its dropped count are on
- * the wire and are decoded by #1460, not here. Conversation-scoped like the two kinds above — no
- * `turn_id`, and it
+ * is in the context window, published after every turn end on the interactive path. THE READING AND ALL
+ * THREE OF ITS INVENTORIES: #1455 decodes `categories` / `dropped_categories`, #1459 `mcp_tools` /
+ * `dropped_mcp_tools` and #1460 `memory_files` / `dropped_memory_files`, after which every key the
+ * daemon writes is read. Conversation-scoped like the two kinds above — no `turn_id`, and it
  * opens and closes no turn. The fail-closed defence is two required strings and three required NUMBERS,
  * each through the type-not-truthiness helpers, so `''` and `0` survive as the values the daemon's empty
  * fixture states them to be rather than being read as absences — and, per inventory, a list-shape
  * guard plus a per-row narrowing where ONE BAD ROW DROPS THE WHOLE FRAME rather than yielding a partial
  * inventory.
  *
- * NEITHER INVENTORY IS EVER NULL and an empty list is the POSITIVE STATEMENT that claude reported no
- * categories, or no MCP tools; the rows are a PREFIX in the producer's descending-token order, so a short
- * list is never a list with holes. EACH DROPPED COUNT IS INDEPENDENT AND NOT INFERABLE — two cuts' worth
- * of loss apiece, so a retained list's length says nothing about completeness, nothing here reconciles a
- * count with a length, and the two counts are never read against each other either.
+ * NO INVENTORY IS EVER NULL and an empty list is the POSITIVE STATEMENT that claude reported no
+ * categories, no MCP tools, or no memory files; the rows are a PREFIX in the producer's descending-token
+ * order, so a short list is never a list with holes. EACH DROPPED COUNT IS INDEPENDENT AND NOT INFERABLE
+ * — two cuts' worth of loss apiece, so a retained list's length says nothing about completeness, nothing
+ * here reconciles a count with a length, and the three counts are never read against each other either.
  *
  * PROVENANCE IS MIXED WITHIN THE ONE PAYLOAD, which is what separates this kind from every neighbour
  * here: `conversation_id` is daemon-authored, `model` and every row's `name` are claude-authored and
@@ -512,8 +512,17 @@ interface FrameTimestamp {
  * and if a consumer indexes rows by it the index is a `Map`, never a plain object. **AND
  * `server_name` IS INERT DESPITE ITS NAME** — it collides with the actuation-crossing `ServerName` on
  * the daemon's MCP reconnect payload, so it must never be fed to an MCP verb, a reconnect or a server
- * lookup, nor joined against `mcp_status`, on the strength of having appeared in this reading. See
- * ContextUsagePayload, ContextUsageCategory and ContextUsageMCPTool, which name the split field by field.
+ * lookup, nor joined against `mcp_status`, on the strength of having appeared in this reading.
+ * **AND A MEMORY FILE'S `path` IS NOT A FILE HANDLE** — it is WORKSPACE-AUTHORED path-shaped descriptive
+ * text that nothing joins, cleans, resolves or opens, so a consumer must not `path.join` it against a
+ * root, render it as an `href`, hand it to `shell.openExternal`, or key a plain object by it; the
+ * daemon's committed fixture carries `../../../etc/passwd` and this decoder passes it through verbatim
+ * on purpose. The `type` beside it is claude's LABEL and NOT A DISCRIMINANT, however much the spelling
+ * invites a `switch` in a file where every other `type` narrows an envelope. **This is the docblock the
+ * IPC carry reads**: #1419 is where `path` first crosses `contextBridge` into the renderer and #1421 is
+ * where the render sink lives, so both inherit these prohibitions rather than re-deciding them. See
+ * ContextUsagePayload, ContextUsageCategory, ContextUsageMCPTool and ContextUsageMemoryFile, which name
+ * the split field by field.
  *
  * THE THREE INTEGERS ARE NOT RANGE-CHECKED and are NOT mutually consistent by contract. The daemon
  * neither recomputes nor normalizes claude's figures, so a consumer must not derive `percentage` from
@@ -2322,55 +2331,116 @@ function parseContextUsageMCPTool(payload: unknown): ContextUsageMCPTool {
 }
 
 /**
+ * Narrow one row of a `context_usage` frame's MEMORY-FILE inventory into a ContextUsageMemoryFile
+ * (#1460). parseContextUsageMCPTool directly above field-for-field with different key names: an isRecord
+ * gate, two requireStrings, one requireNumber, returning a fresh three-field literal. No helper is
+ * invented here, and this is the LAST of the frame's three inventories — after it every key the daemon
+ * writes is read.
+ *
+ * WHAT IS DELIBERATELY NOT CHECKED, each of which would fail-close valid traffic:
+ *
+ *   - **NO join, resolve, normalise, clean, realpath, prefix check or open on `path`, and NO stat.**
+ *     The daemon's own comment states the constraint in those words: `path` is PATH-SHAPED DESCRIPTIVE
+ *     TEXT, NOT A FILE HANDLE, and nothing on this path touches it — not the producer, not the mapper,
+ *     not this decoder — because normalising the string would IMPLY IT NAMES A REAL FILE THIS FRAME ACTS
+ *     ON, which it does not. Rejecting a traversal-shaped value would be worse than useless: it buys
+ *     nothing here (this decoder opens nothing), and `../CLAUDE.md` is an ORDINARY memory-file reference
+ *     in a monorepo, since claude genuinely loads memory from parent directories — so a client-side
+ *     traversal check would drop legitimate frames while leaving the real sink, a later `path.join` or
+ *     `href`, exactly as exposed. The defence is the PROHIBITION (ContextUsageMemoryFile states it, and
+ *     #1419 / #1421 inherit it) plus the render sink, and the committed fixture's `../../../etc/passwd`
+ *     crossing byte-for-byte is what pins it by a test rather than by prose.
+ *   - NO scheme check on `path` either. A path-shaped string is not a path-CONSTRAINED one: the daemon
+ *     constrains neither scheme nor shape, so a `javascript:` URI, a `file://` URL and a UNC path arrive
+ *     as ordinary values and cross as ordinary values. That is why the prohibition on the type names
+ *     `href` and `openExternal` specifically rather than saying "not a link".
+ *   - NO closed set on `type`, and no branch on it anywhere. It is claude's own descriptive LABEL, open
+ *     by definition, so a client-side set fail-closes a valid future frame — and it is NOT a
+ *     DISCRIMINANT, however much a field spelled `type` looks like one in a file whose every other
+ *     `type` narrows an envelope. It carries no authority: nothing may branch security-relevant
+ *     behaviour on it.
+ *   - NO emptiness check on `path` OR `type`, and requireString rather than requireNonEmptyString for
+ *     parseContextUsageMCPTool's stated reason: that sibling exists for a string whose `''` is a
+ *     DISTINCT FAILURE MODE because it is a LOOKUP KEY, and nothing looks these up. An empty `path` is
+ *     emphatically not a lookup that resolved to the filesystem root — it resolves to nothing at all,
+ *     because nothing resolves it. The daemon states all three keys stay present when the strings are
+ *     empty.
+ *   - NO range check on `tokens`, and no running total. The frame's own no-range-check rule one level
+ *     down: the figures are claude's and the daemon neither recomputes nor normalizes them. The
+ *     inventory NEED NOT SUM to `total_tokens` by contract, and a cut list makes the sum smaller still.
+ *   - NO trim, strip, escape, re-encode or length cap on either string. Both crossed the subprocess
+ *     trust boundary; the producer bounds them at construction and parseInboundMessage's
+ *     MAX_PLAINTEXT_BYTES guard backstops the frame, so a third bound here would be a client-invented
+ *     one to keep in agreement (the parseSlashCommand posture). ESCAPING AT A DECODER IS ESCAPING AT THE
+ *     WRONG LAYER, and CLAUDE.md's 2026-08-20 operator ruling puts it at the render sink, which is
+ *     #1421's.
+ *
+ * Its message names the failure CATEGORY only, never a value and NEVER THE ROW INDEX — parseModelOption's
+ * rule verbatim, and this is its sharpest instance on the frame. A `path` names the OPERATOR'S OWN
+ * FILESYSTEM: the daemon's fixture value alone discloses a home directory, a username and a project
+ * name, daemonConnection catches WireDecodeError into a caller that may log it, and a log is exactly
+ * what an operator forwards off-box when reporting a fault. A newline in a path would forge a record in
+ * that line-delimited stream on top of it.
+ */
+function parseContextUsageMemoryFile(payload: unknown): ContextUsageMemoryFile {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed context usage memory file')
+  }
+  const path = requireString(payload, 'path')
+  const type = requireString(payload, 'type')
+  const tokens = requireNumber(payload, 'tokens')
+  return { path, type, tokens }
+}
+
+/**
  * Narrow an opaque payload into a ContextUsagePayload (#1454 the reading, #1455 the category breakdown,
- * #1459 the MCP-tool inventory).
+ * #1459 the MCP-tool inventory, #1460 the memory-file inventory).
  * Fail-closed like parseRateLimitedPayload directly above, extended with parseModelListPayload's
- * list-frame shape applied TWICE: two `requireString`s, three `requireNumber`s, then per inventory an
- * inline Array.isArray-then-`.map` over the rows and a plain `requireNumber` for its dropped count. No
+ * list-frame shape applied THREE TIMES: two `requireString`s, three `requireNumber`s, then per inventory
+ * an inline Array.isArray-then-`.map` over the rows and a plain `requireNumber` for its dropped count. No
  * helper is invented here, and nothing is cross-validated.
  *
- * THE TWO REMAINING MEMORY-FILE KEYS ARE DROPPED, NOT READ. `memory_files` and its dropped count are on
- * EVERY real frame, so this parser's forward-compatibility is load-bearing rather
- * than hypothetical: the fresh nine-field literal tolerates them without copying them through, which
- * also makes it prototype-pollution-safe against a planted `__proto__` and keeps the daemon fixture's
- * deliberately adversarial remaining value — a `../../../etc/passwd` memory-file path — from crossing
- * even as opaque data. #1460 decodes them and owns their
- * validation; that path value is the clearest possible statement that the inventory is a PATH-TRAVERSAL
- * SURFACE and is a must-review item for it.
+ * EVERY KEY ON THE FRAME IS NOW READ, so this parser is no longer the place a real frame's keys get
+ * dropped — the statement that some are is GONE rather than decremented, and the payload-level
+ * forward-compatibility proof rests on the shipped test that plants a `turn_id` on an otherwise valid
+ * frame. What the FRESH ELEVEN-FIELD LITERAL still buys is that same tolerance for a key a LATER daemon
+ * adds, plus prototype-pollution safety against a planted `__proto__`: it copies nothing through, at the
+ * payload level and at every row.
  *
  * EACH INVENTORY FAILS CLOSED ON `null`, ON AN ABSENT KEY AND ON ANY NON-ARRAY, while an EMPTY ARRAY
  * DECODES TO `[]`. The daemon's MarshalJSON normalises every nil inventory slice to `[]` precisely so a
  * client never has to tell the two apart, which makes `[]` the POSITIVE STATEMENT that claude reported no
- * categories, or no MCP tools, and makes a `null` a real defect; `Array.isArray(null)` is `false`, which
+ * categories, no MCP tools, or no memory files, and makes a `null` a real defect; `Array.isArray(null)`
+ * is `false`, which
  * is exactly what fails it, and an omitted key (`undefined`) fails the same way. That empty list must
  * stay distinguishable from the absence a frame that never arrived yields — which is a CONSUMER
  * obligation from #1419 onward, since this decoder only ever returns one or throws. ORDER IS PRESERVED
  * FROM THE WIRE: the rows are a prefix of the producer's descending-token order with any cut taken off
  * the TAIL, so a shortened list is never a list with holes and re-sorting would destroy the only
- * ordering signal a consumer gets. ONE BAD ROW IN EITHER LIST THROWS THE WHOLE FRAME rather than
+ * ordering signal a consumer gets. ONE BAD ROW IN ANY LIST THROWS THE WHOLE FRAME rather than
  * yielding a partial inventory — `.map` propagates the first throw — and a half-populated inventory is
  * worse than none, because nothing downstream could tell the two apart once its dropped count no longer
- * accounts for the loss. THE TWO LISTS ARE NEVER CROSSED: each is guarded, mapped and counted on its
- * own, and a well-formed sibling neither rescues nor validates the other.
+ * accounts for the loss. THE THREE LISTS ARE NEVER CROSSED: each is guarded, mapped and counted on its
+ * own, and a well-formed sibling neither rescues nor validates another.
  *
  * EACH DROPPED COUNT decodes through plain requireNumber, correct PRECISELY BECAUSE the Go fields have
  * no `omitempty`: the key is always written, so `0` is a genuine value carried as `0` and never
- * truthiness-tested, while an absent key is a real defect. NOTHING CROSS-CHECKS EITHER AGAINST ITS
- * LIST'S LENGTH, NOTHING CROSS-READS THE TWO COUNTS, AND NOTHING CAPS EITHER ENTRY COUNT (AC4). Each
+ * truthiness-tested, while an absent key is a real defect. NOTHING CROSS-CHECKS ANY AGAINST ITS
+ * LIST'S LENGTH, NOTHING CROSS-READS THE THREE COUNTS, AND NOTHING CAPS ANY ENTRY COUNT (AC4). Each
  * count is TWO CUTS' worth of loss — the
  * producer's entry and string caps plus the mapper's own frame-byte budget — so a retained list's length
- * is no evidence of completeness in either direction, and the committed fixture's `3` and `5` each beside
- * exactly two rows are the cases that prove it; `list.length + its OWN dropped count` is the true size,
- * not something to reconcile. The daemon divides ONE envelope across THREE lists and can cut all three
- * at once, so one count is no evidence about another. The producer's caps are DAEMON-SIDE and may change
+ * is no evidence of completeness in either direction, and the committed fixture's `3`, `5` and `7` each
+ * beside exactly two rows are the cases that prove it; `list.length + its OWN dropped count` is the true
+ * size, not something to reconcile. The daemon divides ONE envelope across THREE lists and can cut all
+ * three at once, so one count is no evidence about another. The producer's caps are DAEMON-SIDE and may change
  * without any change to this
  * contract, so re-deciding a bound here would be a second place the limit lives, free to disagree
  * silently. NOTHING IS ALLOCATED, SIZED OR LOOPED FROM A CLAIMED COUNT: each `.map` allocates from the
  * array that ACTUALLY arrived, which is AttachmentChunkPayload's never-allocate-from-a-claim rule, and
  * the arrays themselves are already bounded because parseInboundMessage checks MAX_PLAINTEXT_BYTES as its
  * first statement — ahead of decodeEnvelope and therefore ahead of the JSON.parse that materialises them.
- * Iterating a SECOND daemon-supplied list does not double that exposure: both are materialised by that
- * one parse, so they COMPETE FOR ONE BYTE BUDGET rather than each getting their own.
+ * Iterating a SECOND and a THIRD daemon-supplied list does not multiply that exposure: all three are
+ * materialised by that one parse, so they COMPETE FOR ONE BYTE BUDGET rather than each getting their own.
  *
  * NO RANGE CHECK ON ANY OF THE THREE INTEGERS AND NO CROSS-FIELD CHECK, and the daemon's contract is why:
  * the reading is INFORMATIONAL — claude's own integers, which the daemon neither recomputes nor
@@ -2397,8 +2467,10 @@ function parseContextUsageMCPTool(payload: unknown): ContextUsageMCPTool {
  *
  * Any missing / mistyped field throws WireDecodeError (never a partial value), dropping the frame as a
  * whole the way every other arm drops one. Its messages name the failure CATEGORY only, never
- * interpolating a value: `model` and every row's `name` are untrusted claude-authored text, every
- * `server_name` is workspace configuration, and `conversation_id` is a correlating identifier.
+ * interpolating a value: `model`, every row's `name` and every `type` are untrusted claude-authored
+ * text, every `server_name` is workspace configuration, every `path` NAMES THE OPERATOR'S OWN FILESYSTEM
+ * — disclosing a home-directory username and a project name, the strongest such ground on the frame —
+ * and `conversation_id` is a correlating identifier.
  */
 function parseContextUsagePayload(payload: unknown): ContextUsagePayload {
   if (!isRecord(payload)) {
@@ -2421,6 +2493,12 @@ function parseContextUsagePayload(payload: unknown): ContextUsagePayload {
   }
   const mcp_tools = rawTools.map(parseContextUsageMCPTool)
   const dropped_mcp_tools = requireNumber(payload, 'dropped_mcp_tools')
+  const rawMemoryFiles = payload.memory_files
+  if (!Array.isArray(rawMemoryFiles)) {
+    throw new WireDecodeError('malformed context usage memory files list')
+  }
+  const memory_files = rawMemoryFiles.map(parseContextUsageMemoryFile)
+  const dropped_memory_files = requireNumber(payload, 'dropped_memory_files')
   return {
     conversation_id,
     model,
@@ -2430,7 +2508,9 @@ function parseContextUsagePayload(payload: unknown): ContextUsagePayload {
     categories,
     dropped_categories,
     mcp_tools,
-    dropped_mcp_tools
+    dropped_mcp_tools,
+    memory_files,
+    dropped_memory_files
   }
 }
 

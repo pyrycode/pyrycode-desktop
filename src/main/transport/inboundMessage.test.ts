@@ -396,13 +396,14 @@ function encodeContextUsage(payload: unknown): Uint8Array {
 }
 
 /** The daemon's committed `internal/protocol/testdata/context_usage.json` payload, transcribed whole
- *  (#1454). Since #1459 the `categories` and `mcp_tools` pairs are BOTH read and the remaining TWO
- *  memory-file keys are carried verbatim and deliberately, so the fixture is still simultaneously the
- *  forward-compat case — the drop is proven against a real frame rather than an invented extra key.
- *  `Messages <&>` (#1455) and the MCP row's embedded newline and `remote<mcp>` metacharacters (#1459)
- *  are adversarial upstream on purpose and all CROSS, byte-for-byte and unescaped, which is the point:
- *  escaping is owed at the render sink, not at this decoder. `../../../etc/passwd` is still unread and
- *  remains a MUST-review item for #1460. */
+ *  (#1454). Since #1460 EVERY key on it is read: the reading, all three inventories and all three
+ *  dropped counts. `Messages <&>` (#1455), the MCP row's embedded newline and `remote<mcp>`
+ *  metacharacters (#1459) and the memory-file row's `../../../etc/passwd` (#1460) are adversarial
+ *  upstream on purpose and all CROSS, byte-for-byte and unescaped, which is the point: escaping is owed
+ *  at the render sink, not at this decoder. That traversal path is the upstream fixture's clearest
+ *  statement that the inventory is a PATH-TRAVERSAL SURFACE, and it is now pinned as a decoded VALUE
+ *  rather than as a dropped one. The payload-level forward-compat proof is the planted-`turn_id` test
+ *  below, which no longer shares this fixture's job. */
 const CONTEXT_USAGE_FRAME = {
   conversation_id: 'conversation-context',
   model: 'claude-opus-5',
@@ -426,12 +427,14 @@ const CONTEXT_USAGE_FRAME = {
   dropped_memory_files: 7
 }
 
-/** The reading plus both decoded inventories that fixture must narrow to — the decoder's whole output
- *  for it (#1454 the five, #1455 the category pair, #1459 the MCP-tool pair). Every row comes out in
- *  WIRE ORDER, which is the producer's descending-token order; `dropped_categories: 3` and
- *  `dropped_mcp_tools: 5` each sit beside exactly two retained rows, so this constant is also the case
- *  proving nothing reconciles either count against either length — nor the two counts against each
- *  other. */
+/** The reading plus all THREE decoded inventories that fixture must narrow to — the decoder's whole
+ *  output for it, and since #1460 its whole INPUT too (#1454 the five, #1455 the category pair, #1459
+ *  the MCP-tool pair, #1460 the memory-file pair). Every row comes out in WIRE ORDER, which is the
+ *  producer's descending-token order; `dropped_categories: 3`, `dropped_mcp_tools: 5` and
+ *  `dropped_memory_files: 7` each sit beside exactly two retained rows, so this constant is also the
+ *  case proving nothing reconciles any count against any length — nor the three counts against each
+ *  other. The traversal-shaped `path` is transcribed here VERBATIM: not joined, not cleaned, not
+ *  resolved, not normalised. */
 const CONTEXT_USAGE = {
   conversation_id: 'conversation-context',
   model: 'claude-opus-5',
@@ -447,7 +450,12 @@ const CONTEXT_USAGE = {
     { name: 'read_file', server_name: 'filesystem', tokens: 1450 },
     { name: 'query\ndocs', server_name: 'remote<mcp>', tokens: 620 }
   ],
-  dropped_mcp_tools: 5
+  dropped_mcp_tools: 5,
+  memory_files: [
+    { path: '/Users/dev/project/CLAUDE.md', type: 'project', tokens: 3100 },
+    { path: '../../../etc/passwd', type: 'user', tokens: 240 }
+  ],
+  dropped_memory_files: 7
 }
 
 /** The daemon's committed `context_usage_empty.json` payload (#1454). Its two empty strings and three
@@ -467,9 +475,9 @@ const CONTEXT_USAGE_EMPTY_FRAME = {
   dropped_memory_files: 0
 }
 
-/** What the empty fixture narrows to (#1454, extended #1455 and #1459). Each empty inventory is the
- *  POSITIVE statement that claude reported no categories, or no MCP tools — not an absence — and each
- *  `0` beside one is a genuine zero. */
+/** What the empty fixture narrows to (#1454, extended #1455, #1459 and #1460). Each empty inventory is
+ *  the POSITIVE statement that claude reported no categories, no MCP tools, or no memory files — not an
+ *  absence — and each `0` beside one is a genuine zero. */
 const CONTEXT_USAGE_EMPTY = {
   conversation_id: '',
   model: '',
@@ -479,7 +487,9 @@ const CONTEXT_USAGE_EMPTY = {
   categories: [],
   dropped_categories: 0,
   mcp_tools: [],
-  dropped_mcp_tools: 0
+  dropped_mcp_tools: 0,
+  memory_files: [],
+  dropped_memory_files: 0
 }
 
 /** A well-formed background_task_started payload — the daemon's canonical fixture (#564). Every field
@@ -3068,31 +3078,33 @@ describe('parseInboundMessage — context_usage recognition (#1454, AC1/AC4)', (
     })
   })
 
-  it('drops the TWO memory-file keys still unread, keeping exactly the nine (#1459, forward-compat)', () => {
-    // Not a hypothetical unknown key: `memory_files` and its dropped count are on EVERY real frame, and
-    // this decoder must tolerate them without copying them through. The fresh nine-key literal is what
-    // does that — and is also what makes the narrower prototype-pollution-safe against a planted
-    // `__proto__`. #1460 decodes the last pair.
+  it('returns exactly the ELEVEN keys — a fresh literal, nothing copied through (#1460)', () => {
+    // Every key on the frame is now read, so this is no longer the forward-compat case: the statement
+    // that some inventory keys are deliberately dropped is GONE rather than decremented, and the
+    // payload-level proof moves to the planted-`turn_id` test below. What the fresh eleven-key literal
+    // still buys is prototype-pollution safety against a planted `__proto__` and a decoded value that
+    // carries nothing the daemon did not declare — which is what this key set pins.
     const decoded = parseInboundMessage(encodeContextUsage(CONTEXT_USAGE_FRAME))
     expect(decoded?.kind === 'context-usage' && Object.keys(decoded.contextUsage).sort()).toEqual([
       'categories',
       'conversation_id',
       'dropped_categories',
       'dropped_mcp_tools',
+      'dropped_memory_files',
       'max_tokens',
       'mcp_tools',
+      'memory_files',
       'model',
       'percentage',
       'total_tokens'
     ])
     const json = JSON.stringify(decoded)
-    // The adversarial value still unread must not cross even as opaque data. `../../../etc/passwd` is
-    // the daemon's own fixture value and is the clearest statement that its inventory is a
-    // path-traversal surface for the slice that decodes it — #1460's must-review item.
-    expect(json).not.toContain('etc/passwd')
-    // The INVERSION #1459 owns: `read_file` was pinned as NOT crossing while `mcp_tools` was dropped,
-    // and now it crosses as a decoded value. Asserted rather than deleted, so the pin keeps saying
-    // something true about which inventories this decoder reads.
+    // The INVERSION #1460 owns, and the reason it is asserted rather than deleted: `../../../etc/passwd`
+    // was pinned as NOT crossing while `memory_files` was dropped, and it now crosses as a decoded
+    // VALUE — unjoined, uncleaned, unresolved. The pin keeps saying something true about this decoder,
+    // and it reddens if a later change ever re-drops or normalises the inventory.
+    expect(json).toContain('../../../etc/passwd')
+    // #1459's inversion, unchanged: `read_file` crosses for the same reason one inventory over.
     expect(json).toContain('read_file')
   })
 
@@ -3690,6 +3702,326 @@ describe('parseInboundMessage — context_usage dropped_mcp_tools (#1459, AC4)',
     }))
     const frame = { ...CONTEXT_USAGE_FRAME, mcp_tools: tools, dropped_mcp_tools: 9_000_000 }
     expect(mcpToolsOf(frame)).toHaveLength(200)
+  })
+})
+
+/** Read one decoded frame's memory_files, or fail the test if the arm did not narrow (#1460). The
+ *  `mcpToolsOf` reader one inventory over. */
+function memoryFilesOf(payload: unknown): { path: string; type: string; tokens: number }[] {
+  const decoded = parseInboundMessage(encodeContextUsage(payload))
+  if (decoded?.kind !== 'context-usage') {
+    throw new Error('expected a context-usage decode')
+  }
+  return decoded.contextUsage.memory_files
+}
+
+describe('parseInboundMessage — context_usage memory_file rows (#1460, AC1/AC5)', () => {
+  it("carries the daemon's two fixture rows in WIRE ORDER, all three values untouched", () => {
+    // Wire order IS the producer's descending-token order, and a cut takes entries off the TAIL — so a
+    // shortened list is never a list with holes, and re-sorting here would destroy the only ordering
+    // signal a consumer gets. Asserted as a sequence, never as a set.
+    expect(memoryFilesOf(CONTEXT_USAGE_FRAME)).toEqual([
+      { path: '/Users/dev/project/CLAUDE.md', type: 'project', tokens: 3100 },
+      { path: '../../../etc/passwd', type: 'user', tokens: 240 }
+    ])
+  })
+
+  it("carries the FIXTURE's traversal-shaped path VERBATIM — not joined, cleaned, resolved (AC5)", () => {
+    // The test this slice exists for, and the must-review item #1454 flagged for whoever decoded this
+    // inventory. `path` is PATH-SHAPED DESCRIPTIVE TEXT, NOT A FILE HANDLE: nothing on this path joins,
+    // cleans, resolves or opens it, because normalising the string would imply it names a real file
+    // this frame acts on, which it does not. The daemon's own comment states it in those words and its
+    // fixture carries `../../../etc/passwd` on purpose so the pass-through is pinned by a test rather
+    // than by prose.
+    //
+    // Pinned structurally as well as by equality, because the three ways a decoder could "helpfully"
+    // touch this value each have a distinct signature: resolving it against a root, collapsing its `..`
+    // segments, or rebasing it onto a leading slash. None may happen.
+    const rows = memoryFilesOf(CONTEXT_USAGE_FRAME)
+    expect(rows[1].path).toBe('../../../etc/passwd')
+    expect(rows[1].path.startsWith('..')).toBe(true)
+    expect(rows[1].path).not.toMatch(/^\//)
+    expect(rows[1].path).toContain('../')
+    // And the absolute row is equally untouched — no trailing-slash strip, no case fold, no realpath.
+    expect(rows[0].path).toBe('/Users/dev/project/CLAUDE.md')
+  })
+
+  it('decodes a row whose BOTH strings are empty and whose tokens are 0 — all three are values', () => {
+    // The daemon states all three keys remain present even when the strings are empty. `requireString`
+    // and `requireNumber` police the TYPE, never truthiness, so a `!value` guard on any of the three
+    // would read a legitimate row as malformed and drop the whole frame with it. This is also the pin
+    // on `requireString` over `requireNonEmptyString`: nothing resolves these strings against
+    // anything — an empty `path` is emphatically NOT a lookup that found the filesystem root — so `''`
+    // is a display value rather than a resolution that silently found nothing.
+    const frame = {
+      ...CONTEXT_USAGE_FRAME,
+      memory_files: [{ path: '', type: '', tokens: 0 }]
+    }
+    expect(memoryFilesOf(frame)).toEqual([{ path: '', type: '', tokens: 0 }])
+  })
+
+  it.each([
+    ['a negative contribution', -1],
+    ['an absurd magnitude', 1_262_304_000_000],
+    ['a contribution exceeding the whole window', 400_000]
+  ])('decodes %s — the row polices type, never range', (_label, tokens) => {
+    // The frame-level no-range-check rule one level down. The inventory need not sum to `total_tokens`
+    // by contract, so no per-row bound and no running total is checked here.
+    const frame = {
+      ...CONTEXT_USAGE_FRAME,
+      memory_files: [{ path: '/Users/dev/project/CLAUDE.md', type: 'project', tokens }]
+    }
+    expect(memoryFilesOf(frame)).toEqual([
+      { path: '/Users/dev/project/CLAUDE.md', type: 'project', tokens }
+    ])
+  })
+
+  it.each([
+    ['a javascript: URI wearing a path shape', 'javascript:alert(document.domain)'],
+    ['a file:// URL', 'file:///etc/shadow'],
+    ['an http URL to an attacker host', 'http://evil.example/steal'],
+    ['a path carrying an embedded NEWLINE and a forged log record', '/tmp/a\r\n{"event":"forged"}'],
+    ['a path carrying HTML metacharacters and whitespace', '  <img src=x onerror="alert(1)">  '],
+    ['a UNC-shaped path', '\\\\evil-host\\share\\payload'],
+    ['a path whose segment is __proto__', '/Users/dev/__proto__/CLAUDE.md']
+  ])('crosses %s unescaped, untrimmed, un-normalised', (_label, path) => {
+    // `path` is WORKSPACE-AUTHORED and unvalidated, and a path-shaped string is not a path-CONSTRAINED
+    // one: the daemon constrains neither the scheme nor the shape, so a `javascript:` or `file://`
+    // value arrives here as an ordinary `path`. Escaping or rewriting any of these HERE would be
+    // escaping at the wrong layer — it corrupts the value for every non-HTML sink and buys false safety
+    // at the real one. The operator ruling (CLAUDE.md, 2026-08-20) puts the escaping at the render
+    // sink, which is #1421's; what this decoder owes is the untouched value and the prohibition that
+    // travels with it: never an `href`, never a `shell.openExternal` target, never a lookup path.
+    //
+    // The embedded newline matters twice over: POSIX paths may legitimately contain one, and this
+    // stream is line-delimited JSON, so a `path` that reached a log field could FORGE A RECORD —
+    // #1459's integrity ground, extended to a field that also names the operator's filesystem.
+    const frame = { ...CONTEXT_USAGE_FRAME, memory_files: [{ path, type: 'user', tokens: 1 }] }
+    expect(memoryFilesOf(frame)).toEqual([{ path, type: 'user', tokens: 1 }])
+  })
+
+  it('does NOT narrow `type` against any closed set — it is a label, never a discriminant', () => {
+    // `type` is claude's own descriptive label for the entry, open by definition, and a client-side set
+    // would fail-close the first frame a later claude release widens. It is also the field most likely
+    // to be mistaken for a DISCRIMINANT: this repo's inbound union narrows on `kind` and its envelopes
+    // narrow on `type`, so a `switch (row.type)` reads as idiomatic here and is exactly wrong. Nothing
+    // may branch security-relevant behaviour on it — it carries no authority, only a label.
+    const frame = {
+      ...CONTEXT_USAGE_FRAME,
+      memory_files: [
+        { path: '/w/CLAUDE.md', type: 'a-type-no-client-knows', tokens: 1 },
+        { path: '/w/other.md', type: '<script>', tokens: 2 }
+      ]
+    }
+    expect(memoryFilesOf(frame)).toEqual([
+      { path: '/w/CLAUDE.md', type: 'a-type-no-client-knows', tokens: 1 },
+      { path: '/w/other.md', type: '<script>', tokens: 2 }
+    ])
+  })
+
+  it("drops a row's unknown keys — including a planted __proto__ — without copying them through", () => {
+    // Each row returns its own FRESH three-field literal, which is what makes the row parser
+    // forward-compatible AND prototype-pollution-safe against a hostile daemon response. An inventory
+    // keyed by path is an obvious downstream view model, and a path is the most plausible key of the
+    // three inventories' strings — so if a consumer indexes these rows the index is a `Map`, never a
+    // plain object, and never a React `key`.
+    //
+    // The row is built through JSON.parse ON PURPOSE. A `__proto__:` key written in an object literal
+    // sets the prototype rather than an own property, so JSON.stringify would drop it before it ever
+    // reached the wire and this test would pass without proving anything.
+    const row: unknown = JSON.parse(
+      '{"path":"/Users/dev/project/CLAUDE.md","type":"project","tokens":3100,"scope":"x","__proto__":{"polluted":1}}'
+    )
+    expect(Object.keys(row as object)).toContain('__proto__')
+    const decoded = memoryFilesOf({ ...CONTEXT_USAGE_FRAME, memory_files: [row] })
+    expect(decoded).toEqual([{ path: '/Users/dev/project/CLAUDE.md', type: 'project', tokens: 3100 }])
+    expect(Object.keys(decoded[0])).toEqual(['path', 'type', 'tokens'])
+    expect({}).not.toHaveProperty('polluted')
+    expect(Object.prototype).not.toHaveProperty('polluted')
+  })
+})
+
+describe('parseInboundMessage — context_usage memory_files list shape (#1460, AC2)', () => {
+  it('decodes an EMPTY list to [] — a positive statement, not an absence', () => {
+    // MarshalJSON normalises a nil slice to `[]` precisely so a client never has to tell the two apart.
+    // `[]` says claude reported no memory files; it must stay distinguishable from the `undefined` a
+    // frame that never arrived yields, which is what the second assertion pins.
+    expect(memoryFilesOf(CONTEXT_USAGE_EMPTY_FRAME)).toEqual([])
+    const neverArrived: { memory_files?: unknown } = {}
+    expect(neverArrived.memory_files).toBeUndefined()
+  })
+
+  it.each([
+    ['null — the daemon never sends one, so it is a real defect', null],
+    ['a string', '/Users/dev/project/CLAUDE.md'],
+    ['a number', 42],
+    ['an object keyed by path', { '/Users/dev/project/CLAUDE.md': 3100 }],
+    ['a boolean', false]
+  ])('fails the WHOLE frame closed when memory_files is %s', (_label, memory_files) => {
+    expect(() =>
+      parseInboundMessage(encodeContextUsage({ ...CONTEXT_USAGE_FRAME, memory_files }))
+    ).toThrow(WireDecodeError)
+  })
+
+  it('fails closed when memory_files is ABSENT — the key is always written, so a missing one is a defect', () => {
+    const absent: Record<string, unknown> = { ...CONTEXT_USAGE_FRAME }
+    delete absent.memory_files
+    expect(() => parseInboundMessage(encodeContextUsage(absent))).toThrow(WireDecodeError)
+  })
+})
+
+describe('parseInboundMessage — context_usage malformed memory_file row (#1460, AC3)', () => {
+  it.each([
+    ['a non-record row', '/Users/dev/project/CLAUDE.md'],
+    ['a null row', null],
+    ['an array row', ['/Users/dev/project/CLAUDE.md', 'project', 3100]],
+    ['a row missing path', { type: 'project', tokens: 3100 }],
+    ['a row missing type', { path: '/Users/dev/project/CLAUDE.md', tokens: 3100 }],
+    ['a row missing tokens', { path: '/Users/dev/project/CLAUDE.md', type: 'project' }],
+    ['a row whose path is mistyped', { path: 42, type: 'project', tokens: 3100 }],
+    ['a row whose path is null', { path: null, type: 'project', tokens: 3100 }],
+    ['a row whose type is mistyped', { path: '/w/CLAUDE.md', type: 42, tokens: 3100 }],
+    ['a row whose type is null', { path: '/w/CLAUDE.md', type: null, tokens: 3100 }],
+    ['a row whose tokens are mistyped', { path: '/w/CLAUDE.md', type: 'project', tokens: '3100' }],
+    ['a row whose tokens are null', { path: '/w/CLAUDE.md', type: 'project', tokens: null }]
+  ])('throws on %s rather than yielding a partial inventory', (_label, row) => {
+    // ONE bad row drops the WHOLE frame. A half-populated inventory presented as complete is the
+    // outcome this narrower exists to prevent — and it is worse than no inventory, because a consumer
+    // cannot tell the two apart once `dropped_memory_files` no longer accounts for the loss.
+    const frame = {
+      ...CONTEXT_USAGE_FRAME,
+      memory_files: [{ path: '/Users/dev/project/CLAUDE.md', type: 'project', tokens: 3100 }, row]
+    }
+    expect(() => parseInboundMessage(encodeContextUsage(frame))).toThrow(WireDecodeError)
+  })
+
+  it('throws a message naming the failure CATEGORY only — no path, no type, no id, no count, no INDEX', () => {
+    // AC3's second half, and the sharpest instance of it on this frame. A `path` is the first field
+    // here that names the operator's own filesystem: the daemon's fixture value alone discloses a home
+    // directory, a username and a project name. `daemonConnection` catches WireDecodeError into a
+    // caller that may log it, and a log is exactly what an operator forwards off-box when reporting a
+    // fault — so a path echoed into this message rides along. The secret below is therefore
+    // home-directory-shaped rather than an abstract token. The row INDEX is excluded too: a weak oracle
+    // over the inventory for no diagnostic gain (`parseModelOption`'s rule).
+    const SECRET_PATH = '/Users/a-real-username/clients/acme-secret-project/CLAUDE.md'
+    const SECRET_TYPE = 'a-secret-memory-type'
+    const SECRET_CONV = 'secret-conversation-id'
+    try {
+      parseInboundMessage(
+        encodeContextUsage({
+          ...CONTEXT_USAGE_FRAME,
+          conversation_id: SECRET_CONV,
+          memory_files: [
+            { path: SECRET_PATH, type: SECRET_TYPE, tokens: 3100 },
+            { path: '/w/other.md', type: 'user', tokens: '240' }
+          ]
+        })
+      )
+      expect.unreachable('a mistyped tokens field must throw')
+    } catch (error) {
+      expect(error).toBeInstanceOf(WireDecodeError)
+      const message = (error as WireDecodeError).message
+      expect(message).toContain('tokens')
+      expect(message).not.toContain(SECRET_PATH)
+      expect(message).not.toContain('a-real-username')
+      expect(message).not.toContain('acme-secret-project')
+      expect(message).not.toContain(SECRET_TYPE)
+      expect(message).not.toContain(SECRET_CONV)
+      expect(message).not.toContain('3100')
+      expect(message).not.toContain('240')
+      expect(message).not.toMatch(/\b(index|row 1|\[1\])\b/i)
+    }
+  })
+
+  it('never crosses the THREE inventories, even in failure', () => {
+    // Each list is decoded independently and none is consulted about the others. A malformed row in ANY
+    // drops the whole frame, and well-formed siblings do not rescue it — which is what pins that no
+    // fallback, no partial and no cross-read exists among them.
+    const badCategory = { ...CONTEXT_USAGE_FRAME, categories: [{ name: 'System prompt', tokens: '1' }] }
+    const badTool = {
+      ...CONTEXT_USAGE_FRAME,
+      mcp_tools: [{ name: 'read_file', server_name: 'filesystem', tokens: '1' }]
+    }
+    const badMemoryFile = {
+      ...CONTEXT_USAGE_FRAME,
+      memory_files: [{ path: '/w/CLAUDE.md', type: 'project', tokens: '1' }]
+    }
+    expect(() => parseInboundMessage(encodeContextUsage(badCategory))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeContextUsage(badTool))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeContextUsage(badMemoryFile))).toThrow(WireDecodeError)
+  })
+})
+
+describe('parseInboundMessage — context_usage dropped_memory_files (#1460, AC4)', () => {
+  it('carries 7 beside TWO retained rows — the count is independent, never reconciled', () => {
+    // The count accumulates TWO cuts: the producer's entry and string caps, plus the mapper's own
+    // frame-byte budget. So a retained list's length is no evidence of completeness in either
+    // direction, and `memory_files.length + dropped_memory_files` is the inventory's true size rather
+    // than something to check. This test reddens if anyone adds that check.
+    const decoded = parseInboundMessage(encodeContextUsage(CONTEXT_USAGE_FRAME))
+    expect(decoded?.kind === 'context-usage' && decoded.contextUsage.dropped_memory_files).toBe(7)
+  })
+
+  it('carries 3, 5 and 7 side by side — the three counts are independent of EACH OTHER', () => {
+    // The daemon divides one envelope across three lists and can cut all three at once, so a sibling's
+    // count is no evidence about this one either. The fixture's three differing counts are the case.
+    const decoded = parseInboundMessage(encodeContextUsage(CONTEXT_USAGE_FRAME))
+    if (decoded?.kind !== 'context-usage') {
+      throw new Error('expected a context-usage decode')
+    }
+    expect([
+      decoded.contextUsage.dropped_categories,
+      decoded.contextUsage.dropped_mcp_tools,
+      decoded.contextUsage.dropped_memory_files
+    ]).toEqual([3, 5, 7])
+  })
+
+  it.each([
+    ['0 beside a populated list — nothing was dropped', { dropped_memory_files: 0 }],
+    ['a count far exceeding the retained rows', { dropped_memory_files: 900 }],
+    ['a negative count — no client-invented range check', { dropped_memory_files: -1 }],
+    ['zero sibling counts beside a non-zero memory-file count', { dropped_categories: 0, dropped_mcp_tools: 0, dropped_memory_files: 7 }]
+  ])('decodes %s untouched', (_label, override) => {
+    const frame = { ...CONTEXT_USAGE_FRAME, ...override }
+    expect(parseInboundMessage(encodeContextUsage(frame))).toEqual({
+      kind: 'context-usage',
+      contextUsage: { ...CONTEXT_USAGE, ...override }
+    })
+  })
+
+  it('decodes 0 beside an EMPTY list — a zero is a value, never an absence', () => {
+    const decoded = parseInboundMessage(encodeContextUsage(CONTEXT_USAGE_EMPTY_FRAME))
+    expect(decoded?.kind === 'context-usage' && decoded.contextUsage.dropped_memory_files).toBe(0)
+  })
+
+  it.each([
+    ['mistyped', { dropped_memory_files: '7' }],
+    ['null', { dropped_memory_files: null }]
+  ])('fails the whole frame closed when dropped_memory_files is %s', (_label, override) => {
+    expect(() =>
+      parseInboundMessage(encodeContextUsage({ ...CONTEXT_USAGE_FRAME, ...override }))
+    ).toThrow(WireDecodeError)
+  })
+
+  it('fails closed when dropped_memory_files is ABSENT — no omitempty, so an absent key is a defect', () => {
+    const absent: Record<string, unknown> = { ...CONTEXT_USAGE_FRAME }
+    delete absent.dropped_memory_files
+    expect(() => parseInboundMessage(encodeContextUsage(absent))).toThrow(WireDecodeError)
+  })
+
+  it('caps nothing and allocates nothing from the CLAIMED count', () => {
+    // The never-allocate-from-a-claim rule (AttachmentChunkPayload's `new Array(total_chunks)` hazard).
+    // A huge count beside the rows that ARRIVED must decode instantly and yield exactly those — the
+    // decoder sizes from the array it actually got, never from the number the daemon asserts. AC4 also
+    // forbids a client-side entry cap, so a long list decodes whole. All THREE lists long at once,
+    // because they compete for ONE frame-byte budget rather than each getting their own.
+    const files = Array.from({ length: 200 }, (_unused, i) => ({
+      path: `/w/m${i}.md`,
+      type: `t${i}`,
+      tokens: i
+    }))
+    const frame = { ...CONTEXT_USAGE_FRAME, memory_files: files, dropped_memory_files: 9_000_000 }
+    expect(memoryFilesOf(frame)).toHaveLength(200)
   })
 })
 

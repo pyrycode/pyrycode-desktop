@@ -89,6 +89,9 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
   const channelInput = channelDialog.getByRole('textbox', { name: 'Channel name:', exact: true })
   const channelOk = channelDialog.getByRole('button', { name: 'OK', exact: true })
   const channelCancel = channelDialog.getByRole('button', { name: 'Cancel', exact: true })
+  // #1438's content-slot button. Located by its accessible name, which IS its text — the walk below is
+  // the only thing this spec asks of it; the send it performs belongs to `edit-channel-system-prompt`.
+  const channelArchive = channelDialog.getByRole('button', { name: 'Archive channel', exact: true })
 
   // launchPairedApp lands IN the seeded row's thread (it clicked the seeded promoted row to reach it),
   // with activeConversation = SEED. The app-singleton conversation-list store already holds SEED (listed
@@ -244,16 +247,20 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
   })
   expect(await channelDialog.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
   await channelInput.fill('  Renamed saved channel  ')
-  // TWO Tabs to OK, not the three the chat dialog needs, so the document order is input → Cancel → OK.
-  // #1477 put a SECOND field in the Modal's content slot — the Channel system prompt text area — and the
-  // walk is unchanged anyway, because that box is `disabled` until the daemon answers
-  // `request_system_prompt` and a disabled control stays OUT OF THE TAB ORDER. `conversationStateFake`
-  // answers that verb never, so at this tier the box is permanently in its reading arm. (A `readOnly`
-  // spelling of the same gate WOULD have taken a third stop here, which is why it is not one.) #1438 adds
-  // this dialog's own content-slot BUTTON, which is focusable, and puts a third stop back for real. The
+  // THREE Tabs to OK — the chat dialog's own count, reached exactly as the two-Tab version of this
+  // comment predicted: #1438 put this dialog's own focusable BUTTON in the Modal's content slot. The
+  // document order is input → Archive channel → Cancel → OK, and that button must NOT be reachable as a
+  // footer button: an Archive landing after Cancel would put a channel's put-away inside the dialog's
+  // answer row.
+  // #1477's Channel system prompt text area is SKIPPED rather than absent — it is `disabled` until the
+  // daemon answers `request_system_prompt`, and a disabled control stays OUT OF THE TAB ORDER.
+  // `conversationStateFake` answers that verb never, so at this tier the box is permanently in its
+  // reading arm. (A `readOnly` spelling of the same gate would have taken a stop here too.) The
   // scroll-into-view assertion below is what this walk is really for: in a 180px-tall window the focused
   // footer button must still be reachable.
   await channelInput.press('Tab')
+  await expect(channelArchive).toBeFocused()
+  await page.keyboard.press('Tab')
   await expect(channelCancel).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(channelOk).toBeFocused()

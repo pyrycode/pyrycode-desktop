@@ -526,6 +526,30 @@ export function ChannelList({
             // Dismissal is unconditional: BOTH arms close. An unchanged name is a no-op, not a refusal.
             setEditChannelRow(null)
           }}
+          // #1438 — the archive arm, the SAME interaction-time re-check the save above takes and the
+          // same one the chat dialog's own archive takes, with `window.pyry` dereferenced here rather
+          // than during render for the same two reasons.
+          //
+          // ⭐ IT ARCHIVES `editChannelRow` — THE ROW THIS MODAL WAS OPENED ON, never whichever
+          // conversation the chat pane happens to hold. That is true BY CONSTRUCTION rather than by a
+          // check: the id comes from the same captured cell the rename above reads, and there is no
+          // active-conversation lookup anywhere on this path to get it wrong. It is worth stating
+          // because the modal opens from ANY row, so "the row" and "the open conversation" are routinely
+          // two different conversations here — the reason `edit-channel-system-prompt.spec.ts` drives
+          // this click with a promoted row standing beside a separate open chat.
+          //
+          // It sends ONE command and closes. NEITHER the rename NOR the prompt write goes out, whatever
+          // the two fields hold — `writePrompt` is the container's and is reachable only from inside the
+          // save's guard, never from here — nothing is written to a store, nothing navigates, and
+          // nothing logs. The row leaves the sidebar on the daemon's `conversation_updated` re-list, and
+          // if this channel is also the chat on screen, the existing archived-active bridge is what
+          // leaves the thread. `requestArchiveConversation` is already imported for the chat dialog's
+          // own archive and #1439's workspace fan-out, so this adds no command literal and no wire type.
+          onArchive={() => {
+            if (!canMutateHost(editChannelRow.serverId)) return
+            requestArchiveConversation(window.pyry.sendCommand, editChannelRow.id)
+            setEditChannelRow(null)
+          }}
         />
       )}
       {/* #1179 — gated on an explicit `!== null` and NEVER on truthiness: an empty-string `cwd` would

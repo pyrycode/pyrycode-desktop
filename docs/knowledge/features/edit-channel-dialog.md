@@ -7,9 +7,13 @@ row used to share with a chat. Introduced in [#1476](https://github.com/pyrycode
 split from [#1430](https://github.com/pyrycode/pyrycode-desktop/issues/1430). [#1477](https://github.com/pyrycode/pyrycode-desktop/issues/1477)
 added the **Channel system prompt:** field under the name, which is what makes this modal the one
 place Juhana's ruling asks for — see [§ The system prompt field](#the-system-prompt-field-1477)
-below. The outlined Archive/Remove-channel button drawn below the field in Figma is
-[#1438](https://github.com/pyrycode/pyrycode-desktop/issues/1438)'s and is not yet built. Every one
-of these extends this page and this file rather than adding a sibling.
+below. [#1438](https://github.com/pyrycode/pyrycode-desktop/issues/1438) added the outlined
+**Archive channel** button drawn below the field in Figma — see
+[§ The archive button](#the-archive-button-1438) below. (Filed as *Remove channel*; lettered
+**Archive channel** on the drawing and settled that way by the refiner on 2026-09-15, matching the
+sibling chat dialog's **Archive chat** and the fact that the channel lands in the Archive screen's
+Channels tab and Restore brings it back.) Every one of these extends this page and this file rather
+than adding a sibling.
 
 ## What it does
 
@@ -23,9 +27,12 @@ of these extends this page and this file rather than adding a sibling.
 - Activating it opens the [shared Modal](modal-presentation.md) at 640px preferred width: an **Edit
   channel** title, header close control, divider, a **Channel name:** filled input prefilled with the
   row's displayed title (`titleFor(row.name)`, including the **Untitled** fallback), a **Channel
-  system prompt:** label over a filled, borderless text area (below), and centred outlined-Cancel /
-  filled-OK actions. There is no Archive chat button — the one thing this dialog deliberately does
-  not inherit from its sibling.
+  system prompt:** label over a filled, borderless text area (below), an outlined **Archive channel**
+  button in the content area itself — left-aligned below the text area, above the footer — and
+  centred outlined-Cancel / filled-OK actions. That button is not the chat dialog's **Archive chat**:
+  different word, different namespace (`.edit-channel__archive`, never `.rename-conversation__archive`),
+  and this dialog still inherits nothing from its sibling — see
+  [§ The archive button](#the-archive-button-1438).
 - OK is disabled on a blank (or whitespace-only) name, and additionally on a system prompt over
   `MAX_SYSTEM_PROMPT_BYTES` in UTF-8 bytes. **It is never disabled by an outstanding system-prompt
   read** — see [§ The system prompt field](#the-system-prompt-field-1477). On a non-blank,
@@ -72,13 +79,17 @@ it (**Channel system prompt:** over a `.edit-channel__textarea`, 4 rows). Both r
 over-limit lines render *outside* their wrapping label, so neither joins the field's accessible
 name — `ChannelForm`'s stated rule, restated here rather than imported (see below).
 
-**No `available` prop**, unlike its sibling. That prop exists on `EditChatDialogView` because
-[#1440](rename-conversation-dialog.md)'s Archive chat sits in the *gap* between two buttons' disabled
-expressions — OK reads `blank || !available`, Archive chat reads `!available` alone. This dialog has
-one button and no such gap; its host guard is the container's render gate (`connected(...)`) plus the
-save callback's own interaction-time re-check (below). [#1438](https://github.com/pyrycode/pyrycode-desktop/issues/1438)
-adds the prop when it adds the second button that needs it — shipping it now would be a prop with one
-value and no caller.
+**No `available` prop** — and [#1438](https://github.com/pyrycode/pyrycode-desktop/issues/1438)
+answered that forecast "no" rather than adding one when it shipped the second button. That prop exists
+on `EditChatDialogView` because [#1440](rename-conversation-dialog.md)'s Archive chat sits in the
+*gap* between two buttons' disabled expressions — OK reads `blank || !available`, Archive chat reads
+`!available` alone. #1438's Archive channel button removes the gap outright by carrying no disabled
+arm of its own: it stays live on a blank name and while the prompt read is still outstanding, because
+those are OK's conditions and not its. With no disabled expression there is nothing for `available` to
+feed, and a second render-time host authority could only disagree with the interaction-time re-check
+that already guards the send — see [§ The archive button](#the-archive-button-1438). The host guard
+stays the container's pair: the render gate on `connected(...)`, plus each caller's own live re-check
+at interaction time.
 
 The title lives in a module constant, `EDIT_CHANNEL_TITLE`, in `EDIT_CHAT_COPY`'s idiom: apostrophe-
 free, interpolating no conversation name, because it is a load-bearing `getByRole('dialog', { name:
@@ -254,6 +265,62 @@ the newer sibling. `.edit-channel__reading` takes `--color-on-surface-variant` (
 own empty-state colour) rather than the notice's `--color-error`: it reports progress, not a
 failure.
 
+### The archive button (#1438)
+
+`ARCHIVE_CHANNEL_LABEL`, a module constant reading **Archive channel** — client-owned, apostrophe-free,
+interpolating neither the channel's name nor its id, and the button's accessible name (no `aria-label`,
+which would put a string into an attribute). It is disjoint from `EDIT_CHAT_COPY.archive` (**Archive
+chat**) only from its fifth-from-last character on, the same razor-thin margin `Edit chat` / `Edit
+channel` already keep on the two rows' pens; both dialogs' specs assert the two literals apart on
+exactly that.
+
+`EditChannelDialogView` renders it last in the Modal's content slot, under `.edit-channel__actions` /
+`.edit-channel__archive` — the drawing's `Actions` frame, below the text area and its two notice lines,
+above the centred footer. **It carries no `disabled` arm on any branch.** OK's two conditions (a blank
+name, a prompt past the byte bound) are OK's alone: putting a channel away has nothing to do with what
+either field currently holds, so the button stays live on a blank name and while the prompt read is
+still outstanding. This is what let the `available` forecast above be answered "no" — see there.
+
+The prop carrying its effect, `onArchive: () => void`, is **required** on both `EditChannelDialogView`
+and the `EditChannelDialog` container (the `EditWorkspaceArchive` rule the chat dialog already
+restates: a view that cannot act is a bug), and **nullary** (the dialog is open against exactly one
+conversation, whose id every caller already holds). The container forwards it verbatim, taking no
+guard, no send and no log of its own — those stay with each caller, because the two mount sites
+re-check different halves of the same question and the container is in no position to choose between
+them.
+
+**The container has two mount sites, and both wire `onArchive` — a required prop makes a mis-wire a
+compile error at both rather than an inert button on one:**
+
+- **`ChannelList.tsx`** (the sidebar pen) — `canMutateHost(editChannelRow.serverId)`, then
+  `requestArchiveConversation(window.pyry.sendCommand, editChannelRow.id)`, then
+  `setEditChannelRow(null)`. `editChannelRow` is the same captured cell the rename arm above it reads,
+  which is what makes "the row the modal was opened on, never whichever conversation the chat pane
+  holds" true by construction rather than by a check — the modal opens from *any* row, so the two are
+  routinely different conversations. `requestArchiveConversation` was already imported for the chat
+  dialog's own Archive chat and [#1439](edit-workspace-dialog.md)'s workspace fan-out, so this adds no
+  command literal and no wire type.
+- **`ConversationScreen.tsx`**'s `ChannelInfoSheet` (the Channel info sheet's edit pill for a promoted
+  channel, the second mount site [#1431](https://github.com/pyrycode/pyrycode-desktop/issues/1431) gave
+  this container — see below) —
+  `connectedConversationHostNow(conversation.id)`, the same send, then `setRenameOpen(false)` **and**
+  `onClose()`, dismissing the sheet as well as the dialog — a sheet left standing describes a row on its
+  way out. This mount site was not in the ticket's own file estimate; it exists because the container
+  already had two callers as of #1431, and a required prop makes both compile-time callers rather than
+  one by choice.
+
+Neither caller calls `writePrompt()` on this path — a deliberate omission, not an oversight: the
+system-prompt draft is operator-authored text that #1477's own docblock treats as possibly holding a
+pasted credential, and it must not ride out on a click that promised to send nothing else. It simply
+dies with the container's unmount. AC2's `set_system_prompt`-absent assertion, and the equivalent
+`rename_conversation`-absent assertion, both pin this at the e2e tier — see
+[§ Edge cases](#edge-cases-and-limitations) below.
+
+`channels.css`'s `.edit-channel__actions` / `.edit-channel__archive` restate
+`.rename-conversation__actions` / `__archive` declaration for declaration under this namespace — the
+same locator ruling the block header states twice. One rule is deliberately **not** carried: the
+sibling's `:disabled` arm, since this button has no disabled state to select.
+
 ## Edge cases and limitations
 
 - **A rename the daemon never confirms simply leaves the row's title unchanged** — the same answer
@@ -278,7 +345,14 @@ failure.
   (non-promoted) opened from the sheet still reaches Edit chat, not this dialog — #1431 did not touch
   that arm. See [Conversation shell — session boundaries and channel info § Rename
   action](conversation-shell-session-and-channel-info.md#channel-info-sheet-365) for the sheet-side
-  half of this split.
+  half of this split. [#1438](https://github.com/pyrycode/pyrycode-desktop/issues/1438)'s Archive
+  channel button reaches both entry points the same way — see
+  [§ The archive button](#the-archive-button-1438) — because the prop carrying it is required, so both
+  mount sites had to wire it at compile time rather than one growing a button the other lacks.
+- **An archive the daemon never confirms simply leaves the row in place** — the same answer the Channel
+  info sheet's own Archive and the Edit chat dialog's Archive chat give. There is no busy state and no
+  failure line: the archive is a one-way command with no invoke result, so there is nothing to await and
+  no arm to wait in.
 - **A reply that never comes leaves the box unreadable indefinitely.** There is no timeout, retry or
   error frame on the read — `SystemPromptSection`'s own accepted posture for this reply-only frame,
   inherited rather than re-decided. A malicious or slow relay that withholds `system_prompt` leaves
@@ -288,19 +362,28 @@ failure.
   daemon that picks its own conversation id could in principle direct a prompt write at a conversation
   of its choosing. No client-side compare of a field that same party supplies can prevent that; it is
   the shipped exposure of the rename path too, not something #1477 widened.
-- **Static markup cannot prove event wiring.** `EditChannelDialog.test.tsx` covers accessible names,
-  the header word (**Edit chat** and **Rename** both asserted *absent*, not merely unmentioned — five
-  e2e specs locate this dialog by role name), the seeded field, OK's disabled state (including that
-  it is **not** disabled by a `reading` prompt — a pinned regression assertion), the missing Archive
-  chat button, the `.edit-channel*` namespace, an over-limit prompt disabling OK independently of the
-  name, an `undefined`- and an `''`-sourced seed both rendering an empty box, and escaping (a prompt
-  containing `&`/`<` renders as text, never markup, never an `aria-label`). The open → type → OK →
-  dismiss transition, the unchanged-field no-send, the reopen-from-fresh-ask and the host-loss close
-  all belong to Playwright: `edit-channel-system-prompt` (the ask on open, the seed, prompt-only,
-  clear, both together, no-change-sends-nothing, and a wrong-conversation reply seeding nothing),
-  plus the unchanged `conversation-state-fake`, `conversation-create-rename`,
-  `sidebar-offline-mutations`, `sidebar-control-name-pill`, `sidebar-row-geometry` and (behind
-  `npm run e2e:real:gate`) `real-daemon-rename`.
+- **Static markup cannot prove event wiring, and cannot click at all.** `EditChannelDialog.test.tsx`
+  covers accessible names, the header word (**Edit chat** and **Rename** both asserted *absent*, not
+  merely unmentioned — five e2e specs locate this dialog by role name), the seeded field, OK's disabled
+  state (including that it is **not** disabled by a `reading` prompt — a pinned regression assertion),
+  the Archive channel button's copy, placement, namespace and the *absence* of any `disabled` arm on
+  any branch (AC1), that it stays disjoint from **Archive chat** and the `.rename-conversation*`
+  namespace (AC2), an over-limit prompt disabling OK independently of the name, an `undefined`- and an
+  `''`-sourced seed both rendering an empty box, and escaping (a prompt containing `&`/`<` renders as
+  text, never markup, never an `aria-label`). Since `renderToStaticMarkup` discards every handler and
+  nothing in this repo can click, a small element-tree walk (`archiveButtonProps`, recursing through
+  `props.children` — including through `Modal`'s unrendered `children` prop) is what proves `onArchive`
+  is *bound* rather than merely drawn, invoking it and asserting `onSave`/`onCancel` stay silent. The
+  open → type → OK → dismiss transition, the unchanged-field no-send, the reopen-from-fresh-ask, the
+  host-loss close and the click itself all belong to Playwright: `edit-channel-system-prompt` (the ask
+  on open, the seed, prompt-only, clear, both together, no-change-sends-nothing, a wrong-conversation
+  reply seeding nothing, and — a second `test()` — the sidebar's Archive channel click naming the row it
+  opened on while a separate conversation stays open, `mutations` empty, the row gone from the sidebar),
+  `conversation-create-rename` (the pinned Tab walk, now three stops: input → Archive channel → Cancel
+  → OK), plus the unchanged `conversation-state-fake`, `sidebar-offline-mutations`,
+  `sidebar-control-name-pill`, `sidebar-row-geometry` and (behind `npm run e2e:real:gate`)
+  `real-daemon-rename`. **Not driven anywhere:** the Channel Info sheet's own Archive channel send —
+  see [§ Lessons learned](#lessons-learned).
 
 ## Lessons learned
 
@@ -311,9 +394,24 @@ failure.
   to exercise. It was deleted rather than retitled; both halves of that acceptance criterion survive
   on the sheet's own arm. The cost is real: that deleted arm was the only place proving Archive chat
   acts on *the row the control was on* rather than on *the open conversation*, since the sheet is
-  always the open conversation. **#1438 should re-establish that assertion** when it draws this
-  modal's own put-away button — the drive it needs (a promoted sidebar row that is not the open chat)
-  is already set up in that spec, just no longer aimed at anything.
+  always the open conversation. **#1438 re-established that assertion** when it drew this modal's own
+  put-away button: `edit-channel-system-prompt.spec.ts` gained a second `test()` that seeds a promoted
+  `seed-conversation` row carrying the pen beside a separately minted, *open* `created-1` chat, edits
+  both fields, clicks Archive channel, and asserts the single `archive_conversation` names
+  `seed-conversation`, `mutations` stays empty, and the open thread survives — the positive half of "the
+  row the control was on, not the open conversation."
+- **A required prop forces every mount site to compile against it, not to be driven by a test.** #1438's
+  `onArchive` reached `ConversationScreen`'s `ChannelInfoSheet` as a fourth production file because the
+  prop is required — correct, and exactly the point of making it required (§ above) — but the ticket's
+  own testing strategy still drove only the sidebar arm. `channel-info-edit-channel.spec.ts`, the only
+  spec touching that mount site, asserts which dialog the sheet opens and nothing past it; nothing at
+  either tier proves the sheet's Archive channel button sends `archive_conversation`, dismisses both the
+  dialog and the sheet, or withholds the rename. The verifier flagged this as a SHOULD FIX rather than a
+  MUST FIX — the confused-deputy hazard the sidebar arm's dedicated test exists to catch does not apply
+  here, since only `conversation.id` is ever in scope on the sheet's path — but the send itself remains
+  unproven. A future change to that arm should add the drive to `conversation-create-rename.spec.ts`,
+  which already opens the sheet on Edit channel for its Tab-order walk, rather than assume the sidebar
+  spec's coverage reaches this mount site too.
 - **Two e2e markers stayed disjoint only by their terminating quote.** `aria-label="Edit chat"` is not
   a substring of `aria-label="Edit channel"` *because* both literals carry the closing `"`. Every
   per-tree count in `ChannelList.test.tsx` and `sidebar-control-name-pill.spec.ts` rests on that;

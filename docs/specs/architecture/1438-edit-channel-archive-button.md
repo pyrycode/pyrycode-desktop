@@ -211,3 +211,73 @@ Owned by the documentation stage, pending. In `docs/knowledge/features/edit-chan
   `conversation-create-rename.spec.ts` alone pins the in-dialog walk (updated here); the other Tab walks
   in `sidebar-row-geometry` and `sidebar-control-name-pill` are sidebar-row walks, and
   `channel-info-edit-channel.spec.ts` locates by exact name. Re-confirmed by running the touched specs.
+
+## Security review
+
+**Verdict:** PASS
+
+**Findings:**
+
+- **[Trust boundaries]** No new boundary. The one value crossing renderer → main is the conversation id,
+  through the **shipped** `archiveConversation` command arm whose payload main already shape-checks; this
+  ticket adds no command literal, no wire type and no IPC arm, so the boundary is exactly where #1440 and
+  the workspace fan-out already put it. The id itself is **daemon-asserted** — a hostile or impersonating
+  daemon that picks its own conversation id could direct an archive at a conversation of its choosing.
+  That is the shipped exposure of every mutation in this file (the rename path, the sheet's own Archive),
+  recorded on `edit-channel-dialog.md`; no client-side compare of a field that same party supplies can
+  close it, and nothing here widens it.
+- **[Trust boundaries — confused deputy]** The *new* authorization-shaped hazard is acting on the wrong
+  conversation: a button in a modal opened from a sidebar row, in an app whose chat pane holds a different
+  conversation, is exactly the shape that archives the wrong thing. Closed by construction rather than by
+  a check — the send reads `editChannelRow`, the row captured by the same JSX closure the rename arm
+  reads, never an "active conversation" lookup — and proven by the e2e drive AC3 points at, which seeds a
+  promoted row beside a *different* open conversation precisely to catch a regression here.
+- **[Tokens, secrets, credentials]** SHOULD FIX, as an implementation binding: **the archive path must not
+  call `writePrompt()`.** No token, key or credential is on this path, but the system prompt draft is
+  operator-authored text that #1477's own docblock treats as possibly holding a pasted credential, and it
+  arrived over the network. An implementer "helpfully" saving the draft before putting the channel away
+  would send the operator's in-progress prompt on a click that promised to send nothing. The plan's
+  sequence is guard → send → dismiss with no write; the draft dies with the unmounted container. AC2 and
+  the e2e drive both assert `set_system_prompt` is absent, so the verifier can check this landed.
+- **[File / storage operations]** No findings — nothing on this path touches the filesystem, storage or a
+  cache. Per CLAUDE.md's ruling the channel's name and id reach no filename, no cache key and no lookup
+  path; the button's label is a client-owned constant interpolating neither.
+- **[Inter-process / Electron attack surface]** No findings — no new `contextBridge` API, no new
+  `ipcMain` arm, no `webPreferences` change, no protocol registration, no navigation, and nothing moved
+  out of the background process. A compromised renderer could already send `archiveConversation` over the
+  existing command channel, so this button grants the web layer no authority it did not have. The one
+  design choice with a security edge is the **required** `onArchive` prop: it makes a mis-wire a compile
+  error at both mount sites rather than an inert button on one of them, and each caller passes the id it
+  already holds rather than resolving one.
+- **[Cryptographic primitives]** Not applicable by design — no randomness, no hashing, no key material, no
+  comparison against a secret, and no interaction with the Noise session beyond handing one already-typed
+  command to the shipped transport. The `Noise_IK_25519_ChaChaPoly_BLAKE2s` constant is untouched.
+- **[Network & I/O]** No findings — no new socket, frame type, size cap or timeout. One fire-and-forget
+  command per click, with **no retry, no timer and no loop**: the modal unmounts on the same click, so
+  another send needs another deliberate open. A hostile relay that swallows the command or the
+  `conversation_updated` leaves the row in place, which is the shipped posture at both sibling surfaces,
+  and nothing awaits the reply so a withheld frame cannot hang or pin the UI.
+- **[Error messages, logs, telemetry]** No findings, and this is AC2's own clause: nothing on this path
+  logs. The only diagnostic reachable is `canMutateHost`'s existing refusal,
+  `{ event: 'sidebar-mutation', code: 'host-unavailable' }` — two static client-owned strings carrying no
+  conversation id, no name and no prompt. This ticket adds no `sendDiagnostic`, no `console.*`, and no
+  exhaustive `DaemonEvent` switch (whose `assertNever` would `JSON.stringify` an event that on one arm is
+  the operator's prompt text onto a path reaching a console or a crash reporter — the container's standing
+  ban, unchanged here).
+- **[Concurrency]** No findings. Nothing async is started: no promise, timer, interval or listener is
+  added, so there is no `AbortController` to thread and no cleanup to write. The click unmounts the
+  container, and React runs the existing effect's `off` cleanup, so the system-prompt listener is removed
+  rather than left to fire into a dead cell. Rapid repeated clicks within one frame were considered: a
+  duplicate would be a second `archive_conversation` for an already-archived conversation, which is
+  idempotent daemon-side (`is_archived = true`), confers nothing and loses nothing — the same accepted
+  shape the sibling Archive chat ships, not a new exposure.
+- **[Threat model alignment]** The content-blind but on-path relay can drop, delay or reorder this
+  command; every outcome is "the row stays", which is the stated rule, and it can read nothing inside the
+  Noise session. A hostile daemon response is not consumed at all on this path — nothing is dispatched on
+  the reply — and the re-list that does consume one is shipped and unchanged. Token theft from disk and
+  renderer-compromise-reaching-the-transport are unaffected: no secret is read, written or moved.
+  **Out of scope, unchanged from the shipped surfaces:** a daemon that lies about conversation ids
+  (first finding above) — no ticket, because no client-side fix exists.
+
+**Reviewer:** builder (self-review per `builder/security-review.md`)
+**Date:** 2026-09-15

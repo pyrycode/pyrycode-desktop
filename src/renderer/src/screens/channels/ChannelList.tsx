@@ -94,7 +94,7 @@ import { EditChatDialogView, requestRenameConversation } from './EditChatDialog'
 // #1476 — the Channels tree's own modal. `requestRenameConversation` stays imported from the module
 // above and is reused verbatim by both: it owns the `renameConversation` literal, reads only `.id` and
 // already trims, so the retitle costs no second command constructor and no second wire path.
-import { EditChannelDialogView } from './EditChannelDialog'
+import { EditChannelDialog } from './EditChannelDialog'
 import { CreateChannelDialog } from './CreateChannelDialog'
 // #1180 — the view and its send helper travel together, unlike #1179's split: this verb has exactly
 // one sender and no shipped twin to sit beside, which is `EditChatDialog`'s shape.
@@ -476,20 +476,40 @@ export function ChannelList({
       )}
       {/* #1476 — the Channels tree's own modal, a sibling of the chat dialog above and not a variant of
           it. The SAME render gate its five siblings carry, so AC3's "closes if the row's host stops
-          being connected" holds on the very next paint even before the subscription above fires. */}
-      {editChannelRow && connected(editChannelRow.serverId) && (
-        <EditChannelDialogView
+          being connected" holds on the very next paint even before the subscription above fires.
+
+          #1477 mounted a CONTAINER in the view's place, so this modal now owns a daemon subscription and
+          its subscription's lifetime is exactly this gate's — which is what makes that ticket's "a reopen
+          starts from a fresh ask rather than the abandoned draft" true with no reset code here. The
+          `typeof … === 'string'` is BEHAVIOUR-IDENTICAL to what shipped (`connected` already answers
+          false for a non-string) and is present only so `serverId` narrows to `string` for the container
+          without a `!` or an `as`. */}
+      {editChannelRow && typeof editChannelRow.serverId === 'string' &&
+        connected(editChannelRow.serverId) && (
+        <EditChannelDialog
+          conversationId={editChannelRow.id}
+          serverId={editChannelRow.serverId}
           name={editChannelName}
           onNameChange={setEditChannelName}
           // Cancel and the header close are ONE callback and send nothing (AC2). The draft dies with the
           // cell, so a reopen re-seeds from the row's stored title rather than from the abandoned draft.
           onCancel={() => setEditChannelRow(null)}
-          onSave={() => {
+          // #1477 handed this callback a parameter: the container's own prompt write, to be run INSIDE
+          // the guard below. It is invoked here rather than by the container so both of this OK's sends
+          // answer to ONE host re-check and one diagnostic — and so the prompt write is unreachable
+          // except from inside that guard.
+          onSave={(writePrompt) => {
             // FIRST, the interaction-time re-check — a LIVE store read, deliberately a different fabric
             // from the render gate above, which is React state and can be a paint behind a status flip.
             // This dialog's OK carries no `available` disabled arm of its own (see `EditChannelDialog`'s
             // header), so this line is the only thing standing between a disconnect and a send.
             if (!canMutateHost(editChannelRow.serverId)) return
+            // THEN #1477's prompt write, which takes its OWN decision against the value the container
+            // read from the daemon and sends nothing when the box has not moved off it — the rename
+            // comparison below is untouched by it and still fires on its own, including while the read
+            // is still outstanding. Two independent verbs on one conversation, in wire order: the
+            // create path already sends `set_system_prompt` beside a conversation verb this way.
+            writePrompt()
             // THEN AC2's "only when the trimmed name differs from the title the field was seeded with".
             // `titleFor(editChannelRow.name)` is the seed by construction — the same expression, over the
             // same captured row, that `onEditChannel` seeded the field from. So OK on an untouched

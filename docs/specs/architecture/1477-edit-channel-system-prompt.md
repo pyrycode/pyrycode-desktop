@@ -103,6 +103,19 @@ There is no failure arm to add. The read has **no error frame at all** (`request
 
 - Whether `canMutateHost` should be exported from `ChannelList` or restated in the dialog module. Resolved in the Design above: **exported**, because a second authority could only disagree with the first — the reason `systemPromptOverLimit` is imported rather than re-derived. Recorded here so the verifier sees the alternative was weighed.
 
+## Revisions
+
+**2026-09-15 — the host re-check is a callback parameter, not an exported `canMutateHost`.**
+
+§ State + concurrency planned to promote `canMutateHost` from a module-local function in `ChannelList` to an export of that module and call it from the container. That would have created an **import cycle**: `ChannelList` imports `EditChannelDialog`, so `EditChannelDialog` importing back out of `ChannelList` closes the loop. ES modules tolerate a cycle, but it is fragile and nothing in this tree has one.
+
+The shipped shape instead hands the container's prompt write **into** the guard as a parameter: `onSave: (writePrompt: () => void) => void`, which `ChannelList` invokes inside its existing `canMutateHost` body, before its own rename comparison. Everything the plan wanted from the export holds, and two properties improve on it:
+
+- The write is **only reachable from inside the guarded body**, so it cannot be sent to a host that just went away however this container is later edited. The planned export left that property resting on the container remembering to call the check.
+- One guard means one `sidebar-mutation` diagnostic on the refusal path, without depending on an early-return ordering argument.
+
+No other part of the design moved. The wire order is prompt write then rename, as planned.
+
 ## Security review
 
 **Verdict:** PASS

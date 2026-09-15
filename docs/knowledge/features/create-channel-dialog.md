@@ -19,9 +19,20 @@ Each opening starts with an empty, focused **Channel name** field. The shared `M
 centered Cancel/OK actions. The filled input uses the existing theme tokens; short windows scroll
 the panel. OK requires a nonblank trimmed name.
 
+Since #1428 this dialog alone (not Save as channel) also renders an optional **Channel system
+prompt** filled text area under the name field, restating the name input's fill, corner and type.
+Leaving it empty or holding only whitespace creates the channel exactly as before. Typed text is
+bounded at `MAX_SYSTEM_PROMPT_BYTES`, counted the way the channel info sheet's system-prompt
+section counts it — UTF-8 bytes, not UTF-16 code units — and going over disables OK with a
+client-owned notice; nothing extra is shown under the bound. The draft lives only in the
+container's `useState` and dies with the unmount, so Cancel and the header close discard it and a
+reopen starts empty; it is never logged, persisted, or rendered anywhere but the controlled text
+area.
+
 Submission sends one named, promoted channel request for the clicked workspace's exact `cwd`,
 without creating a folder. Both dialogs retain the clicked host, even when two hosts have the
-same workspace path.
+same workspace path. A non-blank prompt is written in a second step described in
+§ Requests and replies below.
 
 While the request is pending, name and OK are disabled. Cancel and header close remain available.
 Channel rejection shows “Could not create that channel”, restores editing and permits an explicit
@@ -36,6 +47,12 @@ discards the draft. Its pure `CreateChannelDialogView` receives presentation sta
 with no workspace path prop or transport access. Operator input is rendered through React's
 escaped input value. Both views render `ChannelForm` inside `Modal`; only the name field is
 shared, while submission stays in each container.
+
+`ChannelForm` takes the system prompt as one optional bundled `prompt` prop (`value`, `overLimit`,
+`onChange`) rather than three parallel optional props — a value with no over-limit state, or a
+handler with no accessible name, is what parallel optionals would permit. Omitted entirely, the
+form renders exactly as it did before #1428, which is how `SaveAsChannelDialog` keeps the name
+field alone without `ChannelForm` knowing which dialog it is inside.
 
 The workspace plus and disclosure remain sibling controls, so creating does not toggle the
 workspace fold. The shared `WorkspaceCreateControl` bundles a label and callback: two parallel
@@ -68,6 +85,50 @@ lifecycle/status codes, never names, paths, payloads or exception details. The c
 returns `void`; the dialog's event subscription supplies the wait and rejection handling.
 [Conversation create](conversation-create.md) covers the shared transport contract.
 
+### The system prompt write (#1428)
+
+The daemon's `set_system_prompt` verb takes an *existing* `conversation_id`, and
+`createConversation` carries no prompt field, so a non-blank prompt cannot ride the create — it
+goes out as a second command, on the confirmation, through the already-shipped
+`submitSystemPrompt` (see [System prompt write](system-prompt-write.md)). No new wire type,
+envelope or IPC arm.
+
+The pending ref (`idle` | `channel`) widens to record what was asked for: the trimmed name and
+`cwd` that were sent, plus the prompt to write — `null` when the draft trimmed to empty, otherwise
+the draft's own text, verbatim and untrimmed, because it round-trips to the daemon as a stored
+value and any normalisation here would silently change what the operator saved. That decision is
+taken once, at send time, not re-derived later.
+
+`conversationCreated` is **uncorrelated** — main emits it on decode without matching it to a
+request — so a same-host confirmation for a create some *other* client asked for is otherwise
+indistinguishable from this dialog's own. Today that only dismisses the dialog early; once a
+prompt write could ride the same event, an unmatched confirmation would write the operator's text
+onto a conversation they did not create. The write is therefore gated on `confirmsPending`, which
+checks the payload's own echoed `is_promoted`, `name` and `cwd` against what this dialog sent (the
+*trimmed* name, since that is what `requestNewChannel` transmits). The gate covers the write only
+— **dismissal is unconditional and behaves exactly as it did before #1428** in every case: a
+foreign-host confirmation, a same-host confirmation for someone else's create, a rejection, and a
+disconnect all still resolve the draft the way they always did, they just never carry a write.
+
+The write call is wrapped in a non-logging `try`/`catch`: `sendCommand` can throw locally, and an
+escaping exception would abort the dismissal below it, stranding the dialog over a channel that
+already exists, and would carry the failed command — prompt included — onto an error path this
+file does not control. The catch is empty by design; there is nothing loggable here that is not
+forbidden, and a stranded in-flight marker is swept by the write store's own reconnect handling.
+The write's outcome lands in the app-level `systemPromptWriteStore`, the same store the channel
+info sheet's `SystemPromptSection` already reads, so the operator sees the result there — the
+dialog itself does not wait for the acknowledgement and has no second failure surface.
+
+**Residual ambiguity, stated rather than engineered around**, the posture
+[Daemon connection — correlation](daemon-connection-correlation.md) already takes for this reply:
+two identical concurrent creates on one host — same trimmed name, same `cwd` — stay
+indistinguishable, and the first confirmation to arrive takes the write. No per-request
+correlation id exists on this path, and minting one is a wire change on this repo and on mobile.
+`confirmsPending` is an **attribution filter against benign concurrency, not an authorization
+check**: a hostile or impersonating daemon picks the `id` in its own confirmation and can already
+direct the write anywhere, since no client-side comparison of fields that same party also supplies
+can prevent that.
+
 ### Draft lifetime
 
 Cancel/header close synchronously mark the draft abandoned, reset the pending ref and remove
@@ -86,7 +147,13 @@ the globally mounted `useConversationCreatedNav`, even after the dialog was dism
 accessible errors, plus escaped input. `autoFocus` renders as `autofocus=""` in static markup,
 but actual focus and keyboard behavior require the interaction tier. Escaping assertions check
 the complete escaped attribute value: words such as `onerror` can remain inert inside a correctly
-escaped value.
+escaped value. It also covers the system prompt field: the label and text area render between the
+name input and the actions and are disabled alongside it while busy; the over-limit notice appears
+only when over the bound, with OK disabled alongside it; `systemPromptOverLimit` is checked at
+empty, at the bound, one byte over, and on a multi-byte value whose UTF-8 length diverges from its
+code-unit length; `confirmsPending` is checked on a match, a name mismatch, a `cwd` mismatch,
+`is_promoted: false`, and `idle`. `SaveAsChannelDialog.test.tsx` checks that its modal renders no
+textarea and no prompt label — the shared form stays unchanged for that dialog.
 
 `e2e/sidebar-create-channel.spec.ts` holds real fake-transport replies to cover the request,
 rejection/retry, frozen controls, duplicate prevention, dismissal, reopening and disconnect
@@ -94,7 +161,15 @@ abandonment. Two hosts sharing a workspace path prove routing in both directions
 original events exercise wrong-host, malformed/absent stamps and out-of-stage guards, including
 that an injected `workspaceFolderCreated` is inert for this draft. A renderer barrier after
 injection precedes absence assertions, avoiding checks made before callbacks could run.
-Short-window checks scroll to and click Cancel.
+Short-window checks scroll to and click Cancel. Since #1428, a second text box exists on this
+form, so every capture that reached for the name field by an unnamed `getByRole('textbox')` had to
+be scoped by accessible name (`{ name: 'Channel name:' }`) — an unscoped query is a strict-mode
+violation once two boxes exist. The same spec covers the write: a create with a prompt sends
+`create_conversation` then `set_system_prompt`, in that order, against the confirmed conversation's
+own id and the typed text verbatim and untrimmed; an empty or whitespace-only box sends no
+`set_system_prompt`; a foreign-host confirmation and a same-host confirmation that does not match
+`confirmsPending` each send nothing (the foreign-host case also does not dismiss, the mismatched
+same-host case dismisses exactly as it always did); text over the bound disables OK.
 
 Independent `conversationStateFake` instances both generate `created-1`. Keep successful
 cross-host navigation assertions in separate launches so artificial ID collisions do not hide
@@ -107,7 +182,10 @@ the daemon's promoted-create branch and reads its stored fields back.
 
 - Replies expose no renderer request identifier. Matching is selected host plus pending
   operation, not per-request correlation. Concurrent same-host operations remain indistinguishable,
-  including an older reply arriving during a newer draft's matching stage.
+  including an older reply arriving during a newer draft's matching stage. Since #1428 this also
+  bounds the system-prompt write: two identical concurrent creates on one host (same trimmed name,
+  same `cwd`) stay indistinguishable to `confirmsPending`, and the first confirmation to arrive
+  takes the write.
 - Guards control this draft's progression and dismissal only. The global navigation bridge
   independently observes confirmed creations, including confirmations ignored locally.
 - No timeout or automatic retry is added. A missing response leaves a dismissible pending wait.
@@ -115,11 +193,23 @@ the daemon's promoted-create branch and reads its stored fields back.
   actions, including during pending work.
 - Existing channels already sitting in a dedicated folder from before the #1436 withdrawal are
   not moved; only new creation and promotion changed.
+- A rejected or lost system-prompt write is invisible to this dialog: by the time it could settle,
+  the dialog has already dismissed on the create confirmation. The outcome still lands in
+  `systemPromptWriteStore`, and the channel info sheet's `SystemPromptSection` is where it surfaces.
 
 ## Related
 
 - [Channel List](channel-list.md) — workspace and host grouping and the owning target state.
-- [Save as channel](save-as-channel-dialog.md) — promotion flow, and the same folder-choice withdrawal.
+- [Save as channel](save-as-channel-dialog.md) — promotion flow, and the same folder-choice withdrawal;
+  its modal renders the shared `ChannelForm` with no `prompt` prop, so it never gains the text area.
 - [New-discussion FAB](new-discussion-fab.md) — existing confirmed-conversation navigation.
+- [System prompt write](system-prompt-write.md) — the transport leg `submitSystemPrompt` rides, the
+  tri-state contract (`null` clears, `''` stores empty, text is verbatim), and the known limitation
+  that two writes in flight on one conversation are indistinguishable, which this dialog's
+  one-write-per-create design never reaches.
+- [Daemon connection — correlation](daemon-connection-correlation.md) — the posture this dialog's
+  `confirmsPending` gate inherits: state a reply's residual ambiguity rather than engineer around it.
 - [Drop the folder choice spec](../../specs/architecture/1436-drop-channel-folder-choice.md)
   — the withdrawal decision and its rationale.
+- [Create channel takes a channel system prompt spec](../../specs/architecture/1428-create-channel-system-prompt.md)
+  — the full design, including the security review of the confirmation-matching gate.

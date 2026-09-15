@@ -186,7 +186,8 @@ Escape-to-dismiss is wired via the same `document`-`keydown`-listener-scoped-to-
 Escape/outside-click and `StatusSheet`'s open-on-click wiring — the suite is `renderToStaticMarkup`-only,
 no jsdom, so interactive effects are reviewed glue, not asserted. Not security-sensitive: the only daemon
 strings rendered by the original shell (`name`/`cwd`/`id`) are already rendered elsewhere in this file
-as auto-escaped React children, same posture as `WorkspaceChip`. Session report text follows the
+as auto-escaped React children, the toolCall/sessionBoundary posture (`WorkspaceChip` carried it until
+[#1486](https://github.com/pyrycode/pyrycode-desktop/issues/1486) deleted that component). Session report text follows the
 bounded display rules below. See [#365 codebase notes](../codebase/365.md) for the full
 design and patterns established.
 

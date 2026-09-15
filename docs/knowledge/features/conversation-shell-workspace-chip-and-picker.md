@@ -1,10 +1,29 @@
 # Conversation shell — workspace chip and picker
 
-The pre-first-message workspace chip on an empty new-discussion thread, and the Workspace Picker sheet that lets the operator switch or create the workspace a conversation runs in.
+The now-deleted pre-first-message workspace chip on an empty new-discussion thread, and the Workspace Picker sheet it used to open — which the picker survives it as, now opened only from Settings' Default workspace row.
 
 Part of [Conversation shell — workspace and run configuration](conversation-shell-workspace-and-run-config.md); see that document for the run-configuration sheet and its sections.
 
-## Workspace chip (#278)
+## Workspace chip (#278, deleted by #1486)
+
+**Deleted outright, not gated or hidden — kept here as history.** By the time of its removal the
+sidebar's workspace-start plus ([#1178](https://github.com/pyrycode/pyrycode-desktop/issues/1178)) and
+Add workspace ([#1189](https://github.com/pyrycode/pyrycode-desktop/issues/1189)) had made every chat
+start in a chosen directory, so the pill only restated a choice already made — the design (Figma node
+102-4) draws the chat pane as top bar → thread → composer footer, with no pill anywhere above the
+thread at any thread length.
+[#1486](https://github.com/pyrycode/pyrycode-desktop/issues/1486) deleted `WorkspaceChip`, its props
+type, `WORKSPACE_CHIP_LABEL`, the `<WorkspaceChip>` mount above `Timeline`, the screen's `pickerOpen`
+state and its `WorkspacePickerSheet` mount, and the five `.conversation__workspace-chip*` CSS rules
+below — an empty, unpromoted thread now renders `Timeline`'s empty-thread copy as the first thing below
+the banner row. **Nothing else was swept**: `WorkspacePickerSheet.tsx` keeps its file (Settings' picker
+still mounts its view), and the `WorkspacePickerSheet` container, `CreateFolderDialog` and
+`requestChangeWorkspace` lose their last caller here and stay in the tree dormant rather than being
+deleted — removing this row also removes the app's only way to create a directory on the host, and
+[#1499](https://github.com/pyrycode/pyrycode-desktop/issues/1499) owns that capability question. See
+[Workspace Picker sheet](#workspace-picker-sheet-383) below for what survives.
+
+The description below is kept as history of what rendered through #1486.
 
 A pre-first-message pill at the top of the empty new-discussion thread, showing the workspace `cwd`
 the discussion will run in before the user sends the first message, with a "change" affordance
@@ -126,6 +145,19 @@ notes](../codebase/278.md) for the full design and patterns established.
 
 ## Workspace Picker sheet (#383)
 
+**Its conversation-screen entry point is gone; this section otherwise describes code that still
+exists but no longer mounts from here.** [#1486](https://github.com/pyrycode/pyrycode-desktop/issues/1486)
+deleted the `WorkspaceChip` that opened it and the `pickerOpen` state + `WorkspacePickerSheet` mount in
+`ConversationScreen.tsx`, so the container, diagram and `CreateFolderDialog` wiring below describe code
+that is dormant — reachable by nothing in production — kept deliberately rather than swept, per
+[#1499](https://github.com/pyrycode/pyrycode-desktop/issues/1499). `WorkspacePickerSheetView` and
+`requestChangeWorkspace` are the parts that live on: Settings' [Default workspace
+row](settings-screen-how-it-works.md#the-defaults-section-defaultworkspacerowtsx-404) (#404) mounts the
+view through its own `DefaultWorkspacePickerSheet` container — not the one described below — with no
+`onCreateFolder` (so the "Other" row always renders disabled there) and an `onChoose` that writes the
+[default-workspace store](default-workspace-store.md) instead of dispatching `changeWorkspace`. See
+[below](#surviving-in-settings-the-defaultworkspacerow-container-404) for that container's own shape.
+
 The UI slice of #157 (Figma node 20-2): a bottom sheet, opened from the `WorkspaceChip`'s "Change"
 button, that lists the [recent-workspaces store](recent-workspaces-store.md) (#382), marks the row
 matching the active conversation's current `cwd`, and dispatches the existing [`changeWorkspace`
@@ -138,7 +170,7 @@ No new command, no new transport plumbing, no store change.
 
 ```
 .conversation
-└── WorkspacePickerSheet                (mounted beside ChannelInfoSheet, when pickerOpen)
+└── WorkspacePickerSheet                (dormant since #1486 — no caller mounts it; kept for #1499)
     ├── RecentWorkspacesData             (#382's dormant bridge — mounted only while open, so
     │                                     each open fires a fresh one-shot requestRecentWorkspaces)
     └── WorkspacePickerSheetView
@@ -233,4 +265,27 @@ Not security-sensitive: a pure renderer read of two already-decoded stores plus 
 already-guarded command; no transport/crypto/socket surface touched. Code review PASS, two non-gating
 NITs (glyph coloring, the deferred create-folder label). See [#383 codebase
 notes](../codebase/383.md) for the full design and patterns established.
+
+### Surviving in Settings: the DefaultWorkspaceRow container (#404)
+
+Since [#1486](https://github.com/pyrycode/pyrycode-desktop/issues/1486) left the `WorkspacePickerSheet`
+container above unreachable, `WorkspacePickerSheetView` and `requestChangeWorkspace` have exactly one
+live mount: Settings' Defaults section, `DefaultWorkspaceRow.tsx`'s `DefaultWorkspaceRowControl`. It
+predates #1486 (landed in #404) and was never coupled to the chip — its own
+`DefaultWorkspacePickerSheet`, a separate in-file container, mounts the same `WorkspacePickerSheetView`
+with different wiring, not the #383 container described above:
+
+- `activeCwd` is the [default-workspace store](default-workspace-store.md)'s current value, not
+  `activeConversationStore`'s `cwd` — there is no open conversation in Settings.
+- `onChoose` calls `defaultWorkspaceStore.getState().setDefaultWorkspace(path)` and closes — a client
+  preference write, not a `changeWorkspace` dispatch. No wire traffic beyond the picker's own
+  `RecentWorkspacesData` fetch.
+- No `onCreateFolder` is supplied, so the "Other → Create new folder" row renders disabled there — it
+  was already conversation-scoped and out of scope for a default-workspace preference, independent of
+  #1486.
+
+So the picker itself — the sheet, the recent-workspaces list, the "default" pill — is not a casualty of
+this removal; only its conversation-screen entry point and the create-folder path reachable through it
+are. See [Settings screen — how it works](settings-screen-how-it-works.md#the-defaults-section-defaultworkspacerowtsx-404)
+for the full `DefaultWorkspaceRow` design.
 

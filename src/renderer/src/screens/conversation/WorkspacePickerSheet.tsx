@@ -87,8 +87,9 @@ function FolderPlusIcon(): JSX.Element {
 // label (AC1).
 //
 // `path` is an untrusted daemon string rendered WHOLE and OPAQUE — auto-escaped React children, never
-// dangerouslySetInnerHTML, never split/basenamed/otherwise resolved as a filesystem path (the WorkspaceChip
-// / RecentWorkspace posture). `last_used_at` is fed only to formatLastActivity (which degrades an
+// dangerouslySetInnerHTML, never split/basenamed/otherwise resolved as a filesystem path (the
+// RecentWorkspace / ChannelInfoSheetView posture). `last_used_at` is fed only to formatLastActivity (which
+// degrades an
 // unparseable value to '' → the '—' fallback and never throws).
 export function WorkspacePickerSheetView({
   workspaces,

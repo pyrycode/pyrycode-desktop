@@ -29,7 +29,6 @@ import {
   ConnectionBanner,
   ComposerErrorChip,
   ContextUsageReading,
-  WorkspaceChip,
   isTurnRunning,
   ComposerSendButton,
   ThreadOverflowMenuView,
@@ -4153,11 +4152,11 @@ describe('daemonLeg — the daemon-session leg mapping (#330)', () => {
   })
 })
 
-// #278: the pre-first-message workspace chip. WorkspaceChip is pure (props in, markup out) — a
-// ConversationCreatedPayload | null + an isEmpty boolean + an optional onChange — so a server-rendered
-// string proves the gate (empty AND present AND unpromoted) and the escaping of the untrusted cwd. The
-// container store read (activeConversationStore) is covered by activeConversationStore.test.ts; the
-// created-event write path by conversationCreatedBridge.test.ts + PairedShell composition.
+// A ConversationCreatedPayload fixture — the store's held value, verbatim off the wire. It arrived with
+// #278's workspace chip and outlived it: #1486 removed that chip, and the ChannelInfoSheetView tests below
+// are this helper's readers now. The container store read (activeConversationStore) is covered by
+// activeConversationStore.test.ts; the created-event write path by conversationCreatedBridge.test.ts +
+// PairedShell composition.
 function createdPayload(
   overrides: Partial<ConversationCreatedPayload> = {}
 ): ConversationCreatedPayload {
@@ -4171,65 +4170,6 @@ function createdPayload(
     ...overrides
   }
 }
-
-describe('WorkspaceChip — the pre-first-message workspace pill (#278)', () => {
-  it('renders the label, the cwd, and the change affordance on an empty new-discussion thread (AC1)', () => {
-    const markup = renderToStaticMarkup(
-      <WorkspaceChip conversation={createdPayload({ cwd: '/home/pyry/scratch' })} isEmpty={true} />
-    )
-    expect(markup).toContain('conversation__workspace-chip')
-    // The client-owned label constant — no daemon string reaches the label.
-    expect(markup).toContain('Workspace')
-    // The daemon-supplied cwd, rendered whole and opaque.
-    expect(markup).toContain('/home/pyry/scratch')
-    // The "change" affordance (AC4).
-    expect(markup).toContain('Change')
-  })
-
-  it('renders nothing once the thread has a message — a pre-first-message affordance only (AC3)', () => {
-    const markup = renderToStaticMarkup(
-      <WorkspaceChip conversation={createdPayload()} isEmpty={false} />
-    )
-    expect(markup).toBe('')
-  })
-
-  it('renders nothing when there is no active conversation', () => {
-    const markup = renderToStaticMarkup(<WorkspaceChip conversation={null} isEmpty={true} />)
-    expect(markup).toBe('')
-  })
-
-  it('renders nothing for a promoted conversation — a new-discussion affordance only (AC1)', () => {
-    const markup = renderToStaticMarkup(
-      <WorkspaceChip conversation={createdPayload({ is_promoted: true })} isEmpty={true} />
-    )
-    expect(markup).toBe('')
-  })
-
-  it('renders an HTML-ish cwd escaped, never as live markup (AC2)', () => {
-    // No apostrophes in the fixture — renderToStaticMarkup escapes ' → &#x27; (prior desktop lesson).
-    const markup = renderToStaticMarkup(
-      <WorkspaceChip conversation={createdPayload({ cwd: '<b>hi</b>' })} isEmpty={true} />
-    )
-    expect(markup).toContain('&lt;b&gt;hi&lt;/b&gt;')
-    expect(markup).not.toContain('<b>hi</b>')
-  })
-
-  it('disables the change affordance until a picker target is wired (AC4 placeholder)', () => {
-    const markup = renderToStaticMarkup(
-      <WorkspaceChip conversation={createdPayload()} isEmpty={true} />
-    )
-    const changeButton = markup.match(/<button[^>]*aria-label="Change workspace"[^>]*>/)?.[0] ?? ''
-    expect(changeButton).toContain('disabled')
-  })
-
-  it('enables the change affordance when an onChange target is provided (the #157 seam)', () => {
-    const markup = renderToStaticMarkup(
-      <WorkspaceChip conversation={createdPayload()} isEmpty={true} onChange={() => {}} />
-    )
-    const changeButton = markup.match(/<button[^>]*aria-label="Change workspace"[^>]*>/)?.[0] ?? ''
-    expect(changeButton).not.toContain('disabled')
-  })
-})
 
 // #276: the thread top-bar overflow menu. ThreadOverflowMenuView is the pure, exported view (the
 // ComposerSendButton / ThinkingIndicator pattern) — server-render it with an injected `open` boolean to

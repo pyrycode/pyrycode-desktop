@@ -5,7 +5,7 @@ import type { RecentWorkspace } from '@shared/wire/types'
 import type { RendererCommand } from '@shared/ipc/commands'
 
 // #383: the Workspace Picker sheet. WorkspacePickerSheetView is the pure, exported view (the
-// ChannelInfoSheetView / WorkspaceChip pattern) — server-render it with injected props (no store) to
+// ChannelInfoSheetView / ThinkingIndicator pattern) — server-render it with injected props (no store) to
 // prove the chrome, the populated / not-loaded / loaded-empty Recent branch, the current-workspace
 // "default" mark, the choose + create-folder gating, and the untrusted-string escaping. `now` is
 // injected so the "Last used …" relative time is deterministic. The interaction container
@@ -18,7 +18,7 @@ function workspace(overrides: Partial<RecentWorkspace> = {}): RecentWorkspace {
 }
 
 // Isolate a single button's opening tag (up to its first `>`) so `disabled` presence is assertable —
-// the WorkspaceChip test idiom. `class="…"` closing-quote keeps `__row` from matching `__row-icon`.
+// the LogDataSection test idiom. `class="…"` closing-quote keeps `__row` from matching `__row-icon`.
 function rowTag(markup: string): string {
   return markup.match(/<button[^>]*class="workspace-picker__row"[^>]*>/)?.[0] ?? ''
 }

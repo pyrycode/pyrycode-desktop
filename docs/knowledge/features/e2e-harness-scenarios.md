@@ -94,6 +94,12 @@ that a later scenario needed.
   `activeConversationStore` — the same #440 unrealizable-active-list trap), both flows assert the
   **outbound wire frame** the fake captured, `expect.poll`ed for async loopback arrival, rather than a
   rendered reflection.
+  - **Deleted whole by [#1486](https://github.com/pyrycode/pyrycode-desktop/issues/1486)**, alongside its
+    real-daemon twin `e2e/real-daemon-workspace.spec.ts` (#441, see CATALOG) — both entered only through
+    the `WorkspaceChip`'s "Change workspace" button, which #1486 deleted with no other entry point, so
+    leaving either spec would have left an always-failing test rather than a thinner one. #457's
+    `e2e/default-workspace.spec.ts`, below, is unaffected: it drives Settings' picker, which #1486 did not
+    touch.
 - **[#425](../codebase/425.md) covers the run-config sheet's (#257) `set_session_settings` write family** —
   model / effort / YOLO, plus one rejection — in a single `test()` block on a single launch (unlike #423's
   two: nothing here is one-way, and the session persists across all three controls). Its spec-local

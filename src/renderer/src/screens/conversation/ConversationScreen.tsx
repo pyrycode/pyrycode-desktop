@@ -149,7 +149,6 @@ import { EditChatDialogView, requestRenameConversation } from '../channels/EditC
 // whose lifetime has to be the dialog's open lifetime. It imports nothing from this directory, so this
 // is the one-way seam `EditChatDialog` already crosses, not a cycle.
 import { EditChannelDialog } from '../channels/EditChannelDialog'
-import { WorkspacePickerSheet } from './WorkspacePickerSheet'
 import { BackgroundTaskPanel } from './BackgroundTaskPanel'
 import type { RendererCommand } from '@shared/ipc/commands'
 
@@ -217,9 +216,11 @@ export function ConversationScreen({
   onBack
 }: ConversationScreenProps = {}): JSX.Element {
   // #278: the conversation the thread is showing, snapshotted when the new discussion was created
-  // (PairedShell's conversation_created callback). The container derives it and passes it down; the
-  // pure WorkspaceChip self-gates to null. A narrow single-slice read — activeConversation changes
-  // once (on creation), so it adds no meaningful re-render churn beyond the items delta already here.
+  // (PairedShell's conversation_created callback). The container derives it and passes it to the pure
+  // views that need it — the Channel Info sheet, the edit dialogs and the background-task panel, since
+  // #1486 removed the workspace row this read was first added for. A narrow single-slice read —
+  // activeConversation changes once (on creation), so it adds no meaningful re-render churn beyond the
+  // items delta already here.
   // #758 moved it ABOVE the timeline read, which now needs its id: same hook, same selector, same single
   // subscription, only its position in the hook list changed (stable across renders).
   const activeConversation = useActiveConversationStore(selectActiveConversation)
@@ -357,12 +358,7 @@ export function ConversationScreen({
   // menu's Channel-info item flips it open; the sheet reads the same `activeConversation` slice already
   // held above. Independent of `sheetOpen`: separate triggers, one sheet at a time in normal use.
   const [channelInfoOpen, setChannelInfoOpen] = useState(false)
-  // #383: the Workspace Picker sheet's open/closed state — the `channelInfoOpen` twin, a single-value
-  // screen-local boolean → useState, never the store (ADR 0006), resetting to closed on remount for free.
-  // The WorkspaceChip's "Change" button flips it open (the named "#157 Workspace Picker seam"); the sheet
-  // reads the same `activeConversation` slice and `now` clock already held. One sheet at a time in normal use.
-  const [pickerOpen, setPickerOpen] = useState(false)
-  // #581: the background-task panel's open/closed state — the `pickerOpen` twin, a single-value
+  // #581: the background-task panel's open/closed state — the `channelInfoOpen` twin, a single-value
   // screen-local boolean → useState, never the store (ADR 0006), resetting to closed on remount for free.
   // #962 retired the clock trigger beside the status row (the design draws no home for it, and #580
   // owns the panel's final one), so the overflow menu's Background-tasks item flips it open now until
@@ -424,14 +420,6 @@ export function ConversationScreen({
           true sentence. The disconnection itself is still announced, by the #279 banner above. */}
       {selectedHost !== null && (localStatus !== 'loaded' || (offline && items.length > 0)) &&
         <SavedTimelineNotice status={localStatus} />}
-      {/* #278: the pre-first-message workspace chip — a sibling above Timeline, not nested inside
-          EmptyThread, so Timeline's { items } contract stays untouched (no prop cascade). It
-          self-gates to null unless the thread is empty and shows an unpromoted (discussion) conversation. */}
-      <WorkspaceChip
-        conversation={activeConversation}
-        isEmpty={items.length === 0}
-        onChange={actionsAvailable ? () => setPickerOpen(true) : undefined}
-      />
       {/* #1214: the backlog goes INTO the thread. `queue_state` is still daemon state held verbatim by
           queueStore and never written through the timeline reducer — the fold is render-time, per
           foldQueuedRows' header — but the two row lists are now joined before they are drawn, so a message
@@ -575,18 +563,7 @@ export function ConversationScreen({
           onClose={() => setChannelInfoOpen(false)}
         />
       )}
-      {/* #383: the Workspace Picker sheet — the ChannelInfoSheet twin, overlaying the conversation surface.
-          Reuses the render-time `now` (the "Last used …" relative time) and the `activeConversation` slice
-          already read above; the container mounts the #382 data-path bridge, marks the current workspace,
-          and dispatches `change_workspace` on selection. Opened from the WorkspaceChip's "Change" button. */}
-      {pickerOpen && (
-        <WorkspacePickerSheet
-          conversation={activeConversation}
-          now={now}
-          onClose={() => setPickerOpen(false)}
-        />
-      )}
-      {/* #581: the background-task panel — the WorkspacePickerSheet twin, overlaying the conversation
+      {/* #581: the background-task panel — the ChannelInfoSheet twin, overlaying the conversation
           surface with the tasks the daemon holds alive for the open conversation. It reads the roster store
           itself, so only the conversation id goes down; with no active conversation the id is null and the
           panel reads "never observed", which is the correct reading. It mounts no data path — the roster
@@ -1264,8 +1241,9 @@ function BubbleAttachmentRow({ attachment }: { attachment: MessageAttachment }):
   )
 }
 
-// #296: the client-owned accessible name for the drop control (the EMPTY_THREAD_COPY / WORKSPACE_CHIP_LABEL
-// idiom). An icon-only button has no visible text, so aria-label supplies its accessible name (the
+// #296: the client-owned accessible name for the drop control (the EMPTY_THREAD_COPY idiom — it named
+// #278's WORKSPACE_CHIP_LABEL as its twin until #1486 deleted the workspace row that held it).
+// An icon-only button has no visible text, so aria-label supplies its accessible name (the
 // .composer__send / .status-sheet__close pattern already in this file). Never a daemon string.
 // #1214 moved it up here with the control itself, off the deleted QueuedBacklog.
 const DROP_QUEUED_LABEL = 'Drop queued message'
@@ -2149,60 +2127,6 @@ function EmptyThread(): JSX.Element {
   )
 }
 
-// #278: the client-owned chip label. A module-level constant (the EMPTY_THREAD_COPY idiom) —
-// apostrophe-free (renderToStaticMarkup escapes `'`) and never a daemon string, so no untrusted string
-// reaches the label; the only daemon value the chip renders is `cwd`, as auto-escaped React children.
-const WORKSPACE_CHIP_LABEL = 'Workspace'
-
-export interface WorkspaceChipProps {
-  // The conversation the thread is showing (the create-reply payload, held verbatim). null ⇒ no chip.
-  conversation: ConversationCreatedPayload | null
-  // The thread has no timeline items yet — the pre-first-message window (AC1/AC3).
-  isEmpty: boolean
-  // The #157 Workspace Picker seam. Omitted by this ticket's container, so the "Change" button renders
-  // disabled — an honest placeholder (AC4). #157 lands as a pure additive: pass an onChange that opens
-  // the picker and the button un-disables, with no other change to this view.
-  onChange?: () => void
-}
-
-// #278: the pre-first-message workspace chip — a Material 3 pill at the top of the empty new-discussion
-// thread showing the workspace `cwd` the discussion will run in. The exact ThinkingIndicator idiom: the
-// container derives the value (activeConversationStore) and passes it down; this pure view self-gates to
-// null; no store read inside it. Exported so tests server-render it with injected props.
-//
-// Gate (AC1/AC3): render iff the thread is empty (pre-first-message), a real conversation is present, and
-// it is a *discussion* (`is_promoted` false — the wire signal for a new discussion vs a channel). Once the
-// first message lands, isEmpty flips false and the chip is gone (AC3 — a pre-first-message affordance only).
-//
-// `cwd` (AC2) is an untrusted daemon string rendered WHOLE and OPAQUE: auto-escaped React children — never
-// dangerouslySetInnerHTML, and never split/basenamed/otherwise interpreted as a filesystem path (extracting
-// a path segment would itself be "interpreting it as a path", which the AC forbids). React escaping handles
-// HTML-ish characters — the toolCall / sessionBoundary untrusted-string posture already in this file.
-export function WorkspaceChip({
-  conversation,
-  isEmpty,
-  onChange
-}: WorkspaceChipProps): JSX.Element | null {
-  if (!isEmpty || conversation === null || conversation.is_promoted) return null
-  return (
-    <div className="conversation__workspace-chip">
-      <span className="conversation__workspace-chip-pill">
-        <span className="conversation__workspace-chip-label">{WORKSPACE_CHIP_LABEL}</span>
-        <span className="conversation__workspace-chip-cwd">{conversation.cwd}</span>
-        <button
-          type="button"
-          className="conversation__workspace-chip-change"
-          aria-label="Change workspace"
-          disabled={!onChange}
-          onClick={onChange}
-        >
-          Change
-        </button>
-      </span>
-    </div>
-  )
-}
-
 // #215: the thinking copy — hoisted by #648 out of the JSX below into a module-level, client-owned
 // constant, joining its three siblings (STALL_COPY / API_RETRY_COPY / COMPACTING_COPY). The VALUE is
 // unchanged: apostrophe-free (renderToStaticMarkup escapes `'` → `&#x27;`, the standing desktop lesson)
@@ -2828,7 +2752,7 @@ export function StatusSheet({ onClose, children }: StatusSheetProps): JSX.Elemen
 }
 
 // #365: the Channel Info sheet's copy + its title id — module-level, client-owned constants (the
-// EMPTY_THREAD_COPY / WORKSPACE_CHIP_LABEL idiom). Every literal is apostrophe-free: renderToStaticMarkup
+// EMPTY_THREAD_COPY idiom). Every literal is apostrophe-free: renderToStaticMarkup
 // escapes `'` → `&#x27;` (the standing desktop lesson). None is ever a daemon string — the only daemon
 // values the sheet renders (name / cwd / id) are auto-escaped React children, never these labels.
 const CHANNEL_INFO_FALLBACK_TITLE = 'Channel info'
@@ -2856,7 +2780,7 @@ const CHANNEL_INFO_SHEET_TITLE_ID = 'channel-info-sheet-title'
 // and injectable under test.
 //
 // The daemon strings (name / cwd / id) reach the DOM only as auto-escaped React children — never
-// dangerouslySetInnerHTML, never path/markup interpretation (the WorkspaceChip / toolCall posture). They
+// dangerouslySetInnerHTML, never path/markup interpretation (the toolCall / sessionBoundary posture). They
 // are already rendered elsewhere in this file, so no new trust boundary.
 export function ChannelInfoSheetView({
   conversation,

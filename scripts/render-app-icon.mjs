@@ -31,9 +31,9 @@ const MASTER = 512
 /** The ICO's entries. 256 is the one electron-builder requires for the NSIS target. */
 const SIZES = [16, 24, 32, 48, 64, 128, 256]
 
-/** The node's frame: 256 square, 4px corners, a 32px inset around the mark. */
+/** The node's frame: 256 square, 64px corners, a 32px inset around the mark. */
 const FRAME = 256
-const RADIUS = 4
+const RADIUS = 64
 const INSET = 32
 
 /** The mark's own viewport, from PyryMark.tsx. Its height sets the scale; its width follows. */

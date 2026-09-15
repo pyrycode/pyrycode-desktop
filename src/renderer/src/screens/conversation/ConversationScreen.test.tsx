@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, vi, type MockInstance } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   ConversationScreen,
@@ -66,6 +66,7 @@ import { activeConversationStore } from '../../store/activeConversationStore'
 import { conversationListStore } from '../../store/conversationListStore'
 import { sessionIdStore } from '../../store/sessionIdStore'
 import { runConfigStore } from '../../store/runConfigStore'
+import { reportedContextStore } from '../../store/reportedContextStore'
 import { runSettingsWriteStore } from '../../store/runSettingsWriteStore'
 import { queueStore } from '../../store/queueStore'
 
@@ -78,6 +79,49 @@ import { queueStore } from '../../store/queueStore'
 // the wire→view-model adaptation in messageViewModel.test.ts.
 function bubbleCount(markup: string): number {
   return markup.match(/data-message-role="/g)?.length ?? 0
+}
+
+// #1421: seed the run-config snapshot's token pair alone, leaving its other fields at their empty
+// defaults — the reading's two consumers read nothing else off it. A getInitialState spy, for the standing
+// reason: zustand v5 reads getInitialState() under renderToStaticMarkup, so a setState seed is invisible.
+function seedRunConfigTokens(usedTokens: number, windowTokens: number): MockInstance {
+  const initial = runConfigStore.getInitialState()
+  return vi.spyOn(runConfigStore, 'getInitialState').mockReturnValue({
+    ...initial,
+    snapshot: { model: '', effort: '', yolo: false, permissionMode: 'default', usedTokens, windowTokens }
+  })
+}
+
+// #1421: seed ONE conversation's reported reading. The eight fields beyond the token pair are filled with
+// the empty-but-present values the daemon's own degenerate frame carries — this ticket reads none of them,
+// and building the record whole is what keeps the seed a real ReportedContextReading rather than a cast.
+function seedReportedContext(
+  conversationId: string,
+  tokens: { totalTokens: number; maxTokens: number }
+): MockInstance {
+  const initial = reportedContextStore.getInitialState()
+  return vi.spyOn(reportedContextStore, 'getInitialState').mockReturnValue({
+    ...initial,
+    readings: new Map([
+      [
+        conversationId,
+        {
+          model: '',
+          totalTokens: tokens.totalTokens,
+          maxTokens: tokens.maxTokens,
+          // Deliberately disagreeing with the token pair: #1421 recomputes from the pair and must never
+          // display this field, so a surface that read it would show 1% and fail every assertion below.
+          percentage: 1,
+          categories: [],
+          droppedCategories: 0,
+          mcpTools: [],
+          droppedMcpTools: 0,
+          memoryFiles: [],
+          droppedMemoryFiles: 0
+        }
+      ]
+    ])
+  })
 }
 
 function stageOpenConnection(status: ConnectionStatus): () => void {
@@ -4834,6 +4878,70 @@ describe('ConversationScreen — store binding', () => {
       )
     } finally {
       spy.mockRestore()
+    }
+  })
+
+  // #1421: claude's own reading displaces the settings-derived figure. BOTH stores are seeded, with
+  // percentages that share no text — 25% from the settings pair, 73% from the reading — so the assertion
+  // fails in both directions: an unwired read leaves 25% standing, and a fallback firing wrongly would
+  // show it too. Staged over stageOpenConnection, because the reading is keyed by the OPEN conversation's
+  // id and an unstaged screen has none (which is the fallback arm, covered by the shipped test above).
+  //
+  // getInitialState spies for the same reason as every sibling here: zustand v5's useStore reads
+  // getInitialState() under renderToStaticMarkup, never getState(), so a setState seed is invisible.
+  it('renders claude’s reported figure in the footer, not the settings-derived one (AC1)', () => {
+    const restore = stageOpenConnection(CONNECTED)
+    const runConfig = seedRunConfigTokens(50000, 200000)
+    const reported = seedReportedContext('open', { totalTokens: 146000, maxTokens: 200000 })
+    try {
+      const markup = renderToStaticMarkup(<ConversationScreen />)
+      expect(markup).toContain('Context high: 73%')
+      expect(markup).not.toContain('Context: 25%')
+    } finally {
+      reported.mockRestore()
+      runConfig.mockRestore()
+      restore()
+    }
+  })
+
+  // AC3's sharp edge at the surface: a PRESENT reading whose maximum is zero is a real reading claude
+  // reported, so it wins and resolves to the unavailable state this control already ships (no element at
+  // all) — it does NOT fall back. The settings pair beside it is seeded non-zero, so a fallback firing
+  // here would draw "Context: 25%" and fail loudly rather than silently.
+  it('shows no reading for a present reading whose maximum is zero, rather than falling back (AC3)', () => {
+    const restore = stageOpenConnection(CONNECTED)
+    const runConfig = seedRunConfigTokens(50000, 200000)
+    const reported = seedReportedContext('open', { totalTokens: 146000, maxTokens: 0 })
+    try {
+      const markup = renderToStaticMarkup(<ConversationScreen />)
+      expect(markup).not.toContain('composer__context')
+      expect(markup).not.toContain('Context:')
+    } finally {
+      reported.mockRestore()
+      runConfig.mockRestore()
+      restore()
+    }
+  })
+
+  // The absent arm through the MOUNTED control, with a conversation open — the shipped mount test above
+  // covers it with none open, which takes the NO_REPORTED_CONTEXT path instead. This one proves the real
+  // selector misses: a reading held for ANOTHER conversation leaves this one on the settings figure,
+  // rather than the other chat's reading leaking across.
+  it('keeps the settings-derived figure when the reading belongs to another conversation (AC1)', () => {
+    const restore = stageOpenConnection(CONNECTED)
+    const runConfig = seedRunConfigTokens(50000, 200000)
+    const reported = seedReportedContext('some-other-conversation', {
+      totalTokens: 146000,
+      maxTokens: 200000
+    })
+    try {
+      const markup = renderToStaticMarkup(<ConversationScreen />)
+      expect(markup).toContain('Context: 25%')
+      expect(markup).not.toContain('73%')
+    } finally {
+      reported.mockRestore()
+      runConfig.mockRestore()
+      restore()
     }
   })
 

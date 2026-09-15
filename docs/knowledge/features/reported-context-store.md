@@ -44,8 +44,10 @@ A conversation id **absent from the map** is the distinct "no reading has arrive
 state. A received reading whose three inventories are `[]` and whose three dropped counts are `0` is a
 **real, degenerate reading**, held as-is and never collapsed to absence — the same `null`-vs-`''`/`null`-vs-
 empty contract [usage-limit store](usage-limit-store.md) and the [session-id store](session-id-store.md)
-use. That distinction is what lets `contextUsagePercent` (the settings-derived figure) stay the fallback on
-absence only, never on an empty-but-present reading — the boundary #1421 will need.
+use. That distinction is what lets the settings-derived pair stay the fallback on absence only, never on an
+empty-but-present reading — the boundary [#1421](https://github.com/pyrycode/pyrycode-desktop/issues/1421)'s
+`contextTokenSource` builds on, branching on `reported === null` alone so a present reading whose
+`maxTokens` is `0` still wins rather than being read as an absence.
 
 **Not a field on the thread-timeline record.** A context window is conversation-scoped, not turn-scoped: it
 outlives a turn end, a `/clear` and a session transition. State a turn rebuilds would drop the reading at
@@ -239,4 +241,8 @@ and memory-file paths to the new one. Position among the in-memory clears is fre
   the sizing overage, and the security review (PASS, two SHOULD FIX both landed).
 - `src/renderer/src/screens/conversation/contextUsage.ts` — `contextUsagePercent`/`contextUsageStep`, the
   settings-derived figure this store is deliberately **not** named after and does not replace; both stay
-  live until #1421 decides what the footer shows on an absent reading.
+  live, computed from whichever pair wins. [#1421](https://github.com/pyrycode/pyrycode-desktop/issues/1421)
+  made this store's reading the display source for the composer footer and the run-configuration gauge, the
+  settings pair the fallback on an absent reading only — see
+  [`contextTokenSource`](conversation-shell-run-configuration.md#run-configuration-context-window-section-192)
+  and [Composer footer row](conversation-shell-composer-message-box.md#composer-footer-row-811).

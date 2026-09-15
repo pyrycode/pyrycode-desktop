@@ -47,6 +47,8 @@ import {
   selectUsageLimitFor,
   type UsageLimitReading
 } from '../../store/usageLimitStore'
+import { useReportedContextStore, selectReportedContextFor } from '../../store/reportedContextStore'
+import { contextTokenSource } from './contextTokenSource'
 import {
   useBackgroundTaskRosterStore,
   selectRosterFor,
@@ -3661,7 +3663,7 @@ function Composer({
             and this is where that conversation id is already in hand and where its lifetime is the open
             chat's. */}
         <EffortDefaultData conversationId={activeConversationId} />
-        <ContextUsageControl />
+        <ContextUsageControl conversationId={activeConversationId} />
         <ComposerAttachButton onAttach={attach.requestAttach} />
       </div>
       {/* #863: the attach outcome, the composer column's last child and NOT a member of the footer row
@@ -4431,14 +4433,39 @@ export function ContextUsageReading({
 // null coalescing is RunConfigSections' verbatim (`snapshot?.usedTokens ?? 0`), so a not-yet-loaded store
 // and the daemon's window_tokens: 0 "usage unavailable" signal collapse into one branch on both surfaces.
 // No window.pyry dereference and no effects — a pure read, server-renderable with no bridge mock.
-function ContextUsageControl(): JSX.Element | null {
+//
+// #1421 — CLAUDE'S OWN READING IS THE SOURCE, the settings pair the fallback. The transcript scan behind
+// the snapshot reads 0% for any conversation opened in a workspace and guesses the window until a turn
+// ends; claude's figure is right for every conversation and matches what the terminal shows. Which pair
+// wins is decided by contextTokenSource, deliberately the SAME function the run-configuration sheet's
+// gauge calls — so the two surfaces cannot disagree for one conversation, which is this ticket, exactly as
+// sharing contextUsagePercent is what stopped them disagreeing about the arithmetic at #811.
+//
+// The fallback fires on an ABSENT reading only, never on a present one: see contextTokenSource, where the
+// only branch is `=== null`. A present reading whose maximum is zero therefore still wins and resolves to
+// the null this control already returns for an unavailable reading — not to the transcript figure.
+//
+// `conversationId` is a PROP, not a fifth store read: `activeConversationId` is already in scope at the
+// composer__footer row and every sibling control in it takes that prop. A useMemo-stable selector per id
+// (the RunConfigSections idiom), because a fresh closure each render would churn the subscription; the
+// null-conversation arm selects nothing THROUGH THE SAME PATH, with no invented key and no second branch.
+// The selector hands back the HELD RECORD ITSELF or `null`, both stable references, so a reading published
+// for another conversation leaves this one Object.is-identical and does not re-render the footer.
+//
+// Claude's own `percentage` field is held by the store and deliberately NOT read here: the reading keeps
+// going through contextUsagePercent, computed from the total and the maximum, so the clamp, the finiteness
+// guard and the severity ladder stay the one computation across both surfaces. The wire contract says the
+// opposite — that a client recomputing disagrees with the figure claude reported — and #1421 recomputes
+// anyway, on purpose. Do not flip this on reading ContextUsagePayload's docblock; raise it on the issue.
+function ContextUsageControl({ conversationId }: { conversationId: string | null }): JSX.Element | null {
   const snapshot = useRunConfigStore(selectSnapshot)
-  return (
-    <ContextUsageReading
-      usedTokens={snapshot?.usedTokens ?? 0}
-      windowTokens={snapshot?.windowTokens ?? 0}
-    />
+  const selectReported = useMemo(
+    () => (conversationId === null ? () => null : selectReportedContextFor(conversationId)),
+    [conversationId]
   )
+  const reported = useReportedContextStore(selectReported)
+  const tokens = contextTokenSource(reported, snapshot)
+  return <ContextUsageReading usedTokens={tokens.usedTokens} windowTokens={tokens.windowTokens} />
 }
 
 // #330: the two-dot Relay/Pyrycode connection-status indicator — the persistent at-a-glance state that

@@ -304,16 +304,26 @@ The five-character growth at the top step (`Context: 100%` → `Context high: 10
 fixed here, since widening the row is a footer-layout change this ticket had no reason to make. See
 "Footer row shrink policy (#1107)" below for the fix.
 
-**`ContextUsageControl()`** — module-private container, the single-selector-read shape #797's
-`ComposerErrorChipControl` established (since collapsed into `ComposerErrorSlotControl` by #963, above):
-one
-`useRunConfigStore(selectSnapshot)` read (not two narrow field selectors — both figures must come from
-the same store tick, or a tear could show a percentage of two unrelated snapshots), coalescing
-`snapshot?.usedTokens ?? 0` / `snapshot?.windowTokens ?? 0` — [`RunConfigSections`'s own
-container](conversation-shell-run-configuration.md#run-configuration-context-window-section-192) verbatim, so the not-yet-loaded state and the
-daemon's `window_tokens: 0` "unavailable" signal collapse into the identical rendered absence on both
-surfaces. Reads [Run configuration store](run-config-store.md)'s app-lifetime `RunConfigLiveData` feed
-(#810) — this ticket adds no store, no subscription, and no event of its own.
+**`ContextUsageControl({ conversationId })`** — module-private container, the single-selector-read shape
+\#797's `ComposerErrorChipControl` established (since collapsed into `ComposerErrorSlotControl` by #963,
+above): one `useRunConfigStore(selectSnapshot)` read (not two narrow field selectors — both figures must
+come from the same store tick, or a tear could show a percentage of two unrelated snapshots). Reads [Run
+configuration store](run-config-store.md)'s app-lifetime `RunConfigLiveData` feed (#810).
+
+**Since [#1421](https://github.com/pyrycode/pyrycode-desktop/issues/1421), that snapshot pair is the
+fallback, not the source.** `conversationId` is now a prop — `activeConversationId`, already in scope at
+the `composer__footer` row and read by every sibling control in it — behind a `useMemo`-stable selector
+(the `RunConfigSections` idiom: a fresh closure each render would re-subscribe `useReportedContextStore`
+every render for a value that is usually the same `null`). The control reads the conversation's claude-
+reported figure through `selectReportedContextFor(conversationId)` from the [reported-context
+store](reported-context-store.md), then resolves the winning pair through the shared leaf
+`contextTokenSource` (`src/renderer/src/screens/conversation/contextTokenSource.ts`) — the *same* function
+[`RunConfigSections`' container](conversation-shell-run-configuration.md#run-configuration-context-window-section-192)
+calls for the gauge, so the footer and the gauge cannot disagree about which figure to show for one
+conversation. `contextTokenSource` still performs the `snapshot?.usedTokens ?? 0` / `?? 0` coalescing this
+control used to spell inline — now written once — so the not-yet-loaded state and the daemon's
+`window_tokens: 0` "unavailable" signal collapse into the identical rendered absence on both surfaces, and
+a present claude reading whose maximum is `0` resolves there too rather than falling back to the snapshot.
 
 **`.composer__footer` reserves its own height (20px) unconditionally**, the same `.composer-status`
 guarantee ([Composer status row](conversation-shell-composer-status-row.md#composer-status-row-796) above): a null reading cannot move

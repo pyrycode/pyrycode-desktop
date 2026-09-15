@@ -246,6 +246,42 @@ defensively instead"*), so a daemon frame carrying `used_tokens: 1e999, window_t
 <= 0` and non-finite now collapse into the identical unavailable branch — an architect self-review
 security finding (MUST FIX), closed in the same extraction rather than as a follow-up.
 
+**The two figures `ContextWindowSection` receives changed source at [#1421](https://github.com/pyrycode/pyrycode-desktop/issues/1421); the section itself did not.**
+`RunConfigSections` (the container) resolves `usedTokens`/`windowTokens` through a new leaf,
+`contextTokenSource` (`src/renderer/src/screens/conversation/contextTokenSource.ts`, beside
+`contextUsage.ts`, same zero-import discipline), before handing them down as the same two primitive props.
+`contextTokenSource(reported, settings)` prefers the per-conversation reading claude reports — held by the
+[reported-context store](reported-context-store.md) and read through
+`selectReportedContextFor(conversationId)`, a third instance of this container's `useMemo`-stable per-id
+selector idiom (the announced model and the model list are the first two) — and falls back to this
+section's settings pair (`RunConfigSnapshot.usedTokens`/`.windowTokens`, the daemon's transcript scan) only
+when no reading has arrived yet. That transcript route reads 0% for any conversation opened in a workspace
+(pyrycode#2423) and guesses the window until a turn ends; claude's own figure does neither.
+
+**The only branch is presence, not `maxTokens > 0`.** A present reading whose `maxTokens` is `0` still
+wins and resolves to this section's existing `Context usage unavailable` line via `contextUsagePercent`'s
+own window guard — it is not read as an absence and the settings pair does not stand in for it. The natural
+shape, testing `maxTokens > 0` before preferring a reading, silently re-reads claude's own zero as "nothing
+arrived" and shows the transcript figure instead — the exact defect this ticket removes — so
+`contextTokenSource`'s only test is `reported === null`, which leaves no second branch for a later edit to
+loosen. `contextTokenSource` returns a freshly built `{ usedTokens, windowTokens }` pair on both arms
+rather than the `settings` argument by reference, since that argument is a `RunConfigSnapshot` that also
+carries a daemon-supplied `model` string — rebuilding is what keeps a value typed as the two-figure pair
+from ever carrying a third field.
+
+**The composer footer's reading (`ContextUsageControl`, in [Composer footer
+row](conversation-shell-composer-message-box.md#composer-footer-row-811)) resolves the identical pair
+through the identical function**, so the footer and this gauge cannot disagree about which figure to show
+for one conversation. Both keep going through `contextUsagePercent`/`contextUsageStep` computed from the
+total and the maximum — never from claude's own `percentage` field, which the store holds and neither
+surface reads — so the clamp, the finiteness guard and the severity ladder stay the one computation this
+section's own `Number.isFinite` extraction established at #811. It also settles this section's *internal*
+consistency for free: `ContextWindowSection` derives its percentage from the same two integers it
+abbreviates into `(X of Y tokens)`, so one winning pair makes the drawn triple (Figma `20:152`) consistent
+by construction rather than by three edits that happen to agree. See [#1421 architecture
+spec](../../specs/architecture/1421-claude-reported-context-reading.md) for the full design and the
+security review (PASS).
+
 ## Run configuration Model section, daemon-published rows (#975)
 
 The Model section stops guessing. `MODEL_CATALOG`, `ModelCatalogEntry`, its family tokens, its

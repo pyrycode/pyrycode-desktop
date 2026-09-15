@@ -43,14 +43,13 @@ keeps its richer `row` type unchanged — it genuinely reads `cwd` too, so only 
 
 ## What it does
 
-- Each saved (promoted) Channel row in the Channel List renders a trailing icon-only "Rename"
-  affordance (`aria-label="Rename"`, a Material pencil glyph — no Figma node pins this row-level
-  control; 19:14 is the dialog only). Since
-  [#1441](channel-list-row-hover-control.md#1441-a-chats-row-now-carries-both-controls-not-one), a
-  Recent (unpromoted) discussion row carries this same pen too, alongside its existing
-  Save-as-channel chevron — named **Edit chat** there rather than **Rename**, and under its own
-  class token — so the two trailing controls are no longer disjoint by section. See that page for
-  the geometry and the reason for the second token.
+- **Channels-row entry point retired ([#1476](edit-channel-dialog.md)).** A saved (promoted) Channel
+  row's own pen no longer opens this dialog. See § Channels-row entry point retired (#1476) below.
+- Since [#1441](channel-list-row-hover-control.md#1441-a-chats-row-now-carries-both-controls-not-one),
+  a Recent (unpromoted) discussion row carries this same pen (`aria-label="Edit chat"`, under its own
+  `.channel-list__chat-edit` class token — no Figma node pins this row-level control; 19:14 is the
+  dialog only) alongside its existing Save-as-channel chevron, so the two trailing controls are no
+  longer disjoint by section. See that page for the geometry and the reason for the second token.
 - Both entry points open the [shared Modal](modal-presentation.md) at a preferred width of
   640px, with the title **Edit chat** (**Rename** before #1440), header close button and divider,
   a filled **Channel name:** field (including for chats), and centred outlined **Cancel** / filled
@@ -146,6 +145,27 @@ already used. `EditChatDialog.tsx` still imports nothing from `conversation/`, k
 directories cycle-free (`ChannelList.tsx` already imported `requestArchiveConversation` for
 [#1439](edit-workspace-dialog.md)'s workspace fan-out).
 
+### Channels-row entry point retired (#1476)
+
+A saved (promoted) Channel row's own pen no longer opens this dialog. [#1476](edit-channel-dialog.md)
+gave it the sibling [Edit channel dialog](edit-channel-dialog.md) instead — reading **Edit channel**
+rather than **Edit chat**, under its own `.edit-channel*` namespace, with no Archive chat button. The
+pen's own class tokens, `.channel-list__rename` / `__rename-icon`, did **not** move — twelve specs
+read them as "this row is a promoted Channels row" — only the word and the modal it opens did.
+
+This dialog's row-level entry point is now the Chats row's pen alone
+(`.channel-list__chat-edit`, since
+[#1441](channel-list-row-hover-control.md#1441-a-chats-row-now-carries-both-controls-not-one)). Its
+second entry point, the [Channel Info sheet](conversation-shell-session-and-channel-info.md#channel-info-sheet-365)'s
+Actions pill, is **unchanged** — it still opens this dialog for the currently open conversation
+whether that conversation is a chat or a channel. #1476 only retired the sidebar-row path for
+Channels rows, so — until a later ticket folds the sheet's channel path over too — opening a channel
+from its own sidebar row and opening the same channel from the sheet reach two different modals.
+
+In `ChannelList.tsx`, `onRename` / `renameRow` / `renameName` below now serve the Chats tree alone;
+the Channels tree's pen has its own `onEditChannel` handler and its own `editChannelRow` /
+`editChannelName` pair, documented on [Edit channel dialog](edit-channel-dialog.md) rather than here.
+
 ### `ChannelList.tsx` — `Row` extension
 
 `Row` already restructured into a flex wrapper with sibling children when
@@ -158,6 +178,9 @@ ended that: the bare `onRename` became a `pen?: RowPenControl` object carrying i
 class tokens, and `discussions.map(...)` (Recent rows) now receives one too
 (`.channel-list__chat-edit`, **Edit chat**) alongside its `onSaveAsChannel` chevron — see that page
 for the current shape and why the two trees keep separate class tokens and label constants.
+[#1476](edit-channel-dialog.md) split the Channels `.map`'s pen off this handler entirely — it now
+carries its own `onEditChannel`, opening [Edit channel dialog](edit-channel-dialog.md) — see §
+Channels-row entry point retired (#1476) above.
 
 ### `ChannelList.tsx` — container state
 
@@ -259,8 +282,10 @@ Saved Channel row's Rename affordance click → container: setRenameRow(row); se
   pen kept `Rename`/`.channel-list__rename` at that point. #1441 then gave the Chats row this same
   pen directly (no longer routed only through the conversation-info sheet's own Rename action),
   named **Edit chat** and under its own `.channel-list__chat-edit` token, so the two sidebar words
-  can diverge without a shared constant. The Channels row's pen stays `Rename` until #1430 renames
-  it to **Edit channel**.
+  can diverge without a shared constant. [#1476](edit-channel-dialog.md) (split from #1430) then
+  retitled the Channels row's pen to **Edit channel** and pointed it at the sibling [Edit channel
+  dialog](edit-channel-dialog.md) instead of this one — see § Channels-row entry point retired
+  (#1476) above.
 - **Static markup cannot prove event wiring or scrolling.** Static tests cover accessible
   names, shared chrome, blank validation and escaping; helper tests assert the exact trimmed
   command and target id. `e2e/conversation-create-rename.spec.ts` exercises both entry points
@@ -275,6 +300,9 @@ Saved Channel row's Rename affordance click → container: setRenameRow(row); se
 
 ## Related
 
+- [Edit channel dialog](edit-channel-dialog.md) — the sibling this dialog was split from
+  ([#1476](edit-channel-dialog.md)); the Channels row's own pen now opens it instead of this dialog,
+  reusing `requestRenameConversation` verbatim. See § Channels-row entry point retired (#1476) above.
 - [Conversation rename (transport)](conversation-rename.md) / [#359 codebase notes](../codebase/359.md)
   — the `renameConversation` command and `RenameConversationPayload` this dialog dispatches
   unchanged; this ticket is its first live caller.

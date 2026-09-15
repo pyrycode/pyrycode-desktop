@@ -57,6 +57,7 @@ import { loadServerInfo } from './store/serverInfoLoader'
 import { slashCommandListStore } from './store/slashCommandListStore'
 import { timelineStore } from './store/timelineStore'
 import { usageLimitStore } from './store/usageLimitStore'
+import { reportedContextStore } from './store/reportedContextStore'
 
 /** Compile-time exhaustiveness guard: a new PairedRoute member without a case is a type error. */
 function assertNever(route: never): never {
@@ -249,6 +250,16 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
   // attributed to the newly paired one. Adding it to THIS object is what makes the unpair path below
   // drop it; the call site needed no edit.
   clearAllUsageLimits: () => usageLimitStore.getState().clearAllUsageLimits(),
+  // #1420: every conversation's held context-window reading, dropped as one — the same direct, nullary
+  // shape as the setters above, and the SECOND member whose store the `connected` edge does NOT clear
+  // and must not: after a reconnect to the same daemon the window is whatever claude last reported and
+  // that conversation's next turn end re-reports it, so blanking at the edge would blank a correct
+  // value with no request half to re-fetch it. Unlike its neighbour this store has no exit of its own
+  // AT ALL — there is no benign value on the arm, so every frame is a reading — and without this entry
+  // a departed machine's model identity, MCP server names and memory-file paths would latch for the
+  // life of the process and be attributed to the newly paired one. Adding it to THIS object is what
+  // makes the unpair path below drop it; the call site needed no edit.
+  clearAllReportedContext: () => reportedContextStore.getState().clearAllReportedContext(),
   dispatchSession: (action) => sessionStore.getState().dispatch(action),
   // #779: how far the operator read on the ended pairing's server — cleared in memory AND on disk, since
   // #776 persists the marks. It reaches its store DIRECTLY rather than through

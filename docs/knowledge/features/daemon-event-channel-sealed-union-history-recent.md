@@ -344,14 +344,20 @@ the combined list again exceeded the size cap.
   stream is line-delimited JSON, and an embedded newline in a tool name or a POSIX path could forge a
   record.
 
-  Consumed as a **permanent** no-op by `daemonEventBridge`, `modalBridge` and `questionBridge` — none of
-  the three will ever own this arm — and a **dormant** no-op by `timelineBridge`; whether #1420 claims it
-  through `timelineBridge` (the `apiRetry`/`compacting` posture) or a subscriber of its own (the
-  `rateLimited`/`questionShown` posture) is that slice's call, not this carry slice's. Ships dormant
-  deliberately: all four exhaustive bridges no-op it until #1420, which is not a formality here — this is
-  the largest arm on the union and the one carrying the most disclosive fields, so a missing bridge case
-  would have put every path and every server name into an `Error` message via `assertNever` and from there
-  into a stack trace and a crash reporter.
+  Consumed as a **permanent** no-op by all four exhaustive bridges — `daemonEventBridge`, `modalBridge`,
+  `questionBridge` and, since [#1420](https://github.com/pyrycode/pyrycode-desktop/issues/1420), also
+  `timelineBridge`, whose case was left DORMANT here pending that ticket's routing choice. #1420 settled it
+  the `rateLimited`/`questionShown` way: the reading goes to a **subscriber of its own**
+  (`reportedContextBridge` → [reported-context store](reported-context-store.md)), not through
+  `timelineBridge` the way `apiRetry`/`compacting`/`thinkingProgress` each eventually went. The deciding
+  fact was lifetime rather than layout, the same one that settled `rateLimited`: a context window is
+  conversation-scoped and outlives a turn end, a `/clear` and a session transition, so state a turn rebuilds
+  would drop it at the wrong moment and cost every reducer arm ten extra fields to carry.
+  `timelineBridge`'s `contextUsage` case now exists only so its `assertNever` guard makes a new arm a
+  compile error — and it matters more here than on any neighbouring arm, because that guard stringifies the
+  **whole** event into an `Error` message and this is the largest arm on the union and the one carrying the
+  most disclosive fields: deleting the case on the strength of "the arm is handled elsewhere now" would put
+  every memory-file path and every MCP server name into a stack trace and a crash reporter.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.

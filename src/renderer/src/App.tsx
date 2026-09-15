@@ -22,6 +22,7 @@ import { ModelListData } from './store/modelListBridge'
 import { SystemPromptData } from './store/systemPromptBridge'
 import { SystemPromptWriteData } from './store/systemPromptWriteBridge'
 import { UsageLimitData } from './store/usageLimitBridge'
+import { ReportedContextData } from './store/reportedContextBridge'
 import { RunConfigLiveData } from './screens/conversation/runConfigLive'
 import { activeConversationStore, selectActiveConversation } from './store/activeConversationStore'
 import { routeForStatus, type AppRoute } from './appRoute'
@@ -294,7 +295,20 @@ function App(): JSX.Element {
   // `connected` branch, and here that is load-bearing rather than incidental: after a reconnect to the
   // same daemon the account's quota window is exactly what it was, and with no request half a value
   // blanked at that edge could never be re-fetched. Its pairing-scoped clear is
-  // clearPairingScopedState's (#1320's fifteenth member), not this leaf's.
+  // clearPairingScopedState's (#1320's own member of that set), not this leaf's.
+  // ReportedContextData (#1420) mounts directly beside it — deliberately WITHOUT a fresh ordinal, since
+  // the numbering in these comments already trails the JSX below (RelayLinkData and SessionFactsData
+  // each landed without one) and minting another would deepen a count nobody can verify from here. It
+  // lands each unsolicited `contextUsage` reading into the per-conversation reported-context store for
+  // the footer and gauge (#1421) and the breakdown popover (#1254). Same App-level always-listening
+  // rationale as the pushed frames above, sharpened by WHEN the daemon sends: the frame is fanned out
+  // after EVERY turn end for whichever conversation ran, which may be one the operator has never
+  // opened, and a reading can arrive long before #1421's footer is mounted. Reactive-only, no gate, and
+  // no request half at all. Ships dormant. Like UsageLimitData it has no `connected` branch, and here
+  // that is load-bearing for the same reason one notch harder: after a reconnect to the same daemon the
+  // window is whatever claude last reported and the next turn end re-reports it, so a value blanked at
+  // that edge could never be re-fetched — and unlike its neighbour this store has no exit of its own to
+  // recover through. Its pairing-scoped clear is clearPairingScopedState's, not this leaf's.
   return (
     <>
       <ConversationListData />
@@ -312,6 +326,7 @@ function App(): JSX.Element {
       <SystemPromptData />
       <SystemPromptWriteData />
       <UsageLimitData />
+      <ReportedContextData />
       <AppView
         route={route}
         onPaired={() => setRoute('conversation')}

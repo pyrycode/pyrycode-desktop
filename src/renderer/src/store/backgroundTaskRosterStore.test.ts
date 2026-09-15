@@ -649,8 +649,12 @@ describe('backgroundTaskRosterStore', () => {
     store.getState().resetRostersFor(new Set(['c1']))
     store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
 
-    // The cleared toolCallId does not come back: nothing repopulates a started frame after a
-    // (re)handshake, so the task reads roster-sourced again. That is #569's gap, stated honestly.
+    // The cleared toolCallId does not come back, and that is still exactly right after #569: the
+    // daemon's reconcile-on-connect re-asserts ROSTERS only (pyrycode#2077-#2080), never a
+    // `background_task_started`, so a task the app had upgraded to started-sourced comes back
+    // roster-sourced — without its `toolCallId` and with the row's tighter-capped label. This case
+    // used to call that "#569's gap"; it is not a gap any more but the reconcile's stated shape, and
+    // the assertion below is what pins the narrowing rather than merely describing it.
     expect(heldTask(store, 'c1', 't1')).toEqual(heldNoCut)
   })
 

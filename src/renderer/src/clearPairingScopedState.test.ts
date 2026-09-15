@@ -371,7 +371,9 @@ describe('clearPairingScopedState', () => {
     // (`localStorage`) and so the only one that can throw; placed last, a throw from it aborts nothing.
     // Placed BEFORE the roster clear, such a throw would abort it — leaving the ended pairing's
     // `local_bash` command lines and patch text live on screen, attributed to a machine the operator
-    // has left, with no re-assertion path of any kind to overwrite them. Position is otherwise free
+    // has left, with nothing to overwrite them — the daemon's reconcile-on-connect re-asserts rosters
+    // (#569) but only for the conversations of the pairing that reported them, never a departed one's.
+    // Position is otherwise free
     // among the in-memory clears; this is the half that is not.
     const { deps, clearAllRosters, clearAllLastRead } = spyDeps()
 
@@ -807,10 +809,13 @@ describe('clearPairingScopedState', () => {
       )
     )
 
-    // SECOND, the half this ticket adds, and it is harsher than the queue's: NOTHING re-asserts a
-    // roster — no frame in this family is in the daemon's reconcile-on-connect set and this app sends
-    // no `last_event_id` — so without this clear both entries latch for the life of the process. The
-    // unlisted one is the sharper of the two, since no scoped reset can ever reach it.
+    // SECOND, the half this ticket adds, and since #569 it is the queue's case rather than a harsher
+    // one: a roster IS re-asserted — the family joined the daemon's reconcile-on-connect set upstream
+    // (pyrycode#2077-#2080) — but the reconcile covers only the conversations of the pairing that
+    // reported them, so it never reaches a DEPARTED pairing's and without this clear both entries still
+    // latch for the life of the process. This comment used to read "NOTHING re-asserts a roster"; the
+    // premise changed, the assertions below did not. The unlisted entry is the sharper of the two,
+    // since no scoped reset can ever reach it.
     expect(rosters.getState().rosters.size).toBe(0)
     expect(selectRosterFor('c-listed')(rosters.getState())).toBeNull()
     expect(selectRosterFor('c-unlisted')(rosters.getState())).toBeNull()

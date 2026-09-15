@@ -277,6 +277,81 @@ the combined list again exceeded the size cap.
   outlives a turn end, a `/clear` and a session transition, so state a turn rebuilds would drop it at the
   wrong moment and cost every reducer arm an extra field to carry. `timelineBridge`'s `rateLimited` case
   now exists only so its `assertNever` guard makes a new arm a compile error.
+- **`contextUsage{conversationId,model,totalTokens,maxTokens,percentage,categories,droppedCategories,mcpTools,droppedMcpTools,memoryFiles,droppedMemoryFiles}`**
+  ([#1419](https://github.com/pyrycode/pyrycode-desktop/issues/1419)) carries claude's own report of how
+  full the context window is, plus the three inventories that say how it got that way. The decode landed
+  across four earlier slices — the reading (#1454), the category breakdown (#1455), the MCP-tool
+  inventory (#1459), the memory-file inventory (#1460) — and this arm is the emit, placed directly after
+  `rateLimited` so the switch mirrors `InboundDaemonMessage`'s own arm order. **A reading, not a state
+  transition**, the `rateLimited`/`thinkingProgress` rule restated: no rising or falling edge, no
+  `turn_id`, opens and closes no turn — daemon state by the `queueState` #720 rule, fanned out after
+  every turn end.
+
+  **All eleven wire fields cross**, unlike `rateLimited`: the frame carries no truncation marker to drop
+  and every field has a consumer once #1420/#1421 land. **Top-level fields are snake→camel; the three row
+  types (`ContextUsageCategory`, `ContextUsageMCPTool`, `ContextUsageMemoryFile`) are reused verbatim with
+  their snake_case fields** — the settled house rule for nested arrays, with `queueState.queued` and
+  `backgroundTaskRoster.tasks` as precedent: the row narrower already stripped each row to its known
+  fields, so there is nothing to drop and no mapping to write. Hence `server_name` stays snake_case inside
+  its row while `mcp_tools` becomes `mcpTools` at the top level. `readonly` on each array mirrors both
+  precedents; the row interfaces themselves stay mutable. **No `daemonTs`**, the `rateLimited`/
+  `thinkingProgress` precedent: the decode arm takes no `FrameTimestamp`, so there is no served-page half
+  to join a (`type`, `ts`) key against.
+
+  **The three arrays cross by reference, unmapped** — safe only because each row parser
+  (`parseContextUsageCategory`/`parseContextUsageMCPTool`/`parseContextUsageMemoryFile`) returns a fresh
+  two- or three-field literal built from named `requireString`/`requireNumber` reads, verified in the tree
+  rather than trusted from the ticket. Had any parser returned its input record, a `__proto__` planted as
+  an own data property inside a row would have ridden across IPC; the property is now pinned from the IPC
+  side too, by a test that a key planted inside a row does not cross, so a future decoder change that
+  breaks it reddens where the value actually crosses rather than only upstream.
+
+  **Provenance is mixed within this one arm**, the field a reader is likeliest to get wrong:
+  `conversationId` is daemon-authored (filled from the daemon's own registry record), while `model` and
+  every row label, `server_name` and `path` are claude- or workspace-authored. **The reading is
+  informational and nothing reconciles** — `percentage` is not derivable from `totalTokens`/`maxTokens`,
+  the categories need not sum to the total, each dropped count is independent (an inventory's true size is
+  `list.length` + its own dropped count), and no count is evidence about another's length. Rows arrive as
+  a prefix in the producer's descending-token order — a cut always takes entries off the tail, so
+  re-sorting or de-duplicating destroys the only ordering signal a consumer gets. `0` and `[]` are both
+  values, never absences; nothing may test either for truthiness.
+
+  **Never allocate, iterate or size anything from any of the six integers** — sharper here than anywhere
+  else on this union: a dropped count is a count of rows that are *not present*, so the natural "…and 3
+  more" rendering invites `Array(droppedCategories)` or a loop to that bound, an allocation sized by an
+  unbounded daemon-supplied number. Render the figure, never a structure sized by it. Not deduped: one
+  event per decoded frame, verbatim repeats included, since a window legitimately repeats and legitimately
+  falls (a `/clear` or a compaction).
+
+  SECURITY: **this is the first arm on the union whose untrusted content is nested** rather than sitting
+  in flat scalar fields on the arm itself — `model` is the only untrusted string at the top level; every
+  other one (a row's `name`, `server_name`, `path`, `type`) lives inside one of the three inventories, so
+  a consumer that has internalised "the untrusted fields are the string-typed ones on the arm" handles
+  exactly one of them. Each row prohibition is stated on its own row type rather than delegated: `name` is
+  a label, never a handle to call anything by; `server_name` is inert despite colliding by name with the
+  actuation-crossing `MCPReconnectPayload.ServerName` — never fed to an MCP verb or joined against
+  `mcp_status`; `path` is path-shaped descriptive text and not a file handle — never an `href`, a
+  `shell.openExternal` target, a `path.join` argument, a filename or a cache key, since the daemon
+  constrains neither scheme nor shape (a `javascript:` URI or a UNC path arrives as an ordinary `path`
+  exactly as `../../../etc/passwd` does in the committed fixture); `type` beside it is a label, never a
+  discriminant to `switch` on. If a consumer indexes any inventory by any of its strings, the index is a
+  `Map` — `__proto__` and `../..` are ordinary values in all three. `model` is also not an identity;
+  `modelAnnounced` remains the authority on which model is running. Nothing decoded reaches a log on any
+  path, and the grounds escalate across the frame: the three integers disclose how much private work is in
+  the window, each per-row figure discloses how the window is *composed*, a `server_name` is workspace
+  configuration disclosing what the operator wired up, and a `path` is the strongest — it discloses who
+  the user is and where they work. It is also an integrity rule, not only a privacy one: the diagnostic
+  stream is line-delimited JSON, and an embedded newline in a tool name or a POSIX path could forge a
+  record.
+
+  Consumed as a **permanent** no-op by `daemonEventBridge`, `modalBridge` and `questionBridge` — none of
+  the three will ever own this arm — and a **dormant** no-op by `timelineBridge`; whether #1420 claims it
+  through `timelineBridge` (the `apiRetry`/`compacting` posture) or a subscriber of its own (the
+  `rateLimited`/`questionShown` posture) is that slice's call, not this carry slice's. Ships dormant
+  deliberately: all four exhaustive bridges no-op it until #1420, which is not a formality here — this is
+  the largest arm on the union and the one carrying the most disclosive fields, so a missing bridge case
+  would have put every path and every server name into an `Error` message via `assertNever` and from there
+  into a stack trace and a crash reporter.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.

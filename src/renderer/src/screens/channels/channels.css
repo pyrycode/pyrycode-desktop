@@ -1633,6 +1633,58 @@
   outline-offset: 2px;
 }
 
+/* #1440 — the Edit chat dialog's archive slot, drawn as the content frame's own `Actions` row
+   (487:2320): left-aligned below the name field, with the drawing's 8px top inset. Its classes share no
+   name with the Edit host or Edit workspace dialogs, the Playwright-locator rule on the Edit host dialog
+   knowledge page — and they keep the `rename-conversation` prefix rather than opening an `edit-chat` one,
+   because six specs already locate this dialog through that prefix and one dialog wearing two namespaces
+   is worse than one whose prefix outlived its title. */
+.rename-conversation__actions {
+  display: flex;
+  align-items: center;
+  padding-top: var(--space-2);
+}
+
+/* The footer Cancel's outlined recipe against the same tokens (.modal__action--cancel), because the
+   design draws this button as that button — `.edit-host__unpair` restated rather than shared, since a
+   class from another dialog's namespace is exactly the coupling the rule above exists to avoid. That
+   sibling is the one restated (not #1439's) because it is the only outlined recipe here carrying a
+   `:disabled` arm, and this button really does disable: it goes dead with OK when the host is gone.
+
+   THREE of that recipe's lines are deliberately NOT carried. `max-width: 100%` and `overflow-wrap:
+   anywhere` defend a long daemon-supplied HOST NAME; this label is a client-owned constant of known
+   length. #1439's `flex-shrink: 0` answered a wrapping prompt SHARING a flex row with two buttons; this
+   row holds one button and no prompt, so there is nothing to squeeze it — confirmed by capture, since
+   that is the one finding static markup cannot see. */
+.rename-conversation__archive {
+  box-sizing: border-box;
+  padding: calc(var(--space-2) - 1px) calc(var(--space-5) - 1px);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight-emphasized);
+}
+
+.rename-conversation__archive:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.rename-conversation__archive:enabled:hover {
+  opacity: 0.88;
+}
+
+.rename-conversation__archive:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
 /* Create and Save-as-channel placement; shared Modal owns the panel, header and actions. */
 .create-channel-overlay {
   position: fixed;

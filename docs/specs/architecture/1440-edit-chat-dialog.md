@@ -248,3 +248,34 @@ Pending for the documentation stage; no file under `docs/knowledge/` is edited b
 2. Does any `getByRole('button', { name: 'Archive', exact: true })` locator in the archive specs start
    matching `Archive chat`? It should not — `exact: true` forbids it — but the fake tier is what
    proves it, since a strict-mode violation would redden `conversation-archive-lifecycle.spec.ts`.
+
+## Revisions
+
+### 2026-09-15 — the button takes a tab stop, and two spec chains absorb it
+
+Not a design change; a consequence of the design that the plan's Testing strategy did not name, and
+that the fake tier caught rather than the static tests. `e2e/conversation-create-rename.spec.ts` pins
+the dialog's keyboard walk twice — once for the chain itself, once to prove a focused OK scrolls into
+view in a 180px-tall window. Archive chat sits in the Modal's **content** slot, between the field and
+the footer, so document order is now input → Archive chat → Cancel → OK and both walks gained a stop.
+
+The walks were extended, **not** routed around: that document position is the requirement, not an
+obstacle. An Archive reachable only after Cancel would sit inside the dialog's answer row, which is
+the opposite of what the drawing places it outside of. The first chain now asserts the new stop
+explicitly so a regression that moved the button into the footer reddens by name.
+
+### 2026-09-15 — open questions resolved
+
+1. **No `flex-shrink: 0`.** Confirmed by the rendered capture at 1280×800: one button in a row with no
+   prompt beside it has nothing to squeeze it, and the label renders on one line at the 640px panel.
+   The CSS comment states the non-carry rather than leaving the omission to be re-derived.
+2. **No locator collision.** `conversation-archive-lifecycle.spec.ts` passes unedited — `exact: true`
+   keeps the sheet's `Archive` pill and the dialog's `Archive chat` disjoint, as expected.
+
+### 2026-09-15 — stale citations left in place, deliberately
+
+Four modules cite `RenameConversationDialog` **by name in comments** as an idiom they follow
+(`CreateFolderDialog.tsx` and its test, `SystemPromptSection.tsx`, `WorkspacePickerSheet.tsx`). They
+are historical citations of #360's shape, not code, and none of the four is otherwise in this
+ticket's blast radius; editing them would put comment-only churn in four files the ticket does not
+name. Left for the documentation stage, flagged in the PR body.

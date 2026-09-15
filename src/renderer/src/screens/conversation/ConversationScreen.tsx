@@ -139,10 +139,9 @@ import {
 import { sessionBoundaryTitle } from './sessionBoundaryViewModel'
 import { compactionBoundaryTitle } from './compactionBoundaryViewModel'
 import { formatLastActivity, titleFor } from '../channels/channelListViewModel'
-import {
-  RenameConversationDialogView,
-  requestRenameConversation
-} from '../channels/RenameConversationDialog'
+// #1440 renamed this module for its new title. `requestRenameConversation` KEEPS its name: it owns the
+// `renameConversation` wire literal, and renaming the helper would drift it from the verb it sends.
+import { EditChatDialogView, requestRenameConversation } from '../channels/EditChatDialog'
 import { WorkspacePickerSheet } from './WorkspacePickerSheet'
 import { BackgroundTaskPanel } from './BackgroundTaskPanel'
 import type { RendererCommand } from '@shared/ipc/commands'
@@ -2978,8 +2977,12 @@ export function ChannelInfoSheetView({
               and an inline confirm before it dispatches. */}
           <div className="channel-info__actions">
             {onRename && (
+              // #1440 — the word moves, the wiring does not. The pill reads **Edit chat** because the
+              // dialog it opens is now the Edit chat modal; `onRename` keeps its prop name because it
+              // still opens the rename-capable dialog, and the Archive and Delete pills beside it are
+              // untouched. #1431 owns the channel case.
               <button type="button" className="channel-info__action" onClick={onRename}>
-                Rename
+                Edit chat
               </button>
             )}
             {onArchive && (
@@ -3141,7 +3144,7 @@ function ChannelInfoSheet({
         }
       />
       {renameOpen && conversation !== null && (
-        <RenameConversationDialogView
+        <EditChatDialogView
           name={renameName}
           available={available}
           onNameChange={setRenameName}
@@ -3150,6 +3153,18 @@ function ChannelInfoSheet({
             if (connectedConversationHostNow(conversation.id) === null) return
             requestRenameConversation(window.pyry.sendCommand, conversation, renameName)
             setRenameOpen(false)
+          }}
+          // #1440 — the archive arm, the sheet's own `onArchive` sequence verbatim one level down:
+          // re-check the host at interaction time, send ONE command, then close. It closes the DIALOG
+          // AND the sheet, which is what that pill already does — leaving the sheet standing over an
+          // archived chat would be a surface describing a row that is on its way out. No rename is sent
+          // whatever the field holds, nothing is written to a store and nothing navigates here: the
+          // existing `useArchivedActiveConversationExit` bridge leaves the thread on the daemon's word.
+          onArchive={() => {
+            if (connectedConversationHostNow(conversation.id) === null) return
+            requestArchiveConversation(window.pyry.sendCommand, conversation.id)
+            setRenameOpen(false)
+            onClose()
           }}
         />
       )}

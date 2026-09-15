@@ -4447,6 +4447,36 @@ describe('ChannelInfoSheetView — the Channel Info sheet (#365)', () => {
     expect(markup).toContain('>Edit chat</button>')
   })
 
+  // #1431: the SAME pill, one word apart. `is_promoted` is the wire's only signal for "this is a saved
+  // channel rather than an ad-hoc discussion", and the view already reads three other fields off the
+  // payload it holds — so the word is derived there rather than handed in as a second authority on a
+  // fact already in scope. These two cases are each other's negative: whichever word renders, the other
+  // must be absent, because a sheet showing both would mean the branch fell through.
+  it('reads Edit channel, not Edit chat, when the open conversation is a promoted channel (#1431)', () => {
+    const markup = renderToStaticMarkup(
+      <ChannelInfoSheetView
+        conversation={createdPayload({ is_promoted: true, name: 'Saved channel' })}
+        onClose={noop}
+        onRename={noop}
+      />
+    )
+    expect(markup).toContain('class="channel-info__action"')
+    expect(markup).toContain('>Edit channel</button>')
+    expect(markup).not.toContain('Edit chat')
+  })
+
+  it('keeps Edit chat for a non-promoted conversation (#1431)', () => {
+    const markup = renderToStaticMarkup(
+      <ChannelInfoSheetView
+        conversation={createdPayload({ is_promoted: false, name: 'Scratch chat' })}
+        onClose={noop}
+        onRename={noop}
+      />
+    )
+    expect(markup).toContain('>Edit chat</button>')
+    expect(markup).not.toContain('Edit channel')
+  })
+
   it('offers no Edit chat action when the active conversation is null (the graceful-empty guard, AC1)', () => {
     // A list-opened thread (conversation === null) gets no onRename from the container, so the
     // Actions header renders over an empty slot — no Edit chat control, consistent with #365's empty About.

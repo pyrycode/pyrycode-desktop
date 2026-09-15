@@ -236,54 +236,17 @@
   display: block;
 }
 
-/* ⭐ BELOW THE CONTROL, AND THIS IS THE ONE PLACE THE THREE SHIPPED PILLS' PLACEMENT IS NOT REUSED
-   VERBATIM. Those sit in their control's own vertical band (`top: 50%` + `translateY(-50%)`). This one
-   hangs under its plus instead, and the reason it was taken NO LONGER EXISTS — which is worth writing
-   down precisely, because a reader who finds a deviation with no live justification will otherwise either
-   delete it or re-derive a wrong one.
+/* #1427 DELETED THIS CONTROL'S PLACEMENT OVERRIDE, and the note is left because a reader who finds five
+   sibling controls and no deviation here should know there was one rather than re-derive it.
 
-   WHAT THE REASON WAS, all of it MEASURED in a running window at scroll top rather than derived, the
-   derivation having got it wrong once: `.channel-list__actions` was then the Channels header's
-   immediately preceding sibling in a gapless flex column AND `position: sticky; top: var(--space-1)`
-   inside the scroller, an offset resolved against the scrollport's CONTENT box, so at scroll top the
-   cluster sat --space-1 past its flow position with its bottom edge 4px INSIDE this header — at 76. The
-   plus is a --space-5 box at `top: 0` of that header and this pill is 24px tall (--space-1 + the 16px
-   body-small line + --space-1), so band-centring put its top at 70 and `top: 0` put it at 72: 6px and 4px
-   under a cluster painting at `z-index: 1`. There was no horizontal escape either, the cluster insetting
-   one --space-1 from the content right edge while the pill grew leftward from that same edge. And the
-   overlap was REACHABLE rather than theoretical — the cluster's buttons filled on their own `:hover`,
-   and this pill can be up on `:focus-visible` while the pointer sits on the gear.
+   The rule was `top: 100%; transform: none`, hanging the pill under the plus instead of centring it on the
+   plus's band the way the other six did. It was taken because `.channel-list__actions` was then
+   `position: sticky` INSIDE the scroller and its bottom edge landed 4px inside this header, so a
+   band-centred pill painted 6px underneath a cluster at `z-index: 1`. #1443 moved the bar out of the
+   scroller entirely and retired the reason without retiring the placement; #1427 retired the placement
+   itself, for every control at once. The shared block is now pointer-relative and there is nothing left
+   here to override. */
 
-   WHAT #1443 CHANGED, AND WHAT IT DELIBERATELY DID NOT. The drawn top bar is neither sticky nor inside
-   the scroller any more: it is the padded column's first child, a level above this header's scrollport,
-   so it overlaps nothing at any scroll offset and every one of those numbers is history. The PLACEMENT
-   still ships exactly as written — re-centring it on the plus's band is a separate ticket by that
-   ticket's ruling, not a free tidy-up here — so `top: 100%` with the transform dropped stays, hanging the
-   pill's top edge on the plus's bottom, which is the header's 20px line's bottom. The glyph it names
-   stays visible beside it rather than covered, and the pill occupies the header's 12px gap and the 12px
-   of the first host row under it. Only these two declarations are overridden; the ground, the ink, the
-   type, the padding, the radius, `right: 0`, `display: none`, `pointer-events: none` and `nowrap` are
-   all the shared block's.
-
-   CONTAINMENT, which is the criterion this pill actually owes: `.channel-list__tree` is `overflow-y:
-   auto`, so it clips on BOTH axes and a clipped box still reports its geometry — no box read and no
-   `toBeVisible()` could tell a clipped pill from a drawn one. This pill lies inside its header's box
-   extended 12px down, so containment follows from the header AND the row under it being in view.
-   `right: 0` pins it to the header's right edge, which is the card's content right edge, so it grows
-   LEFTWARD and reaches neither horizontal edge — and an out-of-flow box adds scrollable overflow only
-   rightward or downward, so the sidebar gains no horizontal scroll.
-
-   `e2e/sidebar-section-header-plus-name-pill.spec.ts` keeps its TOP-BAR-EDGE line, which is now satisfied
-   by construction and kept as the detector for a bar that grew back down into the tree. The detector for
-   THIS rule is the line above it, pinning the pill's top edge to the plus's bottom.
-
-   Declined, and still declined: `top: var(--space-1)`, which centres the pill in the header's 32px box.
-   It cleared the old cluster only by an exact tangency, so a cluster a pixel taller silently reopened the
-   overlap — and it covers the glyph while sitting 6px off its centre, which is true whatever sits above. */
-.channel-list__pair .channel-list__control-name {
-  top: 100%;
-  transform: none;
-}
 
 /* `display: block` is the file's icon convention (__save-icon / __settings-icon). */
 .channel-list__pair-icon {
@@ -516,34 +479,24 @@
    one fires from the control so the name answers only the thing being pointed at. `:focus-visible` and
    not `:focus`, matching the control's own opacity rule above, so the keyboard case cannot half-fire.
 
-   THE GEOMETRY IS ENTIRELY THE BLOCK ABOVE'S AND ADDS NO NUMBER, and the workspace pen's containment
-   argument carries over unchanged because that control is this one's box at this one's inset down a row
-   of this one's height: a 20px box at --space-1 down a 28px row has the ROW's centre, so the 24px pill
-   (--space-1 + the 16px body-small line + --space-1) centred inside it spans 2…26 of that 28 and stays
-   inside the row's own band. Containment inside `.channel-list__tree` — `overflow-y: auto`, so it clips
-   on both axes — then follows from the row being in view at ANY scroll position rather than from the rows
-   a drive parks on. `right: 0` pins it to THIS control's right edge, 25px in from the card's content
-   edge, so it grows leftward and adds no horizontal overflow (an out-of-flow box contributes it only
-   rightward or downward).
+   THE GEOMETRY IS ENTIRELY THE SHARED BLOCK'S AND ADDS NO NUMBER. Since #1427 that geometry is the
+   POINTER's position and not this control's band: while the pointer is on this pen its pill's top-left
+   corner sits --space-3 right of and --space-6 below that pointer, and it moves with it. The band
+   paragraph that stood here is retired with the band, and so is the clearance argument it made against
+   the then-sticky top bar and against #1304's `top: 100%` deviation — the bar left the scroller in #1443
+   and the deviation was deleted in #1427, so neither question survives to be answered.
 
-   ⭐ AND THE BAND IS REUSED HERE RATHER THAN #1304's `top: 100%` DEVIATION, which is the one thing this
-   row had to be checked for. That deviation was taken because the section header's plus sat UNDER the
-   then-sticky `.channel-list__actions` cluster, whose `top: var(--space-1)` resolved against the
-   scrollport's CONTENT box and so landed its bottom edge 4px inside the header. The first host row of a
-   section is one whole header box lower — 20px of content line plus 12px of bottom padding, with
-   `.channel-list__section-header + .channel-list__host` taking no margin — so this pill's top edge
-   cleared the cluster by ~30px and hanging it below would have pushed it into the workspace row
-   underneath for nothing. #1443 then moved the bar out of the scroller entirely, so the clearance is the
-   whole tree and the question is closed rather than merely answered.
-   `e2e/sidebar-host-row-control-name-pill.spec.ts` still reads it back as a RELATION between the bar's
-   bottom edge and this pill's top — kept because a bar that grew back down into the tree is the one way
-   the old overlap can return, and a relation between two live boxes catches it where a literal would not.
+   ⭐ AND THIS ROW IS THE SHARPEST CASE THE CHANGE FIXES. The plus beside this pen is the later sibling, so
+   ITS pill painted over THIS pen's glyph: two bare 20px controls 10px apart, and naming one hid the other.
+   The cost #1190 stated and accepted here was the worst of the five, and it is the one that is gone.
 
-   THE COST, STATED: while a control is hovered its pill covers the trailing part of the machine label,
-   and the plus's covers the pen's glyph beside it (the plus is the later sibling, so it paints over).
-   Accepted on #1172's and #1181's precedent — each is up only while the pointer sits on a 20px control,
-   and `pointer-events: none` on the shared block is what lets a click aimed at the row, or Playwright's
-   hit test on the drives that click these controls without hovering first, read straight through it. */
+   `e2e/sidebar-host-row-control-name-pill.spec.ts` now reads the offset against the pointer's own parked
+   position, the pill's box disjoint from the control's, and the pill inside the WINDOW rather than inside
+   `.channel-list__tree` — a pointer-anchored pill leaves that scroller on purpose. Its relation between
+   the top bar's bottom edge and the pill's top stays, as the detector for a bar that grew back down into
+   the tree. `pointer-events: none` on the shared block is what lets a click aimed at the row, or
+   Playwright's hit test on the drives that click these controls without hovering first, read straight
+   through. */
 .channel-list__host-edit:hover .channel-list__control-name,
 .channel-list__host-edit:focus-visible .channel-list__control-name {
   display: block;
@@ -606,9 +559,10 @@
 
 /* #1190 — THE PLUS'S NAME PILL: the pen's trigger pair above on the control beside it, written here
    rather than joined onto that rule for that rule's own stated reason. Every word of it applies
-   unchanged — the same shared block, the same control's-own-`:hover` scoping, the same band, and the same
-   clearance over the top bar. The one difference is horizontal and follows from this control's own
-   `right: 0`: this pill ends flush with the card's content edge rather than 25px in from it. */
+   unchanged — the same shared block, the same control's-own-`:hover` scoping, and since #1427 the same
+   pointer-relative placement. The one difference #1190 recorded was horizontal and followed from this
+   control's own `right: 0`; the pill no longer resolves against either control's edge, so the two pills
+   are now placed identically and the difference is gone with the band. */
 .channel-list__host-add:hover .channel-list__control-name,
 .channel-list__host-add:focus-visible .channel-list__control-name {
   display: block;
@@ -863,28 +817,24 @@
    The two scopes are the design, not an inconsistency. `:focus-visible` and not `:focus`, matching the
    control's own opacity rule above, so the keyboard case cannot half-fire.
 
-   THE GEOMETRY IS ENTIRELY THE CONTROL BLOCK'S AND ADDS NO NUMBER. The pill is `right: 0; top: 50%;
-   translateY(-50%)` in its containing block, which here is the plus itself (`position: absolute`, so it
-   is one). The plus is a 20px box at `--space-1` down a 28px head row, so its centre is the ROW's centre;
-   the pill is 24px tall (--space-1 + the 16px body-small line + --space-1), so it spans 2…26 of that 28
-   and sits INSIDE THE ROW'S OWN BAND. Containment inside `.channel-list__tree` — which is `overflow-y: auto`
-   and so clips on both axes — then follows from the row being in view, at any scroll position, rather
-   than from the rows a test happens to reach. `right: 0` pins it to the plus's right edge, which is the
-   head row's, which is the scroller's content right edge, so it grows LEFTWARD and adds no horizontal
-   overflow (an out-of-flow box contributes it only rightward or downward).
+   THE GEOMETRY IS ENTIRELY THE SHARED BLOCK'S AND ADDS NO NUMBER. Since #1427 it is the POINTER's
+   position: while the pointer is on this plus the pill's top-left corner sits --space-3 right of and
+   --space-6 below it and moves with it, so the 16px glyph stays visible. What stood here was the band —
+   `right: 0; top: 50%; translateY(-50%)` resolved against the plus itself, a 24px pill centred in a 20px
+   box whose centre is the 28px head row's — and the containment inside `.channel-list__tree` that
+   followed from it. Both are retired; the pill is `position: fixed` and leaves that scroller on purpose.
 
-   ⭐ WHICH ASSERTION DETECTS A WRONG PLACEMENT — MEASURED, NOT ASSUMED, the same way #1172 measured it
-   for the row's pills. Re-pointing this pill at the composer's placement (`bottom: calc(100% + --space-2)`,
-   above the row) moves it 30px off the head row's centre and reddens
-   `e2e/sidebar-workspace-plus-name-pill.spec.ts`'s BAND assertion. Every containment read in that file
-   stays GREEN under the same mutation — checked by disabling the band assertion and re-running — because
-   at scroll top a section header and a host row sit above this row. So containment is the criterion the
-   ticket owes and the band is what makes it true; neither stands in for the other.
+   ⭐ WHICH ASSERTION DETECTS A WRONG PLACEMENT, still measured rather than assumed.
+   `e2e/sidebar-workspace-plus-name-pill.spec.ts` reads the offset against a point IT parked the pointer
+   on, re-reads the box after a second park on the same control (that read, and only that read, is what
+   "follows" means), asserts the box disjoint from the plus's, and bounds it by the WINDOW. A placement
+   computed once on enter passes the first read and fails the second; a placement left on the band fails
+   the first by ~100px, which is what the drive measured before this rule changed.
 
-   THE COST, STATED: while the plus is hovered its pill covers the trailing ~90px of that row's label.
-   Accepted, as #1172 accepted the same on the row's controls — it is up only while the pointer sits on a
-   20px control, and `pointer-events: none` on the pill is what lets a click aimed at the row, or
-   Playwright's hit test on the two shipped drives that click this plus, read straight through it. */
+   THE COST #1181 STATED AND ACCEPTED IS GONE, which is the whole of this ticket: the pill no longer covers
+   the trailing ~90px of the row's label, nor the glyph it names. `pointer-events: none` on the shared
+   block still lets a click aimed at the row, or Playwright's hit test on the two shipped drives that click
+   this plus, read straight through. */
 .channel-list__workspace-create:hover .channel-list__control-name,
 .channel-list__workspace-create:focus-visible .channel-list__control-name {
   display: block;
@@ -965,13 +915,12 @@
    shows nothing". `:focus-visible` and not `:focus`, matching the opacity rule directly above, so the
    keyboard case cannot half-fire.
 
-   THE GEOMETRY IS ENTIRELY THE BLOCK ABOVE'S AND ADDS NO NUMBER, and the containment argument the plus
-   records carries over UNCHANGED: this is a 20px box at `--space-1` down a 28px head row, so its centre
-   is the ROW's centre, and the 24px pill centred inside it spans 2…26 of that 28 — inside the row's own
-   band, so containment inside the `overflow-y: auto` `.channel-list` follows from the row being in view
-   at any scroll position. `right: 0` pins it to THIS control's right edge, 25px in from the scroller's
-   content edge, so it grows leftward and adds no horizontal overflow. `pointer-events: none` on the
-   pill lets a click aimed at the row — or Playwright's hit test — read straight through it. */
+   THE GEOMETRY IS ENTIRELY THE BLOCK ABOVE'S AND ADDS NO NUMBER, and since #1427 that means the POINTER's
+   position rather than this control's band: the pill's top-left corner sits --space-3 right of and
+   --space-6 below the pointer while it is on this pen. The band-and-containment argument that stood here
+   is retired with the band it described — the pill is `position: fixed` and leaves the scroller on
+   purpose. `pointer-events: none` on the shared block still lets a click aimed at the row — or
+   Playwright's hit test — read straight through. */
 .channel-list__workspace-edit:hover .channel-list__control-name,
 .channel-list__workspace-edit:focus-visible .channel-list__control-name {
   display: block;
@@ -1262,8 +1211,15 @@
 .channel-list__save {
   position: absolute;
   right: 0;
-  top: 50%;
-  transform: translateY(-50%);
+  /* #1427 — THE TRANSFORM-FREE FORM OF THE SAME CENTRING, and it is not a tidy-up. A non-`none`
+     `transform` makes an element a containing block for FIXED-position descendants and a stacking context,
+     and this control's `.channel-list__control-name` child is `position: fixed` since #1427 — so the
+     `translateY(-50%)` this rule carried would have resolved the pill against this button's own box,
+     dropped it back inside `.channel-list__tree`'s clip and scoped its `z-index` inside the button. The
+     box is `--space-6` tall, so half of it is exactly `--space-3` and the two forms are identical. These
+     two controls were the ONLY ancestors of any of the seven pills taking one of the six containing-block
+     properties — `channels.css`, `pairedShell.css` and `index.css` all checked. */
+  top: calc(50% - var(--space-3));
   width: var(--space-7);
   height: var(--space-6);
   display: inline-flex;
@@ -1293,8 +1249,8 @@
 .channel-list__rename {
   position: absolute;
   right: 0;
-  top: 50%;
-  transform: translateY(-50%);
+  /* #1427's transform-free centring, `.channel-list__save`'s rule verbatim and for its reasons. */
+  top: calc(50% - var(--space-3));
   width: var(--space-7);
   height: var(--space-6);
   display: inline-flex;
@@ -1342,38 +1298,63 @@
    degrade the composer specs that assert on whole attribute runs. Both blocks read the same tokens by
    name and both are anchored to the same node, so the drift risk sits in the token layer.
 
-   ⭐ PLACEMENT: THE ROW'S OWN VERTICAL BAND, RIGHT-ALIGNED TO THE CONTROL — the one placement that makes
-   the containment criterion hold on every row rather than on the rows a test happens to reach. The
-   arithmetic is entirely the control block's above:
-     - the control is `top: 50%` + `translateY(-50%)` at `height: --space-6`, a 24px box centred on a row
-       whose 24px is itself derived (a 16px line box plus the open button's 4px), so the control's box and
-       the row's band COINCIDE;
-     - this pill is centred the same way inside it and is itself 24px tall (--space-1 + the 16px
-       body-small line + --space-1), so it coincides with the band too. Containment inside `.channel-list__tree`
-       then follows from the ROW being in view, at any scroll position and on the first row and the last
-       alike. That matters because the tree is `overflow-y: auto`, which forces overflow-x off
-       `visible` as well, so it clips on BOTH axes — and a clipped box still reports its geometry, so no
-       `toBeVisible()` and no box read could tell a clipped pill from a drawn one.
-     - `right: 0` pins it to the control's padding-box right edge, which is the row's right edge, which is
-       the card's content right edge. So the pill grows LEFTWARD and reaches neither horizontal
-       edge — and an out-of-flow box adds scrollable overflow only where it overflows right or bottom, so
-       the sidebar gains no horizontal scroll.
-   Declined: flipping below when there is no room above solves a problem this placement does not have, and
-   rendering outside the scroller needs a portal plus a scroll-synced position for the same result.
+   ⭐ PLACEMENT (#1427): THE POINTER, NOT THE CONTROL. The pill's top-left corner sits --space-3 right of
+   and --space-6 below the pointer's current position and moves with it, so the 12px or 14px glyph the
+   pointer is aimed at STAYS VISIBLE. #1172, #1180, #1181, #1190 and #1304 each shipped this pill in its
+   control's own vertical band and each of them stated the covered glyph as an accepted cost; #1427 is the
+   ticket that stopped accepting it, so the band, the containment it bought and the arguments for both are
+   retired here rather than left standing beside a rule that no longer does what they describe.
 
-   THE BAND IS WHAT THE E2E PINS, and the pinning is MEASURED. Re-pointing this rule at the composer
-   pill's own placement (`bottom: calc(100% + var(--space-2))`, one row up) and rebuilding moves the first
-   row's pill exactly 32px off its row's top edge and reddens that spec's band assertion. Its CONTAINMENT
-   assertions stay green under the same mutation — a band-placed pill is inside its row, so containment
-   follows from the row rather than from where in the scroller the row sits. So containment is the
-   criterion this ticket owes, and the band is the thing that makes it true. (That used to be argued from
-   the sticky cluster keeping every hoverable control a cluster-height below the scroller's top edge;
-   #1443 moved the bar out of the scroller, and a row CAN now sit flush with that edge — which is exactly
-   what `e2e/sidebar-control-name-pill.spec.ts`'s high-row block parks one on. The band is what keeps
-   containment true there, so the conclusion is unchanged and better tested than it was.)
+   THE VERTICAL OFFSET IS --space-6 AND NOT --space-5, and the reason is arithmetic rather than taste.
+   --space-6 (24px) is the TALLEST control's own height, which makes "the pill's box never touches the
+   control's box" true on every control rather than at the pointer positions a test happens to drive: the
+   pointer is inside the control, so the control's bottom edge is at most its own height below the pointer,
+   and an offset of at least that height puts the pill's top edge at or below it. `.channel-list__save` and
+   `.channel-list__rename` are --space-7 x --space-6; the other five controls are --space-5 square. At a
+   20px offset the two 24px-tall controls break the guarantee whenever the pointer is in their top 4px,
+   which is ordinary pointer travel arriving from the row above. The horizontal --space-3 carries no such
+   requirement and is the drawing's own clearance.
 
-   THE COST, STATED: while a control is hovered its pill covers the trailing ~104px of that row's title.
-   Accepted (the ticket names it) — the pill is up only while the pointer sits on a 36 × 24 control.
+   ⭐ THE THREE CUSTOM PROPERTIES ARE WRITTEN BY `ChannelList.tsx`, WHICH IS WHY THIS IS NOT CSS ALONE —
+   the pointer's position is not available to a stylesheet. One handler on all seven controls writes
+   `clientX`/`clientY` into `--control-name-pointer-x`/`-y` on the BUTTON's own inline style (a direct
+   style write and never a React `style` prop, which would move the static markup `ChannelList.test.tsx`
+   pins), and the pill inherits them. EVERY `var()` HERE CARRIES A FALLBACK and that is load-bearing: an
+   unset custom property makes the `calc()` invalid at computed-value time, which falls back to
+   `left: auto` / `top: auto` — the pill's static position, on top of the control, which is the defect this
+   placement exists to remove. The handler seeds on pointer ENTER (a `pointermove` is not guaranteed before
+   `:hover` paints the pill) and the fallbacks are the deterministic net under it; the fallback point is
+   the window's own top-left corner, which the shell's 20px inset puts clear of every control.
+
+   `--control-name-mirror` is 0 or 1 and selects the bottom-edge case in ONE rule rather than a second
+   block. At 0 the pill's top-left corner is the offset point. At 1 the same arithmetic is read upward —
+   `top` lands one --space-6 ABOVE the pointer and `translate` lifts the box by its own height — so the
+   pill's BOTTOM-left corner is the offset point. It needs no separate proof: the pointer is inside the
+   control and the offset is at least the control's height, so the pill's bottom edge lands at or above the
+   control's top edge. The handler decides it by MEASUREMENT, writing 0 and reading the pill's own bottom
+   against `window.innerHeight`, so no pixel value for the offset or for the pill's height enters the
+   TypeScript at all.
+
+   `translate` AND NOT `transform`, and on the pill itself: an element's own transform does not change
+   where its own fixed position resolves, and this element has no descendants for the stacking context to
+   scope. On its ANCESTORS the same property is forbidden — see `.channel-list__save` above, whose
+   `translateY(-50%)` #1427 had to remove for exactly that reason.
+
+   NO RIGHT-EDGE FLIP. The sidebar is the window's left 400px, the longest pill computes to ~104px and the
+   minimum window width is 800, so the offset placement cannot reach the right edge and a flip there would
+   defend a case that cannot occur. The bottom edge IS reachable — `.channel-list__tree` has no bottom
+   padding and `.channel-list`'s is --space-5 — and that case is the mirror above.
+
+   `position: fixed` AND `z-index: 1`. Anchored to the pointer the pill must escape `.channel-list__tree`
+   (`overflow-y: auto`, which forces the other axis off `visible`, so it clips on BOTH) and
+   `.paired-shell__sidebar`'s `overflow: hidden`; a fixed box's containing block is the viewport, so no
+   overflow ancestor clips it. That is a shipped idiom in this file, not a new one — five `position: fixed;
+   z-index: 2` overlay rules below, `pairedShell.css`'s standing prohibition on `transform`, `filter`,
+   `backdrop-filter`, `will-change`, `contain` and `clip-path` anywhere in the shell, and
+   `e2e/paired-shell-card.spec.ts` hit-testing those overlays as the live detector for that premise. The
+   `z-index` is 1 and not 2: `.paired-shell__sidebar` and `.paired-shell__pane` are both `position:
+   relative` at `z-index: auto`, so neither is a stacking context and this participates in the ROOT one —
+   above the pane, which is the later sibling and would otherwise paint over it, and below those overlays.
 
    `display: none` → `block` and NEVER opacity/visibility, #1265's reason: a hidden pill then holds no
    accessibility-tree entry and reports NO BOX AT ALL, so a test tells "showing" from "hidden" by the KIND
@@ -1381,9 +1362,12 @@
    CONTROL twenty lines up, which must stay `opacity: 0` because nine shipped specs focus or click it
    without hovering first. Two different elements, two different rulings, no conflict.
 
-   `pointer-events: none` — the pill overlays the row's own open button, and a click aimed at the row (or
-   Playwright's hit test on those nine specs) must read straight through it. It also stops the pill
-   hovering itself, so there is no feedback loop with the trigger below.
+   `pointer-events: none` — unchanged by #1427 and if anything more load-bearing than it was: the pill no
+   longer sits over the control, but it now sits over WHATEVER the offset point lands on, a row below or
+   the chat pane beside the sidebar, and nothing there may lose a click to it. A click aimed at a row (or
+   Playwright's hit test on the nine specs that reach these controls without hovering first) must read
+   straight through. It also stops the pill hovering itself, so there is no feedback loop with the
+   triggers.
 
    NO `max-width` AND NO ELLIPSIS CHAIN, which is where this parts company with the composer's pill: that
    one bounds an untrusted daemon filename of unbounded length. Both strings here are client-owned
@@ -1391,10 +1375,14 @@
    --space-5 and the row's --space-7 inset), so a bound would defend a case that cannot occur. `nowrap`
    alone is what makes it the drawing's one line. */
 .channel-list__control-name {
-  position: absolute;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
+  position: fixed;
+  left: calc(var(--control-name-pointer-x, 0px) + var(--space-3));
+  top: calc(
+    var(--control-name-pointer-y, 0px) + var(--space-6) - var(--control-name-mirror, 0) * 2 *
+      var(--space-6)
+  );
+  translate: 0 calc(var(--control-name-mirror, 0) * -100%);
+  z-index: 1;
   display: none;
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-xs);

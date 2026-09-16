@@ -130,9 +130,9 @@ describe('deriveSystemPromptSection — the section state machine (#1078)', () =
     expect(ready(reading(), null, null).writeLine).toBeNull()
   })
 
-  it('names New session when the running session was started with a different prompt (AC4)', () => {
+  it('names Reset session when the running session was started with a different prompt (AC4)', () => {
     const model = ready(reading({ sessionPromptStatus: 'differs' }), null, null)
-    expect(model.sessionLine).toMatch(/New session/)
+    expect(model.sessionLine).toMatch(/Reset session/)
   })
 
   it.each(['matches' as const, 'no_session' as const])(

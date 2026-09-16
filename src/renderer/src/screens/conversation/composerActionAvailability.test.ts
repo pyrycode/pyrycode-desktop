@@ -127,32 +127,32 @@ describe('markUnavailableActions', () => {
     expect(unavailableIds(markUnavailableActions(COMPOSER_ACTIONS, entry({ commands })))).toEqual([])
   })
 
-  // One rule for all three entries — `/clear` and `/compact` are not special-cased, so removing `clear`
-  // from the published list greys it out exactly as an absent `/knowledge-capture` is greyed.
-  it('applies the same rule to /clear as to every other entry (AC3)', () => {
-    const commands = [command({ name: 'compact' }), command({ name: 'knowledge-capture' })]
+  // One rule for every entry — `/compact` is not special-cased, so removing `compact` from the published
+  // list greys it out exactly as an absent `/knowledge-capture` is greyed. (#1496 retargeted this case
+  // from `/clear`, which left the menu with the fold; the property it proves is the array-agnostic rule,
+  // not the particular command.)
+  it('applies the same rule to /compact as to every other entry (AC3)', () => {
+    const commands = [command({ name: 'knowledge-capture' })]
     expect(unavailableIds(markUnavailableActions(COMPOSER_ACTIONS, entry({ commands })))).toEqual([
-      '/clear'
+      '/compact'
     ])
   })
 
   // The entry id carries a leading slash and a published `name` never does, so exactly one slash is
-  // stripped before comparison — a row that published `/clear` verbatim is a different string and does
-  // NOT match.
+  // stripped before comparison — a row that published `/compact` verbatim is a different string and does
+  // NOT match, while the `knowledge-capture` published beside it does.
   it('strips exactly one leading slash and compares the rest verbatim', () => {
-    const commands = [command({ name: '/clear' }), command({ name: 'compact' })]
+    const commands = [command({ name: '/compact' }), command({ name: 'knowledge-capture' })]
     expect(unavailableIds(markUnavailableActions(COMPOSER_ACTIONS, entry({ commands })))).toEqual([
-      '/clear',
-      '/knowledge-capture'
+      '/compact'
     ])
   })
 
   // Exact equality, the publishedRowFor posture: no case fold, no trim, no normalisation of text the
   // daemon bounds without sanitizing. The type-ahead folds case only because typing asked it to.
   it('does not case-fold or trim a published name', () => {
-    const commands = [command({ name: 'CLEAR' }), command({ name: ' compact ' })]
+    const commands = [command({ name: 'COMPACT' }), command({ name: ' knowledge-capture ' })]
     expect(unavailableIds(markUnavailableActions(COMPOSER_ACTIONS, entry({ commands })))).toEqual([
-      '/clear',
       '/compact',
       '/knowledge-capture'
     ])

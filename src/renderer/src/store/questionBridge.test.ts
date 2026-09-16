@@ -429,12 +429,25 @@ describe('translateQuestionEvent — every other arm returns null (the inverse f
         droppedMcpTools: 5,
         memoryFiles: [{ path: '../../../etc/passwd', type: 'user', tokens: 240 }],
         droppedMemoryFiles: 7
+      },
+      // the reset report is PERMANENTLY no-op here (#1515): unsolicited, nothing outstanding, no
+      // answer to give, and it reports what the DAEMON is doing to a session rather than anything
+      // claude wants from the operator. Its consumers are #1516 and #1517. ONE entry, not one per
+      // edge — this table is a one-per-arm census and the count below depends on it staying that
+      // way; the falling edge's two empty strings are pinned at the transport round-trip and in
+      // `modalBridge.test.ts`, where no count rides on the table's length.
+      {
+        type: 'resetting',
+        conversationId: 'conv-1',
+        active: true,
+        phase: 'wrapping_up',
+        handoff: 'pending'
       }
     ]
 
     // The count is asserted so a future arm silently dropped from this table cannot pass unnoticed:
-    // 47 union arms minus the 3 owned above.
-    expect(others).toHaveLength(44)
+    // 48 union arms minus the 3 owned above.
+    expect(others).toHaveLength(45)
     for (const event of others) expect(translateQuestionEvent(event)).toBeNull()
   })
 })

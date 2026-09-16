@@ -642,6 +642,26 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
         droppedMcpTools: 5,
         memoryFiles: [{ path: '../../../etc/passwd', type: 'user', tokens: 240 }],
         droppedMemoryFiles: 7
+      },
+      // the reset report ships DORMANT (#1515) rather than permanently no-op — the disposition
+      // `compacting` held here until #496 took it, and the one #1517 is expected to reverse when the
+      // composer status row lands. Daemon STATE by the queueState rule (#720) either way: no turn_id,
+      // opens and closes no turn, so a session being reset is not an item IN a turn. Both edges are
+      // in the table because a consumer that claims this arm must handle the falling one, and its two
+      // empty strings are the shape most likely to be mistaken for a malformed frame.
+      {
+        type: 'resetting',
+        conversationId: 'conv-1',
+        active: true,
+        phase: 'restarting',
+        handoff: 'written'
+      },
+      {
+        type: 'resetting',
+        conversationId: 'conv-1',
+        active: false,
+        phase: '',
+        handoff: ''
       }
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
@@ -1298,6 +1318,36 @@ describe('subscribeTimeline', () => {
     // written differently than before this slice" an assertion rather than a claim. The adversarial
     // row values are carried here deliberately — this is the assertion that nothing on the dormant
     // path reaches a render sink with them.
+    expect(store.getState()).toBe(before)
+    expect(selectItems(store.getState())).toHaveLength(0)
+  })
+
+  it('#1515: a resetting daemon event creates NO timeline item and writes NO store (dormant)', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    const before = store.getState()
+    bridge.emit({
+      type: 'resetting',
+      conversationId: 'conv-1',
+      active: true,
+      phase: 'wrapping_up',
+      handoff: 'pending'
+    })
+    bridge.emit({
+      type: 'resetting',
+      conversationId: 'conv-1',
+      active: false,
+      phase: '',
+      handoff: ''
+    })
+
+    // Both halves, as elsewhere: the bridge filtered both edges out so no dispatch reached the
+    // reducer (same state ref), AND no chat row exists. This is AC4 — "nothing observable changes in
+    // the window on this ticket" — as an assertion rather than a claim, and it is asserted over the
+    // FALLING edge as well because that is the one whose empty strings could tempt a reducer arm
+    // into treating the frame as a clear.
     expect(store.getState()).toBe(before)
     expect(selectItems(store.getState())).toHaveLength(0)
   })

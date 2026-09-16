@@ -209,7 +209,21 @@ no new helper.
 2. **Does the emit's placement in the inbound switch matter?** Expected: no, beside `rate-limited`
    is a readability choice. Confirm nothing in the switch falls through into a neighbouring case.
 
-## Documentation handoff
+## Revisions
+
+**2026-09-16 — Phase B.** Both Open Questions resolved; **no design change**, so nothing above is
+superseded.
+
+1. **No fifth exhaustive `DaemonEvent` switch exists.** `npm run build` passes with exactly the four
+   bridge cases in the diff, so the ticket's list of four was complete. `timelineTargetFor`,
+   `liveJoinKeyFor` and `conversationActivityBridge.ts` each needed no edit, as Design §4 predicted.
+2. **Placement is a readability choice only.** The emit sits beside the `rate-limited` case it
+   copies; both cases `return`, so nothing falls through into a neighbour, and the neighbouring
+   `context-usage` suite stays green.
+
+One implementation note with no design consequence: the diagnostic-log capture helper in
+`daemonConnection.test.ts` is `captureLog`, and it needs its records cleared after the handshake
+before a per-frame logging assertion means anything — the `rate-limited` logging test's own shape.
 
 The ticket names no documentation requirement and has no **Documentation handoff** section. Nothing
 pending beyond the family's standing convention: the documentation phase folds this arm's per-field

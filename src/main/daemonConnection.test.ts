@@ -364,6 +364,11 @@ function rateLimitedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'rate_limited', ts: FIXED_TS, payload })
 }
 
+/** A `resetting` plaintext, wrapping an arbitrary payload (#1515). */
+function resettingPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'resetting', ts: FIXED_TS, payload })
+}
+
 /** A `context_usage` plaintext, wrapping an arbitrary payload (#1419). */
 function contextUsagePlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'context_usage', ts: FIXED_TS, payload })
@@ -2419,6 +2424,169 @@ describe('createDaemonConnection — rate_limited stream (#1319)', () => {
       drivers[0].emit({
         type: 'message',
         plaintext: rateLimitedPlaintext({ ...LIMITED, resets_at: '1755900000' })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — resetting stream (#1515)', () => {
+  /**
+   * The daemon's three rows, in the order an upstream real-claude test asserts them (#1514's wire
+   * contract). The falling edge's two EMPTY STRINGS are the fixture that matters: they are the
+   * daemon's declared zero value, written on every frame because nothing upstream is `omitempty`.
+   */
+  const WRAPPING_UP = {
+    conversation_id: 'conv-1',
+    active: true,
+    phase: 'wrapping_up',
+    handoff: 'pending'
+  }
+  const RESTARTING = { ...WRAPPING_UP, phase: 'restarting', handoff: 'written' }
+  const FALLING = { conversation_id: 'conv-1', active: false, phase: '', handoff: '' }
+
+  /** The event the rising fixture above must produce, verbatim. */
+  const CARRIED = {
+    type: 'resetting',
+    conversationId: 'conv-1',
+    active: true,
+    phase: 'wrapping_up',
+    handoff: 'pending'
+  }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(diagnosticLog?: DiagnosticLog): Promise<ReturnType<typeof build>> {
+    const ctx = build({ diagnosticLog })
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('decodes a resetting into exactly one resetting event (conversation_id carried)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: resettingPlaintext(WRAPPING_UP) })
+
+    const events = emitted(sink).slice(before)
+    // A strict toEqual on the whole event, asserted POSITIVELY: the arm has exactly `type` /
+    // `conversationId` / `active` / `phase` / `handoff` — and NO `daemonTs`, which this assertion
+    // pins for free (an extra DEFINED property fails a toEqual). The omission is #1514's design
+    // carried forward: that decode arm takes no FrameTimestamp, because a stored resetting is
+    // skipped rather than served and there is no page half for a (type, ts) key to join against.
+    // The union's timestamp is optional on EVERY arm, so nothing but this assertion catches a stray
+    // stamp — AC2 is a test obligation, not a type obligation.
+    expect(events).toEqual([CARRIED])
+    // The frame's conversation_id reaches the emitted event VERBATIM — the routing key #1516 and
+    // #1517 each attribute by.
+    expect(JSON.stringify(events)).toContain('conv-1')
+  })
+
+  it('emits exactly the five modeled properties — no snake key crosses, and no daemonTs', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: resettingPlaintext({ ...WRAPPING_UP, smuggled: 'must-not-cross' })
+    })
+
+    const events = emitted(sink).slice(before)
+    // One assertion proving three things at once: the snake spellings do not cross, the emit is a
+    // literal built from NAMED fields rather than a spread of the decoded payload (a spread would
+    // carry `conversation_id`), and `daemonTs` is absent as a KEY rather than merely undefined —
+    // which `toEqual` above cannot tell apart, since it ignores an undefined-valued property.
+    expect(Object.keys(events[0]).sort()).toEqual([
+      'active',
+      'conversationId',
+      'handoff',
+      'phase',
+      'type'
+    ])
+    expect(JSON.stringify(events)).not.toContain('conversation_id')
+    expect(JSON.stringify(events)).not.toContain('must-not-cross')
+  })
+
+  it('carries the falling edge intact: both empty strings PRESENT, not undefined and not absent', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: resettingPlaintext(FALLING) })
+
+    const events = emitted(sink).slice(before)
+    // The load-bearing assertion of this ticket. The window gates on `active`, and a consumer that
+    // saw a MISSING key could not tell a falling edge from a malformed one — so `''` crosses as the
+    // contract's own zero value. `toEqual` alone would not pin this: it ignores an undefined-valued
+    // property, so an emit that dropped both fields would pass it. The key check is what fails that
+    // emit, and the explicit `''` compare is what fails an emit that sent `undefined`.
+    expect(events).toEqual([
+      { type: 'resetting', conversationId: 'conv-1', active: false, phase: '', handoff: '' }
+    ])
+    expect(Object.keys(events[0])).toContain('phase')
+    expect(Object.keys(events[0])).toContain('handoff')
+    expect((events[0] as { phase: unknown }).phase).toBe('')
+    expect((events[0] as { handoff: unknown }).handoff).toBe('')
+  })
+
+  it('re-fires as the phase advances — one event per frame, no dedup and no coalescing', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: resettingPlaintext(WRAPPING_UP) })
+    drivers[0].emit({ type: 'message', plaintext: resettingPlaintext(RESTARTING) })
+    drivers[0].emit({ type: 'message', plaintext: resettingPlaintext(RESTARTING) })
+    drivers[0].emit({ type: 'message', plaintext: resettingPlaintext(FALLING) })
+
+    const events = emitted(sink).slice(before)
+    // FOUR frames in, FOUR events out, in order. The rising edge re-fires as the phase advances, so
+    // a transport that deduped would eat a real transition; the verbatim repeat proves the emit
+    // holds no last-value memo either. Deliberately stateless — a dedup cache would be the only
+    // mutable state on this leg, keyed by a daemon-supplied id and fed by a daemon-supplied stream.
+    expect(events.map((e) => (e as { phase: unknown }).phase)).toEqual([
+      'wrapping_up',
+      'restarting',
+      'restarting',
+      ''
+    ])
+    expect(events.map((e) => (e as { active: unknown }).active)).toEqual([true, true, true, false])
+  })
+
+  it('logs no decoded field — not the id, not the phase, not the handoff', async () => {
+    const cap = captureLog()
+    const { drivers } = await connected(cap.log)
+    cap.records.length = 0
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: resettingPlaintext({
+        conversation_id: 'conv-secret-id',
+        active: true,
+        phase: 'restarting',
+        handoff: 'written'
+      })
+    })
+
+    // The pair beside the id discloses WHICH conversation the operator reset and whether a handoff
+    // note was written — a fact about the operator's workflow rather than about this frame. Both
+    // halves of the path are pinned: emitDaemonEvent is log-free by construction and #1514's
+    // decode-side line is content-free.
+    const logged = JSON.stringify(cap.records)
+    expect(logged).not.toContain('conv-secret-id')
+    expect(logged).not.toContain('restarting')
+    expect(logged).not.toContain('written')
+    // Not vacuous: the frame WAS decoded and recorded, under a client-owned code literal.
+    expect(cap.records.some((r) => r.event === 'inbound-decoded' && r.code === 'resetting')).toBe(true)
+  })
+
+  it('drops a malformed resetting without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: resettingPlaintext({ ...WRAPPING_UP, phase: 'no_such_phase' })
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)

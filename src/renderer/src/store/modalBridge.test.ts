@@ -446,6 +446,26 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
         droppedMcpTools: 5,
         memoryFiles: [{ path: '../../../etc/passwd', type: 'user', tokens: 240 }],
         droppedMemoryFiles: 7
+      },
+      // the reset report is PERMANENTLY no-op here (#1515): nothing daemon-side is waiting on an
+      // answer, there is no `modal_id` to resolve it against, and the frame gates no action claude
+      // wants to take — it reports what the DAEMON is doing to a session, which is the opposite
+      // direction from a permission prompt. Its consumers are #1516 and #1517. Both edges are in the
+      // table because a falling edge is the member a reader is most tempted to route somewhere that
+      // dismisses something.
+      {
+        type: 'resetting',
+        conversationId: 'conv-1',
+        active: true,
+        phase: 'wrapping_up',
+        handoff: 'pending'
+      },
+      {
+        type: 'resetting',
+        conversationId: 'conv-1',
+        active: false,
+        phase: '',
+        handoff: ''
       }
     ]
     for (const event of others) expect(translateModalEvent(event, noConversations)).toBeNull()

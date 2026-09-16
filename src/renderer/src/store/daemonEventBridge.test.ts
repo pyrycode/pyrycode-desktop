@@ -391,6 +391,32 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     ).toBeNull()
   })
 
+  it('resetting → null (consumed by #1516 / #1517, not the session store)', () => {
+    expect(
+      translateDaemonEvent({
+        type: 'resetting',
+        conversationId: 'conv-1',
+        active: true,
+        phase: 'wrapping_up',
+        handoff: 'pending'
+      })
+    ).toBeNull()
+    // BOTH EDGES, and the falling one is the half worth asserting: its two empty strings are the
+    // daemon's declared zero value rather than an absence, so nothing here may read them as "the
+    // frame arrived incomplete" and reach for a connection scalar to clear. Neither edge flips one —
+    // a session being reset is orthogonal to whether the socket is up, which is what makes this
+    // no-op permanent rather than dormant.
+    expect(
+      translateDaemonEvent({
+        type: 'resetting',
+        conversationId: 'conv-1',
+        active: false,
+        phase: '',
+        handoff: ''
+      })
+    ).toBeNull()
+  })
+
   it('backgroundTaskStarted → null (consumed by the #567 background-task store, not the session store)', () => {
     expect(
       translateDaemonEvent({

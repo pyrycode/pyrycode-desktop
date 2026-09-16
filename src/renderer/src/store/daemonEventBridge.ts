@@ -351,6 +351,24 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // every memory-file path — which disclose who the user is and where they work — into a stack
       // trace and a crash reporter. This case is what keeps them out of it.
       return null
+    case 'resetting':
+      // No session-store action (#1515): the reset report's consumers are the #1516 channel-list dot
+      // and the #1517 composer status row, not the session store — which holds CONNECTION status,
+      // and a session being reset is orthogonal to whether the socket is up. PERMANENTLY a no-op,
+      // and the temptation to fold it in is real enough to name: unlike the three readings above,
+      // this arm HAS a rising and a falling edge, so it looks like exactly the shape #317 flipped
+      // `stalled` and #493 flipped the retry status with. It is not. Those two report the state of
+      // THIS CLIENT'S conversation with the daemon; a reset is something the daemon is doing to a
+      // session, and folding it into a connection scalar would tell the operator the link is down
+      // while it is up. There is no scalar here it may flip, and there never will be. The falling
+      // edge is no different — its two empty strings are the daemon's declared zero value rather
+      // than an absence, so nothing here may read them as "the frame arrived incomplete" and reach
+      // for a scalar to clear. Present only because the assertNever guard below makes a new arm a
+      // compile error — and that guard is not a formality: it stringifies the WHOLE event into an
+      // Error message, which would put the conversation id the operator reset and whether a handoff
+      // note was written into a stack trace and a crash reporter. This case is what keeps them out
+      // of it.
+      return null
     default:
       return assertNever(event)
   }

@@ -34,7 +34,9 @@ import type {
   SessionPromptStatus,
   ContextUsageCategory,
   ContextUsageMCPTool,
-  ContextUsageMemoryFile
+  ContextUsageMemoryFile,
+  WireResetPhase,
+  WireResetHandoff
 } from '../wire/types'
 
 /** Validated shape, untrusted content: render only as bounded text, never attributes or logs. */
@@ -1699,6 +1701,82 @@ type BaseDaemonEvent =
       droppedMcpTools: number
       memoryFiles: readonly ContextUsageMemoryFile[]
       droppedMemoryFiles: number
+    }
+  // The session-reset arm (#1515) — the daemon's report that a conversation's session is being reset
+  // and which phase of it the conversation is in, decoded at #1514 and carried here.
+  //
+  // TWO EDGES, like `apiRetry` and `compacting` and never a reading like the two arms above:
+  // `active: true` is the rising edge and `active: false` the explicit falling edge, so a client never
+  // derives "cleared" from turn activity. THE RISING EDGE RE-FIRES as the phase advances
+  // (`wrapping_up` → `restarting`), one event per actual change — so a second rising edge is a real
+  // transition and NOT a duplicate to suppress. The daemon's three rows, in the order an upstream
+  // real-claude test asserts them:
+  //
+  //   active:true   phase:wrapping_up   handoff:pending
+  //   active:true   phase:restarting    handoff:written | skipped
+  //   active:false  phase:''            handoff:''
+  //
+  // CONVERSATION-SCOPED, NOT TURN-SCOPED: no `turn_id`, opening and closing no turn, which makes it
+  // daemon STATE by the queueState rule (#720) rather than a turn-stream item. A reset is orthogonal
+  // to whichever turn happened to be running.
+  //
+  // BOTH EMPTY STRINGS CROSS AS THE CONTRACT'S OWN ZERO VALUE — not as `undefined`, and not as absent
+  // keys. This is the one thing about this arm worth reading twice. The daemon writes both keys on
+  // every frame (nothing upstream is `omitempty`), `''` is Go's zero value and a DECLARED MEMBER of
+  // both closed sets, and the window gates on `active`: a consumer that saw a missing key could not
+  // tell a falling edge from a malformed one. Structured clone PRESERVES an undefined-valued property
+  // across this bridge, so "absent" and "present and empty" are distinctions the boundary can
+  // actually keep — and the `'conversationId' in event` ban in `timelineBridge`'s `timelineTargetFor`
+  // docblock is the standing lesson about probing for a field instead of requiring it.
+  //
+  // NEITHER TOKEN IS WIDENED TO `string` HERE. `WireResetPhase` and `WireResetHandoff` cross as the
+  // closed sets #1514 established, the `WireTurnState` precedent — unlike `rateLimited` two arms
+  // above, whose `status` and `limitType` stay open because they are CLAUDE-authored and the value
+  // set beyond the one measured-benign status is unmeasured. Every field here is DAEMON-authored, so
+  // narrowing is safe and widening would throw away a four-value switch for an open one.
+  //
+  // NO `daemonTs`, and the omission is the design. That mix-in marks the arms `decodeHistoryEvent`
+  // draws, which need (`type`, `ts`) as the join key between a served page and what the live stream
+  // already drew; #1514 keeps this type armless there — a stored `resetting` is SKIPPED rather than
+  // served — so there is no page half to join against and stamping it would advertise a join nothing
+  // can perform. `rateLimited` and `thinkingProgress`, NOT `apiRetry` or `compacting`, are the
+  // precedent for this arm's shape; `HistoryTimelineEvent` gains nothing, because `resetting` has no
+  // replay ring upstream.
+  //
+  // NOT DEDUPED: one event per decoded frame, verbatim repeats included. The transport holds no
+  // coalescing, timer or per-conversation memo, and must not grow one — suppressing a repeat would
+  // eat the re-fire that says the phase moved.
+  //
+  // SECURITY: NARROWED IS NOT TRUSTED, and this arm inverts the usual hazard of its neighbours. A
+  // closed union is a compile-time invitation to `switch (phase)` and read the result as settled
+  // fact. It is not. A narrowed value is still a CLAIM BY A PEER: a hostile daemon can send any of
+  // the sixteen (`active`, `phase`, `handoff`) combinations, so a consumer must handle ALL of them
+  // rather than only the producer's three rows, and MUST NOT BRANCH SECURITY-RELEVANT BEHAVIOUR on
+  // either token. THE FRAME IS A REPORT, NEVER A CONTROL INPUT OR AN AUTHORIZATION SIGNAL.
+  // `handoff: 'written'` describes a file the daemon wrote and the payload deliberately carries NO
+  // PATH, so nothing downstream can resolve, join, open, stat or link one — the token is a
+  // four-value status, not a locator, and no consumer may synthesize a path from it. Nothing decoded
+  // REACHES A LOG on any path: `emitDaemonEvent` is log-free by construction and #1514's decode-side
+  // line is pinned content-free, which matters for the pair as much as for the id — together they
+  // disclose WHICH conversation the operator reset and whether a handoff note was written, a fact
+  // about the operator's workflow rather than about this frame. `conversationId` is a daemon-asserted
+  // ROUTING KEY, never rendered text, never an authorization signal and never resolved against a
+  // filesystem; if a consumer indexes by it, THE INDEX IS A `Map`. REQUIRED, never optional, for the
+  // reason every routing key on this union is: an optional one invites `?? activeConversation`
+  // fallbacks, which is the misattribution to remove.
+  //
+  // A CONSUMER MUST NOT RELY ON THE FALLING EDGE ARRIVING. A daemon that crashes or is killed
+  // mid-reset sends no `active: false`, so an indicator cleared ONLY by that frame pins on forever;
+  // the clearing path needs an INDEPENDENT trigger (disconnect, conversation exit, turn activity).
+  // Nothing on this leg can defend that, so the obligation rides this arm's contract forward to its
+  // consumers. Ships dormant — all four exhaustive bridges no-op it until #1516 (the channel-list
+  // dot) and #1517 (the composer status row).
+  | {
+      type: 'resetting'
+      conversationId: string
+      active: boolean
+      phase: WireResetPhase
+      handoff: WireResetHandoff
     }
 
 /**

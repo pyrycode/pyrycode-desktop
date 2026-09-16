@@ -176,6 +176,7 @@ export function translateModalEvent(
     case 'toolProgress':
     case 'rateLimited':
     case 'contextUsage':
+    case 'resetting':
       // No modal event: the session store (#19), download UI (#72), conversation-list store (#208),
       // timeline store (#202), create render slice (#242), the #259 session-id holder, the #261 /
       // #256 session-settings consumers (confirmed + rejected #269), the #293 queue store
@@ -235,6 +236,17 @@ export function translateModalEvent(
       // did, because a near-full window is if anything a stronger invitation to raise AS a dialog:
       // that is a render decision for #1421 to make on a surface of its own, and routing it through
       // this store would hand a reading a permission prompt's one-shot resolution semantics.
+      // resetting (#1515) closes the group and is the one member here that is NOT a reading — it has
+      // a rising and a falling edge, which is precisely why it needs its own line rather than
+      // joining the three above by reference. The grounds still hold and are if anything plainer:
+      // nothing daemon-side is waiting on an answer, there is no `modal_id` to resolve it against,
+      // and the frame reports what the DAEMON is doing to a session rather than gating an action
+      // claude wants to take — the opposite direction from a permission prompt. Its consumers are
+      // the #1516 channel-list dot and the #1517 composer status row, so this no-op is PERMANENT.
+      // The falling edge earns the one extra thought: a frame that ENDS something is the member a
+      // reader is most tempted to hand to a store whose vocabulary includes `modalDismissed`, and
+      // the two retire nothing alike — that retires a permission prompt against `modal_id` under
+      // first-answer-wins, while this reports that a reset the operator started has finished.
       return null
     case 'runConfigReceived':
       // Not a modal event (#491). Present only because the assertNever guard makes a new arm a

@@ -280,3 +280,13 @@ unchanged; see [Modal-prompt model](modal-prompt-model.md) for the reducer contr
   window gates no action claude wants to take — routing it through this store would hand a quota report
   a permission prompt's one-shot `modal_answer` resolution semantics, which nothing on the wire can
   settle.
+- [Daemon event channel — the sealed union: per-member history (recent members)](daemon-event-channel-sealed-union-history-recent.md)
+  — the `resetting` arm ([#1515](https://github.com/pyrycode/pyrycode-desktop/issues/1515), decoded at
+  [#1514](https://github.com/pyrycode/pyrycode-desktop/issues/1514)) that folds into this bridge's no-op
+  group. **Permanently**, and it is the one member of the group with a rising and a falling edge rather
+  than a reading — the grounds still hold and are if anything plainer: nothing daemon-side is waiting on
+  an answer, there is no `modal_id`, and the frame reports what the daemon is doing to a session rather
+  than gating an action claude wants to take, the opposite direction from a permission prompt. Its
+  consumers are the [#1516](https://github.com/pyrycode/pyrycode-desktop/issues/1516) channel-list dot and
+  the [#1517](https://github.com/pyrycode/pyrycode-desktop/issues/1517) composer status row, neither of
+  which is this store.

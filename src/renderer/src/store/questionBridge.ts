@@ -186,6 +186,7 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
     case 'toolProgress':
     case 'rateLimited':
     case 'contextUsage':
+    case 'resetting':
       // No question event. The session store, timeline store, conversation-list store, queue store,
       // relay-link store, background-task store, announced-model store and the modal store consume
       // these — not the question store. `conversationCreateRejected` (#1307) is the newest member and
@@ -238,6 +239,15 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
       // is the arm here that is furthest from an ask — it reports a condition of the WINDOW rather
       // than anything claude wants from the operator, and the frame is a REPORT, never a control
       // input. Its consumer is the #1420 store slice, so the no-op is PERMANENT.
+      //
+      // `resetting` (#1515) closes the group and is the only member of it that is not a reading — it
+      // carries a rising and a falling edge — but it lands on the same terms and needs the least
+      // argument of any arm here: UNSOLICITED, arriving with nothing outstanding, offering no answer
+      // to give, and reporting what the DAEMON is doing to a session rather than anything claude
+      // wants from the operator. It is the opposite direction from claude asking the operator to
+      // choose. The frame is a REPORT, never a control input, and nothing may branch on either of its
+      // tokens. Its consumers are the #1516 channel-list dot and the #1517 composer status row, so
+      // the no-op is PERMANENT.
       return null
     case 'systemPromptWriteConfirmed':
     case 'systemPromptWriteRejected':

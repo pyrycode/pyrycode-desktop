@@ -1697,6 +1697,51 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               resetsAt: inbound.rateLimited.resets_at
             })
             return
+          case 'resetting':
+            // The session-reset data path (#1515, decoded at #1514). Emit a fresh literal carrying
+            // the routing key, the edge and both closed-set tokens, copied BY NAME from the
+            // already-decoded, already-validated payload — never a spread of inbound.resetting (the
+            // assistant-delta idiom), so a decoder that later grows a field cannot smuggle it across
+            // IPC. The decode stays fail-closed upstream: a missing or mistyped field, or a token
+            // outside its closed set, drops the whole frame without emitting.
+            //
+            // ALL FOUR DECODED FIELDS CROSS — unlike `rate-limited` directly above, there is nothing
+            // to leave behind: this frame carries no truncation marker and every field has a consumer
+            // in #1516 / #1517. NO `daemonTs` — the decode arm takes no FrameTimestamp, because a
+            // stored `resetting` is SKIPPED rather than served and there is no served-page half for a
+            // (type, ts) key to join against; the `rate-limited` arm directly above, not `compacting`,
+            // is the precedent for this literal's shape. The union's timestamp is optional on every
+            // arm, so nothing but the round-trip test catches a stray stamp here.
+            //
+            // BOTH EMPTY STRINGS CROSS INTACT on the falling edge: `''` is the daemon's declared zero
+            // value, written on every frame because nothing upstream is `omitempty`, and a member of
+            // both closed sets. No truthiness test, no `|| undefined`, no dropping the key — the
+            // window gates on `active`, and a consumer that saw a missing key could not tell a
+            // falling edge from a malformed one. NEITHER TOKEN IS WIDENED OR NORMALISED either: they
+            // cross as the closed sets #1514 established, and nothing here re-validates what the
+            // decode already narrowed.
+            //
+            // `conversation_id` crosses as `conversationId`: a daemon-asserted routing key, not
+            // rendered text, and it reaches no sink on this leg — all four exhaustive bridges no-op
+            // the arm until #1516 and #1517. Nothing decoded reaches a log either, here or upstream:
+            // emitDaemonEvent is log-free by construction and the decode's log line is content-free,
+            // which matters for the pair beside the id as much as for the id — together they disclose
+            // which conversation the operator reset and whether a handoff note was written.
+            //
+            // DELIBERATELY STATELESS: no dedup, no coalescing, no timer, no last-value memo, and none
+            // keyed by the id either. THE RISING EDGE RE-FIRES as the phase advances, so suppressing
+            // a repeat would eat a real transition; and a per-conversation memo would be the only
+            // mutable state on this leg, keyed by a daemon-supplied id and fed by a daemon-supplied
+            // stream. Not compile-forced (this inner switch has no assertNever) — the round-trip test
+            // guards this emit.
+            emitDaemonEvent(sink, {
+              type: 'resetting',
+              conversationId: inbound.resetting.conversation_id,
+              active: inbound.resetting.active,
+              phase: inbound.resetting.phase,
+              handoff: inbound.resetting.handoff
+            })
+            return
           case 'context-usage':
             // The context-window data path (#1419, decoded across #1454 / #1455 / #1459 / #1460).
             // Emit a fresh ELEVEN-property literal carrying the routing key, the model, the three

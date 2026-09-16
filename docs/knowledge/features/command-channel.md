@@ -166,9 +166,11 @@ no-retry rule that governs it, and [Daemon connection — methods](daemon-connec
 connection method + registry delegate it drives.
 
 The union gained a `newSession` member in [#1217](https://github.com/pyrycode/pyrycode-desktop/issues/1217):
-asks the daemon to **kill** claude and spawn a fresh one in the conversation it names — not the `/clear`
-the Actions menu's Reset session already sends as ordinary message text, which clears context in place
-and keeps the process. It is the **only** member whose payload type *tightens* its wire type rather than
+asks the daemon to **kill** claude and spawn a fresh one in the conversation it names — not a typed
+`/clear`, which clears context in place and keeps the process. The Actions menu's Reset session row
+dispatches this member directly as of [#1496](https://github.com/pyrycode/pyrycode-desktop/issues/1496)
+(folded from a separate row that sent `/clear` as ordinary message text). It is the **only** member whose
+payload type *tightens* its wire type rather than
 reusing it verbatim or `Omit`-ing a field from it: `NewSessionCommandPayload = Required<NewSessionPayload>`.
 The wire `NewSessionPayload.conversation_id` is optional because the daemon publishes it so (pyrycode#2099)
 — the absent/`{}`/empty forms are one wire meaning, the daemon's process-wide follow-active cursor — and

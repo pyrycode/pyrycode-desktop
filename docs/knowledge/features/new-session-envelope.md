@@ -19,12 +19,16 @@ conversation, and a pure function that serializes it:
   spawn a fresh one under a newly minted session id, so every stored setting (model, effort, permission
   mode, and the per-conversation system prompt pyrycode#2094 introduces) re-applies at the spawn.
 
-**Not the `/clear` the Actions menu's Reset session already sends as ordinary message text.** `/clear`
-clears claude's context in place; the process keeps everything it holds — loaded workspace instructions,
-tool servers, every setting it was spawned with. On the Mac the daemon's idle timeout is 0, so nothing
-evicts and `/clear` respawns nothing — `new_session` is the only route by which a stored per-conversation
-setting takes effect at all, and what lets desktop [#1078](https://github.com/pyrycode/pyrycode-desktop/issues/1078)
-honestly say when a saved prompt takes effect.
+**Not a context clear.** `/clear` clears claude's context in place; the process keeps everything it holds —
+loaded workspace instructions, tool servers, every setting it was spawned with. Typing `/clear` by hand is
+unaffected by anything below: claude intercepts a message whose text begins with a slash and runs it
+directly. The Actions menu no longer offers `/clear` as a row — as of
+[#1496](https://github.com/pyrycode/pyrycode-desktop/issues/1496) the menu's **Reset session** row
+dispatches this `new_session` frame directly, folded from a separate `/clear`-sending row the menu carried
+until then. On the Mac the daemon's idle timeout is 0, so nothing evicts on its own — `new_session` is the
+only route by which a stored per-conversation setting takes effect at all, and what lets desktop
+[#1078](https://github.com/pyrycode/pyrycode-desktop/issues/1078) honestly say when a saved prompt takes
+effect.
 
 Fire-and-forget, more completely than most siblings: no nonce, no idempotency key, no correlation key,
 and **no reply of any kind** — not even an error. A named id the daemon cannot act on is silently inert.

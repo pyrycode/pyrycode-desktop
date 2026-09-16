@@ -332,11 +332,13 @@ the operator's first news. Both Save and Clear are withheld while a write is `in
 closes [System-prompt write store](system-prompt-write-store.md)'s two-writes ambiguity behaviourally,
 since that store correlates on conversation id alone with no per-write identity to disambiguate.
 
-**Session status copy.** `sessionPromptStatus === 'differs'` renders a notice naming **New session** as
-what applies the saved prompt; `matches` and `no_session` render nothing. The confirmed-write line
-*also* restates that same story in a form true under all three statuses ("Saved. A running session
-keeps the prompt it started with until New session.") — a form conditioned on `sessionPromptStatus`
-would go stale the instant a save lands, since nothing re-asks after a write.
+**Session status copy.** `sessionPromptStatus === 'differs'` renders a notice naming **Reset session**
+(renamed from New session by [#1496](https://github.com/pyrycode/pyrycode-desktop/issues/1496), which
+folded the Actions menu's two reset rows into the one this notice now names) as what applies the saved
+prompt; `matches` and `no_session` render nothing. The confirmed-write line *also* restates that same story
+in a form true under all three statuses ("Saved. A running session keeps the prompt it started with until
+Reset session.") — a form conditioned on `sessionPromptStatus` would go stale the instant a save lands,
+since nothing re-asks after a write.
 
 **Copy is entirely client-owned**, mirroring `CHANNEL_INFO_*`'s module-constant idiom, apostrophe-free
 (`renderToStaticMarkup` escapes `'` → `&#x27;`). The four `SystemPromptWriteFailure` reasons and the

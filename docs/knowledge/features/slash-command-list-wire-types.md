@@ -9,10 +9,12 @@ blocked on the type rather than on the producer: [#936](https://github.com/pyryc
 the decode slice directly below it in this family, and [#681](https://github.com/pyrycode/pyrycode-desktop/issues/681)
 (landed), which matches the Actions menu's entries against names **and aliases**. **An earlier version
 of this paragraph claimed the desktop Actions menu's own `reset` entry was an alias of `clear` — #681
-corrected that:** the shipped entry's `id` is `/clear`, the command name itself, and `Reset session` is
-only its client-owned display label, which never participates in matching. Alias matching is still
-required (for a published row that names a command only by an alias other than one of the three fixed
-ids), just not for that reason. SSOT is `pyrycode/pyrycode` `docs/protocol-mobile.md` § `slash_command_list` (type declared
+corrected that:** the shipped entry's `id` was `/clear`, the command name itself, and `Reset session` was
+only its client-owned display label, which never participated in matching. That entry is now historical —
+[#1496](https://github.com/pyrycode/pyrycode-desktop/issues/1496) folded it out of the Actions menu
+entirely, and `Reset session` now labels the menu's `new_session` control row instead. Alias matching is
+still required (for a published row that names a command only by an alias other than one of the two fixed
+ids the menu now carries, `compact`/`knowledge-capture`), just not for that original reason. SSOT is `pyrycode/pyrycode` `docs/protocol-mobile.md` § `slash_command_list` (type declared
 by pyrycode#1726, shape by #1727, fixtures and section by #1718) / `internal/protocol/interactive.go`.
 The producer exists now too: #2001 maps the frame, #2002 bounds it, #2003 emits it on the live
 interactive lane, #2004–#2007 retain it and reconcile it on connect, and #2008/#2009 prove both

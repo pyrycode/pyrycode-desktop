@@ -82,6 +82,16 @@ export type EnvelopeType =
   | 'stall'
   | 'api_retry'
   | 'compacting'
+  // The reset lifecycle report (#1514). Grouped HERE rather than with the claude-translation cluster
+  // further down, because it shares the shape of the three members above: an `interactive`-gated
+  // binary → client status frame with a rising and a falling edge, conversation-scoped, opening and
+  // closing no turn. What separates it from all three is provenance in the other direction —
+  // `stall` / `api_retry` / `compacting` report what CLAUDE is doing, this reports what the DAEMON is
+  // doing TO claude, and every field on it is the daemon's own rather than a value claude authored.
+  //
+  // SSOT pyrycode#2453 (shape) / #2478 (producer) / internal/protocol/interactive.go ResettingPayload;
+  // see ResettingPayload for the four rows and for why `''` is an accepted token on both closed sets.
+  | 'resetting'
   | 'compaction_boundary'
   | 'banner'
   // v2-only daemon→client diagnostic — the daemon's stream parser met claude output it has no
@@ -769,6 +779,84 @@ export interface CompactingPayload {
   active: boolean
   compact_result?: string
   compact_error?: string
+}
+
+/**
+ * How far along a reset is. A closed wire enum like WireSessionTransitionReason, so the decoder
+ * compares against literals rather than accepting any string — and unlike RateLimitedPayload's
+ * `status` / `limit_type` one screen down, narrowing here is safe precisely because the daemon
+ * AUTHORS these tokens itself rather than carrying claude's.
+ *
+ * `''` IS A MEMBER, and it is the one thing about this type worth reading twice. Upstream names only
+ * `wrapping_up` and `restarting` as constants; `''` is Go's zero value, and since the daemon declares
+ * no `omitempty` the key is written on every frame, so `''` is what the falling edge carries once the
+ * reset is over. A set admitting only the two named tokens rejects every falling edge.
+ */
+export type WireResetPhase = 'wrapping_up' | 'restarting' | ''
+
+/**
+ * What became of the handoff document a reset writes. A closed wire enum like WireResetPhase above,
+ * with `''` a member for the same reason: it is the daemon's declared zero value on the falling edge,
+ * not an absence. `pending` rides the `wrapping_up` phase; `written` and `skipped` ride `restarting`.
+ */
+export type WireResetHandoff = 'pending' | 'written' | 'skipped' | ''
+
+/**
+ * Inbound `resetting` event (daemon → client). Mirrors the daemon's ResettingPayload field-for-field
+ * (SSOT pyrycode#2453 declared / #2478 emitted, internal/protocol/interactive.go with the `ResetPhase*`
+ * and `ResetHandoff*` constants), wire order `conversation_id, active, phase, handoff` — all four
+ * ALWAYS PRESENT (no `omitempty` on any of them). Fanned out ONLY to `interactive`-capable clients: a
+ * conversation's session is being reset, and this says which phase of it the conversation is in.
+ *
+ * THE FOUR ROWS, exactly as the daemon emits them, with an upstream real-claude test asserting the
+ * three edges in order:
+ *
+ *   active:true   phase:wrapping_up   handoff:pending
+ *   active:true   phase:restarting    handoff:written | skipped
+ *   active:false  phase:''            handoff:''
+ *
+ * TWO EDGES, like ApiRetryPayload and CompactingPayload above and never onset-only like StallPayload.
+ * `active: true` is the rising edge and `active: false` the explicit falling edge, so a client never
+ * derives "cleared" from turn activity; the rising edge RE-FIRES as the phase advances
+ * (`wrapping_up` → `restarting`), one frame per actual change.
+ *
+ * `''` IS ACCEPTED WHATEVER `active` SAYS, and that is the design rather than a gap. The decoder
+ * admits it UNCONDITIONALLY on both fields: gating the token set on `active` would be cross-field
+ * validation, which this decoder family refuses by name (see QueuedItem's no-cross-validate posture),
+ * and upstream's "gate on `active` rather than inventing a fourth token" is addressed to a CONSUMER
+ * switching over either set. So the pair the daemon never emits — `active: true` with `phase: ''` —
+ * DECODES rather than throwing, because rejecting it would defend an unobserved failure mode and
+ * would fail-close a daemon that later adds a phase or reorders its edges.
+ *
+ * CONVERSATION-SCOPED, NOT TURN-SCOPED: there is no `turn_id`, and receiving one neither opens nor
+ * closes a turn. A reset is orthogonal to whichever turn happened to be running.
+ *
+ * SECURITY: NARROWED IS NOT TRUSTED, and this frame inverts the usual hazard of its neighbours. Every
+ * field here is DAEMON-AUTHORED — the id is one the daemon assigned, `active` a bool it computed, both
+ * tokens its own constants — which is why both are narrowed to closed sets where RateLimitedPayload's
+ * claude-authored strings deliberately stay open. The risk is the mirror image: a closed union is a
+ * compile-time invitation to `switch (phase)` and read the result as settled fact. It is not. A
+ * narrowed value is still a CLAIM BY A PEER: a hostile daemon can send any of the sixteen
+ * combinations, so a consumer must handle all of them rather than only the producer's three, and must
+ * never branch security-relevant behaviour on either token. THE FRAME IS A REPORT, NEVER A CONTROL
+ * INPUT OR AN AUTHORIZATION SIGNAL. `handoff: 'written'` describes a file the daemon wrote and the
+ * payload deliberately carries NO PATH, so nothing downstream can resolve, join, open or link one —
+ * the token is a three-value status, not a locator. `conversation_id` is a daemon-asserted routing
+ * key, never an authorization signal and never resolved against a filesystem. Nothing decoded reaches
+ * a log: the pair plus the id discloses which conversation the operator reset and whether a handoff
+ * was written, which is a fact about the operator's workflow rather than about this frame.
+ *
+ * A CONSUMER MUST NOT RELY ON THE FALLING EDGE ARRIVING. A daemon that crashes or is killed mid-reset
+ * sends no `active: false`, so an indicator cleared ONLY by that frame pins on forever; the clearing
+ * path needs an independent trigger (disconnect, conversation exit, turn activity). Nothing at the
+ * decode boundary can defend that. See #1514 (this decode); nothing consumes the decoded arm yet —
+ * the IPC carry is #1515, and its two consumers follow it.
+ */
+export interface ResettingPayload {
+  conversation_id: string
+  active: boolean
+  phase: WireResetPhase
+  handoff: WireResetHandoff
 }
 
 /** Delayed display metadata from the daemon. Missing/null counts differ from zero. */

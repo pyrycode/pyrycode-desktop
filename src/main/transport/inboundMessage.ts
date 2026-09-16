@@ -35,6 +35,7 @@ import type {
   StallPayload,
   ApiRetryPayload,
   CompactingPayload,
+  ResettingPayload,
   CompactionBoundaryPayload,
   BackgroundTaskStartedPayload,
   BackgroundTaskUpdatedPayload,
@@ -408,6 +409,37 @@ interface FrameTimestamp {
  * The `compacting` kind carries status plus optional outcome strings. A separate
  * `compaction-boundary` kind supplies delayed trigger/count metadata. Required fields fail closed;
  * unusable counts degrade to absence, and diagnostics never include any decoded values.
+ *
+ * The `resetting` kind (#1514) carries the decoded ResettingPayload — which phase of a session reset a
+ * conversation is in. A two-edge status peer of the two kinds above, conversation-scoped (no
+ * `turn_id`, and it opens and closes no turn), but the provenance runs the other way: those report
+ * what CLAUDE is doing, this reports what the DAEMON is doing to claude. The fail-closed defence is
+ * one required string, one required BOOLEAN (whose `false` is the falling edge — a value, never an
+ * absence) and TWO NARROWED TOKENS, each checked against its closed set by comparand chain.
+ *
+ * BOTH TOKENS ARE NARROWED, and here that is the OPPOSITE call from `rate-limited` below for the
+ * opposite reason: nothing on this frame is claude's, so there is no unmeasured open set to preserve.
+ * `''` IS A FOURTH ACCEPTED VALUE ON EACH, admitted UNCONDITIONALLY — it is the daemon's declared zero
+ * value once the reset is over, so a set of only the named tokens would reject every falling edge and
+ * leave the window with an indicator nothing can clear. Gating it on `active` would be cross-field
+ * validation, which this family refuses, so `active: true` with `phase: ''` decodes too.
+ *
+ * NARROWED IS NOT TRUSTED. A closed union invites a consumer to `switch (phase)` and read the result
+ * as settled fact; it is a claim by a peer, which can send any of the sixteen combinations, so a
+ * consumer handles all of them and branches no security-relevant behaviour on either token. The frame
+ * is a REPORT, never a control input, and `handoff: 'written'` names no path — there is nothing to
+ * open or resolve.
+ *
+ * IT TAKES NO FrameTimestamp, and the neighbouring `compacting` arm — which DOES mix it in — is the
+ * wrong half of the family to copy here. That mix-in marks exactly the arms decodeHistoryEvent draws;
+ * `resetting` is ephemeral status with no replay ring and no durable history upstream, so it gains no
+ * arm there, and stamping a `ts` would advertise a join nothing can perform.
+ *
+ * NOTHING DECODED REACHES THE LOG, and the reason is NOT `rate-limited`'s: both tokens are daemon
+ * constants rather than claude-authored text. It is that the pair beside `conversation_id` discloses
+ * which conversation the operator reset and whether a handoff was written — a fact about the
+ * operator's workflow, in a log they may send off-box. Ships dormant — daemonConnection's inbound
+ * switch has no catch-all, so the report stops here until #1515 claims it.
  *
  * The `model-announced` kind (#587) carries the decoded ModelAnnouncedPayload — claude's own report of
  * the model it resolved for the turn, off its `system` / `init` line, fanned out to interactive clients.
@@ -794,6 +826,7 @@ export type InboundDaemonMessage =
   | ({ kind: 'stall'; stall: StallPayload } & FrameTimestamp)
   | ({ kind: 'api-retry'; apiRetry: ApiRetryPayload } & FrameTimestamp)
   | ({ kind: 'compacting'; compacting: CompactingPayload } & FrameTimestamp)
+  | { kind: 'resetting'; resetting: ResettingPayload }
   | { kind: 'compaction-boundary'; boundary: CompactionBoundaryPayload }
   | { kind: 'session-facts'; sessionFacts: SessionFactsPayload }
   | { kind: 'model-announced'; modelAnnounced: ModelAnnouncedPayload }
@@ -1573,9 +1606,10 @@ export interface DecodedHistoryPage {
  * object used as a map.
  *
  * `default: return null` is what AC3 rests on, and the types it silently covers are worth naming: the
- * eight this client DOES decode on the live lane and never draws in a thread (`background_task_started` /
- * `_updated` / `_roster`, `model_announced`, `model_list`, `slash_command_list`, and — since #1312 and
- * #1318 — `thinking_progress` and `rate_limited`, whose live-lane parsers each deliberately came with no
+ * ten this client DOES decode on the live lane and never draws in a thread (`background_task_started` /
+ * `_updated` / `_roster`, `model_announced`, `model_list`, `slash_command_list`, and — since #1312,
+ * #1318, #1454 and #1514 — `thinking_progress`, `rate_limited`, `context_usage` and `resetting`, whose
+ * live-lane parsers each deliberately came with no
  * arm here), any type a later daemon invents — and `modal_shown` /
  * `question_shown`. THAT LAST PAIR IS THE SHARPEST CASE: no prompt may ever reach the window from history
  * as something answerable, because resolving a modal that closed hours ago is a real action taken on a
@@ -1864,6 +1898,51 @@ function parseCompactingPayload(payload: unknown): CompactingPayload {
     compact_result: optionalString(payload, 'compact_result'),
     compact_error: optionalString(payload, 'compact_error')
   }
+}
+
+/**
+ * Narrow an opaque payload into a ResettingPayload (#1514). parseApiRetryPayload's shape with its two
+ * numbers replaced by two NARROWED TOKENS: an isRecord gate, one requireString, one requireBoolean,
+ * then parseSessionTransitionPayload's `reason` check cloned once per token — a chain of `!==`
+ * comparisons against literals, which covers non-string and unknown-string alike and narrows without a
+ * cast. Returns a fresh four-field literal. No helper is invented.
+ *
+ * `''` IS IN EACH COMPARAND CHAIN UNCONDITIONALLY, and that is the whole point of this parser. It is
+ * the daemon's declared zero value on the falling edge (no `omitempty`, so the key is always written),
+ * so a chain admitting only the two phases and the three handoffs would reject every falling edge and
+ * leave the window with an indicator nothing can clear. It is admitted whatever `active` says: gating
+ * the token set on `active` would be CROSS-FIELD VALIDATION, which this family refuses by name (see
+ * parseQueuedItem), so `active: true` with `phase: ''` — a pair the producer never emits — decodes
+ * rather than throwing. Do not "tighten" either chain; the tests that pin this are the ones that
+ * redden.
+ *
+ * requireBoolean checks the TYPE, never truthiness. `active: false` IS the falling edge — the one
+ * reading a consumer most needs — so a truthiness test would read the whole signal as an absence.
+ *
+ * NEITHER TOKEN IS LOOKED UP, only compared. No dispatch table, no Set, no object index: the chain
+ * compares values and touches no prototype chain, which is decodeHistoryEvent's
+ * switch-never-a-lookup-table rule applied one level down to a string the peer controls. Returning a
+ * fresh literal rather than a spread makes the same guarantee from the other side — unknown
+ * server-added keys (a spurious `turn_id`, a planted `__proto__`) are tolerated for forward-compat but
+ * never copied through. Its messages name the failure CATEGORY only, never interpolating a value:
+ * `conversation_id` correlates a conversation and the token pair discloses what the operator was doing
+ * to it.
+ */
+function parseResettingPayload(payload: unknown): ResettingPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed resetting payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const active = requireBoolean(payload, 'active')
+  const phase = payload.phase
+  if (phase !== 'wrapping_up' && phase !== 'restarting' && phase !== '') {
+    throw new WireDecodeError('missing required field: phase')
+  }
+  const handoff = payload.handoff
+  if (handoff !== 'pending' && handoff !== 'written' && handoff !== 'skipped' && handoff !== '') {
+    throw new WireDecodeError('missing required field: handoff')
+  }
+  return { conversation_id, active, phase, handoff }
 }
 
 /** Invalid counts degrade to absence, never to zero or rejection of the whole divider. */
@@ -3853,6 +3932,29 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'compacting', compacting, ts: envelope.ts }
+    }
+    case 'resetting': {
+      // Narrow BEFORE logging so a malformed frame (an unknown token, a non-boolean `active`, a
+      // payload that is not an object) throws first and leaves no record. NOTHING decoded is logged —
+      // not `phase` or `handoff`, and not the conversation_id beside them, because the three together
+      // disclose which conversation the operator reset and whether a handoff was written, which is a
+      // fact about the operator's workflow rather than about this frame. Only the frame's byte length
+      // + one-way hash, reusing the existing content-free field set (no new DiagnosticEvent field, so
+      // #131's renderer pin is untouched). Strictly safer than the `default:` arm this replaces for
+      // the type, which logged a WIRE-SUPPLIED `envelope.type`; the code here is a static literal.
+      //
+      // NO `ts` on the returned arm — see the kind's paragraph on InboundDaemonMessage: the mix-in
+      // marks the arms decodeHistoryEvent draws, and this type gains no arm there.
+      // Nothing consumes this arm yet: daemonConnection's inbound switch has no catch-all, so the
+      // report stops here until #1515 claims it.
+      const resetting = parseResettingPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'resetting',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'resetting', resetting }
     }
     case 'session_facts': {
       const sessionFacts = parseSessionFactsPayload(envelope.payload)

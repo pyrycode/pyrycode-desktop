@@ -20,7 +20,11 @@ describe('host repair presentation', () => {
   })
 
   it('renders a named repair button and failed host treatment', () => {
-    const markup = renderToStaticMarkup(<HostRow label="Host" serverId="a" failed onRepair={noop} />)
+    // #1507's three fold props are required on the pure view, and a FAILED row ignores all three: it is
+    // not a disclosure, so it draws neither the button nor the chevron. Passed at their production values
+    // rather than at values chosen to make this case pass.
+    const markup = renderToStaticMarkup(<HostRow label="Host" serverId="a" failed onRepair={noop}
+      expanded hasWorkspaces onToggle={noop} />)
     expect(markup).toContain('channel-list__host--failed')
     expect(markup).toContain('aria-label="Repair host"')
     expect(markup).toContain('type="button"')

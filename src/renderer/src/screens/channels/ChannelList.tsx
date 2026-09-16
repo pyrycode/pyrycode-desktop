@@ -22,7 +22,7 @@ import { requestNewConversation } from '../../store/conversationCreatedBridge'
 // store's INITIAL cell is imported too —
 // it is the collapse target for a server that has reported nothing, so the launch frame is pinned to the
 // same constant it has always rendered rather than to a literal restated here.
-import { useSessionStore, sessionStore, selectStatusFor, initialSessionState, type SessionState } from '../../store/sessionStore'
+import { useSessionStore, sessionStore, selectStatusFor, initialSessionState, type SessionState, type ConnectionStatus } from '../../store/sessionStore'
 import {
   useRelayLinkStore,
   selectRelayLinkStatusFor,
@@ -1236,6 +1236,13 @@ const EDIT_HOST_CONTROL_LABEL = 'Edit host'
 export function HostRow({
   label,
   serverId,
+  // #1507 — the row's own fold, as three required props on the pure view. Required rather than optional,
+  // `WorkspaceRow`'s stated reason for `hasRows` one level down: every caller knows all three answers, and
+  // a default would be a second way to draw a disclosure over nothing. `onToggle` is nullary, this file's
+  // standing handler shape, so React's synthetic event cannot reach a caller's handler.
+  expanded,
+  hasWorkspaces,
+  onToggle,
   onAddWorkspace,
   onEditHost,
   failed = false,
@@ -1247,23 +1254,94 @@ export function HostRow({
   onRepair?: () => void
   label: string
   serverId: string
+  expanded: boolean
+  hasWorkspaces: boolean
+  onToggle: () => void
   onAddWorkspace?: () => void
   onEditHost?: () => void
 }): JSX.Element {
+  // The glyph and the label, lifted to two locals because #1507 draws them in two different parents —
+  // inside the disclosure on a healthy row, as the row's own children on a failed one. Two inline copies
+  // would duplicate a 300-character path and let the two shapes drift.
+  const glyph = (
+    <svg
+      className="channel-list__host-icon"
+      viewBox="0 0 24 24"
+      width="12"
+      height="12"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M20 13H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1zM7 19c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM20 3H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1zM7 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z" />
+    </svg>
+  )
+  const name = <span className="channel-list__host-label">{label}</span>
   return (
     <>
       <div className={failed ? "channel-list__host channel-list__host--failed" : "channel-list__host"}>
-        <svg
-          className="channel-list__host-icon"
-          viewBox="0 0 24 24"
-          width="12"
-          height="12"
-          fill="currentColor"
-          aria-hidden="true"
-        >
-          <path d="M20 13H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1zM7 19c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM20 3H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1zM7 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z" />
-        </svg>
-        <span className="channel-list__host-label">{label}</span>
+        {failed ? (
+          // ⭐ A FAILED ROW IS NOT A DISCLOSURE, and that is a ruling rather than an omission. The drawing's
+          // Pairing Issue variant (486:838) draws no chevron, and this row's server-rack glyph does not
+          // swap the way the workspace row's folder does — so a chevron-less host disclosure would be a
+          // fold whose state no sighted operator can read, the very shape #1488's estimate declined the
+          // chevron-less cut over. It also closes a dead end: a host folded BEFORE it errored would
+          // otherwise have its subtree withheld with no mark and no control to re-open it, clearable only
+          // by restarting the app. `CollapsibleHostGroup` renders the subtree unconditionally while a host
+          // is failed for the same reason, which is why that level reads the status and this one is told.
+          //
+          // The markup is then byte-identical to what shipped: glyph and label as the row's own children,
+          // nothing new in the tab order, and `.channel-list__host--failed`'s three rules still describing
+          // exactly the elements they were written against.
+          <>
+            {glyph}
+            {name}
+          </>
+        ) : (
+          // The disclosure. Its class is a DISTINCT TOKEN from the row's, which is the one structural call
+          // of this ticket: `.channel-list__host` matches whole class tokens, so leaving that class on the
+          // row above keeps the pen's and the plus's hover reveals, the two-selector `:has()` dot swap, the
+          // failed row's pen inset and 21 e2e reads addressing a control, a dot or a name pill as its
+          // DESCENDANT — all of which would break at once if the class moved here for symmetry with
+          // `.channel-list__workspace-head`. `paired-shell-card`'s hit test reads `closest()`, so a hit on
+          // this button still answers with the row.
+          //
+          // The pen, the plus, the repair control and the dots stay SIBLINGS of this button and never
+          // children of it: an interactive control cannot nest inside a button (#274), and the disclosure
+          // coming first is the tab order AC3 pins.
+          <button
+            type="button"
+            className="channel-list__host-disclosure"
+            aria-expanded={expanded}
+            onClick={onToggle}
+          >
+            {glyph}
+            {name}
+            {hasWorkspaces && (
+              // The fold mark (Chevron 510:2384), DOWN as `WorkspaceRow` draws it; `channels.css` rotates
+              // it a quarter turn off this button's own `aria-expanded` for the collapsed state, which is
+              // the whole of "one state signal". The art is the workspace row's, REUSED and not
+              // re-exported — the same 8 × 4 box its block already derives, and not fetched from Figma,
+              // where asset URLs expire. Decorative and silent: the disclosure already says everything, so
+              // a name here would be a second voice for one control.
+              //
+              // The drawing puts a RIGHT-pointing chevron on Idle and Hover while the placement frame
+              // (103:2966) shows those same hosts expanded. That orientation is the component's base art,
+              // not a claim that a resting host is collapsed; down-when-expanded is the behaviour, matching
+              // the row one level down, and a host starts expanded so the shipped sidebar is unchanged on
+              // launch. Do not "fix" this to a right chevron on an expanded host.
+              <svg
+                className="channel-list__host-chevron"
+                viewBox="0 0 8 4"
+                width="8"
+                height="4"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <path d="M4.38533 3.8393C4.16311 4.03385 3.80222 4.03385 3.58 3.8393L0.166667 0.850973C-0.0555557 0.656421 -0.0555557 0.340467 0.166667 0.145915C0.388889 -0.048638 0.749779 -0.048638 0.972001 0.145915L3.98356 2.78249L6.99511 0.147471C7.21733 -0.0470815 7.57822 -0.0470815 7.80044 0.147471C8.02267 0.342024 8.02267 0.657977 7.80044 0.85253L4.38711 3.84086L4.38533 3.8393Z" />
+              </svg>
+            )}
+          </button>
+        )}
         <HostConnectionDotsControl serverId={serverId} />
         {failed && onRepair && (
           <button type="button" className="channel-list__host-repair" aria-label="Repair host" onClick={onRepair}>
@@ -1392,24 +1470,39 @@ export function HostRow({
 // NO seed: the dialog's field opens empty, so the closure passes the id alone and this component reads
 // nothing extra to build it. Both of a machine's two rows pass the same id, so either plus opens the same
 // dialog about the same machine.
+// #1507 MOVED THE STATUS READ ONE LEVEL UP, to `CollapsibleHostGroup`, and it arrives here as a prop. Not
+// a style choice: that level has to know whether this machine is failed, because a failed host is not a
+// disclosure and its subtree must render whatever fold boolean it is holding. Reading the same slice at
+// both levels would be two answers where one is needed; threading it is one read, and it cannot disagree
+// with the tree drawing the row. The two remaining reads stay here, because nothing above needs them.
 function HostRowControl({
   serverId,
+  status,
+  expanded,
+  hasWorkspaces,
+  onToggle,
   onEditHost,
   onAddWorkspace,
   onRepairHost
 }: {
   onRepairHost?: (serverId: string) => void
   serverId: string
+  status: ConnectionStatus | undefined
+  expanded: boolean
+  hasWorkspaces: boolean
+  onToggle: () => void
   onEditHost: (serverId: string, seedLabel: string) => void
   onAddWorkspace: (serverId: string) => void
 }): JSX.Element {
   const hostLabel = useHostLabelStore(selectHostLabelFor(serverId))
-  const status = useSessionStore(selectStatusFor(serverId))
   const localReadFailed = useConversationListStore(s => s.localListReads.get(serverId) === 'failed')
   return (
     <HostRow
       localReadFailed={localReadFailed}
       failed={status?.type === 'error'}
+      expanded={expanded}
+      hasWorkspaces={hasWorkspaces}
+      onToggle={onToggle}
       onRepair={onRepairHost ? () => onRepairHost(serverId) : undefined}
       label={hostRowLabel(hostLabel)}
       serverId={serverId}
@@ -1420,6 +1513,94 @@ function HostRowControl({
         }
       } : undefined}
     />
+  )
+}
+
+/**
+ * One machine's subtree: its host row, and — while expanded — that machine's workspace groups (#1507).
+ *
+ * `CollapsibleWorkspaceGroup`'s shape one level up, and its docblock is the authority on every choice
+ * repeated here. EXPORTED for that neighbour's stated reason: `renderToStaticMarkup` never re-renders, so
+ * rendering this at each `defaultExpanded` value is the only seam through which the unit tier reaches the
+ * COLLAPSED shape at all. Production renders it from `renderServerTrees` alone and never passes the seed.
+ *
+ * `defaultExpanded` is a mount-time SEED and not a controlled prop — React's own `default*` convention, and
+ * `ToolRow`'s contract for the same reason: a prop named `expanded` that a re-render could not change would
+ * be a quiet lie. A host starts OPEN, so the shipped sidebar looks unchanged on launch.
+ *
+ * STATE. One boolean, in the component that renders the subtree — no store, no reducer, no context, no
+ * lifted map. ADR 0006 picks the lowest scope that resets correctly, and both halves of "the fold is
+ * renderer-only and unpersisted" fall out of this scope for free: `PairedShell` renders ChannelList at the
+ * SAME element position on both routes on purpose, so React preserves this subtree across the list↔thread
+ * flip and a fold survives opening a conversation and coming back — while the whole thing dies with the
+ * renderer on app start. Nothing here touches disk, localStorage, IPC or the wire.
+ *
+ * PER-SERVER and PER-TREE INDEPENDENCE need no key engineering, and are the reason this component takes the
+ * `key` the <Fragment> it replaces already carried. React scopes reconciliation per sibling list, so each
+ * machine is a keyed sibling holding its own cell, and the two trees are two separate sibling lists in
+ * `renderBody` — the same machine's two rows therefore hold two separate booleans. There is nothing to
+ * implement for either; there is only something NOT to do, namely lift the state.
+ *
+ * ⭐ THE STATUS IS READ HERE AND NOT IN `HostRowControl`, because the fold and the row need the same answer.
+ * A failed host is not a disclosure (see `HostRow`), so its subtree must render whatever boolean this
+ * component happens to be holding — otherwise a host folded before it errored is stranded, its chevron gone
+ * with the fold that hid it and no control left to re-open it short of restarting the app.
+ *
+ * Returns a shorthand fragment, emitting NO element of its own — exactly like the keyed <Fragment> it
+ * replaced, and like `CollapsibleWorkspaceGroup` below it. The rendered sequence under `.channel-list` stays
+ * the FLAT run of siblings (header, host, workspace, rows, …), which is what keeps the section-header
+ * adjacency rule exact, keeps each workspace head a sibling of its host row, and leaves the ancestry 28 e2e
+ * specs walk unchanged.
+ */
+export function CollapsibleHostGroup({
+  serverId,
+  // #1507 — "has this host any workspace groups in the tree being drawn?", taken as a PROP and never
+  // derived from `children`: a host's children are a <Fragment>, which `Children.count` reads as 1 whatever
+  // is inside it. `renderServerTrees` already holds the group array before it renders it, so the answer is
+  // free there. #1487 rules the other way one level down, where the children ARE the mapped rows; the two
+  // are not in conflict.
+  hasWorkspaces,
+  defaultExpanded = true,
+  onEditHost,
+  onAddWorkspace,
+  onRepairHost,
+  children
+}: {
+  serverId: string
+  hasWorkspaces: boolean
+  defaultExpanded?: boolean
+  onEditHost: (serverId: string, seedLabel: string) => void
+  onAddWorkspace: (serverId: string) => void
+  onRepairHost: ((serverId: string) => void) | undefined
+  children: ReactNode
+}): JSX.Element {
+  const status = useSessionStore(selectStatusFor(serverId))
+  const [expanded, setExpanded] = useState(defaultExpanded)
+  const failed = status?.type === 'error'
+  return (
+    <>
+      <HostRowControl
+        serverId={serverId}
+        status={status}
+        expanded={expanded}
+        hasWorkspaces={hasWorkspaces}
+        // Functional updater, never `setExpanded(!expanded)`: the latter reads a value captured at render
+        // and is a check-then-act race against React's batching (ToolRow / UnrecognizedRow / the workspace
+        // group below).
+        onToggle={() => setExpanded((open) => !open)}
+        onEditHost={onEditHost}
+        onAddWorkspace={onAddWorkspace}
+        onRepairHost={onRepairHost}
+      />
+      {/* The whole of AC1: this machine's workspace GROUPS are withdrawn from the DOM, the row above is
+          not, and nothing else happens — no navigation, no command, no store dispatch, no
+          active-conversation change. The handler's entire body is the state flip.
+
+          `|| failed` is the stranding guard, not a second state: while a host is failed its row draws no
+          disclosure, so the boolean it is holding must not be allowed to withhold anything. The fold is
+          kept rather than reset, so a machine that recovers returns to the state the operator left it in. */}
+      {(expanded || failed) && children}
+    </>
   )
 }
 
@@ -2172,17 +2353,30 @@ function renderServerTrees(
     ))
   return (
     <>
-      {servers.map((server) => (
-        <Fragment key={server.serverId}>
-          <HostRowControl
+      {servers.map((server) => {
+        // #1507 — the groups are built into a LOCAL before they are rendered, which is the whole of the
+        // has-workspaces plumbing: this level already knows each host's group set, so the answer is
+        // `groups.length` and never a count of the fragment those groups are handed to. The keyed
+        // <Fragment> that stood here IS the group component now, carrying the same `key` for the same
+        // reason — it pins each machine's fold to its identity rather than to its position.
+        const groups = workspaceGroups(
+          server.rows,
+          server.serverId,
+          otherByServer.get(server.serverId) ?? []
+        )
+        return (
+          <CollapsibleHostGroup
+            key={server.serverId}
             serverId={server.serverId}
+            hasWorkspaces={groups.length > 0}
             onEditHost={onEditHost}
             onAddWorkspace={onAddWorkspace}
             onRepairHost={onRepairHost}
-          />
-          {workspaceGroups(server.rows, server.serverId, otherByServer.get(server.serverId) ?? [])}
-        </Fragment>
-      ))}
+          >
+            {groups}
+          </CollapsibleHostGroup>
+        )
+      })}
       {/* THE UNATTRIBUTED RUN TAKES NO COMPLEMENT (#1485). These rows name no machine, so a union here
           would merge two UNKNOWN machines' paths — precisely the cross-host merge the per-host split above
           exists to prevent, arrived at by omission instead of by a hostile stamp. #1068 stamps every daemon

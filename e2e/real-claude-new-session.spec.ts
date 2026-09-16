@@ -68,6 +68,16 @@ const META_SELECTOR = '.bubble__meta'
 // The session-boundary marker the daemon draws when a conversation's session rotates — already rendered
 // and untouched by #1218.
 const DELIMITER_SELECTOR = '.session-delimiter'
+// #1517: the composer status row's one label slot. `conversation__thinking` is the shipped identity hook
+// meaning "the row is saying something" — it styles nothing and every one of the row's six states wears
+// it, which is why it is also this tier's turn-liveness gate elsewhere.
+const STATUS_LABEL_SELECTOR = '.conversation__thinking'
+// The shared opening of both reset labels (`RESETTING_WRAPPING_UP_COPY` / `RESETTING_RESTARTING_COPY` in
+// ConversationScreen.tsx). The PREFIX rather than either whole string on purpose: which phase this run
+// catches depends on how fast the real daemon moves through them, and the AC asks that a reset label
+// showed — not which of the two. A literal because e2e specs import no renderer module; if the copy is
+// ever reworded, this line moves with it.
+const RESET_COPY_PREFIX = 'Resetting:'
 
 // --- Client-owned labels. LOAD-BEARING LOCATORS: rewording either in ComposerActionsMenu.tsx without
 // updating this spec breaks it, which is the point. `exact: true` on the trigger because getByRole
@@ -173,6 +183,29 @@ test('real claude restarts on Reset session and the turn stream survives it', as
   // counted after the restart is the restart's. The proof is the positive count below.
   await expect(delimiters).toHaveCount(0)
 
+  // --- #1517 AC5: record every label the status row draws, from here until the reset has finished. A
+  // MutationObserver rather than a poll, and the difference is not style: the row's slot is TRANSIENT —
+  // the real daemon moves `wrapping_up` → `restarting` and then clears, at whatever speed claude writes
+  // a handoff note — so a sampling poll can land between phases and miss the label entirely, failing for
+  // a timing reason on a product that worked. The observer turns "did the operator ever see it" into a
+  // question the DOM can answer after the fact. Installed BEFORE the click that starts the reset, which
+  // is the whole point of it being here rather than after. ---
+  await page.evaluate((selector) => {
+    const seen: string[] = []
+    ;(window as unknown as { __statusLabels?: string[] }).__statusLabels = seen
+    const record = (): void => {
+      const text = document.querySelector(selector)?.textContent ?? ''
+      // Consecutive duplicates collapse; a re-render that redraws the same label is not a new reading.
+      if (text !== '' && seen[seen.length - 1] !== text) seen.push(text)
+    }
+    record()
+    new MutationObserver(record).observe(document.body, {
+      subtree: true,
+      childList: true,
+      characterData: true
+    })
+  }, STATUS_LABEL_SELECTOR)
+
   // --- Restart claude (AC5). The operator's own route: open the Actions menu and pick the row. ---
   await page.getByRole('button', { name: ACTIONS_LABEL, exact: true }).click()
   await page
@@ -185,6 +218,23 @@ test('real claude restarts on Reset session and the turn stream survives it', as
   // daemon received a well-formed frame and did not rotate the session — file it separately, do NOT
   // soften it into a `>= 0`.
   await expect(delimiters).toHaveCount(1, { timeout: TURN_TIMEOUT_MS })
+
+  // --- #1517 AC5: the operator SAW the reset, and the row went quiet after it. This is the assertion
+  // the fake tier cannot make — there the `resetting` frames would be a push this spec's author wrote,
+  // whereas here the daemon emits them because claude is genuinely writing a note and being respawned.
+  //
+  // A timeout or an empty record here means the daemon rotated the session WITHOUT reporting the reset
+  // it was performing. Check that PYRY_BIN is a daemon containing the emitting change (pyrycode#2478)
+  // before filing it against the client: a binary predating it sends no `resetting` frame at all. Do NOT
+  // soften this into an "if any label was seen" check. ---
+  const statusLabels = await page.evaluate(
+    () => (window as unknown as { __statusLabels?: string[] }).__statusLabels ?? []
+  )
+  expect(statusLabels.some((label) => label.startsWith(RESET_COPY_PREFIX))).toBe(true)
+  // And the row is EMPTY once the reset is over — the falling edge and the session boundary both clear
+  // it, and the restarted session has no turn running. Asserted here, strictly before the second message
+  // is sent, because that send legitimately fills the slot again.
+  await expect(page.locator(STATUS_LABEL_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
 
   // --- THE TURN STREAM SURVIVES THE RESTART (AC5) — the whole point of this tier. A second real turn,
   // against the process the daemon just spawned, counted against the baseline. It pays a cold start

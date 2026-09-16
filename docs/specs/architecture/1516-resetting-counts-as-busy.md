@@ -207,4 +207,18 @@ done here:
 
 ## Revisions
 
-_None yet._
+**2026-09-16, implementation.** No design change; both open questions resolved as the plan leaned, and
+both are recorded here rather than left for the reader to infer from the diff.
+
+- The row proof went into the existing `#801` status-dot describe. Its `afterEach` calls
+  `clearAllActivity`, which drops whole entries and so cleared the fifth fact with no edit, and its
+  three-row fixture is what makes the neighbour assertions possible. Two cases landed there rather than
+  one — the working-dot case and AC4's never-opened case at the row.
+- The four `live` literals in the store test gained the field rather than becoming spreads over `idle`.
+  They are spelled out deliberately, so that the file stays free of the computed-key construct the store
+  forbids.
+
+One thing the implementation added that the plan did not name: the translator gained a test that the
+fact is read from `active` alone with the phase varied in both directions. It is the assertion that
+catches a translator branching on `phase` — reading `restarting` as "no longer resetting" — which every
+other case in that file passes.

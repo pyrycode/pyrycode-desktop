@@ -2,13 +2,13 @@
 // is open (#747, split from #674) — so the sidebar can draw a dot on a row the user has never opened.
 // Pure renderer state: no IPC, no preload bridge, no transport, no async task, no timer, no teardown.
 //
-// This slice shipped the HOLDER (#747); #748 wires the four daemon arms (`turnState`, `stallDetected`,
-// `apiRetry`, `compacting` — src/shared/ipc/events.ts:125,145,172,199) into it, and #749 added the two
-// eviction paths below, which #1145 made three.
+// This slice shipped the HOLDER (#747); #748 wires the first four daemon arms (`turnState`,
+// `stallDetected`, `apiRetry`, `compacting`) into it, #749 added the two eviction paths below, which
+// #1145 made three, and #1516 added `resetting` as the fifth fact and fifth arm.
 //
 // BOTH MECHANISMS, not one. Run against the `connected`-edge vs pairing-scoped discriminator
 // announcedModelStore.ts:29-45 documents ("does a reconnect to the SAME daemon need to clear it?"),
-// all four facts are liveness, so a reconnect to the same daemon MUST clear them — a turn that was
+// all five facts are liveness, so a reconnect to the same daemon MUST clear them — a turn that was
 // running when the socket dropped may have finished while it was down. That answer is unchanged and
 // keeps this store on the `connected` edge, wired in conversationActivityBridge.ts. What #1145
 // changed is that the edge is now SCOPED to the reconnecting server, since `connected` has meant
@@ -24,7 +24,7 @@
 // rather than re-derived: the daemon fans these frames out to every interactive connection and each
 // carries `conversation_id`, so frames for DIFFERENT conversations arrive in sequence and a single
 // "hold the latest" slot lets one clobber another. Replacement truth PER KEY — relayLinkStore's
-// single-setter posture applied per id. Four named setters rather than a reducer: four independent
+// single-setter posture applied per id. Five named setters rather than a reducer: five independent
 // whole-value writes model no state machine, so a discriminated-union action set is ceremony without
 // benefit, and one generic `setFact(id, name, value)` would reintroduce a stringly-typed key right
 // next to the one hostile string this store exists to contain.
@@ -40,7 +40,7 @@
 // React, JSX and that screen's whole import graph into a store whose tests run with no React and no
 // DOM; #748 owns deriving the fact with it, which is why `setTurnRunning` takes a plain boolean here.
 // And with no reference to the open conversation in scope, the `?? activeConversation` fallback that
-// the four arms' REQUIRED `conversationId` was designed to prevent is not something a developer must
+// the arms' REQUIRED `conversationId` was designed to prevent is not something a developer must
 // remember to avoid — it is unavailable.
 //
 // SECURITY: the `conversationId` is daemon-asserted untrusted text used here ONLY as a lookup key —
@@ -64,10 +64,10 @@
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
 
-/** The four facts this app holds about ONE conversation. Plain booleans, not `boolean | null`: the
+/** The five facts this app holds about ONE conversation. Plain booleans, not `boolean | null`: the
  *  "never observed" reading lives at the ENTRY level, where `selectActivityFor` returns `null`, exactly
  *  as backgroundTaskRosterStore.ts:398-413 puts it. Per-fact nullability would invent a third state the
- *  sidebar cannot draw and multiply the test matrix by four for no consumer.
+ *  sidebar cannot draw and multiply the test matrix by the fact count for no consumer.
  *
  *  Two names diverge DELIBERATELY from the chrome scalars they mirror:
  *
@@ -79,9 +79,17 @@ import { useStore } from 'zustand'
  *
  *  `stalled` and `compacting` keep their names because their shapes match too.
  *
- *  There is deliberately NO fifth fact: `localSendPending` (threadTimeline.ts:206-224) is the one
- *  renderer-sourced scalar, opened by the operator's own send with no daemon involvement, and only the
- *  open conversation has a composer that can open it.
+ *    - `resetting` (#1516) is the fifth, and it holds the reset arm's `active` AND NOTHING ELSE. The
+ *      arm carries two more tokens, `phase` and `handoff`; neither is held here, for the reason
+ *      `apiRetrying` holds no counter — this is the LIVENESS store, and the two tokens serve #1517's
+ *      composer status row, which is the open conversation's chrome. The name matches the arm's
+ *      because the shape does: one boolean, one edge each way.
+ *
+ *  `localSendPending` IS STILL NOT HELD HERE, and #1516 did not weaken that argument — it is about a
+ *  different fact. That scalar (threadTimeline.ts:206-224) is the one renderer-sourced one, opened by
+ *  the operator's own send with no daemon involvement, and only the open conversation has a composer
+ *  that can open it; it therefore has no per-conversation reading to hold. A daemon-sourced fact
+ *  carrying its own `conversationId`, as `resetting` does, is the opposite case and belongs here.
  *
  *  Fields are plain, not `readonly`, matching `HeldBackgroundTask`
  *  (backgroundTaskRosterStore.ts:147-154): immutability is carried by the `ReadonlyMap` signal and the
@@ -91,6 +99,7 @@ export interface ConversationActivityEntry {
   stalled: boolean
   apiRetrying: boolean
   compacting: boolean
+  resetting: boolean
 }
 
 /** The whole state. A key ABSENT from the map means "no frame has ever arrived for that conversation"
@@ -102,7 +111,8 @@ export interface ConversationActivityState {
   entries: ReadonlyMap<string, ConversationActivityEntry>
 }
 
-/** Store shape = state + one named setter per fact + the three eviction paths (#749, scoped by #1145).
+/** Store shape = state + one named setter per fact (five since #1516) + the three eviction paths
+ *  (#749, scoped by #1145).
  *  `dropConversation` reads against the entry-per-conversation model; `resetActivityFor` drops the
  *  reconnecting server's own conversations; `clearAllActivity` carries `All` so its blast radius is
  *  legible at the CALL SITE rather than only in this docstring. */
@@ -111,6 +121,7 @@ export type ConversationActivityStore = ConversationActivityState & {
   setStalled: (conversationId: string, stalled: boolean) => void
   setApiRetrying: (conversationId: string, apiRetrying: boolean) => void
   setCompacting: (conversationId: string, compacting: boolean) => void
+  setResetting: (conversationId: string, resetting: boolean) => void
   dropConversation: (conversationId: string) => void
   resetActivityFor: (conversationIds: ReadonlySet<string>) => void
   clearAllActivity: () => void
@@ -127,7 +138,8 @@ const idleActivity: ConversationActivityEntry = {
   turnRunning: false,
   stalled: false,
   apiRetrying: false,
-  compacting: false
+  compacting: false,
+  resetting: false
 }
 
 /** The one write path: read the held entry (or seed a fresh idle one), apply `update`, clone the OUTER
@@ -151,7 +163,7 @@ function writeEntry(
  * DI-friendly, React-free store — one isolated instance per test.
  *
  * Each setter is a same-value guard composed onto `writeEntry`, and the guard is written against ITS
- * OWN NAMED FIELD rather than a shared four-field `entriesEqual` inside the helper. That is deliberate:
+ * OWN NAMED FIELD rather than a shared all-field `entriesEqual` inside the helper. That is deliberate:
  * a shared exhaustive comparison silently stops writing the moment a fifth fact is added, whereas a
  * fifth fact here means a fifth setter carrying its own guard.
  *
@@ -173,11 +185,11 @@ function writeEntry(
  * `markStalled(id)` would leave no way to clear the fact at all, and #748 needs one.
  *
  * Growth is bounded by the number of distinct `conversationId`s the daemon names SINCE THE LAST
- * PAIRING BOUNDARY, at four booleans plus one bounded id string per entry, and #1145 WIDENED that
+ * PAIRING BOUNDARY, at five booleans plus one bounded id string per entry, and #1145 WIDENED that
  * bound rather than leaving it where #749 set it. It used to read "since the last handshake", on the
  * ground that `clearAllActivity` emptied the whole map on every `connected` edge; that edge now drops
  * only the reconnecting server's LISTED conversations, so an entry for a conversation in no server's
- * list — reachable, since any of the four arms can arrive for a conversation whose list has not
+ * list — reachable, since any of the arms can arrive for a conversation whose list has not
  * landed — survives every reconnect and is collected only by `clearAllActivity` at a pairing
  * boundary. `dropConversation` still removes a deleted conversation before either. The residue
  * inside one pairing is deliberately not capped here, exactly as the three stores that took this same
@@ -218,13 +230,23 @@ export function createConversationActivityStore(
           ? s
           : writeEntry(s, conversationId, (held) => ({ ...held, compacting }))
       ),
+    // #1516, and the fact the per-setter guard above was argued FOR: the rising reset edge re-fires as
+    // the phase advances (`wrapping_up` → `restarting`), both edges write the same `true`, and the
+    // `===` here is what makes the second one churn no listener. No dedup is added upstream, and none
+    // may be — a suppressed repeat would eat the signal that the phase moved.
+    setResetting: (conversationId, resetting) =>
+      set((s) =>
+        s.entries.get(conversationId)?.resetting === resetting
+          ? s
+          : writeEntry(s, conversationId, (held) => ({ ...held, resetting }))
+      ),
     // Remove exactly one key, CLONING the outer map and deleting on the clone — never
     // `s.entries.delete(...)`. `new Map(s.entries)` copies references, so every survivor is
     // `Object.is`-identical to the object held before, the same property `writeEntry` documents at
     // :124-127. `has` rather than `get(...) !== undefined`: an entry is never `undefined`, so both
     // work and `has` states the intent. `writeEntry` is deliberately NOT reused — its contract is
     // "seed-or-read, apply, set", and a removal is a different shape with one call site, so sharing
-    // would force a sentinel through it for no gain. The absent-key guard is the four setters'
+    // would force a sentinel through it for no gain. The absent-key guard is the setters'
     // same-value doctrine applied to a key that is not there: it returns the state OBJECT, so
     // zustand's `Object.is` short-circuit fires and no subscriber wakes. That is the common case
     // rather than an edge one — the bridge fires for every deletion and most conversations have
@@ -311,7 +333,7 @@ export function useConversationActivityStore<T>(selector: (s: ConversationActivi
  * forces the eventual reader to branch, so the distinction cannot be ignored accidentally.
  *
  * A bare `Map.get` with `?? null` is also what makes an unknown id an EXPLICIT no-match that can never
- * resolve onto a neighbour's entry — the misattribution the four arms' required `conversationId` was
+ * resolve onto a neighbour's entry — the misattribution the arms' required `conversationId` was
  * introduced to push down here.
  *
  * There is deliberately no whole-map `selectAllActivity`: nothing in this slice or the next two reads

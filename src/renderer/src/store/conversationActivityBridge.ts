@@ -101,9 +101,10 @@ export type ConversationActivityWrite =
   | { fact: 'stalled'; conversationId: string; stalled: boolean }
   | { fact: 'apiRetrying'; conversationId: string; apiRetrying: boolean }
   | { fact: 'compacting'; conversationId: string; compacting: boolean }
+  | { fact: 'resetting'; conversationId: string; resetting: boolean }
 
-/** Compile-time exhaustiveness guard for OUR OWN write union: a fifth fact without a dispatch case is
- *  a type error. Unreachable at runtime while the union and the apply switch agree, matching the
+/** Compile-time exhaustiveness guard for OUR OWN write union: a new fact without a dispatch case is a
+ *  type error — which is how #1516's `resetting` arrived, unable to compile until it was routed. Unreachable at runtime while the union and the apply switch agree, matching the
  *  reducer's own guard (threadTimeline.ts:227-229) — but it stringifies THE DISCRIMINANT ONLY, never
  *  the whole write. That is a deliberate divergence from the repo's `JSON.stringify(event)` idiom
  *  (threadTimeline.ts:229, App.tsx:20), which here would embed the untrusted `conversationId` in a
@@ -177,6 +178,29 @@ export function translateConversationActivity(
       // The wire's own edge, copied — `apiRetry`'s clear semantics exactly (threadTimeline.ts:200-205),
       // and likewise never self-cleared by turn activity.
       return [{ fact: 'compacting', conversationId: event.conversationId, compacting: event.active }]
+    case 'resetting':
+      // #1516. `active` ALONE crosses: `phase` and `handoff` are read by nothing here, which is why
+      // this is a fresh named-field literal rather than a spread — the same rule that keeps
+      // `apiRetry`'s counter out. The two tokens are #1517's, for the composer status row.
+      //
+      // THE SAME EDGE SEMANTICS AS `apiRetry` AND `compacting`, and NOT in `turnState`'s clear set —
+      // sharper here than for either peer, because the wrap-up turn runs INSIDE the reset, so its own
+      // turn transitions would otherwise clear the very fact they are part of. Only `active: false`
+      // clears it.
+      //
+      // Nothing branches on `phase`, and nothing may. The rising edge RE-FIRES as the phase advances
+      // (`wrapping_up` → `restarting`); both edges write the same `true` and the store's per-field
+      // guard makes the second churn no listener, so the re-fire needs no handling of its own — no
+      // dedup here, and none upstream, since suppressing a repeat would eat the phase-moved signal.
+      // A hostile daemon can send any of the sixteen (`active`, `phase`, `handoff`) combinations and
+      // this stays total: it reads one boolean and the routing key.
+      //
+      // THE FALLING EDGE MAY NEVER ARRIVE — a daemon killed mid-reset sends none, an obligation
+      // events.ts rides forward to its consumers by name. It is discharged by the three INDEPENDENT
+      // clears this store already owns, none of them added for this fact: the `conversationDeleted`
+      // eviction and the scoped `connected` reset below, and `clearAllActivity` at the pairing
+      // boundary. No timer and no heuristic.
+      return [{ fact: 'resetting', conversationId: event.conversationId, resetting: event.active }]
     default:
       return []
   }
@@ -210,6 +234,7 @@ export interface ConversationActivityDeps {
   setStalled: (conversationId: string, stalled: boolean) => void
   setApiRetrying: (conversationId: string, apiRetrying: boolean) => void
   setCompacting: (conversationId: string, compacting: boolean) => void
+  setResetting: (conversationId: string, resetting: boolean) => void
   dropConversation: (conversationId: string) => void
   resetActivityForServer: (origin: ConversationListOrigin) => void
 }
@@ -295,6 +320,9 @@ export function subscribeConversationActivity(
         case 'compacting':
           deps.setCompacting(write.conversationId, write.compacting)
           break
+        case 'resetting':
+          deps.setResetting(write.conversationId, write.resetting)
+          break
         default:
           assertNever(write)
       }
@@ -353,6 +381,7 @@ export function ConversationActivityData(): null {
       setStalled: (id, v) => conversationActivityStore.getState().setStalled(id, v),
       setApiRetrying: (id, v) => conversationActivityStore.getState().setApiRetrying(id, v),
       setCompacting: (id, v) => conversationActivityStore.getState().setCompacting(id, v),
+      setResetting: (id, v) => conversationActivityStore.getState().setResetting(id, v),
       dropConversation: (id) => conversationActivityStore.getState().dropConversation(id),
       resetActivityForServer: (origin) =>
         conversationActivityStore

@@ -8,7 +8,7 @@ import {
 
 // Plain-function store tests over isolated createConversationActivityStore() instances — the
 // backgroundTaskRosterStore.test idiom. No React, no DOM, no bridge: this store is pure renderer state
-// with four whole-value setters and one selector, and `environment: 'node'` is already global at
+// with five whole-value setters and one selector, and `environment: 'node'` is already global at
 // vitest.config.ts:27, so this file adds no environment pragma.
 //
 // Three properties here are invisible to `tsc` and break no other assertion in this file, which is why
@@ -40,7 +40,8 @@ const idle: ConversationActivityEntry = {
   turnRunning: false,
   stalled: false,
   apiRetrying: false,
-  compacting: false
+  compacting: false,
+  resetting: false
 }
 
 interface FactCase {
@@ -57,22 +58,61 @@ const facts: readonly FactCase[] = [
   {
     field: 'turnRunning',
     write: (store, id, value) => store.getState().setTurnRunning(id, value),
-    live: { turnRunning: true, stalled: false, apiRetrying: false, compacting: false }
+    live: {
+      turnRunning: true,
+      stalled: false,
+      apiRetrying: false,
+      compacting: false,
+      resetting: false
+    }
   },
   {
     field: 'stalled',
     write: (store, id, value) => store.getState().setStalled(id, value),
-    live: { turnRunning: false, stalled: true, apiRetrying: false, compacting: false }
+    live: {
+      turnRunning: false,
+      stalled: true,
+      apiRetrying: false,
+      compacting: false,
+      resetting: false
+    }
   },
   {
     field: 'apiRetrying',
     write: (store, id, value) => store.getState().setApiRetrying(id, value),
-    live: { turnRunning: false, stalled: false, apiRetrying: true, compacting: false }
+    live: {
+      turnRunning: false,
+      stalled: false,
+      apiRetrying: true,
+      compacting: false,
+      resetting: false
+    }
   },
   {
     field: 'compacting',
     write: (store, id, value) => store.getState().setCompacting(id, value),
-    live: { turnRunning: false, stalled: false, apiRetrying: false, compacting: true }
+    live: {
+      turnRunning: false,
+      stalled: false,
+      apiRetrying: false,
+      compacting: true,
+      resetting: false
+    }
+  },
+  {
+    // #1516. Joining the table rather than getting bespoke cases is what gives the fifth setter both
+    // per-setter properties for free: it creates the entry, and a FIRST write of `false` still creates
+    // it. The second matters here — the reset arm carries an explicit falling edge, so `active: false`
+    // can be the very first frame a conversation ever produces.
+    field: 'resetting',
+    write: (store, id, value) => store.getState().setResetting(id, value),
+    live: {
+      turnRunning: false,
+      stalled: false,
+      apiRetrying: false,
+      compacting: false,
+      resetting: true
+    }
   }
 ]
 
@@ -109,20 +149,37 @@ describe('conversationActivityStore', () => {
     })
   }
 
-  it('the four facts are independent — a later setter leaves the earlier ones held (AC1)', () => {
+  it('the five facts are independent — a later setter leaves the earlier ones held (AC1)', () => {
     const store = createConversationActivityStore()
     store.getState().setTurnRunning('c1', true)
     store.getState().setCompacting('c1', true)
     store.getState().setStalled('c1', true)
     store.getState().setApiRetrying('c1', true)
+    store.getState().setResetting('c1', true)
     store.getState().setCompacting('c1', false)
 
     expect(activityFor(store, 'c1')).toEqual({
       turnRunning: true,
       stalled: true,
       apiRetrying: true,
-      compacting: false
+      compacting: false,
+      resetting: true
     })
+  })
+
+  it('a repeat write of the fifth fact hands back the state OBJECT, waking no listener (#1516)', () => {
+    // The rising reset edge RE-FIRES as the phase advances (`wrapping_up` → `restarting`), and both
+    // edges write the same `true`. The per-field guard is what makes that second edge free, so the
+    // bridge needs no dedup of its own — and it must stay per-field: a shared exhaustive comparison
+    // would have silently stopped writing the moment this fifth fact was added.
+    const store = createConversationActivityStore()
+    store.getState().setResetting('c1', true)
+    const afterFirst = store.getState()
+
+    store.getState().setResetting('c1', true)
+
+    expect(store.getState()).toBe(afterFirst)
+    expect(activityFor(store, 'c1')).toEqual({ ...idle, resetting: true })
   })
 
   it("a write for one conversation leaves another's entry referentially unchanged (AC2)", () => {

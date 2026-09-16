@@ -2168,6 +2168,11 @@ describe('ChannelListView', () => {
     // below reads as the status it asserts.
     const seedWorking = (id: string): void => activityStore.getState().setTurnRunning(id, true)
 
+    // #1516's fifth activity fact. A SECOND working seed rather than a widening of the first, because
+    // the claim is that this fact reaches the dot on its own — a case seeded through `setTurnRunning`
+    // would pass against a derivation that never reads `resetting` at all.
+    const seedResetting = (id: string): void => activityStore.getState().setResetting(id, true)
+
     // `reconnected` is the cheapest honest unread seed: a zero-payload arm that MINTS A SLICE without
     // appending an item (conversationTimelineStore.ts:279-282), landing on `isConversationUnread` branch 2
     // — a slice held with no mark recorded reads as unread (conversationUnread.ts:59-60). No item append,
@@ -2270,6 +2275,29 @@ describe('ChannelListView', () => {
       // held, no mark recorded — and the activity store is fed independently of which conversation is
       // open, so the dot is correct with no "open conversation" concept involved anywhere.
       seedWorking('d2')
+      expect(timelineStore.getState().timelines.has('d2')).toBe(false)
+      expect(lastReadStore.getState().marks.has('d2')).toBe(false)
+      expect(chunkFor(render(threeRows()), 'Third conversation')).toContain(STATUS_DOT_WORKING)
+    })
+
+    it('draws the working dot on a row whose conversation is resetting (#1516 AC3)', () => {
+      // AC3 pinned AT THE ROW rather than only at the derivation. `ChannelList.tsx` is UNCHANGED by
+      // #1516 — `ConversationStatusDotControl` already hands the whole entry to
+      // `resolveConversationStatus` — so this passing is the evidence that the fifth fact reaches the
+      // dot through the shipped composition rather than through a second, locally re-derived rule.
+      // The two neighbours pin that it does not leak across rows.
+      seedResetting('d1')
+      const markup = render(threeRows())
+      expect(chunkFor(markup, 'Help me debug auth flow')).toContain(STATUS_DOT_WORKING)
+      expect(chunkFor(markup, 'kitchenclaw refactor')).toContain(STATUS_DOT_IDLE)
+      expect(chunkFor(markup, 'Third conversation')).toContain(STATUS_DOT_IDLE)
+      expect(countOf(markup, STATUS_DOT_WORKING)).toBe(1)
+    })
+
+    it('lights a resetting row the operator has never opened (#1516 AC4)', () => {
+      // The retention half of AC4 at the row: the seeded id is absent from BOTH the timeline and the
+      // last-read stores, and the activity store is fed independently of which conversation is open.
+      seedResetting('d2')
       expect(timelineStore.getState().timelines.has('d2')).toBe(false)
       expect(lastReadStore.getState().marks.has('d2')).toBe(false)
       expect(chunkFor(render(threeRows()), 'Third conversation')).toContain(STATUS_DOT_WORKING)

@@ -348,13 +348,21 @@ test('the host row’s pen and plus name themselves in a pill that follows the p
 
   // --- 10. AC1, the keyboard: focus shows it and blur hides it, with the pointer parked off the list —
   // so this can only be `:focus-visible` firing, never a stray hover. Reached by focusing the Channels
-  // header's own plus and pressing Tab (this row's pen is its next focusable, the pen being drawn before
-  // the plus for exactly that reason), NOT by `locator.focus()`: `:focus-visible` is Chromium's
+  // header's own plus and tabbing into the row, NOT by `locator.focus()`: `:focus-visible` is Chromium's
   // keyboard-modality heuristic and a programmatic focus after a pointer interaction does not match it,
   // so the assertion would be testing the heuristic rather than the rule. #1181's and #1304's specs
-  // record the same reasoning on their own controls. ---
+  // record the same reasoning on their own controls.
+  //
+  // TWO tabs, not one: #1507 turned the host row into a disclosure, and its button is the row's FIRST
+  // child — ahead of the dots, the pen and the plus — so entering the row from outside lands on the
+  // disclosure, and the pen is its next focusable rather than the section header's. The intermediate
+  // assertion is deliberate: it names the leading tab stop, so the next change to the row's leading edge
+  // fails here pointing at what actually moved instead of at a pen that merely never got focus. The pen
+  // still precedes the plus, for the reason it always did. ---
   await scrollTreeTo(tree, 'top')
   await page.locator('.channel-list__pair').first().focus()
+  await page.keyboard.press('Tab')
+  await expect(hostRow.locator('.channel-list__host-disclosure')).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(pen).toBeFocused()
   await expect(penPill).toBeVisible({ timeout: TIMEOUT_MS })

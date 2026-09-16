@@ -330,6 +330,27 @@ Every marker the technical notes named (`HOST_ROW_MARKER`, `HOST_ICON_MARKER`, `
 **2026-09-16 — `pairingRecovery.test.tsx` gained the three required props** at one `HostRow` call site. The
 plan's call-site count missed it: it renders the failed row, which ignores all three.
 
+**2026-09-16, rework 1 — one shipped e2e assertion retuned, which the plan did not predict. The design is
+unchanged.** The verifier's triage found `sidebar-host-row-control-name-pill.spec.ts` red: its step 10
+enters the host row from *outside*, focusing the Channels header's `.channel-list__pair` and pressing Tab
+once to reach the pen. The disclosure is the row's first child — which is what AC3 asks for and what this
+plan's element tree prescribes — so it is now the row's leading tab stop and the pen's predecessor, and
+one Tab lands on it instead.
+
+The fix is one extra `Tab` in that step plus the comment correction, not a structural change: the row's
+child order is load-bearing for the `:has(> …)` dot swap, the two hover reveals and the failed row's pen
+inset, and reordering to spare the spec would trade a one-line test retune for those four CSS families.
+An intermediate `toBeFocused` on the disclosure went in alongside, so the next change to the row's leading
+edge fails naming what moved rather than reporting a pen that never got focus.
+
+What the plan missed was not the tab order — `e2e/host-collapse.spec.ts` § AC3 drives host button → pen →
+plus correctly — but the *sweep for shipped specs that cross the row's leading edge*. The testing strategy
+reasoned about the new spec's coverage and about the unit-tier pins the structure had to leave
+byte-identical, and did not ask which existing specs tab **into** the row from a sibling. Adding a tab stop
+at a container's leading edge reaches every spec that enters that container by keyboard, and that set is
+not visible from the diff. The verifier swept the rest of the tier and found this the only crossing; the
+full tier was re-run here rather than the single spec, on its instruction.
+
 ## Documentation handoff
 
 Pending for the documentation stage, not done here: fold the host row's fold state and its chevron into

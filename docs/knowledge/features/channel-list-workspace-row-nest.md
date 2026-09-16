@@ -70,6 +70,18 @@ made that latent mismatch visible (it rendered ~230px right of the label on the 
 shrink and `min-width: 0` that "a long `cwd` truncates first" rests on are untouched; the button's own
 `flex: 1 1 auto` still spans the click target to the wrapper's far edge.
 
+**#1506 moved the wrapper's own nest, and with it both landing points this page and #1487 both describe
+above.** `.channel-list__workspace-head`'s `margin-left` goes `--space-5` → `--space-1` (20 → 4): `Channels`
+103:2966 places `Host container` 106:3104's `Workspace` instance 405:7456 at x 4, not behind a 20px guess,
+and the 2026-09-05 tree-inset fix ([the tie-break gap](channel-list-tree-inset.md) this page closed) had
+read that nest 16px too deep. Nothing inside the button or its glyph moves — `.channel-list__workspace`'s
+own `pl-[30px]` and its glyph's `left: var(--space-2)` are untouched — so the folder now lands at 4 + 8 =
+12 from the card's content edge, not 28, and the label at 4 + 30 = 34, not 50. **The folder and the label
+still share one left edge with the channel row's own dot and title** (see
+[the tree's inset](channel-list-tree-inset.md)), the invariant `e2e/sidebar-tree-geometry.spec.ts` pins as
+`expect(WORKSPACE_LABEL_X).toBe(TITLE_X)` — only its shared value moved, from 50 to 34. Every "28" and "50"
+reading above, and the `CARD_INSET_PX + 28` reading in Testing below, is history from before this ticket.
+
 **A workspace group with no rows in the tree being drawn renders no chevron, in either state** — the
 visible half of [#1485's union](channel-list-workspace-grouping.md), which is what first made such a
 group reachable in production (a `cwd` with rows in the *other* tree and none in this one). The row stays the disclosure button and still swaps
@@ -150,7 +162,8 @@ byte for byte at one per group now that the wrapper sits above the disclosure bu
 widened from asserting one control to asserting both by their distinct labels — the one assertion #1179's
 plan named as the cost of sharing `.channel-list__workspace-create` across both trees.
 `e2e/sidebar-tree-geometry.spec.ts` retargets `WORKSPACE_ICON_X` to `CARD_INSET_PX + 28` and adds
-`WORKSPACE_LABEL_X`, asserted equal to `TITLE_X`. `e2e/sidebar-workspace-create.spec.ts` (the Chats-tree
+`WORKSPACE_LABEL_X`, asserted equal to `TITLE_X` (both retargeted again by #1506, to `CARD_INSET_PX + 12`
+and `CARD_INSET_PX + 34` — see above). `e2e/sidebar-workspace-create.spec.ts` (the Chats-tree
 plus's own drive) seeds its clicked group's `cwd` at a path **other than** the fake harness's
 `DEFAULT_CREATED_CWD` (`conversationStateFake` mints a created row at `payload.cwd ?? DEFAULT_CREATED_CWD`,
 which happens to equal the default seed's own workspace) — otherwise a plus that silently sent `null`
@@ -180,4 +193,5 @@ covering the dialog it opens, is [`e2e/sidebar-create-channel.spec.ts`](create-c
   (#1181) — the plus's own name pill.
 - [Conversation create](conversation-create.md) — `requestNewConversation`'s constructor and the
   `conversationCreated` event-driven nav the plus's click resolves through; the FAB's own consumer doc.
-- [Channel List — the tree's inset](channel-list-tree-inset.md) — the tie-break gap this ticket closed.
+- [Channel List — the tree's inset](channel-list-tree-inset.md) — the tie-break gap this ticket closed,
+  and (#1506) the wrapper nest this page's own numbers now follow.

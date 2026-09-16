@@ -255,12 +255,24 @@
 }
 
 /* The host row heading each tree (#710, Figma 106:3094; redrawn by #1185 as Host 399:1366) — the machine
-   the tree's conversations live on, sitting between the section label and that tree's rows. The 16px LEFT
-   padding is the design's px-16. Centering the
-   12px glyph against the label's 20px line box reproduces the design's 20px-tall `Row icon` wrapper
-   frame (106:3107) without needing a wrapper element. The row ITSELF is still not interactive — no
-   radius, background, hover or focus rule, and the Figma's 6px corner still has nothing to clip; the two
-   controls #1185 put in its subtree are positioned over it and carry their own.
+   the tree's conversations live on, sitting between the section label and that tree's rows.
+
+   THE 24px LEFT PADDING CARRIES THE LABEL ON ITS OWN SINCE #1506, which is the drawing's construction
+   rather than a sum reached through the flow: `Row icon` 399:1356 is absolutely placed at left 0, so
+   Idle 399:1365's `pl-[24px]` is the label's whole x and the glyph sits outside it, on the card's content
+   edge. It supersedes a 16px padding that reached the same label through the flow — 16, then the 12px
+   glyph, then the 12px gap — and so put every part of this row 16px right of where the redrawn frame
+   draws it. See `.channel-list__host-icon` for the other half of the move.
+
+   THE `gap` IS INERT AND STAYS PUT. With the glyph out of the flow the label is the only flex item left
+   — every other child is absolutely positioned, the dots and the repair control as well as the pen and
+   the plus — so the 12 describes nothing today. It is the CHEVRON's gap: 399:1365 packs a `Chevron`
+   510:2384 after the label at `gap-[6px]`, and #1507 re-derives this declaration to that 6 when it adds
+   the mark that makes it visible again. Deleting it here and re-adding it there would be one edit twice.
+
+   The row ITSELF is still not interactive — no radius, background, hover or focus rule, and the Figma's
+   6px corner still has nothing to clip; the two controls #1185 put in its subtree are positioned over it
+   and carry their own.
 
    THE RIGHT PADDING IS #1185'S 52, up from 0, and it is written as the SUM `--space-8 + --space-5` —
    the slot the plus is positioned over, plus the pen's own 20px box — so the arithmetic stays legible
@@ -288,7 +300,7 @@
   align-items: center;
   position: relative;
   gap: var(--space-3);
-  padding: var(--space-1) calc(var(--space-8) + var(--space-5)) var(--space-1) var(--space-4);
+  padding: var(--space-1) calc(var(--space-8) + var(--space-5)) var(--space-1) var(--space-6);
   /* #1070 — the design's 16px between one machine's subtree and the next (103:2959's `Hosts` column,
      gap-[16px]). It rides the host row rather than a per-server wrapper because this file's rendered
      sequence is deliberately FLAT: React fragments emit no element, so there is no `Host container` box
@@ -305,13 +317,35 @@
   margin-top: 0;
 }
 
-/* The server-rack glyph. `display: block` is the file's icon convention (__save-icon / __settings-icon); the
-   flex basis keeps it from shrinking. Its 12px box is set on the <svg> as structural component geometry
-   (the .channel-list__archive 48px-square precedent) — half the 24px of the interactive icon buttons, so it reads as
-   a level marker rather than a control. Color inherits via currentColor. */
+/* The server-rack glyph, OUT OF THE FLOW SINCE #1506 — the drawing's own construction and not a trick to
+   reach a number: `Row icon` 399:1356 is absolutely placed at left 0, top 4, a 20px-tall box centring the
+   art, while the label carries the row's whole 24px left padding on its own.
+   `.channel-list__workspace-icon` is the shipped precedent for the entire shape one level down,
+   percentage centring included, and this is the same re-derivation #1487 made there.
+
+   `left: 0` is the drawn 0, read against THE ROW's padding box. `.channel-list__host` is already
+   `position: relative` — for the dots since #718 and for the pen and the plus since #1185 — so the
+   containing block already exists and no element is added. The row carries no border, so that padding
+   box starts at its border edge and the 0 reads as the card's content edge straight off: the glyph's x
+   is the card's inset with nothing added to it.
+
+   VERTICAL CENTRING BY PERCENTAGE RATHER THAN BY A LITERAL. The row's padding box is 28 tall (the
+   label's 20px line box between `--space-1` paddings), so the 50% mark is 14, and translating the 12px
+   glyph back by half of itself lands its top at 8 — the drawn box's own centre, 4 + (20 − 12) / 2, and
+   exactly where `align-items: center` had it. The glyph does not move vertically by a pixel.
+
+   `flex: 0 0 auto` IS DROPPED RATHER THAN KEPT: an absolutely positioned child is not a flex item, so
+   the basis that used to stop the glyph shrinking now describes nothing; what replaces it is that the
+   glyph is no longer in the label's way at all. Its 12px box stays set on the <svg> as structural
+   component geometry (the .channel-list__archive 48px-square precedent) — half the 24px of the
+   interactive icon buttons, so it reads as a level marker rather than a control. `display: block` stays,
+   the file's icon convention (__save-icon / __settings-icon); colour inherits via currentColor. */
 .channel-list__host-icon {
   display: block;
-  flex: 0 0 auto;
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 /* The label. Same type set as the section header above it — the theme's label-large is an EXACT match for
@@ -638,10 +672,14 @@
   background: var(--color-outline);
 }
 
-/* #1178 — THE WORKSPACE HEAD ROW'S WRAPPER, which is what carries the nest. The redrawn Hosts frame
-   (106:3160) puts the workspace row and its channel list inside one `Workspace` wrapper (405:7469) at
-   `pl-[20px]`, so the row runs from 20px in from the card's content edge to that edge: 340 wide in the
-   360 content box, as the component (399:1059) draws it.
+/* #1178 — THE WORKSPACE HEAD ROW'S WRAPPER, which is what carries the nest. `Host container` 106:3104
+   puts the workspace row and its channel list inside one `Workspace` wrapper 405:7469, and #1506 read
+   that wrapper's own placements rather than a padding on it: the instance 405:7456 sits at x 4, so the
+   row runs from 4px in from the card's content edge to that edge — 356 wide in the 360 content box,
+   which is the instance's own width. #1178 read the nest as a `pl-[20px]` and drew the row 340 wide from
+   20 in, which put this level and the channel list under it 16px right of the redrawn frame. THE STEP
+   DOWN TO THE CHANNEL ROWS IS UNCHANGED AT 8, because `.channel-list__row`'s indent moves by the same
+   16: the relative ladder is what both readings agree on and only its starting point moved.
 
    `margin-left` rather than a padding on a group element, for `.channel-list__row`'s reason one rule
    down: there is no group wrapper — the group's conversation rows stay FLAT siblings of the
@@ -660,7 +698,7 @@
   display: flex;
   align-items: center;
   position: relative;
-  margin-left: var(--space-5);
+  margin-left: var(--space-1);
 }
 
 /* The workspace row heading each group under a host row (#703, Figma 106:3098; redrawn by #1178 as
@@ -668,12 +706,15 @@
 
    THE GEOMETRY IS THE WHOLE POINT OF #1178 AND EVERY NUMBER IS DRAWN. The drawing gives the row
    `py-[4px]` inside the wrapper's 20px nest, and the two horizontal numbers that decide where its parts
-   land are the folder's 8 and the label's 30. Measured from the card's content edge that puts the folder
-   at 20 + 8 = 28 and the label at 20 + 30 = 50 — which is exactly where `.channel-list__row-open` puts
-   the channel titles beneath it, so THE WORKSPACE LABEL AND THE CHANNEL TITLES SHARE ONE LEFT EDGE. That
-   alignment is what the retune is for, and `e2e/sidebar-tree-geometry.spec.ts` reads both numbers.
+   land are the folder's 8 and the label's 30. Measured from the card's content edge, and against the
+   wrapper's 4px nest as #1506 re-read it, that puts the folder at 4 + 8 = 12 and the label at 4 + 30 = 34
+   — which is exactly where `.channel-list__row-open` puts the channel titles beneath it, so THE WORKSPACE
+   LABEL AND THE CHANNEL TITLES SHARE ONE LEFT EDGE. That alignment is what the retune is for, and
+   `e2e/sidebar-tree-geometry.spec.ts` reads both numbers and asserts their equality. Neither of THIS
+   block's declarations moved for it: #1178's 20px nest put the same pair at 28 and 50, and the 16 between
+   the two readings is entirely the wrapper's.
 
-   #1487 RE-DERIVED THAT SUM WITHOUT MOVING EITHER NUMBER. #1178 reached the label's 50 through the flow
+   #1487 RE-DERIVED THAT SUM WITHOUT MOVING EITHER NUMBER. #1178 reached the label's 30 through the flow
    — `pl-[8px]` + the 12px folder + a 10px gap — and the redrawn component takes the folder OUT of the
    flow (Row icon 399:1034 is absolutely placed at left 8, top 4), so the padding now carries the whole
    30 on its own: `--space-7 + 2px`, the drawn `pl-[30px]`, and the very sum 8 + 12 + 10 already made.
@@ -690,8 +731,9 @@
 
    This replaces the pre-redraw reading (a 24px left inset, a 16px right one, and a --space-3 gap chosen
    by a tie-break between 8 and 12 because 10 had no slot on the scale). The 2px deviation that tie-break
-   introduced is what put the label at 48 against the titles' 50; `e2e/sidebar-tree-geometry.spec.ts`
-   recorded it as accepted beside `WORKSPACE_ICON_X` and it expires here.
+   introduced is what left the label 2px short of the titles beneath it;
+   `e2e/sidebar-tree-geometry.spec.ts` recorded it as accepted beside `WORKSPACE_ICON_X` and it expires
+   here.
 
    THE RIGHT PADDING IS THE HOVER VARIANT'S 52 SINCE #1180, up from the Idle variant's 32, and it is
    written as the SUM `--space-8 + --space-5` — the slot the plus is positioned over, plus the pen's own
@@ -964,7 +1006,8 @@
 
    `left: --space-2` is the drawn 8, read against THIS BUTTON's padding box — see the block above for why
    the positioned ancestor has to be the button and not the head row. Measured from the card's content
-   edge that is the wrapper's 20 + 8 = 28, `WORKSPACE_ICON_X` unchanged.
+   edge that is the wrapper's 4 + 8 = 12 since #1506 moved the nest; this declaration did not move for it,
+   and under #1178's 20px nest the same 8 read as 28.
 
    VERTICAL CENTRING BY PERCENTAGE RATHER THAN BY A LITERAL, and it reproduces the drawing in both states
    from one declaration. The row's content box is 20 tall between `--space-1` paddings, so the 50% mark is
@@ -1058,11 +1101,14 @@
    `position: relative` is #801's edit here — the containing block for the status dot below, the
    `position: relative` parent + `position: absolute` child idiom this file already uses at :500.
 
-   `margin-left` is the channel-list indent — `--space-7` since #1171 read the REDRAWN frame, up from the
-   20 the first read of 103:2985 gave. A row is 332 wide in the 360 content box, starts 48 from the card's
-   edge, and still ends flush with the host row's connection dots. The 28 comes from the list frame
-   sitting inside a `Workspace` wrapper together with the workspace row; that wrapper's other half landed
-   in #1178 as `.channel-list__workspace-head`'s own 20px nest, so the two are 8px apart as drawn.
+   `margin-left` is the channel-list indent — `--space-3` since #1506 read `Host container` 106:3104's
+   own placements, DOWN from the 28 #1171 reached for that same frame and the 20 the first read of
+   103:2985 gave. A row is 348 wide in the 360 content box, starts 32 from the card's edge, and still ends
+   flush with the host row's connection dots. The 12 is a sum the drawing makes twice over: `Channel list`
+   103:2985 sits at x 4 inside the `Workspace` wrapper, and insets its own rows a further 8 (its `Channel`
+   instances read x 8, 348 wide). That wrapper's other half is `.channel-list__workspace-head`'s 4px nest,
+   so the two levels stay 8px apart exactly as #1171 and #1178 had them at 20 + 8 — the relative step is
+   what both readings agree on, and only its starting point moved 16 left onto the frame's own numbers.
 
    A margin on each row rather than a padding on a list wrapper because there is no list wrapper: rows are
    flat siblings of the header, host and workspace rows (#703/#704), the ancestry 28 e2e specs click
@@ -1071,7 +1117,7 @@
   display: flex;
   align-items: center;
   position: relative;
-  margin-left: var(--space-7);
+  margin-left: var(--space-3);
 }
 
 /* The open action — the old full-width row button, reset then holding the row's single label.
@@ -1081,12 +1127,14 @@
    THE HORIZONTAL PADDING IS ASYMMETRIC AND BOTH SIDES ARE DRAWN (#1171; they were 32 / 16 before it).
    LEFT is 22px, written as the sum `--space-2 + 6px + --space-2` because no single token is 22 and the
    arithmetic is the whole point: the drawing's 8px inset, then the 6px status dot, then the 8px gap after
-   it (Hover row 398:7266 reads its dot frame at x=8 and its title at x=22). That 22 puts the title 50
-   from the card's content edge — which is exactly where #1178 landed the workspace label, so the channel
-   titles and the workspace label above them share one left edge. Moving either without the other breaks
-   the alignment `e2e/sidebar-tree-geometry.spec.ts` now asserts as an equality. RIGHT is `--space-7` (28px), the trailing padding
-   the drawing reserves for the Hover variant's 12px control, which is positioned over it rather than laid
-   out in it. Sidebar-only — `channel-list__row*` appears in ChannelList.tsx alone, so the archive screen's
+   it (Hover row 398:7266 reads its dot frame at x=8 and its title at x=22). Against the row's own 12px
+   indent that 22 puts the title 34 from the card's content edge — which is exactly where the workspace
+   label lands, so the channel titles and the workspace label above them share one left edge. Moving
+   either without the other breaks the alignment `e2e/sidebar-tree-geometry.spec.ts` asserts as an
+   equality. The pair read 50 under #1178's and #1171's 20 + 28 insets; #1506 moved both by the same 16
+   and neither this padding nor the workspace button's 30 changed for it. RIGHT is `--space-7` (28px),
+   the trailing padding the drawing reserves for the Hover variant's 12px control, which is positioned
+   over it rather than laid out in it. Sidebar-only — `channel-list__row*` appears in ChannelList.tsx alone, so the archive screen's
    rows are untouched.
 
    #1097 — THE DESKTOP ROW'S 24px, DERIVED AND NEVER DECLARED. `--space-1` (4px) top and bottom over
@@ -1518,8 +1566,9 @@
 
    NO `max-width` AND NO ELLIPSIS CHAIN, which is where this parts company with the composer's pill: that
    one bounds an untrusted daemon filename of unbounded length. Both strings here are client-owned
-   compile-time constants, the longer computing to ~104px inside a 332px row (the 400px sidebar less two
-   --space-5 and the row's --space-7 inset), so a bound would defend a case that cannot occur. `nowrap`
+   compile-time constants, the longer computing to ~104px inside a 348px row (the 400px sidebar less two
+   --space-5 and the row's --space-3 inset — 332 and --space-7 before #1506 moved that indent, which only
+   widens the slack this argument rests on), so a bound would defend a case that cannot occur. `nowrap`
    alone is what makes it the drawing's one line. */
 .channel-list__control-name {
   position: fixed;

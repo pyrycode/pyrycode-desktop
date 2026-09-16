@@ -32,25 +32,31 @@ import type { Locator } from '@playwright/test'
 
 // "Channels and chats" 103:2959 p-[20px]: the inset every level shares.
 const CARD_INSET_PX = 20
-// The channel list's own indent: the rows sit one step in from the host and workspace rows. 28 since
-// #1171 read the REDRAWN frame, where the list sits inside a `Workspace` wrapper together with the
-// workspace row; the first read of 103:2985 gave 20.
-const LIST_INSET_PX = 28
+// The channel list's own indent: the rows sit one step in from the host and workspace rows. 12 since
+// #1506 read `Host container` 106:3104, where `Channel list` 103:2985 sits at x 4 inside the `Workspace`
+// wrapper and insets its own rows a further 8. #1171 read that same wrapper relation but took the outer
+// nest as 20, which put the rows at 28; the first read of 103:2985 gave 20 flat.
+const LIST_INSET_PX = 12
 
-// Host 106:3094 px-[16px]: the glyph at 16 inside the row, the label 12 (icon) + 12 (gap) further.
-const HOST_ICON_X = CARD_INSET_PX + 16
-const HOST_LABEL_X = HOST_ICON_X + 12 + 12
-// Workspace 399:1059, placed as 405:7456 inside the `pl-[20px]` wrapper 405:7469 (#1178): the row nests
-// 20 in, then `pl-[8px]` puts the 12px folder at 28, then the drawing's 10px gap puts the label at 50.
-// The pre-#1178 reading was a 24px inset and a --space-3 gap chosen by a tie-break, which left the label
-// at 48; that 2px deviation was recorded here as accepted and expires with this ticket.
-const WORKSPACE_ROW_X = CARD_INSET_PX + 20
-const WORKSPACE_ICON_X = CARD_INSET_PX + 28
-const WORKSPACE_LABEL_X = CARD_INSET_PX + 50
+// Host 405:7862 at x 0 in `Host container` 106:3104, drawn as Host 399:1366 / Idle 399:1365: `Row icon`
+// 399:1356 is ABSOLUTELY placed at left 0 — a 12 × 20 box centring the 12px glyph — so the row's
+// `pl-[24px]` carries the label on its own and the glyph lands on the card's content edge. The
+// superseded reading was a 16px row padding with the label summed through the flow as 16 + 12 + 12 = 40.
+const HOST_ICON_X = CARD_INSET_PX
+const HOST_LABEL_X = CARD_INSET_PX + 24
+// Workspace 399:1059, placed as 405:7456 at x 4 inside the wrapper 405:7469: the row nests 4 in, then
+// `pl-[8px]` puts the 12px folder at 12, and the button's own `pl-[30px]` puts the label at 34. #1178
+// read that wrapper's nest as 20, which put the folder at 28 and the label at 50; #1506 reads the
+// redrawn `Host container` and moves all three 16 left. (Older still: a 24px inset and a --space-3 gap
+// chosen by a tie-break, which left the label at 48 — a 2px deviation #1178 already closed.)
+const WORKSPACE_ROW_X = CARD_INSET_PX + 4
+const WORKSPACE_ICON_X = CARD_INSET_PX + 12
+const WORKSPACE_LABEL_X = CARD_INSET_PX + 34
 // The redrawn Channel row (Hover 398:7266): an 8px left inset, then the 6px dot, then an 8px gap — dot
 // at 8 and title at 22 inside the row, where #801's leading geometry had them at 16 and 32. Offset by
-// the two insets, the title lands 70 from the card's edge and 50 from its content edge: the same left
-// edge #1178 gives the workspace label above it.
+// the two insets, the title lands 54 from the card's edge and 34 from its content edge: the same left
+// edge #1178's nest gives the workspace label above it, at the x #1506 moves both to. The superseded
+// pair was 70 and 50.
 const ROW_X = CARD_INSET_PX + LIST_INSET_PX
 const DOT_X = ROW_X + 8
 const TITLE_X = ROW_X + 22
@@ -231,19 +237,20 @@ test('the sidebar card sits at its drawn inset under its top bar: 24/20/20, a 24
   for (const row of await rows.all()) expectAbout((await boxOf(row, 'sidebar row')).x - left, ROW_X)
 
   // --- 2. The row spans to the content edge — the open row's fill (#1098) ends where the card's inset
-  // begins, 332 wide in the 360 content box since #1171 widened the indent to 28. This is the assertion
-  // that keeps that widening a MOVE rather than a shrink: block 1 pins the leading edge and this one
-  // pins the trailing edge, so a row that got narrower on both sides would redden here. Read on both
-  // rows: one is the open one, one is resting. ---
+  // begins, 348 wide in the 360 content box since #1506 moved the indent to 12 (`Channel list` 103:2985
+  // draws its rows 348 wide at x 8 inside a wrapper at x 4). This is the assertion that keeps each of
+  // those moves a MOVE rather than a shrink — #1171's widening to 28 and 332, and #1506's step back to
+  // 12: block 1 pins the leading edge and this one pins the trailing edge, so a row that got narrower on
+  // both sides would redden here. Read on both rows: one is the open one, one is resting. ---
   for (const row of await rows.all()) {
     const box = await boxOf(row, 'sidebar row')
     expectAbout(right - (box.x + box.width), CARD_INSET_PX)
   }
 
   // ...and so does the workspace row, which is the OTHER half of #1178's nest. Block 1 pins its leading
-  // edge 20 in and this one pins its trailing edge flush with the content edge, so a row that took the
-  // nest as a symmetric inset — or as a shrink — reddens here rather than passing on one edge. 340 wide
-  // in the 360 content box, as the component draws it.
+  // edge 4 in and this one pins its trailing edge flush with the content edge, so a row that took the
+  // nest as a symmetric inset — or as a shrink — reddens here rather than passing on one edge. 356 wide
+  // in the 360 content box, which is the instance 405:7456's own width; #1178's 20px nest drew it at 340.
   for (const ws of await workspaces.all()) {
     const box = await boxOf(ws, 'workspace row')
     expectAbout(right - (box.x + box.width), CARD_INSET_PX)

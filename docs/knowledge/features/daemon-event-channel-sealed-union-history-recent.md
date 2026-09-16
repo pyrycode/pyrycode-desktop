@@ -358,6 +358,71 @@ the combined list again exceeded the size cap.
   **whole** event into an `Error` message and this is the largest arm on the union and the one carrying the
   most disclosive fields: deleting the case on the strength of "the arm is handled elsewhere now" would put
   every memory-file path and every MCP server name into a stack trace and a crash reporter.
+- **`resetting{conversationId,active,phase,handoff}`**
+  ([#1515](https://github.com/pyrycode/pyrycode-desktop/issues/1515)) carries the daemon's report that a
+  conversation's session is being reset, and which phase of it the conversation is in, the last hop across
+  IPC — the wire vocabulary and the fail-closed decode
+  ([#1514](https://github.com/pyrycode/pyrycode-desktop/issues/1514)) already existed; this arm is the emit,
+  placed directly after `contextUsage` so the switch mirrors `InboundDaemonMessage`'s own arm order. **Two
+  edges, not a reading** — unlike `thinkingProgress`/`rateLimited`/`contextUsage` directly above, `active`
+  is a rising and an explicit falling edge, the `apiRetry`/`compacting` shape. **The rising edge re-fires as
+  the phase advances** (`wrapping_up` → `restarting`), one event per actual change, so a second rising edge
+  is a real transition and never a duplicate to suppress. No `turn_id`, opens and closes no turn — daemon
+  state by the `queueState` #720 rule, since a reset is orthogonal to whichever turn happened to be running.
+
+  **All four decoded fields cross**, copied by name from the already-validated payload, never a spread —
+  there is nothing to leave behind. **No `daemonTs`**, the `rateLimited`/`thinkingProgress` precedent rather
+  than `compacting`'s: the decode arm takes no `FrameTimestamp`, because a stored `resetting` is **skipped**
+  rather than served, so there is no served-page half for a (`type`, `ts`) key to join against; the union's
+  timestamp stays optional on every arm, so only the emit site and its round-trip test — not the type system
+  — catch a stray stamp. `HistoryTimelineEvent` gains nothing, since `resetting` has no replay ring.
+
+  **Both empty strings cross intact on the falling edge — as the contract's own zero value, not as
+  `undefined` and not as an absent key.** The daemon writes both keys on every frame (nothing upstream is
+  `omitempty`), `''` is Go's zero value and a declared member of both closed sets, and the window gates on
+  `active`: a consumer that saw a missing key could not tell a falling edge from a malformed one. Structured
+  clone preserves an `undefined`-valued property across this bridge, so "absent" and "present and empty" are
+  distinctions the boundary can actually keep — the `'conversationId' in event` ban in `timelineBridge`'s
+  `timelineTargetFor` docblock is the standing lesson about probing for a field instead of requiring it.
+  **Neither token is widened to `string` here** — `WireResetPhase` and `WireResetHandoff` cross as the
+  closed sets #1514 established, the `WireTurnState` precedent, unlike `rateLimited`'s `status`/`limitType`
+  two arms above: every field on this arm is daemon-authored, so narrowing is safe where widening would
+  throw away a four-value switch for an open one.
+
+  **Not deduped**: no dedup, no coalescing, no timer, no last-value memo, none keyed by `conversationId` —
+  the rising edge re-firing as the phase advances means a suppressor would eat a real transition. Not
+  compile-forced (`daemonConnection`'s inbound switch has no `assertNever`) — the round-trip test is what
+  guards this emit, including an explicit `Object.keys` presence check beside the `toEqual`: `toEqual`
+  alone ignores an undefined-valued property, so it cannot by itself distinguish "empty string" from
+  "dropped key" or "stray `daemonTs`" from "correctly absent."
+
+  SECURITY: **narrowed is not trusted** — a closed union is a compile-time invitation to read a value as
+  settled fact, and it is only a claim by a peer. The set is **2 × 3 × 4 = 24** combinations of
+  (`active`, `phase`, `handoff`), not sixteen (the figure inherited verbatim from `ResettingPayload`'s own
+  contract block at #1514, which carries the same correction owed); a consumer handles all of them, not
+  only the daemon's three observed rows, and must not branch security-relevant behaviour on either token.
+  `handoff: 'written'` describes a file the daemon wrote and the payload carries **no path** — nothing
+  downstream can resolve, join, open, stat or link one; the token is a status, not a locator. Nothing
+  decoded reaches a log on any path: `emitDaemonEvent` is log-free by construction and #1514's decode-side
+  line is pinned content-free, which matters for the phase/handoff pair as much as for the id — together
+  they disclose which conversation the operator reset and whether a handoff note was written, a fact about
+  the operator's workflow rather than about this frame. `conversationId` is a daemon-asserted routing key;
+  if a consumer indexes by it, the index is a `Map`. **A consumer must not rely on the falling edge
+  arriving** — a daemon killed mid-reset sends no `active: false`, so an indicator cleared only by that
+  frame pins forever, and the clearing path needs an independent trigger (disconnect, conversation exit,
+  turn activity). Nothing on this leg can defend that; the obligation rides forward to this arm's
+  consumers.
+
+  Ships **dormant**: three of the four exhaustive bridges (`daemonEventBridge`, `modalBridge`,
+  `questionBridge`) no-op it **permanently** — a reset is orthogonal to connection status, is not a
+  permission prompt (no `modal_id`, nothing daemon-side waiting on an answer) and is not an ask (unsolicited,
+  nothing outstanding), each reporting what the daemon is doing to a session rather than anything the
+  session store, a modal or claude wants from the operator. `timelineBridge`'s case stays **dormant**, the
+  `apiRetry`/`compacting`-before-#493/#496 shape: a reset is transient thread chrome, and whether it becomes
+  an owned arm is [#1517](https://github.com/pyrycode/pyrycode-desktop/issues/1517)'s call, on the surface
+  its composer status row owns. All four cases exist only so each bridge's `assertNever` guard makes a new
+  arm a compile error — and it is not a formality: it stringifies the whole event into an `Error` message,
+  which would put the conversation id and both tokens into a stack trace and a crash reporter.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.

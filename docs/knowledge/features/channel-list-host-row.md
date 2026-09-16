@@ -415,13 +415,31 @@ template. Sends `requestNewWorkspaceChat`, a third sibling beside `requestNewCon
 `requestNewChannel`. See [Add workspace dialog](add-workspace-dialog.md) for connection
 gating, host-scoped results, the 30-second uncertain outcome, explicit retry and safe text sinks.
 
+## The row's fold and its chevron (#1507)
+
+Split into its own page, [Channel List — the host row's fold and its
+chevron](channel-list-host-fold.md), once this page neared the doc-guard's byte cap.
+[#1507](https://github.com/pyrycode/pyrycode-desktop/issues/1507) turned the row into a disclosure: a
+native `button` (`channel-list__host-disclosure`, a **child** of `.channel-list__host` — the row keeps
+that class rather than moving it, the structural call [§ The row's pen and plus on
+hover](#the-rows-pen-and-plus-on-hover-1185) above already measured) takes the glyph, the label and a new
+chevron, while the pen, the plus, the repair control and the two dots stay siblings inside the row. A
+`CollapsibleHostGroup` keyed by `serverId` owns one unpersisted `useState` per host per tree and renders
+that host's workspace groups only while expanded; a failed row is not a disclosure and draws no chevron,
+so its subtree renders unconditionally rather than stranding behind a fold with no control left to clear
+it. See [that page](channel-list-host-fold.md) for the full design: the props `HostRow` gained, why the
+session-status read moved up from `HostRowControl` to the group, the CSS (including the one declaration
+`.channel-list__workspace` carries that this button must not), and the tab-order ripple into
+`sidebar-host-row-control-name-pill.spec.ts`.
+
 ## Related
 
 - [Channel List home screen](channel-list.md) — the parent page: the view-model, the row's save/rename
   affordances, workspace grouping, and the CSS this section's classes live in.
 - [Edit host dialog](edit-host-dialog.md) (#1299) / [Add workspace dialog](add-workspace-dialog.md)
-  (#1308) — split out of this page once it neared the byte cap; the two dialogs the row's pen and plus
-  open, § above.
+  (#1308) / [the host row's fold and its chevron](channel-list-host-fold.md) (#1507) — split out of this
+  page once it neared the byte cap; the two dialogs the row's pen and plus open, and the disclosure that
+  now wraps the glyph and label, § above.
 - [Host-label window store](host-label-window-store.md) / [#833](https://github.com/pyrycode/pyrycode-desktop/issues/833) —
   the store `HostRowControl` reads and the loader `<HostLabelData />` mounts; re-keyed by server id in
   [#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199).

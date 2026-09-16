@@ -7,7 +7,7 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 // real-claude.spec.ts's line verbatim.
 test.use({ interactiveRunner: 'stream-json' })
 
-// Tier-3 real-claude e2e for #1218 — the LIVENESS NET for New session, and the reason it cannot be folded
+// Tier-3 real-claude e2e for #1218 — the LIVENESS NET for Reset session, and the reason it cannot be folded
 // into the fake tier. The fake twin (e2e/composer-new-session.spec.ts) proves the CLIENT WIRING: the
 // picked row reaches the wire as one `new_session` naming the open conversation, nothing travels the
 // message path, and a scripted `session_transition` draws exactly one delimiter. But there the daemon's
@@ -73,7 +73,10 @@ const DELIMITER_SELECTOR = '.session-delimiter'
 // updating this spec breaks it, which is the point. `exact: true` on the trigger because getByRole
 // matches `name` as a case-insensitive SUBSTRING and the thread overflow trigger reads `More actions`. ---
 const ACTIONS_LABEL = 'Actions'
-const NEW_SESSION_ROW = 'New session (restarts claude)'
+// #1496 renamed this row: it read `New session (restarts claude)` while a second `/clear` row called
+// itself Reset session. The fold dropped that row and this one inherited its label; the binding keeps
+// the wire's verb, as ComposerActionsMenu.tsx's own constant does.
+const NEW_SESSION_ROW = 'Reset session'
 
 // --- Timeouts (the siblings' values) ----------------------------------------
 const HANDSHAKE_TIMEOUT_MS = 45_000
@@ -105,7 +108,7 @@ function nonEmptyAssistantCount(page: Page): Promise<number> {
     )
 }
 
-test('real claude restarts on New session and the turn stream survives it', async ({
+test('real claude restarts on Reset session and the turn stream survives it', async ({
   relay,
   daemon,
   page

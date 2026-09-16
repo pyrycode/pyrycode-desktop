@@ -25,8 +25,8 @@ import type {
 //
 // THE STANDING RULE IS KEPT: a fake-tier spec may not supply an input production does not produce.
 // `session_transition` is exactly the frame the daemon pushes unprovoked on an idle eviction — the live
-// trigger for this defect, since desktop's Reset session sends `/clear` as ordinary text that claude
-// intercepts in process. The create round trip is the plus's own, each `session_settings` answers a
+// trigger for this defect. (Desktop's own Reset session row dispatches `new_session` since #1496, so
+// this spec's marker stands in for the daemon-side eviction rather than for that row.) The create round trip is the plus's own, each `session_settings` answers a
 // `request_session_settings` this app actually sent, and the model list is the unsolicited push. Only
 // the TIMING of the marker is this test's, and the timing is the defect.
 //

@@ -87,7 +87,7 @@ function capturingSystemPromptFake(
           ts: FIXED_TS,
           in_reply_to: env.id,
           // `differs` so AC4's notice is driven live: the running session was started with something
-          // else, and New session is what applies the stored value.
+          // else, and Reset session is what applies the stored value.
           payload: {
             system_prompt: SEEDED_PROMPT,
             session_prompt_status: 'differs'
@@ -148,8 +148,9 @@ test('the section reads, edits, saves and clears a channel system prompt', async
   const editor = page.locator('.system-prompt__input')
   await expect(editor).toHaveValue(SEEDED_PROMPT, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
-  // AC4: `differs` says the running session was started with something else and names New session.
-  await expect(page.locator('.system-prompt__session')).toContainText('New session')
+  // AC4: `differs` says the running session was started with something else and names Reset session —
+  // the Actions menu row that applies it, renamed from `New session` by #1496.
+  await expect(page.locator('.system-prompt__session')).toContainText('Reset session')
 
   // AC3: the count is live and counts UTF-8 BYTES. 24 for a 22-code-unit string.
   await editor.fill(TYPED_PROMPT)

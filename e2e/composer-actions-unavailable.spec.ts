@@ -45,27 +45,39 @@ const FIXED_TS = '2026-09-04T12:00:00.000Z'
 // `exact: true` for composer-actions.spec.ts's measured reason — getByRole matches `name` as a
 // case-insensitive SUBSTRING, and the thread overflow trigger one region up reads `More actions`.
 const ACTIONS_LABEL = 'Actions'
-const AVAILABLE_ROW = 'Reset session'
+// #1496 MOVED THIS ANCHOR, and a rename would not have been enough. It read `Reset session` — the
+// ungreyed `/clear` slash row — while CONTROL_ROW below read the New session label. The fold made both
+// names resolve to the SAME row, so renaming in place would have left this spec green for the wrong
+// reason: the available-row half would have been driving the control row, which sends no `send_message`
+// at all. `Compact session` is the available slash row now, and it doubles as AC3's alias-arm proof
+// because the fixture publishes its verb only as an alias.
+const AVAILABLE_ROW = 'Compact session'
 const UNAVAILABLE_ROW = 'Knowledge capture'
 const UNAVAILABLE_NOTE = '(unavailable in this workspace)'
-// #1218's control row. It is NOT a slash command, so a complete published list that does not name it
-// proves nothing about it and it must never be greyed out — the whole of that ticket's AC3, and a
-// failure that would ship looking correct.
-const CONTROL_ROW = 'New session (restarts claude)'
+// #1218's control row, labelled `Reset session` and drawn first since #1496. It is NOT a slash command,
+// so a complete published list that does not name it proves nothing about it and it must never be greyed
+// out — the whole of that ticket's AC3, #1496's AC2, and a failure that would ship looking correct. It is
+// also the conversation's only reset path now, so greying it would leave a chat with no way to start over.
+const CONTROL_ROW = 'Reset session'
 
 function command(overrides: Partial<WireSlashCommand> & { name: string }): WireSlashCommand {
   return { argument_hint: '', description: '', aliases: [], truncated_fields: null, ...overrides }
 }
 
-// A COMPLETE menu — nothing dropped, no row reporting a cut field — carrying `clear` and `compact` and
-// NOT `knowledge-capture`. Completeness is what makes the absence provable; every incomplete shape is an
-// UNKNOWN reading that leaves all three rows available, and those cases are data in
+// A COMPLETE menu — nothing dropped, no row reporting a cut field — carrying `compact` and NOT
+// `knowledge-capture`. Completeness is what makes the absence provable; every incomplete shape is an
+// UNKNOWN reading that leaves every row available, and those cases are data in
 // composerActionAvailability.test.ts rather than four more launches here.
 //
 // `compact` publishes its verb as an ALIAS of a differently-named row, so this drive also exercises AC3's
 // alias arm through the real decode path: a name-only match would grey a working command out.
+//
+// IT NAMES NEITHER THE CONTROL ROW NOR `clear`, and #1496 removed the `clear` entry it used to publish
+// for exactly that reason. That is the sharpest input for the control row's never-greyed property: a list
+// still publishing `clear` would keep this spec green for an implementation that folded the control row
+// back into COMPOSER_ACTIONS under the id `/clear` — the tidy-up that would put the conversation's only
+// reset path back under the workspace's control.
 const COMMANDS: WireSlashCommand[] = [
-  command({ name: 'clear', description: 'Clear conversation history and free up context' }),
   command({ name: 'compact-conversation', aliases: ['compact'] }),
   command({ name: 'model', argument_hint: '<model>' })
 ]
@@ -136,8 +148,8 @@ test('an unpublished action is greyed out and sends nothing, by click or by Ente
 
   // --- 2. GREYING IS NOT HIDING (AC1). Every row is still offered and still a menu item; exactly
   // one of them is marked, and it is the one no published row names. The assertion retries, so a frame
-  // still in flight when the panel opened resolves here rather than racing. Four rows since #1218. ---
-  await expect(panel.getByRole('menuitem')).toHaveCount(4)
+  // still in flight when the panel opened resolves here rather than racing. Three rows since #1496. ---
+  await expect(panel.getByRole('menuitem')).toHaveCount(3)
   await expect(unavailable).toHaveAttribute('aria-disabled', 'true', {
     timeout: ROUNDTRIP_TIMEOUT_MS
   })
@@ -149,18 +161,17 @@ test('an unpublished action is greyed out and sends nothing, by click or by Ente
   await expect(unavailable).toContainText(UNAVAILABLE_NOTE)
 
   // AC3's alias arm, through the real decode: `compact` is published only as an ALIAS of
-  // `compact-conversation`, and its row is NOT marked. A name-only match would have greyed it.
-  await expect(panel.getByRole('menuitem', { name: 'Compact session' })).not.toHaveAttribute(
-    'aria-disabled',
-    'true'
-  )
+  // `compact-conversation`, and its row is NOT marked. A name-only match would have greyed it. This is
+  // the same row the drive below picks, so the alias arm is proved by a row that then genuinely sends.
+  await expect(available).not.toHaveAttribute('aria-disabled', 'true')
 
-  // #1218's AC3, live and against the strongest input this spec has: a COMPLETE published list naming
-  // `clear` and `compact-conversation` and nothing else. That list proves the absence of the three slash
-  // commands, and proves NOTHING about a control frame that is not a slash command at all — so the
-  // control row must be offered here exactly as in a workspace that publishes everything. The `count(1)`
-  // above already bounds the marking to one row; this names which row must not be it, so a regression
-  // reads as "New session was greyed out" rather than as an arithmetic surprise.
+  // #1218's AC3 and #1496's AC2, live and against the strongest input this spec has: a COMPLETE published
+  // list naming `compact-conversation` and `model` and nothing else — neither the control row nor `clear`.
+  // That list proves the absence of a slash command it does not name, and proves NOTHING about a control
+  // frame that is not a slash command at all — so the control row must be offered here exactly as in a
+  // workspace that publishes everything. The `count(1)` above already bounds the marking to one row; this
+  // names which row must not be it, so a regression reads as "Reset session was greyed out" rather than
+  // as an arithmetic surprise.
   await expect(panel.getByRole('menuitem', { name: CONTROL_ROW })).not.toHaveAttribute(
     'aria-disabled',
     'true'
@@ -194,9 +205,10 @@ test('an unpublished action is greyed out and sends nothing, by click or by Ente
   // --- 5. THE GATE IS PER ROW, not a dead menu (AC1). The same open panel still sends an available row's
   // command — arrowed back to it, so the keyboard path is proven to work rather than merely to refuse. ---
   //
-  // TWO steps, not one, since #1218 appended a fourth row: the ring wraps, so from the third row the
-  // first is now two ArrowDowns away, THROUGH the control row. Passing over it is part of what this
-  // proves — arrowing onto a row does not activate it.
+  // TWO steps, not one, and still two after #1496 moved the control row from last to first: the ring
+  // wraps, so from the greyed last row the first ArrowDown lands on the control row and the second on the
+  // available one. Passing over the control row is part of what this proves — arrowing onto a row does not
+  // activate it, which matters more now that the row it passes over restarts claude.
   await page.keyboard.press('ArrowDown')
   await expect(panel.getByRole('menuitem', { name: CONTROL_ROW })).toBeFocused()
   await page.keyboard.press('ArrowDown')
@@ -205,5 +217,5 @@ test('an unpublished action is greyed out and sends nothing, by click or by Ente
   await expect(panel).toBeHidden()
 
   await expect.poll(() => sent.length, { timeout: ROUNDTRIP_TIMEOUT_MS }).toBe(1)
-  expect(sent[0].text).toBe('/clear')
+  expect(sent[0].text).toBe('/compact')
 })

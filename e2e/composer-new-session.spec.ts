@@ -3,11 +3,12 @@ import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/lau
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { NewSessionPayload, SessionTransitionPayload } from '../src/shared/wire/types'
 
-// Fake-stack UI e2e for #1218 — the Actions menu's New session row, the FIRST entry in that menu that is
-// not a slash command. Picking it dispatches a `new_session` control frame asking the daemon to kill
-// claude and spawn a fresh one in the open conversation; picking Reset session beside it still sends the
-// literal text `/clear` as an ordinary message, which e2e/composer-actions.spec.ts owns and this spec
-// deliberately does not restate.
+// Fake-stack UI e2e for #1218 — the Actions menu's Reset session row, the only entry in that menu that is
+// not a slash command and, since #1496, the conversation's only reset path. Picking it dispatches a
+// `new_session` control frame asking the daemon to kill claude and spawn a fresh one in the open
+// conversation. It shipped as `New session (restarts claude)` beside a `/clear` row that carried the
+// Reset session label; the fold dropped that row and gave this one its words. The two slash rows that
+// remain are e2e/composer-actions.spec.ts's, which this spec deliberately does not restate.
 //
 // WHY IT HAS TO BE PLAYWRIGHT. vitest runs the `node` environment (vitest.config.ts): every renderer test
 // is a renderToStaticMarkup string assertion with no DOM, no effects and no click handlers.
@@ -45,7 +46,7 @@ const FIXED_TS = '2026-09-07T12:00:00.000Z'
 // reason — getByRole matches `name` as a case-insensitive SUBSTRING, and the thread overflow trigger one
 // region up reads `More actions`.
 const ACTIONS_LABEL = 'Actions'
-const NEW_SESSION_ROW = 'New session (restarts claude)'
+const NEW_SESSION_ROW = 'Reset session'
 
 const actionsTrigger = (page: Page): Locator =>
   page.getByRole('button', { name: ACTIONS_LABEL, exact: true })
@@ -112,7 +113,7 @@ const sessionTransitionFrame = (): Uint8Array =>
     } satisfies SessionTransitionPayload
   })
 
-test('picking New session sends one new_session naming the open chat, and nothing else (AC2, AC4)', async ({
+test('picking Reset session sends one new_session naming the open chat, and nothing else (AC2, AC4)', async ({
   launchPairedApp
 }) => {
   const { newSessions, messages, buildReplyFrames } = captureOutbound()
@@ -135,8 +136,9 @@ test('picking New session sends one new_session naming the open chat, and nothin
   expect(newSessions[0]).toEqual({ conversation_id: SEEDED_ROW.id })
 
   // NOTHING TRAVELLED THE MESSAGE PATH (AC2). The row's id is not a slash command, so routing it through
-  // the path Reset session takes would have sent the literal string as prose to claude — the exact
-  // mistake this ticket's second kind of entry exists to prevent. Three independent readings of it: no
+  // the path the two slash rows take would have sent the literal string as prose to claude — the exact
+  // mistake this menu's second kind of entry exists to prevent, and the one #1496 had to keep true while
+  // giving this row the label the message-text row used to wear. Three independent readings of it: no
   // outbound message, no user bubble in the thread, and no text left in the message box.
   expect(messages).toHaveLength(0)
   await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveCount(0)

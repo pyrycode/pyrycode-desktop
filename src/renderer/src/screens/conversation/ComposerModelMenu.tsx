@@ -70,13 +70,36 @@ export interface ComposerModelLayers {
   picked: string
   /** claude's own identifier for the running turn, held verbatim. */
   announced: string
-  /** The snapshot's stored explicit choice — '' on a session running the daemon's inherited default. */
-  stored: string
+  /** The snapshot's stored explicit choice — '' on a session running the daemon's inherited default,
+   *  and `null` (#1495) when NO SNAPSHOT HAS ARRIVED for this chat at all.
+   *
+   *  THIS IS THE ONE LAYER THAT IS NOT A PLAIN STRING, and the exception is the point. `''` is uniformly
+   *  "nothing at this layer" across all four readings above, which is what lets the other two collapse a
+   *  store's null into it — but since #1423 an empty stored model is no longer nothing: it is a POSITIVE
+   *  reading the wire contract names (the daemon's inherited default) and this control resolves a row
+   *  for. `runConfigStore` has held that distinction one layer down since #1167 — its header calls
+   *  `snapshot: null` the distinct not-yet-loaded state, and `clearSnapshot` returns to it on every
+   *  activation — and the container was flattening it here, so a chat whose snapshot had not landed
+   *  resolved the inherited-default row the PREVIOUS chat may have been showing. `activateConversation`'s
+   *  clear exists so the controls say nothing instead of something false; this layer is what makes that
+   *  true of this one.
+   *
+   *  It is CLIENT-MINTED AND UNFORGEABLE. `parseSessionSettingsPayload` reads `model` through
+   *  requireString, so a missing or non-string model fails the frame closed and never reaches the store —
+   *  `null` here means only that this client has received nothing, never that a daemon said so. */
+  stored: string | null
 }
 
-/** The first layer with something to show, or '' when none has anything. */
-function firstShown(...values: readonly string[]): string {
-  return values.find((value) => value !== '') ?? ''
+/** The first layer with something to show, or '' when none has anything — `null` (#1495) being nothing at
+ *  a layer exactly as '' is, so both chains below read through it with no second branch.
+ *
+ *  BOTH TESTS ARE EXPLICIT, and the null one is not redundant even though `stored` is last in both chains
+ *  today: a bare `value !== ''` lets a null PASS the predicate, and the result is right only because
+ *  `?? ''` launders it at the end. A later nullable layer in front of another would silently answer
+ *  "nothing" for the layers behind it. The predicate states the rule instead of inheriting it from an
+ *  ordering. A truthiness test is the opposite error and is what the guard below must not become. */
+function firstShown(...values: readonly (string | null)[]): string {
+  return values.find((value) => value !== '' && value !== null) ?? ''
 }
 
 /** #1095 — the vendor prefix the family rule strips, and the ONE client-owned literal on this path.
@@ -150,15 +173,17 @@ export interface ComposerModelMenuModel {
  *
  * THREE RENDERINGS:
  *
- *   no layer has anything, and no inherited-default row → null   nothing is known; draw nothing
- *   something to show, no usable rows                   → no options   AC4's inert label
- *   something to show and rows                          → the menu
+ *   no layer has anything, and no row a snapshot resolves → null   nothing is known; draw nothing
+ *   something to show, no usable rows                     → no options   AC4's inert label
+ *   something to show and rows                            → the menu
  *
  * The first is not in #988's ACs and was a decision that slice took; #1053's AC4 widened its criterion
- * from "the session's model is unset" to "no layer has anything", and #1423 NARROWED IT AGAIN by the
- * clause above. It stays reachable in the app's ordinary startup window — the run-config snapshot arrives
- * on a turn end, and until then selectEffectiveSettings resolves `model` to ''. Every other rendering
- * would draw an empty gap where a label belongs. ContextUsageControl takes exactly this posture for its
+ * from "the session's model is unset" to "no layer has anything", #1423 NARROWED IT AGAIN by the clause
+ * above, and #1495 gave back the part of it #1423 took too much of: the inherited-default row is resolved
+ * only once a SNAPSHOT has said so, never while none has arrived. It stays reachable in the app's
+ * ordinary startup window — with no pick, no announcement and no snapshot, none of the three layers has
+ * anything to say, and since #1495 a model list the client happens to hold no longer answers in the
+ * missing snapshot's place. Every other rendering would draw an empty gap where a label belongs. ContextUsageControl takes exactly this posture for its
  * own unavailable reading, and #811's no-placeholder rule points the same way.
  *
  * #1423 IS WHY IT IS NO LONGER WHERE AN UNCONFIGURED CHAT LIVES. An empty model is not an absence — the
@@ -213,10 +238,17 @@ export function composerModelMenuModel(
   // and the function still returns null below, which is the rendering #988 shipped for this state.
   //
   // ONE ROW ANSWERS BOTH LOOKUPS HERE and that is a property of this state rather than a shortcut: a shown
-  // string of '' means every layer is '', so `firstShown(picked, stored)` is '' too and the marking would
-  // take the identical argument. If a fourth layer ever makes those two diverge at '', they must separate
-  // again.
-  const inherited = shown === '' ? effortRowFor(models, shown) : undefined
+  // string of '' means every layer is nothing, so `firstShown(picked, stored)` is '' too and the marking
+  // would take the identical argument. If a fourth layer ever makes those two diverge at '', they must
+  // separate again. #1495 did not: a null stored layer is nothing at both, and the branch is not entered.
+  //
+  // #1495 ADDED THE SECOND HALF OF THE CONDITION and changed nothing else about the branch. A shown string
+  // of '' now has two causes and they are different sentences: the snapshot says the daemon's inherited
+  // default (`stored === ''`), or no snapshot has arrived and nothing is known yet (`stored === null`).
+  // Only the first has a row behind it. `=== null` rather than a truthiness test, which would fold '' into
+  // the not-known reading and stop this branch firing at all — the near-miss cases below pin the
+  // substitution's exactness from the other side and this guard is the same kind of claim.
+  const inherited = shown === '' && layers.stored !== null ? effortRowFor(models, shown) : undefined
   if (shown === '' && inherited === undefined) return null
   const row = inherited ?? publishedRowFor(models, shown)
   // The SESSION's model, which is the only thing a row may be marked current by. Exact equality stays the
@@ -402,10 +434,17 @@ export function ComposerModelMenu({ conversationId }: { conversationId: string |
       // #1053's four layers, `null` and a '' announcement collapsing to the same "nothing at this layer"
       // (AC4 names them as one clause). `truncated` is deliberately NOT read: this surface reports no cut
       // and clips every long name by CSS, and the sheet stays the full reading.
+      //
+      // THE STORED LAYER IS THE ONE THAT DOES NOT COLLAPSE (#1495). `?? null` rather than `?? ''`, and
+      // `??` does not fire on '' — so a snapshot naming no model still arrives as '' and takes #1423's
+      // inherited-default branch, while NO SNAPSHOT arrives as null and takes none. The announcement above
+      // keeps collapsing for the reason stated there: no rendering can tell its two readings apart. This
+      // one has told them apart since #1423, which is what made the flattening a defect rather than a
+      // simplification.
       layers={{
         picked,
         announced: announced?.model ?? '',
-        stored: snapshot?.model ?? ''
+        stored: snapshot?.model ?? null
       }}
       models={models}
       // An arrow, so `window.pyry` is dereferenced at INTERACTION time and never during render — hoisting

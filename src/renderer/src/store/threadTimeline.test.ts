@@ -13,6 +13,7 @@ import {
   type ThreadItem,
   type TimelineState
 } from './threadTimeline'
+import type { WireResetPhase, WireResetHandoff } from '@shared/wire/types'
 
 // Fixture builders — plain renderer-local events, no transport/wire involved. Mirror
 // sessionStore.test.ts's `msg(...)` idiom: sensible defaults, override only what a case asserts.
@@ -133,6 +134,20 @@ function compacting(active: boolean): ThreadEvent {
  *  would let a test that meant to name a number silently assert against a house value. */
 function thinkingProgress(estimatedTokens: number): ThreadEvent {
   return { type: 'thinkingProgress', estimatedTokens }
+}
+
+/**
+ * #1517: one edge of a reset. The token defaults are the daemon's OWN three rows — a rising edge is
+ * `wrapping_up`/`pending` and a falling one is the pair of zero values — so a case that names neither
+ * token still exercises traffic the producer actually emits, and a case that means to test the
+ * sixteen-combination hazard has to say so out loud.
+ */
+function resetting(
+  active: boolean,
+  phase: WireResetPhase = active ? 'wrapping_up' : '',
+  handoff: WireResetHandoff = active ? 'pending' : ''
+): ThreadEvent {
+  return { type: 'resetting', active, phase, handoff }
 }
 
 function unrecognized(
@@ -1501,5 +1516,120 @@ describe('reduceTimeline — dropUserText (#1213)', () => {
     const once = run([userTextWithId('drop me', 'm1'), dropUserText('m1')])
     expect(once.items).toEqual([])
     expect(reduceTimeline(once, dropUserText('m1'))).toBe(once)
+  })
+})
+
+describe('reduceTimeline — resetting (#1517)', () => {
+  it('holds both tokens from the rising edge', () => {
+    const state = run([resetting(true)])
+    expect(state.resetting).toEqual({ phase: 'wrapping_up', handoff: 'pending' })
+  })
+
+  it('returns the SAME reference when the daemon repeats an identical edge', () => {
+    // No wire-side dedup: the transport emits one event per decoded frame, verbatim repeats included.
+    // An unchanged record must not churn subscribers — the apiRetry arm's own rule.
+    const once = run([resetting(true)])
+    expect(reduceTimeline(once, resetting(true))).toBe(once)
+  })
+
+  it('swaps the record when the rising edge re-fires with a new phase (AC2)', () => {
+    // `wrapping_up` → `restarting` is a real transition, not a duplicate to suppress. The row must
+    // RELABEL rather than read as a second reset, so the reference changes and the record is fresh.
+    const wrapping = run([resetting(true)])
+    const restarting = reduceTimeline(wrapping, resetting(true, 'restarting', 'written'))
+    expect(restarting).not.toBe(wrapping)
+    expect(restarting.resetting).toEqual({ phase: 'restarting', handoff: 'written' })
+  })
+
+  it('swaps the record when only the handoff token moves', () => {
+    const pending = run([resetting(true, 'restarting', 'pending')])
+    expect(reduceTimeline(pending, resetting(true, 'restarting', 'skipped')).resetting).toEqual({
+      phase: 'restarting',
+      handoff: 'skipped'
+    })
+  })
+
+  it('clears on the falling edge, ignoring whatever tokens it repeats', () => {
+    const after = run([resetting(true, 'restarting', 'written'), resetting(false, 'restarting', 'written')])
+    expect(after.resetting).toBeNull()
+  })
+
+  it('is a same-reference no-op when a falling edge arrives against no live reset', () => {
+    expect(reduceTimeline(initialTimelineState, resetting(false))).toBe(initialTimelineState)
+  })
+
+  it('holds an empty phase token rather than rejecting it', () => {
+    // `active: true` with `phase: ''` decodes — the decoder deliberately does not cross-validate the
+    // pair — so the reducer holds it and the LABEL decides what an unnamed phase reads as.
+    expect(run([resetting(true, '', '')]).resetting).toEqual({ phase: '', handoff: '' })
+  })
+
+  it('survives the whole wrap-up turn: turn activity does NOT clear it (AC3)', () => {
+    // The clear semantics are apiRetry's and compacting's, never `stalled`'s. The wrap-up turn is a
+    // REAL turn whose rows stream into the message list exactly as any turn's do, so clearing on turn
+    // activity would blank the label on the first delta of the very turn it describes.
+    const state = run([
+      resetting(true),
+      { type: 'turnState', state: 'thinking' },
+      delta('A', 'writing the note'),
+      toolUse('A', 't1'),
+      toolResult('A', 't1'),
+      turnEnd('A')
+    ])
+    expect(state.resetting).toEqual({ phase: 'wrapping_up', handoff: 'pending' })
+    // …and the turn's own rows are all there: the label showing does not suppress the thread.
+    expect(state.items.map((i) => i.kind)).toEqual(['assistantText', 'toolCall', 'turnBoundary'])
+  })
+
+  it('clears on a session boundary — the belt (AC1)', () => {
+    // The independent trigger the wire contract demands: a daemon killed mid-reset sends no falling
+    // edge, and a reset ends in a session rotation. The two ride SEPARATE producers, so their relative
+    // arrival order is deliberately not pinned — each order is asserted on its own below.
+    expect(run([resetting(true), sessionBoundary()]).resetting).toBeNull()
+  })
+
+  it('ends empty whichever of the falling edge and the boundary arrives first', () => {
+    expect(run([resetting(true), resetting(false), sessionBoundary()]).resetting).toBeNull()
+    expect(run([resetting(true), sessionBoundary(), resetting(false)]).resetting).toBeNull()
+  })
+
+  it('leaves the session-boundary row itself untouched', () => {
+    const state = run([resetting(true), sessionBoundary()])
+    expect(state.items.map((i) => i.kind)).toEqual(['sessionBoundary'])
+  })
+
+  it('clears on a reconnect, and a held reset alone defeats the early-out', () => {
+    // Mode B, beside apiRetry / compacting / thinkingTokens: the daemon re-asserts no `resetting` on
+    // connect, so a record held across the handshake would report a reset that has since finished.
+    const held = run([resetting(true)])
+    const after = reduceTimeline(held, reconnected())
+    expect(after).not.toBe(held)
+    expect(after.resetting).toBeNull()
+  })
+
+  it('clears on a timeline reset', () => {
+    expect(run([resetting(true), reset()]).resetting).toBeNull()
+  })
+
+  it('leaves the other five chrome scalars exactly as it found them', () => {
+    const before = run([
+      { type: 'turnState', state: 'thinking' },
+      stall(),
+      apiRetry(true, 3, 10),
+      compacting(true),
+      thinkingProgress(120)
+    ])
+    const after = reduceTimeline(before, resetting(true))
+    expect(after.phase).toBe(before.phase)
+    expect(after.stalled).toBe(before.stalled)
+    expect(after.apiRetry).toEqual(before.apiRetry)
+    expect(after.compacting).toBe(before.compacting)
+    expect(after.localSendPending).toBe(before.localSendPending)
+    expect(after.thinkingTokens).toBe(before.thinkingTokens)
+    expect(after.items).toBe(before.items)
+  })
+
+  it('starts null', () => {
+    expect(initialTimelineState.resetting).toBeNull()
   })
 })

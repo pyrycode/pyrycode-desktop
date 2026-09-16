@@ -643,28 +643,52 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
         memoryFiles: [{ path: '../../../etc/passwd', type: 'user', tokens: 240 }],
         droppedMemoryFiles: 7
       },
-      // the reset report ships DORMANT (#1515) rather than permanently no-op — the disposition
-      // `compacting` held here until #496 took it, and the one #1517 is expected to reverse when the
-      // composer status row lands. Daemon STATE by the queueState rule (#720) either way: no turn_id,
-      // opens and closes no turn, so a session being reset is not an item IN a turn. Both edges are
-      // in the table because a consumer that claims this arm must handle the falling one, and its two
-      // empty strings are the shape most likely to be mistaken for a malformed frame.
-      {
+      // #1517 TOOK the reset report out of this table. It shipped DORMANT rather than permanently
+      // no-op (#1515), the disposition `compacting` held here until #496 took it, and the composer
+      // status row is the consumer that reversed it — see the owned-arm describe below.
+    ]
+    for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
+  })
+})
+
+describe('translateTimelineEvent — the resetting arm (#1517)', () => {
+  it('translates the rising edge into a ThreadEvent carrying BOTH tokens', () => {
+    expect(
+      translateTimelineEvent({
         type: 'resetting',
-        conversationId: 'conv-1',
+        conversationId: 'conv-reset',
         active: true,
-        phase: 'restarting',
-        handoff: 'written'
-      },
-      {
+        phase: 'wrapping_up',
+        handoff: 'pending'
+      })
+    ).toEqual({ type: 'resetting', active: true, phase: 'wrapping_up', handoff: 'pending' })
+  })
+
+  it('translates the falling edge with its two empty tokens verbatim', () => {
+    expect(
+      translateTimelineEvent({
         type: 'resetting',
-        conversationId: 'conv-1',
+        conversationId: 'conv-reset',
         active: false,
         phase: '',
         handoff: ''
-      }
-    ]
-    for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
+      })
+    ).toEqual({ type: 'resetting', active: false, phase: '', handoff: '' })
+  })
+
+  it('DROPS conversationId — the routing key stops at the bridge', () => {
+    // A fresh named-field literal, never a spread of the DaemonEvent. The id reaches the keyed store
+    // through `timelineTargetFor` below, whose index is a Map; it must never reach the reducer, the
+    // label or the DOM.
+    const translated = translateTimelineEvent({
+      type: 'resetting',
+      conversationId: 'conv-must-not-cross',
+      active: true,
+      phase: 'restarting',
+      handoff: 'written'
+    })
+    expect(translated).not.toBeNull()
+    expect(Object.keys(translated as object).sort()).toEqual(['active', 'handoff', 'phase', 'type'])
   })
 })
 
@@ -725,11 +749,24 @@ describe('timelineTargetFor', () => {
         raw: '{"type":"some_future_event"}',
         truncated: false
       }
+    ],
+    // #1517: the eleventh. Without this arm a translated reset would route to no conversation and
+    // never reach the keyed store the composer status row reads — the half of the flip that is easy
+    // to miss, because the translator alone looks complete.
+    [
+      'conv-resetting',
+      {
+        type: 'resetting',
+        conversationId: 'conv-resetting',
+        active: true,
+        phase: 'wrapping_up',
+        handoff: 'pending'
+      }
     ]
   ]
 
-  it('returns each id-carrying owned arm its OWN conversation id (all ten)', () => {
-    expect(idCarrying).toHaveLength(10)
+  it('returns each id-carrying owned arm its OWN conversation id (all eleven)', () => {
+    expect(idCarrying).toHaveLength(11)
     for (const [expected, event] of idCarrying) {
       expect(timelineTargetFor(event)).toBe(expected)
     }
@@ -1322,12 +1359,14 @@ describe('subscribeTimeline', () => {
     expect(selectItems(store.getState())).toHaveLength(0)
   })
 
-  it('#1515: a resetting daemon event creates NO timeline item and writes NO store (dormant)', () => {
+  it('#1517: a resetting daemon event moves the chrome scalar and creates NO timeline item', () => {
+    // The dormancy this test asserted through #1515 is over — the composer status row is the consumer
+    // that reversed it. What survives verbatim is the OTHER half: a reset is thread CHROME, never a
+    // row, so both edges leave `items` empty however the state scalar moves.
     const bridge = fakeBridge()
     const store = createTimelineStore()
     subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
 
-    const before = store.getState()
     bridge.emit({
       type: 'resetting',
       conversationId: 'conv-1',
@@ -1335,6 +1374,9 @@ describe('subscribeTimeline', () => {
       phase: 'wrapping_up',
       handoff: 'pending'
     })
+    expect(store.getState().resetting).toEqual({ phase: 'wrapping_up', handoff: 'pending' })
+    expect(selectItems(store.getState())).toHaveLength(0)
+
     bridge.emit({
       type: 'resetting',
       conversationId: 'conv-1',
@@ -1342,13 +1384,9 @@ describe('subscribeTimeline', () => {
       phase: '',
       handoff: ''
     })
-
-    // Both halves, as elsewhere: the bridge filtered both edges out so no dispatch reached the
-    // reducer (same state ref), AND no chat row exists. This is AC4 — "nothing observable changes in
-    // the window on this ticket" — as an assertion rather than a claim, and it is asserted over the
-    // FALLING edge as well because that is the one whose empty strings could tempt a reducer arm
-    // into treating the frame as a clear.
-    expect(store.getState()).toBe(before)
+    // The falling edge is asserted separately because its two empty strings are the shape most
+    // likely to be mistaken for a malformed frame — it clears, and still draws nothing.
+    expect(store.getState().resetting).toBeNull()
     expect(selectItems(store.getState())).toHaveLength(0)
   })
 

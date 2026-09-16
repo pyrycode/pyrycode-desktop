@@ -17,7 +17,7 @@ import {
 
 // Framework-free data-path tests with injected spies (the backgroundTaskRosterBridge idiom): no React,
 // no Electron. The real store is wired only for the seam tests. This bridge is reactive-only — the
-// daemon pushes all four arms unsolicited — so there is no requestX describe block.
+// daemon pushes all five arms unsolicited — so there is no requestX describe block.
 //
 // Every fixture id is DISTINCT from every other id in the file, so an assertion that a write carries
 // the event's own id cannot pass by coincidence with the one a neighbouring fixture used.
@@ -40,6 +40,23 @@ const apiRetry = (conversationId: string, active: boolean, current = 3, total = 
 const compacting = (conversationId: string, active: boolean): DaemonEvent => ({
   type: 'compacting',
   active,
+  conversationId
+})
+
+/** #1516's arm. `phase` and `handoff` DEFAULT to the daemon's own rows rather than being omitted — both
+ *  cross as the contract's zero value `''` on the falling edge and as declared members otherwise — so
+ *  every fixture here carries the two tokens the translator must drop, and a translator that leaked one
+ *  would be caught by a fixture that had them rather than by one that never supplied them. */
+const resetting = (
+  conversationId: string,
+  active: boolean,
+  phase: 'wrapping_up' | 'restarting' | '' = active ? 'wrapping_up' : '',
+  handoff: 'pending' | 'written' | 'skipped' | '' = active ? 'pending' : ''
+): DaemonEvent => ({
+  type: 'resetting',
+  active,
+  phase,
+  handoff,
   conversationId
 })
 const conversationDeleted = (id: string): DaemonEvent => ({ type: 'conversationDeleted', id })
@@ -132,6 +149,38 @@ describe('translateConversationActivity', () => {
     ])
   })
 
+  it('copies both resetting edges and carries NEITHER token into this store (#1516 AC2)', () => {
+    const writes = translateConversationActivity(resetting('conv-reset', true))
+
+    expect(writes).toEqual([{ fact: 'resetting', conversationId: 'conv-reset', resetting: true }])
+    // A fresh named-field literal, never a spread. `phase` and `handoff` belong to #1517's composer
+    // status row; this store holds LIVENESS only, exactly as it holds no apiRetry counter. A spread
+    // would carry both, plus the arm's `type` tag, into a write unit that never agreed to hold them.
+    expect(writes[0]).not.toHaveProperty('phase')
+    expect(writes[0]).not.toHaveProperty('handoff')
+    expect(writes[0]).not.toHaveProperty('type')
+
+    expect(translateConversationActivity(resetting('conv-reset-off', false))).toEqual([
+      { fact: 'resetting', conversationId: 'conv-reset-off', resetting: false }
+    ])
+  })
+
+  it('reads `active` alone — the phase does not steer the fact (#1516 AC1, AC2)', () => {
+    // The rising edge RE-FIRES as the phase advances, and the second edge is a real transition rather
+    // than a duplicate to suppress. Both write the same `true`, so a translator that branched on
+    // `phase` — reading `restarting` as "no longer resetting", say — would fail here while passing
+    // every case above.
+    expect(translateConversationActivity(resetting('conv-phase', true, 'restarting', 'written'))).toEqual(
+      [{ fact: 'resetting', conversationId: 'conv-phase', resetting: true }]
+    )
+    // And the inverse: a daemon is free to send any of the sixteen combinations, so a falling edge
+    // carrying a non-empty phase still clears. NARROWED IS NOT TRUSTED — the tokens are a report, and
+    // nothing here may branch on them.
+    expect(translateConversationActivity(resetting('conv-phase-off', false, 'restarting', 'skipped'))).toEqual(
+      [{ fact: 'resetting', conversationId: 'conv-phase-off', resetting: false }]
+    )
+  })
+
   it('returns [] for an unowned arm rather than throwing (reactive-only, not exhaustive)', () => {
     const announced: DaemonEvent = {
       type: 'modelAnnounced',
@@ -187,6 +236,7 @@ describe('subscribeConversationActivity', () => {
       setStalled: vi.fn(),
       setApiRetrying: vi.fn(),
       setCompacting: vi.fn(),
+      setResetting: vi.fn(),
       dropConversation: vi.fn(),
       resetActivityForServer: vi.fn()
     }
@@ -234,6 +284,18 @@ describe('subscribeConversationActivity', () => {
     expect(w.setTurnRunning).not.toHaveBeenCalled()
     expect(w.setStalled).not.toHaveBeenCalled()
     expect(w.setApiRetrying).not.toHaveBeenCalled()
+    expect(w.setResetting).not.toHaveBeenCalled()
+  })
+
+  it('dispatches resetting to setResetting alone (#1516 AC1)', () => {
+    const w = wired()
+    w.bridge.emit(resetting('conv-e', true))
+
+    expect(w.setResetting).toHaveBeenCalledWith('conv-e', true)
+    expect(w.setTurnRunning).not.toHaveBeenCalled()
+    expect(w.setStalled).not.toHaveBeenCalled()
+    expect(w.setApiRetrying).not.toHaveBeenCalled()
+    expect(w.setCompacting).not.toHaveBeenCalled()
   })
 
   it('calls no setter and no removal at all for an unowned arm', () => {
@@ -253,6 +315,7 @@ describe('subscribeConversationActivity', () => {
     expect(w.setStalled).not.toHaveBeenCalled()
     expect(w.setApiRetrying).not.toHaveBeenCalled()
     expect(w.setCompacting).not.toHaveBeenCalled()
+    expect(w.setResetting).not.toHaveBeenCalled()
     expect(w.dropConversation).not.toHaveBeenCalled()
     expect(w.resetActivityForServer).not.toHaveBeenCalled()
   })
@@ -268,6 +331,7 @@ describe('subscribeConversationActivity', () => {
     expect(w.setStalled).not.toHaveBeenCalled()
     expect(w.setApiRetrying).not.toHaveBeenCalled()
     expect(w.setCompacting).not.toHaveBeenCalled()
+    expect(w.setResetting).not.toHaveBeenCalled()
   })
 
   it('drops a conversation whose id is the degenerate empty string', () => {
@@ -293,6 +357,7 @@ describe('subscribeConversationActivity', () => {
     expect(w.setStalled).not.toHaveBeenCalled()
     expect(w.setApiRetrying).not.toHaveBeenCalled()
     expect(w.setCompacting).not.toHaveBeenCalled()
+    expect(w.setResetting).not.toHaveBeenCalled()
   })
 
   it('passes the three-valued origin through unchanged — a real id, null, and an absent stamp (AC2)', () => {
@@ -370,6 +435,7 @@ describe('subscribeConversationActivity', () => {
         setStalled: (id, v) => store.getState().setStalled(id, v),
         setApiRetrying: (id, v) => store.getState().setApiRetrying(id, v),
         setCompacting: (id, v) => store.getState().setCompacting(id, v),
+        setResetting: (id, v) => store.getState().setResetting(id, v),
         dropConversation: (id) => store.getState().dropConversation(id),
         resetActivityForServer: (origin) =>
           store.getState().resetActivityFor(selectConversationIdsFor(origin)(list.getState()))
@@ -389,7 +455,8 @@ describe('subscribeConversationActivity', () => {
         turnRunning: false,
         stalled: false,
         apiRetrying: false,
-        compacting: true
+        compacting: true,
+        resetting: false
       })
     })
 
@@ -407,7 +474,8 @@ describe('subscribeConversationActivity', () => {
         turnRunning: false,
         stalled: false,
         apiRetrying: true,
-        compacting: false
+        compacting: false,
+        resetting: false
       })
     })
 
@@ -438,7 +506,8 @@ describe('subscribeConversationActivity', () => {
         turnRunning: true,
         stalled: false,
         apiRetrying: true,
-        compacting: true
+        compacting: true,
+        resetting: false
       })
 
       bridge.emit(apiRetry('conv-edges', false))
@@ -447,8 +516,78 @@ describe('subscribeConversationActivity', () => {
         turnRunning: true,
         stalled: false,
         apiRetrying: false,
-        compacting: false
+        compacting: false,
+        resetting: false
       })
+    })
+
+    it('keeps resetting set across the wrap-up turn, and clears it only on its edge (#1516 AC1)', () => {
+      // `resetting` takes `apiRetry`'s and `compacting`'s edge semantics, NOT `stalled`'s — and the
+      // case is sharper here than for either peer, because the wrap-up turn runs INSIDE the reset. If
+      // `resetting` had joined `turnState`'s clear set, the reset's own turn transitions would clear
+      // the very fact they are part of, and the dot would go dark mid-reset.
+      const { bridge, store } = seam()
+      bridge.emit(resetting('conv-reset-edges', true))
+
+      bridge.emit(turnState('conv-reset-edges', 'responding'))
+      bridge.emit(turnState('conv-reset-edges', 'idle'))
+      expect(selectActivityFor('conv-reset-edges')(store.getState())).toEqual({
+        turnRunning: false,
+        stalled: false,
+        apiRetrying: false,
+        compacting: false,
+        resetting: true
+      })
+
+      bridge.emit(resetting('conv-reset-edges', false))
+      expect(selectActivityFor('conv-reset-edges')(store.getState())?.resetting).toBe(false)
+    })
+
+    it('leaves resetting set when the rising edge re-fires as the phase advances (#1516 AC1)', () => {
+      // `wrapping_up` → `restarting` is a real transition rather than a duplicate to suppress, and
+      // both edges write the same `true`. The store's per-field guard makes the second churn no
+      // listener, so nothing on this leg dedups and nothing may: suppressing the repeat upstream
+      // would eat the signal that the phase moved.
+      const { bridge, store } = seam()
+      bridge.emit(resetting('conv-phases', true, 'wrapping_up', 'pending'))
+      const afterFirst = store.getState()
+
+      bridge.emit(resetting('conv-phases', true, 'restarting', 'written'))
+
+      expect(store.getState()).toBe(afterFirst)
+      expect(selectActivityFor('conv-phases')(store.getState())?.resetting).toBe(true)
+    })
+
+    it('holds resetting for a conversation never opened, and drops it on a delete (#1516 AC4)', () => {
+      // Retention first: the arm is keyed by the event's OWN id and nothing consults which
+      // conversation is open, so a reset the operator is not looking at still lights its row. Then
+      // the independent clear that discharges #1515's falling-edge obligation — a daemon killed
+      // mid-reset sends no `active: false`, and the delete eviction does not need one.
+      const { bridge, store } = seam()
+      bridge.emit(resetting('never-opened-reset', true))
+      expect(selectActivityFor('never-opened-reset')(store.getState())?.resetting).toBe(true)
+
+      bridge.emit(conversationDeleted('never-opened-reset'))
+      expect(selectActivityFor('never-opened-reset')(store.getState())).toBeNull()
+    })
+
+    it('drops resetting on that conversation’s OWN server reconnect, not another’s (#1516 AC4)', () => {
+      // The second independent clear, and the one that covers the killed-daemon case: no falling edge
+      // arrives, but that server's next handshake drops its own conversations' entries. Scoped — a
+      // neighbouring server's reconnect must leave this fact standing.
+      const { bridge, store } = seam([
+        ['srv-a', ['a-reset']],
+        ['srv-b', ['b-reset']]
+      ])
+      bridge.emit(resetting('a-reset', true))
+      bridge.emit(resetting('b-reset', true))
+
+      bridge.emit(connectedFrom('srv-b'))
+      expect(selectActivityFor('b-reset')(store.getState())).toBeNull()
+      expect(selectActivityFor('a-reset')(store.getState())?.resetting).toBe(true)
+
+      bridge.emit(connectedFrom('srv-a'))
+      expect(selectActivityFor('a-reset')(store.getState())).toBeNull()
     })
 
     it('a delete evicts that conversation and leaves its neighbour Object.is-identical (AC1)', () => {
@@ -518,7 +657,8 @@ describe('subscribeConversationActivity', () => {
           turnRunning: true,
           stalled: true,
           apiRetrying: true,
-          compacting: true
+          compacting: true,
+          resetting: false
         })
         // And by REFERENCE, so no selector watching A re-renders at all.
         expect(selectActivityFor('a1')(store.getState())).toBe(aBefore)
@@ -624,19 +764,22 @@ describe('subscribeConversationActivity', () => {
         turnRunning: true,
         stalled: false,
         apiRetrying: false,
-        compacting: false
+        compacting: false,
+        resetting: false
       })
       expect(selectActivityFor('constructor')(store.getState())).toEqual({
         turnRunning: false,
         stalled: true,
         apiRetrying: false,
-        compacting: false
+        compacting: false,
+        resetting: false
       })
       expect(selectActivityFor('')(store.getState())).toEqual({
         turnRunning: false,
         stalled: false,
         apiRetrying: false,
-        compacting: true
+        compacting: true,
+        resetting: false
       })
     })
   })

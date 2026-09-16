@@ -1,6 +1,6 @@
 # Conversation status resolver
 
-The join between [conversation activity store](conversation-activity-store.md)'s four booleans and
+The join between [conversation activity store](conversation-activity-store.md)'s five booleans and
 [conversation unread predicate](conversation-unread.md)'s shipped boolean: one sealed `ConversationStatus`
 union and one total pure function that maps both onto exactly one status a sidebar row can draw. Renders
 nothing, reads no store, holds no state.
@@ -13,6 +13,9 @@ first module to call `resolveConversationStatus` in production, composed per row
 [#873](https://github.com/pyrycode/pyrycode-desktop/issues/873) added the fourth state, `input-required`, and
 its leading `inputRequired` parameter; [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874)
 composed `selectHasOutstandingFor` at that call site, so all four states are reachable in production.
+[#1516](https://github.com/pyrycode/pyrycode-desktop/issues/1516) widened `isWorking`'s input from four
+activity facts to five, adding `resetting` — the four `ConversationStatus` states themselves are
+unchanged, and `ChannelList.tsx`'s call site needed no edit.
 
 ## What it does
 
@@ -60,7 +63,8 @@ once.
      — the same way #799 and #800 each landed before #801 wired them — until
      [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) composed
      `selectHasOutstandingFor(conversationId)` (`modalPrompts.ts:254`) there.
-  2. **Working** — any of the four activity facts.
+  2. **Working** — any of the five activity facts (`resetting` joined the other four at
+     [#1516](https://github.com/pyrycode/pyrycode-desktop/issues/1516)).
   3. **New messages** — the `unread` boolean, already derived by `isConversationUnread` at the call site;
      this module never re-derives it.
   4. **Idle** — otherwise.
@@ -69,13 +73,16 @@ once.
   edit at a marked point — the reserved-slot comment this replaced predicted exactly that.
 
 - **`isWorking`, a module-private helper, not exported:** any of `turnRunning`, `stalled`, `apiRetrying`,
-  `compacting`, each named explicitly — never `Object.values(entry).some(Boolean)`, which reads
-  behaviourally identical today but would silently absorb a fifth field the day
-  `ConversationActivityEntry` grows one, and truthy-reads a non-boolean. "Not idle" rather than "a turn is
-  strictly in flight" is the deliberate ruling: a stalled turn, an API retry and a compaction are all the
-  assistant mid-work, and reading any of them as idle would be a false negative on the one state the
-  operator most wants to see. Narrowing this to `turnRunning` alone, if ever wanted, is a change to this
-  one helper and three tests, nothing else.
+  `compacting`, `resetting`, each named explicitly — never `Object.values(entry).some(Boolean)`, which
+  reads behaviourally identical today but would silently absorb a new field the day
+  `ConversationActivityEntry` grows one, and truthy-reads a non-boolean. The ban did its work at
+  [#1516](https://github.com/pyrycode/pyrycode-desktop/issues/1516): under it, `resetting` joining the
+  disjunction was a deliberate edit here with a test of its own, where `Object.values` would have let the
+  dot start lighting for a resetting conversation with no edit, no test and no decision anywhere. "Not
+  idle" rather than "a turn is strictly in flight" is the deliberate ruling: a stalled turn, an API retry,
+  a compaction and a session reset are all the assistant mid-work, and reading any of them as idle would
+  be a false negative on the one state the operator most wants to see. Narrowing this to `turnRunning`
+  alone, if ever wanted, is a change to this one helper and four tests, nothing else.
 
 - **The `null` guard is null-safety, not precedence.** An absent activity key ("no frame has ever arrived
   for this conversation") and a present all-false entry ("observed; nothing is happening") *agree* here —
@@ -134,8 +141,9 @@ once.
 
 - [Conversation status dot](conversation-status-dot.md) — the presentational leaf that draws this type's
   four values (#800/#873), and this module's first consumer.
-- [Conversation activity store](conversation-activity-store.md) — the four activity booleans this module
-  reads through `ConversationActivityEntry`, the only symbol this module imports (as a type).
+- [Conversation activity store](conversation-activity-store.md) — the five activity booleans this module
+  reads through `ConversationActivityEntry`, the only symbol this module imports (as a type). Grew a
+  fifth fact, `resetting`, at [#1516](https://github.com/pyrycode/pyrycode-desktop/issues/1516).
 - [Conversation unread predicate](conversation-unread.md) — the sibling pure-join module this one is
   shaped after (posture, not logic): store-slice inputs, no store of its own, `import type`-only,
   mutation-checked.

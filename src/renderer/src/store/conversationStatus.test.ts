@@ -24,10 +24,19 @@ import type { ConversationActivityEntry } from './conversationActivityStore'
 // One property NO test here can defend: annotating the return as `string` instead of `ConversationStatus`
 // typechecks and passes everything. #800's dot-component prop type is what defends it.
 
-/** Spread over an all-false base so a fifth fact added to `ConversationActivityEntry` later breaks in ONE
- *  place rather than in every test. Never `Object.values`-style construction — each fact is named. */
+/** Spread over an all-false base so a fact added to `ConversationActivityEntry` later breaks in ONE place
+ *  rather than in every test. Never `Object.values`-style construction — each fact is named. #1516's
+ *  `resetting` is the first fact to arrive after this helper was written, and it cost exactly the one
+ *  edit here that the helper was shaped to cost. */
 function activity(facts: Partial<ConversationActivityEntry> = {}): ConversationActivityEntry {
-  return { turnRunning: false, stalled: false, apiRetrying: false, compacting: false, ...facts }
+  return {
+    turnRunning: false,
+    stalled: false,
+    apiRetrying: false,
+    compacting: false,
+    resetting: false,
+    ...facts
+  }
 }
 
 describe('resolveConversationStatus', () => {
@@ -50,12 +59,25 @@ describe('resolveConversationStatus', () => {
     expect(resolveConversationStatus(false, activity({ compacting: true }), false)).toBe('working')
   })
 
-  it('reads working when all four facts are true (AC3)', () => {
-    // Pins that the four-way predicate is a disjunction read forwards, not an `&&` chain.
+  it('reads working when resetting alone is true (#1516 AC3)', () => {
+    // The fifth single-fact test, and the only assertion in the file that catches a dropped `resetting`
+    // clause. A reset is the assistant mid-work by exactly the reading the other four got — reading it
+    // as idle would make a reset look like an idle chat, which is the whole of #1516's user story.
+    expect(resolveConversationStatus(false, activity({ resetting: true }), false)).toBe('working')
+  })
+
+  it('reads working when all five facts are true (AC3)', () => {
+    // Pins that the five-way predicate is a disjunction read forwards, not an `&&` chain.
     expect(
       resolveConversationStatus(
         false,
-        activity({ turnRunning: true, stalled: true, apiRetrying: true, compacting: true }),
+        activity({
+          turnRunning: true,
+          stalled: true,
+          apiRetrying: true,
+          compacting: true,
+          resetting: true
+        }),
         false
       )
     ).toBe('working')
@@ -109,13 +131,20 @@ describe('resolveConversationStatus', () => {
     expect(resolveConversationStatus(true, null, true)).toBe('input-required')
   })
 
-  it('reads input-required with all four activity facts true AND unread (#873 AC2, full strength)', () => {
+  it('reads input-required with all five activity facts true AND unread (#873 AC2, full strength)', () => {
     // AC2's "including when that conversation is also working, also unread, or both" at its loudest: every
-    // other input says a lower status.
+    // other input says a lower status. A conversation mid-reset with a prompt outstanding still reads
+    // input-required — #1516 adds a fact to the working level and moves no precedence.
     expect(
       resolveConversationStatus(
         true,
-        activity({ turnRunning: true, stalled: true, apiRetrying: true, compacting: true }),
+        activity({
+          turnRunning: true,
+          stalled: true,
+          apiRetrying: true,
+          compacting: true,
+          resetting: true
+        }),
         true
       )
     ).toBe('input-required')

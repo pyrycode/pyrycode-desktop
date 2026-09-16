@@ -299,6 +299,37 @@ PR.
    alone. Kept for consistency with `.channel-list__workspace`; dropped if the capture shows it reads wrong
    against the row's 28px box.
 
+## Revisions
+
+**2026-09-16 — Open question 1 resolved: the spec stays single-server.** `launchPairedApp` reaches the
+thread by clicking a single strict `.channel-list__row-open`, and the fixture's default second server seeds
+its own row, so a `secondServer` launch would strict-violate before the first assertion. AC1's "every other
+host" half therefore rides the keyed-sibling property `CollapsibleHostGroup`'s docblock states and #1070
+established — each machine is a keyed sibling holding its own `useState` cell — which is exactly the
+posture `workspace-collapse.spec.ts` already ships for the level below. `e2e/host-collapse.spec.ts` proves
+the per-tree half (two copies of one machine, folded independently) and the unit tier pins the two-server
+markup shape. Not attempted rather than attempted and dropped: the cost was a fixture change this ticket
+does not otherwise need.
+
+**2026-09-16 — Open question 2 resolved: the `border-radius` is kept.** The static capture shows the
+`:focus-visible` outline reading correctly against the row's 28px box at `--radius-xs`, the Figma's
+`rounded-[6px]`.
+
+**2026-09-16 — two shipped unit assertions retuned, which the plan did not predict.** Both counted buttons
+inside the host row, and the row now carries a third element the ticket adds on purpose:
+
+- `"draws NEITHER without handlers…"` asserted `not.toContain('<button')`. Retuned to "exactly one button,
+  and it is the disclosure", which keeps the claim it was making (a control that leaked in without its
+  handler still fails) rather than dropping it.
+- `"makes each a plain, unnested <button type=\"button\">"` asserted a count of 2. Retuned to 3, with the
+  nesting loop — the actual #274 guard — untouched and now covering the disclosure as well.
+
+Every marker the technical notes named (`HOST_ROW_MARKER`, `HOST_ICON_MARKER`, `HOST_LABEL_OPEN`,
+`DOT_WRAPPER_MARKER`, the exact opening tag) survived byte-identical, as predicted.
+
+**2026-09-16 — `pairingRecovery.test.tsx` gained the three required props** at one `HostRow` call site. The
+plan's call-site count missed it: it renders the failed row, which ignores all three.
+
 ## Documentation handoff
 
 Pending for the documentation stage, not done here: fold the host row's fold state and its chevron into

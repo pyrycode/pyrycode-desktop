@@ -244,8 +244,9 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * reported rather than dropped. It has NO renderer sender in the slice that declares it — #1250 adds
  * the trigger, and #1078 the editor surface.
  * And `newSession` (#1217), which asks the daemon to KILL claude and spawn a fresh one in the
- * conversation it names — not the `/clear` the Actions menu's Reset session already sends as ordinary
- * message text, which clears context in place and keeps the process. It is the only member whose
+ * conversation it names — not a `/clear` sent as ordinary message text, which clears context in place
+ * and keeps the process. (#1496 made the Actions menu's one `Reset session` row dispatch this command;
+ * a typed `/clear` still travels the message path and never reaches here.) It is the only member whose
  * payload type TIGHTENS its wire type rather than reusing or Omit-ing it (NewSessionCommandPayload =
  * `Required<NewSessionPayload>`): the daemon publishes `conversation_id` as optional because the
  * absent form is a pre-#2099 compatibility promise meaning "the daemon's process-wide follow-active

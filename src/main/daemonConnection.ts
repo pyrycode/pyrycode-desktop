@@ -373,9 +373,11 @@ export interface DaemonConnection {
   /**
    * Encrypt a payload-carrying `new_session` control envelope onto the live session — asks the daemon
    * to KILL claude in the named conversation and spawn a fresh one under a newly minted session id, so
-   * every stored setting re-applies at the spawn. NOT the `/clear` the Actions menu's Reset session
-   * sends as ordinary message text: that clears context in place and the process keeps everything it
-   * holds. Takes the conversation id as a SCALAR, like `requestModelList` and unlike `dequeueMessage`
+   * every stored setting re-applies at the spawn. NOT a `/clear` sent as ordinary message text: that
+   * clears context in place and the process keeps everything it holds. (Since #1496 the Actions menu's
+   * one `Reset session` row dispatches this verb; the typed `/clear` route is unchanged and reaches
+   * claude down the message path.) Takes the conversation id as a SCALAR, like `requestModelList` and
+   * unlike `dequeueMessage`
    * — the builder rebuilds a fresh literal, so no renderer-supplied key reaches the wire — and it is
    * REQUIRED: an unnamed restart is the daemon's process-wide follow-active cursor, which is another
    * conversation's restart as often as it is this one's (pyrycode#2099). The `send` TWIN, not

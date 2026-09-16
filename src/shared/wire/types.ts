@@ -172,8 +172,9 @@ export type EnvelopeType =
   // payload-carrying request verbs because it shares that frame's daemon-side character: intercepted
   // by the v2 session manager before dispatch.Route, `interactive`-capability-gated, fire-and-forget
   // with no reply. Carries NewSessionPayload (one optional conversation_id) and NO nonce, answer token
-  // or correlation key. NOT the `/clear` this app's Reset-session action sends as ordinary text: that
-  // clears context in place and the process keeps everything it holds, this discards the process.
+  // or correlation key. NOT a `/clear` sent as ordinary text: that clears context in place and the
+  // process keeps everything it holds, this discards the process. (Since #1496 this frame is what the
+  // app's one Reset-session action dispatches; a typed `/clear` still goes down the message path.)
   // SSOT pyrycode docs/protocol-mobile.md § New session (v2), widened by pyrycode#2099.
   | 'new_session'
   | 'modal_shown'
@@ -1785,10 +1786,11 @@ export interface InterruptPayload {
  * Outbound `new_session` payload (client → daemon). Mirrors the daemon SSOT (pyrycode#2099,
  * docs/protocol-mobile.md § New session (v2)) field-for-field: ONE field and nothing else. Asks the
  * daemon to kill claude and spawn a fresh one under a newly minted session id — on the stream path a
- * kill and respawn, NOT the `/clear` keystroke the terminal-era framing described, and not the
- * `/clear` this app's Reset-session action sends as ordinary message text (that clears context in
- * place and the process keeps its loaded instructions, tool servers and spawn settings; this discards
- * all of it, so every stored setting re-applies at the spawn).
+ * kill and respawn, NOT the `/clear` keystroke the terminal-era framing described, and not a `/clear`
+ * sent as ordinary message text (that clears context in place and the process keeps its loaded
+ * instructions, tool servers and spawn settings; this discards all of it, so every stored setting
+ * re-applies at the spawn). Since #1496 this payload is what the app's one Reset-session action puts on
+ * the wire; a typed `/clear` is a `send_message` and never becomes one of these.
  *
  * UNGATED BY TOKEN and carrying NO nonce, answer token, idempotency key or correlation key: the frame
  * is fire-and-forget with no reply at all, and the daemon documents a replay as harmless (it simply

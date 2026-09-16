@@ -1,13 +1,17 @@
-// #1218 — the send half of the Actions menu's New session row: ask the daemon to kill claude in the
+// #1218 — the send half of the Actions menu's Reset session row: ask the daemon to kill claude in the
 // open conversation and spawn a fresh one, so every stored setting applies at the spawn. Framework-free
 // and React-free, co-located with the screen and mirroring `sendInterrupt` / `dropQueuedMessage` /
 // `composerSend`: the single effect (the guarded outbound command) is injected, so the helper is a pure,
 // deterministic function tested with a plain spy (no React, no store, no Electron).
 //
-// IT IS NOT THE `/clear` THE ROW ABOVE IT SENDS. Reset session sends the literal text `/clear` as an
-// ordinary message through `submitMessage`: claude clears its context in place and the process keeps
-// what it holds. This sends a control frame that throws the process away. Nothing about this helper may
-// be refactored towards the message-text path — the two rows are different verbs on purpose.
+// IT IS NOT A `/clear`. That text, sent as an ordinary message through `submitMessage`, makes claude clear
+// its context in place while the process keeps what it holds. This sends a control frame that throws the
+// process away. #1496 folded the two into one row — the menu used to offer both, and Juhana's 2026-09-06
+// decision is that a conversation has exactly one reset path and it is this one — so nothing about this
+// helper may be refactored towards the message-text path: the row that survived is the one that restarts
+// claude, and routing it back through message text would silently restore the rejected behaviour under
+// the surviving label. An operator who types `/clear` into the composer still gets the in-place clear;
+// that path is `submitMessage`'s and needs nothing from here.
 //
 // `sendInterrupt` WITH AN ADDRESS. That helper's command is bare (one Esc, no selector); a restart kills
 // claude in ONE conversation, so this one names it — and naming it is the whole safety property below.

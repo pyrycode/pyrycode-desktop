@@ -345,3 +345,15 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
   leaking a home-directory username and a project name, and a POSIX path may legitimately contain a
   newline, extending the MCP inventory's forge-a-log-record ground to this field too. Full account in
   [Extension history](inbound-message-decode-history.md).
+- [#1514](https://github.com/pyrycode/pyrycode-desktop/issues/1514) extended it once more, additively:
+  the `resetting` kind, `parseResettingPayload` (`parseApiRetryPayload`'s shape with its two numbers
+  replaced by two narrowed tokens), and the status-peer cluster's first daemon-authored frame — where
+  `stall`/`api_retry`/`compacting` report what claude is doing, this reports what the daemon is doing
+  to claude, which is why both `WireResetPhase` and `WireResetHandoff` are narrowed rather than left
+  open like `rate_limited`'s claude-authored strings. `''` is a fourth accepted value on each closed
+  set, admitted unconditionally regardless of `active`: it is the daemon's declared zero value on the
+  falling edge, and gating it on `active` would be cross-field validation this decoder family refuses.
+  Takes no `FrameTimestamp` and gains no arm in `decodeHistoryEvent` — `compacting`, its immediate
+  neighbour in both files, is the wrong half of the family to copy on that point. Ships dormant: the
+  IPC carry is #1515, whose consumer also owns the case this decode cannot cover — a daemon that never
+  sends the falling edge. Full account in [Extension history](inbound-message-decode-history.md).

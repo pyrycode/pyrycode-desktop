@@ -62,8 +62,12 @@ and `.channel-list__host-icon` leaves the flex flow (`position: absolute; left: 
 transform: translateY(-50%)`, `.channel-list__workspace-icon`'s own shape) so the row's padding alone
 carries the label to 24 in, and the glyph itself sits at the card's content edge (`HOST_ICON_X` is now
 bare `CARD_INSET_PX`, not `HOST_ICON_X + 12 + 12`). The host row's 12px `gap` goes inert with the glyph
-out of the flow — it is the chevron's gap and #1507 re-derives it to the drawn 6 when it adds the mark
-that makes it visible. `.channel-list__workspace-head`'s nest goes `--space-5` → `--space-1` (20 → 4),
+out of the flow — it is the chevron's gap, reserved here for
+[#1507](channel-list-host-row.md#the-rows-fold-and-its-chevron-1507) to spend. **Superseded by #1507:**
+the reservation was not spent in place — the 12 is deleted from `.channel-list__host` outright and the
+drawn 6 lands on the new `.channel-list__host-disclosure` button instead, since that button becomes the
+row's one remaining in-flow child and the row itself never regains a second one.
+`.channel-list__workspace-head`'s nest goes `--space-5` → `--space-1` (20 → 4),
 landing the workspace glyph at 12 from the content edge and its label — sharing the channel titles' edge
 above — at 34, not 50; see [Channel List — the workspace row's own nest](channel-list-workspace-row-nest.md)
 for that file's own numbers. `e2e/sidebar-tree-geometry.spec.ts` is the sole gate that can see any of

@@ -5,6 +5,7 @@ import type { SessionState, ConnectionStatus } from '../../store/sessionStore'
 import type { ConversationSummary } from '@shared/wire/types'
 import {
   ChannelListView,
+  CollapsibleHostGroup,
   CollapsibleWorkspaceGroup,
   HostConnectionDots,
   HostRow,
@@ -241,6 +242,22 @@ const WORKSPACE_CHEVRON_MARKER = 'class="channel-list__workspace-chevron"'
 const EXPANDED_MARKER = 'aria-expanded="true"'
 const COLLAPSED_MARKER = 'aria-expanded="false"'
 
+// #1507 — the host row's own disclosure, and the fold mark that follows its label. The button's class is
+// a DISTINCT token from the row's, which is the whole structural call of the ticket: `HOST_ROW_MARKER`
+// carries its closing quote, so `class="channel-list__host-disclosure"` is not a match for it and the
+// row's four families of CSS and 21 e2e descendant reads keep addressing the same element they always did.
+const HOST_DISCLOSURE_MARKER = 'class="channel-list__host-disclosure"'
+
+// The chevron as a WHOLE opening run, `WORKSPACE_CHEVRON_SVG`'s idiom: one marker fixes the class, the
+// viewBox, both box dimensions, the currentColor fill and the aria-hidden together. The art is the
+// workspace row's, reused rather than re-exported, so the two runs differ in the class token alone.
+const HOST_CHEVRON_SVG =
+  '<svg class="channel-list__host-chevron" viewBox="0 0 8 4" width="8" height="4" fill="currentColor" aria-hidden="true">'
+
+// The chevron counted WITHOUT its geometry, so "no chevron here" is asserted on the class alone and stays
+// true if a later ticket re-exports the art at another size.
+const HOST_CHEVRON_MARKER = 'class="channel-list__host-chevron"'
+
 // The two connection dots ending each host row (#718). These are the FULL attribute value, not the usual
 // one-class prefix: the dot wears the geometry class AND #330's shipped colour modifier, so
 // `class="channel-list__host-dot"` with its closing quote would silently match NOTHING — the quote follows
@@ -310,6 +327,19 @@ const workspaceRowTagsIn = (markup: string): string[] => {
     const end = markup.indexOf('>', at)
     tags.push(markup.slice(markup.lastIndexOf('<', at), end + 1))
     at = markup.indexOf(WORKSPACE_ROW_MARKER, end)
+  }
+  return tags
+}
+
+// `workspaceRowTagsIn`'s treatment for the host row's disclosure (#1507), so its whole attribute set can
+// be compared between the two fold states as an EQUALITY — the pin that keeps a `--collapsed` modifier
+// class out and leaves `aria-expanded` the single state signal the chevron's rotation reads.
+const hostDisclosureTagsIn = (markup: string): string[] => {
+  const tags: string[] = []
+  for (let at = markup.indexOf(HOST_DISCLOSURE_MARKER); at !== -1; ) {
+    const end = markup.indexOf('>', at)
+    tags.push(markup.slice(markup.lastIndexOf('<', at), end + 1))
+    at = markup.indexOf(HOST_DISCLOSURE_MARKER, end)
   }
   return tags
 }
@@ -819,7 +849,15 @@ describe('ChannelListView', () => {
       // so every id addresses slots the server renderer always sees empty. The named-server matrix is the
       // e2e tier's (`host-row-per-server.spec.ts`).
       const renderHostRow = (label: string): string =>
-        renderToStaticMarkup(<HostRow label={label} serverId={DEFAULT_SERVER} />)
+        renderToStaticMarkup(
+          <HostRow
+            label={label}
+            serverId={DEFAULT_SERVER}
+            expanded
+            hasWorkspaces={false}
+            onToggle={() => {}}
+          />
+        )
 
       // Read the SHIPPED fallback back out of the collapse rather than restating 'Server', the same
       // discipline `hostLabelsIn` applies to the render — a copy change that collides with a section
@@ -994,6 +1032,9 @@ describe('ChannelListView', () => {
           <HostRow
             label={HOST_NAME}
             serverId={DEFAULT_SERVER}
+            expanded
+            hasWorkspaces={false}
+            onToggle={noop}
             onAddWorkspace={over.add}
             onEditHost={over.edit}
           />
@@ -1037,7 +1078,11 @@ describe('ChannelListView', () => {
         expect(countOf(markup, EDIT_NAME_MARKER)).toBe(0)
         expect(countOf(markup, ADD_MARKER)).toBe(0)
         expect(countOf(markup, EDIT_MARKER)).toBe(0)
-        expect(markup).not.toContain('<button')
+        // "No button at all" until #1507, which gave the row its own disclosure. The claim this case makes
+        // survives the change and is retuned rather than dropped: the only button a control-less row draws
+        // is the fold, so a control that leaked in without its handler still fails here.
+        expect(countOf(markup, '<button')).toBe(1)
+        expect(countOf(markup, HOST_DISCLOSURE_MARKER)).toBe(1)
         expect(countOf(markup, HOST_ROW_MARKER)).toBe(1)
         expect(countOf(markup, DOT_WRAPPER_MARKER)).toBe(1)
         expect(hostDotTagsIn(markup)).toHaveLength(2)
@@ -1129,7 +1174,10 @@ describe('ChannelListView', () => {
         const markup = both()
         expect(countOf(markup, `<button type="button" ${ADD_MARKER}`)).toBe(1)
         expect(countOf(markup, `<button type="button" ${EDIT_MARKER}`)).toBe(1)
-        expect(countOf(markup, '<button')).toBe(2)
+        // THREE since #1507, not two: the row's own disclosure is the third, and it is a SIBLING of these
+        // two rather than a wrapper around them — which is the half of #274's rule the loop below states.
+        // The count is retuned rather than dropped, so a fourth button still has to be argued for here.
+        expect(countOf(markup, '<button')).toBe(3)
         for (const tag of markup.split('<button').slice(1)) {
           expect(tag.slice(0, tag.indexOf('</button>'))).not.toContain('<button')
         }
@@ -2499,6 +2547,228 @@ describe('CollapsibleWorkspaceGroup (#704)', () => {
   })
 })
 
+// #1507 — THE HOST ROW AS ITS SUBTREE'S DISCLOSURE. The exported pure view is the seam: `HostRow` takes
+// its whole state as props, so every shape below is reachable from `renderToStaticMarkup`, which never
+// re-renders and therefore can never click. This tier pins the rendered SHAPES; the click, the keystroke
+// and the nothing-else-happened claims are `e2e/host-collapse.spec.ts`'s.
+describe('the host row as a collapse control (#1507)', () => {
+  const HOST_NAME = 'Pyrybox-Fold-Sentinel'
+  const noop = (): void => {}
+
+  const renderRow = (
+    over: {
+      expanded?: boolean
+      hasWorkspaces?: boolean
+      failed?: boolean
+      add?: () => void
+      edit?: () => void
+      repair?: () => void
+    } = {}
+  ): string =>
+    renderToStaticMarkup(
+      <HostRow
+        label={HOST_NAME}
+        serverId="fold-sentinel-id"
+        expanded={over.expanded ?? true}
+        hasWorkspaces={over.hasWorkspaces ?? true}
+        onToggle={noop}
+        failed={over.failed}
+        onRepair={over.repair}
+        onAddWorkspace={over.add}
+        onEditHost={over.edit}
+      />
+    )
+
+  it('makes the glyph, the label and the chevron one disclosure button (AC1)', () => {
+    const markup = renderRow()
+    expect(countOf(markup, HOST_DISCLOSURE_MARKER)).toBe(1)
+    const tag = hostDisclosureTagsIn(markup)[0]
+    expect(tag).toBe(`<button type="button" ${HOST_DISCLOSURE_MARKER} ${EXPANDED_MARKER}>`)
+    // The three parts sit INSIDE it, in the drawn order, and the label is still the row's only text.
+    const inner = markup.slice(markup.indexOf(tag) + tag.length, markup.indexOf('</button>'))
+    expect(inner.indexOf(HOST_ICON_MARKER)).toBeGreaterThan(-1)
+    expect(inner.indexOf(HOST_ICON_MARKER)).toBeLessThan(inner.indexOf(HOST_LABEL_OPEN))
+    expect(inner.indexOf(HOST_LABEL_OPEN)).toBeLessThan(inner.indexOf(HOST_CHEVRON_MARKER))
+    expect(hostLabelsIn(markup)).toEqual([HOST_NAME])
+  })
+
+  it('leaves the ROW’s own tag exactly what it shipped (AC5)', () => {
+    // The ticket's one structural call, asserted rather than assumed: `.channel-list__host` stays on the
+    // element that still contains every part of the row, so the four CSS families and the 21 e2e reads
+    // that address a control, a dot or a pill as its DESCENDANT keep addressing the same element. A
+    // `HOST_ROW_MARKER` that stopped matching would silently zero counts across this whole file.
+    for (const markup of [renderRow(), renderRow({ expanded: false })]) {
+      expect(countOf(markup, HOST_ROW_MARKER)).toBe(1)
+      expect(countOf(markup, HOST_ICON_MARKER)).toBe(1)
+      expect(countOf(markup, HOST_LABEL_OPEN)).toBe(1)
+      expect(markup.slice(0, markup.indexOf('>') + 1)).toBe('<div class="channel-list__host">')
+    }
+    // The failed row wears the shipped modifier, so `HOST_ROW_MARKER`'s closing quote correctly stops
+    // matching it — which is why its opening tag is asserted against the modified value instead.
+    const failedMarkup = renderRow({ failed: true })
+    expect(failedMarkup.slice(0, failedMarkup.indexOf('>') + 1)).toBe(
+      '<div class="channel-list__host channel-list__host--failed">'
+    )
+    expect(countOf(failedMarkup, HOST_ICON_MARKER)).toBe(1)
+    expect(countOf(failedMarkup, HOST_LABEL_OPEN)).toBe(1)
+  })
+
+  it('changes nothing but the state attribute between the two shapes (AC5)', () => {
+    // `HOST_DISCLOSURE_MARKER` is an EXACT attribute-value substring, so a collapsed modifier class would
+    // stop matching it and silently zero every count above rather than failing one. This equality is what
+    // keeps the class token sole and `aria-expanded` the single state signal the rotation reads.
+    const expanded = hostDisclosureTagsIn(renderRow())[0]
+    const collapsed = hostDisclosureTagsIn(renderRow({ expanded: false }))[0]
+    expect(collapsed).toBe(expanded.replace(EXPANDED_MARKER, COLLAPSED_MARKER))
+  })
+
+  it('draws ONE chevron in both fold states (AC2)', () => {
+    // The mark turns rather than appearing — the half an implementation that hung it off `expanded`
+    // alone would get wrong. Its DIRECTION is `channels.css`'s rotation off the attribute pinned above,
+    // which is the deliberate one-signal design and is proved by review of one declaration.
+    expect(countOf(renderRow(), HOST_CHEVRON_SVG)).toBe(1)
+    expect(countOf(renderRow({ expanded: false }), HOST_CHEVRON_SVG)).toBe(1)
+  })
+
+  it('withholds the chevron from a host with no workspace groups, in either state (AC2)', () => {
+    for (const expanded of [true, false]) {
+      const markup = renderRow({ expanded, hasWorkspaces: false })
+      // Still the disclosure, still the label: only the MARK is withheld.
+      expect(countOf(markup, HOST_DISCLOSURE_MARKER)).toBe(1)
+      expect(hostLabelsIn(markup)).toEqual([HOST_NAME])
+      expect(countOf(markup, HOST_CHEVRON_MARKER)).toBe(0)
+    }
+    // Asserted against the populated render so the case above is a WITHHOLD and not a count that was zero
+    // all along — the shape a `class` typo would otherwise pass.
+    expect(countOf(renderRow(), HOST_CHEVRON_MARKER)).toBe(1)
+  })
+
+  it('makes the FAILED row no disclosure at all (AC2)', () => {
+    // The Pairing Issue variant draws no chevron (486:838), and a chevron-less host disclosure is a fold
+    // whose state no sighted operator can read — the host's server-rack glyph does not swap the way the
+    // workspace row's folder does. So the failed row keeps the markup it shipped: glyph and label as
+    // direct children, no button, no `aria-expanded`, nothing new in the tab order.
+    const markup = renderRow({ failed: true, repair: noop })
+    expect(countOf(markup, HOST_DISCLOSURE_MARKER)).toBe(0)
+    expect(countOf(markup, HOST_CHEVRON_MARKER)).toBe(0)
+    expect(markup).not.toContain('aria-expanded')
+    expect(countOf(markup, HOST_ICON_MARKER)).toBe(1)
+    expect(hostLabelsIn(markup)).toEqual([HOST_NAME])
+    expect(countOf(markup, 'class="channel-list__host-repair"')).toBe(1)
+  })
+
+  it('gives the chevron no voice, no text and no second attribute (AC5)', () => {
+    // `aria-hidden` rides in the marker's opening run above, so this adds the part a run cannot carry:
+    // that the element is EMPTY, and that the button gained nothing beyond `aria-expanded`.
+    for (const markup of [renderRow(), renderRow({ expanded: false })]) {
+      const at = markup.indexOf(HOST_CHEVRON_SVG)
+      const body = markup.slice(at + HOST_CHEVRON_SVG.length, markup.indexOf('</svg>', at))
+      expect(body.replace(/<path[^>]*>|<\/path>/g, '')).toBe('')
+      const tag = hostDisclosureTagsIn(markup)[0]
+      expect(tag).not.toContain('aria-label')
+      expect(tag).not.toContain('title=')
+      expect(tag).not.toContain('data-')
+      expect(tag).not.toContain('--')
+    }
+  })
+
+  it('keeps the untrusted label out of every attribute, in both states (AC5)', () => {
+    // `HostRow`'s four declined sinks, re-asserted over the subtree this ticket adds. The label occurs
+    // exactly ONCE, immediately after the label span's opening tag, which catches an `aria-label`, a
+    // `title` and anything nobody thought to ban.
+    for (const markup of [renderRow(), renderRow({ expanded: false }), renderRow({ failed: true })]) {
+      expect(countOf(markup, HOST_NAME)).toBe(1)
+      expect(markup.indexOf(HOST_NAME)).toBe(markup.indexOf(HOST_LABEL_OPEN) + HOST_LABEL_OPEN.length)
+      expect(markup).not.toContain('title=')
+    }
+    const escaped = renderToStaticMarkup(
+      <HostRow
+        label="<b>x</b>"
+        serverId="fold-sentinel-id"
+        expanded={false}
+        hasWorkspaces
+        onToggle={noop}
+      />
+    )
+    expect(escaped).toContain('&lt;b&gt;x&lt;/b&gt;')
+    expect(escaped).not.toContain('<b>x</b>')
+  })
+
+  it('nests no control inside the disclosure (AC3)', () => {
+    // #274's rule, re-asserted at the level this ticket creates: the pen, the plus and the repair control
+    // are SIBLINGS of the disclosure, never inside it, so a click on one reaches one handler. The
+    // disclosure comes FIRST, which is the tab order AC3 pins.
+    const markup = renderRow({ add: noop, edit: noop })
+    const disclosure = hostDisclosureTagsIn(markup)[0]
+    const body = markup.slice(markup.indexOf(disclosure) + disclosure.length, markup.indexOf('</button>'))
+    expect(body).not.toContain('<button')
+    expect(markup.indexOf(HOST_DISCLOSURE_MARKER)).toBeLessThan(
+      markup.indexOf('class="channel-list__host-edit"')
+    )
+    expect(markup.indexOf('class="channel-list__host-edit"')).toBeLessThan(
+      markup.indexOf('class="channel-list__host-add"')
+    )
+  })
+})
+
+// #1507 — the group that owns one host's fold. Exported for `CollapsibleWorkspaceGroup`'s stated reason:
+// `renderToStaticMarkup` never re-renders, so rendering it at each `defaultExpanded` value is the only way
+// this tier reaches the collapsed shape at all. Its store reads render their initial cells here (a zustand
+// singleton seeded before a server render is invisible to it), which is exactly enough: the label falls
+// back to the generic word and the fold is the thing under test.
+describe('CollapsibleHostGroup (#1507)', () => {
+  const PROBE = 'a-hosted-workspace-group'
+  const noop = (): void => {}
+
+  const renderGroup = (defaultExpanded?: boolean, hasWorkspaces = true): string =>
+    renderToStaticMarkup(
+      <CollapsibleHostGroup
+        serverId="grouped-host-id"
+        hasWorkspaces={hasWorkspaces}
+        defaultExpanded={defaultExpanded}
+        onEditHost={noop}
+        onAddWorkspace={noop}
+        onRepairHost={undefined}
+      >
+        <span>{PROBE}</span>
+      </CollapsibleHostGroup>
+    )
+
+  it('renders the host row expanded with its subtree when no default is given (AC1)', () => {
+    // `defaultExpanded={undefined}` takes the same default-parameter path `renderServerTrees` takes by
+    // omitting the prop, so the no-argument call really does render the production shape.
+    const markup = renderGroup()
+    expect(countOf(markup, HOST_ROW_MARKER)).toBe(1)
+    expect(hostDisclosureTagsIn(markup)[0]).toContain(EXPANDED_MARKER)
+    expect(markup).toContain(PROBE)
+  })
+
+  it('withdraws the subtree but KEEPS the host row when collapsed (AC1)', () => {
+    const markup = renderGroup(false)
+    // The half a naive implementation gets wrong: the row IS the control, so folding it away with its
+    // subtree would leave nothing to click back.
+    expect(countOf(markup, HOST_ROW_MARKER)).toBe(1)
+    expect(countOf(markup, HOST_DISCLOSURE_MARKER)).toBe(1)
+    expect(hostDisclosureTagsIn(markup)[0]).toContain(COLLAPSED_MARKER)
+    // Genuinely gone from the markup, not hidden by a class — the tool-row body precedent.
+    expect(markup).not.toContain(PROBE)
+  })
+
+  it('emits no element of its own (AC4)', () => {
+    // The rendered sequence under `.channel-list` stays the flat run of siblings every
+    // `.channel-list__row`'s ancestry depends on across 28 e2e specs, and the section-header adjacency
+    // rule that carries AC4's vertical rhythm stays exact. A wrapper <div> would break both at once.
+    const markup = renderGroup()
+    expect(markup.slice(0, markup.indexOf('>') + 1)).toBe('<div class="channel-list__host">')
+    expect(markup.endsWith(`<span>${PROBE}</span>`)).toBe(true)
+  })
+
+  it('passes the has-workspaces answer through to the mark (AC2)', () => {
+    expect(countOf(renderGroup(undefined, false), HOST_CHEVRON_MARKER)).toBe(0)
+    expect(countOf(renderGroup(undefined, true), HOST_CHEVRON_MARKER)).toBe(1)
+  })
+})
+
 describe('the open chat’s row (#1098)', () => {
   // The sidebar marks the row whose chat the pane is showing. This tier owns the MARKUP contract only —
   // which button carries the state, and that nothing else about any row's markup moves. The fill's
@@ -2709,11 +2979,13 @@ describe('host-owned mutation availability', () => {
 })
 
 it('shows a local read failure independently of the host connection and repair control', () => {
-  const local = renderToStaticMarkup(<HostRow label="Saved host" serverId="private-id" localReadFailed />)
+  const local = renderToStaticMarkup(<HostRow label="Saved host" serverId="private-id"
+    expanded hasWorkspaces={false} onToggle={() => {}} localReadFailed />)
   expect(local).toContain('Could not read saved chats on this device.')
   expect(local).not.toContain('channel-list__host--failed')
   expect(local).not.toContain('private-id')
   const both = renderToStaticMarkup(<HostRow label="Saved host" serverId="private-id"
+    expanded hasWorkspaces={false} onToggle={() => {}}
     localReadFailed failed onRepair={() => {}} />)
   expect(both).toContain('Could not read saved chats on this device.')
   expect(both).toContain('aria-label="Repair host"')

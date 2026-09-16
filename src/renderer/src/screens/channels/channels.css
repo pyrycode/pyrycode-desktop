@@ -264,11 +264,12 @@
    glyph, then the 12px gap — and so put every part of this row 16px right of where the redrawn frame
    draws it. See `.channel-list__host-icon` for the other half of the move.
 
-   THE `gap` IS INERT AND STAYS PUT. With the glyph out of the flow the label is the only flex item left
-   — every other child is absolutely positioned, the dots and the repair control as well as the pen and
-   the plus — so the 12 describes nothing today. It is the CHEVRON's gap: 399:1365 packs a `Chevron`
-   510:2384 after the label at `gap-[6px]`, and #1507 re-derives this declaration to that 6 when it adds
-   the mark that makes it visible again. Deleting it here and re-adding it there would be one edit twice.
+   THE `gap` IS GONE, AND THAT IS #1507 MAKING GOOD ON THE PARAGRAPH THAT STOOD HERE. It reserved the 12
+   as the chevron's, to be re-derived to the drawn 6 by the ticket that added the mark; the mark arrived,
+   and the gap it needs is the one between the LABEL and the CHEVRON — both of which are now children of
+   `.channel-list__host-disclosure` below, where the 6 is declared. This element is left with exactly one
+   in-flow child in both of its shapes (the disclosure, or the bare label on a failed row), every other
+   child being absolutely positioned, so a `gap` here can never apply again. One edit, as promised, not two.
 
    The row ITSELF is still not interactive — no radius, background, hover or focus rule, and the Figma's
    6px corner still has nothing to clip; the two controls #1185 put in its subtree are positioned over it
@@ -299,7 +300,6 @@
   display: flex;
   align-items: center;
   position: relative;
-  gap: var(--space-3);
   padding: var(--space-1) calc(var(--space-8) + var(--space-5)) var(--space-1) var(--space-6);
   /* #1070 — the design's 16px between one machine's subtree and the next (103:2959's `Hosts` column,
      gap-[16px]). It rides the host row rather than a per-server wrapper because this file's rendered
@@ -315,6 +315,79 @@
    sibling — which is what leaves single-server geometry byte-identical to what shipped before #1070. */
 .channel-list__section-header + .channel-list__host {
   margin-top: 0;
+}
+
+/* THE ROW'S DISCLOSURE (#1507, Figma Host 399:1366) — the button that folds one machine's whole subtree.
+   It holds the glyph, the label and the chevron; the pen, the plus, the repair control and the two dots
+   stay SIBLINGS of it inside the row, because an interactive control cannot nest inside a button (#274).
+   A failed row draws none of this: `ChannelList.tsx` says why, and the markup it falls back to is exactly
+   what shipped, which is what leaves `--failed`'s three rules below describing the same elements.
+
+   ⭐ ITS OWN CLASS TOKEN, AND `.channel-list__host` DELIBERATELY LEFT ON THE ROW. This is the one
+   structural call of the ticket and it was measured rather than assumed. Four families of rules in this
+   file reach the trailing controls THROUGH the row's class — the pen's and the plus's hover reveals, the
+   two-selector `:has()` guard that swaps the dots for them, and the failed row's pen inset — and 21 reads
+   across six e2e specs locate a control, a dot or a name pill as a DESCENDANT of it. Moving the class here
+   for symmetry with `.channel-list__workspace-head` one level down would break every one of them at once.
+   `paired-shell-card.spec.ts`'s hit test reads `closest()`, so a hit on this button still answers with the
+   row.
+
+   ⭐ NO `position: relative`, WHICH IS THE ONE DECLARATION `.channel-list__workspace` CARRIES THAT THIS
+   BUTTON MUST NOT. That block's own comment explains why the workspace glyph needs the BUTTON as its
+   containing block: it is drawn at `left: 8` from the button's edge. This glyph is the opposite case —
+   `Row icon` 399:1356 sits at `left: 0` read against THE ROW's padding box, i.e. the card's content edge —
+   so leaving this button unpositioned lets `.channel-list__host-icon` keep resolving against
+   `.channel-list__host` (already relative since #718) and keeps its shipped declarations byte-identical in
+   both of the row's shapes. Adding `position: relative` here would shift the glyph 24px right, silently.
+
+   THE `gap` IS THE 6 THE ROW'S BLOCK ABOVE RESERVED — 399:1365's `gap-[6px]`, between the label and the
+   chevron behind it — written as `--space-1 + 2px` for this file's standing reason: the arithmetic is the
+   point and the scale has no slot at 6. The two horizontal insets stay on the ROW (24 left, 52 right), so
+   `padding: 0` here is a reset and not a number: the label still starts at 24 and the trailing 52 is still
+   reserved, unchanged by this ticket.
+
+   THE TWO INHERITANCE REPAIRS are `.channel-list__workspace`'s verbatim, and are not cosmetic:
+     - `font-family`: a <button> does not inherit it, and `.channel-list__host-label` sets size, line,
+       tracking and weight but not family — without this the machine's name renders in the UA button font.
+     - `color`: a <button> resets it to the UA `buttontext`, and the server-rack glyph is
+       fill="currentColor". `.channel-list` already declares this same value, so the glyph's paint is
+       unchanged; without the repair it would mis-paint visibly in the dark scheme.
+
+   `flex: 1 1 auto` + `min-width: 0` are load-bearing, the same pair and the same reasons as one level
+   down. The grow is what spans the button to the row's content edge, so the label's ellipsize chain and
+   the row's 52px trailing reserve keep describing something and the focus rectangle covers the whole row;
+   the zero lifts the automatic minimum size, which would otherwise floor this flex item at its content
+   width and be opaque to `.channel-list__host-label`'s own overflow chain — letting a 128-character
+   operator label widen the row and take the 400px sidebar with it.
+
+   `.channel-list__host-label` needs NOTHING for this: it already omits `flex-grow`, so it resolves to the
+   `0 1 auto` that #1487 had to correct `.channel-list__workspace-label` DOWN to, and that is exactly what
+   packs the chevron against the text at the 6px gap instead of parking it at the row's trailing edge.
+
+   The 6px radius is the Figma's `rounded-[6px]`, an EXACT --radius-xs. It clips no background of its own —
+   the drawing gives this row no hover fill and none is added — so it shapes the `:focus-visible` outline
+   alone, `.channel-list__workspace`'s posture. */
+.channel-list__host-disclosure {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: calc(var(--space-1) + 2px);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+}
+
+/* An OUTLINE, not a fill, per the file convention — so it says nothing about the drawn hover state, which
+   the redrawn Host component pins as differing from Idle by its controls alone. */
+.channel-list__host-disclosure:focus-visible {
+  outline: 1px solid var(--color-outline);
 }
 
 /* The server-rack glyph, OUT OF THE FLOW SINCE #1506 — the drawing's own construction and not a trick to
@@ -377,6 +450,43 @@
   line-height: var(--text-label-large-line);
   letter-spacing: var(--text-label-large-tracking);
   font-weight: var(--text-label-large-weight);
+}
+
+/* THE FOLD MARK (#1507, Figma `Chevron` 510:2384) — the disclosure's last flex item, after the label at
+   the 6px gap that block declares. Three declarations, and they are `.channel-list__workspace-chevron`'s
+   verbatim: the art is the SAME glyph one level down, reused rather than re-exported, so the placement
+   derivation is the same one and is not restated in full here — see that block for the long form.
+
+   ITS OWN CLASS AND ITS OWN BLOCK rather than joining that selector, the call `.channel-list__host-add`
+   already records for the plus it shares a drawing with: two marks on two different row families, told
+   apart by a block that says where each lives instead of a selector list that grows with every row family.
+
+   THE 2px TOP MARGIN IS THE DRAWING'S OWN NUMBER AND REPRODUCES 510:2384 EXACTLY. That node is a 20px-tall
+   box — the row's whole content box between its `--space-1` paddings — centring a 10px chevron instance
+   whose art is inset `pt-[2px]`, which lands the art's centre at 11: one pixel below the row's centre of
+   10. A `margin-top: 2px` on a `center`-aligned flex item centres the MARGIN box, so a 4px-tall glyph in a
+   6px margin box lands its border box at 9…13 — centre 11, the same pixel, with no halving written out.
+
+   `flex: 0 0 auto` IS THE WHOLE OF "A LONG HOST LABEL TRUNCATES FIRST". The label shrinks and ellipsizes
+   (`min-width: 0` plus its quartet); this never gives. Its 8px box ends at the label's content edge, 52 in
+   from the row's trailing edge, and `.channel-list__host-edit`'s hit box starts at 45 — so the mark and
+   the pen never meet, in either state, the same clearance the label itself has.
+
+   THE COLLAPSED DIRECTION IS ONE QUARTER TURN OFF THE BUTTON'S OWN `aria-expanded`, and that attribute
+   rather than a second render branch is the point: the drawn direction cannot disagree with the state a
+   screen reader is told, because it reads it. `rotate(-90deg)` takes the drawn down chevron to a right one
+   about the element's own centre — the margin-nudged centre, so the 2px above survives the turn. The
+   reserved 8px box does not rotate with the art (a transform is not layout), so the label's truncation
+   point is the same in both states and folding a host cannot reflow its own label. The rule is (0,2,0)
+   over the base's (0,1,0). */
+.channel-list__host-chevron {
+  display: block;
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.channel-list__host-disclosure[aria-expanded='false'] .channel-list__host-chevron {
+  transform: rotate(-90deg);
 }
 
 /* The host row's two trailing connection dots (#718, Figma 110:3499 + 106:3114; the Idle variant of Host

@@ -268,6 +268,11 @@ function encodeCompacting(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 24, type: 'compacting', ts: FIXED_TS, payload })
 }
 
+/** A `resetting` envelope's plaintext bytes, wrapping an arbitrary payload (#1514). */
+function encodeResetting(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 32, type: 'resetting', ts: FIXED_TS, payload })
+}
+
 /** A `model_announced` envelope's plaintext bytes, wrapping an arbitrary payload (#587). */
 function encodeModelAnnounced(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 29, type: 'model_announced', ts: FIXED_TS, payload })
@@ -353,6 +358,29 @@ const COMPACTING = {
   conversation_id: 'c1',
   active: true
 }
+
+/** A well-formed resetting payload on the FIRST rising edge — the daemon's own first emitted row
+ *  (#1514: `wrapping_up` / `pending`). The falling edge, which carries both tokens as `''`, is driven
+ *  from the RESETTING_ROWS table rather than spread off this one, so the two readings stay visibly
+ *  distinct. */
+const RESETTING = {
+  conversation_id: 'c1',
+  active: true,
+  phase: 'wrapping_up',
+  handoff: 'pending'
+}
+
+/** The FOUR rows the daemon emits, in the order one reset produces them (#1514). The fourth is the
+ *  falling edge, and it is the trap: `''` is a member of neither token's named constant set upstream
+ *  but IS the daemon's declared zero value once the reset is over, so a decoder admitting only the two
+ *  phases and the three handoffs would reject every falling edge and leave the window with an
+ *  indicator nothing can clear. */
+const RESETTING_ROWS: Array<[string, Record<string, unknown>]> = [
+  ['rising wrapping_up/pending', { ...RESETTING }],
+  ['rising restarting/written', { ...RESETTING, phase: 'restarting', handoff: 'written' }],
+  ['rising restarting/skipped', { ...RESETTING, phase: 'restarting', handoff: 'skipped' }],
+  ['falling edge, both tokens empty', { conversation_id: 'c1', active: false, phase: '', handoff: '' }]
+]
 
 /** A well-formed model_announced payload — the daemon's canonical fixture VERBATIM (#587,
  *  pyrycode/internal/protocol/testdata/model_announced.json). All three fields are always present. */
@@ -2769,6 +2797,129 @@ describe('parseInboundMessage — compacting fail-closed (#495)', () => {
   it('throws when a compacting payload is not an object', () => {
     expect(() => parseInboundMessage(encodeCompacting('nope'))).toThrow(WireDecodeError)
     expect(() => parseInboundMessage(encodeCompacting(['a']))).toThrow(WireDecodeError)
+  })
+})
+
+describe('parseInboundMessage — resetting recognition (#1514, additive)', () => {
+  it.each(RESETTING_ROWS)(
+    'narrows the %s into { kind: resetting } carrying all four fields',
+    (_label, row) => {
+      expect(parseInboundMessage(encodeResetting(row))).toEqual({
+        kind: 'resetting',
+        resetting: row
+      })
+    }
+  )
+
+  it('no longer reaches the unmodeled default — it decodes instead of returning null (AC1)', () => {
+    expect(parseInboundMessage(encodeResetting(RESETTING))).not.toBeNull()
+  })
+
+  it('carries NO ts — this type gains no decodeHistoryEvent arm, so there is nothing to join (AC5)', () => {
+    // The mix-in marks exactly the arms decodeHistoryEvent draws. `compacting`'s arm DOES take it,
+    // which is what makes the nearer neighbour the wrong half of the family to copy here.
+    expect(parseInboundMessage(encodeResetting(RESETTING))).not.toHaveProperty('ts')
+  })
+
+  it('tolerates unknown server-added keys without copying them through (AC3)', () => {
+    // Forward-compat: a fresh four-field literal, never a spread, which is also what makes the
+    // narrower prototype-pollution-safe against a planted __proto__.
+    const withExtras = { ...RESETTING, turn_id: 'turn-1', handoff_path: '/tmp/handoff.md' }
+    const decoded = parseInboundMessage(encodeResetting(withExtras))
+    expect(decoded).toEqual({ kind: 'resetting', resetting: RESETTING })
+    expect(decoded?.kind === 'resetting' && Object.keys(decoded.resetting).sort()).toEqual([
+      'active',
+      'conversation_id',
+      'handoff',
+      'phase'
+    ])
+  })
+})
+
+describe('parseInboundMessage — resetting closed sets and the empty token (#1514, AC1/AC2)', () => {
+  it.each([
+    ['phase only', { phase: '' }],
+    ['handoff only', { handoff: '' }],
+    ['both', { phase: '', handoff: '' }]
+  ])('admits an EMPTY token — %s — whatever the other field says', (_label, override) => {
+    // `''` is a member of neither named constant set upstream, but IS the daemon's declared zero
+    // value. A membership check admitting only the two phases and the three handoffs would reject
+    // every falling edge, leaving the window with an indicator nothing can clear.
+    const payload = { ...RESETTING, ...override }
+    expect(parseInboundMessage(encodeResetting(payload))).toEqual({
+      kind: 'resetting',
+      resetting: payload
+    })
+  })
+
+  it('decodes active:true alongside an empty phase — a pair the daemon never emits (AC1)', () => {
+    // The no-cross-validate pin. `''` is admitted UNCONDITIONALLY: gating the token set on `active`
+    // would be cross-field validation, which this decoder family refuses by name, and rejecting this
+    // pair would defend a failure mode nobody has observed. This test reddens if someone "hardens" it.
+    const impossible = { conversation_id: 'c1', active: true, phase: '', handoff: '' }
+    expect(parseInboundMessage(encodeResetting(impossible))).toEqual({
+      kind: 'resetting',
+      resetting: impossible
+    })
+  })
+
+  it.each([
+    ['phase', 'wrapped_up'],
+    ['phase', 'pending'], // the other field's vocabulary — a closed set, not a shared one
+    ['handoff', 'writing'],
+    ['handoff', 'restarting']
+  ])('throws on an unknown non-empty %s (%s)', (field, value) => {
+    expect(() => parseInboundMessage(encodeResetting({ ...RESETTING, [field]: value }))).toThrow(
+      WireDecodeError
+    )
+  })
+})
+
+describe('parseInboundMessage — resetting fail-closed (#1514, AC2)', () => {
+  it.each([
+    ['conversation_id', 42],
+    ['active', 'true'],
+    ['active', 1],
+    ['active', 0], // TYPE-checked, never truthiness: the falling edge's `false` is the whole signal
+    ['phase', 7],
+    ['phase', ['wrapping_up']],
+    ['handoff', { value: 'pending' }],
+    ['handoff', true]
+  ])('throws when %s is absent or mistyped (%s)', (field, mistyped) => {
+    const absent: Record<string, unknown> = { ...RESETTING }
+    delete absent[field]
+    const bad: unknown[] = [absent, { ...RESETTING, [field]: mistyped }, { ...RESETTING, [field]: null }]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeResetting(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a resetting payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeResetting('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeResetting(['a']))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeResetting(null))).toThrow(WireDecodeError)
+  })
+
+  it('names the failure CATEGORY only — no conversation id and no token value (AC4)', () => {
+    // The id is conversation-correlating and the pair discloses which conversation the operator reset;
+    // neither may be interpolated into an error a caller can surface.
+    const SECRET_CONV = 'secret-conversation-id'
+    try {
+      parseInboundMessage(
+        encodeResetting({
+          conversation_id: SECRET_CONV,
+          active: true,
+          phase: 'wrapping_up',
+          handoff: 'handed_over_to_a_later_daemon'
+        })
+      )
+      expect.unreachable('an unknown handoff must throw')
+    } catch (error) {
+      const message = (error as Error).message
+      expect(message).not.toContain(SECRET_CONV)
+      expect(message).not.toContain('handed_over_to_a_later_daemon')
+      expect(message).not.toContain('wrapping_up')
+    }
   })
 })
 
@@ -7686,6 +7837,52 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(lines).toHaveLength(0)
   })
 
+  it('logs a resetting content-free, never the conversation_id and never either token (#1514)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONV = 'secret-conversation-id'
+    const plaintext = encodeResetting({
+      conversation_id: SECRET_CONV,
+      active: true,
+      phase: 'restarting',
+      handoff: 'written'
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    // AC4: the client-owned type LITERAL, never the wire-supplied envelope.type the `default:` arm
+    // this replaces for the type used to log.
+    expect(record.code).toBe('resetting')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no decoded field reaches the log, and no new DiagnosticEvent
+    // field is introduced (reuses the existing set).
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_CONV)
+    // Both tokens are daemon constants rather than claude-authored text, so the reason they stay out
+    // is not the unsanitized-model-text one: the id plus a phase discloses WHICH conversation the
+    // operator reset and whether a handoff was written, in a log they may send off-box.
+    expect(lines[0]).not.toContain('restarting')
+    expect(lines[0]).not.toContain('written')
+  })
+
+  it('writes NO inbound-unmodeled record for a resetting any more (#1514, AC4)', () => {
+    const { log, lines } = captureLog()
+    parseInboundMessage(encodeResetting(RESETTING), log)
+    expect(lines).toHaveLength(1)
+    expect(JSON.parse(lines[0]).event).not.toBe('inbound-unmodeled')
+  })
+
+  it('does NOT log on a malformed resetting throw path (#1514, AC4)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(encodeResetting({ ...RESETTING, phase: 'wrapped_up' }), log)
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
   it('logs a context_usage content-free, never the conversation_id, the model or an integer (#1454)', () => {
     const { log, lines } = captureLog()
     const SECRET_CONV = 'secret-conversation-id'
@@ -9759,10 +9956,10 @@ describe('parseInboundMessage — history entry payload decode (#1227)', () => {
     expect(JSON.stringify(decoded)).not.toContain('SHOULD-NOT-CROSS')
   })
 
-  // AC3: a stored type the timeline does not draw is skipped rather than crossing. The first nine
+  // AC3: a stored type the timeline does not draw is skipped rather than crossing. The first ten
   // this client DOES decode on the live lane and never draws in the thread — `thinking_progress`
-  // joined them at #1312, `rate_limited` at #1318 and `context_usage` at #1454, each given a live-lane
-  // parser and deliberately no arm here; the last is a type it has never seen.
+  // joined them at #1312, `rate_limited` at #1318, `context_usage` at #1454 and `resetting` at #1514,
+  // each given a live-lane parser and deliberately no arm here; the last is a type it has never seen.
   it.each([
     'background_task_started',
     'background_task_updated',
@@ -9773,6 +9970,7 @@ describe('parseInboundMessage — history entry payload decode (#1227)', () => {
     'thinking_progress',
     'rate_limited',
     'context_usage',
+    'resetting',
     'a_frame_type_from_a_later_daemon'
   ])('skips a stored %s — undrawn, and not an error', (type) => {
     expect(decodedEntries([historyEntry(type, { conversation_id: 'c1' })])).toEqual([])
@@ -9808,6 +10006,15 @@ describe('parseInboundMessage — history entry payload decode (#1227)', () => {
     // own it cannot tell "skipped because decodeHistoryEvent has no arm" from "skipped because the
     // payload failed" — the distinction the neighbouring skips-by-stored-TYPE test draws.
     expect(decodedEntries([historyEntry('context_usage', CONTEXT_USAGE_FRAME)])).toEqual([])
+  })
+
+  it('skips a WELL-FORMED stored resetting — armless dispatch, not a payload failure (#1514)', () => {
+    // The discriminating version of the row above, and the one that stays honest now that the type HAS
+    // a live-lane parser. That row's payload would fail `parseResettingPayload` anyway, so on its own
+    // it cannot tell "skipped because decodeHistoryEvent has no arm" from "skipped because the payload
+    // failed" — the distinction the neighbouring skips-by-stored-TYPE test draws. `resetting` is
+    // ephemeral status: no replay ring and no durable history upstream, so there is nothing to draw.
+    expect(decodedEntries([historyEntry('resetting', RESETTING)])).toEqual([])
   })
 
   it('skips by stored TYPE, not by payload failure — one payload valid for both parsers', () => {

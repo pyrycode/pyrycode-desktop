@@ -20,6 +20,9 @@ import type {
   StallPayload,
   ApiRetryPayload,
   CompactingPayload,
+  ResettingPayload,
+  WireResetPhase,
+  WireResetHandoff,
   BackgroundTaskStartedPayload,
   BackgroundTaskUpdatedPayload,
   BackgroundTask,
@@ -229,6 +232,82 @@ describe('compacting wire vocabulary (#495)', () => {
       active: false
     }
     expect(falling.active).toBe(false)
+  })
+})
+
+describe('resetting wire vocabulary (#1514)', () => {
+  it('admits the resetting inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType.
+    const resetting: EnvelopeType = 'resetting'
+    expect(resetting).toBe('resetting')
+  })
+
+  it('shapes ResettingPayload as its four fields — the edge plus two tokens, no turn_id', () => {
+    const payload: ResettingPayload = {
+      conversation_id: 'c1',
+      active: true,
+      phase: 'wrapping_up',
+      handoff: 'pending'
+    }
+    expect(payload).toEqual({
+      conversation_id: 'c1',
+      active: true,
+      phase: 'wrapping_up',
+      handoff: 'pending'
+    })
+    // Conversation-scoped: a reset is orthogonal to whichever turn happened to be running, so
+    // attributing it to one would be a claim the daemon cannot honestly make.
+    expect(payload).not.toHaveProperty('turn_id')
+  })
+
+  it('expresses each of the three rising rows the daemon emits, with its own token pairing', () => {
+    // `pending` rides `wrapping_up`; `written` and `skipped` ride `restarting`. The pairing is the
+    // daemon's, not the type system's — both sets are declared independently, and nothing
+    // cross-validates them.
+    const wrappingUp: ResettingPayload = {
+      conversation_id: 'c1',
+      active: true,
+      phase: 'wrapping_up',
+      handoff: 'pending'
+    }
+    const written: ResettingPayload = { ...wrappingUp, phase: 'restarting', handoff: 'written' }
+    const skipped: ResettingPayload = { ...wrappingUp, phase: 'restarting', handoff: 'skipped' }
+    expect([wrappingUp.handoff, written.handoff, skipped.handoff]).toEqual([
+      'pending',
+      'written',
+      'skipped'
+    ])
+  })
+
+  it('admits the falling edge — both tokens EMPTY, and `""` is a VALUE on each set', () => {
+    // `''` is a member of neither named constant set upstream (it is Go's zero value), but the daemon
+    // declares no `omitempty`, so the key is written on every frame and `''` is what the falling edge
+    // carries. A type admitting only the two phases and the three handoffs could not express the one
+    // reading that clears the indicator.
+    const falling: ResettingPayload = {
+      conversation_id: 'c1',
+      active: false,
+      phase: '',
+      handoff: ''
+    }
+    expect([falling.active, falling.phase, falling.handoff]).toEqual([false, '', ''])
+
+    // Admissible on each set independently, which is the compile-time half of the same fact.
+    const emptyPhase: WireResetPhase = ''
+    const emptyHandoff: WireResetHandoff = ''
+    expect([emptyPhase, emptyHandoff]).toEqual(['', ''])
+  })
+
+  it('expresses the pair the daemon never emits — active true with an empty phase', () => {
+    // The decoder admits `''` UNCONDITIONALLY rather than gating it on `active`, because gating would
+    // be cross-field validation. The type has to be able to hold what the decoder can return.
+    const impossible: ResettingPayload = {
+      conversation_id: 'c1',
+      active: true,
+      phase: '',
+      handoff: ''
+    }
+    expect(impossible.active).toBe(true)
   })
 })
 

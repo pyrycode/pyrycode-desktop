@@ -433,3 +433,54 @@ carry slice claims it. Decode spanned four slices replacing #1254's first criter
 (#1459) and the memory-file inventory (#1460) — after which every key the daemon writes is declared and
 read — then IPC carry #1419, store #1420, surfaces #1421 — #1254 is re-cut to the popover alone.
 Architect (builder) self-review PASS, no MUST FIX findings for #1460.
+
+[#1514](https://github.com/pyrycode/pyrycode-desktop/issues/1514) extended it once more, additively, with
+`resetting` → `{ kind: 'resetting', resetting: ResettingPayload }` via `parseResettingPayload` — which
+phase of a session reset a conversation is in (pyrycode#2453 shape / #2478 producer,
+`internal/protocol/interactive.go` `ResettingPayload`). Joins the status-peer cluster right after
+`compacting` in both the `EnvelopeType` union and the interface order, sharing its two-edge,
+conversation-scoped, turn-opening-and-closing-neither shape — but the provenance runs the other way:
+`stall`/`api_retry`/`compacting` report what CLAUDE is doing, this reports what the DAEMON is doing TO
+claude, and every field on the frame is the daemon's own rather than a value claude authored.
+
+**That reversed provenance is why this decoder narrows where its neighbours don't.** `WireResetPhase`
+(`'wrapping_up' | 'restarting' | ''`) and `WireResetHandoff` (`'pending' | 'written' | 'skipped' | ''`)
+are two closed wire enums, `parseSessionTransitionPayload`'s `reason` idiom cloned once per token — a
+comparand chain covering non-string and unknown-string alike, narrowing without a cast — where
+`RateLimitedPayload`'s `status`/`limit_type` one screen over deliberately stay open precisely because
+those *are* claude's. **`''` is inside each union, not bolted on as `| ''`, and is admitted
+unconditionally on both fields regardless of `active`.** The daemon declares no `omitempty`, so every
+key is always on the wire and `''` is its declared zero value once a reset ends; a chain admitting only
+the named tokens would reject every falling edge and leave an indicator nothing can clear. Gating the
+token set on `active` would be cross-field validation, which this decoder family refuses by name
+(`parseQueuedItem`'s posture), so `active: true` with `phase: ''` — a pair the daemon's three emitted
+rows never produce — decodes rather than throwing: rejecting an unobserved combination would fail-close
+a daemon that later adds a phase or reorders its edges. `requireBoolean` checks `active`'s type, never
+truthiness, since `false` *is* the falling edge rather than an absence.
+
+**A closed union is not a trust upgrade, and this frame is where that distinction had to be spelled out
+explicitly rather than inherited.** Narrowing here makes both tokens' *shape* trusted, never a claim
+that the daemon is honest: a hostile daemon can still send any of the sixteen field combinations, not
+only the producer's three, so a consumer (#1515) must handle all of them and must never branch
+security-relevant behaviour on either token. `handoff: 'written'` names no path — nothing downstream can
+resolve, open or join one — and `conversation_id` is a daemon-asserted routing key, never an
+authorization signal.
+
+**Takes no `FrameTimestamp`, unlike the immediately neighbouring `compacting` arm** — the nearest
+sibling is the wrong half of the family to copy here, since the mix-in marks exactly the arms
+`decodeHistoryEvent` draws and `resetting` is ephemeral status with no replay ring or durable history
+upstream, so it gains no arm there either (a regression pin: a fully well-formed stored `resetting`
+still skips). Content-free-logged as `inbound-decoded(code: 'resetting')` before the `default` branch,
+narrowed before the log call so a malformed frame leaves no record at all; neither token nor
+`conversation_id` ever reaches a log line. The reason is *not* `rate_limited`'s — both tokens are daemon
+constants, not unsanitized claude text — it is workflow disclosure: the id beside a phase and a handoff
+status says which conversation the operator reset and whether a handoff was written. Ships dormant, the
+same two-step already taken for `question_shown`/`modal_shown`/`rate_limited`/`context_usage`:
+`daemonConnection.ts`'s inbound switch has no catch-all, so the report stops here until #1515 claims it.
+
+Out of scope here, named for the carry slice rather than silently deferred: a consumer must not rely on
+the falling edge arriving, since a daemon that crashes or is killed mid-reset sends no `active: false`,
+and nothing at this decode boundary can supply the independent clearing path (disconnect, conversation
+exit, turn activity) that a stuck indicator would need. Architect (builder) self-review PASS, no MUST
+FIX findings; one SHOULD FIX recorded for #1515 — handle all sixteen combinations rather than only the
+three the producer emits, since a narrowed value is still a claim by a peer.

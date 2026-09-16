@@ -220,23 +220,37 @@ a lone `idle` push fires nothing, since the refresh trigger is a running→idle 
 that a drive no longer needs either edge just to get *a* snapshot onto the screen — the activation that
 opens the conversation already supplied one.
 
-**A known, accepted gap since #1423: switching to a chat whose snapshot hasn't arrived yet can render the
-*previous* chat's inherited-default row for one settings round trip.** `activateConversation` clears
-`runConfigStore` and `sessionIdStore` on every switch, but deliberately never clears `modelListStore` — that
-store's own docs rule out an activation- or connected-edge clear, since #1166's model-list ask is
-per-conversation and the list itself does not vary by chat. The container collapses "no snapshot yet" and
-"snapshot says the model is empty" into the same layer (`stored: snapshot?.model ?? ''`), so between the
-clear and the next `runConfigReceived` frame, `shown === ''` and the already-held model list resolves the
-inherited-default row — the same row the *previous* chat may have been showing — even on a chat whose
-actual stored model may be something else entirely. It is inert (the session id rides the same
-`runConfigReceived` frame as the snapshot, so no pick can be sent against the wrong session) and self-heals
-in one round trip once the new snapshot lands. #1167's `activateConversation` docblock states the clear
-exists so controls "say nothing instead of something false"; this is the one control on the row for which
-that is no longer quite true during that window. Verifier-flagged on #1423 as a SHOULD FIX and left open
-deliberately — the ticket's acceptance criteria direct resolving `''` to the inherited-default row with no
-carve-out for this window, and the fix (distinguishing "not yet known" from "explicitly empty" one layer up,
-in `ComposerModelLayers.stored`) is a layer-shape change belonging to its own ticket rather than a rework of
-this one.
+**The gap #1423 left open — switching to a chat whose snapshot hadn't arrived yet could render the
+*previous* chat's inherited-default row — is closed, by [#1495](https://github.com/pyrycode/pyrycode-desktop/issues/1495).**
+`activateConversation` clears `runConfigStore` and `sessionIdStore` on every switch, but deliberately never
+clears `modelListStore` — that store's own docs rule out an activation- or connected-edge clear, since
+\#1166's model-list ask is per-conversation and the list itself does not vary by chat. Before #1495, the
+container collapsed "no snapshot yet" and "snapshot says the model is empty" into the same layer (`stored:
+snapshot?.model ?? ''`), so between the clear and the next `runConfigReceived` frame, `shown === ''` and the
+already-held model list resolved the inherited-default row — the same row the *previous* chat may have been
+showing — even on a chat whose actual stored model was something else entirely.
+
+`ComposerModelLayers.stored` is now `string | null`, not `string`: `null` means no snapshot has arrived for
+this chat at all, `''` keeps meaning the snapshot named no model (the daemon's inherited default,
+\#1423's reading). The container supplies the distinction it was flattening — `snapshot?.model ?? null`
+rather than `?? ''`, since `??` does not fire on `''` and a real empty-model snapshot still arrives as `''`.
+`firstShown` widened to accept the null and treats it as nothing at that layer exactly as `''` already was,
+so the label and marking chains read through it unchanged; #1423's inherited-default branch in
+`composerModelMenuModel` gained the one guard that tells the two apart, resolving `effortRowFor` only when
+`layers.stored !== null`. With no snapshot, the function now falls through to the `shown === '' && inherited
+=== undefined` arm and returns `null` — #988's absent rendering — instead of drawing the previous chat's
+row. `runConfigStore`'s header had held this same distinction one layer down since #1167 (`snapshot: null`
+as the distinct not-yet-loaded state); the fix threads it up rather than inventing a new one. #1167's
+`activateConversation` docblock states the clear exists so controls "say nothing instead of something
+false" — this is now true of this control too, for the window between a switch and the next snapshot.
+
+**The closed window is the no-snapshot one only.** A daemon `no_session` settings reply after a restart —
+the 2026-09-15 behaviour named in #1495's Context, fixed daemon-side in pyrycode rather than here — still
+lands as a real snapshot with `model: ''`, and #1423's branch still resolves the inherited-default row for
+it, correctly: a zero-valued reply is a snapshot, not an absence. #1495 also does not add a way to pick a
+model while none is held — the control is simply absent during that window, which trades against #1423's
+own motivation (a new, unmessaged chat is when a model is most worth choosing) in favour of never showing a
+false one.
 
 ## CSS: the shared footer-button treatment, lifted on its second consumer
 
@@ -387,6 +401,25 @@ reading the same stores:
 There is no vitest detector for stylesheet declarations; the CSS extraction above is proven by the
 class-run assertions plus review, the standing ruling for this stylesheet.
 
+Two lessons from the #1495 e2e drive (`e2e/composer-model-waits-for-snapshot.spec.ts`), on top of the two
+above:
+
+- **Every sibling footer control was also unavailable as the "the app has finished launching" barrier.**
+  Permission mode, effort and the context reading all wait on the same withheld snapshot the drive is
+  proving absent, so none could anchor the wait and `.composer__model-label` is the thing under test. The
+  barrier that worked is the capture itself: push `model_list`, then a `thinking → idle` pair, and wait for
+  the extra `request_session_settings` envelope the turn-end transition sends to reach the capture before
+  asserting the label's absence — frames are in-order on one socket, so that ask proves the list was
+  already processed. It holds only because `createRunConfigRefreshTrigger` fires on exactly the `connected`
+  edge and a running → not-running transition, with no retry and no poll, so the baseline envelope count
+  cannot drift on its own the way a polled or retried request could.
+- **A widened `firstShown` predicate is right by accident if written as a bare `value !== ''`.** A `null`
+  passes that looser test, and the result is correct only because `?? ''` launders it at the end and
+  because `stored` happens to be last in both chains today. The explicit `value !== '' && value !== null`
+  states the rule instead of inheriting it from an ordering — a later nullable layer placed in front of
+  `stored` would otherwise silently answer "nothing" for every layer behind it, with no test in this repo
+  positioned to catch it.
+
 **#1053's layering** moved the nine existing `composerModelMenuModel` call sites in
 `ComposerModelMenu.test.tsx` onto a `stored(...)` helper that builds a `ComposerModelLayers` record with
 the other two layers empty, so every rule #988 shipped keeps asserting exactly what it asserted; the
@@ -448,4 +481,6 @@ See [PR #1018](https://github.com/pyrycode/pyrycode-desktop/pull/1018) and
 `docs/specs/architecture/1095-model-family-only-in-the-footer.md` for #1095's plan, security review and
 `## Revisions` entry. See `docs/specs/architecture/1423-inherited-default-model-menu.md` for #1423's plan
 and [PR #1432](https://github.com/pyrycode/pyrycode-desktop/pull/1432) for its verifier review, including
-the switch-window gap recorded above.
+the switch-window gap that #1495 closed. See `docs/specs/architecture/1495-model-label-waits-for-a-snapshot.md`
+for #1495's plan and security review, and [PR #1512](https://github.com/pyrycode/pyrycode-desktop/pull/1512)
+for its verifier review.

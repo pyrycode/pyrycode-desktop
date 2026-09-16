@@ -75,7 +75,12 @@ function layers(over: Partial<ComposerModelLayers> = {}): ComposerModelLayers {
 
 // The snapshot's stored choice ALONE — the single input #988's rules were written against, so every
 // assertion it pinned still reads as the sentence it was written as.
-function stored(model: string): ComposerModelLayers {
+//
+// #1495 WIDENED IT TO CARRY THE NULL, and the DEFAULT above deliberately stayed `''`: every case written
+// before this ticket means "a snapshot arrived and named no model", which is the reading `''` has always
+// had here and the one #1423's branch answers. The new reading — no snapshot at all — is spelled out at
+// each of its call sites rather than defaulted into, so no existing case changed meaning silently.
+function stored(model: string | null): ComposerModelLayers {
   return layers({ stored: model })
 }
 
@@ -638,5 +643,61 @@ describe('composerModelMenuModel — a chat with no explicit model (#1423)', () 
     )
     expect(countOf(markup, 'aria-current')).toBe(1)
     expect(markup).toContain('aria-current="true">Default<')
+  })
+})
+
+// #1495 — the reading the block above could not express, and the one the store has held one layer down
+// since #1167: NO SNAPSHOT HAS ARRIVED FOR THIS CHAT. `runConfigStore`'s header calls `snapshot: null` the
+// distinct not-yet-loaded state and `clearSnapshot` returns to it on every activation; until this ticket
+// the container flattened it into `''`, so "nothing is known" and "the snapshot says the daemon's
+// inherited default" reached this function as one input and #1423's branch answered both.
+//
+// The two readings differ by this one layer and by nothing else, which is why every case here seeds the
+// #1423 fixture verbatim: same list, same published inherited-default row, same empty pick and
+// announcement. A guard written on anything but the null — a truthiness test, a `== null`, a check moved
+// onto `shown` — either stops #1423's branch firing at all or fails to separate the two.
+describe('composerModelMenuModel — no snapshot has arrived (#1495)', () => {
+  const INHERITED = row({ value: 'default', display_name: 'Inherited default' })
+  const list: ModelListEntry = { models: [...ROWS, INHERITED], droppedModels: 0 }
+
+  // AC1, stated against the exact input #1423 draws a label for. The list is HELD — the activation clear
+  // never touches `modelListStore`, which is what made the old flattening visible on a switch — so a
+  // resolvable inherited-default row is present and must still not be resolved.
+  it('draws nothing with no snapshot, even holding a list with an inherited-default row (AC1)', () => {
+    expect(composerModelMenuModel(list, stored(null))).toBeNull()
+    expect(viewLayers(list, stored(null))).toBe('')
+  })
+
+  // AC2, and it is the same fixture one input apart — the pair is the claim, not either half alone. This
+  // is #1423's landed rendering unchanged: the label, the marking and the published rows in daemon order.
+  it('still resolves the inherited-default row on an explicitly empty model (AC2)', () => {
+    const menu = composerModelMenuModel(list, stored(''))
+    expect(menu?.label).toBe('Default')
+    expect(menu?.currentId).toBe('default')
+    expect(menu?.options.map((o) => o.id)).toStrictEqual([...ROWS.map((r) => r.value), 'default'])
+  })
+
+  // The guard is on #1423's BRANCH, not on the function: a pick or an announcement still labels over a
+  // missing snapshot, and each still marks what it marked before — the pick's own row, and nothing for an
+  // announcement (#1053 AC5: the marking is the session's model and never the announcement).
+  it('labels from a pick or an announcement over a missing snapshot', () => {
+    const announced = composerModelMenuModel(list, layers({ stored: null, announced: 'gamma' }))
+    expect(announced?.label).toBe('Gamma')
+    expect(announced?.currentId).toBeNull()
+    const picked = composerModelMenuModel(list, layers({ stored: null, picked: 'alpha' }))
+    expect(picked?.label).toBe('Alpha')
+    expect(picked?.currentId).toBe('alpha')
+  })
+
+  // The absent rendering is #988's own, reached by the path it already had: with no inherited-default row
+  // published, an explicitly empty model draws nothing either, and a missing snapshot is not a second way
+  // of getting there that behaves differently. Three list readings, the same as #1423's null case seeds.
+  it.each([
+    ['a list without an inherited-default row', LIST],
+    ['no model_list frame at all', null],
+    ['an empty published list', EMPTY]
+  ])('draws nothing on %s, snapshot or none', (_why, models) => {
+    expect(composerModelMenuModel(models, stored(null))).toBeNull()
+    expect(composerModelMenuModel(models, stored(''))).toBeNull()
   })
 })

@@ -7,14 +7,17 @@ Part of [Conversation shell](conversation-shell.md); see that document for what 
 ## Actions menu (#680)
 
 The shared [options panel](conversation-shell-composer-options-panel.md#composer-options-panel-838-placed-839-keyboard-driven-since-840-first-live-mount-since-680-right-edge-clamp-wired-since-847)'s
-first live consumer, and the composer footer's leading item (Figma `115:3677`, x=0). Sends `/clear`,
-`/compact` or `/knowledge-capture` as ordinary message text — reset, compact and knowledge capture, one
-click instead of typed by hand. Needs no daemon change and no wire change: claude intercepts a message
-whose text begins with a slash and runs it as a command rather than passing it to the model (measured
-2026-08-21 against claude 2.1.220), and an unknown command comes back as a synthetic "Unknown command"
-assistant reply at zero turns and zero cost — which is why an absent `/knowledge-capture` in a workspace
-that doesn't define it was, at #680's ship, a correct, visible, harmless outcome that ticket deliberately
-did not detect or grey out. **[#681](https://github.com/pyrycode/pyrycode-desktop/issues/681) has since
+first live consumer, and the composer footer's leading item (Figma `115:3677`, x=0). At #680's ship, sent
+`/clear`, `/compact` or `/knowledge-capture` as ordinary message text — reset, compact and knowledge
+capture, one click instead of typed by hand. **`/clear` is gone from this menu as of
+[#1496](https://github.com/pyrycode/pyrycode-desktop/issues/1496)**: reset now dispatches the control frame
+described in § New session control action below, whose row is relabelled **Reset session** and drawn first;
+the menu's slash-text path now carries only `/compact` and `/knowledge-capture`. Typing `/clear` by hand is
+untouched — claude still intercepts a message whose text begins with a slash and runs it as a command
+rather than passing it to the model (measured 2026-08-21 against claude 2.1.220), and an unknown command
+comes back as a synthetic "Unknown command" assistant reply at zero turns and zero cost — which is why an
+absent `/knowledge-capture` in a workspace that doesn't define it was, at #680's ship, a correct, visible,
+harmless outcome that ticket deliberately did not detect or grey out. **[#681](https://github.com/pyrycode/pyrycode-desktop/issues/681) has since
 built exactly that grey-out** — see § Grey-out for an absent command below. See [Driving a running
 session](../../../CLAUDE.md) in CLAUDE.md for the general mechanism.
 
@@ -34,8 +37,12 @@ export function ComposerActionsMenu({ onCommand }: { onCommand: (command: string
 
 **This is the #680 shape. #681 split `ComposerActionsMenu` into a pure view (renamed
 `ComposerActionsMenuView`) and a store-bound container that kept the original name** — see § Grey-out for
-an absent command below for the current signatures; `COMPOSER_ACTIONS` and `COMPOSER_ACTIONS_LABEL` are
-unchanged and `COMPOSER_ACTIONS` is still never mutated.
+an absent command below for the current signatures; `COMPOSER_ACTIONS_LABEL` is unchanged and
+`COMPOSER_ACTIONS` is still never mutated. **The array above is not the current shape**:
+[#1496](https://github.com/pyrycode/pyrycode-desktop/issues/1496) dropped the `{ id: '/clear', label:
+'Reset session' }` member — reset moved to the control row (§ New session control action below, now itself
+labelled Reset session) — so `COMPOSER_ACTIONS` today holds only `/compact` and `/knowledge-capture`, in
+that order.
 
 **The `id` is the command, sent verbatim.** `ComposerOptionsPanelOption.id` is documented elsewhere as
 "the stable identity — the wire/model value," kept separate from `label` because #683 shows `Opus 5` for
@@ -116,7 +123,9 @@ have made a name-only match grey out a working command. It is not — the shippe
 the command *name* itself, and `Reset session` is only its client-owned display label, which never
 participates in matching. There was no live bug to repair; alias matching is still required (a published
 row can name a command only by an alias other than `clear`/`compact`/`knowledge-capture`), just not for
-that reason.
+that reason. **This example is now purely historical** — [#1496](https://github.com/pyrycode/pyrycode-desktop/issues/1496)
+folded the `/clear` entry out of `COMPOSER_ACTIONS` entirely (§ New session control action below), so the
+live rule below applies to `/compact` and `/knowledge-capture` only.
 
 **`composerActionAvailability.ts` (new file)**, framework-free and DOM-free like `composerSend.ts` /
 `composerOptionsKeyboard.ts` / `slashCommandTypeAhead.ts`, so the whole decision is a total function a
@@ -150,13 +159,15 @@ predicate** (`entry is SlashCommandListEntry`), a departure from the architectur
 — it is what lets `markUnavailableActions` narrow on that one call with no second, dead-at-runtime null
 test.
 
-**`markUnavailableActions` is AC3's whole rule, applied identically to all three entries — no per-command
-table, `/clear` and `/compact` are not special-cased.** An entry is present when its id, with exactly one
-leading `/` stripped, equals a published row's `name` **or** any string in that row's `aliases` — exact
+**`markUnavailableActions` is AC3's whole rule, applied identically to both remaining entries — no
+per-command table, neither `/compact` nor `/knowledge-capture` is special-cased** (a third, `/clear`, was
+marked here too until [#1496](https://github.com/pyrycode/pyrycode-desktop/issues/1496) folded it out of
+`COMPOSER_ACTIONS`; see § New session control action below). An entry is present when its id, with exactly
+one leading `/` stripped, equals a published row's `name` **or** any string in that row's `aliases` — exact
 string equality, no case fold and no trim (`publishedRowFor`'s posture; the type-ahead folds case only
 because its own ticket asked for case-insensitive typing). The scan is a linear `Array.prototype.some`,
 deliberately not a `Set` or an index: workspace-authored text keys no cache, no memo and no lookup path
-here either, the store header's obligation carried one hop, and three entries against a measured 51 rows
+here either, the store header's obligation carried one hop, and two entries against a measured 51 rows
 costs nothing perceivable. Returns the input array **by reference** whenever nothing is unavailable — the
 common case (every unknown reading, and a fully-published workspace) allocates nothing. Each marked entry
 is the caller's own option **spread** with one boolean added; `id` and `label` are never rebuilt from a
@@ -220,62 +231,81 @@ Enter while an available row in the same open panel still sends. **The click is 
 what the app does when clicked — `aria-disabled` is advisory, a real pointer does reach the row, and
 forcing the click is what actually drives the path the gate guards.
 
-## New session control action (#1218)
+## New session control action (#1218, folded to the menu's only reset row by #1496)
 
-The menu's fourth row, and the first entry in it that is not a slash command. `/clear` (Reset session,
-above) clears claude's context in place and the process keeps what it holds — loaded workspace
-instructions, tool servers, every setting it was spawned with. New session asks the daemon to kill claude
-and spawn a fresh one under a new id in the open conversation, so every stored setting (model, effort,
-permission mode, the per-conversation system prompt) applies at the spawn instead. The transport half —
-`newSessionCommand`, the routed `newSession` arm in `src/main/index.ts`, `buildNewSession` — shipped with
-[#1217](https://github.com/pyrycode/pyrycode-desktop/issues/1217) with no renderer caller; this ticket is
-that caller and the proof the round trip works. **The daemon answers the frame with nothing at all** — the
-only observable effect, when it has a child to rotate, is the pre-existing `session_transition` marker
-drawn by the shipped `.session-delimiter`, which is why the fake-tier proof below needs two arms rather
-than one.
+**As shipped by #1218**, this was the menu's fourth row and its first entry that is not a slash command,
+drawn *beside* a separate `/clear` row labelled Reset session: `/clear` cleared claude's context in place
+and the process kept what it holds — loaded workspace instructions, tool servers, every setting it was
+spawned with — while this row asked the daemon to kill claude and spawn a fresh one under a new id in the
+open conversation, so every stored setting (model, effort, permission mode, the per-conversation system
+prompt) applied at the spawn instead. That was the two-button surface Juhana's 2026-09-06 decision had
+already rejected — a conversation has exactly one reset path, the cold one — and on 2026-09-15 he asked why
+there were two. **[#1496](https://github.com/pyrycode/pyrycode-desktop/issues/1496) folded them**: the
+`/clear` row is gone from `COMPOSER_ACTIONS` (§ Actions menu above), this row's label became **Reset
+session**, and it moved from last to first. The row's own dispatch is unchanged by the fold — only which
+row makes it, what it's called, and where it sits changed.
 
-**A second array, not a widened one.** `COMPOSER_ACTIONS` is untouched — still exactly the three slash
-commands, still an array whose every id *is* the command sent verbatim. The control row is a sibling
-constant in the same file:
+The transport half — `newSessionCommand`, the routed `newSession` arm in `src/main/index.ts`,
+`buildNewSession` — shipped with [#1217](https://github.com/pyrycode/pyrycode-desktop/issues/1217) with no
+renderer caller; #1218 is that caller and the proof the round trip works. **The daemon answers the frame
+with nothing at all** — the only observable effect, when it has a child to rotate, is the pre-existing
+`session_transition` marker drawn by the shipped `.session-delimiter`, which is why the fake-tier proof
+below needs two arms rather than one.
+
+**A second array, not a widened one — and that separation is what made the #1496 fold safe.**
+`COMPOSER_ACTIONS` is never touched by this row: it holds whatever slash commands the menu offers (three at
+\#1218's ship, two — `/compact` and `/knowledge-capture` — since #1496 dropped `/clear`), still an array
+whose every id *is* the command sent verbatim. The control row is a sibling constant in the same file, and
+its label is the one field #1496 changed:
 
 ```ts
 export const NEW_SESSION_ACTION: ComposerOptionsPanelOption = {
   id: 'new-session',
-  label: 'New session (restarts claude)'
+  label: 'Reset session'
 }
 export function composerActionRows(
   menu: SlashCommandListEntry | null
 ): readonly ComposerOptionsPanelOption[] {
-  return [...markUnavailableActions(COMPOSER_ACTIONS, menu), NEW_SESSION_ACTION]
+  return [NEW_SESSION_ACTION, ...markUnavailableActions(COMPOSER_ACTIONS, menu)]
 }
 ```
 
-`id` carries no leading slash and is disjoint from every `COMPOSER_ACTIONS` id — pinned by a test, since
-it is what makes the view's two-arm dispatch total: `onSelect={(id) => (id === NEW_SESSION_ACTION.id ?
-onNewSession() : onCommand(id))}`. `label` carries the whole distinction from `Reset session` in words,
-because the shared [options panel](conversation-shell-composer-options-panel.md) renders one visible
-field per row and no description (the #934 product decision) — a client-owned constant and a load-bearing
-e2e locator like `COMPOSER_ACTIONS_LABEL`. The row is appended **last**, keeping the three
-availability-marked commands one contiguous block, on the reading that AC1's "beside Reset session" and
-the ticket's "interim home: the Actions menu" both name the *surface* the row lives on (the eventual home
-is the channel-settings header), not a row index — the distinction is the label's job by the AC's own next
-clause.
+**`NEW_SESSION_ACTION` keeps its constant name and its `id` (`new-session`) across the #1496 rename —
+deliberately, not by oversight.** The id, the view's `onNewSession` prop, the `sendNewSession` helper, the
+`newSession` IPC command and the `new_session` wire envelope all keep the verb they have and are one chain;
+`label` exists as a field separate from the constant's name precisely so the two can differ, and only
+`label` speaks the UI's vocabulary. `id` carries no leading slash and is disjoint from every
+`COMPOSER_ACTIONS` id — pinned by a test, since it is what makes the view's two-arm dispatch total:
+`onSelect={(id) => (id === NEW_SESSION_ACTION.id ? onNewSession() : onCommand(id))}`. That dispatch reads
+the id, never the row's position, so #1218's append-last and #1496's move to prepend-first changed nothing
+about which arm a pick takes. At #1218's ship the row was appended **last**, keeping the availability-marked
+commands one contiguous block at the head, on the reading that AC1's "beside Reset session" named the
+*surface* the row lives on, not a row index. **#1496 moved it to the head instead** — AC1 there mandates
+`Reset session, Compact session, Knowledge capture` in that order — so the availability-marked block is now
+the contiguous tail rather than the head; the composition stays the same single splice-free expression
+either way.
 
-**Why a second array is what makes AC3 structural rather than a carve-out.** The control entry is never
-an argument to `markUnavailableActions` (§ Grey-out above), so no published `slash_command_list` —
-complete, empty, hostile or truncated — can reach it: there is no "except this one" branch inside that
-module to get backwards, since `isPublished` strips one leading slash and matches a published `name` or
-alias, and a non-slash id like `new-session` would otherwise match nothing and grey out in every
-workspace with a complete list, a failure that ships looking correct. It is also what left two shipped
-assertions honest rather than weakened, contrary to the ticket's own prediction that they would need
-editing: `ComposerActionsMenu.test.tsx`'s "every entry id starts with `/`" still guards exactly the array
-whose ids are commands, and `composerActionAvailability.test.ts`'s "an empty published menu marks every
-entry" is untouched and still true, since `COMPOSER_ACTIONS` still holds only entries that rule applies
-to. What moved instead is the *rendered* row counts (3→4 unmarked, 2→3 in the mixed panel) — the honest
-place for a fourth row to be felt. **Lesson for a future ticket reading a Technical Notes section**: when
-it predicts which shipped guard must be weakened to satisfy an AC, treat that as a hint about the
-sketched design rather than a requirement the AC itself imposes — a differently-shaped design can leave
-the guard both green and still meaningful.
+**Why a second array is what makes AC3 (#1218) and AC2 (#1496) structural rather than a carve-out.** The
+control entry is never an argument to `markUnavailableActions` (§ Grey-out above), so no published
+`slash_command_list` — complete, empty, hostile or truncated — can reach it: there is no "except this one"
+branch inside that module to get backwards, since `isPublished` strips one leading slash and matches a
+published `name` or alias, and a non-slash id like `new-session` would otherwise match nothing and grey out
+in every workspace with a complete list, a failure that ships looking correct. After #1496 folded `/clear`
+away, this row is the conversation's **only** reset path, so that failure mode would now mean no reset
+offered at all rather than a redundant second one — which is why #1496's own acceptance criteria restate
+the same structural property (the control row "stays offered in a workspace whose published
+`slash_command_list` is complete and names neither it nor `clear`") rather than trusting the #1218 shape to
+still hold. It is also what left two shipped assertions honest rather than weakened at #1218's ship, contrary
+to that ticket's own prediction that they would need editing: `ComposerActionsMenu.test.tsx`'s "every entry
+id starts with `/`" still guards exactly the array whose ids are commands, and
+`composerActionAvailability.test.ts`'s "an empty published menu marks every entry" is untouched and still
+true, since `COMPOSER_ACTIONS` still holds only entries that rule applies to. What moved instead is the
+*rendered* row counts (3→4 unmarked at #1218, 2→3 in the mixed panel; back to 3 unmarked at #1496, now
+1→2 in the mixed panel since `COMPOSER_ACTIONS` itself shrank) — the honest place for a row-count change to
+be felt. **Lesson for a future ticket reading a Technical Notes section**: when it predicts which shipped
+guard must be weakened to satisfy an AC, treat that as a hint about the sketched design rather than a
+requirement the AC itself imposes — a differently-shaped design can leave the guard both green and still
+meaningful.
 
 **The send: `sendNewSession.ts` (new file)**, the `sendInterrupt` shape with an address — `sendInterrupt`
 sends a bare Esc naming nothing, and a restart has to name the one conversation it kills claude in:
@@ -296,46 +326,69 @@ killed mid-work. `isNewSessionPayload` (`src/shared/ipc/commands.ts`) remains th
 that case at the renderer→main boundary; the renderer-side check is defence in depth, commented as such so
 a later reader cannot conclude the boundary guard is now redundant and relax it — a command the boundary
 guard rejects is dropped in silence, no frame, no event, no error, so a relaxed clause on either side
-compiles, typechecks and passes every gate with no symptom to chase. `Composer.startNewSession` now checks the current conversation owner's connected status
-before calling this helper. It closes over the same `activeConversationId` as `sendText`
-and dereferences `window.pyry` only at interaction time. Main's existing validation remains
-in place; renderer availability prevents offering or dispatching unavailable actions.
+compiles, typechecks and passes every gate with no symptom to chase. `Composer.startNewSession` checks the
+current conversation owner's connected status before calling this helper. It closes over the same
+`activeConversationId` as `sendText` and dereferences `window.pyry` only at interaction time. Main's
+existing validation remains in place; renderer availability prevents offering or dispatching unavailable
+actions.
+
+**No confirmation step in front of this row, by decision — worth a reader's attention rather than an
+assumption of safety.** The shared panel focuses row 0 on open, and #1496 put this row at index 0, so an
+operator who opens the Actions menu and presses Enter reflexively now kills and respawns claude, where
+before the fold (when `/clear` was row 0) that same keystroke cleared context in place. Both #1218's and
+\#1496's security reviews name this and leave it unaddressed deliberately: AC1 (#1496) mandates the row
+order, Juhana's 2026-09-06 decision mandates the single cold reset path, and the planned mitigation is
+upstream — a daemon-side wrap-up turn that writes a handoff note before the kill, not yet landed as of
+\#1496. A client-side confirmation dialog would be a product decision neither ticket was given.
 
 **Testing.** `sendNewSession.test.ts` covers the happy path, the `null` and `''` refusals and a swallowed
-bridge throw with a plain spy — no React, no store. `ComposerActionsMenu.test.tsx` pins the fourth row's
-exact label, its position last, and the two identity properties the dispatch's totality rests on
-(`new-session` has no leading slash and matches no `COMPOSER_ACTIONS` id), plus a deterministic AC3
-detector: the control row carries no `unavailable` marking and no `aria-disabled` against both a complete
-list naming none of the entries and a complete empty list — the guard that reddens if a later ticket ever
-merges the two arrays back into one. `e2e/composer-new-session.spec.ts` (new) is AC2 and AC4 end to end:
-picking the row sends exactly one `new_session` naming the open conversation, zero `send_message`, no user
-bubble and an empty message box; with the daemon answering nothing, no delimiter and no error surface;
-with one pushed `session_transition`, exactly one `.session-delimiter`. **The two AC4 arms are a matched
-pair, not two independent tests** — the daemon answering `new_session` with nothing gives the "nothing
-drawn" arm no event to await, so on its own it is vacuous; it is worth something only paired with the arm
-that pushes one `session_transition` and counts exactly one delimiter. `e2e/real-claude-new-session.spec.ts`
-(new) is the liveness proof AC5 asks for and the reason it cannot be folded into the fake tier: a live
-claude cannot be made to answer with no `session_transition` on demand, and a scripted fake cannot prove
-the turn stream survives a real respawn. It mirrors `real-claude-interrupt.spec.ts`'s pair-create-send
-preamble, sends one real turn to give the daemon a child to rotate, captures a `nonEmptyAssistantCount`
-baseline **after** that turn quiesces (a bare `>= 1` is vacuous in a chat that already streamed a turn —
-see [live-e2e-runbook.md](live-e2e-runbook.md)), picks New session, asserts exactly one delimiter, sends a
-second message and asserts the count rises **above** the baseline. Adding it makes the real-claude tier's
-floor stale — see [live-e2e-runbook.md § Current real-claude gate state](live-e2e-runbook.md), the bump is
-the operator's, and it does not block this ticket.
+bridge throw with a plain spy — no React, no store. `ComposerActionsMenu.test.tsx` pins the row's exact
+label (`Reset session` as of #1496; `New session (restarts claude)` at #1218's ship), its position (first
+as of #1496; last at #1218's ship), and the two identity properties the dispatch's totality rests on
+(`new-session` has no leading slash and matches no `COMPOSER_ACTIONS` id), plus a deterministic detector:
+the control row carries no `unavailable` marking and no `aria-disabled` against both a complete list naming
+none of the entries and a complete empty list — the guard that reddens if a later ticket ever merges the
+two arrays back into one, and #1496 sharpened its input further by also proving the row survives a complete
+list that names neither the row's id nor `clear`. `e2e/composer-new-session.spec.ts` drives AC2/AC4 (#1218)
+and AC1/AC4 (#1496) end to end: picking the row sends exactly one `new_session` naming the open
+conversation, zero `send_message`, no user bubble and an empty message box; with the daemon answering
+nothing, no delimiter and no error surface; with one pushed `session_transition`, exactly one
+`.session-delimiter`. **The two arms are a matched pair, not two independent tests** — the daemon answering
+`new_session` with nothing gives the "nothing drawn" arm no event to await, so on its own it is vacuous; it
+is worth something only paired with the arm that pushes one `session_transition` and counts exactly one
+delimiter. `e2e/real-claude-new-session.spec.ts` is the liveness proof and the reason it cannot be folded
+into the fake tier: a live claude cannot be made to answer with no `session_transition` on demand, and a
+scripted fake cannot prove the turn stream survives a real respawn. It mirrors
+`real-claude-interrupt.spec.ts`'s pair-create-send preamble, sends one real turn to give the daemon a child
+to rotate, captures a `nonEmptyAssistantCount` baseline **after** that turn quiesces (a bare `>= 1` is
+vacuous in a chat that already streamed a turn — see [live-e2e-runbook.md](live-e2e-runbook.md)), picks
+**Reset session** (renamed from New session by #1496; locator and prose only, no new spec), asserts exactly
+one delimiter, sends a second message and asserts the count rises **above** the baseline. #1218 made the
+real-claude tier's floor stale — see [live-e2e-runbook.md § Current real-claude gate
+state](live-e2e-runbook.md); #1496 adds no spec and leaves that floor unchanged.
 
-**A row-count lesson for any future ticket that appends to this menu.**
+**A row-count lesson for any future ticket that touches this menu.**
 `e2e/composer-actions-unavailable.spec.ts` arrows from the greyed row back to `Reset session` through the
-roving-tabindex wrap; over three rows that was one `ArrowDown`, over four it is two. Nothing in a diff
-that only adds a row names that spec's keyboard drive — grep a shared panel's specs for keyboard
-navigation, not only for row-count and label assertions, before appending another row anywhere in this
-family.
+roving-tabindex wrap, and the wrap distance is a function of the row count: one `ArrowDown` over three
+rows at #680's ship, two over four once #1218 appended this row, back to one once #1496 folded `/clear`
+away. **A label rename across two rows that fold into one is also not a plain rename, and a spec can go
+green for the wrong reason**: this spec's `AVAILABLE_ROW` and `CONTROL_ROW` constants anchored on `Reset
+session` (the `/clear` row) and the New session label respectively — after the fold both names resolve to
+the same row, so a mechanical rename would have pointed `AVAILABLE_ROW` at the control row too, silently
+turning "an available row still sends" into a no-op assertion. #1496's fix moved `AVAILABLE_ROW` to
+`Compact session` and dropped `clear` from the spec's own published-list fixture, which is also what keeps
+the never-greyed assertion honest against the exact regression AC2 exists to forbid (folding the control
+row back into `COMPOSER_ACTIONS` under the id `/clear`). Check for collapsed anchors — two constants about
+to name the same element — before a mechanical rename, not after. Nothing in a diff that only adds, removes
+or renames a row names this spec's keyboard drive on its own; grep a shared panel's specs for keyboard
+navigation, not only for row-count and label assertions, before changing this family's row count again.
 
-Code review (self-review) PASS, one non-blocking NIT (a stale word in
-`e2e/composer-actions.spec.ts`'s own file-header comment, describing the static tier as pinning "the
-panel's three unmarked rows" where the referenced test now asserts four). See [PR
-\#1220](https://github.com/pyrycode/pyrycode-desktop/pull/1220) and the architecture spec at
-`docs/specs/architecture/1218-new-session-action.md`.
+Code review (self-review) PASS at #1218, one non-blocking NIT (a stale word in
+`e2e/composer-actions.spec.ts`'s own file-header comment). #1496's own review (verifier) PASS, one SHOULD
+FIX and two NITs, none blocking. See [PR \#1220](https://github.com/pyrycode/pyrycode-desktop/pull/1220),
+[PR \#1513](https://github.com/pyrycode/pyrycode-desktop/pull/1513), and the architecture specs at
+`docs/specs/architecture/1218-new-session-action.md` and
+`docs/specs/architecture/1496-one-reset-session-row.md`.
 
 ## The open-conversation reader cutover (#758)
 

@@ -191,11 +191,13 @@ that fires it on conversation open.
 **`newSession(conversationId)` was added in [#1217](https://github.com/pyrycode/pyrycode-desktop/issues/1217)**
 — asks the daemon to **kill** the supervised claude process in the named conversation and spawn a fresh
 one under a new session id, so every stored setting (model, effort, permission mode, and the
-per-conversation system prompt pyrycode#2094 introduces) re-applies at the spawn. **Not** the `/clear`
-the Actions menu's Reset session already sends as ordinary message text — that clears context in place
-and the process keeps everything it holds; this discards the process outright, which is why it is the
-only route by which a stored per-conversation setting takes effect at all (on the Mac the daemon's idle
-timeout is 0, so nothing evicts and `/clear` respawns nothing). Faithful `requestModelList` send
+per-conversation system prompt pyrycode#2094 introduces) re-applies at the spawn. **Not** a typed `/clear`
+— that clears context in place and the process keeps everything it holds; this discards the process
+outright, which is why it is the only route by which a stored per-conversation setting takes effect at all
+(on the Mac the daemon's idle timeout is 0, so nothing evicts on its own). The Actions menu's Reset session
+row dispatches this method directly as of [#1496](https://github.com/pyrycode/pyrycode-desktop/issues/1496)
+— until then the menu carried a separate row that sent `/clear` as ordinary message text; typing `/clear`
+by hand is unaffected. Faithful `requestModelList` send
 mechanics (inert no-op when `driver === null`, sharing the one `nextEnvelopeId` counter, advancing the id
 only on a successful build, a content-free `catch {}`), and the **same** required-id divergence from
 `requestSessionSettings`'s optional one, for a stronger reason still: an unnamed `new_session` is not

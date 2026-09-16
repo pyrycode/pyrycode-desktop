@@ -3,12 +3,13 @@
 // a newly minted session id. A sibling to requestModelListEnvelope.ts, following the same
 // one-concern-per-file split the module already uses.
 //
-// IT IS NOT THE `/clear` THIS APP ALREADY SENDS. The Actions menu's Reset session sends the literal
-// text `/clear` as an ordinary message: claude clears its context in place and the process keeps
-// everything it holds — loaded workspace instructions, tool servers, every setting it was spawned
-// with. This frame throws the process away, which is why it is the route by which a stored
+// IT IS NOT A `/clear`. Sent as ordinary message text, `/clear` makes claude clear its context in place
+// and the process keeps everything it holds — loaded workspace instructions, tool servers, every setting
+// it was spawned with. This frame throws the process away, which is why it is the route by which a stored
 // per-conversation setting takes effect at all. On the Mac the daemon's idle timeout is 0, so nothing
-// evicts and `/clear` respawns nothing.
+// evicts and `/clear` respawns nothing. (#1496 folded the Actions menu's two reset rows into one: its
+// `Reset session` row dispatches THIS frame. `/clear` still reaches claude when an operator types it into
+// the composer, which is a message-path concern and not this builder's.)
 //
 // FIRE-AND-FORGET, and more completely than its neighbours: no nonce, no idempotency key, no
 // correlation key and NO REPLY of any kind — not even an error. A named id the daemon cannot act on is

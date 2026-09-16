@@ -37,16 +37,14 @@ const ROUNDTRIP_TIMEOUT_MS = 15_000
 // LABELS BELOW ARE LOAD-BEARING LOCATORS — rewording one in ComposerActionsMenu.tsx breaks this spec,
 // which is the point.
 const ACTIONS_LABEL = 'Actions'
-// #1218 appended a FOURTH row, and it is the one entry here that is not a slash command: picking it
-// dispatches a `new_session` control frame rather than message text, so this spec's captures never see
-// it. Its own drive is e2e/composer-new-session.spec.ts. It is listed here because `toHaveText` below
-// asserts the panel's rows exactly, which is what makes a row appearing or vanishing fail loudly.
-const ROW_LABELS = [
-  'Reset session',
-  'Compact session',
-  'Knowledge capture',
-  'New session (restarts claude)'
-]
+// `Reset session` LEADS AND IS NOT A SLASH COMMAND. #1218 added it as a fourth, appended row reading
+// `New session (restarts claude)`, beside a `/clear` row that carried the Reset session label; #1496
+// folded the two, dropped the `/clear` entry and moved the survivor first. Picking it dispatches a
+// `new_session` control frame rather than message text, so this spec's captures never see it and no test
+// below picks it — its own drive is e2e/composer-new-session.spec.ts. It is listed here because
+// `toHaveText` asserts the panel's rows exactly, which is what makes a row appearing, vanishing or
+// changing places fail loudly.
+const ROW_LABELS = ['Reset session', 'Compact session', 'Knowledge capture']
 
 // EXACT IS LOAD-BEARING, not defensive tidiness. getByRole's `name` matches as a case-insensitive
 // SUBSTRING by default, and the thread overflow trigger one region up is labelled `More actions` — so a
@@ -90,7 +88,15 @@ function captureOutbound(): {
   }
 }
 
-test('picking Reset session sends /clear as an ordinary message (AC1, AC2, AC3)', async ({
+// DRIVEN ON `Compact session` RATHER THAN ON ROW 1, and that is #1496's doing rather than a preference.
+// This test used to pick the first row and assert one `send_message` carrying `/clear`; after the fold
+// row 1 is the control row, so that pick sends a frame this spec's `captureOutbound` does not record and
+// the capture stays empty — the test would have gone green for the wrong reason, or red for a reason that
+// is not a defect. The control row's dispatch has its own drive in e2e/composer-new-session.spec.ts and
+// is deliberately not duplicated here. Everything this test is actually for — the panel opening, its rows
+// being exactly ROW_LABELS, a pick closing it, the optimistic echo, and one outbound whose text is the
+// command verbatim — is unchanged; only which slash row carries it moved.
+test('picking Compact session sends /compact as an ordinary message (AC1, AC2, AC3)', async ({
   launchPairedApp
 }) => {
   const { sent, buildReplyFrames } = captureOutbound()
@@ -106,40 +112,41 @@ test('picking Reset session sends /clear as an ordinary message (AC1, AC2, AC3)'
   await expect(panel.getByRole('menuitem')).toHaveText(ROW_LABELS)
 
   // --- Pick (AC2, AC3). ---
-  await panel.getByRole('menuitem', { name: ROW_LABELS[0] }).click()
+  await panel.getByRole('menuitem', { name: ROW_LABELS[1] }).click()
   await expect(panel).toBeHidden()
 
   // The command lands in the thread as a USER message, exactly as a typed one does — the same optimistic
   // `userText` echo the send button produces (`.bubble[data-thread-role="user"]`). It follows the thread
   // down through the same `onMessageSent()` notify, whose behaviour thread-scroll-pin.spec.ts owns.
   await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveText(
-    bubbleTextExactly('/clear'),
+    bubbleTextExactly('/compact'),
     { timeout: ROUNDTRIP_TIMEOUT_MS }
   )
 
   // BOTH the bubble AND the outbound: the bubble alone would pass if the echo were painted without
   // anything being sent. One `send_message`, whose text is the command verbatim — no new command type.
   await expect.poll(() => sent.length, { timeout: ROUNDTRIP_TIMEOUT_MS }).toBe(1)
-  expect(sent[0].text).toBe('/clear')
+  expect(sent[0].text).toBe('/compact')
 })
 
-test('picking Compact session sends /compact — the mapping is per row (AC2)', async ({
+test('picking Knowledge capture sends /knowledge-capture — the mapping is per row (AC2)', async ({
   launchPairedApp
 }) => {
   const { sent, buildReplyFrames } = captureOutbound()
   const { page } = await launchPairedApp({ buildReplyFrames })
 
   await actionsTrigger(page).click()
-  await actionsPanel(page).getByRole('menuitem', { name: ROW_LABELS[1] }).click()
+  await actionsPanel(page).getByRole('menuitem', { name: ROW_LABELS[2] }).click()
 
   // A second entry carrying its own command is enough to prove the mapping is per-row rather than
-  // hardcoded to the first one; a third adds no information.
+  // hardcoded to one position. Since #1496 the two slash rows ARE these two, so this pair is the whole
+  // mapping rather than a sample of it.
   await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveText(
-    bubbleTextExactly('/compact'),
+    bubbleTextExactly('/knowledge-capture'),
     { timeout: ROUNDTRIP_TIMEOUT_MS }
   )
   await expect.poll(() => sent.length, { timeout: ROUNDTRIP_TIMEOUT_MS }).toBe(1)
-  expect(sent[0].text).toBe('/compact')
+  expect(sent[0].text).toBe('/knowledge-capture')
 })
 
 test('Escape dismisses the panel and returns focus to the Actions button (AC1)', async ({

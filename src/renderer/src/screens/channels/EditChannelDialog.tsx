@@ -388,7 +388,7 @@ export function EditChannelDialog({
       // late second reply from clobbering a draft the operator has already started — the hazard
       // `deriveSystemPromptSection`'s docblock names, closed here by the arm rather than by a separate
       // "has the draft been touched" test. `sessionPromptStatus` rides along on the reading and is
-      // DROPPED ON THE FLOOR: the `differs` notice belongs to the section, which has a New session
+      // DROPPED ON THE FLOOR: the `differs` notice belongs to the section, which has a Reset session
       // control to point at, and a modal with one OK has nothing to do with it.
       setPrompt((current) =>
         current.type === 'reading'

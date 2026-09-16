@@ -22,7 +22,7 @@ import {
 // lines to the same file is three merge conflicts. This file is the precedent they follow. It adds no
 // CSS import: its styles live in conversation.css, whose single importer is ConversationScreen.tsx:13.
 
-// The three commands, in the order the design lists them — and THE ID IS THE COMMAND, sent verbatim as
+// The slash commands, in the order the design lists them — and THE ID IS THE COMMAND, sent verbatim as
 // ordinary message text.
 //
 // `ComposerOptionsPanelOption` splits `id` from `label` because #683 shows `Opus 5` for `claude-opus-5`:
@@ -41,23 +41,42 @@ import {
 // below is still the CLIENT'S OWN and is never mutated or rebuilt from that list — the marking is derived
 // per render by `markUnavailableActions`.
 // #1218 NARROWED WHAT THIS ARRAY IS, WITHOUT CHANGING A BYTE OF IT. Everything above still holds — of
-// these three entries — and the array is still the client's own, never rebuilt from a published list.
-// What it is no longer is the whole menu: the fourth row below is a CONTROL FRAME rather than a slash
+// the entries that remain — and the array is still the client's own, never rebuilt from a published list.
+// What it is no longer is the whole menu: the control row below is a CONTROL FRAME rather than a slash
 // command, so it lives in its own constant and `composerActionRows` composes the two. Add a slash
 // command here; add a control action there. See that constant for why the split is the shape rather
 // than a `command` field, a lookup or an id union.
+//
+// #1496 REMOVED `/clear`, and it is not coming back. That entry was the Actions menu's second reset path:
+// picking it sent the literal text `/clear` as an ordinary message, which clears claude's context in place
+// while the process survives. Juhana decided on 2026-09-06 that a conversation has exactly ONE reset path,
+// the cold one, and the control row below is it. Restoring a `/clear` entry here — or, the likelier
+// tidy-up, giving the control row that id so it matches a published `clear` — rebuilds the two-button
+// surface that decision rejected and would silently make the reset path greyable by a workspace's
+// published list. ComposerActionsMenu.test.tsx asserts the absence directly for that reason.
+//
+// Typing `/clear` into the composer still works and is untouched: claude intercepts a message whose text
+// begins with a slash and runs it rather than passing it to the model, so the typed route needs nothing
+// from this client.
 export const COMPOSER_ACTIONS: readonly ComposerOptionsPanelOption[] = [
-  { id: '/clear', label: 'Reset session' },
   { id: '/compact', label: 'Compact session' },
   { id: '/knowledge-capture', label: 'Knowledge capture' }
 ]
 
 /**
- * #1218 — New session, and it is the FIRST entry in this menu that is not a slash command. It asks the
- * daemon to kill claude and spawn a fresh one under a new id, so every stored setting applies at the
- * spawn; `sendNewSession` is what it dispatches. Routing it through the message-text path the three
- * above take would send the literal string "New session" to claude, which is why the menu now holds two
- * kinds of entry and why the id below is NOT the command.
+ * #1218 — the conversation's reset, and it is the only entry in this menu that is not a slash command. It
+ * asks the daemon to kill claude and spawn a fresh one under a new id, so every stored setting applies at
+ * the spawn; `sendNewSession` is what it dispatches. Routing it through the message-text path the slash
+ * entries take would send its label to claude as prose, which is why the menu holds two kinds of entry and
+ * why the id below is NOT the command.
+ *
+ * #1496 GAVE IT THE `Reset session` LABEL AND MADE IT THE FIRST ROW. It shipped as
+ * `New session (restarts claude)` beside a `/clear` row that also called itself Reset session, and the
+ * parenthetical existed to tell the two apart. There is no second reset row now, so the words are the
+ * plain ones and the distinction is carried by there being one. THE NAME OF THIS BINDING DELIBERATELY DID
+ * NOT FOLLOW: the `new-session` id below, the `onNewSession` prop, `sendNewSession`, the `newSession` IPC
+ * command and the `new_session` wire envelope are one chain speaking the daemon's verb, and `label` is a
+ * separate field precisely so the row can speak the product's.
  *
  * A SECOND ARRAY RATHER THAN A FOURTH MEMBER OF THE ONE ABOVE, and that is the whole of AC3. An entry
  * this menu draws is greyed out when the conversation's published `slash_command_list` is complete and
@@ -73,26 +92,27 @@ export const COMPOSER_ACTIONS: readonly ComposerOptionsPanelOption[] = [
  * is what makes `ComposerActionsMenuView`'s two-arm dispatch total. Both properties are pinned by a test
  * rather than left to inspection.
  *
- * THE LABEL CARRIES THE WHOLE DISTINCTION FROM `Reset session`, because it is the only field the shared
- * panel draws — one visible field per row and no description, the #934 product decision that
- * `ComposerOptionsPanel` records, and adding a description field to a surface four menus share is not
- * this ticket's. So the row says in words that claude is restarted. It is a client-owned constant like
- * `COMPOSER_ACTIONS_LABEL`, it is a LOAD-BEARING e2e LOCATOR, and no workspace string may ever reach it.
+ * THE LABEL IS THE ONLY FIELD THE SHARED PANEL DRAWS — one visible field per row and no description, the
+ * #934 product decision that `ComposerOptionsPanel` records. It is a client-owned constant like
+ * `COMPOSER_ACTIONS_LABEL`, it is a LOAD-BEARING e2e LOCATOR (composer-actions, composer-new-session,
+ * composer-actions-unavailable, offline-conversation-actions and both real-claude specs all match it), and
+ * no workspace string may ever reach it.
  */
 export const NEW_SESSION_ACTION: ComposerOptionsPanelOption = {
   id: 'new-session',
-  label: 'New session (restarts claude)'
+  label: 'Reset session'
 }
 
 /**
  * The rows this menu draws, in order, marked — the whole "which entries, and which of them are greyed
  * out" decision in one place, so the view holds none of it.
  *
- * The control entry is APPENDED LAST rather than placed beside `Reset session`. #1218's "beside Reset
- * session" names the surface this action lives on (its Context calls the Actions menu an interim home,
- * with the channel-settings header the eventual one), and the distinction between the two rows is
- * carried by the label, which is the AC's own next clause. Appending keeps the three marked commands one
- * contiguous block and this composition a single splice-free expression.
+ * The control entry is PREPENDED since #1496 — Reset session, then Compact session, then Knowledge
+ * capture, the order that ticket's AC1 names. It shipped appended, when a separate `/clear` row held the
+ * first slot and the two rows were told apart by their labels; folding them left one reset row and it
+ * leads. Prepending keeps the marked commands one contiguous block (the tail rather than the head) and
+ * this composition a single splice-free expression. Nothing routes on position: the view's dispatch is an
+ * equality test on the id, so this order is presentation only.
  *
  * It returns a FRESH ARRAY every render, where `markUnavailableActions` returns its input by reference
  * when nothing is unavailable. Nothing consumes that identity: `useComposerOptionsClamp`'s deps are
@@ -102,7 +122,7 @@ export const NEW_SESSION_ACTION: ComposerOptionsPanelOption = {
 export function composerActionRows(
   menu: SlashCommandListEntry | null
 ): readonly ComposerOptionsPanelOption[] {
-  return [...markUnavailableActions(COMPOSER_ACTIONS, menu), NEW_SESSION_ACTION]
+  return [NEW_SESSION_ACTION, ...markUnavailableActions(COMPOSER_ACTIONS, menu)]
 }
 
 // A module-level client-owned constant, following SEND_LABEL / INTERRUPT_LABEL

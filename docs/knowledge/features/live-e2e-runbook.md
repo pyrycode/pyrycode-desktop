@@ -77,7 +77,11 @@ to end: a prompt saved through Channel info produces nothing in a session that w
 same text produces a marker reply once a session actually spawns with it. The ticket asked for the positive
 half on `New session`; the first live run failed there, and the failure was the daemon, not the spec — see
 § Current real-claude gate state's own detail in [system-prompt-write.md](system-prompt-write.md#live-proof-1433)
-and the rework rationale in the spec's file header.
+and the rework rationale in the spec's file header. **`New session` below names the row as it was labelled
+on 2026-09-15, the day this ran** — [#1496](https://github.com/pyrycode/pyrycode-desktop/issues/1496) the
+next day folded it with the menu's separate `/clear` row and renamed it **Reset session**; the spec picks
+the same row and the same mechanism under its current locator, and the history below is otherwise
+unaffected by the rename.
 
 Two gate runs:
 
@@ -204,11 +208,14 @@ the full account.
 
 **#1218 (2026-09-07) — the tier grows to 15 specs; the floor is already stale by two.**
 `e2e/real-claude-new-session.spec.ts` is the liveness proof for the [New session control
-action](conversation-shell-actions-menu-and-reader-cutover.md#new-session-control-action-1218): pair,
+action](conversation-shell-actions-menu-and-reader-cutover.md#new-session-control-action-1218-folded-to-the-menus-only-reset-row-by-1496): pair,
 create through the FAB, send one real turn to give the daemon a child to rotate, capture a
 `nonEmptyAssistantCount` baseline **after** that turn quiesces (the vacuous-`>= 1` trap below applies
 here too), pick New session, assert exactly one `.session-delimiter`, send a second message and assert
-the count rises above the baseline. **Not yet run live** — `real-*.spec.ts` is `testIgnore`d by the
+the count rises above the baseline. **The row this spec picks is named New session only historically** —
+[#1496](https://github.com/pyrycode/pyrycode-desktop/issues/1496) folded the menu's two reset rows into
+one, renamed this one's label to **Reset session** and moved it first; the spec's locator and prose
+followed, with no change to what it proves or to the tier's floor. **Not yet run live** — `real-*.spec.ts` is `testIgnore`d by the
 default config, nothing in this ticket's own gate loads it, and it was verified only by an ad-hoc
 `tsc --noEmit`. `origin/main` already carried 14 `real-*.spec.ts` files at `373ae70` against the floor of
 13 recorded below (itself already stale by one, the same drift #1055's note two entries down describes),

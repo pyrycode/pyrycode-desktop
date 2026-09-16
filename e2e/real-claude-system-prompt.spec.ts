@@ -31,7 +31,7 @@ test.use({ interactiveRunner: 'stream-json' })
 // SAME prompt text is saved in a second conversation and IS observed in its first reply, so the zero in
 // conversation A is a statement about WHEN the daemon applies a prompt rather than about whether it can.
 //
-// WHY THE POSITIVE HALF IS NOT TAKEN AFTER `New session`, WHICH IS WHAT THIS TICKET FIRST ASKED FOR.
+// WHY THE POSITIVE HALF IS NOT TAKEN AFTER `Reset session`, WHICH IS WHAT THIS TICKET FIRST ASKED FOR.
 // The 2026-09-15 live gate ran that shape and it failed at the marker, and the cause is upstream and
 // structural, not a flake and not the model:
 //
@@ -43,7 +43,7 @@ test.use({ interactiveRunner: 'stream-json' })
 //   says — while `Pool.RotateForNewSession` only rekeys, persists and notifies. The session also stays
 //   `stateActive` across the whole rotation, so even the next message's `Activate` skips the refresh.
 //
-// So a prompt saved during a live session cannot reach the child that `New session` spawns, which
+// So a prompt saved during a live session cannot reach the child that `Reset session` spawns, which
 // contradicts the daemon's own `set_system_prompt` contract ("takes effect at the conversation's NEXT
 // session start"). That is filed upstream; the `test.fixme` at the foot of this file is the proof,
 // written out and ready to flip to `test` when the daemon lands the fix.
@@ -120,7 +120,8 @@ const DELIMITER_SELECTOR = '.session-delimiter:not(.compaction-delimiter)'
 // breaks it, which is the point. `exact: true` on the Actions trigger because getByRole matches `name` as
 // a case-insensitive SUBSTRING and the thread overflow trigger reads `More actions`. ---
 const ACTIONS_LABEL = 'Actions'
-const NEW_SESSION_ROW = 'New session (restarts claude)'
+// Renamed by #1496 — see real-claude-new-session.spec.ts, whose selectors this file copies verbatim.
+const NEW_SESSION_ROW = 'Reset session'
 const CHANNEL_INFO_ROW = 'Channel info'
 const CREATE_CHAT_LABEL = 'Create chat'
 
@@ -392,7 +393,7 @@ test('real claude applies a stored system prompt at a spawn, and a save never re
 // than one text block, and reading the newest would go green on a run where only a later block happened
 // to carry the token.
 test.fixme(
-  'real claude picks up a saved channel system prompt at New session',
+  'real claude picks up a saved channel system prompt at Reset session',
   async ({ relay, daemon, page }) => {
     test.setTimeout(SPEC_TIMEOUT_MS)
 
@@ -451,7 +452,7 @@ test.fixme(
     )
     expect(
       firstAfterRestart,
-      'the first reply after New session did not carry the marker: the rotation respawned claude ' +
+      'the first reply after Reset session did not carry the marker: the rotation respawned claude ' +
         'without recomposing the appended system prompt file'
     ).toBe(true)
   }

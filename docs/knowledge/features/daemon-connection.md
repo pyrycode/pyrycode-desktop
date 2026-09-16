@@ -104,7 +104,8 @@ send mechanics and required-id posture, but with no reply of any kind.
   `requestModelList` (#1165) and `newSession` (#1217).
 - [New session envelope](new-session-envelope.md) — the `newSession(conversationId)` method's wire
   frame, builder, and command path (#1217): kills claude in the named conversation and spawns a fresh
-  one, distinct from the `/clear` the Actions menu's Reset session already sends as message text.
+  one, distinct from a typed `/clear`, which clears context in place. The Actions menu's Reset session
+  row dispatches this frame directly as of #1496 (folded from a separate `/clear`-sending row).
 - [Request history send](request-history-send.md) / [#1222](https://github.com/pyrycode/pyrycode-desktop/issues/1222) —
   the `requestHistory(payload)` method added to this factory (a `requestModelList` send-mechanics twin
   that takes the whole three-field payload rather than a scalar), the `pendingHistoryRequests`

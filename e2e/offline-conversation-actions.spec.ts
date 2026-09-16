@@ -124,7 +124,7 @@ test('pre-opened action menu and missing, connecting, failed or ambiguous owners
   const read = await observe(app)
   await page.locator('.composer__actions').click()
   const menu = page.getByRole('menu', { name: 'Actions', exact: true })
-  await menu.getByRole('menuitem', { name: 'New session (restarts claude)', exact: true }).focus()
+  await menu.getByRole('menuitem', { name: 'Reset session', exact: true }).focus()
   await connection(app, 'connecting')
   await expect(menu).toHaveCount(0)
   await page.keyboard.press('Enter')

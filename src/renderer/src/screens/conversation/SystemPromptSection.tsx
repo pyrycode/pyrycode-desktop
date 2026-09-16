@@ -55,10 +55,14 @@ const SYSTEM_PROMPT_SAVE = 'Save'
 const SYSTEM_PROMPT_CLEAR = 'Clear'
 const SYSTEM_PROMPT_EDITOR_LABEL = 'System prompt for this channel'
 const WRITE_IN_FLIGHT = 'Saving'
+// Both name the Actions menu's reset row, and #1496 renamed it: the row that used to read
+// `New session (restarts claude)` now reads `Reset session`, and the `/clear` row that used to carry that
+// label is gone. The copy follows the row, so a reader is told which control to reach for by the words
+// actually printed on it.
 const WRITE_CONFIRMED =
-  'Saved. A running session keeps the prompt it started with until New session.'
+  'Saved. A running session keeps the prompt it started with until Reset session.'
 const SESSION_DIFFERS =
-  'The running session was started with a different prompt. New session applies the saved one.'
+  'The running session was started with a different prompt. Reset session applies the saved one.'
 
 // One line per SystemPromptWriteFailure member. `prompt-too-long` names the bound rather than repeating
 // the count, because reaching it at all means the pre-flight gate below was bypassed (an over-length

@@ -48,7 +48,10 @@ Compact sends the client-owned `/compact` through the same `sendText` path as th
 click time: a complete list proving absence disables it; unknown or incomplete
 availability does not. The click also rechecks the open conversation id, and
 `sendText` retains its connection/conversation guards. A command never clears the
-typed draft. Reset session remains the Actions-menu `/clear` action.
+typed draft. **Reset session is the Actions menu's `new_session` control action, not a
+slash command**, as of [#1496](https://github.com/pyrycode/pyrycode-desktop/issues/1496) — it dispatches
+outside `sendText` entirely; see [New session control
+action](conversation-shell-actions-menu-and-reader-cutover.md#new-session-control-action-1218-folded-to-the-menus-only-reset-row-by-1496).
 
 Recovery has priority after re-pair and connection errors, before refusal recovery,
 model-settings rejection, Claude reports and usage notices; it is visible only while connected. The

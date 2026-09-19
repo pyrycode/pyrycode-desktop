@@ -258,3 +258,32 @@ Split depth was checked first: parent #1497, no grandparent.
 3. **Whether the live spec can observe the label deterministically.** The observer shape above is the
    answer; if the real tier shows it cannot, the fallback is a poll with the turn timeout and that
    weakening must be recorded in a `## Revisions` entry, not applied silently.
+
+## Revisions
+
+### 2026-09-19 — live-gate failure and delivery proof
+
+The dispatcher log `2026-09-19T11-11-32-006Z_real-claude-gate_#1517.log` reports
+18 passed, one failed and one skipped test. The failure is the reset-label observation in
+`real-claude-new-session.spec.ts`, after the real session delimiter appeared.
+The configured `PYRY_BIN`, `/Users/juhanailmoniemi/.local/share/pyrycode-desktop-tests/pyry`,
+reports `dev-8a850505`. Its source revision is
+`8a850505170c4041b852d899f60601c100894fb1` (2026-09-13); it has no `TypeResetting`,
+`resettingEmitter` or `resetThenRotate`. The producer landed later in upstream
+`bc72445938ff35d7f849fd228215138dbe83858c` (2026-09-16, pyrycode#2478).
+The gate log does not itself record the executable revision; these are the configured
+binary and its version inspected during this rework.
+
+Keep the production implementation and live assertion unchanged. Extend the existing
+fake `composer-new-session.spec.ts` reset drive to send both rising phases through the
+real decode/IPC/keyed-store path and assert their visible labels, then prove the session
+boundary clears the label and the later falling edge leaves it clear. This distinguishes
+missing upstream emission from a client delivery failure without weakening live acceptance.
+No new production files, exports, signatures or error branches; approximately 60 lines of
+additional test and plan work, no overlapping remote feature branch for either file.
+
+The dispatcher/maintainer must rebuild the dedicated test daemon from a clean revision
+containing upstream #2478, record that revision, and rerun the existing real test with
+credentials. The builder does not replace the host binary or run the credentialed tier.
+The single real test and executed-count floor remain unchanged. Documentation handoff
+above remains pending for the documentation stage.

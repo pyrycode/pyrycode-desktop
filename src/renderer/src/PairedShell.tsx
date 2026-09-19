@@ -32,6 +32,7 @@ import {
   type ExitActiveConversationDeps
 } from './exitActiveConversation'
 import { requestRunConfigSnapshot } from './screens/conversation/runConfigSnapshot'
+import { requestContextUsage } from './screens/conversation/requestContextUsage'
 import { requestModelList } from './store/modelListBridge'
 import { requestSystemPrompt } from './store/systemPromptBridge'
 import { activeConversationStore } from './store/activeConversationStore'
@@ -113,27 +114,13 @@ const activateDeps: ActivateConversationDeps = {
   // store DIRECTLY, the `clearTimelineFor` / `clearAllTimelines` shape below: there is no sampling branch
   // to keep in one tested place, because the store method takes the id and nothing else.
   markViewed: (conversationId) => conversationTimelineStore.getState().markViewed(conversationId),
-  // #1166: ask the daemon for the opened conversation's run configuration and its published model list,
-  // and since #1231 its stored system prompt. All three senders are the tested, React-free helpers on
-  // their own paths and each already refuses a falsy id, so this arrow holds no branch — only the three
-  // calls, in the order the three lanes were built. The sequence does not matter (all are
-  // fire-and-forget and their replies are whole-value replaces landing through app-lifetime
-  // subscribers), which is exactly why no gate or await appears here.
-  //
-  // #1231's ask is the one that CANNOT be dropped without the vertical going dark. The other two frames
-  // are also pushed unsolicited, so a missing ask costs freshness; `system_prompt` is REPLY-ONLY, so
-  // with no ask the event never fires at all and the store stays permanently at its not-loaded state.
-  // Its sender's falsy guard is correspondingly load-bearing rather than tidy: this verb has no error
-  // frame, so an unroutable id would draw an ordinary-looking `no_session` reply that nothing
-  // downstream could tell from a true reading.
-  //
-  // `window.pyry` is dereferenced INSIDE the arrow body, the `getState()` shape every member above uses:
-  // it runs only when a conversation is activated, never at module load and never during render, so this
-  // module stays server-renderable.
-  //
+  // Refresh the connected chat's settings, context reading, model list and reply-only system prompt
+  // on every activation, including reopening it. Each sender refuses falsy ids and sends once;
+  // app-lifetime subscribers receive their replies. Read window.pyry only at activation time.
   requestConversationConfig: (conversationId) => {
     if (connectedConversationHostNow(conversationId) === null) return
     requestRunConfigSnapshot(window.pyry.sendCommand, conversationId)
+    requestContextUsage(window.pyry.sendCommand, conversationId)
     requestModelList(window.pyry.sendCommand, conversationId)
     requestSystemPrompt(window.pyry.sendCommand, conversationId)
   }

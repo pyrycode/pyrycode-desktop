@@ -1,7 +1,9 @@
-import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { test, expect, FIRST_SERVER_ID, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type {
   ContextUsagePayload,
+  Envelope,
   SessionSettingsPayload,
   TurnStatePayload,
   WireTurnState
@@ -22,8 +24,8 @@ import type {
 //
 // THE STANDING RULE IS KEPT: a fake-tier spec may not supply an input production does not produce. Every
 // frame here is one the daemon sends — `session_settings` is the reply to the app's own
-// `request_session_settings`, and `context_usage` is fanned out unprovoked after a turn end, which is why
-// the drive runs a `turn_state` thinking → idle pair first rather than pushing the reading cold.
+// `request_session_settings`, and `context_usage` is either a correlated on-open reply or an unsolicited
+// turn-end reading. The two tests below exercise those distinct production paths.
 //
 // SECRET HYGIENE (the sibling specs' rule, carried verbatim): every assertion reads DOM text. The session
 // id and the token figures are non-secret display/routing literals, the three inventories are sent EMPTY
@@ -83,11 +85,12 @@ function sessionSettingsFrame(inReplyTo: number): Uint8Array {
 // The three inventories go out EMPTY and their dropped counts zero — a real, if degenerate, shape the
 // daemon emits, and the one this ticket's two integers are the whole of. `[]` and `0` are values here, not
 // absences: the frame positively reports that claude listed no rows.
-function contextUsageFrame(): Uint8Array {
+function contextUsageFrame(inReplyTo?: number): Uint8Array {
   return encodeEnvelope({
     id: REPLY_ENVELOPE_ID,
     type: 'context_usage',
     ts: FIXED_TS,
+    ...(inReplyTo === undefined ? {} : { in_reply_to: inReplyTo }),
     payload: {
       conversation_id: SEEDED_ROW.id,
       model: 'seeded-model',
@@ -146,4 +149,72 @@ test('composer footer: claude’s reported reading displaces the settings-derive
   // Claude's own `percentage` is held and not displayed. Asserted on the whole footer rather than on the
   // reading alone, so the figure cannot have leaked into a sibling control either.
   await expect(page.locator('.composer__footer')).not.toContainText(`${UNDISPLAYED_PERCENTAGE}%`)
+})
+
+test('chat activation requests context once and replaces both readings before a turn', async ({ launchPairedApp }) => {
+  const requests: Envelope[] = []
+  const app = await launchPairedApp({
+    buildReplyFrames: (inbound) => {
+      const env = decodeEnvelope(inbound)
+      if (env.type === 'list_conversations') return [seedConversationsFrame()]
+      if (env.type === 'request_session_settings' || env.type === 'request_context_usage') requests.push(env)
+      return env.type === 'request_session_settings' ? [sessionSettingsFrame(env.id)] : []
+    }
+  })
+  const { page, daemon } = app
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const contextRequests = () => requests.filter(env => env.type === 'request_context_usage')
+  const settingsRequests = () => requests.filter(env => env.type === 'request_session_settings')
+  const reading = page.locator('.composer__context')
+  const gauge = page.getByRole('progressbar', { name: 'Context window usage' })
+  await expect(reading).toHaveText(SETTINGS.text)
+  await expect.poll(() => contextRequests().length).toBe(1)
+  expect(contextRequests()[0].payload).toEqual({ conversation_id: SEEDED_ROW.id })
+  expect(settingsRequests()).toHaveLength(1)
+  expect(settingsRequests()[0].payload).toEqual(contextRequests()[0].payload)
+
+  // Hold the correlated reply until both surfaces show the fallback. Opening the sheet only asks
+  // for settings; if context were attached to that sender, this count would incorrectly grow.
+  await page.locator('.conversation__overflow-trigger').click()
+  await page.getByRole('menuitem', { name: 'Run configuration', exact: true }).click()
+  await expect(gauge).toHaveAttribute('aria-valuenow', '25')
+  await expect.poll(() => settingsRequests().length).toBe(2)
+  expect(contextRequests()).toHaveLength(1)
+  daemon.pushFrame(contextUsageFrame(contextRequests()[0].id))
+  await expect(reading).toHaveText(REPORTED.text)
+  await expect(gauge).toHaveAttribute('aria-valuenow', '40')
+  await expect(page.locator('.run-config__context-usage')).toHaveText('40% used (80K of 200K tokens)')
+  await page.screenshot({ path: '/tmp/builder-1504-visual/gauge.png', animations: 'disabled' })
+  await page.getByRole('button', { name: 'Close', exact: true }).click()
+  await page.screenshot({ path: '/tmp/builder-1504-visual/footer.png', animations: 'disabled' })
+
+  // Reopen explicitly, with no turn or reply to the second ask. The held reading survives.
+  await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await expect.poll(() => contextRequests().length).toBe(2)
+  expect(contextRequests()[1].payload).toEqual({ conversation_id: SEEDED_ROW.id })
+  await expect.poll(() => settingsRequests().length).toBe(3)
+  await expect(reading).toHaveText(REPORTED.text)
+
+  // Observe at the renderer boundary so main's connected socket cannot conceal a misplaced send.
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Debugger.enable')
+  await page.evaluate(() => { (window as any).__contextCommands = [] })
+  const { result } = await cdp.send('Runtime.evaluate', { expression: 'window.pyry.sendCommand' })
+  await cdp.send('Debugger.setBreakpointOnFunctionCall', {
+    objectId: result.objectId,
+    condition: '(globalThis.__contextCommands.push(arguments[0].type), false)'
+  })
+  for (const type of ['disconnected', 'connecting', 'failed']) {
+    await app.app.evaluate(({ BrowserWindow }, { channel, serverId, type }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send(channel, {
+        type, serverId, error: { code: 'transport', message: 'Offline', retryable: true }
+      })
+    }, { channel: DAEMON_EVENT_CHANNEL, serverId: FIRST_SERVER_ID, type })
+    await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
+    await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    expect(await page.evaluate(() => (window as any).__contextCommands)).toEqual([])
+  }
+  await cdp.detach()
+  expect(contextRequests()).toHaveLength(2)
 })

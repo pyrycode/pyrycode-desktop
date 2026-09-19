@@ -82,6 +82,26 @@ const ids = (count: number): readonly string[] =>
 const hostileKeys = ['__proto__', 'constructor', ''] as const
 
 describe('conversationTimelineStore', () => {
+  it('settles a newly created chat under its creating host without a history response', () => {
+    const store = createConversationTimelineStore()
+    store.getState().markViewed('new-chat')
+    store.getState().initializeCreatedTimeline('host-a', 'new-chat')
+    const slice = store.getState().timelines.get('new-chat')
+    expect(slice?.serverId).toBe('host-a')
+    expect(slice?.timeline).toEqual(emptyTimeline)
+    expect(slice?.localRead).toBeUndefined()
+    expect(slice?.history).toBeNull()
+    expect(slice?.restored).toBeUndefined()
+  })
+
+  it('does not adopt another host’s rows for an identically named newly created chat', () => {
+    const store = createConversationTimelineStore(undefined, () => 'host-a')
+    store.getState().dispatchFor('same-id', delta('old-turn', 'old host text'))
+    store.getState().initializeCreatedTimeline('host-b', 'same-id')
+    expect(store.getState().timelines.get('same-id')?.serverId).toBe('host-b')
+    expect(timelineFor(store, 'same-id')).toEqual(emptyTimeline)
+  })
+
   it('starts holding nothing — selectTimelineFor returns null, not an empty slice (AC1, AC4)', () => {
     const store = createConversationTimelineStore()
 

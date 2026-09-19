@@ -52,6 +52,22 @@ Unavailable-host and whitespace rejection keep their current send result and lea
 
 None.
 
+## Revisions
+
+### 2026-09-19 — verifier regression: new-chat timeline ownership
+
+Retaining the creating host made `ConversationScreen` correctly reject the unowned
+empty slice created by `markViewed`, but nothing settled that new chat's timeline.
+Add `initializeCreatedTimeline(serverId, conversationId)` to
+`conversationTimelineStore` and call it after creation activation in `PairedShell`.
+The creation event establishes an empty live timeline owned by its stamped host,
+without a saved-history read, restoration provenance or pending history request.
+It replaces any same-ID content from another host. Draft coordinates and submission
+behavior remain unchanged. Store tests cover ownership and replacement; the switch
+spec asserts no loading banner before the held list reply, and the verifier's
+`host-conversation-list` regression spec must pass. This adds one production file
+(four total), no exported types and one consumer; total written work remains below 800 lines.
+
 ## Documentation handoff
 
 Pending for the documentation stage: update `docs/knowledge/features/composer-send.md` under “The controlled composer” and “Data flow”, and `docs/knowledge/features/paired-shell-routing.md` under “The conversation-switch remount bug and the paneKey fix”. Explain that text drafts survive by host/conversation for the app session while transient pane state still resets.

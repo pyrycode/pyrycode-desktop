@@ -63,6 +63,8 @@ test('drafts survive create/sidebar switches and screen exits while transient pa
   await composer.fill(SECOND)
   await expect(composer).toHaveValue(SECOND)
   await expect.poll(() => createdList.length).toBeGreaterThan(0)
+  // Creation itself settles the empty live timeline, even before metadata/history arrives.
+  await expect(page.getByText('Loading saved messages…', { exact: true })).toHaveCount(0)
   holdCreatedList = false
   for (const frame of createdList) daemon.pushFrame(frame)
   await expect(page.locator('.channel-list__row').filter({ hasText: 'Untitled' })).toBeVisible()

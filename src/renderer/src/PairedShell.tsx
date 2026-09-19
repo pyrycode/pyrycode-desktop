@@ -476,6 +476,9 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     cancelCreatedInitialization.current?.()
     leaveRecovery()
     activateConversation(activateDeps, created)
+    if (serverId !== undefined) {
+      conversationTimelineStore.getState().initializeCreatedTimeline(serverId, created.id)
+    }
     cancelCreatedInitialization.current = initializeCreatedConversationAfterList(
       created.id, serverId, activateDeps.requestConversationConfig
     )

@@ -307,6 +307,7 @@ export interface ConversationTimelineState {
  *  reducer for the reason the four above are: they are independent operations, and a discriminated
  *  action set would be ceremony. All three are ABSENT-KEY NO-OPS — see their implementations. */
 export type ConversationTimelineStore = ConversationTimelineState & {
+  initializeCreatedTimeline: (serverId: string, conversationId: string) => void
   // #1225 adds the OPTIONAL trailing `joinKey` — the live half of the history join key, recorded on the
   // slice only when the fold below actually changes the timeline. Optional and trailing for
   // `subscribeTimeline`'s own #756/#1013 reason: a required parameter cascades over every existing call
@@ -554,6 +555,10 @@ export function createConversationTimelineStore(
   }
   return createStore<ConversationTimelineStore>((set, get) => ({
     ...init,
+    // A confirmed creation is an observed empty live thread, not a pending saved-history read.
+    initializeCreatedTimeline: (serverId, conversationId) => set(s => ({
+      timelines: withSliceAtTail(s.timelines, conversationId, { ...emptySlice, serverId })
+    })),
     beginLocalTimelineRead: (serverId, conversationId) => {
       const held = get().timelines.get(conversationId)
       if (held?.serverId === serverId &&

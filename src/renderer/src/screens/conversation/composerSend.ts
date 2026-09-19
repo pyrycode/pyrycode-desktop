@@ -328,26 +328,18 @@ export function composerAvailability(status: ConnectionStatus): ComposerAvailabi
   }
 }
 
-/**
- * Whether the app should proactively offer a re-pair escape hatch (#167). True ONLY for a terminal,
- * non-retryable connection `error` — the case where the stored pairing can no longer be used: a fatal
- * close code or supervisor give-up (which daemonConnection.emitFailed always reports `retryable: false`),
- * or the daemon rejecting a stale/unknown device at handshake (pyrycode ADR 029). Pure — no store, no
- * React, no I/O — so the whole true/false matrix is unit-testable, the same discipline as
- * composerAvailability. A boolean over the single `error` arm; the other three arms are not `error`, so
- * no exhaustiveness switch is needed.
- *
- * The two gates, derived from the three-source retryability model (validated against the merged transport):
- *  - `!retryable` is the primary gate. It admits the terminal transport/handshake failures (always
- *    non-retryable) and EXCLUDES the retryable daemon-wire-error class (server.binary_offline,
- *    rate_limited) — a transient daemon-side condition, not a broken pairing (AC4). A transient transport
- *    drop never reaches `error` at all (relaySupervisor absorbs + re-dials), so it is out of scope here.
- *  - `code !== 'unpair'` excludes the self-inflicted UNPAIR_FAILED_ERROR that runUnpair dispatches when
- *    the clear itself fails (`unpairAction.ts`, `code: 'unpair'`). Without it, a failed re-pair would
- *    immediately re-satisfy the predicate and re-offer itself — a tight loop of a broken capability (AC5).
- */
+/** Only an explicit pairing rejection establishes that re-pairing can help. */
 export function shouldOfferRepair(status: ConnectionStatus): boolean {
-  return status.type === 'error' && !status.error.retryable && status.error.code !== 'unpair'
+  return status.type === 'error' && !status.error.retryable && status.error.code === 'pairing-rejected'
+}
+
+/** Other terminal failures can redial a saved host; failed removal and absent pairing cannot. */
+export function shouldOfferReconnect(status: ConnectionStatus): boolean {
+  return (
+    status.type === 'error' && !status.error.retryable &&
+    status.error.code !== 'pairing-rejected' &&
+    status.error.code !== 'unpair' && status.error.code !== 'not-paired'
+  )
 }
 
 /**
@@ -448,3 +440,6 @@ export const COMPOSER_ERROR_CHIP_PREFIX_COPY = 'Error: '
  * not.
  */
 export const COMPOSER_REPAIR_BUTTON_COPY = 'Pairing error - Re-pair'
+
+/** Client-owned visible and accessible label; error fields never supply button content. */
+export const COMPOSER_RECONNECT_BUTTON_COPY = 'Connection error - Reconnect'

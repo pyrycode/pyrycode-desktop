@@ -77,7 +77,7 @@ describe('stopped turn presentation', () => {
   })
   it('places recovery behind connection failures and ahead of notices', () => {
     const props = { onRepair: () => {}, notice: <span>usage</span>, recovery: <span>recovery</span> }
-    expect(renderToStaticMarkup(<ComposerErrorSlot {...props} status={{ type: 'connected', ack: { protocol_version: '1', server_id: 's', conn_id: 'c', capabilities: [] } }} />)).toBe('<span>recovery</span>')
-    expect(renderToStaticMarkup(<ComposerErrorSlot {...props} status={{ type: 'disconnected' }} />)).toBe('')
+    expect(renderToStaticMarkup(<ComposerErrorSlot onReconnect={() => {}} {...props} status={{ type: 'connected', ack: { protocol_version: '1', server_id: 's', conn_id: 'c', capabilities: [] } }} />)).toBe('<span>recovery</span>')
+    expect(renderToStaticMarkup(<ComposerErrorSlot onReconnect={() => {}} {...props} status={{ type: 'disconnected' }} />)).toBe('')
   })
 })

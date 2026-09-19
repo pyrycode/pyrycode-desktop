@@ -14,7 +14,7 @@ afterEach(() => vi.restoreAllMocks())
 
 const history = (retryable = true) => <ComposerHistoryFailure retryable={retryable} onRetry={() => {}} />
 const render = (status: ConnectionStatus, overrides = {}) => renderToStaticMarkup(
-  <ComposerErrorSlot status={status} onRepair={() => {}} notice={null} history={history()} {...overrides} />)
+  <ComposerErrorSlot onReconnect={() => {}} status={status} onRepair={() => {}} notice={null} history={history()} {...overrides} />)
 
 describe('history status occupant', () => {
   it.each([false, true])('renders fixed error copy with Retry only when retryable=%s', retryable => {

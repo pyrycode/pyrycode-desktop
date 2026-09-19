@@ -71,6 +71,8 @@ import {
   shouldInterruptOnKeyDown,
   composerAvailability,
   shouldOfferRepair,
+  shouldOfferReconnect,
+  COMPOSER_RECONNECT_BUTTON_COPY,
   shouldShowBanner,
   CONNECTION_BANNER_COPY,
   COMPOSER_ERROR_CHIP_COPY,
@@ -4194,39 +4196,13 @@ export function ComposerTaskCount({ count, onOpen }: {
 // the slot the chip otherwise holds (operator ruling 2026-09-02), which is what retires #167's separate
 // `.composer__repair` block beneath the composer — one control, in the place the operator already looks.
 //
-// FOUR arms since #1321, asked in this order, and the order IS the contract — it is the whole of the
-// slot's one-occupant rule. shouldOfferRepair is a strict SUBSET of `status.type === 'error'` (it adds
-// `!retryable` and `code !== 'unpair'`), so the narrower gate must be asked first or the chip would
-// swallow every actionable case; and the `error` discriminant must be asked before the notice or the
-// notice would render beside the chip rather than behind it. Exactly ONE arm delegates to
-// ComposerErrorChip — the `error` one — which is why #797's whole view, its treatment and its tests
-// survive both swaps untouched: it is still reached on precisely the arm it already showed on, so a
-// retryable daemon error still gets the plain chip (#167's AC4) and so does the self-inflicted unpair
-// failure (#167's AC5).
-//
-// A `status` PROP, not a store read, for RepairPrompt's and ComposerErrorChip's reason: the populated
-// branches are unreachable under server render (zustand v5 reads getInitialState() = disconnected), so
-// the matrix is only assertable in a static render if the status is injected. `onRepair` is a prop for the
-// same reason plus one more — it keeps the window.pyry dereference out of this view's render path
-// entirely. `notice` is a prop for a third reason of its own, recorded at the arm that returns it.
-//
-// THE ERROR ARM IS READ FOR A DECISION AND NEVER FOR MARKUP. ComposerErrorChip could state the stronger
-// "never destructures status.error"; this view cannot, because shouldOfferRepair reads `.retryable` and
-// `.code`. Both reads are confined to that predicate's boolean, no local here binds `status.error`, and
-// the button's text is COMPOSER_REPAIR_BUTTON_COPY and nothing else — so no ConnectionError field has a
-// path to the DOM, an attribute, a title or a log (AC4). The test pins it with sentinel values on this
-// very arm rather than trusting the argument. Do not "simplify" by lifting the destructure up here.
-//
-// No visually-hidden `Error: ` prefix, unlike the chip. That prefix exists because "Host connection
-// down!" does not say it is an error; this label leads with "Pairing error", so the accessible name — the
-// visible text, there being no aria-label — already carries it. No live region either: the #279 banner is
-// showing on this same arm and announces the disconnect politely once.
-//
-// No separate ComposerRepairButton component. Its only job would be to be rendered unconditionally by its
-// single caller — a name and a test surface for no decision.
+// Repair and reconnect are disjoint subsets of errors, ahead of the chip and all connected-only
+// occupants. Error fields select a branch but never supply markup, attributes, accessible copy or logs.
+// Inject status and handlers so the pure view remains statically testable without stores or window.
 export function ComposerErrorSlot({
   status,
   onRepair,
+  onReconnect,
   notice,
   recovery,
   refusal,
@@ -4235,6 +4211,7 @@ export function ComposerErrorSlot({
 }: {
   status: ConnectionStatus
   onRepair: () => void
+  onReconnect: () => void
   notice: JSX.Element | null
   recovery?: JSX.Element | null
   refusal?: JSX.Element | null
@@ -4245,6 +4222,13 @@ export function ComposerErrorSlot({
     return (
       <button type="button" className="button-small button-small--error" onClick={onRepair}>
         {COMPOSER_REPAIR_BUTTON_COPY}
+      </button>
+    )
+  }
+  if (shouldOfferReconnect(status)) {
+    return (
+      <button type="button" className="button-small button-small--error" onClick={onReconnect}>
+        {COMPOSER_RECONNECT_BUTTON_COPY}
       </button>
     )
   }
@@ -4429,10 +4413,25 @@ function ComposerErrorSlotControl({
     if (serverId !== null) onRepairHost?.(serverId)
   }
 
+  const handleReconnect = async (): Promise<void> => {
+    const open = selectActiveConversation(activeConversationStore.getState())
+    const serverId = serverIdForOpenConversation(
+      selectConversations(conversationListStore.getState()),
+      open === null ? null : open.id
+    )
+    if (serverId === null) return
+    try {
+      await window.pyry.reconnectServer(serverId)
+    } catch {
+      window.pyry.sendDiagnostic({ event: 'composer-reconnect-failed', code: 'bridge-rejected' })
+    }
+  }
+
   return (
     <ComposerErrorSlot
       status={status}
       onRepair={handleRepair}
+      onReconnect={handleReconnect}
       recovery={recoveryCopy === null ? null : (
         <div className="stopped-turn-recovery" role="status">
           <span>{recoveryCopy}</span>

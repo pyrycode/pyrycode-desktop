@@ -292,3 +292,39 @@ Verification: withholding the reset frames makes the new mounted-row assertion f
 supplying the two rising frames makes the focused fake spec pass (two tests). The five
 existing scoped unit files pass (729 tests), and `npm run build` passes. Listing the real
 spec still finds one test; listing is not live execution. No production fix was needed.
+
+### 2026-09-19 — preserve reset-label geometry at minimum width
+
+The verifier measured reset labels wrapping at the supported 800px window width:
+restarting grew the 24px row to 32px, or 64px beside the error chip. This disproves
+the original assumption that the base label already ellipsizes. Figma `111:3525`
+was fetched again: the primary body-small label remains a single nowrap text run,
+bottom-aligned with the trailing slot; that slot may independently set the row height.
+
+Add a reset-specific modifier in `ThinkingIndicator` and share the existing
+`.composer-status__label--tool` shrink/hidden-overflow/ellipsis/nowrap declarations.
+Keep the single text child, existing typography, colour, spacing and row sizing.
+No other state, copy, routing or completion contract changes.
+
+Update the reset markup assertion in `ConversationScreen.test.tsx`. Add a focused
+fake-transport layout test in `e2e/composer-new-session.spec.ts` for wrapping-up and
+both restarting outcomes at 800px and 1280px, with empty and error-chip trailing
+slots. Compare row height and composer position to idle, assert single-line
+ellipsis and contained label bounds, and capture each state for visual review.
+Reset frames traverse the real wire/IPC path; the typed connection error uses the
+existing preload-boundary injection pattern from `stopped-turn.spec.ts`.
+
+Rework scope: one TypeScript production file plus its CSS, two test files and this
+plan; approximately 120 written lines, no new exports, changed signatures, consumer
+cascade or error branches. Remote feature-branch overlap check found no conflicts.
+The existing size-floor rationale still applies to the original implementation.
+Live acceptance and the documentation handoff remain pending in their owning stages.
+
+Verification: before the fix the new mounted test measured a 32px restarting row
+against the 24px idle baseline. After the fix, all 389 `ConversationScreen.test.tsx`
+tests, the three focused fake reset tests and `npm run build` pass. All twelve
+layout cases preserve the 24px row and idle composer position. Captures under
+`/tmp/builder-1517-reset-layout/reset-{800,1280}-{empty,error}-{pending,written,skipped}.png`
+use 800×572 and 1280×572 content viewports (600px outer window height). Visual review
+against Figma `111:3525` confirms the existing mark, primary colour, body-small type
+and spacing, with a single ellipsis at narrow widths and full outcome copy at 1280px.

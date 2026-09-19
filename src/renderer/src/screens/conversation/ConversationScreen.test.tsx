@@ -3158,10 +3158,8 @@ describe('the resetting label — the rows sixth state (#1517)', () => {
     }
   })
 
-  it('outranks an open tool name, and takes no modifier of its own', () => {
-    // The tool name belongs to the working/thinking state alone (#967 AC1); the reset joins the three
-    // states that outrank it. And it draws in the rows own --color-primary, so it adds no class: the
-    // Figma node changes no type, box or line-height between labels.
+  it('outranks an open tool name and keeps reset copy in one truncating text run', () => {
+    // The reset modifier bounds long copy without changing the row's primary colour or typography.
     const markup = renderToStaticMarkup(
       <ThinkingIndicator
         state="resetting"
@@ -3174,7 +3172,7 @@ describe('the resetting label — the rows sixth state (#1517)', () => {
     expect(markup).toContain(`>${RESETTING_WRAPPING_UP_COPY}</span>`)
     expect(markup).not.toContain('Bash')
     expect(markup).toBe(
-      `<span class="conversation__thinking composer-status__label">${RESETTING_WRAPPING_UP_COPY}</span>`
+      `<span class="conversation__thinking composer-status__label composer-status__label--resetting">${RESETTING_WRAPPING_UP_COPY}</span>`
     )
   })
 

@@ -1,6 +1,7 @@
 import type { Locator, Page } from '@playwright/test'
 import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
+import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
 import type {
   NewSessionPayload,
   ResettingPayload,
@@ -201,4 +202,76 @@ test('reset phases reach the composer and session_transition clears the label wi
     timeout: ROUNDTRIP_TIMEOUT_MS
   })
   await expect(statusLabel).toHaveCount(0)
+})
+
+test('reset labels keep one-line geometry beside the trailing error chip at minimum width', async ({
+  launchPairedApp
+}, testInfo) => {
+  const { page, app, daemon } = await launchPairedApp()
+  const row = page.locator('.composer-status')
+  const label = row.locator('.composer-status__label')
+  const chip = row.locator('.composer-status__error')
+  const composer = page.locator('.composer__row')
+  const states: Array<{ phase: ResettingPayload['phase']; handoff: ResettingPayload['handoff']; copy: string }> = [
+    { phase: 'restarting', handoff: 'written', copy: 'Resetting: restarting claude… handoff note written' },
+    { phase: 'restarting', handoff: 'skipped', copy: 'Resetting: restarting claude… handoff note skipped' },
+    { phase: 'wrapping_up', handoff: 'pending', copy: 'Resetting: writing the handoff note…' }
+  ]
+
+  for (const trailing of [false, true]) {
+    if (trailing) {
+      // Keep the fake transport live so reset frames still use the decoder. Only the connection
+      // failure is injected at the preload boundary, as in stopped-turn.spec.ts.
+      await app.evaluate(({ BrowserWindow }, channel) => {
+        BrowserWindow.getAllWindows()[0].webContents.send(channel, {
+          type: 'failed', serverId: 'fake-daemon',
+          error: { code: 'transport', message: '', retryable: true }
+        })
+      }, DAEMON_EVENT_CHANNEL)
+    }
+    await expect(chip).toHaveCount(trailing ? 1 : 0)
+    for (const width of [800, 1280]) {
+      await app.evaluate(({ BrowserWindow }, width) => {
+        BrowserWindow.getAllWindows()[0].setSize(width, 600)
+      }, width)
+      await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width)
+      await expect(label).toHaveCount(0)
+      const idleRow = await row.boundingBox()
+      const idleComposer = await composer.boundingBox()
+      expect(idleRow?.height).toBe(24)
+
+      for (const { phase, handoff, copy } of states) {
+        daemon.pushFrame(resettingFrame(true, phase, handoff))
+        await expect(label).toHaveText(copy)
+        expect((await row.boundingBox())?.height).toBe(idleRow?.height)
+        expect((await composer.boundingBox())?.y).toBe(idleComposer?.y)
+        await expect(label).toHaveCSS('white-space', 'nowrap')
+        await expect(label).toHaveCSS('text-overflow', 'ellipsis')
+        await expect(label).toHaveCSS('overflow', 'hidden')
+        const bounds = await label.evaluate(el => {
+          const rect = el.getBoundingClientRect()
+          const activity = el.parentElement!.getBoundingClientRect()
+          return {
+            height: rect.height,
+            lineHeight: Number.parseFloat(getComputedStyle(el).lineHeight),
+            contained: rect.left >= activity.left && rect.right <= activity.right,
+            truncated: el.scrollWidth > el.clientWidth,
+            singleTextNode: el.childNodes.length === 1 && el.firstChild?.nodeType === Node.TEXT_NODE
+          }
+        })
+        expect(bounds.height).toBe(bounds.lineHeight)
+        expect(bounds.contained).toBe(true)
+        expect(bounds.singleTextNode).toBe(true)
+        if (width === 800 && trailing) expect(bounds.truncated).toBe(true)
+        await page.screenshot({
+          path: testInfo.outputPath(`reset-${width}-${trailing ? 'error' : 'empty'}-${handoff}.png`),
+          animations: 'disabled'
+        })
+      }
+      daemon.pushFrame(resettingFrame(false, '', ''))
+      await expect(label).toHaveCount(0)
+      expect((await row.boundingBox())?.height).toBe(idleRow?.height)
+      expect((await composer.boundingBox())?.y).toBe(idleComposer?.y)
+    }
+  }
 })

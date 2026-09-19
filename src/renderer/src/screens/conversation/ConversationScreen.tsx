@@ -2440,7 +2440,8 @@ function apiRetryLabel(retry: ApiRetryStatus | null): string {
 // longer moves the composer — which is what makes the null-at-rest posture safe to keep. The tool branch
 // still adds ONE modifier, carrying the one-line bound an unbounded daemon string needs (see
 // .composer-status__label--tool in conversation.css, and its rewritten reasoning: the .bubble max-width
-// that used to backstop that bound went away with the bubble).
+// that used to backstop that bound went away with the bubble). Reset copy shares that bound through
+// its own modifier: the outcome suffix wraps at minimum window width without it.
 //
 // `conversation__thinking` is RETAINED on the element deliberately. It styles nothing any more — it is
 // the shipped identity hook meaning "the working indicator is showing", and two Electron-launch e2e specs
@@ -2497,11 +2498,12 @@ export function ThinkingIndicator({
   // One element, three varying pieces — the toolCall row's `rowClass` idiom above, which likewise varies
   // only a className and keeps a single return. Writing any case as its own early return would duplicate
   // the markup, and a drifted copy is exactly what makes the five labels stop being byte-identical to each
-  // other. The two modifiers are mutually exclusive by construction: `toolLabel` is null in every
-  // superseding state, so a stalled row can never also be a tool-named one.
+  // other. The modifiers are mutually exclusive: `toolLabel` is null in every superseding state.
   const labelClass = `conversation__thinking composer-status__label${
     toolLabel !== null ? ' composer-status__label--tool' : ''
-  }${state === 'stalled' ? ' composer-status__label--stalled' : ''}`
+  }${state === 'stalled' ? ' composer-status__label--stalled' : ''}${
+    state === 'resetting' ? ' composer-status__label--resetting' : ''
+  }`
   const label = toolLabel !== null
     ? `${toolLabel}${toolElapsedSeconds === undefined ? '' : ` ${formatToolElapsed(toolElapsedSeconds)}`}`
     : statusRowCopy(state, retry, thinkingTokens, resetting)

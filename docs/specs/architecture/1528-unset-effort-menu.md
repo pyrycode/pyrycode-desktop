@@ -24,4 +24,4 @@ Sizing: one deliverable, one production file, approximately 200 written lines in
 - Run touched unit tests, build, the focused effort-menu interaction spec and the existing remembered-default interaction spec. Capture the unset open menu for comparison with Figma.
 
 ## Documentation handoff
-No explicit documentation requirement is present in the ticket. Any feature-overview update belongs to the documentation stage.
+No explicit documentation requirement is present in the ticket. Pending documentation stage: update `docs/knowledge/features/composer-effort-menu.md`, section “composerEffortMenuModel, one pure function deciding all three renderings”, to describe the Effort trigger for an unset value with published levels.

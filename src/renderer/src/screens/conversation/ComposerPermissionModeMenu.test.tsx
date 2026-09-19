@@ -138,6 +138,35 @@ describe('the vocabulary', () => {
   })
 })
 
+describe('permission mode display copy', () => {
+  it.each([
+    ['default', 'Manual approval'],
+    ['acceptEdits', 'Auto-approve edits'],
+    ['plan', 'Plan'],
+    ['auto', 'Auto approval'],
+    ['dontAsk', 'Approved actions only'],
+    ['bypassPermissions', 'Bypass approvals']
+  ])('names %s by its behaviour in the trigger', (mode, label) => {
+    expect(triggerInner(view(mode))).toContain(
+      `<span class="composer__permission-label">${label}</span>`
+    )
+  })
+
+  it('pairs the new menu labels with the existing selectable values', () => {
+    const options = [
+      { id: 'default', label: 'Manual approval' },
+      { id: 'acceptEdits', label: 'Auto-approve edits' },
+      { id: 'plan', label: 'Plan' },
+      { id: 'auto', label: 'Auto approval' },
+      { id: 'dontAsk', label: 'Approved actions only' }
+    ]
+    expect(composerPermissionModeMenuModel(null, '', 'default')?.options).toEqual(options)
+    const markup = panel('default')
+    for (const { label } of options) expect(markup).toContain(`>${label}<`)
+    expect(markup).not.toContain('Bypass approvals')
+  })
+})
+
 describe('composerPermissionModeMenuModel', () => {
   // AC1 and AC2 in one shape: the label is the DISPLAY name for the session's mode, the entries are the
   // five settable modes with the machine value as `id`, and the current one is the session's mode itself.

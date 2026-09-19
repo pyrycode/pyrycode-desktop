@@ -242,8 +242,8 @@ Composer
 The row now matches Figma's own order (Actions · mode · model · effort · reading · attach). See
 [Composer permission-mode menu](composer-permission-mode-menu.md) for the one structural way it differs
 from its two menu neighbours — its entries are a client-owned constant rather than a daemon-published list, so
-it has no inert arm and is operable the instant a mode is known, which is what moved the row's
-anchor/`aria-haspopup` counts from one to two; see [Composer model menu](composer-model-menu.md) for its
+it needs no model list to become operable once a mode is known and host/session availability permits.
+That moved the row's anchor/`aria-haspopup` counts from one to two; see [Composer model menu](composer-model-menu.md) for its
 three renderings, the CSS extraction it triggered on `.composer__actions` (the row's second footer button
 at the time), and the `.composer-options-anchor` uniqueness correction it required; see
 [Composer effort menu](composer-effort-menu.md) for its own three renderings, its own label-width bound,
@@ -402,12 +402,13 @@ and a number here would be the "number in a single control's rule" the whole pol
 wrapped form and stayed an exact equality; the accessible name is still computed from contents, so the
 ellipsis is visual only.
 
-**Accepted, checked residual: `.composer__permission-label` (`Bypass permissions` at its widest) can now
-ellipsize at the 800px minimum**, which that label's own comment had refused to do by `max-width` alone —
-"the one label naming a security posture" argument. Judged a net improvement rather than a violation:
-before #1107 the same content silently vanished off the pane's clipped edge with no truncation signal at
-all; an ellipsis is a visible one, the mode's full name is still in the control's accessible name and its
-own open menu, and the `min()` ceiling makes the whole policy a no-op above a 1088px window. At 800px with
+**`.composer__permission-label` can ellipsize at the 800px minimum.** Its longest known label is
+`Approved actions only` (`dontAsk`), which `e2e/composer-footer-overflow.spec.ts` seeds beside long
+model/effort labels and full context usage. Before #1107 content silently vanished off the pane's clipped
+edge with no truncation signal; an ellipsis is a visible one. The full mode name remains in the control's
+accessible name, and selectable labels fit fully in the open dropdown. `Bypass approvals` can appear on
+the trigger but remains excluded from the menu; see the [permission-mode contract](composer-permission-mode-menu.md#the-wire-contract-is-asymmetric-and-that-asymmetry-is-the-whole-design).
+The gap's `min()` ceiling preserves its 20px spacing above a 1088px window. At 800px with
 every label maximally long the four triggers compress to roughly two or three characters each — the honest
 floor of six controls in a 284px content box — while the context reading and every control's presence,
 order, chevron and hit target are untouched; no control is ever dropped.

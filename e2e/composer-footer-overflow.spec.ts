@@ -31,9 +31,8 @@ import type {
 // frames here are `session_settings` (the reply to the app's own `request_session_settings`) and
 // `model_list` (which the daemon pushes unprovoked). Only the VALUES are this test's.
 //
-// THE DRIVE IS READ-ONLY. It opens no menu and sends no `set_session_settings`, so no write path is
-// exercised and the seeded `bypassPermissions` mode — which this client deliberately never offers as a
-// choice — is only ever rendered, never submitted.
+// THE DRIVE IS READ-ONLY. It opens no menu and sends no `set_session_settings`; the longest permission
+// label is only rendered, never submitted.
 //
 // SECRET HYGIENE (the sibling specs' rule, carried verbatim): every assertion reads geometry, counts or
 // DOM text. SESSION_ID, the published identifiers and the token figures are non-secret display/routing
@@ -73,10 +72,9 @@ const LONG_MODEL_FAMILY = 'Extraordinarilycapable'
 // 21 characters against .composer__effort-label's 64px bound. Published as one of the matched row's
 // levels, which is what un-inerts the effort trigger and gives it its chevron.
 const LONG_EFFORT = 'exceptionallythorough'
-// The widest label in PERMISSION_MODE_LABELS, and a mode a real session can be in. It is not a member of
-// SETTABLE_PERMISSION_MODES, which is a property of the WRITE path this drive never touches.
-const BYPASS_MODE = 'bypassPermissions'
-const BYPASS_LABEL = 'Bypass permissions'
+// The longest label in PERMISSION_MODE_LABELS, and a mode a real session can be in.
+const WIDEST_MODE = 'dontAsk'
+const WIDEST_LABEL = 'Approved actions only'
 
 const READING_TEXT = 'Context high: 100%'
 
@@ -98,7 +96,7 @@ const WORST_CASE_RUN_CONFIG: SessionSettingsPayload = {
   model: PUBLISHED_MODEL.value,
   effort: LONG_EFFORT,
   yolo: false,
-  permission_mode: BYPASS_MODE,
+  permission_mode: WIDEST_MODE,
   used_tokens: WINDOW_TOKENS,
   window_tokens: WINDOW_TOKENS
 }
@@ -142,7 +140,7 @@ const footerOverflowPx = (page: Page): Promise<number> =>
 
 test('composer footer: the row compresses instead of overflowing at the 800px minimum (AC1-AC3)', async ({
   launchPairedApp
-}) => {
+}, testInfo) => {
   const { page, app, daemon } = await launchPairedApp({
     buildReplyFrames: (inbound) => {
       const env = decodeEnvelope(inbound)
@@ -178,7 +176,7 @@ test('composer footer: the row compresses instead of overflowing at the 800px mi
   await expect(reading).toHaveText(READING_TEXT, { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(modelLabel).toHaveText(LONG_MODEL_FAMILY, { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(effortLabel).toHaveText(LONG_EFFORT)
-  await expect(permissionLabel).toHaveText(BYPASS_LABEL)
+  await expect(permissionLabel).toHaveText(WIDEST_LABEL)
   // All four triggers operable, so the row is measured in its widest rendering.
   await expect(page.locator('.composer__footer .composer-options-anchor')).toHaveCount(4)
 
@@ -260,4 +258,6 @@ test('composer footer: the row compresses instead of overflowing at the 800px mi
     BrowserWindow.getAllWindows()[0].getMinimumSize()
   )
   expect(minWidth).toBe(NARROW_WIDTH_PX)
+  await expect(page.getByRole('button', { name: WIDEST_LABEL, exact: true })).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('permission-footer-800.png'), animations: 'disabled' })
 })

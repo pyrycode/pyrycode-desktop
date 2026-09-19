@@ -61,10 +61,7 @@ const SESSION_ID = 'session-682'
 // The one mode the read half reports and the write half refuses.
 const BYPASS = 'bypassPermissions'
 
-// The two picks, taken from the production constant by POSITION so neither is typed here: a mode that is
-// not the daemon-reported baseline, and a second one that is neither of the first two. The rejected pick
-// is deliberately the one whose display name carries an apostrophe (`Don't ask`), which is the label most
-// likely to be mangled by an escaping bug on either side of the round trip.
+// The accepted pick differs from the baseline; the rejected pick exercises the longest display label.
 const [BASELINE_MODE, HAPPY_MODE] = SETTABLE_PERMISSION_MODES
 const REJECTED_MODE = 'dontAsk'
 
@@ -164,10 +161,10 @@ function settingsFramesMatching(captured: Envelope[], expected: SetSessionSettin
 
 test('composer footer: the permission-mode menu labels, offers, submits and reverts (AC1-AC4)', async ({
   launchPairedApp
-}) => {
+}, testInfo) => {
   reportedMode = BYPASS
   const captured: Envelope[] = []
-  const { page, daemon } = await launchPairedApp({ buildReplyFrames: capturingFake(captured) })
+  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: capturingFake(captured) })
 
   // The trigger's label lives in its own element, so one locator reads it throughout. It wears its OWN
   // class rather than either sibling's, which is what keeps this locator and both sibling specs'
@@ -203,10 +200,24 @@ test('composer footer: the permission-mode menu labels, offers, submits and reve
   // EXACTLY the five settable modes, in order, by display name — toHaveText is exact and ordered, so a
   // dropped, invented or reordered entry fails here. And the escalation is not among them: a session in
   // bypass is offered the five, and nothing in this menu can put a session back into bypass.
-  await expect(panel.getByRole('menuitem')).toHaveText(SETTABLE_PERMISSION_MODES.map(displayed))
+  await expect(panel.getByRole('menuitem')).toHaveText([
+    'Manual approval', 'Auto-approve edits', 'Plan', 'Auto approval', 'Approved actions only'
+  ])
   await expect(panel.getByRole('menuitem', { name: displayed(BYPASS), exact: true })).toHaveCount(0)
   // Nothing is marked: the session's mode is in no entry, through the panel's existing branch.
   await expect(panel.locator('[aria-current="true"]')).toHaveCount(0)
+  await page.screenshot({ path: testInfo.outputPath('permission-menu-1100.png'), animations: 'disabled' })
+
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(800, 600))
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(800)
+  const panelBox = await panel.boundingBox()
+  expect(panelBox).not.toBeNull()
+  expect(panelBox!.x).toBeGreaterThanOrEqual(0)
+  expect(panelBox!.x + panelBox!.width).toBeLessThanOrEqual(800)
+  for (const item of await panel.getByRole('menuitem').all()) {
+    expect(await item.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true)
+  }
+  await page.screenshot({ path: testInfo.outputPath('permission-menu-800.png'), animations: 'disabled' })
   await page.keyboard.press('Escape')
   await expect(panel).toBeHidden()
 

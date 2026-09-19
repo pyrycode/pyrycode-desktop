@@ -61,6 +61,35 @@ reserved regardless, so the composer no longer moves under the operator's cursor
 appears or disappears — the same reasoning `ComposerSendButton` (#678) already applies to never returning
 `null` either.
 
+The row has **six label states**, selected in one place by `workingIndicatorState`:
+reset → retry → compaction → stall → thinking/working (the last two depend on the
+turn phase). Reset takes priority even over an open tool's name or elapsed time.
+The handoff-writing phase is a real turn; putting reset below thinking/working would
+hide its progress behind ordinary turn copy. Its assistant text and tool rows still
+stream into the thread normally. The reset status itself creates no thread bubble.
+
+The observable reset copy is:
+
+- During `wrapping_up`: “Resetting: writing the handoff note…”
+- During `restarting` with a written note: “Resetting: restarting claude… handoff note written”
+- During `restarting` with a skipped note: “Resetting: restarting claude… handoff note skipped”
+
+An unresolved restarting outcome shows “Resetting: restarting claude…” without a
+suffix; an empty phase shows “Resetting…”. Exhaustive switches select client-owned
+copy; neither decoded token is interpolated. A second rising edge updates the same
+label when either phase or outcome changes, while an identical repeat preserves
+state identity. See [#1517](https://github.com/pyrycode/pyrycode-desktop/issues/1517).
+
+Reset frames route by their conversation id through both the translator and target
+selector in the [timeline bridge](conversation-timeline-store.md). Turn activity
+must not clear the held reset, or the first handoff delta would erase its own label.
+The falling edge and the existing `sessionBoundary` event each clear it, in either
+arrival order; reconnect and a timeline reset also clear it. The boundary retains
+its existing routing: `sessionTransition` has no keyed target and files onto the
+conversation on screen. This does not establish a boundary clear for an off-screen
+conversation. Clearing reset lets any remaining lower-priority status show; after
+an otherwise idle completed reset, the label slot is empty and the row stays mounted.
+
 **Through #963, a turning icon beside no label was a legal, expected render** — a live api-retry or
 compaction superseded the label (per #493/#496) while the raw phase reading (`isRunning`) kept the icon
 turning regardless, and the held height was what made that read as intentional rather than broken.
@@ -68,7 +97,7 @@ turning regardless, and the held height was what made that read as intentional r
 of folding retry, compacting and stall into the label's own union** (see [Thinking / working
 indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)
 below) rather than by coupling the two gates: the icon still turns on the raw `isRunning`, and whenever
-that holds the label is now non-null in every case (retrying, compacting, stalled, or thinking/working),
+that holds the label is now non-null in every case (resetting, retrying, compacting, stalled, or thinking/working),
 so the icon can no longer turn beside nothing. The converse is still reachable and still intended: a
 stall or a held retry at `idle` shows its label beside a still icon — the folded statuses are not gated
 on a running turn (see below).
@@ -135,12 +164,37 @@ the floor is far below the label's intrinsic width and the label still absorbs a
 first. `text-overflow` needs a block container and the label is a `<span>` — it works because a
 flex item is blockified, the load-bearing detail nearest a future "make it a span again" refactor.
 
+**A single text child does not by itself enforce truncation.** Reset copy uses
+`.composer-status__label--resetting`, sharing the tool label's `min-width: 0`,
+`overflow: hidden`, `text-overflow: ellipsis` and `white-space: nowrap`. The complete
+phase and outcome remain one text run, so they truncate with one ellipsis. Typography,
+primary colour, spacing and line height stay unchanged. Without these declarations,
+the restarting copy grew the 24px row to 32px at the 800px minimum window width,
+and to 64px beside an error chip; static markup assertions could not detect this.
+
+[`e2e/composer-new-session.spec.ts`](../../../e2e/composer-new-session.spec.ts) drives
+reset frames through decode, IPC and the keyed store, and measures all three visible
+phase/outcome combinations at 800px and 1280px with empty and error-chip trailing
+slots. It compares row height and composer position to idle, checks single-line
+ellipsis and contained bounds, and verifies boundary clearing. Taller trailing
+occupants may still determine the row's height independently.
+
+The single test in
+[`e2e/real-claude-new-session.spec.ts`](../../../e2e/real-claude-new-session.spec.ts)
+records transient labels with a `MutationObserver` installed before reset, then
+requires a reset label and an empty slot after completion. A session delimiter alone
+proves rotation, not status emission: a daemon predating upstream pyrycode#2478 can
+rotate without emitting these frames. Its post-reset liveness baseline is captured
+after the delimiter, empty slot and enabled Send button, immediately before the next
+message; otherwise handoff output could satisfy the assertion for a new response.
+
 **Scope boundary, held through #796 and reopened by #967.** Through #796, `ApiRetryIndicator`,
 `CompactingIndicator`, and `StallIndicator` kept their pre-#796 mount site (right after `Timeline`),
 their bubble treatments, and their mutual precedence rule — none of that was reopened by #796. #967 is
 what reopened it: those three views, their mount site, their bubbles, and seven CSS rules are gone, and
 the precedence they used to hold via separate DOM adjacency now lives entirely inside
-`workingIndicatorState`'s four-way order — see [Thinking / working
+`workingIndicatorState`'s order (now reset first, followed by retry, compaction, stall and
+thinking/working) — see [Thinking / working
 indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)
 above for the retirement and the new order.
 
@@ -151,7 +205,7 @@ shell](conversation-shell.md#edge-cases-and-limitations), where `thread-scroll-p
 criterion was repointed by #796 onto the (now also folded) stall indicator, and repointed again by #967
 onto the queued backlog. `conversation__thinking` itself is **retained** as a class on the label purely
 as an identity hook (two Electron-launch e2e specs locate it as their turn-liveness gate, and it is now
-also the one element all five status-row states share) — it styles nothing any more; that is ordinary
+also the one element all six status-row states share) — it styles nothing any more; that is ordinary
 BEM, not drift.
 
 **Test-file vacuity repoint, the same hazard the row's own class-string rename created elsewhere.** Once

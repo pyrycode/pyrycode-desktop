@@ -1514,7 +1514,10 @@
    ellipsizes as one unit, so on overflow the client's trailing … is truncated away and replaced by the
    ellipsis the truncation itself draws, rather than rendering two of them. No title tooltip — the daemon
    string may never reach an attribute. No new token, no colour or type literal. */
-.composer-status__label--tool {
+/* Reset outcomes need the same bound: even client-owned copy wraps at the minimum window width,
+   especially beside the trailing error chip. Keep the whole label in one ellipsizing text run. */
+.composer-status__label--tool,
+.composer-status__label--resetting {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

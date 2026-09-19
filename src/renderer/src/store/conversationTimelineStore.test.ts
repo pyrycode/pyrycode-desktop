@@ -47,6 +47,7 @@ const timelineFor = (store: Store, conversationId: string): TimelineState | null
 /** "Observed; nothing in the thread" — a PRESENT slice, and a different reading from `null`. */
 const emptyTimeline: TimelineState = {
   thinkingTokens: null,
+  resetting: null,
   items: [],
   phase: 'idle',
   stalled: false,
@@ -122,6 +123,12 @@ describe('conversationTimelineStore', () => {
     store.getState().dispatchFor('c1', { type: 'compacting', active: true })
     store.getState().dispatchFor('c1', { type: 'stallDetected' })
     store.getState().dispatchFor('c1', { type: 'thinkingProgress', estimatedTokens: 512 })
+    store.getState().dispatchFor('c1', {
+      type: 'resetting',
+      active: true,
+      phase: 'restarting',
+      handoff: 'written'
+    })
     store.getState().dispatchFor('c2', delta('t2', 'quiet'))
 
     expect(timelineFor(store, 'c1')).toEqual({
@@ -131,11 +138,13 @@ describe('conversationTimelineStore', () => {
       apiRetry: { current: 1, total: 3 },
       compacting: true,
       localSendPending: true,
-      thinkingTokens: 512
+      thinkingTokens: 512,
+      resetting: { phase: 'restarting', handoff: 'written' }
     })
-    // The payload is the whole flat timeline, so none of the six scalars leaks across the key. #1314's
+    // The payload is the whole flat timeline, so none of the seven scalars leaks across the key. #1314's
     // reading joins them, and it is the one a leak would be most visible on: the status row would report
-    // how deep a think in ANOTHER conversation had got.
+    // how deep a think in ANOTHER conversation had got. #1517's reset is the second of that kind — a leak
+    // there would tell the operator a chat they are watching is restarting when a different one is.
     expect(timelineFor(store, 'c2')).toEqual({
       items: [{ kind: 'assistantText', turnId: 't2', text: 'quiet' }],
       phase: 'idle',
@@ -143,7 +152,8 @@ describe('conversationTimelineStore', () => {
       apiRetry: null,
       compacting: false,
       localSendPending: false,
-      thinkingTokens: null
+      thinkingTokens: null,
+      resetting: null
     })
   })
 

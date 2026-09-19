@@ -1,4 +1,5 @@
 import type { ModelRefusalEvent } from '@shared/ipc/events'
+import type { WireResetPhase, WireResetHandoff } from '@shared/wire/types'
 
 // The conversation timeline: a heterogeneous, ordered list of turn content (streamed
 // assistant text, tool calls with their results, turn boundaries) plus the coarse
@@ -357,6 +358,23 @@ export type ThreadEvent =
   // truthiness on it. `estimated_tokens_delta` deliberately does not cross the IPC boundary and is not
   // accumulated here: the payload's own contract says the deltas do not sum to the turn's total.
   | { type: 'thinkingProgress'; estimatedTokens: number }
+  // #1517: one edge of a session reset (#1514 decodes it, #1515 carried it to the window, this slice
+  // gives it a consumer). The DaemonEvent carries `conversationId` beside the two render fields; this
+  // arm does not, so the id STOPS at the bridge — a filter + fresh literal (the `apiRetry` /
+  // `compacting` discipline), never a pass-through.
+  //
+  // TWO EDGES, like `apiRetry` and `compacting` and unlike `thinkingProgress` beside it: `active` is a
+  // faithful renderer-local re-declaration of the wire edge, and the reducer is the single place that
+  // translates it into presence-or-absence. The rising edge RE-FIRES as the phase advances
+  // (`wrapping_up` → `restarting`), which is a real transition and not a duplicate to suppress.
+  //
+  // BOTH TOKENS ARE CLOSED SETS, so the "no daemon-supplied string is ever rendered" guarantee holds
+  // differently here than on its neighbours: there is a string field, but its value set is the daemon's
+  // own four-and-three constants, and the consumer SELECTS client-owned copy with it rather than
+  // rendering it. A narrowed token is still a CLAIM BY A PEER — all sixteen (`active`, `phase`,
+  // `handoff`) combinations decode, so every consumer handles all of them, and nothing
+  // security-relevant may branch on either. The frame is a REPORT, never a control input.
+  | { type: 'resetting'; active: boolean; phase: WireResetPhase; handoff: WireResetHandoff }
 
 /**
  * #493: the live api-retry attempt counter. Present ⇒ a retry is in flight; `null` ⇒ none.
@@ -371,6 +389,24 @@ export type ThreadEvent =
 export interface ApiRetryStatus {
   current: number
   total: number
+}
+
+/**
+ * #1517: the live reset status. Present ⇒ a reset is in flight; `null` ⇒ none.
+ *
+ * `ApiRetryStatus`'s shape above, for its reasons: a record rather than a flag because the row's label
+ * needs BOTH tokens to choose its copy, and `| null` rather than carrying the wire's `active` because it
+ * collapses "not resetting" into ONE representation — the falling edge stores `null`, so there is nowhere
+ * for a stale token to leak from and the "the falling edge repeats the last-known tokens verbatim" clause
+ * is true by construction.
+ *
+ * NEITHER TOKEN IS A CONTROL INPUT. Both are closed sets the daemon authors, and both exist to SELECT
+ * client-owned copy. `handoff: 'written'` describes a file the daemon wrote and the frame carries no
+ * path, so nothing may resolve, open or synthesize one from it.
+ */
+export interface ResettingStatus {
+  phase: WireResetPhase
+  handoff: WireResetHandoff
 }
 
 /** The whole timeline state: ordered content + the coarse lifecycle phase + the five chrome scalars. */
@@ -441,6 +477,25 @@ export interface TimelineState {
   //  for free. Two guards widened for it; see the `turnState` and `reconnected` arms, and the `toolResult`
   //  arm for the one that deliberately did not.
   thinkingTokens: number | null
+  // #1517: the live reset status, or `null` when none is held. The SIXTH chrome scalar, and the second
+  // to carry a record — `ResettingStatus | null` follows `apiRetry` exactly, because there are two
+  // tokens and the label needs both.
+  //
+  // ITS CLEAR RULES ARE `apiRetry`'s, NOT `stalled`'s, and that is the whole reason the label survives
+  // the phase it describes. The wrap-up turn is a REAL turn: claude writes the handoff note as an
+  // ordinary turn whose deltas, tool rows and turn boundary stream into `items` exactly as any turn's
+  // do. Self-clearing on turn activity would blank the label on the first delta of that very turn,
+  // which is the unnamed pause #1517 exists to remove. So:
+  //  - the wire's own falling edge clears it, as it does `apiRetry` and `compacting`;
+  //  - `sessionBoundary` ALSO clears it — the BELT, and the independent trigger the wire contract
+  //    demands, since a daemon killed mid-reset sends no falling edge and a status clearable only by
+  //    one that never comes pins on forever. A reset ends in a session rotation, so the boundary is
+  //    that trigger. The two ride SEPARATE producers, so their relative arrival order is deliberately
+  //    not pinned and neither is asserted: each order leaves this null.
+  //  - `reconnected` clears it, Mode B beside `apiRetry` / `compacting` / `thinkingTokens` — see that
+  //    arm's classification.
+  //  - `reset` clears it for free through `initialTimelineState`.
+  resetting: ResettingStatus | null
 }
 
 /** Compile-time exhaustiveness guard: a new ThreadEvent arm without a case is a type error. */
@@ -627,6 +682,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
         stalled: false,
         apiRetry: state.apiRetry,
         compacting: state.compacting,
+        resetting: state.resetting,
         localSendPending: state.localSendPending,
         // #1314: carried. Turn content is NOT one of the three clearing edges — see the field's contract.
         thinkingTokens: state.thinkingTokens
@@ -656,6 +712,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
         stalled: false,
         apiRetry: state.apiRetry,
         compacting: state.compacting,
+        resetting: state.resetting,
         localSendPending: state.localSendPending,
         thinkingTokens: state.thinkingTokens
       }
@@ -710,6 +767,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
             stalled: false,
             apiRetry: state.apiRetry,
             compacting: state.compacting,
+            resetting: state.resetting,
             localSendPending: state.localSendPending,
             // #1314: carried on BOTH paths, and the guard above deliberately does NOT widen for it — the
             // `apiRetry` / `compacting` / `localSendPending` reading, not `stalled`'s. A tool result is not
@@ -753,6 +811,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
             stalled: false,
             apiRetry: state.apiRetry,
             compacting: state.compacting,
+            resetting: state.resetting,
             localSendPending: false,
             thinkingTokens: event.state === 'thinking' ? state.thinkingTokens : null
           }
@@ -770,6 +829,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
         stalled: state.stalled,
         apiRetry: state.apiRetry,
         compacting: state.compacting,
+        resetting: state.resetting,
         localSendPending: state.localSendPending,
         // #1314: the SECOND clearing edge. A turn boundary is not turn activity — which is why `stalled`
         // is carried one line up — but it is the end of the thinking this reading measured, and the daemon
@@ -823,6 +883,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
         stalled: state.stalled,
         apiRetry: state.apiRetry,
         compacting: state.compacting,
+        resetting: state.resetting,
         localSendPending: true,
         // #1314: carried. A renderer-sourced echo is no more the daemon's word on the reading than it is
         // on the stall one line up; the operator sending a second message mid-turn does not un-say how
@@ -857,6 +918,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
             stalled: state.stalled,
             apiRetry: state.apiRetry,
             compacting: state.compacting,
+            resetting: state.resetting,
             localSendPending: state.localSendPending,
             thinkingTokens: state.thinkingTokens
           }
@@ -865,6 +927,14 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
       // A whole boundary marker: fresh tail-append (never coalesced), `phase` untouched — the `userText` /
       // `turnEnd` discipline. Always a new `items` array (a fresh append is always a change). AC1. NOT in
       // AC2's clear set: a session rotation is not turn activity, so `stalled` is carried unchanged.
+      //
+      // #1517: THE ONE EXCEPTION, and it is a deliberate departure from the sentence above rather than
+      // a widening of the turn-activity rule. `resetting` clears here because a reset ENDS in a session
+      // rotation, so this marker is the independent trigger the wire contract demands for a daemon
+      // killed mid-reset with no falling edge to send. It is a BELT: the falling edge is the primary
+      // clear, the two ride separate producers, and neither order between them is pinned. Unconditional
+      // rather than guarded — a boundary arriving with no reset live writes `null` over `null`, which
+      // this arm already pays for by always rebuilding the state (a fresh append is always a change).
       return {
         items: [
           ...state.items,
@@ -879,6 +949,8 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
         stalled: state.stalled,
         apiRetry: state.apiRetry,
         compacting: state.compacting,
+        // #1517's belt — the ONE scalar this arm does not carry. See the comment above the return.
+        resetting: null,
         localSendPending: state.localSendPending,
         thinkingTokens: state.thinkingTokens
       }
@@ -909,6 +981,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
         stalled: state.stalled,
         apiRetry: state.apiRetry,
         compacting: state.compacting,
+        resetting: state.resetting,
         localSendPending: state.localSendPending,
         thinkingTokens: state.thinkingTokens
       }
@@ -926,6 +999,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
             stalled: true,
             apiRetry: state.apiRetry,
             compacting: state.compacting,
+            resetting: state.resetting,
             localSendPending: state.localSendPending,
             thinkingTokens: state.thinkingTokens
           }
@@ -946,6 +1020,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
               stalled: state.stalled,
               apiRetry: null,
               compacting: state.compacting,
+              resetting: state.resetting,
               localSendPending: state.localSendPending,
               thinkingTokens: state.thinkingTokens
             }
@@ -962,8 +1037,55 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
         stalled: state.stalled,
         apiRetry: { current: event.current, total: event.total },
         compacting: state.compacting,
+        resetting: state.resetting,
         localSendPending: state.localSendPending,
         thinkingTokens: state.thinkingTokens
+      }
+    }
+    case 'resetting': {
+      // #1517: the two-edged reset status — set from the rising edge, cleared by the falling one and by
+      // the `sessionBoundary` belt above. `items`, `phase` and the other four chrome scalars are
+      // untouched on EVERY path, and that is this arm's load-bearing property rather than tidiness: the
+      // wrap-up turn streams into `items` while the label shows, so a reset must neither clear turn
+      // state nor be cleared by it.
+      if (!event.active) {
+        // The falling edge. Both tokens are deliberately NOT read — the wire repeats the last-known
+        // pair here (or two empty strings) and it is ignored, `apiRetry`'s rule. A falling edge against
+        // no live reset is a same-reference no-op.
+        return state.resetting === null
+          ? state
+          : {
+              items: state.items,
+              phase: state.phase,
+              stalled: state.stalled,
+              apiRetry: state.apiRetry,
+              compacting: state.compacting,
+              localSendPending: state.localSendPending,
+              thinkingTokens: state.thinkingTokens,
+              resetting: null
+            }
+      }
+      // The rising edge RE-FIRES as the phase advances, and the daemon may also repeat an identical
+      // frame (no wire-side dedup), so an unchanged pair returns the SAME state reference — the label
+      // never flickers — while a changed `phase` or `handoff` swaps in a fresh record. That swap is
+      // what makes `wrapping_up` → `restarting` RELABEL the row rather than read as a second reset.
+      // Both tokens are compared: `restarting`/`pending` → `restarting`/`written` is a real change the
+      // suffix depends on, and comparing `phase` alone would drop it.
+      const held = state.resetting
+      if (held !== null && held.phase === event.phase && held.handoff === event.handoff) return state
+      return {
+        items: state.items,
+        phase: state.phase,
+        stalled: state.stalled,
+        apiRetry: state.apiRetry,
+        compacting: state.compacting,
+        localSendPending: state.localSendPending,
+        thinkingTokens: state.thinkingTokens,
+        // A fresh named-field literal, never a spread of the event — the same discipline the bridge
+        // applies one layer up, and what keeps a future `ThreadEvent` field from silently entering the
+        // store. An empty `phase` with `active: true` is held as it arrives: it decodes (the decoder
+        // refuses to cross-validate the pair), so the LABEL decides what an unnamed phase reads as.
+        resetting: { phase: event.phase, handoff: event.handoff }
       }
     }
     case 'compacting': {
@@ -1012,6 +1134,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
             stalled: state.stalled,
             apiRetry: state.apiRetry,
             compacting: state.compacting,
+            resetting: state.resetting,
             localSendPending: state.localSendPending,
             thinkingTokens: event.estimatedTokens
           }
@@ -1069,13 +1192,19 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
       // of a think that has since finished — the stuck-banner hazard in its plainest form, since this
       // frame has no falling edge at all to lose. Hence the fifth predicate clause: a state whose ONLY
       // live chrome is a held reading must NOT early-out.
+      // #1517 is that classification for the eighth field, and it is Mode B alongside its three
+      // neighbours: the daemon re-asserts no `resetting` on connect, and this frame's falling edge is
+      // exactly the one a disconnect eats — so a record held across the reconcile would report a reset
+      // that has since finished, or one whose daemon is gone. Hence the sixth predicate clause: a state
+      // whose ONLY live chrome is a held reset must NOT early-out.
       const nothingLive =
         state.phase === 'idle' &&
         !state.stalled &&
         state.apiRetry === null &&
         !state.compacting &&
         !state.localSendPending &&
-        state.thinkingTokens === null
+        state.thinkingTokens === null &&
+        state.resetting === null
       return nothingLive
         ? state
         : {
@@ -1085,7 +1214,8 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
             apiRetry: null,
             compacting: false,
             localSendPending: false,
-            thinkingTokens: null
+            thinkingTokens: null,
+            resetting: null
           }
     }
     default:
@@ -1100,7 +1230,8 @@ export const initialTimelineState: TimelineState = {
   apiRetry: null,
   compacting: false,
   localSendPending: false,
-  thinkingTokens: null
+  thinkingTokens: null,
+  resetting: null
 }
 
 /** Selectors — the read surface, mirroring `sessionStore`'s. */

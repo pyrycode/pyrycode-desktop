@@ -19,7 +19,7 @@ import { connectedConversationHostNow, useConversationActionAvailability } from 
 import { AssistantMarkdown } from './AssistantMarkdown'
 import { PyryMark } from '../../theme/PyryMark'
 import type { Message } from './messageViewModel'
-import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
+import type { QueuedItem, ConversationCreatedPayload, WireResetHandoff } from '@shared/wire/types'
 import type { ModelRefusalEvent, RelayLinkStatus } from '@shared/ipc/events'
 import { sessionStore, useSessionStore, initialSessionState, selectStatusFor, type ConnectionStatus } from '../../store/sessionStore'
 import { canRespondToPromptNow, usePromptResponseAvailability } from './promptResponseAvailability'
@@ -61,6 +61,7 @@ import {
   type TimelineState,
   type TurnPhase,
   type ApiRetryStatus,
+  type ResettingStatus,
   type UnrecognizedSite,
   type MessageAttachment
 } from '../../store/threadTimeline'
@@ -296,7 +297,8 @@ export function ConversationScreen({
   //                      daemon string" guarantee is preserved. It does NOT join the `ThreadStatus`
   //                      record below: that record decides WHICH of the five labels the slot shows, and
   //                      the reading changes none of that — it only extends the text of one of them.
-  const { items, phase, stalled, apiRetry, compacting, localSendPending, thinkingTokens } = thread
+  const { items, phase, stalled, apiRetry, compacting, localSendPending, thinkingTokens, resetting } =
+    thread
   const openTool = openToolCall(items)
   // #1009: the open conversation's queued backlog, read HERE rather than one level down. #1009's own reason
   // was the scroll pin: the backlog was a REGION between the thread and the composer, so its appearance and
@@ -521,12 +523,13 @@ export function ConversationScreen({
           >
             <ThinkingIndicator
               state={workingIndicatorStateWithLocalSend(
-                { phase, apiRetry, compacting, stalled },
+                { phase, apiRetry, compacting, stalled, resetting },
                 localSendPending
               )}
               toolName={openTool?.name ?? null}
               toolElapsedSeconds={openTool?.elapsedSeconds}
               retry={apiRetry}
+              resetting={resetting}
               thinkingTokens={thinkingTokens}
             />
           </ComposerStatusArea>
@@ -2179,6 +2182,28 @@ export const API_RETRY_COPY = 'API error — retrying…'
 // #967 moved it here for the same reason as its retry peer above.
 export const COMPACTING_COPY = 'Compacting the conversation…'
 
+// #1517: the reset copy — three module-level, client-owned constants joining the cluster above, plus the
+// two handoff suffixes below. Apostrophe-free (renderToStaticMarkup escapes `'` → `&#x27;`, the standing
+// desktop lesson) and using the U+2026 ellipsis character, matching all five siblings.
+//
+// THEY NAME THE TWO PHASES THE OPERATOR CAN SEE. A reset is two visible acts — claude writes a handoff
+// note, then the daemon restarts it — and the first of them is a REAL TURN, so without this label the row
+// reads `Thinking…` across the whole of it. That is the unnamed pause the ticket exists to remove, and it
+// is also why the reset takes the TOP of the row's order rather than any lower position.
+//
+// The wire's two tokens SELECT among these constants and are never interpolated into one. That is the
+// difference between this cluster and `toolWorkingCopy` beside it: there the hole holds a daemon string,
+// here there is no hole at all, so this slice puts no daemon-supplied string in the DOM. A closed union
+// is not a reason to relax that — a narrowed token is still a claim by a peer.
+export const RESETTING_COPY = 'Resetting…'
+export const RESETTING_WRAPPING_UP_COPY = 'Resetting: writing the handoff note…'
+export const RESETTING_RESTARTING_COPY = 'Resetting: restarting claude…'
+
+// The outcome of the note, appended to the restarting copy as ONE TEXT RUN (see `resettingLabel`). Not
+// sentences of their own: the row holds one line, and the phase is the subject both of these modify.
+export const HANDOFF_WRITTEN_COPY = 'handoff note written'
+export const HANDOFF_SKIPPED_COPY = 'handoff note skipped'
+
 // #317: the stall-indicator copy — a module-level, client-owned constant (the EMPTY_THREAD_COPY /
 // 'Thinking…' idiom). Apostrophe-free (renderToStaticMarkup escapes `'` → `&#x27;`, the standing desktop
 // lesson) and using the U+2026 ellipsis character (matching 'Thinking…'). Never a daemon string — the
@@ -2203,7 +2228,18 @@ export const STALL_COPY = 'The turn seems to have stalled…'
 // constants. The row's one label slot now carries all four thread-status facts, in the order
 // `workingIndicatorState` below derives — retry, compacting, stalled, then the working label. The daemon's
 // two contributions still ride their own separately-typed props on the view (`toolName`, `retry`).
-export type WorkingIndicatorState = 'thinking' | 'working' | 'retrying' | 'compacting' | 'stalled'
+//
+// #1517 widens it to six, by #967's arithmetic rather than a new one: the added member is another
+// CLIENT-OWNED literal, so the label choice stays a closed set of this file's own constants. The reset's
+// two decoded tokens ride their own separately-typed prop (`resetting`), the third of the daemon's
+// contributions to this label and the first whose fields are closed unions rather than free values.
+export type WorkingIndicatorState =
+  | 'thinking'
+  | 'working'
+  | 'retrying'
+  | 'compacting'
+  | 'stalled'
+  | 'resetting'
 
 // #967: the label for each of the five states — a total switch with NO default, so a sixth member is a
 // `tsc` error here rather than a silently unlabelled row. Every arm returns a client-owned constant; only
@@ -2211,12 +2247,17 @@ export type WorkingIndicatorState = 'thinking' | 'working' | 'retrying' | 'compa
 // #1314: the estimate reaches the `'thinking'` arm ALONE. AC2 freezes the other four — a retry, a
 // compaction, a stall and the generic working label each keep their own constant verbatim, and none of
 // them is about a think whose depth there is a reading of.
+// #1517: the sixth arm takes the reset record, the way the retry arm takes the counter. Its own copy
+// selection is `resettingLabel` below rather than inline, because it is the one arm with a nested choice.
 function statusRowCopy(
   state: WorkingIndicatorState,
   retry: ApiRetryStatus | null,
-  thinkingTokens: number | null
+  thinkingTokens: number | null,
+  resetting: ResettingStatus | null
 ): string {
   switch (state) {
+    case 'resetting':
+      return resettingLabel(resetting)
     case 'retrying':
       return apiRetryLabel(retry)
     case 'compacting':
@@ -2283,6 +2324,62 @@ function thinkingLabel(thinkingTokens: number | null): string {
 // bare copy is the honest answer. Both fields are guaranteed numbers, not daemon strings:
 // parseApiRetryPayload narrows them with requireNumber and throws WireDecodeError otherwise, which is what
 // bounds this interpolation's length (a JS number stringifies to at most 24 characters).
+// #1517: the reset copy chosen by the two decoded tokens — `apiRetryLabel`'s and `thinkingLabel`'s
+// sibling, and written to their shape deliberately.
+//
+// THE TOKENS SELECT, THEY ARE NOT INTERPOLATED, and that is this function's whole security posture (AC4).
+// Every returned string is assembled from the constants declared beside `COMPACTING_COPY`; neither
+// `phase` nor `handoff` reaches the DOM as a character. The wire narrows both to closed sets, and a
+// closed union is precisely the compile-time invitation to read a peer's claim as settled fact — the
+// frame's own docblock says so. So a switch that SELECTS is safe where a template that INTERPOLATES
+// would be putting a daemon-authored value on screen no matter how small its declared value set is.
+//
+// TOTAL OVER BOTH SETS, including the pairs the producer never emits. All sixteen (`active`, `phase`,
+// `handoff`) combinations decode — the decoder refuses to cross-validate the pair, by name — so the
+// unnamed phase and the unresolved handoff are ordinary inputs here, not defended-against ones. Both
+// DEGRADE to the nearest honest copy on `apiRetryLabel(null)`'s precedent, never throw and never return
+// the empty string: a hostile or merely buggy daemon must not be able to blank the status row.
+//
+// `resetting === null` is a DEGRADE, not a defence: the container derives `'resetting'` from
+// `resetting !== null` and hands this the same record, so it is unreachable from there — but the prop's
+// type admits it and the bare copy is the honest answer.
+//
+// ONE TEXT RUN, not constant-plus-span, for the reason stated on `ThinkingIndicator`: the row's label
+// ellipsizes as a unit and two runs draw two ellipses. The handoff outcome is therefore appended into
+// the string, exactly as the retry counter is one function down.
+function resettingLabel(resetting: ResettingStatus | null): string {
+  if (resetting === null) return RESETTING_COPY
+  switch (resetting.phase) {
+    case 'wrapping_up':
+      // The note is being written; whether it lands is not known yet, so `handoff` says `pending` here
+      // and the copy deliberately reports no outcome.
+      return RESETTING_WRAPPING_UP_COPY
+    case 'restarting':
+      return `${RESETTING_RESTARTING_COPY}${handoffSuffix(resetting.handoff)}`
+    case '':
+      // Go's zero value. On the falling edge it never reaches here (the reducer stores `null`); paired
+      // with `active: true` it is traffic the daemon does not emit, and the bare copy is what stays
+      // true of it — the phase is unnamed, the reset is not.
+      return RESETTING_COPY
+  }
+}
+
+/** The restarting label's trailing clause, or nothing while the outcome is still unresolved. Total over
+ *  `WireResetHandoff`, so a fifth token is a `tsc` error here rather than a silently dropped outcome. */
+function handoffSuffix(handoff: WireResetHandoff): string {
+  switch (handoff) {
+    case 'written':
+      return ` ${HANDOFF_WRITTEN_COPY}`
+    case 'skipped':
+      return ` ${HANDOFF_SKIPPED_COPY}`
+    case 'pending':
+    case '':
+      // `pending` rides `wrapping_up` upstream, so seeing it here means the daemon moved the phase
+      // without settling the note. No suffix is the honest reading — never an invented third outcome.
+      return ''
+  }
+}
+
 function apiRetryLabel(retry: ApiRetryStatus | null): string {
   if (retry === null || retry.total <= 0) return API_RETRY_COPY
   return `${API_RETRY_COPY} attempt ${retry.current}/${retry.total}`
@@ -2343,7 +2440,8 @@ function apiRetryLabel(retry: ApiRetryStatus | null): string {
 // longer moves the composer — which is what makes the null-at-rest posture safe to keep. The tool branch
 // still adds ONE modifier, carrying the one-line bound an unbounded daemon string needs (see
 // .composer-status__label--tool in conversation.css, and its rewritten reasoning: the .bubble max-width
-// that used to backstop that bound went away with the bubble).
+// that used to backstop that bound went away with the bubble). Reset copy shares that bound through
+// its own modifier: the outcome suffix wraps at minimum window width without it.
 //
 // `conversation__thinking` is RETAINED on the element deliberately. It styles nothing any more — it is
 // the shipped identity hook meaning "the working indicator is showing", and two Electron-launch e2e specs
@@ -2375,12 +2473,18 @@ export function ThinkingIndicator({
   state,
   toolName,
   retry,
+  resetting,
   thinkingTokens,
   toolElapsedSeconds
 }: {
   state: WorkingIndicatorState | null
   toolName: string | null
   retry: ApiRetryStatus | null
+  // #1517: REQUIRED, on `toolName`'s and `retry`'s stated reasoning — an optional prop would let the
+  // container silently omit it and nothing in this repo could catch that, since every container test
+  // renders the idle store. Two closed-set tokens and no free string, so the type-level "this prop
+  // structurally cannot carry an arbitrary daemon string" guarantee holds here too.
+  resetting: ResettingStatus | null
   thinkingTokens: number | null
   toolElapsedSeconds?: number
 }): JSX.Element | null {
@@ -2394,14 +2498,15 @@ export function ThinkingIndicator({
   // One element, three varying pieces — the toolCall row's `rowClass` idiom above, which likewise varies
   // only a className and keeps a single return. Writing any case as its own early return would duplicate
   // the markup, and a drifted copy is exactly what makes the five labels stop being byte-identical to each
-  // other. The two modifiers are mutually exclusive by construction: `toolLabel` is null in every
-  // superseding state, so a stalled row can never also be a tool-named one.
+  // other. The modifiers are mutually exclusive: `toolLabel` is null in every superseding state.
   const labelClass = `conversation__thinking composer-status__label${
     toolLabel !== null ? ' composer-status__label--tool' : ''
-  }${state === 'stalled' ? ' composer-status__label--stalled' : ''}`
+  }${state === 'stalled' ? ' composer-status__label--stalled' : ''}${
+    state === 'resetting' ? ' composer-status__label--resetting' : ''
+  }`
   const label = toolLabel !== null
     ? `${toolLabel}${toolElapsedSeconds === undefined ? '' : ` ${formatToolElapsed(toolElapsedSeconds)}`}`
-    : statusRowCopy(state, retry, thinkingTokens)
+    : statusRowCopy(state, retry, thinkingTokens, resetting)
   return <span className={labelClass}>{label}</span>
 }
 
@@ -2493,11 +2598,16 @@ export function ComposerStatusArea({
 // the type is the only detector this repo has here, since every container test renders the initial store.
 // The cascade that costs — every `ThreadStatus` literal in the test file gains one token — is the price of
 // having a detector at all, and `tsc` names every site.
+//
+// #1517 IS THE FOURTH, and it takes the field on #967's own terms: required, one more token in every
+// literal, and `tsc` names every site. What is different is where it lands in the order — the TOP, not
+// the middle — for the reason the constants above give.
 export interface ThreadStatus {
   phase: TurnPhase
   apiRetry: ApiRetryStatus | null
   compacting: boolean
   stalled: boolean
+  resetting: ResettingStatus | null
 }
 
 // #493: whether the generic thinking indicator shows — thinking, and nothing supersedes it (AC5).
@@ -2548,6 +2658,11 @@ export function shouldShowThinking(status: ThreadStatus): boolean {
 // #967: THIS IS THE ONE PLACE THE ROW'S FOUR-WAY ORDER LIVES. The row's label slot holds one string, so
 // the four thread-status facts need a precedence rather than four surfaces, and this is it:
 //
+//   0. resetting  — #1517, and it goes on TOP rather than into the middle. The wrap-up turn is a REAL
+//                   turn, so the thread's phase is thinking or responding throughout it; any lower
+//                   position would render `Thinking…` across the whole first phase, which is the
+//                   unnamed pause that ticket exists to remove. Read before the gate like the three
+//                   below it, because the restarting phase has no turn of its own to be gated on.
 //   1. retry      — a live rising/falling-edge signal; claude is re-attempting a failed call.
 //   2. compacting — the same kind of signal. The two never overlap in practice; retry wins if they do.
 //   3. stalled    — a one-shot onset with no clearing frame, cleared only by the next turn activity, so
@@ -2568,6 +2683,7 @@ export function shouldShowThinking(status: ThreadStatus): boolean {
 // an unknown-count retry (`{ current: 0, total: 0 }`) picks `'retrying'` exactly like a known one, and the
 // counter's absence is then apiRetryLabel's business, not this function's.
 export function workingIndicatorState(status: ThreadStatus): WorkingIndicatorState | null {
+  if (status.resetting !== null) return 'resetting'
   if (status.apiRetry !== null) return 'retrying'
   if (status.compacting) return 'compacting'
   if (status.stalled) return 'stalled'

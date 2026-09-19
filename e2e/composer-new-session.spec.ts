@@ -1,7 +1,12 @@
 import type { Locator, Page } from '@playwright/test'
 import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
-import type { NewSessionPayload, SessionTransitionPayload } from '../src/shared/wire/types'
+import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
+import type {
+  NewSessionPayload,
+  ResettingPayload,
+  SessionTransitionPayload
+} from '../src/shared/wire/types'
 
 // Fake-stack UI e2e for #1218 — the Actions menu's Reset session row, the only entry in that menu that is
 // not a slash command and, since #1496, the conversation's only reset path. Picking it dispatches a
@@ -113,6 +118,18 @@ const sessionTransitionFrame = (): Uint8Array =>
     } satisfies SessionTransitionPayload
   })
 
+const resettingFrame = (
+  active: boolean,
+  phase: ResettingPayload['phase'],
+  handoff: ResettingPayload['handoff']
+): Uint8Array =>
+  encodeEnvelope({
+    id: PUSH_ENVELOPE_ID,
+    type: 'resetting',
+    ts: FIXED_TS,
+    payload: { conversation_id: SEEDED_ROW.id, active, phase, handoff } satisfies ResettingPayload
+  })
+
 test('picking Reset session sends one new_session naming the open chat, and nothing else (AC2, AC4)', async ({
   launchPairedApp
 }) => {
@@ -152,7 +169,7 @@ test('picking Reset session sends one new_session naming the open chat, and noth
   await expect(page.locator('[role="alert"]')).toHaveCount(0)
 })
 
-test('one session_transition after the restart draws exactly one delimiter (AC4)', async ({
+test('reset phases reach the composer and session_transition clears the label with one delimiter', async ({
   launchPairedApp
 }) => {
   const { newSessions, buildReplyFrames } = captureOutbound()
@@ -165,6 +182,15 @@ test('one session_transition after the restart draws exactly one delimiter (AC4)
   // drive's own frame rather than a push that raced it.
   await expect.poll(() => newSessions.length, { timeout: ROUNDTRIP_TIMEOUT_MS }).toBe(1)
 
+  // Exercise the full wire → IPC → keyed timeline → mounted composer path. The live gate's
+  // old daemon rotated the session without emitting these frames; a delimiter alone cannot
+  // prove the label path works.
+  const statusLabel = page.locator('.composer-status .conversation__thinking')
+  daemon.pushFrame(resettingFrame(true, 'wrapping_up', 'pending'))
+  await expect(statusLabel).toHaveText('Resetting: writing the handoff note…')
+  daemon.pushFrame(resettingFrame(true, 'restarting', 'written'))
+  await expect(statusLabel).toHaveText('Resetting: restarting claude… handoff note written')
+
   // The daemon's answer when it DOES have a child to rotate. It is a SERVER PUSH — the real daemon emits
   // this marker unprovoked on the inbound path rather than as a reply to the frame — so it goes out
   // through daemon.pushFrame rather than through buildReplyFrames, which only answers outbound envelopes.
@@ -175,4 +201,77 @@ test('one session_transition after the restart draws exactly one delimiter (AC4)
   await expect(page.locator('.session-delimiter')).toHaveCount(1, {
     timeout: ROUNDTRIP_TIMEOUT_MS
   })
+  await expect(statusLabel).toHaveCount(0)
+})
+
+test('reset labels keep one-line geometry beside the trailing error chip at minimum width', async ({
+  launchPairedApp
+}, testInfo) => {
+  const { page, app, daemon } = await launchPairedApp()
+  const row = page.locator('.composer-status')
+  const label = row.locator('.composer-status__label')
+  const chip = row.locator('.composer-status__error')
+  const composer = page.locator('.composer__row')
+  const states: Array<{ phase: ResettingPayload['phase']; handoff: ResettingPayload['handoff']; copy: string }> = [
+    { phase: 'restarting', handoff: 'written', copy: 'Resetting: restarting claude… handoff note written' },
+    { phase: 'restarting', handoff: 'skipped', copy: 'Resetting: restarting claude… handoff note skipped' },
+    { phase: 'wrapping_up', handoff: 'pending', copy: 'Resetting: writing the handoff note…' }
+  ]
+
+  for (const trailing of [false, true]) {
+    if (trailing) {
+      // Keep the fake transport live so reset frames still use the decoder. Only the connection
+      // failure is injected at the preload boundary, as in stopped-turn.spec.ts.
+      await app.evaluate(({ BrowserWindow }, channel) => {
+        BrowserWindow.getAllWindows()[0].webContents.send(channel, {
+          type: 'failed', serverId: 'fake-daemon',
+          error: { code: 'transport', message: '', retryable: true }
+        })
+      }, DAEMON_EVENT_CHANNEL)
+    }
+    await expect(chip).toHaveCount(trailing ? 1 : 0)
+    for (const width of [800, 1280]) {
+      await app.evaluate(({ BrowserWindow }, width) => {
+        BrowserWindow.getAllWindows()[0].setSize(width, 600)
+      }, width)
+      await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width)
+      await expect(label).toHaveCount(0)
+      const idleRow = await row.boundingBox()
+      const idleComposer = await composer.boundingBox()
+      expect(idleRow?.height).toBe(24)
+
+      for (const { phase, handoff, copy } of states) {
+        daemon.pushFrame(resettingFrame(true, phase, handoff))
+        await expect(label).toHaveText(copy)
+        expect((await row.boundingBox())?.height).toBe(idleRow?.height)
+        expect((await composer.boundingBox())?.y).toBe(idleComposer?.y)
+        await expect(label).toHaveCSS('white-space', 'nowrap')
+        await expect(label).toHaveCSS('text-overflow', 'ellipsis')
+        await expect(label).toHaveCSS('overflow', 'hidden')
+        const bounds = await label.evaluate(el => {
+          const rect = el.getBoundingClientRect()
+          const activity = el.parentElement!.getBoundingClientRect()
+          return {
+            height: rect.height,
+            lineHeight: Number.parseFloat(getComputedStyle(el).lineHeight),
+            contained: rect.left >= activity.left && rect.right <= activity.right,
+            truncated: el.scrollWidth > el.clientWidth,
+            singleTextNode: el.childNodes.length === 1 && el.firstChild?.nodeType === Node.TEXT_NODE
+          }
+        })
+        expect(bounds.height).toBe(bounds.lineHeight)
+        expect(bounds.contained).toBe(true)
+        expect(bounds.singleTextNode).toBe(true)
+        if (width === 800 && trailing) expect(bounds.truncated).toBe(true)
+        await page.screenshot({
+          path: testInfo.outputPath(`reset-${width}-${trailing ? 'error' : 'empty'}-${handoff}.png`),
+          animations: 'disabled'
+        })
+      }
+      daemon.pushFrame(resettingFrame(false, '', ''))
+      await expect(label).toHaveCount(0)
+      expect((await row.boundingBox())?.height).toBe(idleRow?.height)
+      expect((await composer.boundingBox())?.y).toBe(idleComposer?.y)
+    }
+  }
 })

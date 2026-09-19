@@ -19,10 +19,11 @@ now empty, and their copy is a wider `state` union on this one view instead:
 ├── Timeline                   items={useTimelineStore(selectItems)}
 └── ComposerStatusArea         isRunning={isTurnRunning(phase)}
     └── ThinkingIndicator      state={workingIndicatorStateWithLocalSend(
-                                         { phase, apiRetry, compacting, stalled }, localSendPending)}
+                                         { phase, apiRetry, compacting, stalled, resetting }, localSendPending)}
                                 toolName={openTool?.name ?? null}
                                 toolElapsedSeconds={openTool?.elapsedSeconds}
                                 retry={apiRetry}
+                                resetting={resetting}
                                 thinkingTokens={thinkingTokens}
 ```
 
@@ -49,17 +50,21 @@ prop's only inhabitants were two client-owned literals and `null`. #649 named th
 tool in the label (per the operator's 2026-08-20 decision: the tool row two lines above the indicator
 already renders the same `name` as an escaped inert React child, so the indicator adds no new exposure)
 and had to reverse that guarantee to do it. What survives, narrowed rather than dropped: the **label
-choice** (`state`) is still a closed client-owned union — **widened from two members to five by #967**
-(`'thinking' | 'working' | 'retrying' | 'compacting' | 'stalled'`), and #967's own comment is explicit
+choice** (`state`) is still a closed client-owned union — **widened to five by #967 and six by #1517**
+(`'thinking' | 'working' | 'retrying' | 'compacting' | 'stalled' | 'resetting'`).
+The original fold's comment is explicit
 that this is a *different* act from the one #649 refused: every added member is another client-owned
 literal, so the label choice stays a closed set of this file's own constants rather than dissolving into
-the daemon's vocabulary. The daemon's two contributions still ride their own separately-typed, *required*
+the daemon's vocabulary. The daemon's contributions ride their own separately-typed, *required*
 props: the tool name on `toolName: string | null` (`toolWorkingCopy` keeps its client-owned copy around
 it, and the name reaches the DOM only as an auto-escaped text child, never through an HTML sink), and —
 new in #967 — the retry counter's two integers on `retry: ApiRetryStatus | null` (no string field, so the
 "this prop structurally cannot carry a daemon string" guarantee `ApiRetryIndicator` used to hold on its
 own is preserved verbatim on the merged view) — and, new in [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314), the running thinking-token estimate on
-`thinkingTokens: number | null` (also a bare number, same guarantee). All three are required for
+`thinkingTokens: number | null` (also a bare number, same guarantee). The reset record also rides a
+required `resetting: ResettingStatus | null` prop; its closed phase/outcome tokens select client-owned
+copy (see the [status row](conversation-shell-composer-status-row.md#composer-status-row-796)).
+All four are required for
 `toolName`'s own recorded reason: an optional prop lets the container silently omit it, and nothing in
 this repo could catch that since every container test renders the initial store, so `tsc` is the only
 available detector and the type must be the one that fails. **#1314 paid that reason's cost in full**: the
@@ -72,11 +77,11 @@ splitting at that cascade.
 `state === null` guard was what enforced #493's and #496's supersede rules, and the tool name then won
 over the phase-derived copy: `toolName !== null ? toolWorkingCopy(toolName) : …`, safe only because a
 live retry or compaction made `state` null and the component returned before reaching the label. Now
-that all five states share the one slot, `state === 'retrying'` with a tool still open is *reachable*,
+that all six states share the one slot, `state === 'retrying'` with a tool still open is *reachable*,
 and the old order would have rendered the tool name where the row must say `API_RETRY_COPY`. So one
 `const toolLabel = (state === 'thinking' || state === 'working') && toolName !== null ?
 toolWorkingCopy(toolName) : null` now drives both the label and the `--tool` modifier — one expression
-rather than two conditions that have to independently agree — and the three superseding states outrank
+rather than two conditions that have to independently agree — and the four superseding states outrank
 it unconditionally. `{ state: 'thinking', toolName: 'Bash' }` stays well-defined rather than illegal (the
 daemon flips to `responding` on the first tool step, so it is a defined edge, not a defended one); an
 open tool during a live retry or compaction is now equally well-defined and renders the state's own copy.
@@ -88,7 +93,7 @@ moved the label off the daemon-bubble surface into the fixed-height row above th
 one genuinely new piece, a turning icon; see [Composer status
 row](conversation-shell-composer-status-row.md#composer-status-row-796) below.
 
-**The label is a single text child in every one of the five states, never constant-plus-span.** That is
+**The label is a single text child in every one of the six states, never constant-plus-span.** That is
 load-bearing for the truncation bound: one text run ellipsizes as one unit, so on overflow the client `…`
 is truncated away and replaced by the ellipsis the truncation itself draws — two runs would render two
 ellipses. `ApiRetryIndicator`'s retired bubble *did* render constant-plus-span (`.api-retry__counter`,
@@ -97,7 +102,8 @@ instead (`apiRetryLabel`, below) rather than carried in a nested span — [#1314
 state (`thinkingLabel`, below), for the same reason. The class attribute keeps its
 shipped order and appends at most one modifier: `conversation__thinking composer-status__label`, plus
 ` composer-status__label--tool` in the working/thinking state with a name, or
-` composer-status__label--stalled` in the stalled state — mutually exclusive by construction, since
+` composer-status__label--stalled` in the stalled state, or
+` composer-status__label--resetting` during reset — mutually exclusive by construction, since
 `toolLabel` is `null` in every superseding state.
 
 **Opens locally on send since [#650](../codebase/650.md), closes robustly.** Through #649 the
@@ -146,19 +152,22 @@ now that a stall can also occupy the slot. It keeps its name, its `ThreadStatus`
 return, and both supersede clauses textually untouched, deliberately: they are #493's and #496's standing
 regression evidence, the predicate is exported and independently tested, and — per #650's own comment,
 trued up by #967 — one order living in one function is what keeps the supersede facts from drifting into
-two places. It gains **no** `stalled` clause of its own.
+two places. It gains neither a `stalled` nor a `resetting` clause: the higher-priority returns
+in `workingIndicatorState` decide whether either occupies the slot.
 
-**`workingIndicatorState(status)` is where the four-way order actually lives, since #967:**
+**`workingIndicatorState(status)` selects the six labels in one order, with reset first since #1517:**
 
 | Order | State | Why |
 | --- | --- | --- |
-| 1 | `'retrying'` | a live rising/falling-edge signal — claude is re-attempting a failed API call |
-| 2 | `'compacting'` | the same kind of signal; the two never overlap in practice, retry wins if they do |
-| 3 | `'stalled'` | a one-shot onset with no clearing frame, cleared only by the next turn activity — the two live signals still outrank it, but it is the more useful of two compatible facts (stalled, working) while it lasts |
-| 4 | `'thinking'` / `'working'` | what `shouldShowThinking` + the raw phase decide, tool-named where a tool is open |
+| 1 | `'resetting'` | the handoff is a real turn; reset must stay visible while it streams |
+| 2 | `'retrying'` | a live rising/falling-edge signal for a failed API call |
+| 3 | `'compacting'` | a live compaction signal; reset and retry win if they overlap |
+| 4 | `'stalled'` | a held onset cleared by turn activity; live reset, retry and compaction outrank it |
+| 5 | `'thinking'` / `'working'` | selected by the running turn phase, tool-named where a tool is open |
 
 ```ts
 export function workingIndicatorState(status: ThreadStatus): WorkingIndicatorState | null {
+  if (status.resetting !== null) return 'resetting'
   if (status.apiRetry !== null) return 'retrying'
   if (status.compacting) return 'compacting'
   if (status.stalled) return 'stalled'
@@ -167,17 +176,13 @@ export function workingIndicatorState(status: ThreadStatus): WorkingIndicatorSta
 }
 ```
 
-**The first three returns are read *before* `shouldShowThinking`'s running-turn gate, and that ordering
-is AC2, not an implementation detail.** All three folded views rendered off their own scalar alone —
-`StallIndicator({ isStalled })`, `ApiRetryIndicator({ retry })`, `CompactingIndicator({ isCompacting })`
-took no phase at all — so putting the three early returns *behind* the gate would have silently narrowed
-three shipped behaviours to only-while-a-turn-is-running. `thread-scroll-pin.spec.ts` pins this by
-construction: it pushes a stall onto a turn the primer has already returned to `idle` and asserts the
-label still renders. Only the thinking/working label is turn-gated; the three superseding states are not
-and must stay that way.
+**The first four returns precede the running-turn gate.** Reset, retry, compaction
+and stall remain visible while the turn is idle; only thinking/working is turn-gated.
+The restarting phase has no turn of its own, so gating reset on a running turn would
+hide it. `thread-scroll-pin.spec.ts` also pins the idle-stall case.
 
-**`ThreadStatus` takes the fourth field #650 declined to take.** #493 built the record as the seam for
-exactly this — "one field here, one clause below" — and #496 extended it once already:
+**`ThreadStatus` requires every fact used to choose the label.** #967 added stall to
+the phase/retry/compaction record; #1517 adds the reset phase/outcome record:
 
 ```ts
 export interface ThreadStatus {
@@ -185,10 +190,11 @@ export interface ThreadStatus {
   apiRetry: ApiRetryStatus | null
   compacting: boolean
   stalled: boolean
+  resetting: ResettingStatus | null
 }
 ```
 
-`stalled` is **required, not optional** — an optional field is precisely the silent-omission hole
+`stalled` and `resetting` are **required, not optional** — an optional field is precisely the silent-omission hole
 `toolName`'s own comment refuses, and the type is the only detector this repo has here, since every
 container test renders the initial store. The cost of having a detector at all is that every
 `ThreadStatus` literal in `ConversationScreen.test.tsx` gains one token; `tsc` names each one (measured
@@ -300,7 +306,7 @@ view used, never `current / total` (`NaN` at `0/0`). Both integers are guarantee
 strings: `parseApiRetryPayload` (`src/main/transport/inboundMessage.ts`) narrows them with
 `requireNumber` and throws `WireDecodeError` otherwise, which is also what bounds the interpolation's
 length — a JS number stringifies to at most 24 characters. A module-private `statusRowCopy(state, retry,
-thinkingTokens)` is the total switch that picks among all five labels, with **no `default`**, so a sixth
+thinkingTokens, resetting)` is the total switch that picks among all six labels, with **no `default`**, so a new
 `WorkingIndicatorState` member is a `tsc` error here rather than a silently unlabelled row. **The estimate
 reaches the `'thinking'` arm alone** — AC2 froze the other four states verbatim, so a retry, a compaction,
 a stall and the generic working label never carry it, and neither does the tool-named label (the tool name
@@ -331,16 +337,17 @@ connection-banner/rejection-line precedent); the merged label takes only
 `.composer-status__label--stalled { color: var(--color-error) }` — no bar, since a bar was a *bubble*
 idiom and there is no fill behind a bare text run for one to bound. Retry and compaction keep the row's
 own `--color-primary`, the only colour Figma `111:3523` draws; `--color-error` is the only error-role
-token on desktop, so this is within-token — no new token, no literal. Colour-only is also what makes "no
-state can move the row" true by construction: no type, box, or line-height changes, so all five labels
-occupy identical geometry. **The stall's error colour, and whether retry should share it, was drawn
+token on desktop, so this is within-token — no new token, no literal. Keeping row geometry stable
+requires more than matching type, box and line height: reset copy also needs explicit single-line
+truncation, as the [minimum-width measurements](conversation-shell-composer-status-row.md#composer-status-row-796)
+establish. **The stall's error colour, and whether retry should share it, was drawn
 nowhere in Figma — flagged for Juhana in the PR rather than decided silently; still an open question, not
 resolved by this ticket.**
 
 **Co-render is gone by construction, not by a new coordination mechanism.** Through #796 all three could
 show at once with `ThinkingIndicator` (mutual exclusion scoped to the working label only, by AC4/AC5 of
 \#493/#496) — separate surfaces conveying independent facts. One label slot cannot hold more than one
-string, so `workingIndicatorState`'s four-way order (above) replaces "may all co-render" with "exactly
+string, so `workingIndicatorState`'s order (above) replaces "may all co-render" with "exactly
 one wins" — a loss of simultaneity, not of any individual fact: a live retry still shows, a stall still
 shows, just never two at once. `shouldShowThinking`'s own docblock used to state the old co-render
 posture twice; both sentences were removed rather than qualified, since #967 made them false at the
@@ -350,7 +357,7 @@ function whose result now actually picks between the four.
 `.bubble--stall` visibility check for one **exact-text** assertion on the row's label
 (`.conversation__thinking`, still the identity hook) plus a class check for
 `composer-status__label--stalled` — exact rather than `toBeVisible`, because the label element is now
-shared by all five states, so mere visibility proves nothing. `thread-scroll-pin.spec.ts` needed two
+shared by all six states, so mere visibility proves nothing. `thread-scroll-pin.spec.ts` needed two
 separate repairs, covered in the **Thread scroll pin** edge case of [Conversation
 shell](conversation-shell.md#edge-cases-and-limitations): its fourth criterion (chrome mounting shrinks
 the thread's viewport without un-pinning it) moved off the now-empty stall block onto the queued backlog,

@@ -273,6 +273,24 @@ export function translateTimelineEvent(
       // which does not cross the IPC boundary at all. The translator normalizes nothing: deciding what
       // a reading means is reduceTimeline's job and formatting it defensively is the label's.
       return { type: 'thinkingProgress', estimatedTokens: event.estimatedTokens }
+    case 'resetting':
+      // #1517: the reset-edge arm — the flip the no-op group below was holding open. The DaemonEvent
+      // carries `conversationId` beside the three render fields; the ThreadEvent this returns does not,
+      // so the id STOPS here (the `thinkingProgress` / `apiRetry` / `compacting` discipline). That drop
+      // is what keeps the routing key out of the reducer, the label and the DOM entirely; it reaches
+      // the keyed store through `timelineTargetFor` below, whose index is a `Map`.
+      //
+      // BOTH TOKENS ARE COPIED VERBATIM and both edges translate. The falling edge's two empty strings
+      // are carried rather than normalised away: `active` is the edge, and the reducer is the single
+      // place that turns it into presence-or-absence. The translator normalizes NOTHING — deciding
+      // what an unnamed phase means is the label's job, not this function's, and gating the token set
+      // on `active` here would be the cross-field validation the decoder already refuses by name.
+      return {
+        type: 'resetting',
+        active: event.active,
+        phase: event.phase,
+        handoff: event.handoff
+      }
     case 'unrecognizedMessage':
       // The parser-gap diagnostic. The DaemonEvent carries `conversationId` (#784) beside the four
       // render fields; the ThreadEvent this returns does not, so the id STOPS here — a filter + fresh
@@ -363,7 +381,6 @@ export function translateTimelineEvent(
     case 'questionDismissed':
     case 'rateLimited':
     case 'contextUsage':
-    case 'resetting':
       // No timeline event: the session store (#19), download UI (#72), conversation-list store
       // (#208), modal store + bridge (#223, and the #249 rejection render), the create render slice
       // (#242), the #261 / #256 session-settings consumers (confirmed + rejected #269), the #293
@@ -446,19 +463,12 @@ export function translateTimelineEvent(
       // and this is the largest arm on the union and the one carrying the most disclosive fields.
       // DELETING THE CASE would put every memory-file path and every MCP server name into a stack trace
       // and a crash reporter.
-      // resetting (#1515) joins the group by the same queueState rule (#720) — no turn_id, opens and
-      // closes no turn, so a session being reset is daemon STATE and not an item IN a turn, however
-      // plainly the turn it interrupts is the one the operator is watching. It is the one arm in this
-      // group that is NOT a reading: it has a rising edge that RE-FIRES as the phase advances and an
-      // explicit falling edge, which is exactly the two-edge shape apiRetry (#493) and compacting
-      // (#496) each had when they left this group to become owned thread-chrome arms above. So its
-      // no-op here is DORMANT rather than permanent, and #1517 is expected to flip it — the composer
-      // status row is transient thread chrome, not a timeline row, the answer #495 reached for
-      // `compacting`. The call is #1517's to make and not this slice's; what this slice may NOT do is
-      // pre-empt it by writing a reducer arm no consumer asked for. Present meanwhile only so the
-      // assertNever guard makes a new arm a compile error — and that guard is not a formality: it
-      // stringifies the WHOLE event into an Error message, which would put the conversation id the
-      // operator reset and whether a handoff note was written into a stack trace and a crash reporter.
+      // resetting (#1515) SAT IN THIS GROUP, dormant rather than permanently no-op, and #1517 made the
+      // call it was waiting for: the composer status row is transient thread chrome, not a timeline
+      // row — the answer #495 reached for `compacting` — so the reset is an owned arm above now. The
+      // queueState rule (#720) still holds for what this arm is NOT: no turn_id, it opens and closes
+      // no turn, and it produces no ThreadItem, however plainly the turn it interrupts is the one the
+      // operator is watching.
       return null
     case 'runConfigReceived':
       // Not a timeline event (#491). Present only because the assertNever guard makes a new arm a
@@ -613,8 +623,9 @@ export function timelineTargetFor(event: DaemonEvent): string | null {
     case 'compactionBoundary':
     case 'unrecognizedMessage':
     case 'thinkingProgress':
-      // Ten of the twelve owned arms carry the frame's `conversation_id` (#751 / #752 / #724 / #763 /
-      // #766 / #732 / #737 / #742 / #784 / #1313, the #675 family). It is REQUIRED on every one of them — a
+    case 'resetting':
+      // Eleven of the thirteen owned arms carry the frame's `conversation_id` (#751 / #752 / #724 / #763 /
+      // #766 / #732 / #737 / #742 / #784 / #1313 / #1514, the #675 family). It is REQUIRED on every one of them — a
       // missing or non-string `conversation_id` fails the whole line at the decode without emitting — so
       // the routing key is non-nullable here by construction. TypeScript narrows across grouped cases,
       // so the field resolves with no cast and no probe.

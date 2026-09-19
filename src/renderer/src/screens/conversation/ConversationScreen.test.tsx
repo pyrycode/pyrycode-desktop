@@ -16,6 +16,11 @@ import {
   API_RETRY_COPY,
   COMPACTING_COPY,
   STALL_COPY,
+  RESETTING_COPY,
+  RESETTING_WRAPPING_UP_COPY,
+  RESETTING_RESTARTING_COPY,
+  HANDOFF_WRITTEN_COPY,
+  HANDOFF_SKIPPED_COPY,
   UNRECOGNIZED_COPY,
   UNRECOGNIZED_TRUNCATED_COPY,
   unrecognizedSiteLabel,
@@ -1446,7 +1451,7 @@ describe('Timeline — the streamed assistant text', () => {
     expect(userMarkup).toContain('bubble bubble--user')
     expect(userMarkup).not.toContain(MODIFIER)
     const labelMarkup = renderToStaticMarkup(
-      <ThinkingIndicator state="thinking" toolName={null} retry={null} thinkingTokens={null} />
+      <ThinkingIndicator state="thinking" toolName={null} retry={null} resetting={null} thinkingTokens={null} />
     )
     expect(labelMarkup).not.toContain(MODIFIER)
     // #609 (AC5): the markdown container is the assistant bubble's alone. Neither the user bubble nor the
@@ -2229,14 +2234,14 @@ describe('Timeline — the session-boundary delimiter (#286, redrawn #690)', () 
 // superseded the label" — those arrive as states of their own — it means there is nothing to say.
 describe('ThinkingIndicator — the row label for all four thread statuses (#215, #648, #649, #967)', () => {
   it('is inert when there is nothing to say — renders nothing (zero layout footprint, AC3)', () => {
-    expect(renderToStaticMarkup(<ThinkingIndicator state={null} toolName={null} retry={null} thinkingTokens={null} />)).toBe(
+    expect(renderToStaticMarkup(<ThinkingIndicator state={null} toolName={null} retry={null} resetting={null} thinkingTokens={null} />)).toBe(
       ''
     )
   })
 
   it('shows the daemon-styled Thinking affordance while thinking', () => {
     const markup = renderToStaticMarkup(
-      <ThinkingIndicator state="thinking" toolName={null} retry={null} thinkingTokens={null} />
+      <ThinkingIndicator state="thinking" toolName={null} retry={null} resetting={null} thinkingTokens={null} />
     )
     // The stable test seam (the bubble__cursor role) — #796 RETAINED `conversation__thinking` when the
     // bubble treatment became the status row's label, precisely so this assertion and the two e2e
@@ -2265,6 +2270,7 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
           state="thinking"
           toolName={null}
           retry={null}
+          resetting={null}
           thinkingTokens={thinkingTokens}
         />
       )
@@ -2325,6 +2331,7 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
             state={state}
             toolName={null}
             retry={{ current: 3, total: 10 }}
+            resetting={null}
             thinkingTokens={1500}
           />
         )
@@ -2338,7 +2345,7 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
       // behaviour, asserted because the estimate is exactly the kind of thing a later edit appends to
       // every branch.
       const markup = renderToStaticMarkup(
-        <ThinkingIndicator state="thinking" toolName="Bash" retry={null} thinkingTokens={900} />
+        <ThinkingIndicator state="thinking" toolName="Bash" retry={null} resetting={null} thinkingTokens={900} />
       )
       expect(markup).toContain('Running Bash…')
       expect(markup).not.toContain('tokens')
@@ -2357,7 +2364,7 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
 
   it('shows the generic working affordance on the same surface while running but not thinking (#648, AC1)', () => {
     const markup = renderToStaticMarkup(
-      <ThinkingIndicator state="working" toolName={null} retry={null} thinkingTokens={null} />
+      <ThinkingIndicator state="working" toolName={null} retry={null} resetting={null} thinkingTokens={null} />
     )
     // The same element and the same class attribute — one surface, two labels, no CSS change (AC1's
     // "the indicator is visible", not "a second indicator appears").
@@ -2386,7 +2393,7 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
 
   it('names the open tool on the same surface, replacing the generic copy (#649, AC1)', () => {
     const markup = renderToStaticMarkup(
-      <ThinkingIndicator state="working" toolName="Bash" retry={null} thinkingTokens={null} />
+      <ThinkingIndicator state="working" toolName="Bash" retry={null} resetting={null} thinkingTokens={null} />
     )
     // The same element and the same base classes plus ONE modifier — one surface, now three labels
     // (AC1 is "the indicator names the tool", not "a second indicator appears").
@@ -2409,10 +2416,10 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
     // The #648 labels must render byte-identical markup, so their assertions above stay AC3's
     // regression evidence rather than being retyped against a moved target.
     expect(
-      renderToStaticMarkup(<ThinkingIndicator state="working" toolName={null} retry={null} thinkingTokens={null} />)
+      renderToStaticMarkup(<ThinkingIndicator state="working" toolName={null} retry={null} resetting={null} thinkingTokens={null} />)
     ).not.toContain('composer-status__label--tool')
     expect(
-      renderToStaticMarkup(<ThinkingIndicator state="thinking" toolName={null} retry={null} thinkingTokens={null} />)
+      renderToStaticMarkup(<ThinkingIndicator state="thinking" toolName={null} retry={null} resetting={null} thinkingTokens={null} />)
     ).not.toContain('composer-status__label--tool')
   })
 
@@ -2422,7 +2429,7 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
     // used to be a live api-retry or compaction (which blanked the state), and those now arrive as
     // states of their own. What is left is the honest empty case — an idle turn with no folded status
     // and no local send — where a stale unresolved toolCall can still be sitting in `items`.
-    expect(renderToStaticMarkup(<ThinkingIndicator state={null} toolName="Bash" retry={null} thinkingTokens={null} />)).toBe(
+    expect(renderToStaticMarkup(<ThinkingIndicator state={null} toolName="Bash" retry={null} resetting={null} thinkingTokens={null} />)).toBe(
       ''
     )
   })
@@ -2430,7 +2437,7 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
   it('renders a hostile tool name as inert escaped text, never as markup (#649, AC4)', () => {
     const hostile = '<img src=x onerror="alert(1)">'
     const markup = renderToStaticMarkup(
-      <ThinkingIndicator state="working" toolName={hostile} retry={null} thinkingTokens={null} />
+      <ThinkingIndicator state="working" toolName={hostile} retry={null} resetting={null} thinkingTokens={null} />
     )
     // Attribute-shaped guards, not a bare not.toContain: a `not.toContain('src=')` would pass
     // vacuously. The name reaches the DOM only as an auto-escaped React text child (the tool row's own
@@ -2455,6 +2462,7 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
         state="retrying"
         toolName={null}
         retry={{ current: 3, total: 10 }}
+        resetting={null}
         thinkingTokens={null}
       />
     )
@@ -2475,6 +2483,7 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
         state="retrying"
         toolName={null}
         retry={{ current: 0, total: 10 }}
+        resetting={null}
         thinkingTokens={null}
       />
     )
@@ -2487,6 +2496,7 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
         state="retrying"
         toolName={null}
         retry={{ current: 0, total: 0 }}
+        resetting={null}
         thinkingTokens={null}
       />
     )
@@ -2505,13 +2515,13 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
     // the same record — but the prop type admits it, and the bare copy is the honest answer. A degrade,
     // not a defence.
     expect(
-      renderToStaticMarkup(<ThinkingIndicator state="retrying" toolName={null} retry={null} thinkingTokens={null} />)
+      renderToStaticMarkup(<ThinkingIndicator state="retrying" toolName={null} retry={null} resetting={null} thinkingTokens={null} />)
     ).toContain(`>${API_RETRY_COPY}</span>`)
   })
 
   it('shows the compaction label on the same surface, in the rows own colour (#967, AC1)', () => {
     const markup = renderToStaticMarkup(
-      <ThinkingIndicator state="compacting" toolName={null} retry={null} thinkingTokens={null} />
+      <ThinkingIndicator state="compacting" toolName={null} retry={null} resetting={null} thinkingTokens={null} />
     )
     expect(markup).toContain(`>${COMPACTING_COPY}</span>`)
     // No modifier at all: compaction is claude working normally, so it keeps --color-primary — painting
@@ -2521,7 +2531,7 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
 
   it('shows the stall label with the error-colour modifier and nothing else (#967, AC3)', () => {
     const markup = renderToStaticMarkup(
-      <ThinkingIndicator state="stalled" toolName={null} retry={null} thinkingTokens={null} />
+      <ThinkingIndicator state="stalled" toolName={null} retry={null} resetting={null} thinkingTokens={null} />
     )
     expect(markup).toContain(`>${STALL_COPY}</span>`)
     // The WHOLE class attribute: the stall takes exactly one modifier, and the tool modifier is not it.
@@ -2539,6 +2549,7 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
           state={state}
           toolName={null}
           retry={{ current: 1, total: 2 }}
+          resetting={null}
           thinkingTokens={null}
         />
       )
@@ -2564,6 +2575,7 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
           state={state as 'retrying' | 'compacting' | 'stalled'}
           toolName="Bash"
           retry={{ current: 3, total: 10 }}
+          resetting={null}
           thinkingTokens={null}
         />
       )
@@ -2703,54 +2715,54 @@ describe('toolWorkingCopy — the client-owned label around the daemon tool name
 // evidence that folding three statuses into one slot did not weaken either supersede rule.
 describe('shouldShowThinking — the running-turn gate for the working label (#493, #496, #648, #967)', () => {
   it('shows the thinking indicator while thinking with nothing superseding it (AC4)', () => {
-    expect(shouldShowThinking({ phase: 'thinking', apiRetry: null, compacting: false, stalled: false })).toBe(true)
+    expect(shouldShowThinking({ phase: 'thinking', apiRetry: null, compacting: false, stalled: false, resetting: null })).toBe(true)
   })
 
   it('hides the thinking indicator while a retry is in flight — the supersede rule (#493)', () => {
     expect(
-      shouldShowThinking({ phase: 'thinking', apiRetry: { current: 3, total: 10 }, compacting: false, stalled: false })
+      shouldShowThinking({ phase: 'thinking', apiRetry: { current: 3, total: 10 }, compacting: false, stalled: false, resetting: null })
     ).toBe(false)
   })
 
   it('hides it for a retry with an unknown count too — presence supersedes, not the counter (#493)', () => {
     expect(
-      shouldShowThinking({ phase: 'thinking', apiRetry: { current: 0, total: 0 }, compacting: false, stalled: false })
+      shouldShowThinking({ phase: 'thinking', apiRetry: { current: 0, total: 0 }, compacting: false, stalled: false, resetting: null })
     ).toBe(false)
   })
 
   it('hides the thinking indicator while compacting — the second supersede rule (AC4)', () => {
-    expect(shouldShowThinking({ phase: 'thinking', apiRetry: null, compacting: true, stalled: false })).toBe(false)
+    expect(shouldShowThinking({ phase: 'thinking', apiRetry: null, compacting: true, stalled: false, resetting: null })).toBe(false)
   })
 
   it('hides it while both compacting and retrying (AC4)', () => {
     expect(
-      shouldShowThinking({ phase: 'thinking', apiRetry: { current: 3, total: 10 }, compacting: true, stalled: false })
+      shouldShowThinking({ phase: 'thinking', apiRetry: { current: 3, total: 10 }, compacting: true, stalled: false, resetting: null })
     ).toBe(false)
   })
 
   it('never shows thinking outside the thinking phase, compacting or not (AC4)', () => {
-    expect(shouldShowThinking({ phase: 'idle', apiRetry: null, compacting: true, stalled: false })).toBe(false)
-    expect(shouldShowThinking({ phase: 'responding', apiRetry: null, compacting: true, stalled: false })).toBe(false)
+    expect(shouldShowThinking({ phase: 'idle', apiRetry: null, compacting: true, stalled: false, resetting: null })).toBe(false)
+    expect(shouldShowThinking({ phase: 'responding', apiRetry: null, compacting: true, stalled: false, resetting: null })).toBe(false)
   })
 
   it('holds the indicator across the whole running turn when nothing is in flight (#648, AC1)', () => {
     // #648 reverses the phase clause: the pre-#648 gate was exactly `phase === 'thinking'`, which let the
     // indicator vanish for the tool-heavy bulk of a turn. It is now `isTurnRunning(phase)`, so `responding`
     // shows. `idle` still hides — the gate never widens past a running turn.
-    expect(shouldShowThinking({ phase: 'idle', apiRetry: null, compacting: false, stalled: false })).toBe(false)
-    expect(shouldShowThinking({ phase: 'responding', apiRetry: null, compacting: false, stalled: false })).toBe(true)
+    expect(shouldShowThinking({ phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null })).toBe(false)
+    expect(shouldShowThinking({ phase: 'responding', apiRetry: null, compacting: false, stalled: false, resetting: null })).toBe(true)
   })
 
   it('shows in both running phases and hides at idle — the isTurnRunning tie (#648, AC1, AC3)', () => {
     // The gate now REUSES isTurnRunning rather than re-deriving the phase test, so the tie is asserted
     // here rather than merely inherited: a future edit to either side that breaks agreement fails this.
     for (const phase of ['thinking', 'responding'] as const) {
-      expect(shouldShowThinking({ phase, apiRetry: null, compacting: false, stalled: false })).toBe(
+      expect(shouldShowThinking({ phase, apiRetry: null, compacting: false, stalled: false, resetting: null })).toBe(
         isTurnRunning(phase)
       )
-      expect(shouldShowThinking({ phase, apiRetry: null, compacting: false, stalled: false })).toBe(true)
+      expect(shouldShowThinking({ phase, apiRetry: null, compacting: false, stalled: false, resetting: null })).toBe(true)
     }
-    expect(shouldShowThinking({ phase: 'idle', apiRetry: null, compacting: false, stalled: false })).toBe(
+    expect(shouldShowThinking({ phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null })).toBe(
       isTurnRunning('idle')
     )
   })
@@ -2767,7 +2779,7 @@ describe('shouldShowThinking — the running-turn gate for the working label (#4
 // shipped behaviours), and that the gate still governs the working label alone.
 describe('workingIndicatorState — which label the rows one slot shows (#648, #967)', () => {
   it('picks the thinking label during the thinking slice (AC2)', () => {
-    expect(workingIndicatorState({ phase: 'thinking', apiRetry: null, compacting: false, stalled: false })).toBe(
+    expect(workingIndicatorState({ phase: 'thinking', apiRetry: null, compacting: false, stalled: false, resetting: null })).toBe(
       'thinking'
     )
   })
@@ -2776,13 +2788,13 @@ describe('workingIndicatorState — which label the rows one slot shows (#648, #
     // The phase that LASTS: the daemon flips to `responding` on the first reply token or tool step and
     // sends no further turn_state until the turn ends, so this covers the tool-heavy silent stretch that
     // used to show nothing at all.
-    expect(workingIndicatorState({ phase: 'responding', apiRetry: null, compacting: false, stalled: false })).toBe(
+    expect(workingIndicatorState({ phase: 'responding', apiRetry: null, compacting: false, stalled: false, resetting: null })).toBe(
       'working'
     )
   })
 
   it('picks nothing at idle — no wrapper, no empty chrome (AC3)', () => {
-    expect(workingIndicatorState({ phase: 'idle', apiRetry: null, compacting: false, stalled: false })).toBeNull()
+    expect(workingIndicatorState({ phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null })).toBeNull()
   })
 
   // #967 CHANGED THESE THREE ANSWERS, and the change is the ticket rather than a regression: the working
@@ -2791,18 +2803,18 @@ describe('workingIndicatorState — which label the rows one slot shows (#648, #
   // unchanged on `shouldShowThinking` above, which is why they were kept there.
   it('is superseded by a live retry in the newly covered phase too (AC4, #967)', () => {
     expect(
-      workingIndicatorState({ phase: 'responding', apiRetry: { current: 3, total: 10 }, compacting: false, stalled: false })
+      workingIndicatorState({ phase: 'responding', apiRetry: { current: 3, total: 10 }, compacting: false, stalled: false, resetting: null })
     ).toBe('retrying')
   })
 
   it('is superseded by an unknown-count retry too — presence supersedes, not the counter (AC4)', () => {
     expect(
-      workingIndicatorState({ phase: 'responding', apiRetry: { current: 0, total: 0 }, compacting: false, stalled: false })
+      workingIndicatorState({ phase: 'responding', apiRetry: { current: 0, total: 0 }, compacting: false, stalled: false, resetting: null })
     ).toBe('retrying')
   })
 
   it('is superseded by a live compaction in the newly covered phase too (AC4, #967)', () => {
-    expect(workingIndicatorState({ phase: 'responding', apiRetry: null, compacting: true, stalled: false })).toBe(
+    expect(workingIndicatorState({ phase: 'responding', apiRetry: null, compacting: true, stalled: false, resetting: null })).toBe(
       'compacting'
     )
   })
@@ -2812,7 +2824,7 @@ describe('workingIndicatorState — which label the rows one slot shows (#648, #
     // own order before the gate is consulted at all (AC2 — those three are not turn-gated), so the
     // agreement it still owes the gate is exactly over the working label's own inputs.
     for (const phase of ['thinking', 'responding', 'idle'] as const) {
-      const status = { phase, apiRetry: null, compacting: false, stalled: false }
+      const status = { phase, apiRetry: null, compacting: false, stalled: false, resetting: null }
       expect(workingIndicatorState(status) !== null).toBe(shouldShowThinking(status))
     }
   })
@@ -2825,20 +2837,21 @@ describe('workingIndicatorState — which label the rows one slot shows (#648, #
         phase: 'responding',
         apiRetry: { current: 3, total: 10 },
         compacting: true,
-        stalled: true
+        stalled: true,
+        resetting: null
       })
     ).toBe('retrying')
   })
 
   it('picks compacting second, ahead of a stall and the working label (#967, AC1)', () => {
     expect(
-      workingIndicatorState({ phase: 'responding', apiRetry: null, compacting: true, stalled: true })
+      workingIndicatorState({ phase: 'responding', apiRetry: null, compacting: true, stalled: true, resetting: null })
     ).toBe('compacting')
   })
 
   it('picks the stall third, ahead of the working label (#967, AC1)', () => {
     expect(
-      workingIndicatorState({ phase: 'responding', apiRetry: null, compacting: false, stalled: true })
+      workingIndicatorState({ phase: 'responding', apiRetry: null, compacting: false, stalled: true, resetting: null })
     ).toBe('stalled')
   })
 
@@ -2847,18 +2860,19 @@ describe('workingIndicatorState — which label the rows one slot shows (#648, #
     // shipped behaviours to the running turn. `thread-scroll-pin.spec.ts` drives exactly this case —
     // it pushes a stall onto a turn the primer already returned to `idle`.
     expect(
-      workingIndicatorState({ phase: 'idle', apiRetry: null, compacting: false, stalled: true })
+      workingIndicatorState({ phase: 'idle', apiRetry: null, compacting: false, stalled: true, resetting: null })
     ).toBe('stalled')
     expect(
       workingIndicatorState({
         phase: 'idle',
         apiRetry: { current: 3, total: 10 },
         compacting: false,
-        stalled: false
+        stalled: false,
+        resetting: null
       })
     ).toBe('retrying')
     expect(
-      workingIndicatorState({ phase: 'idle', apiRetry: null, compacting: true, stalled: false })
+      workingIndicatorState({ phase: 'idle', apiRetry: null, compacting: true, stalled: false, resetting: null })
     ).toBe('compacting')
   })
 })
@@ -2876,13 +2890,13 @@ describe('workingIndicatorState — which label the rows one slot shows (#648, #
 describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650)', () => {
   it('opens the window at idle while a local send is pending, labelled thinking (AC1)', () => {
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false }, true)
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null }, true)
     ).toBe('thinking')
   })
 
   it('opens nothing at idle with no local send pending — todays behaviour, unchanged (AC1)', () => {
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false }, false)
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null }, false)
     ).toBeNull()
   })
 
@@ -2891,7 +2905,7 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     // returned byte-identical, so no daemon-opened case changed behaviour at all.
     for (const phase of ['thinking', 'responding', 'idle'] as const) {
       for (const pending of [true, false]) {
-        const status = { phase, apiRetry: null, compacting: false, stalled: false }
+        const status = { phase, apiRetry: null, compacting: false, stalled: false, resetting: null }
         const daemon = workingIndicatorState(status)
         if (daemon !== null) {
           expect(workingIndicatorStateWithLocalSend(status, pending)).toBe(daemon)
@@ -2903,7 +2917,7 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
   it('keeps the daemon label for a send issued mid-turn — responding stays working (AC1)', () => {
     expect(
       workingIndicatorStateWithLocalSend(
-        { phase: 'responding', apiRetry: null, compacting: false, stalled: false },
+        { phase: 'responding', apiRetry: null, compacting: false, stalled: false, resetting: null },
         true
       )
     ).toBe('working')
@@ -2919,7 +2933,7 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
   it('inherits the retry supersede rule — a live retry outranks a locally-opened window (#967)', () => {
     expect(
       workingIndicatorStateWithLocalSend(
-        { phase: 'idle', apiRetry: { current: 3, total: 10 }, compacting: false, stalled: false },
+        { phase: 'idle', apiRetry: { current: 3, total: 10 }, compacting: false, stalled: false, resetting: null },
         true
       )
     ).toBe('retrying')
@@ -2928,7 +2942,7 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
   it('inherits it for an unknown-count retry too — presence supersedes, not the counter', () => {
     expect(
       workingIndicatorStateWithLocalSend(
-        { phase: 'idle', apiRetry: { current: 0, total: 0 }, compacting: false, stalled: false },
+        { phase: 'idle', apiRetry: { current: 0, total: 0 }, compacting: false, stalled: false, resetting: null },
         true
       )
     ).toBe('retrying')
@@ -2936,14 +2950,14 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
 
   it('inherits the compaction supersede rule too (#967)', () => {
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: true, stalled: false }, true)
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: true, stalled: false, resetting: null }, true)
     ).toBe('compacting')
   })
 
   it('is superseded while both compacting and retrying — retry wins the tie (#967)', () => {
     expect(
       workingIndicatorStateWithLocalSend(
-        { phase: 'idle', apiRetry: { current: 3, total: 10 }, compacting: true, stalled: false },
+        { phase: 'idle', apiRetry: { current: 3, total: 10 }, compacting: true, stalled: false, resetting: null },
         true
       )
     ).toBe('retrying')
@@ -2953,11 +2967,11 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     // The middle of the order, and the case a wrapper composed on the gate could not have expressed
     // without re-reading `apiRetry` and `compacting` itself — the reason #967 took the fourth field.
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: true }, true)
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: true, resetting: null }, true)
     ).toBe('stalled')
     // And with no local send pending either: the three folded statuses were never gated on a send.
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: true }, false)
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: true, resetting: null }, false)
     ).toBe('stalled')
   })
 
@@ -2966,8 +2980,8 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     // daemon takes over is invisible. `working` would have flipped Working → Thinking → Working at the
     // one seam this ticket exists to smooth.
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false }, true)
-    ).toBe(workingIndicatorState({ phase: 'thinking', apiRetry: null, compacting: false, stalled: false }))
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null }, true)
+    ).toBe(workingIndicatorState({ phase: 'thinking', apiRetry: null, compacting: false, stalled: false, resetting: null }))
   })
 
   it('opens the window WITHOUT arming the stop variant (AC4)', () => {
@@ -2980,9 +2994,199 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     // `phase` alone, isTurnRunning admits only a TurnPhase, and ComposerSendButton takes
     // `isRunning: boolean` — the new scalar has no path into any of the three.
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false }, true)
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null }, true)
     ).not.toBeNull()
     expect(isTurnRunning('idle')).toBe(false)
+  })
+})
+
+// #1517: the sixth label and the new TOP of the row's order. The order block above pins five; this one
+// pins that a live reset outranks every one of them, and that the label is assembled from client-owned
+// constants SELECTED by the two decoded tokens rather than interpolating either.
+describe('the resetting label — the rows sixth state (#1517)', () => {
+  const WRAPPING = { phase: 'wrapping_up', handoff: 'pending' } as const
+  const RESTARTING_WRITTEN = { phase: 'restarting', handoff: 'written' } as const
+  const RESTARTING_SKIPPED = { phase: 'restarting', handoff: 'skipped' } as const
+
+  it('outranks retry, compaction, the stall and a running turn (AC3)', () => {
+    // Every superseding fact live at once, plus a running turn: the reset still takes the slot. A
+    // lower position would render `Thinking…` across the whole wrap-up phase, which is the unnamed
+    // pause this ticket exists to remove.
+    expect(
+      workingIndicatorState({
+        phase: 'responding',
+        apiRetry: { current: 3, total: 10 },
+        compacting: true,
+        stalled: true,
+        resetting: WRAPPING
+      })
+    ).toBe('resetting')
+  })
+
+  it('shows at idle too — it is not gated on a running turn', () => {
+    // The first three superseding states are read BEFORE the gate for the reason #967's block records;
+    // the reset joins them, and the restarting phase in particular has no turn of its own.
+    expect(
+      workingIndicatorState({
+        phase: 'idle',
+        apiRetry: null,
+        compacting: false,
+        stalled: false,
+        resetting: RESTARTING_WRITTEN
+      })
+    ).toBe('resetting')
+  })
+
+  it('yields the slot back the moment the record clears', () => {
+    expect(
+      workingIndicatorState({
+        phase: 'responding',
+        apiRetry: null,
+        compacting: false,
+        stalled: false,
+        resetting: null
+      })
+    ).toBe('working')
+    expect(
+      workingIndicatorState({
+        phase: 'idle',
+        apiRetry: null,
+        compacting: false,
+        stalled: false,
+        resetting: null
+      })
+    ).toBeNull()
+  })
+
+  it('is the daemon answer a local send never relabels (#650)', () => {
+    expect(
+      workingIndicatorStateWithLocalSend(
+        { phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: WRAPPING },
+        true
+      )
+    ).toBe('resetting')
+  })
+
+  it('reads the wrapping-up copy on the first edge and the restarting copy on the second (AC1)', () => {
+    const label = (resetting: typeof WRAPPING | typeof RESTARTING_WRITTEN): string =>
+      renderToStaticMarkup(
+        <ThinkingIndicator
+          state="resetting"
+          toolName={null}
+          retry={null}
+          resetting={resetting}
+          thinkingTokens={null}
+        />
+      )
+    expect(label(WRAPPING)).toContain(`>${RESETTING_WRAPPING_UP_COPY}</span>`)
+    expect(label(RESTARTING_WRITTEN)).toContain(
+      `>${RESETTING_RESTARTING_COPY} ${HANDOFF_WRITTEN_COPY}</span>`
+    )
+  })
+
+  it('carries the skipped suffix on a skipped handoff', () => {
+    expect(
+      renderToStaticMarkup(
+        <ThinkingIndicator
+          state="resetting"
+          toolName={null}
+          retry={null}
+          resetting={RESTARTING_SKIPPED}
+          thinkingTokens={null}
+        />
+      )
+    ).toContain(`>${RESETTING_RESTARTING_COPY} ${HANDOFF_SKIPPED_COPY}</span>`)
+  })
+
+  it('degrades to bare copy rather than blanking the row on a combination the daemon never emits', () => {
+    // All sixteen (active, phase, handoff) combinations decode — the wire docblock is explicit that a
+    // narrowed token is still a CLAIM BY A PEER. `apiRetryLabel(null)`'s posture applies: degrade to
+    // the bare constant, never throw and never let a hostile or buggy daemon empty the status row.
+    const label = (resetting: { phase: '' | 'restarting'; handoff: '' | 'pending' }): string =>
+      renderToStaticMarkup(
+        <ThinkingIndicator
+          state="resetting"
+          toolName={null}
+          retry={null}
+          resetting={resetting}
+          thinkingTokens={null}
+        />
+      )
+    expect(label({ phase: '', handoff: '' })).toContain(`>${RESETTING_COPY}</span>`)
+    expect(label({ phase: '', handoff: 'pending' })).toContain(`>${RESETTING_COPY}</span>`)
+    // Restarting with the handoff still unresolved: the phase copy stands, the suffix does not.
+    expect(label({ phase: 'restarting', handoff: 'pending' })).toContain(
+      `>${RESETTING_RESTARTING_COPY}</span>`
+    )
+    expect(label({ phase: 'restarting', handoff: '' })).toContain(`>${RESETTING_RESTARTING_COPY}</span>`)
+  })
+
+  it('draws ONLY client-owned constants over all sixteen token combinations (AC4)', () => {
+    // The tokens SELECT copy and are never interpolated into it — asserted as membership in the closed
+    // set of strings the constants can produce, NOT as `not.toContain(token)`. A substring check is the
+    // wrong instrument here and would be vacuously false: `RESETTING_RESTARTING_COPY` contains the word
+    // "restarting" and `HANDOFF_WRITTEN_COPY` the word "written" as ordinary English. Membership is what
+    // actually fails on an interpolation — `Resetting: wrapping_up…` is not in this set.
+    //
+    // All SIXTEEN combinations, not the producer's three rows: every one of them decodes (the decoder
+    // refuses to cross-validate the pair) and a hostile daemon can send any of them, so the sweep is the
+    // claim. Its other half is that no combination renders empty.
+    const allowed = new Set([
+      RESETTING_COPY,
+      RESETTING_WRAPPING_UP_COPY,
+      RESETTING_RESTARTING_COPY,
+      `${RESETTING_RESTARTING_COPY} ${HANDOFF_WRITTEN_COPY}`,
+      `${RESETTING_RESTARTING_COPY} ${HANDOFF_SKIPPED_COPY}`
+    ])
+    const phases = ['wrapping_up', 'restarting', ''] as const
+    const handoffs = ['pending', 'written', 'skipped', ''] as const
+    for (const phase of phases) {
+      for (const handoff of handoffs) {
+        const markup = renderToStaticMarkup(
+          <ThinkingIndicator
+            state="resetting"
+            toolName={null}
+            retry={null}
+            resetting={{ phase, handoff }}
+            thinkingTokens={null}
+          />
+        )
+        const label = markup.replace(/^<span class="[^"]*">/, '').replace(/<\/span>$/, '')
+        expect(allowed.has(label)).toBe(true)
+        expect(label).not.toBe('')
+      }
+    }
+  })
+
+  it('outranks an open tool name and keeps reset copy in one truncating text run', () => {
+    // The reset modifier bounds long copy without changing the row's primary colour or typography.
+    const markup = renderToStaticMarkup(
+      <ThinkingIndicator
+        state="resetting"
+        toolName="Bash"
+        retry={{ current: 3, total: 10 }}
+        resetting={WRAPPING}
+        thinkingTokens={900}
+      />
+    )
+    expect(markup).toContain(`>${RESETTING_WRAPPING_UP_COPY}</span>`)
+    expect(markup).not.toContain('Bash')
+    expect(markup).toBe(
+      `<span class="conversation__thinking composer-status__label composer-status__label--resetting">${RESETTING_WRAPPING_UP_COPY}</span>`
+    )
+  })
+
+  it('keeps every reset constant apostrophe-free and on the U+2026 ellipsis', () => {
+    // renderToStaticMarkup escapes `'` → `&#x27;` (the standing desktop lesson), and three dots are
+    // not the character the five sibling constants use.
+    for (const copy of [RESETTING_COPY, RESETTING_WRAPPING_UP_COPY, RESETTING_RESTARTING_COPY]) {
+      expect(copy).not.toContain("'")
+      expect(copy).not.toContain('...')
+      expect(copy.endsWith('…')).toBe(true)
+    }
+    for (const suffix of [HANDOFF_WRITTEN_COPY, HANDOFF_SKIPPED_COPY]) {
+      expect(suffix).not.toContain("'")
+    }
   })
 })
 

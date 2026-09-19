@@ -110,30 +110,12 @@
 
    `overflow-y: auto` also forces `overflow-x` off `visible`, so this box clips on BOTH axes — which is
    what every name-pill containment argument in this file now rests on, and why each of them names this
-   element rather than `.channel-list`. It is also what gives this element the SCROLLBAR, and the
-   scrollbar is the whole reason for the margin/padding pair below.
+   element rather than `.channel-list`.
 
-   ⭐ THE BOX BLEEDS BACK THROUGH THE CARD'S RIGHT INSET SO THE BAR RIDES IN IT: --space-5 of negative
-   margin, the same --space-5 back as padding. The border box's trailing edge moves out to the card's own
-   edge while the CONTENT box stays exactly the 360 it was, so nothing in the tree moves and the strip a
-   scrollbar takes lands in the 20 the card already reserves. That is where the bar sat for every ticket
-   before this one, when `.channel-list` was the scroller and its own inset held the strip; moving the
-   scrollport one level in without the bleed put the strip straight over the column of trailing controls
-   that every row, section header and workspace head ends flush with.
-
-   MEASURED, NOT PREDICTED, AND THE GEOMETRY READS COULD NOT SEE IT. Shipped without the bleed, the
-   OVERLAY bar this engine draws takes no width at all — `offsetWidth - clientWidth` reads 0, so every
-   derivation in e2e/sidebar-tree-geometry.spec.ts stayed green — but it paints over those controls and
-   HIT-TESTS AS THIS ELEMENT, and e2e/sidebar-control-name-pill, e2e/sidebar-section-header-plus-name-pill
-   and e2e/sidebar-workspace-plus-name-pill each timed out with `.channel-list__tree` intercepting the
-   pointer at its control. Those three are the regression detector; the trailing-edge read added to the
-   geometry spec is the fast one that names the cause.
-
-   ONE PAIR COVERS BOTH BAR KINDS, which is why this is written as geometry and not as
-   `scrollbar-gutter: stable` — that property has no effect on overlay bars, the only kind this defect
-   has. A classic (non-overlay) bar is instead taken out of THIS content box and moves the rows' trailing
-   edge in by its own width, which is why the geometry spec derives that edge from `offsetWidth -
-   clientWidth` here rather than from the column's `clientWidth`.
+   The scrollbar is hidden with the same standard property and WebKit fallback as
+   `.conversation__thread`. Native overflow remains enabled for wheel, trackpad and focus scrolling.
+   Keep the negative right margin and matching padding: the scrollport extends through the card's
+   right inset while the content retains its existing inset and row positions.
 
    The top padding is the card's own 28px column gap (103:2959 gap-[28px]), carried HERE rather than as a
    bottom margin on the rule so the Channels header scrolls away with its rows. It is what puts that
@@ -147,9 +129,14 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-width: none;
   margin-right: calc(-1 * var(--space-5));
   padding-top: var(--space-7);
   padding-right: var(--space-5);
+}
+
+.channel-list__tree::-webkit-scrollbar {
+  display: none;
 }
 
 /* Section header (Figma 103:2984) — muted label-large at 85% (opacity, not a color literal). No

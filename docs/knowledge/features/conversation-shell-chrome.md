@@ -60,15 +60,17 @@ Independent scroll rests on three rules; get these right and AC1/AC5 follow:
 - `.conversation__thread` — `flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: none`. The **`min-height: 0`** is load-bearing: without it a flex item refuses to shrink below its content, so the whole window scrolls instead of the thread region. Since [#1074](https://github.com/pyrycode/pyrycode-desktop/issues/1074) the thread hides its scrollbar to match the design — the Figma message area stacks 1026px of content in a 780px column with no strip reserved for a bar at any depth. `scrollbar-width: none` is the operative declaration on Chromium 130; a separate top-level `.conversation__thread::-webkit-scrollbar { display: none }` rule sits below it as an inert fallback (once the standard property is set, the pseudo-element is never consulted — it's kept for an engine that lacks the property, and written flat rather than nested, since this repo's nine stylesheets use no CSS nesting anywhere). It's a paint change only: `overflow-y: auto` stays, `overflow-anchor` stays absent from the rule (see the drift comment above), and no `tabindex` is added — the wheel, the trackpad and the four scroll keys still reach the region through Chromium's own sequential-focus starting point after a click inside it, and that keyboard path was measured working *before* either declaration landed, so it was never dependent on a bar being drawn.
 - `.composer` — `flex: 0 0 auto`: pinned, never grows or shrinks.
 
-**Proving "no scrollbar" needs a computed-style read and a neighbour control.**
+**Proving "no scrollbar" needs a computed-style read on an overflowing scrollport.**
 `offsetWidth - clientWidth === 0` passes on machines drawing overlay scrollbars even with the hiding
 rule deleted. `e2e/thread-scrollbar.spec.ts` instead reads
-`getComputedStyle(el).getPropertyValue('scrollbar-width')`: the thread and `.composer__input` return
-`none`, while `.channel-list__tree` returns `auto` in the same run, ruling out an engine that answers
-`none` for every element. The control targets the sidebar's actual scrolling tree, not its outer card.
-Since #1525 the [composer also hides its scrollbar](conversation-shell-composer-message-box.md#the-box-grows-with-the-draft-to-a-five-line-ceiling-1056),
-so it is no longer a visible-scrollbar control; its own overflow and editing coverage lives in
-`e2e/composer-message-box.spec.ts`.
+`getComputedStyle(el).getPropertyValue('scrollbar-width')`: the thread, `.composer__input` and
+`.channel-list__tree` all return `none`. The composer (#1525) and sidebar (#1527) now share the
+thread's policy, so neither is a visible-scrollbar control. Their own overflowing states need
+separate interaction coverage: `e2e/composer-message-box.spec.ts` covers [composer scrolling and
+editing](conversation-shell-composer-message-box.md#the-box-grows-with-the-draft-to-a-five-line-ceiling-1056),
+and `e2e/sidebar-scrollbar.spec.ts` covers [sidebar wheel and focus scrolling](channel-list.md#css-channelscss).
+The sidebar test also checks the WebKit fallback's computed `display: none`; geometry remains a
+separate assertion for insets and the fixed top bar.
 
 Driving the keyboard leg of the thread spec needs a raw-coordinate `page.mouse.click` into the thread's
 own padding strip rather than a locator click: a locator click auto-scrolls its target into view first,

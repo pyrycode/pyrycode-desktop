@@ -23,8 +23,8 @@ import { composerOptionsMaxWidthPx, composerOptionsShiftPx } from './composerOpt
 // import — its styles live in conversation.css and ConversationScreen.tsx:13 is that file's single
 // importer, exactly as PermissionModal.tsx relies on.
 //
-// The posture is ThreadOverflowMenuView's: props in, markup out, no state, no effects, no store read and
-// no window.pyry, so renderToStaticMarkup renders the current-value and no-current-value states directly
+// The panel takes props in and returns markup, with no state, effects, store reads or
+// window.pyry access, so renderToStaticMarkup renders the current-value and no-current-value states directly
 // and both stay unit-testable under the repo's `node` vitest environment.
 
 // `id` is the stable identity — the wire/model value — and `label` is the visible row text. They are
@@ -105,13 +105,12 @@ function rowClassName(isCurrent: boolean, isUnavailable: boolean): string {
 //
 // There is deliberately NO `open` prop and no trigger. The trigger belongs to #680/#682/#683, and a view
 // that owns no trigger cannot own `aria-expanded`. Mounting IS opening: a consumer writes
-// `{open && <ComposerOptionsPanel … />}`, which is where ThreadOverflowMenuView puts the same seam — and
-// where ComposerOptionsMenu below keeps it, rather than growing the prop. `ariaLabel` therefore has to be
+// `{open && <ComposerOptionsPanel … />}`, as ComposerOptionsMenu does below. `ariaLabel` has to be
 // injected — the panel cannot name itself when it does not know which control opened it.
 //
 // #840 added the last two. `focusedIndex` is REQUIRED like the rest; `panelRef` is the one optional prop,
-// following ThreadOverflowMenuView's `triggerRef` convention exactly — an ordinary prop rather than
-// forwardRef, omitted in tests, since a native <div> accepts ref={undefined} and a static render cannot
+// an ordinary prop rather than forwardRef, omitted in tests, since a native <div> accepts
+// ref={undefined} and a static render cannot
 // exercise a ref anyway.
 export interface ComposerOptionsPanelProps {
   options: readonly ComposerOptionsPanelOption[]
@@ -202,18 +201,14 @@ export function ComposerOptionsPanel({
   )
 }
 
-// #840: the store-free interaction container around the pure view above — the ThreadOverflowMenuView /
-// ThreadOverflowMenu split (ConversationScreen.tsx:2653-2710), which already solves most of this shape and
-// is deliberately extended rather than reinvented. Unlike ThreadOverflowMenu it is EXPORTED: #680 Actions,
-// #682 permission mode and #683 model and effort live in other files, and three copies of an ARIA contract
-// is three chances to get it wrong.
+// The store-free interaction container shared by footer controls and ThreadOverflowMenu. Keeping
+// focus, activation and dismissal here gives every consumer the same keyboard contract.
 //
 // THE TRIGGER'S BEHAVIOUR IS THE CONTAINER'S; ITS LABEL AND APPEARANCE ARE THE CONSUMER'S. The <button>,
 // aria-haspopup, aria-expanded and the toggle are the parts four tickets would each get wrong, so they land
 // once here. What the button READS and how it is DRAWN belong to whichever menu mounts it — this ticket
-// draws no footer button. The container puts no aria-label on the trigger: `triggerContent` is visible text
-// ("Max", "Opus 5"), so an aria-label would override it and break WCAG 2.5.3's label-in-name. An icon-only
-// trigger would need one, and the fix then is one additive optional prop with no cascade.
+// draws no footer button. Text triggers take their accessible name from `triggerContent`; icon-only
+// consumers supply the optional client-owned `triggerAriaLabel`.
 //
 // It shipped DORMANT: nothing mounted it when #840 landed, exactly as #838's panel and #839's clamp did.
 // #680 is the first live host. The anchor still takes NO `style` prop — #839's `--composer-options-shift`
@@ -370,7 +365,9 @@ export function ComposerOptionsMenu({
   onSelect,
   ariaLabel,
   triggerContent,
-  triggerClassName
+  triggerClassName,
+  triggerAriaLabel,
+  placement = 'footer'
 }: {
   options: readonly ComposerOptionsPanelOption[]
   currentId: string | null
@@ -378,6 +375,8 @@ export function ComposerOptionsMenu({
   ariaLabel: string
   triggerContent: ReactNode
   triggerClassName: string
+  triggerAriaLabel?: string
+  placement?: 'footer' | 'bottom-end'
 }): JSX.Element {
   // Component-local useState, never the session store (ADR 0006, the `sheetOpen` precedent), so the panel
   // resets to closed on remount for free — the same reason #276's container gets that property.
@@ -497,11 +496,18 @@ export function ComposerOptionsMenu({
   }, [open])
 
   return (
-    <div ref={anchorRef} className="composer-options-anchor" onKeyDown={handleKeyDown}>
+    <div
+      ref={anchorRef}
+      className={placement === 'bottom-end'
+        ? 'composer-options-anchor composer-options-anchor--bottom-end'
+        : 'composer-options-anchor'}
+      onKeyDown={handleKeyDown}
+    >
       <button
         ref={triggerRef}
         type="button"
         className={triggerClassName}
+        aria-label={triggerAriaLabel}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={toggle}

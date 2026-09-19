@@ -132,3 +132,31 @@ contains no additional documentation-only acceptance criteria.
 
 **Reviewer:** builder self-review using `builder/security-review.md`
 **Date:** 2026-09-19
+
+## Revisions
+
+2026-09-19 — Add `e2e/queue-delivery-evidence.spec.ts` to verify the observer's
+actual renderer installation and queued-to-delivered row transition in the built
+app before handing it to the credentialed gate. This fake-tier check also records
+synthetic queued/delivered screenshots at 1280×800; it does not claim live delivery.
+The additional path has no remote feature overlap. Total work remains below 650
+lines, with no production changes. The focused e2e typecheck exposes an existing
+`withIsolatedElectronApp` environment type mismatch; leave that shared fixture
+unchanged and distinguish it from errors in the added specs.
+
+The daemon's `TurnEndPayload` serializes optional stop details as empty strings.
+The oracle accepts empty/absent details alongside `end_turn`, rejects non-success
+outcomes, explicit error flags/categories and non-completed terminal reasons.
+Unit tests demonstrated both the empty-field false rejection and an overlooked
+error-category false acceptance before these conditions were corrected.
+
+Builder outcome: 16 oracle unit cases and the focused fake Electron scenario
+pass; the production build passes. The live gate collects 23 tests across 20
+files, an increase of three. The new e2e code has no focused typecheck errors;
+the shared fixture's pre-existing environment mismatch remains the sole diagnostic.
+The installed dedicated binary reports `dev-8a850505`, while the inspected daemon
+checkout is `8e7461c59b9f159dc650c6cb84f95457850272ff`; neither is live acceptance
+evidence. Open question resolution is the dispatcher handoff: execute the three
+delivery cases and retained queue-drop case, inspect their recorded binary revision
+and correlated completions, then select a repair only if that reproduction fails.
+No daemon prerequisite is confirmed by this test-only builder pass.

@@ -70,12 +70,24 @@ is what that store's header forbids.
 ## How it works
 
 The receive bridge remains passive: it subscribes to `contextUsage` events and writes readings.
-The separate [outbound transport capability](daemon-connection-methods.md#public-surface),
-`requestContextUsage`, can ask the daemon for a named conversation's reading through main.
-It is callable but dormant: no renderer sender invokes it yet.
-[#1504](https://github.com/pyrycode/pyrycode-desktop/issues/1504) owns the later trigger on conversation
-open. Adding that send capability does not add a request effect, retry loop or pending state to this
-bridge or store.
+On each eligible [chat activation](paired-shell-conversation-exits.md#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166),
+including reopening the same chat, `PairedShell`'s `activateDeps.requestConversationConfig` sends exactly one
+`requestContextUsage` through `window.pyry.sendCommand`, immediately beside `requestRunConfigSnapshot`
+and naming the same conversation. The connected-owner guard blocks unavailable or unresolved hosts;
+the React-free sender also rejects null/empty ids. Created chats whose list row has not arrived use
+the existing [deferred initialization](conversation-shell.md#created-chat-initialization).
+
+Keep this ask at activation: adding it inside `requestRunConfigSnapshot` would also request context
+on sheet opens and settings refreshes. Opening Run configuration sends no additional context ask.
+The [outbound transport](daemon-connection-methods.md#public-surface) remains synchronous
+fire-and-forget; main owns send diagnostics, and neither layer retries a failure, error or silence.
+The bridge and store gain no request effect or pending state.
+
+A reply for the chat replaces its held reading through the same receive path as unsolicited turn-end
+reports. Both the footer and run-configuration gauge prefer that reading before any new turn through
+`contextTokenSource`, keeping their existing visuals and absent-only transcript fallback. Reopening
+does not clear the held reading while awaiting a reply. See the
+[#1504 design](../../specs/architecture/1504-context-reading-on-chat-open.md).
 
 ### The store (`src/renderer/src/store/reportedContextStore.ts`)
 
@@ -207,6 +219,14 @@ Position among the in-memory clears is free; it precedes
   lines including the 441-line plan, finished well inside the run budget with no continuation leg — a data
   point *for* that ruling, not against it. See [#1320](usage-limit-store.md)'s identical call one arm
   earlier.
+
+## Testing
+
+`e2e/composer-context-claude-reading.spec.ts` holds the correlated on-open reply until both surfaces
+show the transcript fallback, then verifies their replacement before any turn. An unsolicited
+turn-end reading alone cannot prove the activation request. Unavailable-host checks observe
+`window.pyry.sendCommand`: absent socket frames could otherwise hide a renderer send dropped by main.
+The sender unit tests cover null/empty ids, repeated explicit asks and no scheduled retry.
 
 ## Edge cases and limitations
 

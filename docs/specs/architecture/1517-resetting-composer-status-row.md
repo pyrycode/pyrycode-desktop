@@ -328,3 +328,30 @@ layout cases preserve the 24px row and idle composer position. Captures under
 use 800×572 and 1280×572 content viewports (600px outer window height). Visual review
 against Figma `111:3525` confirms the existing mark, primary colour, body-small type
 and spacing, with a single ellipsis at narrow widths and full outcome copy at 1280px.
+
+### 2026-09-19 — isolate post-reset liveness from the handoff turn
+
+The latest PASS review identifies a nonblocking false-positive path in
+`real claude restarts on Reset session and the turn stream survives it`: the handoff
+turn can increase the assistant count after the pre-reset baseline, satisfying the
+closing assertion without a response to the second message. Capture the baseline
+after the delimiter, empty status label and enabled Send button, immediately before
+the second message. Require the assistant count to increase over that new baseline.
+Keep the existing single test, reset-label observation and executed-count floor.
+Also include a live reset record in `toolProgress.test.tsx`'s existing superseding-state
+table, addressing the earlier review nit that elapsed tool time must not alter reset copy.
+
+The subsequent dispatcher log `2026-09-19T11-52-08-458Z_real-claude-gate_#1517.log`
+again reports 18 passed, one failed and one skipped, with the failure at the reset-label
+observation after the delimiter. The configured dedicated executable still reports
+`dev-8a850505` when inspected during this rework. This is the same unmet producer
+prerequisite described above; the test correction does not claim to fix that failure.
+The maintainer/dispatcher must supply the updated daemon, record its revision and
+rerun the credentialed gate. No live execution is performed by this builder.
+
+Scope: two existing test files and this plan, approximately 45 written lines;
+zero production files, exports, signature changes, consumer updates or error branches.
+No remote feature branch overlaps these files. Codegraph remains uninitialized.
+Verification: scoped unit tests, build, focused fake reset spec, and collection of the
+single real test; collection does not establish live acceptance. No production or
+visual contract changes. Documentation handoff remains pending as specified above.

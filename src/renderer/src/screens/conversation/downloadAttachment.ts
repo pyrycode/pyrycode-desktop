@@ -4,49 +4,21 @@ import {
   type AttachmentRetrievalRequest
 } from '@shared/ipc/attachmentRetrieval'
 import type { AttachmentSaveRequest } from '@shared/ipc/attachmentSave'
+import type { AttachmentOpenEvent } from '@shared/ipc/attachmentOpen'
+import { attachmentAskTarget } from './ComposerAttach'
 import type { MessageAttachment } from '../../store/threadTimeline'
 import {
   activeConversationStore,
   selectActiveConversation
 } from '../../store/activeConversationStore'
 
-/**
- * #816 — what one activation of the bubble's attachment file row does.
- *
- * A module-level helper with injected effects, beside `copyMessageText` and for its recorded reason: the
- * renderer test tier is static server renders (`environment: 'node'`, no DOM, no `@testing-library`), so
- * an effect reachable only from an `onClick` would be unprovable. Here it is one function with three
- * seams and `downloadAttachment.test.ts` pins exactly what reaches each. The click itself belongs to
- * `e2e/attachment-file-row.spec.ts`, which is the only tier in this repo that can press anything.
- *
- * ⭐ THE DOWNLOAD IS TWO ASKS, NOT ONE, AND THAT IS THE WHOLE SUBSTANCE OF THE SLICE. The save channel
- * does not fetch: `src/main/attachmentSave.ts` copies a file that is ALREADY in the app's private
- * attachment directory and answers `source-unavailable` when nothing is there. The retrieval leg (#996)
- * is that directory's only writer — `storeAttachment`'s single caller is the composition root's
- * `createAttachmentRetrieval` — and the upload leg keeps no local copy, it streams the picked file to the
- * host and retains nothing. Every attachment a row can draw is one THIS window uploaded (`MessagePayload`
- * carries no attachment field and there is no list verb), so its bytes are on the host and not here. A
- * click wired straight to the save channel would therefore answer `source-unavailable` on every
- * activation, on every machine, forever — while satisfying a criterion reading "sends the identifier to
- * the save channel". That is a dead control that passes its own test, which is why the sequencing lives
- * here rather than in a follow-up.
- *
- * NO PENDING STATE AND NO FAILURE STATE, and both are deliberate rather than unfinished. The drawing has
- * neither, this slice invents nothing (AC4), and the ticket's Open Question records both gaps as needing
- * a Figma node and their own ticket. That is also what makes "leaves the row activatable again" true by
- * construction: there is no flag, no `disabled`, nothing a failure could leave stuck.
- *
- * NO SHARED FETCH-THEN-ACT MACHINERY. #868 and #869 will want this shape; neither is refined or started,
- * and the first one to need it twice can lift it.
- */
-
-/**
- * The three seams plus the conversation read. Injected rather than imported so the whole decision surface
- * is exercisable with plain fakes under `environment: 'node'` — the `ConversationLastReadDeps` idiom.
- */
+/** File activation prefers the owner-scoped original, then retrieves and saves on unavailability.
+ * Effects are injected because renderer unit tests cannot execute click handlers. */
 export interface AttachmentDownloadDeps {
   /** The conversation the thread is showing, or `null` when none is open. */
   getOpenConversationId: () => string | null
+  openLocalAttachment: (request: AttachmentRetrievalRequest) => void
+  onAttachmentOpenEvent: (listener: (event: AttachmentOpenEvent) => void) => () => void
   /** `window.pyry.requestAttachment` — fire-and-forget; the terminal arrives on the listener below. */
   requestAttachment: (request: AttachmentRetrievalRequest) => void
   /** `window.pyry.onAttachmentRetrievalEvent`; returns the unsubscribe handle this module must call. */
@@ -55,22 +27,7 @@ export interface AttachmentDownloadDeps {
   saveAttachment: (request: AttachmentSaveRequest) => void
 }
 
-/**
- * Fetch the attachment back from the host, and on that fetch's own `completed` terminal ask the save
- * channel for it. Never throws, and returns nothing: both channels are fire-and-forget with a pushed
- * terminal, so there is no result to hand back and nothing for a caller to await.
- *
- * NOTHING HERE BUILDS, JOINS OR FORWARDS A PATH (AC3). The window holds none: both directories — the
- * app-private attachment store and Downloads — are computed in the background process from Electron's
- * own per-user locations. The name rides along on the SAVE ask only, because main cannot get it any
- * other way (the retrieval leg deliberately discards it: `attachmentReassembler` never reads `filename`,
- * the stored file is flat and extension-less, and `AttachmentRetrievalEvent` is content-free). It is
- * display-derived, NOT addressing — the bytes are selected by the identifier alone, so a wrong or hostile
- * name saves the right file under a poor name, never a different file — and it crosses VERBATIM.
- * `sanitizeAttachmentFilename` re-runs in main on the value a path is actually built from; a second
- * sanitiser on this side would make what the operator SEES diverge from what a save WRITES, which is why
- * the renderer must not reach for that module at all.
- */
+/** No path crosses the bridge. Only the main process resolves the original or sanitizes a fallback name. */
 export function downloadAttachment(
   deps: AttachmentDownloadDeps,
   attachment: MessageAttachment
@@ -88,6 +45,26 @@ export function downloadAttachment(
     return
   }
 
+  let unsubscribe: (() => void) | null = null
+  let settled = false
+  unsubscribe = deps.onAttachmentOpenEvent(event => {
+    if (settled || event.attachmentId !== attachment.attachmentId) return
+    settled = true
+    unsubscribe?.()
+    if (event.type === 'failed' && event.reason === 'unavailable') {
+      retrieveAndSave(deps, attachment, conversationId)
+    }
+  })
+  if (settled) unsubscribe()
+  deps.openLocalAttachment({ conversationId, attachmentId: attachment.attachmentId })
+}
+
+/** Fallback for attachments without a readable original under this upload owner. */
+function retrieveAndSave(
+  deps: AttachmentDownloadDeps,
+  attachment: MessageAttachment,
+  conversationId: string
+): void {
   // Subscribe BEFORE asking. Load-bearing rather than stylistic: `busy` and `not-connected` are decided
   // synchronously inside main's receiver, so the reverse order is a race by construction — it survives
   // today only because the preload bridge happens to hop the IPC boundary first, which is an
@@ -175,6 +152,12 @@ function addressable(identifier: string): boolean {
  * separate three-line ticket for whoever needs a third". This is the third; the ticket is not this one.
  */
 export const attachmentDownloadDeps: AttachmentDownloadDeps = {
+  openLocalAttachment: request => window.pyry.openAttachment({
+    attachmentId: request.attachmentId,
+    ...attachmentAskTarget(request.conversationId),
+    localOnly: true
+  }),
+  onAttachmentOpenEvent: listener => window.pyry.onAttachmentOpenEvent(listener),
   getOpenConversationId: () => {
     const open = selectActiveConversation(activeConversationStore.getState())
     return open === null ? null : open.id

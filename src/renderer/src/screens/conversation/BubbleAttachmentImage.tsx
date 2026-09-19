@@ -3,6 +3,7 @@ import { activeConversationStore } from '../../store/activeConversationStore'
 import { connectedConversationHostNow } from './conversationActionAvailability'
 import type { MessageAttachment } from '../../store/threadTimeline'
 import { attachmentImageSources } from './attachmentImageSource'
+import { attachmentAskTarget } from './ComposerAttach'
 
 /**
  * #1045 — an image attachment drawn as a picture inside the message bubble (Figma `Slot`
@@ -173,36 +174,20 @@ export function BubbleAttachmentImage({
     // rather than on the object keeps that true if a reducer ever re-creates the record.
   }, [attachment.attachmentId])
 
-  // ⭐ #869 — ONE ASK, THE IDENTIFIER AND NOTHING ELSE, AND NO LISTENER.
-  //
-  // NO FETCH-THEN-ACT SEQUENCING, although `downloadAttachment`'s header offers the shape to whoever
-  // needs it second. The drawn picture IS the proof the fetch already happened: this component only
-  // reaches `ready` after `attachmentImageSources` drove the retrieval leg to `completed`, and that leg
-  // is the sole writer of the app-private directory `src/main/attachmentOpen.ts` reads. That INVERTS
-  // #816's situation rather than repeating it — the file row is drawn BEFORE any fetch, so its click
-  // needed the sequencing to avoid being a dead control that passes its own test.
-  //
-  // NO PATH IS BUILT, JOINED OR FORWARDED, which is what `AttachmentOpenRequest`'s single field is for:
-  // the background process owns resolution and refuses an identifier that escapes the attachment
-  // directory. The blob URL the `ready` state holds takes no part — it is a capability handle to bytes
-  // in this origin, and the open channel addresses the file by identifier. No conversation id to read
-  // and no store to consult either, unlike the retrieval leg.
-  //
-  // `window.pyry` IS DEREFERENCED INSIDE THE ARROW BODY, the `attachmentDownloadDeps` idiom, so neither
-  // module load nor a static render touches the bridge.
-  //
-  // THE OUTCOME IS NOT SUBSCRIBED TO, and that is a decision. Four failure reasons exist and this slice
-  // presents none of them: there is no designed feedback for a failed open (the ticket's open question,
-  // shared with #816), so a listener would have nothing to do with what it heard. The driver already
-  // records each terminal at its own boundary, so nothing goes unrecorded. There is likewise no
-  // pending, disabled or in-flight flag — the drawing has none, and "the control stays activatable" is
-  // therefore true by construction rather than by a flag nothing resets.
+  // Scope the local preference to this conversation and host. Main retains the existing raster
+  // fallback for images without a readable original; thumbnail retrieval already populated its cache.
   return (
     <AttachmentThumbnail
       state={state}
       filename={attachment.filename}
       onDecodeError={() => setState({ type: 'failed' })}
-      onOpen={() => window.pyry.openAttachment({ attachmentId: attachment.attachmentId })}
+      onOpen={() => {
+        const conversationId = activeConversationStore.getState().activeConversation?.id
+        window.pyry.openAttachment({
+          attachmentId: attachment.attachmentId,
+          ...(conversationId === undefined ? {} : attachmentAskTarget(conversationId))
+        })
+      }}
     />
   )
 }

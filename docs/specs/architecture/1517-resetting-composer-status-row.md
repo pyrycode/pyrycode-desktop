@@ -277,7 +277,7 @@ binary and its version inspected during this rework.
 Keep the production implementation and live assertion unchanged. Extend the existing
 fake `composer-new-session.spec.ts` reset drive to send both rising phases through the
 real decode/IPC/keyed-store path and assert their visible labels, then prove the session
-boundary clears the label and the later falling edge leaves it clear. This distinguishes
+boundary clears the label. Existing reducer tests retain both completion orders. This distinguishes
 missing upstream emission from a client delivery failure without weakening live acceptance.
 No new production files, exports, signatures or error branches; approximately 60 lines of
 additional test and plan work, no overlapping remote feature branch for either file.
@@ -287,3 +287,8 @@ containing upstream #2478, record that revision, and rerun the existing real tes
 credentials. The builder does not replace the host binary or run the credentialed tier.
 The single real test and executed-count floor remain unchanged. Documentation handoff
 above remains pending for the documentation stage.
+
+Verification: withholding the reset frames makes the new mounted-row assertion fail;
+supplying the two rising frames makes the focused fake spec pass (two tests). The five
+existing scoped unit files pass (729 tests), and `npm run build` passes. Listing the real
+spec still finds one test; listing is not live execution. No production fix was needed.

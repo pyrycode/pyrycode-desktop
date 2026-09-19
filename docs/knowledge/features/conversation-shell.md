@@ -8,9 +8,12 @@ Introduced in [#1](../codebase/1.md); the thread was bound to the live [session 
 
 Renders the conversation thread and composer for a session: a thread region that fills the window height and scrolls independently, and a composer (text input + send button) pinned to the bottom edge. The thread now renders the **live** message list from the [session store](session-store.md) — streamed daemon replies appear as they arrive ([#69](../codebase/69.md)). The composer is now **wired**: typing a message and submitting it (send button or Enter) sends it and shows it in the thread immediately as an optimistic echo ([#66](../codebase/66.md) — see [Composer send](composer-send.md)).
 
-The app bar, status row, tool-call chips, code blocks, session delimiters, and the mic icon shown in the Figma node are **deliberately out of scope** — they render conversation/connection/model state that lands in later slices. This screen builds the message thread and composer only.
-
-A minimal seed of that future top app bar landed in [#166](../codebase/166.md): a slim header row above the thread holding an unpair escape hatch. See [Unpair control](conversation-shell-chrome.md#unpair-control-166) below.
+The messaging top bar shows the current conversation name beside the overflow menu
+and remains visible while messages scroll. It follows conversation switches and
+list-reply name updates, including automatic naming, with `Unnamed conversation` for
+a null name. See [Chrome and controls](conversation-shell-chrome.md#structure) for
+the title, menu boundary and layout contract. The earlier unpair header was removed;
+see [Unpair control](conversation-shell-chrome.md#unpair-control-166-deleted-by-1061).
 
 A **proactive** twin of that escape hatch landed in [#167](../codebase/167.md): beneath the composer, a `Re-pair` button that appeared only when the connection had hit a terminal failure or the daemon had rejected the pairing, instead of requiring the user to notice the manual header control. [#963](https://github.com/pyrycode/pyrycode-desktop/issues/963) folded it into the composer status row's own error slot as a filled button, in place of the block beneath the composer. See [Re-pair control](conversation-shell-chrome.md#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963) below and [Composer — actionable-error button](conversation-shell-composer-repair-button.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963).
 

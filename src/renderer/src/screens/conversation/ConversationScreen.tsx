@@ -219,12 +219,9 @@ export function ConversationScreen({
   onRepairHost,
   onBack
 }: ConversationScreenProps = {}): JSX.Element {
-  // #278: the conversation the thread is showing, snapshotted when the new discussion was created
-  // (PairedShell's conversation_created callback). The container derives it and passes it to the pure
-  // views that need it — the Channel Info sheet, the edit dialogs and the background-task panel, since
-  // #1486 removed the workspace row this read was first added for. A narrow single-slice read —
-  // activeConversation changes once (on creation), so it adds no meaningful re-render churn beyond the
-  // items delta already here.
+  // The current conversation snapshot feeds the top-bar name, Channel Info, edit dialogs and task panel.
+  // PairedShell's useActiveConversationReseed updates it from list replies, including renames and
+  // automatic naming. Reuse this subscription so the title follows refreshes without reopening the chat.
   // #758 moved it ABOVE the timeline read, which now needs its id: same hook, same selector, same single
   // subscription, only its position in the hook list changed (stable across renders).
   const activeConversation = useActiveConversationStore(selectActiveConversation)
@@ -407,6 +404,7 @@ export function ConversationScreen({
           together with the sheet, once #683 lands the footer's model and effort controls. */}
       {onBack && (
         <ThreadOverflowMenu
+          name={activeConversation?.name ?? UNNAMED_CONVERSATION_LABEL}
           onChannelInfo={() => setChannelInfoOpen(true)}
           onRunConfiguration={() => setSheetOpen(true)}
           onBackgroundTasks={() => setPanelOpen(true)}
@@ -4823,10 +4821,12 @@ export function ThreadOverflowMenuView({
 // compile error instead of a menu item that silently closes and does nothing — which is exactly the
 // failure the AC guards against.
 function ThreadOverflowMenu({
+  name,
   onChannelInfo,
   onRunConfiguration,
   onBackgroundTasks
 }: {
+  name: string
   onChannelInfo: () => void
   onRunConfiguration: () => void
   onBackgroundTasks: () => void
@@ -4877,15 +4877,18 @@ function ThreadOverflowMenu({
     // positioned from (`top: 100%; right: 0`), so the ref and the anchor must stay the same element —
     // `.conversation__overflow-anchor`'s rule carries both halves of the argument.
     <div className="conversation__overflow">
-      <div ref={wrapperRef} className="conversation__overflow-anchor">
-        <ThreadOverflowMenuView
-          open={open}
-          onToggle={() => setOpen((o) => !o)}
-          onSelectChannelInfo={select(onChannelInfo)}
-          onSelectRunConfiguration={select(onRunConfiguration)}
-          onSelectBackgroundTasks={select(onBackgroundTasks)}
-          triggerRef={triggerRef}
-        />
+      <div className="conversation__overflow-content">
+        <p className="conversation__overflow-title">{name}</p>
+        <div ref={wrapperRef} className="conversation__overflow-anchor">
+          <ThreadOverflowMenuView
+            open={open}
+            onToggle={() => setOpen((o) => !o)}
+            onSelectChannelInfo={select(onChannelInfo)}
+            onSelectRunConfiguration={select(onRunConfiguration)}
+            onSelectBackgroundTasks={select(onBackgroundTasks)}
+            triggerRef={triggerRef}
+          />
+        </div>
       </div>
       <div className="conversation__overflow-rule" />
     </div>

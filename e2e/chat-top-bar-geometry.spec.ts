@@ -3,6 +3,8 @@ import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/lau
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type {
   AssistantDeltaPayload,
+  ConversationSummary,
+  ConversationsPayload,
   SendMessagePayload,
   TurnEndPayload,
   TurnStatePayload,
@@ -23,35 +25,30 @@ import type {
 // Its rectOf / wholePixels / tokenColor helpers are borrowed verbatim below, which is the convention in
 // this family (each spec pays its own launch and carries its own copies).
 //
-// COMPARED BY TOKEN, NEVER BY HEX. Both drawn nodes are STYLED `inverse-primary` in the Figma file and
-// both resolve to #9dcbfc, which is this repo's --color-primary; `tokens.css` has its own
-// --color-inverse-primary at #32628d, a different colour entirely. Reading the live token back and
-// comparing against it is what keeps a scheme change moving the design instead of reddening this file —
-// and what would catch an implementation that reached for the style NAME instead of the value.
+// The updated Figma variables resolve the title to On Primary Container and the divider to
+// Inverse Primary. The existing ellipsis keeps Primary. Probe the app's matching tokens separately.
 //
 // SECRET HYGIENE (the sibling specs' posture, carried verbatim): every assertion reads geometry, a
 // computed style or an element count. The prompt and reply texts, the conversation_id and the turn ids
 // are non-secret display and routing literals; the pairing plumbing lives in launchPairedApp and is never
 // echoed. No failure diagnostic serialises a token, a key or any plaintext.
 
-// The drawing's own numbers, read off the nodes on 2026-09-14. `Content` (106:3321) is
-// `pt-[24px] px-[20px] pb-[16px]` with `gap-[12px]`; its `Top bar` (497:1891) is a `gap-[20px] pb-[16px]`
-// column over a 24px `Buttons` row; the `Message area` (132:4171) is `gap-[16px]`. Held as named constants
-// so a failure says which of them moved rather than reporting a bare pixel delta.
+// Updated Top bar: a 28px content row, 16px divider gap and 16px bottom padding.
+// The containing card and message-area insets remain unchanged.
 const CARD_TOP_PX = 24
 const CARD_SIDE_PX = 20
 const CARD_BOTTOM_PX = 16
 const CARD_GAP_PX = 12
 const BUTTON_PX = 24
-const RULE_GAP_PX = 20
+const CONTENT_ROW_PX = 28
+const RULE_GAP_PX = 16
 const RULE_HEIGHT_PX = 1
 const BAR_BOTTOM_PX = 16
 const ROW_GAP_PX = 16
 
-// The AC's own number, and the one value in this file that is NOT derived: 24 + 24 + 20 + 1 + 16 + 12.
-// Written as the sum so a failure names the term that moved.
+// The first message still starts 97px below the card top.
 const FIRST_ROW_TOP_PX =
-  CARD_TOP_PX + BUTTON_PX + RULE_GAP_PX + RULE_HEIGHT_PX + BAR_BOTTOM_PX + CARD_GAP_PX
+  CARD_TOP_PX + CONTENT_ROW_PX + RULE_GAP_PX + RULE_HEIGHT_PX + BAR_BOTTOM_PX + CARD_GAP_PX
 
 const PRIMARY_TOKEN = '--color-primary'
 const RULE_OPACITY = '0.6'
@@ -209,6 +206,8 @@ test('the chat card draws its top bar and its inset, and only the thread scrolls
 
   const card = page.locator('.conversation')
   const bar = page.locator('.conversation__overflow')
+  const contentRow = page.locator('.conversation__overflow-content')
+  const title = page.locator('.conversation__overflow-title')
   const trigger = page.locator('.conversation__overflow-trigger')
   const rule = page.locator('.conversation__overflow-rule')
   const thread = page.locator('.conversation__thread')
@@ -227,6 +226,23 @@ test('the chat card draws its top bar and its inset, and only the thread scrolls
   const cardBox = await rectOf(card)
   const contentWidth = cardBox.width - 2 * CARD_SIDE_PX
   const barBox = await rectOf(bar)
+  await expect(title).toHaveText(SEEDED_ROW.name ?? '')
+  const contentRowBox = await rectOf(contentRow)
+  const titleBox = await rectOf(title)
+  expect(wholePixels(contentRowBox.height), 'the title and menu row').toBe(CONTENT_ROW_PX)
+  expect(wholePixels(barBox.height), 'the bar stays 61px tall').toBe(61)
+  expect([titleBox.x, titleBox.y].map(wholePixels)).toEqual([barBox.x, barBox.y].map(wholePixels))
+  const titlePaint = await title.evaluate((el) => {
+    const style = getComputedStyle(el)
+    return {
+      font: style.fontFamily, size: style.fontSize, line: style.lineHeight,
+      weight: style.fontWeight, tracking: style.letterSpacing, color: style.color
+    }
+  })
+  expect(titlePaint.font).toContain('Roboto')
+  expect(titlePaint).toMatchObject({ size: '22px', line: '28px', weight: '400', tracking: 'normal' })
+  expect(titlePaint.color).toBe(await tokenColor(page, '--color-on-primary-container'))
+  expect(await bar.evaluate((el) => getComputedStyle(el).borderRadius)).toBe('6px')
   const composerBox = await rectOf(composer)
 
   expect(wholePixels(barBox.y - cardBox.y), 'card top inset').toBe(CARD_TOP_PX)
@@ -261,12 +277,10 @@ test('the chat card draws its top bar and its inset, and only the thread scrolls
   expect(buttonPaint.background, 'no ground is drawn').toBe('rgba(0, 0, 0, 0)')
   expect(buttonPaint.color, 'the glyph takes the primary token').toBe(primary)
 
-  // --- 3. The rule (AC1): 1px, 20 under the button row, spanning the content box, in the same token at
-  // 60%. The opacity is read as its own value because that is how this file family paints de-emphasis —
-  // a pre-mixed colour literal here would read back as a different colour and redden. ---
+  // The divider is 16px below the 28px content row, independently of the 24px trigger height.
   const ruleBox = await rectOf(rule)
   expect(wholePixels(ruleBox.height), 'the rule is 1px').toBe(RULE_HEIGHT_PX)
-  expect(wholePixels(ruleBox.y - (triggerBox.y + triggerBox.height)), 'the rule gap').toBe(RULE_GAP_PX)
+  expect(wholePixels(ruleBox.y - (contentRowBox.y + contentRowBox.height)), 'the rule gap').toBe(RULE_GAP_PX)
   expect([ruleBox.x, ruleBox.width].map(wholePixels), 'the rule spans the content box').toEqual(
     [cardBox.x + CARD_SIDE_PX, contentWidth].map(wholePixels)
   )
@@ -274,7 +288,9 @@ test('the chat card draws its top bar and its inset, and only the thread scrolls
     const style = getComputedStyle(el)
     return { background: style.backgroundColor, opacity: style.opacity }
   })
-  expect(rulePaint.background, 'the rule takes the primary token').toBe(primary)
+  expect(rulePaint.background, 'the rule takes inverse primary').toBe(
+    await tokenColor(page, '--color-inverse-primary')
+  )
   expect(rulePaint.opacity, 'the rule is drawn at 60%').toBe(RULE_OPACITY)
 
   // The bar's own bottom padding, which is the last term of the 97 and the one a border-bottom
@@ -352,3 +368,99 @@ test('the chat card draws its top bar and its inset, and only the thread scrolls
   await trigger.click()
   await expect(menu).toBeVisible()
 })
+
+for (const width of [800, 1280]) {
+  test(`the top-bar name refreshes and truncates beside a usable menu at ${width}px`, async ({
+    launchPairedApp
+  }) => {
+    let rows: ConversationSummary[] = [SEEDED_ROW]
+    const listFrame = (): Uint8Array => encodeEnvelope({
+      id: REPLY_ENVELOPE_ID, type: 'conversations', ts: FIXED_TS,
+      payload: { conversations: rows } satisfies ConversationsPayload
+    })
+    const { page, app, daemon } = await launchPairedApp({
+      buildReplyFrames: (inbound) => decodeEnvelope(inbound).type === 'list_conversations'
+        ? [listFrame()] : []
+    })
+    await app.evaluate(({ BrowserWindow }, windowWidth) => {
+      BrowserWindow.getAllWindows()[0].setSize(windowWidth, 800)
+    }, width)
+    await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width)
+
+    const title = page.locator('.conversation__overflow-title')
+    const bar = page.locator('.conversation__overflow')
+    const trigger = page.getByRole('button', { name: 'More actions', exact: true })
+    const menu = page.getByRole('menu')
+    await expect(title).toHaveText('Seeded discussion')
+
+    // The list reply is the refresh source for automatic naming and renames. Keep the open chat
+    // mounted, and preserve a local draft to distinguish a refresh from reactivation.
+    const draft = page.getByPlaceholder('Message…')
+    await draft.fill('Unsent local draft')
+    const renameFromList = async (name: string | null): Promise<void> => {
+      rows = [{ ...SEEDED_ROW, name }]
+      await daemon.pushFrame(listFrame())
+      await expect(title).toHaveText(name ?? 'Unnamed conversation')
+      await expect(draft).toHaveValue('Unsent local draft')
+    }
+    await renameFromList(null)
+    await renameFromList('Automatically named chat')
+    await renameFromList('pyrycode discord integration')
+    await page.screenshot({ path: `/tmp/builder-1541-${width}-named.png`, animations: 'disabled' })
+
+    const other = { ...SEEDED_ROW, id: 'other-top-bar-chat', name: 'Second conversation' }
+    rows = [...rows, other]
+    await daemon.pushFrame(listFrame())
+    await page.locator('.channel-list__row-open').filter({ hasText: other.name }).click()
+    await expect(title).toHaveText(other.name)
+    await page.locator('.channel-list__row-open').filter({ hasText: 'pyrycode discord integration' }).click()
+    await expect(title).toHaveText('pyrycode discord integration')
+
+    const longName = 'Long conversation name '.repeat(12)
+    await draft.fill('Unsent local draft')
+    await renameFromList(longName)
+    const titleBox = await rectOf(title)
+    const triggerBox = await rectOf(trigger)
+    const barBox = await rectOf(bar)
+    expect(wholePixels(titleBox.height), 'one title line').toBe(CONTENT_ROW_PX)
+    expect(titleBox.x + titleBox.width, 'title ends before the menu').toBeLessThanOrEqual(triggerBox.x)
+    expect(wholePixels(triggerBox.x + triggerBox.width)).toBe(wholePixels(barBox.x + barBox.width))
+    expect([triggerBox.width, triggerBox.height].map(wholePixels)).toEqual([BUTTON_PX, BUTTON_PX])
+    const truncation = await title.evaluate((el) => ({
+      overflow: el.scrollWidth > el.clientWidth,
+      ellipsis: getComputedStyle(el).textOverflow,
+      whiteSpace: getComputedStyle(el).whiteSpace
+    }))
+    expect(truncation).toEqual({ overflow: true, ellipsis: 'ellipsis', whiteSpace: 'nowrap' })
+    expect(await page.locator('.conversation').evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+
+    await trigger.focus()
+    await page.keyboard.press('Enter')
+    await expect(menu).toBeVisible()
+    const menuBox = await rectOf(menu)
+    expect(wholePixels(menuBox.y)).toBe(wholePixels(triggerBox.y + triggerBox.height))
+    expect(wholePixels(menuBox.x + menuBox.width)).toBe(wholePixels(triggerBox.x + triggerBox.width))
+    expect(menuBox.x).toBeGreaterThanOrEqual(barBox.x)
+    await expect(menu.getByRole('menuitem')).toHaveText([
+      'Channel info', 'Run configuration', 'Background tasks'
+    ])
+    await page.screenshot({ path: `/tmp/builder-1541-${width}-long-menu.png`, animations: 'disabled' })
+    await title.click()
+    await expect(menu).toHaveCount(0)
+
+    await trigger.press('Space')
+    await expect(menu).toBeVisible()
+    await page.keyboard.press('Tab')
+    await expect(page.getByRole('menuitem', { name: 'Channel info', exact: true })).toBeFocused()
+    await page.keyboard.press('Escape')
+    await expect(menu).toHaveCount(0)
+    await expect(trigger).toBeFocused()
+
+    await trigger.press('Enter')
+    await page.keyboard.press('Tab')
+    await page.keyboard.press('Enter')
+    await expect(page.getByRole('dialog', { name: longName, exact: true })).toBeVisible()
+    await expect(menu).toHaveCount(0)
+  })
+}

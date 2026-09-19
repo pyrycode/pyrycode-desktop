@@ -239,6 +239,10 @@ export type EnvelopeType =
   // `narrowDaemonErrorOutcome`'s allowlist to `unclassified`, which is correct and complete — surfacing
   // a refusal to the operator is #1036's job. SSOT pyrycode#2125 / internal/protocol/interactive.go.
   | 'request_model_list'
+  // Client → daemon, interactive-capability-gated (pyrycode#2431). One context_usage
+  // reply correlated by in_reply_to, or conversation.not_found/context_usage.unavailable.
+  // The client does not retry either error or a missing reply.
+  | 'request_context_usage'
   // The conversation's MODEL inventory (#971) — the identities claude will run as, with the
   // reasoning-effort levels each one supports. Same shape of frame as its sibling below and drawn from
   // the same `initialize` control reply: v2 outbound (binary → phone), interactive-capability-gated,
@@ -2546,6 +2550,11 @@ export interface ModelListPayload {
  * scratch: never a key, a path, a log field, or an attribute.
  */
 export interface RequestModelListPayload {
+  conversation_id: string
+}
+
+/** Request one conversation's context reading. Mirrors the daemon's required field. */
+export interface RequestContextUsagePayload {
   conversation_id: string
 }
 

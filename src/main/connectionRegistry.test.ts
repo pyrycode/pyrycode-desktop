@@ -83,6 +83,7 @@ interface BuiltConnection {
    * the argument, not a count: the delegate that dropped it would still count right.
    */
   newSessions: string[]
+  contextRequests: string[]
   /**
    * The conversation ids this connection's `interrupt` was handed (#1092), recorded beside `calls` for
    * the reason `newSessions` is: `calls.interrupt` survives as this file's lifecycle-delegation probe
@@ -101,12 +102,14 @@ function createFactoryFake() {
   }): DaemonConnection => {
     const calls = { start: 0, stop: 0, reconnect: 0, interrupt: 0 }
     const newSessions: string[] = []
+    const contextRequests: string[] = []
     const interrupts: string[] = []
     built.push({
       serverId: spec.serverId,
       pairedServer: spec.pairedServer,
       calls,
       newSessions,
+      contextRequests,
       interrupts
     })
     const noop = (): void => {}
@@ -130,6 +133,7 @@ function createFactoryFake() {
       send: noop,
       requestSessionSettings: noop,
       requestModelList: noop,
+      requestContextUsage: (conversationId) => { contextRequests.push(conversationId) },
       requestHistory: noop,
       requestSystemPrompt: noop,
       requestConversations: noop,
@@ -498,6 +502,14 @@ describe('createConnectionRegistry', () => {
   // server; this answers for the one NAMED, which is the whole difference between a command reaching
   // the right daemon and reaching whichever was paired last.
   describe('the per-server accessor', () => {
+    it('forwards context requests only to the named host', async () => {
+      const { factory, registry } = harness([record('alpha'), record('beta')])
+      await settle()
+      registry.connectionFor('alpha')?.requestContextUsage('conv-42')
+      expect(factory.for('alpha').contextRequests).toEqual(['conv-42'])
+      expect(factory.for('beta').contextRequests).toEqual([])
+    })
+
     it('reaches the named server, not the most recently paired one', async () => {
       const { factory, registry } = harness([record('alpha'), record('beta')])
       await settle()

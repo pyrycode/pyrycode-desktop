@@ -404,6 +404,37 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand({ type: 'requestModelList', payload: null })).toBe(false)
   })
 
+  it.each(['conv-42', '', '__proto__'])('accepts a context request with string id %j', (id) => {
+    expect(isRendererCommand({ type: 'requestContextUsage', payload: {
+      conversation_id: id, extra: 'ignored'
+    } })).toBe(true)
+  })
+
+  it.each([
+    {}, { payload: undefined }, { payload: null }, { payload: {} },
+    { payload: 'conv-42' }, { payload: { conversation_id: undefined } },
+    { payload: { conversation_id: null } }, { payload: { conversation_id: 42 } },
+    { payload: { conversation_id: true } }, { payload: { conversation_id: [] } }
+  ])('rejects malformed context request %j', (fields) => {
+    expect(isRendererCommand({ type: 'requestContextUsage', ...fields })).toBe(false)
+  })
+
+  it('requires the context request payload and its string id at compile time', () => {
+    // @ts-expect-error a context request requires a payload
+    const bare: RendererCommand = { type: 'requestContextUsage' }
+    // @ts-expect-error an explicit undefined payload is invalid
+    const undefinedPayload: RendererCommand = { type: 'requestContextUsage', payload: undefined }
+    // @ts-expect-error the conversation id must be present
+    const missingId: RendererCommand = { type: 'requestContextUsage', payload: {} }
+    // @ts-expect-error the conversation id must be a string
+    const numericId: RendererCommand = { type: 'requestContextUsage', payload: { conversation_id: 42 } }
+    const valid: RendererCommand = { type: 'requestContextUsage', payload: { conversation_id: 'conv-42' } }
+    for (const invalid of [bare, undefinedPayload, missingId, numericId]) {
+      expect(isRendererCommand(invalid)).toBe(false)
+    }
+    expect(isRendererCommand(valid)).toBe(true)
+  })
+
   it('types requestModelList as payload-REQUIRED — a bare send does not compile (#1165)', () => {
     // Compile-time half of AC2, and the half the runtime guard above cannot prove: `src/shared/**/*`
     // is inside tsconfig.node.json's include, so `npm run typecheck` reads this file, and an unused

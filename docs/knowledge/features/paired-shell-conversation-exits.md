@@ -501,9 +501,11 @@ requestConversationConfig(conversation.id)  // #1166, new — outside the gate, 
 ```
 
 `PairedShell.activateDeps.requestConversationConfig` checks current unique ownership and
-host status before run-configuration, model-list, system-prompt and first-history helpers.
-Offline activation still records local viewing but consumes no history-fetch eligibility.
-Connected configuration replies land through app-lifetime subscribers already listening.
+host status before requesting settings, context usage, the model list and system prompt.
+The [context ask](reported-context-store.md#how-it-works) runs once beside the settings ask,
+including on same-chat reopening, never on a sheet open or settings refresh. Offline activation
+still records local viewing. Opening never requests history. Replies land through app-lifetime
+subscribers; none of these activation asks retries.
 
 Creation confirmation can arrive before its list row. The shell preserves local activation
 and waits for the creating host's first authoritative list update before initializing once.
@@ -512,8 +514,8 @@ connected status authorize requests. Disconnect, active-chat change, replacement
 or unmount cancels it, with no reconnect replay. Ordinary held opening installs no wait.
 See [created-chat initialization](conversation-shell.md#created-chat-initialization).
 
-**`requestSystemPrompt`'s absence costs more than the other two's.** `runConfigReceived` and
-`modelListReceived` are also pushed unsolicited on other edges, so a dropped ask there costs freshness
+**`requestSystemPrompt` has no unsolicited counterpart.** `runConfigReceived`, `contextUsage` and
+`modelListReceived` are also pushed on other edges, so a dropped ask there costs freshness
 only; `system_prompt` has no pushed half at all — with no ask the event never fires, and [System-prompt
 store](system-prompt-store.md) stays permanently at its not-yet-loaded state. That is why its sender's
 falsy-id guard is a correctness boundary rather than tidiness: this verb has no error frame, so an
@@ -525,12 +527,9 @@ wipes the very value the run-configuration reply refills — the ask must follow
 the same tick would be blanked by the clear it was sent to repair. Nothing downstream of the request
 needs the store writes to have completed first.
 
-**The no-usable-id decision lives in the two senders, not here.** `requestRunConfigSnapshot` and
-`requestModelList` (`modelListBridge.ts`) each already refuse a falsy conversation id — a faithful pair,
-down to the guard — so `activateConversation` gains no branch of its own and an activation with no
-addressable id (the empty-string case; the only one this function can see, since it takes a conversation
-already) sends neither request. The notification-activated `open` dispatch (#393) carries no conversation
-at all and does not call `activateConversation`, so it sends nothing by construction.
+All four senders reject null/empty conversation ids, so `activateConversation` needs no id-validation
+branch of its own. The notification-activated `open` dispatch (#393) carries no conversation and does
+not call `activateConversation`, so it sends no activation requests.
 
 **The four comments this made false.** Before #1166, `modelListBridge.ts`, `modelListStore.ts`,
 `App.tsx`'s `ModelListData` leaf and `clearPairingScopedState.ts` each stated that the model-list path had

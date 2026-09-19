@@ -130,7 +130,8 @@ result observed offline is consumed without changing workspace, so reconnect can
 replay the mutation. Recent-workspace data mounts only while available.
 
 Offline opening still activates local state and records viewing, but returns before
-run-configuration, model-list or system-prompt request helpers. Opening never requests
+run-configuration, [context-reading](reported-context-store.md#how-it-works), model-list or
+system-prompt request helpers. Opening never requests
 history, even while connected. Qualifying upward thread input checks availability
 before the history helper; reconnect alone cannot retry a page. The run-configuration
 sheet gates both its data mount and the effect's current-state request. File-button gates alone are insufficient: thumbnails

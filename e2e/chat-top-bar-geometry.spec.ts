@@ -67,8 +67,8 @@ const FIXED_TS = '2026-07-07T12:00:00.000Z'
 // thread-scroll-pin.spec.ts's own count, sized to overflow the 1100x800 window — which the scroll block
 // below needs and asserts before it relies on it.
 const REPLY_TURNS = 20
-const replyText = (turn: number): string => `Streamed reply line ${turn}`
-const PRIMER_TEXT = 'prime the thread past its viewport'
+const replyText = (turn: number): string => `Streamed reply line ${turn}. `.repeat(8)
+const PRIMER_TEXT = 'prime the thread past its viewport. '.repeat(8).trimEnd()
 
 // --- Spec-local frame builders (the seedConversationsFrame idiom, copied from thread-scrollbar.spec.ts):
 // each seals one envelope through the production codec with a deterministic id/ts. ---
@@ -358,7 +358,7 @@ test('the chat card draws its top bar and its inset, and only the thread scrolls
   // test had quietly grown to the bar's full width. The point below is inside the bar and outside both the
   // button and its menu — exactly the click that stops dismissing if `wrapperRef` is left on the bar. A
   // raw-coordinate click, because there is no element to locate at that spot. ---
-  const menu = page.locator('.conversation__overflow-menu')
+  const menu = page.getByRole('menu')
   await trigger.click()
   await expect(menu).toBeVisible()
   await page.mouse.click(barAfterScroll.x + 4, barAfterScroll.y + BUTTON_PX / 2)
@@ -406,7 +406,7 @@ for (const width of [800, 1280]) {
     await renameFromList(null)
     await renameFromList('Automatically named chat')
     await renameFromList('pyrycode discord integration')
-    await page.screenshot({ path: `/tmp/builder-1541-${width}-named.png`, animations: 'disabled' })
+    await page.screenshot({ path: `/tmp/builder-1542-${width}-named.png`, animations: 'disabled' })
 
     const other = { ...SEEDED_ROW, id: 'other-top-bar-chat', name: 'Second conversation' }
     rows = [...rows, other]
@@ -445,22 +445,145 @@ for (const width of [800, 1280]) {
     await expect(menu.getByRole('menuitem')).toHaveText([
       'Channel info', 'Run configuration', 'Background tasks'
     ])
-    await page.screenshot({ path: `/tmp/builder-1541-${width}-long-menu.png`, animations: 'disabled' })
+    await page.screenshot({ path: `/tmp/builder-1542-${width}-long-menu.png`, animations: 'disabled' })
     await title.click()
     await expect(menu).toHaveCount(0)
 
     await trigger.press('Space')
     await expect(menu).toBeVisible()
-    await page.keyboard.press('Tab')
     await expect(page.getByRole('menuitem', { name: 'Channel info', exact: true })).toBeFocused()
     await page.keyboard.press('Escape')
     await expect(menu).toHaveCount(0)
     await expect(trigger).toBeFocused()
 
     await trigger.press('Enter')
-    await page.keyboard.press('Tab')
     await page.keyboard.press('Enter')
     await expect(page.getByRole('dialog', { name: longName, exact: true })).toBeVisible()
     await expect(menu).toHaveCount(0)
+  })
+}
+
+for (const width of [800, 1280]) {
+  test(`the messaging dropdown paints above the divider and scrolling thread at ${width}px`, async ({
+    launchPairedApp
+  }) => {
+    const { page, app } = await launchPairedApp({ buildReplyFrames })
+    await app.evaluate(({ BrowserWindow }, windowWidth) => {
+      BrowserWindow.getAllWindows()[0].setSize(windowWidth, 800)
+    }, width)
+    await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width)
+    await primeOverflowingThread(page)
+    await wheelThreadToTop(page)
+
+    const trigger = page.getByRole('button', { name: 'More actions', exact: true })
+    const menu = page.getByRole('menu')
+    await trigger.click()
+    await expect(menu).toBeVisible()
+
+    const expectUncovered = async (): Promise<void> => {
+      const samples = await menu.evaluate((panel) => {
+        const box = panel.getBoundingClientRect()
+        const divider = document.querySelector('.conversation__overflow-rule')?.getBoundingClientRect()
+        const thread = document.querySelector('.conversation__thread')?.getBoundingClientRect()
+        if (!divider || !thread) throw new Error('missing divider or scrollport')
+        const ys = [box.top + 1, divider.top + divider.height / 2, box.bottom - 1]
+        for (const row of panel.querySelectorAll('[role="menuitem"]')) {
+          const rect = row.getBoundingClientRect()
+          ys.push(rect.top + rect.height / 2)
+        }
+        return {
+          crossesDivider: box.top < divider.top && box.bottom > divider.bottom,
+          coversThread: box.bottom > thread.top,
+          coversMessage: Array.from(document.querySelectorAll('.bubble')).some((bubble) => {
+            const message = bubble.getBoundingClientRect()
+            return message.top < box.bottom && message.bottom > Math.max(box.top, thread.top)
+              && message.left < box.right && message.right > box.left
+          }),
+          // Hit-testing follows paint order. Probe the surface padding as well as every row;
+          // a visible bounding box alone passes when the opacity divider paints over it.
+          uncovered: ys.flatMap((y) => [box.left + 8, box.left + box.width / 2, box.right - 8]
+            .map((x) => panel.contains(document.elementFromPoint(x, y))))
+        }
+      })
+      expect(samples.crossesDivider).toBe(true)
+      expect(samples.coversThread).toBe(true)
+      expect(samples.coversMessage, 'a real message paints behind the menu').toBe(true)
+      expect(samples.uncovered.every(Boolean), 'the entire dropdown paints above intersecting content').toBe(true)
+    }
+    await expectUncovered()
+
+    const menuBox = await rectOf(menu)
+    const triggerBox = await rectOf(trigger)
+    expect(wholePixels(menuBox.y)).toBe(wholePixels(triggerBox.y + triggerBox.height))
+    expect(wholePixels(menuBox.x + menuBox.width)).toBe(wholePixels(triggerBox.x + triggerBox.width))
+    expect(menuBox.x).toBeGreaterThanOrEqual(0)
+    expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(width)
+    await expect(menu).toHaveClass('composer-options')
+    await expect(menu.locator('[aria-current]')).toHaveCount(0)
+
+    const threadBox = await rectOf(page.locator('.conversation__thread'))
+    await page.mouse.move(threadBox.x + 16, threadBox.y + threadBox.height / 2)
+    // Keep the long first message under the panel instead of landing in a gap between rows.
+    await page.mouse.wheel(0, 40)
+    await expect.poll(() => scrollTopOf(page)).toBeGreaterThan(0)
+    await expectUncovered()
+    expect(await rectOf(menu)).toEqual(menuBox)
+    await page.screenshot({ path: `/tmp/builder-1542-${width}-scroll-menu.png`, animations: 'disabled' })
+
+    await page.keyboard.press('Escape')
+    await expect(menu).toHaveCount(0)
+    await expect(trigger).toBeFocused()
+    await trigger.press('Space')
+    const rows = menu.getByRole('menuitem')
+    await expect(rows).toHaveText(['Channel info', 'Run configuration', 'Background tasks'])
+    await expect(rows.nth(0)).toBeFocused()
+    await page.keyboard.press('ArrowUp')
+    await expect(rows.nth(2)).toBeFocused()
+    await page.keyboard.press('ArrowDown')
+    await expect(rows.nth(0)).toBeFocused()
+    await page.keyboard.press('ArrowDown')
+    await expect(rows.nth(1)).toBeFocused()
+    await page.keyboard.press('ArrowDown')
+    await expect(rows.nth(2)).toBeFocused()
+    await page.keyboard.press('Space')
+    await expect(page.getByRole('dialog', { name: 'Background tasks', exact: true })).toBeVisible()
+    await expect(menu).toHaveCount(0)
+    await page.keyboard.press('Escape')
+
+    await trigger.press('Enter')
+    await expect(rows.nth(0)).toBeFocused()
+    await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('Enter')
+    const sheet = page.getByRole('dialog', { name: 'Run configuration', exact: true })
+    await expect(sheet).toBeVisible()
+    await expect(menu).toHaveCount(0)
+
+    // Programmatic opening keeps the sheet mounted: an ordinary outside click would dismiss
+    // one of these surfaces before their stacking relationship could be tested.
+    await trigger.evaluate((button: HTMLButtonElement) => button.click())
+    await expect(menu).toBeVisible()
+    const overlayWins = await menu.evaluate((panel) => {
+      const box = panel.getBoundingClientRect()
+      return Boolean(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+        ?.closest('.status-sheet-overlay'))
+    })
+    expect(overlayWins, 'the sheet scrim stays above the open dropdown').toBe(true)
+
+    await sheet.getByRole('button', { name: 'Close', exact: true }).click()
+    await expect(sheet).toHaveCount(0)
+    await trigger.click()
+    await rows.nth(0).click()
+    const infoSheet = page.getByRole('dialog', { name: SEEDED_ROW.name ?? '', exact: true })
+    await expect(infoSheet).toBeVisible()
+    await expect(menu).toHaveCount(0)
+    await infoSheet.getByRole('button', { name: 'Edit chat', exact: true }).click()
+    await expect(page.getByRole('dialog', { name: 'Edit chat', exact: true })).toBeVisible()
+    await trigger.evaluate((button: HTMLButtonElement) => button.click())
+    await expect(menu).toBeVisible()
+    expect(await menu.evaluate((panel) => {
+      const box = panel.getBoundingClientRect()
+      return Boolean(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+        ?.closest('.rename-conversation-overlay'))
+    }), 'the dialog scrim stays above the open dropdown').toBe(true)
   })
 }

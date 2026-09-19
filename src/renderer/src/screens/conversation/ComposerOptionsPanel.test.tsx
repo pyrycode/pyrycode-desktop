@@ -250,6 +250,24 @@ describe('ComposerOptionsMenu — the interaction container, collapsed (#840)', 
     expect(markup).not.toContain('composer-options__item')
     expect(countOf(markup, '<button')).toBe(1)
   })
+
+  it('supports a named icon trigger with bottom-end placement', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerOptionsMenu
+        options={OPTIONS}
+        currentId={null}
+        onSelect={noop}
+        ariaLabel="More actions"
+        triggerAriaLabel="More actions"
+        triggerContent={<span aria-hidden="true">⋮</span>}
+        triggerClassName="conversation__overflow-trigger"
+        placement="bottom-end"
+      />
+    )
+    expect(markup).toContain('class="composer-options-anchor composer-options-anchor--bottom-end"')
+    expect(markup).toContain('aria-label="More actions"')
+    expect(markup).toContain('aria-expanded="false"')
+  })
 })
 
 // #681 — the optional `unavailable` marking. The affordance's own end-to-end proof (a published list

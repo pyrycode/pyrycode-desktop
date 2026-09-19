@@ -1,7 +1,7 @@
 # Conversation shell — composer options panel surface
 
 The shared panel surface, its placement arithmetic, its keyboard contract and its right-edge clamp — the
-piece every footer menu and the slash-command type-ahead mount on top of.
+piece every footer menu, the messaging top-bar menu and the slash-command type-ahead use.
 
 Part of [Composer options panel](conversation-shell-composer-options.md); see that document for the
 type-ahead sections built on this surface, and [Conversation shell](conversation-shell.md) for the screen
@@ -9,10 +9,13 @@ overall.
 
 ## Composer options panel (#838, placed #839, keyboard-driven since #840, first live mount since #680, right-edge clamp wired since #847)
 
-The one panel surface that all remaining footer slots and one message-box consumer open rather than
-each building its own: Actions (#680, landed), permission mode (#682), model and effort (#683), and
-the slash-command type-ahead (split from #694 into #939's decisions plus #940's mount, both landed —
-see [Slash command type-ahead](conversation-shell-composer-options-slash-type-ahead.md)). #838 shipped only the panel's **resting appearance** — its surface,
+The shared surface serves Actions, permission mode, model and effort in the footer,
+the [messaging top bar](conversation-shell-chrome.md#structure), and the
+[slash-command type-ahead](conversation-shell-composer-options-slash-type-ahead.md).
+`ThreadOverflowMenu` uses `ComposerOptionsMenu` with `currentId={null}` for its three
+actions, so it inherits the same dark surface, 6px corners, body-small Primary text,
+28px rows, 12px horizontal insets, hover and focus treatment without a selected-value
+highlight. #838 shipped only the panel's **resting appearance** — its surface,
 its rows, its one new colour token — with no host anywhere in the app yet. #839 placed it in the
 footer; #840 completed the interaction — opening, dismissing and driving it from the keyboard. The
 panel shipped feature-complete but dormant across all three tickets: nothing mounted
@@ -38,15 +41,13 @@ export interface ComposerOptionsPanelProps {
   onSelect: (id: string) => void
   ariaLabel: string
   focusedIndex: number       // #840: the roving-tabindex row — required, like every other prop
-  panelRef?: Ref<HTMLDivElement>  // #840: optional, `ThreadOverflowMenuView`'s `triggerRef` convention
+  panelRef?: Ref<HTMLDivElement>  // optional: static renders cannot exercise a ref
 }
 ```
 
-A pure view — props in, markup out, no state, no effect, no store read, no `window.pyry` — the
-`ThreadOverflowMenuView`/`ComposerSendButton` posture, and every prop is required (`ConversationScreen.tsx:2033`'s
-"a view that cannot answer is a bug" rule) except `panelRef`, added alongside `focusedIndex` in #840 and
-optional for the same reason `ThreadOverflowMenuView`'s `triggerRef` is: an ordinary prop rather than
-`forwardRef`, omitted in tests since a static render cannot exercise a ref anyway. `id` is separate from
+A pure view — props in, markup out, no state, no effect, no store read, no `window.pyry` —
+with required rendering and action props. `panelRef` is optional, an ordinary prop rather
+than `forwardRef`, omitted in static tests because they cannot exercise a ref. `id` is separate from
 `label` because #683's model menu shows `Opus 5` for `claude-opus-5` and #682's permission menu shows
 `Accept edits` for `acceptEdits`; matching on the label would force both to invent a lookup.
 `currentId: string | null`, not optional — `null` is "a menu of commands is a list of actions rather
@@ -54,7 +55,7 @@ than a choice: same panel, no row highlighted," and a `currentId` matching no op
 identical no-highlight branch, so a stale model id or a renamed effort level can't crash the panel.
 There is still no `open` prop and no trigger on the view itself: the trigger's *behaviour* now belongs
 to `ComposerOptionsMenu` (below), and mounting the view *is* opening — the container writes
-`{open && <ComposerOptionsPanel … />}`, the same seam `ThreadOverflowMenuView` uses.
+`{open && <ComposerOptionsPanel … />}` for footer and top-bar consumers alike.
 
 Markup is one `<button role="menuitem" type="button">` per option in array order (the panel never
 sorts), inside a `<div className="composer-options" role="menu" aria-label={ariaLabel}>`. The current
@@ -106,13 +107,14 @@ or minimum width — so the panel's resting size stays independent of whatever h
 the drawn 81px is that particular menu's longest label, not a size (#683's model menu will be much
 wider). #838 shipped no `position`, no offset and no `z-index` anywhere in the block (AC5) —
 deliberately: the panel cannot be an in-flow child of `.composer__footer`, which holds a hard
-`height: 20px`, and #839 (below) is the ticket that fills the gap in. The **no-`z-index`** half holds
-unchanged even once positioned, for the reason `.conversation__overflow`'s comment records at
-`conversation.css:2325-2334` (#276): a positioned element already paints above the non-positioned
-thread, and later-in-DOM overlays (the status sheets, the permission modal) keep painting above it by
-DOM order alone. This is a **new surface**, not a variant of `.conversation__overflow-menu` — only its
-button reset and its no-`z-index` reasoning are copied; none of its light-surface-card visual treatment
-is.
+`height: 20px`, and #839 (below) is the ticket that fills the gap in. The panel and footer
+anchors still have no explicit `z-index`. The top-bar consumer requires a different
+stacking relationship: `.composer-options-anchor--bottom-end` has `z-index: 1` so its
+whole panel paints above the later opacity divider and positioned message content.
+`.status-sheet-overlay` has `z-index: 2`, matching the existing dialog overlays above
+menus. Raising only this anchor preserves the title row's layout and avoids a stacking
+context on the whole header. The old outlined `.conversation__overflow-menu` surface
+has been removed; the top bar uses this same panel.
 
 **One shipped deviation from the architecture spec, confirmed correct in review.** The spec read the
 node as drawing no radius; `get_design_context` on `121:3879` returns `rounded-[6px]` on the frame
@@ -129,7 +131,7 @@ design authority cited; `get_design_context` returns `px-[12px]` on every Option
 `padding: 0 var(--space-3)` is confirmed as the literal translation and that open question is closed
 rather than carried into #839.
 
-**Testing** is `renderToStaticMarkup` only (`ComposerOptionsPanel.test.tsx`) — no jsdom in this repo,
+**Unit testing** uses `renderToStaticMarkup` (`ComposerOptionsPanel.test.tsx`) — no jsdom in this repo,
 so nothing here can click, focus or measure. AC4 (the current-value modifier) is the only criterion
 with a vitest detector; AC2/AC3/AC5 are stylesheet declarations, and per the ruling at
 `ConversationScreen.test.tsx:1128-1132` the tests pin that the class hooks are *on* the elements rather
@@ -141,8 +143,8 @@ harness (not part of the diff) and measured the real computed styles — 144×83
 throughout. A reusable technique for a future renderer ticket whose ACs are pure CSS and whose
 component has no live host yet.
 
-One lesson worth carrying to a future row-button component: `.conversation__overflow-item` (the reset
-this panel's rows clone) declares `width: 100%` alongside its horizontal padding. Copying that
+One lesson worth carrying to a future row-button component: the retired overflow menu's
+reset declared `width: 100%` alongside horizontal padding. Copying that
 literally onto `.composer-options__item` would have overflowed the panel — with no global `box-sizing`
 reset, `width: 100%` plus `padding: 0 var(--space-3)` adds the row's 24px on *top of* the panel's
 `max-content` width. The flex column's default `align-items: stretch` already runs each row the
@@ -151,15 +153,14 @@ panel's full width for free, so the correct row rule declares no `width` at all.
 Code review PASS, two non-blocking NITs (the corner-clip magnitude's backdrop description, and the
 test's coupling to exact JSX attribute order) — see [PR #841](https://github.com/pyrycode/pyrycode-desktop/pull/841).
 
-**Placement (#839).** Three declarations appended to the `.composer-options` rule
-(`conversation.css:3158-3160`), resolving against a new sibling wrapper block,
-`.composer-options-anchor` (`conversation.css:3248-3251` — its own block rather than
+**Footer placement.** `ComposerOptionsMenu` defaults its optional
+`placement: 'footer' | 'bottom-end'` prop to `'footer'`. The four footer consumers omit
+it and keep their upward placement and window clamp. The `.composer-options` offsets
+resolve against `.composer-options-anchor` (its own block rather than
 `.composer-options__anchor`, since it wraps a *trigger* the panel knows nothing about, and #940 in fact
 put it on the message box rather than on a button — see below for why it did not reuse this class):
 
-- **`bottom: 100%`** puts the panel's bottom edge on the anchor's top edge — AC1, with no gap. This is
-  `.conversation__overflow-menu`'s `top: 100%` (`conversation.css:2405`) mirrored, the repo's one other
-  anchored overlay and the idiom copied here.
+- **`bottom: 100%`** puts the panel's bottom edge on the anchor's top edge, with no gap.
 - **`left: calc(-1 * var(--space-3) - var(--composer-options-shift, 0px))`** — written as the negation
   of `--space-3`, never as `-12px`, because the alignment number *is*
   `.composer-options__item`'s left padding: a footer button's label starts at the button's own left
@@ -196,6 +197,17 @@ put it on the message box rather than on a button — see below for why it did n
   must carry a unit, or the whole `left` declaration goes invalid at computed-value time and the panel
   falls to `left: auto`.
 
+**Top-bar placement.** `placement="bottom-end"` adds
+`composer-options-anchor--bottom-end`, a non-shrinking anchor around the existing 24px
+icon button. Its direct panel overrides only offsets: `top: 100%; right: 0;
+bottom: auto; left: auto`. The panel starts at the button's bottom edge and aligns with
+its right edge, rather than the full header's edges. The shared clamp hook still runs
+on open and resize, but its `--composer-options-shift` has no effect on this placement's
+`left: auto`. The top bar's three fixed labels fit within the window at the 800px floor;
+this is not a general width clamp for arbitrary bottom-end consumers. Keep the
+outside-click ref on the shared anchor, so the adjacent conversation title dismisses
+the menu. Only the title clips; clipping the header row would also cut off the panel.
+
 **Why the wrapper is `display: flex` with no padding and no border.** A block wrapper around an
 inline-block `<button>` establishes an inline formatting context, and the line box's strut leading
 makes the wrapper measurably taller than the button — breaking AC1's "the button's top edge" and
@@ -226,14 +238,15 @@ window width, so the branch stays unobservable either way.
 
 **Interaction (#840).** Two pieces complete the panel: `composerOptionsKeyboard.ts`, a DOM-free total
 function holding the whole keyboard contract, and `ComposerOptionsMenu`, an exported container in
-`ComposerOptionsPanel.tsx` beside the view — the `ThreadOverflowMenuView`/`ThreadOverflowMenu` split
-(`ConversationScreen.tsx:2653-2710`) extended rather than reinvented. Unlike `ThreadOverflowMenu` it is
-exported: #680, #682 and #683 each import it from another file, so the ARIA contract lands once instead
-of three times. **The trigger's behaviour and ARIA are the container's — `aria-haspopup="menu"`,
+`ComposerOptionsPanel.tsx` beside the view. Footer controls and `ThreadOverflowMenu`
+share that container, so focus, activation and dismissal have one implementation.
+**The trigger's behaviour and ARIA are the container's — `aria-haspopup="menu"`,
 `aria-expanded`, the toggle `onClick` — its label and appearance stay the consumer's**, passed in as
-`triggerContent` and `triggerClassName`. No `aria-label` goes on the trigger: `triggerContent` is
-visible text ("Max", "Opus 5"), and an `aria-label` would override it and break WCAG 2.5.3's
-label-in-name. State is component-local `useState` (`open`, `focusedIndex`), never the session store —
+`triggerContent` and `triggerClassName`. Text triggers omit the optional `triggerAriaLabel`
+and take their accessible name from visible text. Icon-only consumers supply a
+client-owned name: the top bar passes `triggerAriaLabel="More actions"` alongside its
+decorative SVG. The separate `ariaLabel` names the menu panel. State is component-local
+`useState` (`open`, `focusedIndex`), never the session store —
 [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md)'s `sheetOpen` precedent —
 so it resets to closed on remount for free.
 
@@ -245,7 +258,7 @@ addressable. Four decisions were settled explicitly rather than left to the impl
 - **Focus opens on the current option, or the first when there is none** —
   `initialFocusedOptionIndex(options, currentId)`, one `findIndex` with `-1` falling back to `0`. A value
   menu (#682, #683) opens where the arrows should be relative to what it currently reads; a command list
-  (#680, the type-ahead — `currentId: null`) opens on its first entry; a **stale** id lands on the first entry
+  (Actions, the top bar or type-ahead — `currentId: null`) opens on its first entry; a **stale** id lands on the first entry
   through the identical branch, no special case, mirroring how the view already handles a stale
   `currentId` in its markup.
 - **Arrows wrap.** `ArrowDown`/`ArrowUp` step by ±1 through `(((focusedIndex + delta) % optionCount) +
@@ -263,22 +276,19 @@ addressable. Four decisions were settled explicitly rather than left to the impl
   while it stays open is a deliberately open question for #680 to decide on a real user, not invented
   glue here.
 
-**One keydown path, not two — a deliberate deviation from `ThreadOverflowMenu`.** That container
-dismisses on Escape through a *document* listener because it never moves focus into its menu, so a
-React handler on the wrapper would never see the key. `ComposerOptionsMenu` does move focus in via a
-plain `useEffect` (`querySelectorAll('.composer-options__item')[focusedIndex]?.focus()`, optional-chained
-throughout), so its own `onKeyDown` on the anchor `<div>` sees every keystroke — the trigger's and the
-rows' both — and `event.preventDefault()` runs for every outcome except `ignore`, which is what stops
-the arrows scrolling the thread and stops Enter double-firing. A document `mousedown` listener still
-handles outside click, kept verbatim from `ThreadOverflowMenu`'s shape (attached only while open, torn
-down on close and unmount, target narrowed with `instanceof Node`, read through
-`DocumentEventMap['mousedown']` for the same shadowing reason `ConversationScreen.tsx:2681-2683`
-records). One accepted deviation from a literal reading of "every close path returns focus to the
-trigger": `close()`'s `.focus()` runs before the browser's own mousedown focus action, so on the
-outside-click path focus lands where the user clicked rather than on the trigger. Code review
-considered and did not flag this — the alternative (`preventDefault` in that handler) would also
-suppress caret placement when the outside click is into the message box, the most likely outside click
-there is, and `ThreadOverflowMenu` has shipped the identical shape since its own AC.
+**One keydown path.** `ComposerOptionsMenu` moves focus through a plain `useEffect`
+(`querySelectorAll('.composer-options__item')[focusedIndex]?.focus()`). Its anchor's
+React `onKeyDown` handles keys from both trigger and rows, preventing the default for
+every outcome except `ignore` so arrows do not scroll the thread and Enter does not
+double-fire. The top bar now uses this same path: Enter/Space on More actions opens
+with Channel info already focused; no Tab is needed to reach the first action. Escape
+closes and returns focus to the trigger. The old top-bar document keydown listener was
+removed with its separate interaction state.
+
+A document `mousedown` listener handles outside clicks, attached only while open and
+removed on close or unmount. `close()` focuses the trigger before the browser's native
+mousedown focus action, allowing a clicked input to receive focus and caret placement.
+Preventing that default would steal focus from the control the user clicked.
 
 **Testing is split at the DOM boundary, deliberately.** `composerOptionsKeyboard.test.ts` executes the
 whole keyboard contract with no DOM, including a totality property (every `optionCount` 1–5, every
@@ -287,18 +297,24 @@ markup half extends `ComposerOptionsPanel.test.tsx` with a `focusedIndex` parame
 (defaulted, so the eight pre-existing tests are untouched — the proof the change is additive), plus one
 static-render assertion of the container's *collapsed* markup (`aria-haspopup="menu"`,
 `aria-expanded="false"`, no `role="menu"` anywhere — reachable because `useState(false)` is what a
-static render sees). **What has no detector**: the container's `useState` transitions, the document
-listener and the focus calls are untested reviewed glue, the same ruling `ConversationScreen.test.tsx:2523-2528`
-gives #276's container — `environment: 'node'` fires no clicks and runs no effects, and adding jsdom to
-reach them is the separate, deliberate decision CLAUDE.md reserves. The in-app interaction proof rides
-\#680, the first consumer with a real trigger in a real footer.
+static render sees). Static tests also pin the optional icon name and bottom-end class.
+They cannot exercise `useState` transitions, document listeners or focus calls:
+`environment: 'node'` fires no clicks and runs no effects. Those belong to Playwright.
+`e2e/composer-actions.spec.ts` retains the footer activation/dismissal proof, and
+`e2e/composer-options-clamp.spec.ts` checks its label alignment and
+resize clamp. `e2e/chat-top-bar-geometry.spec.ts` covers the top-bar menu at 800px and
+1280px: alignment, containment, first-row focus, arrow wrap, activation of all three
+destinations, Escape and outside/title dismissal. Its
+[paint-order probes](conversation-shell-chrome.md#layout-contract) detect divider and
+message occlusion that visibility and geometry alone missed, and keep a menu mounted
+under a sheet or dialog to prove overlay precedence.
 
 Code review PASS with one deferred SHOULD FIX: the `switch (outcome.type)` in `handleKeyDown` has no
 `default: return assertNever(outcome)`, the exhaustiveness-guard convention this repo otherwise applies
 uniformly (`composerSend.ts`, `messageViewModel.ts`, `pairingState.ts`, and others). Its absence is
 silent today — every outcome is handled — but a fifth outcome added later (the module's own docblock
 names Home/End as a two-line follow-up) would be swallowed by the switch with no type error and no test
-catching it, since the container is untested-by-design. The PR recorded folding the guard into #680's
+catching it at the unit tier, since static renders cannot exercise the handler. The PR recorded folding the guard into #680's
 first live mount as the intended timing — **that did not happen**: #680's diff touches no line of
 `ComposerOptionsPanel.tsx` (confirmed against its merged diff and its code review, PR #848, which is
 silent on the guard). The gap is still open for whichever ticket next touches this file. Two accepted
@@ -386,7 +402,7 @@ addition, `composerOptionsMaxWidthPx`, does not touch these four comments.)
 `ComposerOptionsPanelOption` grows one **optional** field, `unavailable?: boolean`, its first addition
 since #838 shipped the two-field shape — the authorization `ComposerActionsMenu.tsx` had stood asking for
 since #680, raised and granted on #681. Optional is what keeps this an addition rather than a migration:
-the four other consumers (permission mode, model, effort, the slash-command type-ahead) pass nothing, so
+the other consumers (permission mode, model, effort, the top bar and slash-command type-ahead) omit it, so
 `isUnavailable` is `false` for every option they render and the three markup changes below are each
 absent — the ordinary-row runs stay the exact strings seven spec files already match
 (`class="composer-options__item"` and `class="composer-options__item composer-options__item--current"`).
@@ -459,4 +475,4 @@ for that half, since the decision itself is not this file's.
 
 Code review (self-review, since #681 was builder-reviewed) PASS, one SHOULD FIX recorded for a future
 pass: state the "hidden text, never an attribute" constraint directly in this file's own comment where the
-four other consumers read it, rather than only in the ticket record — not yet applied.
+other consumers read it, rather than only in the ticket record — not yet applied.

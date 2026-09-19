@@ -36,7 +36,6 @@ import {
   ContextUsageReading,
   isTurnRunning,
   ComposerSendButton,
-  ThreadOverflowMenuView,
   ChannelInfoSheetView,
   requestArchiveConversation,
   requestDeleteConversation,
@@ -4389,76 +4388,6 @@ function createdPayload(
   }
 }
 
-// #276: the thread top-bar overflow menu. ThreadOverflowMenuView is the pure, exported view (the
-// ComposerSendButton / ThinkingIndicator pattern) — server-render it with an injected `open` boolean to
-// prove the collapsed trigger and the opened menu surface without a store or a DOM harness. The
-// interaction shell (open/close toggle, Escape / outside-click dismiss, focus-return) lives in the
-// in-file ThreadOverflowMenu container: it is untested reviewed glue, exactly like Composer.handleKeyDown
-// and Composer.handleSubmit — the `node` env fires no clicks and runs no effects. (UnpairControl's phase
-// transitions were the other example until #1061 deleted that control.)
-describe('ThreadOverflowMenuView — the thread overflow menu (#276, #962)', () => {
-  const noop = (): void => {}
-  const openMenu = (): string =>
-    renderToStaticMarkup(
-      <ThreadOverflowMenuView
-        open={true}
-        onToggle={noop}
-        onSelectChannelInfo={noop}
-        onSelectRunConfiguration={noop}
-        onSelectBackgroundTasks={noop}
-      />
-    )
-
-  it('renders a collapsed icon-only trigger advertising a menu popup, no surface (AC1/AC2)', () => {
-    const markup = renderToStaticMarkup(
-      <ThreadOverflowMenuView
-        open={false}
-        onToggle={noop}
-        onSelectChannelInfo={noop}
-        onSelectRunConfiguration={noop}
-        onSelectBackgroundTasks={noop}
-      />
-    )
-    // The icon-only trigger: a client-owned accessible name, the haspopup=menu affordance, and the
-    // collapsed state (React stringifies aria booleans under renderToStaticMarkup → "false").
-    expect(markup).toContain('aria-label="More actions"')
-    expect(markup).toContain('aria-haspopup="menu"')
-    expect(markup).toContain('aria-expanded="false"')
-    // Closed: the menu surface is not rendered, and none of the three items' copy is on screen.
-    expect(markup).not.toContain('role="menu"')
-    expect(markup).not.toContain('Channel info')
-    expect(markup).not.toContain('Run configuration')
-    expect(markup).not.toContain('Background tasks')
-  })
-
-  // #962 AC2. This describe is the ONLY surface that can see the shipped copy and the shipped order:
-  // the container is in-file, the screen gates the menu on `onBack`, and the `node` env fires no
-  // clicks — so a bare `<ConversationScreen />` can never open the menu. The two new labels are also
-  // the accessible names four e2e opens locate by, which is why they are literals in the view rather
-  // than data the container injects: a typo has to redden a unit assertion, not just time out a drive.
-  it('exposes three menuitems — Channel info, Run configuration, Background tasks (AC2)', () => {
-    const markup = openMenu()
-    // The trigger now advertises the expanded state…
-    expect(markup).toContain('aria-expanded="true"')
-    // …and the menu surface exposes role=menu with one menuitem per action. A menuitem's accessible
-    // name is its CONTENT, so the two retired triggers' aria-labels land here as text, not attributes.
-    expect(markup).toContain('role="menu"')
-    expect(markup).toContain('Channel info')
-    expect(markup).toContain('Run configuration')
-    expect(markup).toContain('Background tasks')
-    // Exactly three: a fourth item, or an item that lost its role, fails here.
-    expect(markup.split('role="menuitem"').length - 1).toBe(3)
-  })
-
-  // AC2's ordering, stated as document order. Channel info keeps the first slot it has held since
-  // #276; the two new items follow it in the order the ticket fixes.
-  it('orders the items Channel info, then Run configuration, then Background tasks (AC2)', () => {
-    const markup = openMenu()
-    expect(markup.indexOf('Channel info')).toBeLessThan(markup.indexOf('Run configuration'))
-    expect(markup.indexOf('Run configuration')).toBeLessThan(markup.indexOf('Background tasks'))
-  })
-})
-
 // #365: the Channel Info sheet. ChannelInfoSheetView is the pure, exported view (the StatusSheet /
 // ThreadOverflowMenuView pattern) — server-render it with an injected conversation to prove the chrome,
 // the populated About / Channel ID footer, the null-conversation placeholder, the empty Actions slot,
@@ -5534,7 +5463,7 @@ describe('ConversationScreen — store binding', () => {
   // per-screen controls that never shared this gate.) When onBack is provided the trailing more_vert trigger
   // renders (its popup advertised via aria-haspopup="menu"); it starts closed, so no menu surface is
   // present at first paint (the open toggle is untested useState glue — effects don't run under server
-  // render). The pure view's open/closed contract is proven in the ThreadOverflowMenuView describe above.
+  // render). The opened menu is exercised in the top-bar Playwright spec.
   it.each([
     ['Current channel', 'Current channel'],
     [null, 'Unnamed conversation'],
@@ -5557,7 +5486,9 @@ describe('ConversationScreen — store binding', () => {
 
   it('renders the overflow trigger, collapsed, when onBack is provided (the shell-mounted thread, AC1)', () => {
     const markup = renderToStaticMarkup(<ConversationScreen onBack={() => {}} />)
-    expect(markup).toContain('conversation__overflow')
+    expect(markup).toContain('composer-options-anchor composer-options-anchor--bottom-end')
+    expect(markup).toContain('aria-label="More actions"')
+    expect(markup).toContain('aria-expanded="false"')
     expect(markup).toContain('aria-haspopup="menu"')
     // Closed at first paint — no menu surface yet.
     expect(markup).not.toContain('role="menu"')

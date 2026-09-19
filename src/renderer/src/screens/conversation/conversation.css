@@ -3866,6 +3866,7 @@
    position: relative containing block), not a portal. flex-end anchors the panel to the bottom. */
 .status-sheet-overlay {
   position: absolute;
+  z-index: 2;
   inset: 0;
   display: flex;
   flex-direction: column;
@@ -4626,10 +4627,8 @@
    driving the old element would have failed OPEN rather than red. Fifteen specs read this thread and
    `thread-scroll-pin` drives it exactly that way; nothing here needed them touched.
 
-   NO explicit z-index by design: a positioned element already paints above the non-positioned message
-   thread, and the status-sheet / permission-modal overlays — also positioned but later in the child list —
-   keep painting above this menu by DOM order. A competing z-index here would lift the menu above those
-   overlays; the menu and a sheet/modal never coexist anyway (an outside-click dismisses the menu).
+   The shared dropdown's bottom-end anchor paints at level 1 above the divider and thread;
+   status sheets and existing dialog overlays paint at level 2 above menus.
 
    The column stretches the title/menu row and divider across the content box. The bar's 16px bottom
    padding keeps the first message at the existing inset after the row grew from 24px to 28px. */
@@ -4662,25 +4661,6 @@
   line-height: var(--text-title-large-line);
   letter-spacing: var(--text-title-large-tracking);
   font-weight: var(--text-title-large-weight);
-}
-
-/* THE ANCHOR (#1444) — a shrink-wrapped box around the trigger and its menu, at the bar's trailing edge.
-   It exists for two reasons that must not be separated, which is why it is one element and not two.
-
-   THE MENU'S CONTAINING BLOCK. `.conversation__overflow-menu` is `top: 100%; right: 0`, so it needs a
-   relative box that is exactly the 24px button; hung off the bar it would drop clear of the rule and the
-   bar's 16px foot before it began.
-
-   ⭐ AND THE OUTSIDE-CLICK REF. `ThreadOverflowMenu`'s dismissal is `!wrapperRef.current.contains(target)`,
-   so whatever element that ref holds defines "inside the menu". On the bar — a full-width element since
-   this ticket — a mousedown anywhere across the pane's width would have counted as inside and the menu
-   would have stopped dismissing. No shipped spec would have caught it: the twelve that click this trigger
-   all go on to click a menu ITEM. e2e/chat-top-bar-geometry.spec.ts is where that click now lives.
-   Moving the ref off this element requires moving the menu's anchor with it. */
-.conversation__overflow-anchor {
-  flex: 0 0 auto;
-  position: relative;
-  display: flex;
 }
 
 /* THE RULE (`Rectangle` 497:1899) — 1px, --space-4 under the content row, spanning the card's
@@ -4731,55 +4711,6 @@
 
 .conversation__overflow-icon {
   display: block;
-}
-
-/* Known visual deviation: the divider can paint across this existing menu; #1542 owns its layering
-   fix and migration to the shared footer dropdown.
-   The opened menu surface — no Figma frame (the mobile file draws a native Android overflow menu, the
-   documented #148 gap), so an M3-idiom dropdown: right-anchored below the trigger (top: 100% of
-   `.conversation__overflow-anchor`, the 24px box around the trigger since #1444 — read that rule before
-   moving either offset), a surface-container card with an elevation border. The .status-sheet panel surface
-   treatment (--color-surface-container-low fill, --radius-md corners, --color-outline-variant border) —
-   no new color literals. */
-.conversation__overflow-menu {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  min-width: 180px;
-  display: flex;
-  flex-direction: column;
-  padding: var(--space-1) 0;
-  background: var(--color-surface-container-low);
-  border: 1px solid var(--color-outline-variant);
-  border-radius: var(--radius-md);
-}
-
-/* One menu item — a full-width, left-aligned text button (label-large on-surface), gaining a surface
-   tint on hover and a focus-visible outline. The #155 Channel Info slot; later actions (#274/#153/#154)
-   add sibling rows through the same treatment. */
-.conversation__overflow-item {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  padding: var(--space-2) var(--space-4);
-  border: none;
-  background: transparent;
-  color: var(--color-on-surface);
-  cursor: pointer;
-  text-align: left;
-  font-family: var(--font-sans);
-  font-size: var(--text-label-large-size);
-  line-height: var(--text-label-large-line);
-  letter-spacing: var(--text-label-large-tracking);
-  font-weight: var(--text-label-large-weight);
-}
-
-.conversation__overflow-item:hover {
-  background: var(--color-surface-container-high);
-}
-
-.conversation__overflow-item:focus-visible {
-  outline: 1px solid var(--color-outline);
 }
 
 /* #365 — the Channel Info sheet's content classes (Figma node 20-48). The sheet reuses the
@@ -5558,14 +5489,8 @@
    positioning declarations below, against the .composer-options-anchor wrapper at the foot of this file —
    the panel cannot be an in-flow child of .composer__footer, which holds a hard height: 20px. #840 opens it.
 
-   NO explicit z-index, for the reason .conversation__overflow's comment records above (#276): now that
-   #839 positions it, the panel already paints above the non-positioned message thread, and the status-sheet /
-   permission-modal overlays — also positioned but later in the child list — keep painting above it by DOM
-   order. A competing z-index would lift it above those overlays, which is the stacking regression.
-
-   Not a variant of .conversation__overflow-menu, whose treatment is a LIGHT surface-container card with an
-   outline border, --radius-md corners and label-large rows. Only its button reset and its no-z-index
-   reasoning are copied here; none of its visual treatment is.
+   The panel is shared by footer menus and the messaging top bar. Footer placement remains unlayered;
+   the bottom-end anchor establishes the top-bar menu's stacking level below sheets and dialogs.
 
    The fill nesting is the Figma's, collapsed: the node paints Schemes/On Primary on the frame and
    Schemes/On Primary Fixed on four of its five rows, the fifth (the current value) left unfilled to let
@@ -5631,8 +5556,8 @@
   border-radius: var(--radius-xs);
 }
 
-/* One row — the .conversation__overflow-item button reset (border, background, cursor, text-align,
-   font-family) at this panel's own geometry and type: 28px tall, body-small in --color-primary, and the
+/* One row — a reset button at the shared panel's geometry and type: 28px tall, body-small in
+   --color-primary, and the
    label inset --space-3 (12px) from the row's left edge.
 
    height: 28px as a LITERAL rather than var(--space-7) (also 28px), per the ruling at 753 above: a
@@ -5646,7 +5571,7 @@
    of any label, and its 4px right gap is slack. Left-only padding would set the longest label flush
    against the panel edge.
 
-   NO width: 100%, deliberately unlike .conversation__overflow-item: the panel's default align-items
+   NO width: 100%: the panel's default align-items
    stretch already runs each row its full width, and a content-box `width: 100%` would add these 24px of
    padding ON TOP of the panel's width and overflow it. white-space: nowrap keeps a row on one line, which
    is also what makes the panel's max-content width the longest label rather than a wrap point. */
@@ -5822,12 +5747,28 @@
    trigger exactly as before.
 
    Scoped by its wearers rather than by the row, which is why the declaration is safe here: this class is
-   rendered in exactly one place (ComposerOptionsPanel) and worn by exactly the four footer triggers —
-   ConversationScreen's type-ahead row deliberately does not wear it. */
+   rendered in ComposerOptionsMenu for the footer triggers and top-bar icon. The bottom-end modifier
+   keeps the icon from shrinking. ConversationScreen's type-ahead row does not wear it. */
 .composer-options-anchor {
   position: relative;
   display: flex;
   min-width: 0;
+}
+
+/* The top-bar icon anchor cannot shrink. Level 1 lifts its panel over the later opacity divider
+   and positioned thread content; status sheets and existing dialog overlays use level 2. */
+.composer-options-anchor--bottom-end {
+  flex: 0 0 auto;
+  z-index: 1;
+}
+
+/* Right alignment keeps the three fixed action labels inside the window at its 800px minimum.
+   Footer offsets and their measured shift remain the default on every other consumer. */
+.composer-options-anchor--bottom-end > .composer-options {
+  top: 100%;
+  right: 0;
+  bottom: auto;
+  left: auto;
 }
 
 /* #906 — the question panel (Figma node 347:6913, the single-question instance), drawn in the composer's

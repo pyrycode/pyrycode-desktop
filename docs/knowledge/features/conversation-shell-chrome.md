@@ -13,7 +13,7 @@ ConversationScreen            .conversation        (flex column, full height, po
 ├── ThreadOverflowMenu         .conversation__overflow (in-flow top bar, gated on onBack)
 │   ├── Title/menu row         .conversation__overflow-content (28px, top-aligned)
 │   │   ├── Current name       .conversation__overflow-title (one line, ellipsis)
-│   │   └── Trigger + menu     .conversation__overflow-anchor (24×24px anchor)
+│   │   └── ComposerOptionsMenu .composer-options-anchor--bottom-end (24×24px icon anchor)
 │   └── Divider                .conversation__overflow-rule (full-width, 1px)
 ├── ConnectionBannerControl    .conversation__banner (null unless not-connected; below the top bar)
 ├── (WorkspaceChip used to mount here, #278 — deleted outright by #1486; the empty thread's copy is now the first thing below the banner)
@@ -43,12 +43,27 @@ give Roboto Regular, 22px/28px, zero tracking and On Primary Container (`#cfe4ff
 
 Only the title clips: `flex: 1 1 0`, `min-width: 0`, `white-space: nowrap` and ellipsis
 let it shrink beside the non-shrinking anchor, with a 16px gap. Clipping the whole row
-would also clip the popup. The 24px anchor owns both popup positioning
-(`top: 100%; right: 0`) and the outside-click ref; moving that ref onto the full row
-would make title clicks count as inside the menu. Title clicks and Escape dismiss it,
-returning focus to the trigger. Enter/Space opens the menu, and Tab reaches its actions.
-The existing divider can paint across the open menu; the layering fix and shared-dropdown
-migration are tracked by [#1542](https://github.com/pyrycode/pyrycode-desktop/issues/1542).
+would also clip the popup. `ThreadOverflowMenu` mounts the shared
+[`ComposerOptionsMenu`](conversation-shell-composer-options-panel.md) with
+`placement="bottom-end"` and the existing icon named by `triggerAriaLabel="More actions"`.
+The panel opens immediately below the 24px button, aligned to its right edge
+(`top: 100%; right: 0`); its three fixed labels fit inside the window at the 800px minimum.
+The shared anchor owns the outside-click ref as well as positioning. Moving that ref
+onto the full row would make title clicks count as inside the menu.
+
+The menu lists Channel info, Run configuration and Background tasks in that order,
+with `currentId={null}` so no row has a selected-value highlight. Enter/Space opens
+with focus already on Channel info; Up/Down wrap, and Enter/Space activates the focused
+action, closing the menu and opening its existing sheet or panel. Escape closes and
+returns focus to More actions. Outside clicks, including the title, dismiss; clicking
+a focusable control lets that control receive focus.
+
+The divider's 60% opacity creates a stacking context that previously painted across
+Channel info even when the menu was visible and correctly positioned. The bottom-end
+anchor now has `z-index: 1`, raising its entire panel over the divider and positioned
+message content. `.status-sheet-overlay` uses `z-index: 2`, matching existing dialog
+overlays so sheets and dialogs remain above menus. The header itself gains no stacking
+context or clipping. See the [shared-menu design](../../specs/architecture/1542-shared-messaging-menu.md).
 
 `MessageBubble` and `Composer` are **in-file functions** inside `ConversationScreen.tsx` — they are tiny. (`UnpairControl` was a third until [#1061](https://github.com/pyrycode/pyrycode-desktop/issues/1061) deleted it — see [Unpair control](#unpair-control-166-deleted-by-1061) below.) `MessageThread` and `StatusSheet` are also in-file but **exported** ([#69](../codebase/69.md), [#177](../codebase/177.md)), so tests server-render them as pure views — `RepairPrompt` joined them in [#167](../codebase/167.md) and was retired, folded into `ComposerErrorSlot`, by [#963](https://github.com/pyrycode/pyrycode-desktop/issues/963); see [Re-pair control](#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963) below. `PermissionModal`/`PermissionModalView` live in their own file, `PermissionModal.tsx` ([#224](../codebase/224.md)), the same split one level up. `ConversationScreen` is the store-bound container; `MessageThread`/`StatusSheet`/`PermissionModalView` are the props-in/markup-out views — the same container/view split `PairingScreen`/`PairingView` uses ([#55](../codebase/55.md)). The load-bearing contracts are the props/types, not the file boundaries (see Seams).
 
@@ -101,6 +116,12 @@ Bubbles use `max-width: min(680px, 75%)` (not a fixed width) so they reflow as t
 [`chat-top-bar-geometry.spec.ts`](../../../e2e/chat-top-bar-geometry.spec.ts) checks the
 bar against an actually scrolling thread. At 800px and 1280px it also proves real text
 overflow beside a usable open menu; an ellipsis style alone cannot establish truncation.
+Visibility and bounding boxes likewise passed with the divider covering Channel info.
+`elementFromPoint` probes now check panel padding, every row and the divider intersection
+before and after wheel scrolling, with an assertion that a real message overlaps the
+panel. Sheet/dialog precedence needs both surfaces mounted: the spec programmatically
+opens the menu beneath an existing overlay before checking that the scrim wins the hit
+test. An ordinary outside click would dismiss the menu and make that check vacuous.
 List-reply refresh checks retain an unsent draft, distinguishing a title update from
 chat reactivation. Static renders prove the named/null/escaped text cases, but cannot
 prove these updates, geometry or dismissal; see [test boundaries](development-verification.md#what-each-test-tier-proves).
@@ -418,42 +439,27 @@ Both overlays they opened — `StatusSheet` and `BackgroundTaskPanel` — stay: 
 only surface for the model/effort/YOLO writes until #683 lands and the only home of the log-data
 download (#72), and the panel is unchanged pending #580's drawing of its final form and trigger.
 
-Both keep an entry point in the thread's overflow menu (`ThreadOverflowMenu` / `ThreadOverflowMenuView`,
-\#276 — see the [structure diagram](#structure) above and
-[Channel Info sheet](conversation-shell-session-and-channel-info.md#channel-info-sheet-365) for the
-menu's first item), which grows from one hardcoded `Channel info` item to three, in order: `Channel
-info`, `Run configuration`, `Background tasks`. The three labels are **literals inside the pure view**
-(`ThreadOverflowMenuView`), mapped from a local array rather than injected as props — deliberately: the
-container `ThreadOverflowMenu` is in-file and not exported, the screen gates the menu on `onBack`, and
-the `renderToStaticMarkup`-only unit tier fires no clicks, so this view is the only surface on which
-the unit tier can see the shipped copy and its order at all, and those two new strings are also the
-accessible names the e2e suite's re-pointed opens locate by. `ThreadOverflowMenu`'s single `select`
-became a factory (`select = (action) => () => { close; action(); returnFocus }`) so the same
-close → invoke → return-focus sequence AC2 asks for is written once and shared by all three items, and
-its three action props (`onChannelInfo`, `onRunConfiguration`, `onBackgroundTasks`) are now **required**
-rather than #276's optional `onChannelInfo?` — that optionality only ever existed because the menu
-shipped before #365 wired its one item; with all three wired at the single mount site now, a required
-prop turns a forgotten wire into a compile error instead of a menu item that silently closes and does
-nothing. None of the three items advertises `aria-haspopup="dialog"`, matching `Channel info`'s existing
-posture — a hint on two of three items and not the first would read as a difference between them, and
-the bare-tree `aria-haspopup="menu"` count assertion stays correct at 1.
+Both keep an entry point in `ThreadOverflowMenu`, following
+[Channel info](conversation-shell-session-and-channel-info.md#channel-info-sheet-365):
+Channel info, Run configuration, Background tasks. The local array now supplies stable
+ids, literal labels and callbacks to `ComposerOptionsMenu`; the former
+`ThreadOverflowMenuView`, separate interaction state and surface CSS were removed by
+[#1542](https://github.com/pyrycode/pyrycode-desktop/issues/1542). The shared container
+owns close → invoke → return-focus for all three actions. The three callback props
+(`onChannelInfo`, `onRunConfiguration`, `onBackgroundTasks`) remain required, making a
+forgotten wire a compile error. The screen still gates this in-file consumer on `onBack`;
+see [Structure](#structure) for its placement and keyboard contract.
 
 The two retired triggers' bodies moved verbatim onto the menu: `onRunConfiguration={() =>
 setSheetOpen(true)}` and `onBackgroundTasks={() => setPanelOpen(true)}` are exactly what the deleted
 `StatusRow`/`BackgroundTaskTrigger` did from their own mounts — the overlays and their `useState`
 open/closed cells ([ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md)) are
-untouched, only the affordance that flips them moved. `ThreadOverflowMenu` is itself mobile-era chrome
-that a later ticket retires together with the sheet, once #683 lands the footer's model and effort
-controls.
+untouched; the shared-menu migration retains these callbacks.
 
-**One known gap, left deliberately.** The `Background tasks` item's wire (`onBackgroundTasks={() =>
-setPanelOpen(true)}`) has no test at any tier — the unit tier sees the menuitem's label and position but
-not what it flips, and no e2e spec touches the panel at all (a gap #581 shipped with, not one #962
-opened). Code review flagged it [SHOULD FIX], not blocking: the sibling wire through the identical
-`select` factory and the identical menu shape is proven end to end by `run-config-settings.spec.ts` and
-`stall-bundle.spec.ts`, so a structural bug in the factory would redden there, and #580 owns the panel's
-final trigger and will re-point whatever lands here anyway. A ~10-line fake-tier spec (overflow trigger
-→ menuitem `Background tasks` → `.background-task-panel` visible) is the fix, whenever #580 lands.
+`e2e/chat-top-bar-geometry.spec.ts` now checks the labels and order in the open shared
+menu and activates all three destinations at 800px and 1280px, including the previously
+uncovered Background tasks callback. Static renders pin the collapsed icon trigger and
+placement modifier; they cannot open the menu or exercise its callbacks.
 
 Four comments elsewhere had to be corrected on the move (`channels.css`'s `.channel-list__host-dot`
 comment — see [above](#two-dot-relaypyrycode-connection-status-leg-mapping-330-its-render-retired-from-this-screen-by-962)

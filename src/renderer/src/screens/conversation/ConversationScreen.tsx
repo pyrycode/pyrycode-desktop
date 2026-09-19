@@ -8,7 +8,6 @@ import {
   type ClipboardEvent,
   type KeyboardEvent,
   type ReactNode,
-  type Ref,
   type RefObject,
   type WheelEventHandler,
   type KeyboardEventHandler,
@@ -80,6 +79,7 @@ import {
   COMPOSER_REPAIR_BUTTON_COPY
 } from './composerSend'
 import { ComposerActionsMenu, COMPOSER_ACTIONS } from './ComposerActionsMenu'
+import { ComposerOptionsMenu } from './ComposerOptionsPanel'
 import { markUnavailableActions } from './composerActionAvailability'
 import {
   slashCommandListStore,
@@ -395,8 +395,8 @@ export function ConversationScreen({
           actions. #365 wires its Channel-info item to open the Channel Info sheet (below): the seam is no
           longer a no-op. Gated on onBack presence, the established "mounted in the paired shell" signal —
           established by #140's back affordance, which shared this gate until #1064 deleted it (see the
-          note above ThreadOverflowMenuView): a bare `<ConversationScreen />` still shows no menu. Gated at
-          the mount site, not self-gated, so ThreadOverflowMenu's hooks stay unconditional (rules-of-hooks).
+          note above ThreadOverflowMenu): a bare `<ConversationScreen />` still shows no menu.
+          The shared ComposerOptionsMenu owns the interaction state and listener cleanup.
           #962: it now carries all three entry points. The last two setters are VERBATIM what the retired
           StatusRow and BackgroundTaskTrigger did from their own mounts in the region between the thread
           and the composer — the overlays and their open/closed state are untouched, only the affordance
@@ -4701,125 +4701,8 @@ export function daemonLeg(status: ConnectionStatus): ConnectionLeg {
 // the thread starts at the drawn 97 from the card's top edge rather than "higher by the deleted control".
 // The back affordance itself stays deleted: no padding, spacer or reserved band holds its old offset.
 
-// #276: the thread top app bar's trailing overflow menu's pure view (Figma node 16-16) — the single
-// entry point to per-conversation actions, on the right edge. Props-in /
-// markup-out with NO state and NO effects, so renderToStaticMarkup renders both the collapsed and open
-// states directly (the entire tested contract, the ComposerSendButton / ThinkingIndicator posture). The
-// interaction shell (toggle, Escape / outside-click dismiss, focus-return) lives in the container below.
-//
-// The trigger is an icon-only <button> carrying, since #1444, the drawing's 6 × 24 ellipsis export
-// (`ellipsis-vertical-solid-full 1`, 498:1919) in a 24px box drawn at rest with no ground — the
-// `.channel-list__settings` treatment, replacing the 48px round .composer__send one it wore while it had
-// no node of its own. The export ships #9DCBFC, which is --color-primary and NOT --color-inverse-primary
-// despite the node's Figma style name; `fill="currentColor"` over the button's `color` reaches it through
-// the token. The path string lives here rather than being fetched at build time because the Figma asset
-// URLs expire after seven days. aria-label supplies its accessible name, aria-haspopup="menu"
-// advertises the popup, and aria-expanded tracks open/closed (React stringifies the aria boolean under
-// server render → "true"/"false", both directly assertable). When `open`, a role="menu" surface drops
-// below it holding one role="menuitem" per action — the extension slot #155 documented, which #962
-// finally used. Every item is ENABLED and routed to its own callback, so "dismisses on selecting an
-// item" (AC3) is live on all three. Copy is apostrophe-free (renderToStaticMarkup escapes ' → &#x27; —
-// the standing desktop lesson). `triggerRef` is forwarded for the container's focus-return; omitted in
-// tests (a native <button> accepts ref={undefined}).
-//
-// #962: the menu grew from one hardcoded item to three when the region between the thread and the
-// composer emptied — the run-config sheet (#177) and the background-task panel (#581) lost their own
-// triggers and moved in here. The three labels are LITERALS IN THIS VIEW, in the order the ticket
-// fixes, rather than data the container injects, and that is load-bearing rather than incidental: the
-// container below is in-file, the screen gates the menu on `onBack`, and the `node` test env fires no
-// clicks, so this pure view is the ONLY surface on which the unit tier can see the shipped copy and
-// the shipped order at all. Those two new strings are also the accessible names four e2e opens locate
-// by, so a typo must redden a unit assertion rather than merely time out a drive. Passing
-// `items: { label, onSelect }[]` instead would be the tidier prop, and it would move both facts out of
-// the one place that can prove them. The items are mapped from one local array so the three share a
-// single JSX shape — the alternative was three near-identical literal buttons.
-//
-// No item advertises aria-haspopup="dialog" even though all three open one. `Channel info` has opened
-// a dialog without it since #276, a hint on some items and not others reads as a difference between
-// them, and a second popup kind in this subtree would also break the bare-tree
-// `aria-haspopup="menu"` count assertion's premise. The retired StatusRow carried one because it was a
-// standalone button; a menuitem inside an already-advertised menu is not the same affordance.
-export function ThreadOverflowMenuView({
-  open,
-  onToggle,
-  onSelectChannelInfo,
-  onSelectRunConfiguration,
-  onSelectBackgroundTasks,
-  triggerRef
-}: {
-  open: boolean
-  onToggle: () => void
-  onSelectChannelInfo: () => void
-  onSelectRunConfiguration: () => void
-  onSelectBackgroundTasks: () => void
-  triggerRef?: Ref<HTMLButtonElement>
-}): JSX.Element {
-  const items = [
-    { label: 'Channel info', onSelect: onSelectChannelInfo },
-    { label: 'Run configuration', onSelect: onSelectRunConfiguration },
-    { label: 'Background tasks', onSelect: onSelectBackgroundTasks }
-  ]
-  return (
-    <>
-      <button
-        ref={triggerRef}
-        type="button"
-        className="conversation__overflow-trigger"
-        aria-label="More actions"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={onToggle}
-      >
-        <svg
-          className="conversation__overflow-icon"
-          viewBox="0 0 6 24"
-          width="6"
-          height="24"
-          fill="currentColor"
-          aria-hidden="true"
-        >
-          <path d="M3 6C1.34464 6 0 4.65536 0 3C0 1.34464 1.34464 0 3 0C4.65536 0 6 1.34464 6 3C6 4.65536 4.65536 6 3 6ZM3 18C4.65536 18 6 19.3446 6 21C6 22.6554 4.65536 24 3 24C1.34464 24 0 22.6554 0 21C0 19.3446 1.34464 18 3 18ZM6 12C6 13.6554 4.65536 15 3 15C1.34464 15 0 13.6554 0 12C0 10.3446 1.34464 9 3 9C4.65536 9 6 10.3446 6 12Z" />
-        </svg>
-      </button>
-      {open && (
-        <div className="conversation__overflow-menu" role="menu">
-          {items.map(({ label, onSelect }) => (
-            <button
-              key={label}
-              type="button"
-              role="menuitem"
-              className="conversation__overflow-item"
-              onClick={onSelect}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
-    </>
-  )
-}
-
-// #276: the store-free interaction container for the overflow menu — the thin shell around the pure view
-// (the ComposerErrorSlotControl / ConnectionBannerControl split, minus the store read: this control
-// subscribes to nothing). Menu open/closed is screen-local useState, never the session store (ADR 0006,
-// the `sheetOpen`
-// precedent), so it resets to closed on remount for free (AC5). In-file and not exported, like Composer.
-//
-// close/select both return focus to the trigger (AC3). Dismiss-on-Escape and dismiss-on-outside-click
-// (AC3) attach document listeners only while open, torn down by the effect cleanup on close/unmount so
-// no listener outlives an open menu. Both handlers read the DOM event via addEventListener's event-map
-// inference — NOT an annotation — because this file imports React's `KeyboardEvent` type at the top,
-// which would otherwise shadow the DOM one; the outside-click target is narrowed with `instanceof Node`
-// (never an `as` cast).
-//
-// #962: `select` became a FACTORY when the menu grew to three items, so close → invoke → return-focus
-// is written once and every item is dismissed on the same terms rather than three times over. The three
-// action props are REQUIRED, replacing #276's optional `onChannelInfo?`: that optionality existed only
-// because the menu shipped before #365 wired its one item, so the item was a deliberate live no-op.
-// All three are wired at the single mount site now, and a required prop turns a forgotten wire into a
-// compile error instead of a menu item that silently closes and does nothing — which is exactly the
-// failure the AC guards against.
+// The title and divider retain the top-bar layout. Only the shared menu's trigger anchor owns
+// outside-click containment, so clicking the adjacent title still dismisses the menu.
 function ThreadOverflowMenu({
   name,
   onChannelInfo,
@@ -4831,64 +4714,36 @@ function ThreadOverflowMenu({
   onRunConfiguration: () => void
   onBackgroundTasks: () => void
 }): JSX.Element {
-  const [open, setOpen] = useState(false)
-  const wrapperRef = useRef<HTMLDivElement>(null)
-  const triggerRef = useRef<HTMLButtonElement>(null)
-
-  const close = (): void => {
-    setOpen(false)
-    triggerRef.current?.focus()
-  }
-  const select =
-    (action: () => void) =>
-    (): void => {
-      setOpen(false)
-      action()
-      triggerRef.current?.focus()
-    }
-
-  useEffect(() => {
-    if (!open) return
-    // Index the DOM event map for the exact event types — the top-level `import { type KeyboardEvent }`
-    // shadows the global one, so a bare `KeyboardEvent` annotation would resolve to React's synthetic type.
-    const onMouseDown = (event: DocumentEventMap['mousedown']): void => {
-      const target = event.target
-      if (target instanceof Node && wrapperRef.current && !wrapperRef.current.contains(target)) {
-        close()
-      }
-    }
-    const onKeyDown = (event: DocumentEventMap['keydown']): void => {
-      if (event.key === 'Escape') close()
-    }
-    document.addEventListener('mousedown', onMouseDown)
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('mousedown', onMouseDown)
-      document.removeEventListener('keydown', onKeyDown)
-    }
-  }, [open])
-
+  const actions = [
+    { id: 'channel-info', label: 'Channel info', onSelect: onChannelInfo },
+    { id: 'run-configuration', label: 'Run configuration', onSelect: onRunConfiguration },
+    { id: 'background-tasks', label: 'Background tasks', onSelect: onBackgroundTasks }
+  ]
   return (
-    // #1444: .conversation__overflow is the card's drawn TOP BAR — a full-width in-flow row over a 1px
-    // rule — where it used to be an absolute box the size of the trigger. `wrapperRef` moved off it and
-    // onto the anchor below, and that move is not cosmetic: dismissal is
-    // `!wrapperRef.current.contains(target)`, so left here a mousedown anywhere across the pane's full
-    // width would count as inside the menu and stop dismissing it. The anchor is also what the menu is
-    // positioned from (`top: 100%; right: 0`), so the ref and the anchor must stay the same element —
-    // `.conversation__overflow-anchor`'s rule carries both halves of the argument.
     <div className="conversation__overflow">
       <div className="conversation__overflow-content">
         <p className="conversation__overflow-title">{name}</p>
-        <div ref={wrapperRef} className="conversation__overflow-anchor">
-          <ThreadOverflowMenuView
-            open={open}
-            onToggle={() => setOpen((o) => !o)}
-            onSelectChannelInfo={select(onChannelInfo)}
-            onSelectRunConfiguration={select(onRunConfiguration)}
-            onSelectBackgroundTasks={select(onBackgroundTasks)}
-            triggerRef={triggerRef}
-          />
-        </div>
+        <ComposerOptionsMenu
+          options={actions}
+          currentId={null}
+          onSelect={(id) => actions.find((action) => action.id === id)?.onSelect()}
+          ariaLabel="More actions"
+          triggerAriaLabel="More actions"
+          triggerClassName="conversation__overflow-trigger"
+          placement="bottom-end"
+          triggerContent={
+            <svg
+              className="conversation__overflow-icon"
+              viewBox="0 0 6 24"
+              width="6"
+              height="24"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M3 6C1.34464 6 0 4.65536 0 3C0 1.34464 1.34464 0 3 0C4.65536 0 6 1.34464 6 3C6 4.65536 4.65536 6 3 6ZM3 18C4.65536 18 6 19.3446 6 21C6 22.6554 4.65536 24 3 24C1.34464 24 0 22.6554 0 21C0 19.3446 1.34464 18 3 18ZM6 12C6 13.6554 4.65536 15 3 15C1.34464 15 0 13.6554 0 12C0 10.3446 1.34464 9 3 9C4.65536 9 6 10.3446 6 12Z" />
+            </svg>
+          }
+        />
       </div>
       <div className="conversation__overflow-rule" />
     </div>

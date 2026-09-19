@@ -3,6 +3,7 @@ import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
 import { MAX_PLAINTEXT_BYTES } from '../src/shared/wire/types'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { readMainProcess } from './fixtures/mainProcessRead'
 import type { ConversationSummary, RenameWorkspacePayload } from '../src/shared/wire/types'
 
 // Mounted creation lifecycle, using real Noise/IPC and request-driven conversation list replies.
@@ -338,8 +339,24 @@ test('rejection and deadline allow naming-only retry and isolate foreign, unsoli
   // An unsolicited update still refreshes rows but cannot finish the form.
   const payload = decodeEnvelope(fake.renames[1]).payload as RenameWorkspacePayload
   app.daemon.pushFrame(encodeEnvelope({ id: 91, type: 'workspace_updated', ts: '2026-09-13T00:00:00Z', payload }))
-  const attemptId = await app.app.evaluate(() =>
-    (globalThis as typeof globalThis & { workspaceAttempts: string[] }).workspaceAttempts[1])
+  // Reproduce the observed inspection failure on a read, without replaying any IPC mutation.
+  let attemptReads = 0
+  const attemptReader = {
+    async evaluate(read: (electron: typeof import('electron')) => string | Promise<string>): Promise<string> {
+      if (++attemptReads === 1) {
+        throw new Error('electronApplication.evaluate: Execution context was destroyed, most likely because of a navigation.')
+      }
+      return app.app.evaluate(read)
+    }
+  }
+  let attemptId: string | undefined
+  await expect.poll(async () => {
+    const reading = await readMainProcess(attemptReader, () =>
+      (globalThis as typeof globalThis & { workspaceAttempts: string[] }).workspaceAttempts[1])
+    if (typeof reading === 'string') attemptId = reading
+    return typeof attemptId === 'string' && attemptId.length > 0
+  }, { timeout: 5_000 }).toBe(true)
+  expect(attemptReads).toBeGreaterThanOrEqual(2)
   expect(attemptId).toBeTruthy()
   for (const serverId of [SECOND_SERVER_ID, undefined, null, '', 42]) {
     await mainEvent(app, { type: 'workspaceRenameResult', serverId, attemptId, outcome: 'confirmed' })

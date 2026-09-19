@@ -8,6 +8,7 @@ import {
   type AttachmentRetrievalEvent
 } from '@shared/ipc/attachmentRetrieval'
 import type { AttachmentSaveRequest } from '@shared/ipc/attachmentSave'
+import type { AttachmentOpenEvent } from '@shared/ipc/attachmentOpen'
 import type { MessageAttachment } from '../../store/threadTimeline'
 
 // #816 — the two-ask sequencing behind the file row's click. The whole reason this lives in a module
@@ -47,6 +48,7 @@ function recorder(conversationId: string | null = CONVERSATION_ID): Recorder {
   const asks: unknown[] = []
   const saves: AttachmentSaveRequest[] = []
   const listeners = new Set<(event: AttachmentRetrievalEvent) => void>()
+  const openListeners = new Set<(event: AttachmentOpenEvent) => void>()
 
   return {
     calls,
@@ -57,6 +59,13 @@ function recorder(conversationId: string | null = CONVERSATION_ID): Recorder {
     },
     liveListeners: () => listeners.size,
     deps: {
+      openLocalAttachment: request => {
+        for (const listener of [...openListeners]) listener({ type: 'failed', attachmentId: request.attachmentId, reason: 'unavailable' })
+      },
+      onAttachmentOpenEvent: listener => {
+        openListeners.add(listener)
+        return () => { openListeners.delete(listener) }
+      },
       getOpenConversationId: () => conversationId,
       requestAttachment: (request) => {
         calls.push('ask')
@@ -77,6 +86,32 @@ function recorder(conversationId: string | null = CONVERSATION_ID): Recorder {
     }
   }
 }
+
+it.each(['opened', 'unavailable', 'open-failed'] as const)('tries the original first and handles %s', result => {
+  const r = recorder()
+  const listeners = new Set<(event: AttachmentOpenEvent) => void>()
+  const opens: unknown[] = []
+  r.deps.openLocalAttachment = request => { opens.push(request) }
+  r.deps.onAttachmentOpenEvent = listener => {
+    listeners.add(listener)
+    return () => { listeners.delete(listener) }
+  }
+  downloadAttachment(r.deps, ATTACHMENT)
+  expect(opens).toEqual([{ conversationId: CONVERSATION_ID, attachmentId: ATTACHMENT.attachmentId }])
+  expect(r.asks).toEqual([])
+  for (const listener of listeners) listener({ type: 'opened', attachmentId: 'unrelated' })
+  expect(listeners.size).toBe(1)
+  const event: AttachmentOpenEvent = result === 'opened'
+    ? { type: 'opened', attachmentId: ATTACHMENT.attachmentId }
+    : { type: 'failed', attachmentId: ATTACHMENT.attachmentId, reason: result }
+  for (const listener of [...listeners]) listener(event)
+  expect(listeners.size).toBe(0)
+  expect(r.asks).toHaveLength(result === 'unavailable' ? 1 : 0)
+  if (result === 'unavailable') {
+    r.push({ type: 'completed', attachmentId: ATTACHMENT.attachmentId })
+    expect(r.saves).toEqual([ATTACHMENT])
+  }
+})
 
 describe('downloadAttachment — the fetch ask (#816 AC2)', () => {
   it('asks with the conversation and the attachment id AND NOTHING ELSE', () => {

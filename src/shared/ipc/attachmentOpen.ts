@@ -1,9 +1,8 @@
 // The attachment-OPEN channel pair between the renderer window and the background process (#867):
 // two channel constants, the request shape plus its boundary guard, and one sealed outcome union,
-// imported by both process sides. The window names an attachment; the background process resolves
-// that identifier inside the app's own attachment directory, decides the file's type from its own
-// leading bytes, materialises a suffixed copy in a second app-owned directory, hands THAT path to
-// the operating system's default handler, and answers exactly one terminal.
+// imported by both process sides. The window names an attachment and optionally its upload owner.
+// Main prefers a matching original local file. Otherwise the existing image fallback resolves the
+// identifier in the attachment directory, checks raster bytes and opens a derived suffixed copy.
 //
 // THE WINDOW CANNOT BE HANDED A PATH, which is what this channel exists to work around, and it
 // matters more here than on any sibling. `setWindowOpenHandler` drops every `file:` URL and every
@@ -20,12 +19,9 @@
 // TWO CHANNELS, NOT AN INVOKE, matching all four attachment legs: a separate answer channel keeps
 // the two directions unconfusable, and keeps an outcome away from the daemon-event bridges.
 //
-// NO PATH, DIRECTORY OR URL IS DECLARABLE IN EITHER DIRECTION (AC 1). The ask carries an identifier
-// and nothing else; the event carries that identifier back and a client-owned literal. Both
-// directories the flow spans are computed at the composition root from Electron's per-user app-data
-// location, never from anything the window sent, and the suffix the opened path carries is chosen
-// from a closed set by the file's own bytes — never by a `mime_type`, a file name, or any other
-// daemon-supplied value.
+// No path, directory, filename or URL is declarable in either direction. The local preference is
+// registered only after a successful picker/drop upload, and can be selected only by its owner/ID.
+// Fallback directories remain app-owned and the suffix still comes from the closed raster set.
 //
 // This module is channel constants + a discriminated union + one pure guard, with no I/O and no
 // state. It imports nothing from src/main (layering: shared is loaded by preload and renderer and
@@ -56,31 +52,24 @@ export const ATTACHMENT_OPEN_EVENT_CHANNEL = 'pyry:attachment-open-event' as con
  */
 export const MAX_OPEN_IDENTIFIER_LENGTH = 256
 
-/**
- * What the window asks for: an attachment, AND NOTHING ELSE. One field, because the file is
- * addressed by the identifier alone — attachmentBytes.ts's shape rather than the save leg's, since
- * there is no display name to supply and nothing else this side needs.
- *
- * In particular there is no declared type, no suffix and no file name. That is not an omission: the
- * type the operating system is told about is decided by the file's own leading bytes in the
- * background process, and a field here would be a second, weaker source for the same decision.
- *
- * camelCase, not the wire's snake_case, because this is a client-internal IPC contract rather than a
- * wire type. Nothing downstream rebuilds a value from this object's other keys, so an ask carrying
- * extra ones is accepted and its extras are simply never read — a smuggled `path`, `directory` or
- * `mime_type` reaches nothing.
- */
+/** An attachment ID plus optional local owner. No request field can name an original path.
+ * Unscoped requests retain the existing raster-only fallback; filenames and extra fields are ignored. */
 export interface AttachmentOpenRequest {
   /** The attachment to open. Untrusted in the same way a wire field is: it may carry `..`, a
    *  separator or an absolute path. `resolveAttachmentPath` is the sole gate that refuses a
    *  non-canonical one, before any filesystem call. */
   attachmentId: string
+  /** Local originals require a matching upload owner; omitted for legacy raster-only requests. */
+  conversationId?: string
+  serverId?: string
+  /** Probe the local preference without deriving a fallback image (used by file rows). */
+  localOnly?: boolean
 }
 
 /**
  * The runtime guard the main receiver applies at the untrusted renderer→main boundary —
- * isAttachmentBytesRequest's role for this channel, and its body verbatim, since the shapes are
- * identical. A failing ask is DROPPED: no filesystem call, no file opened, no event. There is no
+ * the sibling attachment channels' shape checks plus the optional local-owner fields.
+ * A failing ask is DROPPED: no filesystem call, no file opened, no event. There is no
  * identifier to address an answer to, and a conforming renderer never sends one.
  *
  * SHAPE ONLY, NOT CANONICITY, and deliberately so. `resolveAttachmentPath` already refuses a
@@ -96,7 +85,18 @@ export interface AttachmentOpenRequest {
 export function isAttachmentOpenRequest(value: unknown): value is AttachmentOpenRequest {
   if (typeof value !== 'object' || value === null) return false
   if (!('attachmentId' in value)) return false
-  const { attachmentId } = value as Record<string, unknown>
+  if (
+    'conversationId' in value && value.conversationId !== undefined &&
+    (typeof value.conversationId !== 'string' || value.conversationId.length === 0 ||
+     value.conversationId.length > MAX_OPEN_IDENTIFIER_LENGTH)
+  ) return false
+  if ('serverId' in value && value.serverId !== undefined && typeof value.serverId !== 'string') return false
+  if ('localOnly' in value && value.localOnly !== undefined && typeof value.localOnly !== 'boolean') return false
+  if (
+    'localOnly' in value && value.localOnly === true &&
+    (!('conversationId' in value) || typeof value.conversationId !== 'string')
+  ) return false
+  const { attachmentId } = value
   return (
     typeof attachmentId === 'string' &&
     attachmentId.length > 0 &&

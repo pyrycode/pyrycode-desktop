@@ -123,12 +123,7 @@ describe('composerEffortMenuModel', () => {
     expect(composerEffortMenuModel(LIST, model, EFFORT)?.options).toStrictEqual([])
   })
 
-  // AC1's second half, and the posture #988 shipped for the identical case one button to the left.
-  // selectEffectiveSettings resolves effort to '' until a run-config snapshot arrives, and that lands on
-  // a turn-end edge — ordinary app startup, not an edge case. Nothing is drawn rather than an empty gap.
-  // The SHEET takes the opposite posture on this same field for its own reasons; it is not carried over.
   it.each([
-    ['a matched row publishing levels', LIST, GRADED.value],
     ['a matched row publishing none', LIST, FLAT.value],
     ['no list at all', null, GRADED.value]
   ])('renders nothing when the session effort is not known, with %s (AC1)', (_why, models, model) => {
@@ -225,8 +220,24 @@ describe('ComposerEffortMenuView', () => {
     expect(markup).not.toContain('composer__effort-icon')
   })
 
-  it('renders nothing when the session effort is not known', () => {
-    expect(view(LIST, GRADED.value, '')).toBe('')
+  it('offers an unset effort without marking any published level', () => {
+    const menu = composerEffortMenuModel(LIST, GRADED.value, '')
+    expect(menu).toStrictEqual({
+      label: 'Effort', currentId: '',
+      options: [
+        { id: 'tier-one', label: 'tier-one' },
+        { id: 'tier-two', label: 'tier-two' },
+        { id: 'tier-three', label: 'tier-three' }
+      ]
+    })
+    expect(view(LIST, GRADED.value, '')).toContain('aria-haspopup="menu"')
+    expect(view(LIST, GRADED.value, '')).toContain('>Effort</span>')
+    const markup = renderToStaticMarkup(
+      <ComposerOptionsPanel options={menu?.options ?? []} currentId={menu?.currentId ?? null}
+        onSelect={noop} ariaLabel="Effort" focusedIndex={0} />
+    )
+    expect(rowCount(markup)).toBe(3)
+    expect(markup).not.toContain('aria-current="true"')
   })
 
   // The levels reach the SHARED panel: this menu's own static render cannot show an open panel
@@ -348,10 +359,10 @@ describe('composerEffortMenuModel / View — the inherited-default session (#116
     }
   )
 
-  // The first rendering is untouched: an unknown effort still draws nothing at all, even where the empty
-  // model now resolves a row publishing levels.
-  it('still renders nothing when the session effort is not known (AC2)', () => {
-    expect(composerEffortMenuModel(WITH_INHERITED, '', '')).toBeNull()
-    expect(view(WITH_INHERITED, '', '')).toBe('')
+  it('offers the inherited model levels when effort is unset', () => {
+    expect(composerEffortMenuModel(WITH_INHERITED, '', '')?.options.map(o => o.id))
+      .toStrictEqual([...INHERITED_LEVELS])
+    expect(view(WITH_INHERITED, '', '')).toContain('>Effort</span>')
+    expect(view(WITH_INHERITED, '', '')).toContain('aria-haspopup="menu"')
   })
 })

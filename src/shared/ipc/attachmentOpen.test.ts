@@ -21,6 +21,15 @@ import {
 
 const valid = { attachmentId: '7f3c1a2b-0000-4000-8000-0123456789ab' }
 
+it('validates optional local ownership and local-only intent', () => {
+  expect(isAttachmentOpenRequest({ ...valid, conversationId: 'chat', serverId: 'host', localOnly: true })).toBe(true)
+  for (const extra of [
+    { conversationId: '' }, { conversationId: 'x'.repeat(257) },
+    { conversationId: 1 }, { serverId: 1 }, { localOnly: 'true' },
+    { localOnly: true }
+  ]) expect(isAttachmentOpenRequest({ ...valid, ...extra })).toBe(false)
+})
+
 describe('the open channel constants', () => {
   it('are two distinct channels, and distinct from all three sibling pairs', () => {
     // Ten values, ten distinct strings: the ask direction cannot be confused with the answer

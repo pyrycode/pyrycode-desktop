@@ -25,6 +25,9 @@ Playwright's `_electron` API launches the project's **own** `electron` binary an
 
 **Why the built renderer gets exercised** (still the governing constraint for every fixture below). `createWindow` (`src/main/index.ts:50-68`) computes `devRendererUrl = app.isPackaged ? undefined : process.env['ELECTRON_RENDERER_URL']`. Under `electron.launch` the app is **not packaged**, so the built-vs-dev choice hangs purely on that env var. Every launch fixture therefore launches with a copy of `process.env` that has `ELECTRON_RENDERER_URL` **deleted** — if the var leaked from a dev shell, `createWindow` would `loadURL` a non-running dev server instead of `loadFile('out/renderer/index.html')`, and the test would hang until timeout.
 
+Build before launching and leave `out/` unchanged until Electron tests finish. A concurrent
+rebuild replaces the renderer assets and can invalidate launch evidence.
+
 ### Deterministic teardown
 
 Teardown must run on **every** exit path — success, test failure, and a failure raised after a resource (the Electron process, its `--user-data-dir`) came up but before `use()` returns. The naive shape (cleanup code placed textually after `await use(...)`) only covers the first two: Playwright's fixture lifecycle runs that code on pass and fail alike, but a setup-time throw — say `firstWindow()` rejecting — never reaches it, so the process and dir both leak. With `workers: 1`, one leaked launch then poisons every remaining spec in the run, since apps launch serially and the orphan just sits there.
@@ -161,9 +164,13 @@ reproduce on demand. Bounding the retry stays the caller's job and visible at th
 bound #1380 used, so a genuinely dead app still fails inside five seconds instead of waiting out the
 test timeout.
 
-`readAuthentication` keeps its own private copy of the same tolerance — migrating it onto the shared
-helper was explicitly out of scope for #1502, since that spec was already green. Fold it in when a
-third site needs this.
+`sidebar-add-workspace.spec.ts` also uses `readMainProcess` for the naming-retry
+`workspaceAttempts[1]` read. Its five-second poll requires a nonempty string and
+retains the successful attempt ID for the foreign/stale-result assertions, avoiding
+a second unguarded read. A one-shot injected context-loss error must recover through
+a real Electron read; listener installation, clicks and pushed events are never replayed.
+
+`readAuthentication` keeps its own private copy of the same tolerance.
 
 ## Configuration and usage
 

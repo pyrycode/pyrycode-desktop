@@ -77,6 +77,7 @@ import {
 import { createAttachmentSave } from './attachmentSave'
 import { createAttachmentBytes } from './attachmentBytes'
 import { ATTACHMENT_OPEN_DIR_NAME, createAttachmentOpen } from './attachmentOpen'
+import { createLocalAttachments } from './localAttachments'
 import {
   ATTACHMENT_SAVE_CHANNEL,
   ATTACHMENT_SAVE_EVENT_CHANNEL,
@@ -1141,6 +1142,10 @@ app.whenReady().then(() => {
     return new Uint8Array(png.buffer, png.byteOffset, png.byteLength)
   }
 
+  const localAttachments = createLocalAttachments({
+    open: async path => (await shell.openPath(path)).length === 0,
+    diagnosticLog
+  })
   let pickerOpen = false
   const attachmentUploadListener = (event: Electron.IpcMainEvent, request?: unknown): void => {
     const sender = event.sender
@@ -1166,7 +1171,8 @@ app.whenReady().then(() => {
      */
     const buildDeps = (
       serverId: string | undefined,
-      conversationId: string
+      conversationId: string,
+      localPath?: string
     ): AttachmentUploadDeps => ({
       // #1205: the destination, as the ask carried it and as the guard admitted it. Read once by the
       // flow module into the plan, which spreads it onto every chunk; it reaches no filename, path or
@@ -1177,7 +1183,7 @@ app.whenReady().then(() => {
        * decides whether a report becomes a message, and this arrow owns nothing but the join and,
        * since #1129, the routing.
        *
-       * ROUTED BY SERVER (#1129), the last entry point off `registry.active`. `servers.route`
+       * ROUTED BY SERVER (#1129), the last entry point off `registry.active`. `servers.resolve`
        * answers the connection for the server the window named, or — when the ask carries no id,
        * which the composer now sends only for a chat its conversation list does not hold — the sole
        * connection if the registry holds exactly one entry. Anything else REFUSES: an id no held
@@ -1208,11 +1214,18 @@ app.whenReady().then(() => {
        * With exactly one held entry this reduces to the expression it replaces, which is what keeps
        * single-server behaviour byte-for-byte unchanged.
        */
-      upload: (input, onProgress) => {
-        const target = servers.route(serverId)
-        return target === null
-          ? Promise.resolve({ ok: false, outcome: 'not-connected' })
-          : target.uploadAttachment(input, onProgress)
+      upload: async (input, onProgress) => {
+        const target = servers.resolve(serverId)
+        if (target === null) return { ok: false, outcome: 'not-connected' }
+        const { attachment_id: attachmentId, conversation_id: uploadConversationId } = input
+        const result = await target.connection.uploadAttachment(input, onProgress)
+        if (result.ok && localPath !== undefined && target.serverId !== null) {
+          localAttachments.remember(attachmentId, localPath, {
+            serverId: target.serverId,
+            conversationId: uploadConversationId
+          })
+        }
+        return result
       },
       emit: (uploadEvent) => {
         if (sender.isDestroyed()) return
@@ -1227,7 +1240,7 @@ app.whenReady().then(() => {
     // shape is accepted. A malformed ask falls past both guards and returns below, having made no
     // filesystem call, no clipboard read and no event.
     if (isAttachmentUploadRequest(request)) {
-      void uploadAttachmentFile(request.path, buildDeps(request.serverId, request.conversationId))
+      void uploadAttachmentFile(request.path, buildDeps(request.serverId, request.conversationId, request.path))
       return
     }
 
@@ -1248,17 +1261,17 @@ app.whenReady().then(() => {
     // the three — a bare send included — is dropped outright, matching every sibling attachment
     // channel: no event, and no log either, which is what denies a looping renderer a way to drive the
     // main-process logger. The picker's `serverId` takes the resolver's path like the other two asks'.
-    // Deps are built AFTER the pickerOpen gate so a suppressed second picker builds nothing.
+    // Deps are built only once the picker supplies a path, keeping cancellation a total no-op.
     if (!isAttachmentPickRequest(request)) return
     if (pickerOpen) return
     pickerOpen = true
-    const pickerDeps = buildDeps(request.serverId, request.conversationId)
     void dialog
       .showOpenDialog({ properties: ['openFile'] })
       .then((choice) => {
         // Cancelling is a TOTAL no-op: nothing read, nothing sent, no outcome reported (AC1).
         if (choice.canceled || choice.filePaths.length === 0) return
-        void uploadAttachmentFile(choice.filePaths[0], pickerDeps)
+        const path = choice.filePaths[0]
+        void uploadAttachmentFile(path, buildDeps(request.serverId, request.conversationId, path))
       })
       .finally(() => {
         pickerOpen = false
@@ -1413,9 +1426,8 @@ app.whenReady().then(() => {
   // THE `openPath` SEAM IS NARROWED TO A BOOLEAN HERE, AND THAT IS LOAD-BEARING. `shell.openPath`
   // does not throw — it resolves with the operating system's error MESSAGE, empty on success, and
   // that message carries the path. Collapsing it to a bit at this boundary means the driver, which
-  // builds the reasons and the log records, never holds the string at all (AC 5). This is the repo's
-  // first `shell.openPath` call; `shell.showItemInFolder` above is the save leg's reveal and is a
-  // different API for a different job.
+  // builds the reasons and the log records, never holds the string at all (AC 5). The local-original
+  // opener uses the same narrowing; `shell.showItemInFolder` is the save leg's distinct reveal action.
   const openDir = join(app.getPath('userData'), ATTACHMENT_OPEN_DIR_NAME)
   const openAttachment = createAttachmentOpen({
     attachmentDir,
@@ -1424,9 +1436,9 @@ app.whenReady().then(() => {
     diagnosticLog
   })
 
-  // The bytes listener's posture verbatim — the ask carries an untrusted identifier and nothing
-  // else, and owes the same boundary check. A malformed ask is DROPPED: no filesystem call, no file
-  // opened, no event — the only sound answer when there is no identifier to address a reply to.
+  // Owner-scoped requests first try an original registered by a successful local upload.
+  // Local-only probes stop there; image activation retains the existing raster fallback.
+  // Malformed requests are dropped before any filesystem or OS call.
   //
   // The bare `void` is safe because the driver never rejects — a property of that module, not of a
   // `.catch()` anyone must remember. `event.sender` is closed into the reply so the outcome goes
@@ -1435,7 +1447,13 @@ app.whenReady().then(() => {
   const attachmentOpenListener = (event: Electron.IpcMainEvent, request: unknown): void => {
     if (!isAttachmentOpenRequest(request)) return
     const sender = event.sender
-    void openAttachment(request).then((openEvent) => {
+    const target = request.conversationId === undefined ? null : servers.resolve(request.serverId)
+    // Resolve once per activation; never substitute the currently selected chat or a filename.
+    const localRequest = { ...request, serverId: target?.serverId ?? undefined }
+    void localAttachments.open(localRequest).then(async localEvent => {
+      const openEvent = localEvent.type === 'failed' && localEvent.reason === 'unavailable' && !request.localOnly
+        ? await openAttachment(request)
+        : localEvent
       if (sender.isDestroyed()) return
       sender.send(ATTACHMENT_OPEN_EVENT_CHANNEL, openEvent)
     })

@@ -14,8 +14,8 @@ escape check. It does not fetch — #996 owns that, and a source file that is no
 since shipped, and [#816](https://github.com/pyrycode/pyrycode-desktop/issues/816) wired its click — see
 [Conversation shell — message bubble § The attachment file
 row](conversation-shell-message-bubble-attachments.md#the-attachment-file-row-815-816) and [Attachment retrieval §
-the renderer click (#816)](attachment-retrieval.md#the-renderer-click-816). The click asks [attachment
-retrieval](attachment-retrieval.md) (#996) first and this channel only on that fetch's `completed`
+the renderer click (#816)](attachment-retrieval.md#the-renderer-click-816). The click first probes the [original local file](attachment-open.md). If unavailable, it asks
+[attachment retrieval](attachment-retrieval.md) and this channel only on that fetch's `completed`
 terminal — never this channel directly, since a source-file-not-there answer on every activation is
 exactly the dead control the sequencing exists to avoid.
 
@@ -93,6 +93,20 @@ everything else, including `ENAMETOOLONG`: the ticket's technical notes are expl
 name is the same errno shape as any other failed copy, so it gets no member of its own.
 
 ### 2. The copy driver — `src/main/attachmentSave.ts`
+
+File-row activation in `downloadAttachment.ts` first subscribes to the open outcome,
+then sends an owner-scoped `localOnly: true` request on the
+[open channel](attachment-open.md#the-ipc-contract--srcsharedipcattachmentopents).
+A matching readable original opens in its OS default handler with its existing name,
+spaces included, without retrieval or copying. Repeated activations open that same path.
+Only `failed: unavailable` starts retrieval and then save/reveal; `opened` and
+`open-failed` stop without a Downloads copy. The correlated open terminal removes
+the listener. Changing filename cleanup alone cannot fix duplicate activation copies:
+the original preference must precede retrieval and this copy driver.
+
+Received/pasted attachments, earlier-run uploads and missing/unreadable originals
+retain the fallback below. Its filename sanitization and exclusive-create collision
+handling are unchanged; direct save requests still copy and reveal.
 
 ```ts
 export const MAX_SAVE_ATTEMPTS = 10_000
@@ -202,7 +216,7 @@ it to build.
 None to hold. Each ask is an independent bounded copy with no cross-ask state, no wire traffic and no
 timer — unlike `createAttachmentRetrieval` there is no in-flight map, no concurrency cap, no
 coalescing. Concurrent saves of one attachment under one name are correct without coordination: each
-`copyFile` is exclusive-create, so the loser sees `EEXIST` and advances — two clicks produce
+`copyFile` is exclusive-create, so the loser sees `EEXIST` and advances — two fallback saves produce
 `report.pdf` and `report (1).pdf`, never a torn file. A window that closes mid-save drops the terminal
 at the `isDestroyed()` guard, the same loss the retrieval and upload edges already take.
 

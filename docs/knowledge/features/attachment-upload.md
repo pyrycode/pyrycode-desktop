@@ -149,7 +149,8 @@ explicitly-`undefined`, or a string, and rejects anything else — the same rule
 `src/shared/ipc/commands.ts` states for #1120's six server-scoped commands, restated rather than
 imported (no production module under `src/shared/ipc/` imports a sibling). It is a routing key, never a
 capability: resolved against the connection registry's held entry set by `servers.route`/`servers.resolve`
-and then discarded, reaching no filename, byte, path, wire field or log line. See [Daemon connection —
+and retained as local-upload ownership only after success, reaching no filename, byte,
+path component, wire field or log line. See [Daemon connection —
 per-server routing § The attachment upload names its
 server](daemon-connection-attachment-upload-routing.md#the-attachment-upload-names-its-server-and-the-stand-in-retires-1129)
 for the full routing design, including why the refusal for an unresolvable id is surfaced as
@@ -301,14 +302,13 @@ any declared type. The two guarded shapes are tried **path-first**, and the orde
 rather than stylistic: `isAttachmentUploadRequest(request)` is tried before `isAttachmentPasteRequest(request)`,
 so an ask carrying a valid `path` reaches the drop arm exactly as it did before a third shape existed,
 extras included — nothing an operator can produce changes arm now that a second guarded shape is
-accepted. A passing drop request calls `uploadAttachmentFile(request.path, buildDeps(request.serverId))`;
-a passing paste request calls `uploadClipboardImage(readClipboardImagePng, buildDeps(request.serverId))`
+accepted. A passing drop request calls `uploadAttachmentFile` with the path and deps retaining it;
+a passing paste request calls `uploadClipboardImage` with deps carrying the owner but no local path
 (below). An ask that carried something and matched neither guard is dropped outright — no filesystem
 call, no clipboard read, no event, and deliberately no log, denying a looping renderer a way to drive
 the main-process logger — and, since #1129, no `buildDeps` call either, so it cannot reach
-`servers.route`'s own logging. `request === undefined` selects the picker arm, byte-for-byte what #862
-shipped, with `pickerDeps = buildDeps(undefined)` built after the `pickerOpen` gate so a suppressed
-second picker builds nothing. **`pickerOpen` stays scoped to the dialog**: neither the drop arm nor the
+`servers.resolve`'s own logging. `isAttachmentPickRequest` selects the picker arm. After the dialog succeeds,
+its selected path and requested owner supply `buildDeps`; cancellation builds nothing. **`pickerOpen` stays scoped to the dialog**: neither the drop arm nor the
 paste arm opens one, so neither reads nor sets that flag, and several transfers may be live at once (one
 per arm, or several drops, or several pastes) by this flow's existing design.
 
@@ -339,14 +339,14 @@ or which channel an outcome lands on, would have to be made twice and could land
 still closed in for [#519](https://github.com/pyrycode/pyrycode-desktop/issues/519)'s reason, and the
 `emitDaemonEvent`-style `sender.isDestroyed()` guard is unchanged.
 
-**Since #1129, `deps` is no longer a literal hoisted once — it is `buildDeps(serverId)`, a factory
+**The per-ask factory is `buildDeps(serverId, conversationId, localPath?)`, a factory
 called exactly once per ask, from *inside* whichever arm the ask selects.** The deps now depend on the
 ask's resolved server, which is knowable only once an arm has matched, so a single object built at
 listener-construction time could no longer express them. This is *stronger* than the old hoisted
 literal, not weaker: there is still exactly one construction site and one call per ask, and having one
 body rather than one object makes it structurally impossible for two arms to be handed differently-built
 `emit`s. It is also a security property, not a style choice: `buildDeps`'s `upload` calls
-`servers.route(serverId)`, which logs `server-route-refused` on both of its refusal branches, so calling
+`servers.resolve(serverId)`, which logs `server-route-refused` on both of its refusal branches, so calling
 it before the guards discriminate would hand a looping renderer the exact lever the neither-guard-matched
 return above exists to deny. See [Daemon connection — per-server routing § The attachment upload names
 its
@@ -414,65 +414,46 @@ closure, the same posture every sender here shares. `PyryApi` is inferred from `
 
 ## Data flow
 
-```
-renderer: window.pyry.requestAttachmentUpload({ conversationId })  ── pick ask (#1205) ──▶
+All three asks carry a conversation ID and optional server ID. Main tries the drop,
+paste and picker guards in that order; malformed asks do nothing. The picker gate
+covers the dialog only and clears before file reading or upload begins.
 
-main: ipcMain.on(ATTACHMENT_UPLOAD_CHANNEL) → pickerOpen? ──yes──▶ ignored (one dialog at a time)
-  │no
-  pickerOpen = true
-  dialog.showOpenDialog({ properties: ['openFile'] })
-    canceled / no file ──▶ pickerOpen = false, nothing else happens
-    │a path
-    pickerOpen = false                                    ◀── cleared once the DIALOG settles
-    uploadAttachmentFile(path, { upload, emit, diagnosticLog })
-      readChosenFile(path)  ── open → isFile()? → size? → read, one handle throughout
-        not a regular file / open|stat|read throws ──▶ emit failed:'unreadable'
-        size > ATTACHMENT_MAX_UPLOAD_BYTES            ──▶ emit refused:'too-large' + limitBytes
-        │ok
-      driveUpload(uploadId, file, deps)
-        deps.upload({ attachment_id: uploadId, filename, mime_type, bytes })  ── #861 ──▶
-          { ok: true }              ──▶ emit completed
-          { ok: false, outcome }    ──▶ emit failed: outcome
-
-main → renderer: sender.send(ATTACHMENT_UPLOAD_EVENT_CHANNEL, event)   ── exactly one, or none ──▶
+```text
+picker → selected path ─┐
+drop → preload path ────┴→ uploadAttachmentFile → open → stat regular file/size → read
+paste → main clipboard → PNG bytes ────────────────────────────────────────────┐
+                          guarded local bytes ─────────────────────────────────┤
+                                                                              ↓
+                         driveUpload: client UUID, bounded filename, MIME type
+                                                                              ↓
+                         buildDeps.upload: resolve server, capture upload owner
+                                                                              ↓
+                         connection.uploadAttachment → progress → terminal
+                           ok + local path → remember original → completed
+                           ok + paste      → completed without registration
+                           failure         → failed without registration
 ```
 
-The drop entry (#890) joins the same diagram one step later, at the listener — path guard tried first
-(#1032, see § Composition root):
+A cancelled picker emits nothing. Read failures emit `unreadable`, oversized files
+emit `refused: too-large`, and absent/empty clipboard images emit `refused: no-image`.
+See [the guard and drive](attachment-upload-guard-and-drive.md) for byte and progress
+bounds and [the bridge](#bridge--srcpreloadindexts) for the drop's path-backed `File` check.
 
-```
-renderer: window.pyry.dropAttachmentFile(file)
-  preload: webUtils.getPathForFile(file)
-    throws (not a File)  ──▶ nothing sent
-    ''  (page-built File) ──▶ nothing sent
-    │a path
-    ipcRenderer.send(ATTACHMENT_UPLOAD_CHANNEL, { path })   ── an argument, this time ──▶
+Successful picker/drop uploads register the absolute original path in
+`createLocalAttachments` (`src/main/localAttachments.ts`), constructed once in main
+([#1524](https://github.com/pyrycode/pyrycode-desktop/issues/1524)). Before awaiting the
+transfer, the upload seam captures the client-created attachment ID, input conversation
+ID and actual server returned by `servers.resolve`, including an unnamed sole host.
+Only `ok` with a local path and resolved server records an association. Paste, cancelled,
+refused, failed and thrown uploads cannot register; subsequent chat/host selection
+cannot change the captured owner. First registration wins for an attachment ID.
 
-main: ipcMain.on(ATTACHMENT_UPLOAD_CHANNEL, (event, request) => …)
-  isAttachmentUploadRequest(request)?
-    │true
-    uploadAttachmentFile(request.path, deps)   ── same deps, same driveUpload, same terminal ──▶
-    │false
-  isAttachmentPasteRequest(request)?  ── the paste arm, below ──
-    │false
-  request !== undefined?  ──yes──▶ dropped: no filesystem call, no clipboard read, no event
-    │no → the picker arm, unchanged above
-```
-
-The paste entry (#1032) joins at the same listener, tried after the path guard:
-
-```
-renderer: window.pyry.pasteAttachmentImage()   ── { source: ATTACHMENT_PASTE_SOURCE }, no path, no bytes ──▶
-
-main: isAttachmentUploadRequest(request)?  ──false──▶  (not a path ask)
-  isAttachmentPasteRequest(request)?
-    false ──▶ dropped: no clipboard read, no filesystem call, no event
-    │true
-    readClipboardImagePng()   ── clipboard.readImage(), main process only ──▶
-      null (no image) / zero bytes / reader throws  ──▶ emit refused:'no-image'
-      │bytes
-    driveUpload(randomUUID(), { bytes, filename: <minted>, mimeType: 'image/png' }, deps)   ── same as above ──▶
-```
+The map survives chat and window navigation for this main-process lifetime, with no
+persistence. Paths never return to the renderer, enter the wire or appear in logs;
+filenames neither register nor select them. Activation uses the current contents at
+that path, not a snapshot of the uploaded bytes. Earlier-run attachments retain the
+fallback described in [attachment open](attachment-open.md#the-driver--srcmainattachmentopents)
+and [attachment save](attachment-save.md#2-the-copy-driver--srcmainattachmentsavets).
 
 ## Error handling
 

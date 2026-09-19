@@ -8,7 +8,7 @@ the screen overall.
 
 ## Composer status row (#796)
 
-The desktop layout's own fixed-height status area directly above the message box (Figma `111:3525`,
+The desktop layout's own status area above the message box (Figma `111:3525`,
 780×24), replacing the loose region the working indicator used to float in. `ComposerStatusArea({
 isRunning, children })` is an in-file `ConversationScreen.tsx` function, mounted directly after
 `Timeline` (through #1009 the queued backlog sat between them as its own `<QueuedBacklog/>` view,
@@ -37,6 +37,23 @@ This is the DOM order. `ComposerSlot.statusArea(sendText)` supplies the status a
 through `Composer.beforeComposer`, giving recovery the composer's existing command
 send callback. The status area remains outside the composer's `hidden` subtree,
 so covering the input with a question panel does not hide its messages.
+
+**The 12px separation from the message viewport stays outside the scrollport.**
+`.composer-status` owns it as `margin-top: var(--space-3)`; `.conversation__thread` keeps
+its 12px top padding and sets its stylesheet bottom padding to zero. A bottom inset can
+space the last message correctly while leaving no gap between the viewport and status row
+when reading older messages. The external margin preserves that gap at both scroll positions.
+Keep `.conversation` without a column `gap`: it would also add space below the status row,
+turning the [message box's existing 8px top spacing](conversation-shell-composer-message-box.md#message-box-951)
+into 20px.
+
+[`e2e/composer-status-spacing.spec.ts`](../../../e2e/composer-status-spacing.spec.ts)
+measures the viewport and status-row boxes after proving overflow and wheel scrolling.
+It checks the 12px upper gap, 8px lower gap and 24px row with an empty draft and with a
+usage warning plus five-line draft, at 1280px and the 800px minimum width. At the bottom,
+it also checks that no extra inset remains after the last row, preventing doubled spacing.
+A last-message distance alone would pass with the old scrolling inset; static renderer
+tests cannot prove these [layout measurements](development-verification.md#layout-and-input).
 
 **Never returns `null` — the one deliberate departure from `ThinkingIndicator`'s own zero-footprint
 posture (AC2).** `ThinkingIndicator` still returns `null` at rest; this row's *height* is what must be

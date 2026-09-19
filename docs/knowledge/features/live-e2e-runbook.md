@@ -71,6 +71,56 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
+**Latest verified run: #1522, 2026-09-19 — 22 executed, 22 passed, 0 failed, 1 skipped;
+all four required queue cases passed on retry 0.** The
+[dispatcher verdict](https://github.com/pyrycode/pyrycode-desktop/issues/1522#issuecomment-5741840980)
+records `feature/1522` at `8abd854c7b`, merged with `origin/main` at `db45831a51`
+(0 commits behind), exit 0, wall clock 151.9s. Per-test JSON in dispatcher-host log
+`2026-09-19T12-23-02-498Z_real-claude-gate_#1522.log` confirms these executions;
+the log is under `pyrycode-desktop-agents/logs/`.
+
+All three cases in
+[`e2e/real-claude-queue-delivery.spec.ts`](../../../e2e/real-claude-queue-delivery.spec.ts)
+ran against real Claude with the stream-json runner. Their `queue-delivery-evidence`
+attachments each report **daemon revision `8a850505`**, read from the executed binary's
+`version` output using the fixture's `PYRY_BIN`/PATH resolution. This is binary evidence,
+not the newer daemon checkout revision inspected during implementation.
+
+| Executed test | Queued before release | Completed marker order | Result |
+| --- | ---: | --- | --- |
+| `real claude delivers one queued follow-up exactly once` | 1 | 0 → 1 | PASS |
+| `real claude delivers two queued follow-ups in submission order` | 2 | 0 → 1 → 2 | PASS |
+| `real claude drops the queued head and completes the remaining follow-up` | 2 (then head dropped) | 0 → 2 | PASS |
+
+Marker 0 belongs to the held first turn; 1 and 2 belong to the follow-ups in submission
+order. Every listed turn had exactly one normal completion, each next turn started after
+the previous completion, and all attachments report `released: true`, `complete: true`
+and zero remaining queue items. The passing cases also checked one surviving originating
+user row per delivered message, removed queued/drop affordances, rendered response markers
+and no additional desktop send through the three-second settle window. The drop case
+observed no turn for marker 1.
+
+The retained
+[`e2e/real-claude-queue-drop.spec.ts`](../../../e2e/real-claude-queue-drop.spec.ts)
+case, `real claude enqueues a mid-turn send, drops it before drain, and runs no turn for it`,
+also executed and passed on the stream-json runner. It checks cancellation of the only
+follow-up, row removal and stable idle UI/content after release. It uses the same daemon
+fixture and binary resolution; it does not emit a separate revision attachment.
+
+The suite declares **23 tests in 20 files**, including the three new delivery cases.
+The sole skip was `real-claude-system-prompt.spec.ts` → `real claude picks up a saved channel
+system prompt at Reset session`, the existing `test.fixme` for pyrycode#2436; it is not a
+pass. The gate reported a configured execution floor of 10, still below the 22 runnable
+tests; adjusting that external setting remains the operator's work.
+
+This run did not reproduce the reported stuck queue. The change adds regression proof
+without a production repair or a confirmed daemon prerequisite. The result covers the
+built desktop, local routing relay, real daemon and real Claude at the recorded revision;
+it does not establish behavior through the production relay. The
+[liveness overview](real-claude-liveness-e2e.md#what-it-does) explains the correlated proof.
+
+### Earlier recorded runs
+
 **#1433 (2026-09-15) — the tier grows to 20 executed specs in 20 files (21 declared); the stored-prompt family gets its first live proof, and the live gate found a real daemon bug.**
 `e2e/real-claude-system-prompt.spec.ts` proves the [system prompt write](system-prompt-write.md) family end
 to end: a prompt saved through Channel info produces nothing in a session that was already running, and the
@@ -320,14 +370,14 @@ next state change updates one place, not four.
 PYRY_REAL_CLAUDE_GATE_CMD="npm install --no-audit --no-fund >&2 && npm run build >&2 && npx playwright test --config playwright.real-claude.config.ts --reporter=json"
 PYRY_REAL_CLAUDE_GATE_FORMAT=playwright-json
 PYRY_REAL_CLAUDE_GATE_TIMEOUT_MS=1800000
-PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED=13
+PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED=22
 ```
 
 Why each line is what it is:
 
 - **Install and build chatter goes to stderr on purpose.** The gate reads stdout and expects Playwright's JSON report alone. Its parser skips to the first `{`, but npm output ahead of the report can still defeat it, so the chatter is routed away rather than tolerated.
 - **The gate needs the per-test JSON reporter, not `e2e:real:gate`.** The repo's own gate script prints a human list. The dispatcher counts tests that ran a body, and it cannot count what it cannot read.
-- **The floor must equal the exact spec count on the branch, not an approximation.** These specs are discrete and countable. Set the floor below the true count and a run in which one spec skipped still clears it and reports a pass — the false green the whole mechanism exists to catch, reintroduced through the floor. The cost is a manual bump whenever a spec is added, so a PR that adds a `real-*` spec must say so. [#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055) is the latest such PR: the tier is now 13 specs and the floor shown above (13) reflects that — see § Current real-claude gate state, which also records the count drifting stale by one between #929 and #1055 with no PR announcing it, the exact failure mode this bullet exists to prevent.
+- **The floor must match the runnable test count on the branch.** A lower floor can hide a missing-prerequisite skip. Count tests, not files, and account explicitly for an existing `test.fixme`: #1522 declares 23 tests in 20 files, with 22 runnable after the known system-prompt exclusion. The example above reflects those 22, including three new queue-delivery cases; the actual gate still reported 10. Updating this document does not change the fork's external configuration. See § Current real-claude gate state for the executed tests and the excluded case.
 - **The floor is one-sided.** It answers "did enough tests run", never "did the right ones run". The 66-executed run described in § Current real-claude gate state cleared a floor of 10 with room to spare while running 56 fake-tier specs under the real-daemon config. A count above the floor is not evidence that the intended tier ran.
 
 **This fork cannot tell an inherited failure from a new one.** On a red run the gate is meant to re-run just the failing tests against the base commit, so a failure that already exists on `main` parks for the operator instead of being blamed on the branch. That comparison never runs here: the dispatcher's filter builder rejects any test name outside a conservative character set, and every Playwright name carries spaces and a `›` separator, so the filter is always refused ([agent-dispatcher#38](https://github.com/pyrycode/agent-dispatcher/issues/38)). While any spec in the tier is red, **every** gated ticket that reaches the gate is failed and sent back for rework for a fault it did not cause, and each one needs a hand correction. That is what happened to [#928](https://github.com/pyrycode/pyrycode-desktop/issues/928) on the first live run, for the pre-existing red later filed as [#941](https://github.com/pyrycode/pyrycode-desktop/issues/941).

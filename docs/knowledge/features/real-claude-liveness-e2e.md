@@ -11,8 +11,8 @@ interactive-capability flip that makes a v2 daemon's structured reply reach this
 
 ## What it does
 
-Every other Desktop e2e — [#89](../codebase/89.md) (transport round-trip), [#93](../codebase/93.md)/
-[#94](../codebase/94.md) (UI pair/send/stream) — runs against a fake relay **and** a fake daemon that
+The fake-transport Desktop e2e specs — [#89](../codebase/89.md) (transport round-trip), [#93](../codebase/93.md)/
+[#94](../codebase/94.md) (UI pair/send/stream) — run against a fake relay **and** a fake daemon that
 always answer. They stay green even if a real daemon never responds. This scenario is the thin
 client-layer net over the daemon-side liveness test, `pyrycode#854` (merged) — it drives the real
 stack the operator actually ships, with the Electron window standing in for that ticket's headless
@@ -37,30 +37,56 @@ real-stack net over the [interrupt envelope](interrupt-envelope.md)'s client wir
 the fake-stack twins (#307, #427) can only prove against a scripted `daemon.pushFrame`, not a genuinely
 running turn. Split from #431; its twin [#446](../codebase/446.md) shipped next on the same tier.
 
-[#446](../codebase/446.md), #445's twin, is `e2e/real-claude-queue-drop.spec.ts` — the same
-long-prompt precondition clone, but the body proves queue-while-busy-then-drop: a second send issued
-mid-turn enqueues as a `data-thread-role="queued"` [queue-store](queue-store.md) row (rather than
-starting a new turn, since `composerAvailability` gates only on connection, never turn phase), the drop
-removes it while turn 1 is still provably running (bracketing `interruptButton`-visible checks
-immediately before and after the drop, the DOM-only answer to the #442-class dequeue-before-drain
-hazard), and — reusing #445's two-signal-quiesce-plus-settle idiom verbatim — the turn drains to prove
-the dropped send produced no assistant turn at all.
+**Queue cancellation and delivery use a foreground file gate.**
+[`real-claude-queue-drop.spec.ts`](../../../e2e/real-claude-queue-drop.spec.ts)
+holds the first turn in an ordinary Bash tool until the test creates a release file. A long text
+prompt can finish before the UI observes a running turn; a backgrounded sleep does not hold it at all,
+and a chatty loop can delay queue frames behind tool output. The silent foreground gate lets the test
+establish enqueue and drop before releasing the turn. Enter submits during the running turn even
+though the composer's button now offers Stop. After drop, the test requires the queued row to disappear,
+then releases the first turn and checks idle UI and stable assistant content over a three-second window.
+Cancelling the only follow-up cannot establish successful queue delivery.
 
-**[#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) added the echo half this spec used
-to explicitly wave off.** At ship time #446 knew the drop left a delivered-looking `userText` echo
-standing beside the vanished queued row and said so in prose, scoping every queued assertion away from
-it as "expected and harmless" — that was the actual product bug #1213 fixed. The spec now asserts msg2's
-delivered echo is present *before* the drop and gone *after*, with msg1's own echo untouched, using the
-existing `queuedBubbles` 1 → 0 mutation-check as the positive wait a closing absence assertion needs in
-front of it (an opening `toHaveCount(0)` proves nothing on its own — it can pass before the click's async
-work resolves). This is the one assertion in the tier that depends on the real `pyry` binary actually
-shipping pyrycode#2092: against an older daemon the `queue_state` frame carries no `message_id`, the
-drop correlates with nothing, and the echo-gone assertion is the one that reddens — check the binary
-before the diff if it's this line. See [Dequeue message
-envelope](dequeue-message-envelope.md#configuration-and-usage) and [Thread
-timeline](thread-timeline-internals.md#types) for the client-side mechanism; the fake-tier twin is
-`e2e/queued-backlog-interrupt.spec.ts`, updated in the same PR, whose fixture literals had to gain
-`message_id` by hand since nothing typechecks `e2e/`.
+The queued message occupies **one originating user row**: daemon `message_id` correlates with the
+optimistic echo, which takes the queued styling and drop control. Drop removes that row entirely while
+the first message's row survives. The positive queued-row 1 → 0 transition must precede the absence
+check; a delivered-role-only absence is already true while the row is queued. A daemon predating
+pyrycode#2092 omits `message_id` and cannot support this correlation. See
+[Queue store](queue-store.md), [Dequeue message envelope](dequeue-message-envelope.md#configuration-and-usage)
+and [Thread timeline](thread-timeline-internals.md#types); the fake-tier twin is
+`e2e/queued-backlog-interrupt.spec.ts`.
+
+[`real-claude-queue-delivery.spec.ts`](../../../e2e/real-claude-queue-delivery.spec.ts)
+([#1522](https://github.com/pyrycode/pyrycode-desktop/issues/1522)) adds three stream-json scenarios:
+one follow-up completes once; two complete in submission order; and dropping the queued head leaves
+the second follow-up to complete. Each message is submitted once with Enter. Before release, the test
+requires the Bash entry witness, running UI, and daemon queue ids matching the captured send ids in
+the UI-created conversation. The drop case also waits for the shortened queue and removed row.
+After delivery, each surviving message remains exactly one user row without queued styling or a drop
+control, and its response marker must render in the assistant output. Main-process send-command
+metadata must remain unchanged through completion and a three-second settle window: the desktop
+does not resubmit an accepted message.
+
+**An empty queue or a larger assistant-bubble count is insufficient delivery evidence.**
+[`createQueueTurnEvidence`](../../../e2e/fixtures/queueTurnEvidence.ts) observes typed daemon events,
+isolates the originating conversation, and correlates each message's unique response marker with a
+distinct turn id. Each expected turn must have exactly one normal completion and one expected marker,
+in submission order, with its first observed turn event after the previous completion. This rejects
+first-turn trailing output, missing delivery, duplicate or overlapping turns, and any turn for the
+dropped marker. The observer's [unit cases](../../../e2e/fixtures/queueTurnEvidence.test.ts) exercise
+these false positives; [`queue-delivery-evidence.spec.ts`](../../../e2e/queue-delivery-evidence.spec.ts)
+checks installation in the built renderer and row transitions against scripted events. That fake
+scenario cannot prove the real daemon drains its queue.
+
+Normal completion requires `stopReason: 'end_turn'`, no true `isError`, no nonempty `errorCategory`,
+and either absent/empty or successful `outcome` and `terminalReason` (`success` and `completed`). The
+daemon serializes missing optional details as empty strings: accepting only `undefined` falsely
+rejects normal completions, while ignoring `errorCategory` can accept a failed turn. Marker matching
+keeps a bounded suffix in page memory for split deltas; evidence attachments omit transcript text,
+message ids and turn ids, retaining marker indexes, event order, counts and completion metadata.
+Each live delivery case records the executed binary's revision via `PYRY_BIN`/PATH and fails if it
+cannot parse that revision. See the [current live results](live-e2e-runbook.md#current-real-claude-gate-state)
+for measured execution and provenance; this test-only change selects no production repair.
 
 [#432](../codebase/432.md), the third sibling on this tier, is `e2e/real-claude-permission-modal.spec.ts`
 — the deepest liveness net in the suite. It clones the same precondition and swaps the turn body for a
@@ -166,7 +192,7 @@ pattern and the two must stay byte-for-byte the same. It runs only via its own c
 npm run e2e:real-claude   # = npm run build && playwright test --config playwright.real-claude.config.ts
 ```
 
-`playwright.real-claude.config.ts` matches only this spec, with `workers: 1`, `retries: 0`, and a
+`playwright.real-claude.config.ts` matches the real-tier specs, with `workers: 1`, `retries: 0`, and a
 `timeout: 300_000` generous enough for a cold real-claude turn. This was designed as part of the
 operator's **pre-ship gate**, documented in `README.md` alongside `npm run build` and `npm test` —
 there is no CI (org policy), so an unrun real-claude test earns nothing until an operator actually
@@ -415,10 +441,10 @@ overrides the resolved `pyry` binary when it isn't on `PATH` (e.g. a sibling-rep
 - **`pyry pair` stdout is never echoed.** It carries the pairing token; a decode failure surfaces only
   a static error string, never the scanned stdout.
 - **No `screenshot`/`trace`/`video`** on this config — a trace could capture more than DOM text.
-- **Pass/fail is a manual PR observation, not automated.** The agent env has no Anthropic credentials
-  and there is no CI, so the "fails on a pre-#854 daemon, passes on a #854 daemon" proof is recorded
-  once by the operator in the PR description, mirroring `pyrycode#854`'s own convention. The current
-  observed state lives in the [live e2e runbook](live-e2e-runbook.md) § Current real-claude gate state.
+- **Live acceptance requires executed results.** The credentialed dispatcher gate or an operator
+  runs this tier; an agent's fake-tier pass or test collection cannot establish live success.
+  Per-test execution, skips and available daemon provenance belong in the
+  [live e2e runbook](live-e2e-runbook.md#current-real-claude-gate-state).
 - **Turn timeout is 120s per turn** to absorb a cold PTY claude (spawn + model load + first reply);
   the whole-spec timeout is 300s (handshake + 2×turn + headroom).
 

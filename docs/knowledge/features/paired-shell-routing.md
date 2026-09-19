@@ -102,7 +102,7 @@ owned by `App` and uses the default full-page presentation.
 The view receives it as `pairingOrigin` and renders that background at the same element
 position while `route === 'pairServer'`, with the modal as a sibling. Keeping both
 position and `paneKey` stable preserves the actual conversation subtree, including
-its unsent composer draft, rather than merely restoring its selected conversation ID.
+its transient controls. Text drafts also survive full pane remounts through the session draft store.
 The background remains mounted but native dialog inertness blocks pointer and keyboard
 input, including sidebar navigation.
 
@@ -317,7 +317,7 @@ shipped in a follow-up commit on the same PR:
   `ConversationScreen`'s `key` — a React `key` change forces a remount, restoring the "resets on remount
   for free" invariant those five comments assume.
 - `PairedShell` (the container) holds `paneKey` in a `useState` beside the nav `useReducer`, and records
-  it at exactly the two production sites that change the active conversation:
+  it as `JSON.stringify([serverId ?? null, conversationId])` at the two production activation sites:
   `useConversationCreatedNav`'s payload (the FAB's daemon-confirmed create) and `onOpen`'s argument (a
   sidebar row click). It is recorded from the activation action rather than subscribed back from
   `activeConversationStore`; the shell's separate recovery subscriptions do not own pane identity.
@@ -332,12 +332,29 @@ shipped in a follow-up commit on the same PR:
 - Making the prop **required**, not optional, turns "a future call site forgets to record the switch"
   into a compile error rather than a silent reintroduction of the bug.
 
-Proven by a new e2e spec, `e2e/conversation-switch-remount.spec.ts`, using the composer draft as the
-observable (plain `useState`, no store, no round trip — a surviving value can only mean a surviving
-subtree): it drives both paths that leave the route on `thread` (FAB create → switch, sidebar row click
-→ switch) in both directions, verified RED before the fix. See [#670 codebase notes](../codebase/670.md)
-for the full round-1/round-2 review record, including a pre-existing cross-conversation modal-store leak
-the overlay-scope change (below) made newly reachable, flagged as a follow-up rather than fixed here.
+Text retention has a different lifetime from those controls. The
+[composer draft store](composer-send.md#3-the-controlled-composer--conversationscreentsx)
+holds exact text by host and conversation for the app session, including across screen exits.
+The pane still remounts and resets transient panels, menus and scroll state; attachments are outside
+text-draft retention. Including the host in `paneKey` also resets controls when two hosts use the
+same conversation ID. Retained coordinates in `savedTimelineTarget` come from the clicked row or
+`useConversationCreatedNav`'s creating-host stamp, never from a later list refresh.
+
+Retaining the creating host also enables the screen's timeline ownership check. `markViewed`
+alone can create an empty slice with no host, which leaves a new chat showing “Loading saved
+messages…” indefinitely when no history read is pending. After activation, the creation callback
+therefore calls `initializeCreatedTimeline(serverId, conversationId)` to establish an empty
+host-owned live timeline immediately. It replaces any same-ID content from another host without
+starting a saved-history read or claiming restoration provenance. See
+[timeline admission](conversation-timeline-holder.md#local-timeline-admission).
+
+`e2e/conversation-switch-remount.spec.ts` now proves remounts through Channel Info closing on
+create/sidebar switches, independently of restored text. A surviving draft no longer proves a
+surviving subtree. The test holds the new chat's conversation-list reply until after typing and
+checks that no loading banner appears before releasing it, then verifies metadata arrival leaves
+the draft unchanged. An immediate fake list reply can hide missing creation-time ownership.
+The second scenario covers equal conversation IDs on different hosts and a later list refresh.
+See [the draft design](../../specs/architecture/1523-composer-drafts.md).
 
 **A related, disclosed side effect: thread-scoped overlays now cover the pane, not the window.**
 `.status-sheet-overlay` (Run configuration) and `.permission-modal-overlay` are `position: absolute;

@@ -8,7 +8,7 @@ Introduced in [#66](../codebase/66.md). Entirely `src/renderer/` — no keys, so
 
 Wires the previously-inert composer (an uncontrolled `<textarea>`, a click-less send button in the [conversation shell](conversation-shell.md)) into a working send:
 
-- The input is **controlled** — typing updates the composer's own ephemeral state; the input clears after a successful submit; whitespace-only input does nothing.
+- The input is **controlled** — typing updates a session draft keyed by host and conversation; a successful typed submit clears only that draft; whitespace-only input is retained.
 - **Submit** (the send button or Enter) mints a `message_id` via `crypto.randomUUID()`, assembles a `SendMessagePayload` for the active conversation, and emits `window.pyry.sendCommand(sendMessageCommand(payload))`.
 - The just-sent message is appended to the store **optimistically** as a wire `MessagePayload { role: 'user' }`, carrying the **same `message_id`** sent on the wire — so the store's existing `message_id` dedupe drops the daemon's later echo instead of double-posting.
 - A failure of the send bridge does not crash the window; the echo still posts.
@@ -116,11 +116,31 @@ A **distinct name** from `messageReceived` documents intent (a local echo, not a
 
 `Composer` becomes a thin controlled container (stays in-file; the logic lives in `composerSend.ts`):
 
-- `const [text, setText] = useState('')` — ephemeral single-value screen-local state (ADR 0006), never the store.
-- `const dispatch = useSessionStore((s) => s.dispatch)` — `dispatch` identity is stable, so selecting it adds no re-render churn.
+- Text lives in the renderer singleton `composerDraftStore`, in nested maps keyed by server ID then
+  conversation ID. `selectDraft` returns the exact string, including whitespace and blank lines;
+  missing entries read as empty. Emptying the input removes only that entry. Null coordinates read
+  empty and the composer does not write an anonymous draft. The narrow string selector keeps edits
+  to another draft from re-rendering this composer.
+- `ConversationScreen` passes its retained `selectedHost` through `ComposerSlot`, alongside the
+  conversation ID. Sidebar selection and the creating host stamped on `useConversationCreatedNav`
+  establish ownership; later conversation-list refreshes cannot transfer it. See
+  [pane identity](paired-shell-routing.md#the-conversation-switch-remount-bug-and-the-panekey-fix).
+- Drafts survive channel/chat switches, newly created chats and visits to other in-app screens for
+  the app session. They have no restart persistence. Attachments are not retained by this text store;
+  menus and other transient pane state still reset on remount.
+- Typing and slash-command completion use the same coordinate-bound `setText` setter. Restoration
+  feeds the existing controlled textarea and its sizing, so a multiline draft expands on return.
+- The optimistic echo uses the flat timeline dispatch and host-owned held-timeline dispatch; input
+  retention does not change `submitMessage`'s send contract.
 - The `<textarea>` gains `value={text}`, `onChange`, and `onKeyDown`; the send `<button>` gains `onClick={handleSubmit}`. Existing `className`/`placeholder`/`aria-label="Send"`/SVG untouched.
 - **Since [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678), that button is `ComposerSendButton`, not a bare `<button>`.** `Composer` also takes a required `phase: TurnPhase` prop from the container and derives `isRunning={isTurnRunning(phase)}` on every render; while a turn is running the control swaps to a stop affordance in place, reusing the same `.composer__send` chrome and the same `aria-label="Send"` string only in the idle branch. `onClick={handleSubmit}`/`disabled={!canSend}` still gate the send branch exactly as above — `isRunning` and `canSend` are independent, so the send-gate logic on this page is unchanged by the swap. See [Interrupt envelope § The render affordance](interrupt-envelope.md#the-render-affordance-307-merged-into-the-send-button-by-678) for the stop variant's own contract.
-- `handleSubmit` builds `deps` **inside the handler body** (so `window.pyry` is dereferenced only at interaction time, never during render — this keeps the server-rendered container smoke test crash-free), calls `submitMessage(text, { sendCommand: window.pyry.sendCommand, dispatch, newMessageId: () => crypto.randomUUID() })`, and `setText('')` when it returns `true`.
+- `handleSubmit` calls `sendText(text)` and clears only the selected draft when it returns `true`,
+  then emits the content-free `composer-draft-cleared` diagnostic. This is local submit success,
+  without a daemon acknowledgement, including the existing caught bridge-error path that still
+  posts an optimistic echo. Unavailable-host and whitespace-only rejection leave the draft intact
+  through subsequent switches. Actions-menu commands call `sendText` directly and leave typed text
+  alone. Bridge dependencies are built inside `sendText`, at interaction time, so server rendering
+  never dereferences `window.pyry` through this send path.
 - `onKeyDown`: reads `key`, `shiftKey`, and `nativeEvent.isComposing` off the event into one shared `ComposerKeyEvent`, and asks two predicates in turn (§7) — `shouldInterruptOnKeyDown` first, since [#1072](https://github.com/pyrycode/pyrycode-desktop/issues/1072) added it beneath the type-ahead's own claim, then `shouldSubmitOnKeyDown`. A `true` from the interrupt predicate calls `sendInterrupt` and returns with no `preventDefault()`; otherwise `shouldSubmitOnKeyDown`'s `false` returns without touching the event, and `true` does `preventDefault()` + `handleSubmit()`.
 
 ### 4. Connection-status gate — `composerAvailability` ([#31](../codebase/31.md))
@@ -396,19 +416,26 @@ the architecture spec's Security review for the full argument.
 
 ## Data flow
 
+```text
+selected/creating host + conversation -> retained draft coordinates
+  typing / slash completion -> setDraft(host, conversation, exact text)
+  pane remount / return from another screen -> selectDraft -> controlled textarea + sizing
+
+Send / Enter -> handleSubmit -> sendText(text)
+  unavailable host -> false; retain draft
+  submitMessage(text, activeConversationId, deps)
+    whitespace-only / no conversation -> false; retain draft
+    mint message_id; send trimmed text through guarded bridge
+    append userText echo to flat timeline and host-owned held timeline
+    return true -> onMessageSent -> clear only selected draft
+      -> content-free composer-draft-cleared diagnostic
+
+Actions command -> sendText(command) -> same send and echo; no draft clear
 ```
-type in textarea ─▶ setText (local useState)
-click Send / Enter ─▶ handleSubmit
-                        ├─ !canSend (status ≠ connected)? ─▶ return, no effects (#31 gate)
-                        └─▶ submitMessage(text, deps)
-                              ├─ trim; empty? ─▶ return false (no effects)
-                              ├─ id = newMessageId()          (crypto.randomUUID)
-                              ├─ sendCommand(sendMessageCommand(SendMessagePayload))  [guarded]  ──▶ main/#65 ──▶ relay ──▶ daemon
-                              ├─ dispatch(messageSent: MessagePayload{ role:'user', same id })     ──▶ sessionStore ──▶ thread (#69)
-                              └─ return true ─▶ setText('')
-                                                        │
-daemon later echoes same message_id ──▶ messageReceived ──▶ appendUnique drops the duplicate
-```
+
+Clearing happens at local success, even if the bridge throws and `submitMessage` catches it;
+it does not wait for delivery acknowledgement. Other drafts remain untouched. Draft storage
+preserves whitespace exactly; trimming belongs only to submission.
 
 ## Edge cases and limitations
 
@@ -416,7 +443,11 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 - **Whitespace-only / empty input** — early `return false`; no send, no dispatch, no clear (AC1).
 - **Send-bridge failure** — `try/catch` swallows it (`console.error`); the process does not crash and the optimistic echo still appends (AC4). There is deliberately **no** send-failure UI (no banner, retry, or echo rollback) — the store has no per-message delivery state this milestone. Since #1055, one thing **is** rolled back on this path: a `takeAttachments` take is undone via its own `rollback()`, and the echo's `attachments` field — unlike its `text` — is withheld, because a frame that never reached the bridge named no ids (§10).
 - **Daemon re-echoes the sent message** — the same-`message_id` copy is dropped by `appendUnique`; the thread shows one bubble (AC3).
-- **DOM interaction is untested.** Only the pure `submitMessage` and `shouldSubmitOnKeyDown` are unit-tested (spies/plain values + a stub id). `onChange`, clear-on-success, and `handleKeyDown`'s own three-statement wiring have no test, because the render harness is `renderToStaticMarkup` (node env), not jsdom — the same deferral [#69](../codebase/69.md) carries, and the one carved out by [#512](../codebase/512.md) is that the IME-vs-plain-Enter *decision* no longer has to live in that untested surface.
+- **Interaction coverage uses fake-transport Playwright.** `e2e/conversation-switch-remount.spec.ts`
+  drives exact restoration, edits/emptying, Settings round trips, Send/Enter clearing without an
+  acknowledgement, rejected submission, completion and Actions preservation. Store unit tests cover
+  host/conversation isolation (including equal IDs), collision-safe keys and fresh-session emptiness.
+  Static renderer tests still cannot execute effects or input handlers.
 - **`auto-grow` on the textarea shipped in #1056** — `field-sizing: content` plus a `max-height` on `.composer__input`, no TSX change; the box grows a line at a time to a five-line ceiling, then scrolls. See [Composer message box § the auto-grow](conversation-shell-composer-message-box.md#the-box-grows-with-the-draft-to-a-five-line-ceiling-1056). *(The "single active conversation, `MILESTONE_CONVERSATION_ID`" limitation this bullet used to name was closed by #448, which added the `conversationId` parameter documented above; the rest of this page's narrative sections still describe the pre-#448/#179 shape and are due a fuller pass — flagged here rather than silently left contradicting the current signature.)*
 - **A submit refused by `submitMessage`'s two early `false` returns reads no clock at all**
   ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013)) — `deps.now?.()` sits below both the

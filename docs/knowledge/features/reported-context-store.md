@@ -8,10 +8,10 @@ Introduced in [#1420](../../specs/architecture/1420-reported-context-store.md), 
 [#1419](daemon-event-channel-sealed-union-history-recent.md)'s carried `contextUsage` daemon event — which
 [#1454](https://github.com/pyrycode/pyrycode-desktop/issues/1454)/[#1455](https://github.com/pyrycode/pyrycode-desktop/issues/1455)/[#1459](https://github.com/pyrycode/pyrycode-desktop/issues/1459)/[#1460](https://github.com/pyrycode/pyrycode-desktop/issues/1460)
 decode off the daemon's `context_usage` frame and its three inventories — into a per-conversation store
-plus its own bridge. Shipped dormant: nothing renders yet.
-[#1421](https://github.com/pyrycode/pyrycode-desktop/issues/1421) draws the footer reading and the gauge;
-[#1254](https://github.com/pyrycode/pyrycode-desktop/issues/1254) draws the breakdown popover; both own the
-visual-fidelity check and the DOM-sink discipline this slice only inherits.
+plus its own bridge. [#1421](https://github.com/pyrycode/pyrycode-desktop/issues/1421) uses the held
+reading in the footer and the run-configuration gauge, with settings-derived totals as the fallback
+only when no reading exists. [#1254](https://github.com/pyrycode/pyrycode-desktop/issues/1254) owns the
+breakdown popover.
 
 **Named `reportedContextStore`, not `contextUsageStore` — a forced break with the family convention, for a
 concrete collision rather than a stylistic one.** Every sibling here takes its name from its event arm
@@ -68,6 +68,14 @@ ticket's question if it ever becomes one, and building an eviction policy for a 
 is what that store's header forbids.
 
 ## How it works
+
+The receive bridge remains passive: it subscribes to `contextUsage` events and writes readings.
+The separate [outbound transport capability](daemon-connection-methods.md#public-surface),
+`requestContextUsage`, can ask the daemon for a named conversation's reading through main.
+It is callable but dormant: no renderer sender invokes it yet.
+[#1504](https://github.com/pyrycode/pyrycode-desktop/issues/1504) owns the later trigger on conversation
+open. Adding that send capability does not add a request effect, retry loop or pending state to this
+bridge or store.
 
 ### The store (`src/renderer/src/store/reportedContextStore.ts`)
 
@@ -137,9 +145,21 @@ subscribeReportedContext(onDaemonEvent, setReportedContext): () => void
 ReportedContextData(): null
 ```
 
-`announcedModelBridge`'s shape: reactive-only, no request half, no `connected`-edge trigger, no retry — the
-daemon pushes the reading unsolicited after every turn end, and a client-side retry against a relay
-withholding the frame would be a self-inflicted spin. **One route, no comparison** — the sharpest contrast
+`announcedModelBridge`'s shape: receive-only, no send effect, no `connected`-edge trigger and no retry.
+It accepts both unsolicited turn-end readings and replies to `request_context_usage` through the
+same `parseContextUsagePayload` → `contextUsage` path. The reply's envelope `in_reply_to` identifies
+the request on the wire, but the stored key comes only from the payload's `conversation_id`.
+There is no pending-request lookup or substitution of the requested or active conversation id.
+Optional `as_of` is ignored by the named-field parser and reaches neither the event nor the store;
+displaying its meaning is separate work. Readings still replace by arrival order, with no timestamp
+comparison or expiry.
+
+The request errors `conversation.not_found` and retryable `context_usage.unavailable` keep generic
+error handling upstream; neither produces a `contextUsage` event. This bridge ignores other event
+arms, so an error neither clears a held reading nor fabricates one for an absent key. The outbound
+method also never retries either error, a send failure or silence.
+
+**One route, no comparison** — the sharpest contrast
 with `usageLimitBridge`, which routes on an exact-equality test against a benign status: this arm has no
 benign value, so the whole module is comparison-free and there is nothing for a hostile string to steer.
 `translateContextUsage` returns a fresh named-field literal (never `return event`, never a spread) so
@@ -155,11 +175,11 @@ effect, so the leaf server-renders to `''` without a bridge mock.
 ### The pairing clear
 
 `clearAllReportedContext` joins `ClearPairingScopedStateDeps` and is wired through `PairedShell.tsx`. No
-`connected`-edge clear, for `usageLimitStore`'s reason: after a reconnect the window is whatever claude
-last reported, the next turn end re-reports it, and there is no request half to re-fetch a value blanked
-there. A pairing that has **ended** is the opposite: nothing writes the map until the new daemon's next
-turn ends, and until then a surface would attribute a departed machine's model identity, MCP server names
-and memory-file paths to the new one. Position among the in-memory clears is free; it precedes
+`connected`-edge clear: after a reconnect the held value remains claude's last reported reading until
+another arrives. The outbound request capability does not change that lifetime or guarantee a reply.
+A pairing that has **ended** clears the map so a surface cannot attribute the departed machine's
+model identity, MCP server names or memory-file paths to the new one while awaiting its first reading.
+Position among the in-memory clears is free; it precedes
 `clearAllLastRead`, the only effect that reaches outside memory and so the only one that can throw.
 
 ## Lessons learned (#1420)

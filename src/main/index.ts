@@ -782,6 +782,12 @@ app.whenReady().then(() => {
         router.route(conversationId)?.requestModelList(conversationId)
         return
       }
+      case 'requestContextUsage': {
+        // Use the same id for host lookup and sending; an unknown host never falls back.
+        const conversationId = command.payload.conversation_id
+        router.route(conversationId)?.requestContextUsage(conversationId)
+        return
+      }
       case 'requestHistory':
         // ROUTED BY CONVERSATION, mirroring the two cases above — a conversation's history belongs to
         // the server that hosts it, so the frame goes there or to no wire at all (#1222). The WHOLE

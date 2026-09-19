@@ -211,6 +211,21 @@ describe('subscribeReportedContext', () => {
       droppedMcpTools: 2
     })
   })
+
+  it.each(['conversation.not_found', 'context_usage.unavailable'])(
+    'does not clear or fabricate readings when an unrelated failure carries %s', (code) => {
+      const bridge = fakeBridge()
+      const store = createReportedContextStore()
+      const off = subscribeReportedContext(bridge.onDaemonEvent, store.getState().setReportedContext)
+      bridge.emit(contextUsage({ conversationId: 'held-conversation' }))
+      const held = store.getState()
+      bridge.emit({ type: 'failed', error: { code, message: 'generic failure', retryable: true } })
+      expect(store.getState()).toBe(held)
+      expect(selectReportedContextFor('held-conversation')(store.getState())?.percentage).toBe(11)
+      expect(selectReportedContextFor('no-reading')(store.getState())).toBeNull()
+      off()
+    }
+  )
 })
 
 describe('ReportedContextData', () => {

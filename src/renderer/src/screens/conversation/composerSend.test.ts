@@ -5,6 +5,8 @@ import {
   shouldInterruptOnKeyDown,
   composerAvailability,
   shouldOfferRepair,
+  shouldOfferReconnect,
+  COMPOSER_RECONNECT_BUTTON_COPY,
   shouldShowBanner,
   CONNECTION_BANNER_COPY,
   COMPOSER_ERROR_CHIP_COPY,
@@ -611,62 +613,35 @@ describe('composerAvailability', () => {
   })
 })
 
-// shouldOfferRepair is the pure predicate (#167) deciding when the app proactively surfaces a re-pair
-// escape hatch: true ONLY for a terminal, non-retryable connection `error`. React-free and store-free,
-// the same discipline as composerAvailability, so the whole true/false matrix is unit-testable without
-// a DOM. The three retryability sources are validated against the merged transport in the spec.
-describe('shouldOfferRepair', () => {
-  const ack: HelloAckPayload = {
-    protocol_version: '1',
-    server_id: 's',
-    conn_id: 'c',
-    capabilities: []
-  }
+describe('connection recovery gates', () => {
+  const ack: HelloAckPayload = { protocol_version: '1', server_id: 's', conn_id: 'c', capabilities: [] }
 
-  it('true for a terminal transport error (supervisor gave up / fatal close code — always non-retryable)', () => {
-    expect(
-      shouldOfferRepair({
-        type: 'error',
-        error: { code: 'transport', message: 'gave up', retryable: false }
-      })
-    ).toBe(true)
+  it.each([
+    ['pairing-rejected', true, false],
+    ['transport', false, true],
+    ['handshake', false, true],
+    ['unpair', false, false],
+    ['not-paired', false, false],
+    ['unknown-terminal-code', false, true]
+  ] as const)('classifies non-retryable %s disjointly', (code, repair, reconnect) => {
+    const status = { type: 'error' as const, error: { code, message: 'private', retryable: false } }
+    expect(shouldOfferRepair(status)).toBe(repair)
+    expect(shouldOfferReconnect(status)).toBe(reconnect)
+    expect(shouldOfferRepair(status) && shouldOfferReconnect(status)).toBe(false)
+    const retryable = { ...status, error: { ...status.error, retryable: true } }
+    expect(shouldOfferRepair(retryable)).toBe(false)
+    expect(shouldOfferReconnect(retryable)).toBe(false)
   })
 
-  it('true for a terminal handshake error (daemon rejected a stale/unknown device, close 4401)', () => {
-    expect(
-      shouldOfferRepair({
-        type: 'error',
-        error: { code: 'handshake', message: 'unauthorized', retryable: false }
-      })
-    ).toBe(true)
+  it('rejects every non-error status for both actions', () => {
+    for (const status of [{ type: 'connected', ack }, { type: 'connecting' }, { type: 'disconnected' }] as const) {
+      expect(shouldOfferRepair(status)).toBe(false)
+      expect(shouldOfferReconnect(status)).toBe(false)
+    }
   })
 
-  it('false for connected / connecting / disconnected — not the error arm', () => {
-    expect(shouldOfferRepair({ type: 'connected', ack })).toBe(false)
-    expect(shouldOfferRepair({ type: 'connecting' })).toBe(false)
-    expect(shouldOfferRepair({ type: 'disconnected' })).toBe(false)
-  })
-
-  // AC4: a retryable daemon wire-error (server.binary_offline, rate_limited) is a transient daemon-side
-  // condition, not a broken pairing — the status row keeps #797's plain error chip, no re-pair button.
-  it('false for a retryable daemon error (server.binary_offline)', () => {
-    expect(
-      shouldOfferRepair({
-        type: 'error',
-        error: { code: 'server.binary_offline', message: 'binary offline', retryable: true }
-      })
-    ).toBe(false)
-  })
-
-  // AC5: runUnpair dispatches UNPAIR_FAILED_ERROR { code: 'unpair', retryable: false } when the clear
-  // itself fails. Without the code guard, a failed re-pair would immediately re-offer itself in a loop.
-  it("false for the self-inflicted unpair-failure error (code 'unpair')", () => {
-    expect(
-      shouldOfferRepair({
-        type: 'error',
-        error: { code: 'unpair', message: 'Could not forget this pairing.', retryable: false }
-      })
-    ).toBe(false)
+  it('owns the exact reconnect wording', () => {
+    expect(COMPOSER_RECONNECT_BUTTON_COPY).toBe('Connection error - Reconnect')
   })
 })
 

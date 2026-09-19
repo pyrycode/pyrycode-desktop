@@ -243,7 +243,7 @@ test('records received content, drains buffered quit, and reads locally after re
   await expect.poll(() => page.locator('.channel-list__row-open').textContent()).toContain('latest received list')
   expect(snapshotText(await read())).not.toContain('final buffered text')
   forwarder.closeClientLeg(4401)
-  await expect.poll(() => page.getByRole('button', { name: 'Pairing error - Re-pair' }).count()).toBe(1)
+  await expect.poll(() => page.getByRole('button', { name: 'Connection error - Reconnect', exact: true }).count()).toBe(1)
   expect(await read()).toEqual(saved)
   expect(await page.evaluate((serverId) => window.pyry.chatHistory({ operation: 'replaceList', serverId,
     snapshot: { version: 1, kind: 'list', serverId, conversations: [] } }), serverId)).toEqual({ status: 'ok' })
@@ -359,7 +359,7 @@ test('restores a pairing-rejected saved host beside a usable connected host', as
 
 test('pending saved reading survives opening and cancelling host repair', async ({ launchPairedApp }) => {
   const launched = await launchPairedApp()
-  const { app, page, daemon, forwarder, servers } = launched
+  const { app, page, daemon, servers } = launched
   const text = 'Saved reply after repair cancellation'
   await daemon.pushFrame(frame('assistant_delta', {
     conversation_id: SEEDED_ROW.id, turn_id: 'repair-read', seq: 0, text
@@ -369,7 +369,8 @@ test('pending saved reading survives opening and cancelling host repair', async 
   }), { serverId: servers[0].serverId, conversationId: SEEDED_ROW.id })
   await expect.poll(async () => snapshotText(await read())).toBe(text)
   const saved = await read()
-  forwarder.closeClientLeg(4401)
+  // Recovery requires an explicit sealed rejection, not a bare terminal close.
+  await daemon.pushFrame(frame('error', { code: 'auth.invalid_token', message: 'private', retryable: false }))
   await expect(page.getByRole('button', { name: 'Pairing error - Re-pair' })).toBeVisible()
   await page.reload()
   await expect(page.getByRole('button', { name: SEEDED_ROW.name!, exact: true })).toBeVisible()

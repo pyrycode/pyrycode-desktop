@@ -47,14 +47,14 @@ describe('banner display surfaces', () => {
   it('keeps connected gating and recovery priority for the report notice', () => {
     const props = { onRepair: () => {}, notice: <ComposerBannerReport report={report} /> }
     const connected = { type: 'connected' as const, ack: { protocol_version: '1', server_id: 's', conn_id: 'c', capabilities: [] } }
-    expect(renderToStaticMarkup(<ComposerErrorSlot {...props} status={connected} />)).toContain('Claude:')
+    expect(renderToStaticMarkup(<ComposerErrorSlot onReconnect={() => {}} {...props} status={connected} />)).toContain('Claude:')
     for (const type of ['disconnected', 'connecting'] as const) {
-      expect(renderToStaticMarkup(<ComposerErrorSlot {...props} status={{ type }} />)).toBe('')
+      expect(renderToStaticMarkup(<ComposerErrorSlot onReconnect={() => {}} {...props} status={{ type }} />)).toBe('')
     }
-    expect(renderToStaticMarkup(<ComposerErrorSlot {...props} status={connected} recovery={<span>stopped</span>} refusal={<span>switch</span>} />)).toBe('<span>stopped</span>')
-    expect(renderToStaticMarkup(<ComposerErrorSlot {...props} status={connected} refusal={<span>switch</span>} />)).toBe('<span>switch</span>')
+    expect(renderToStaticMarkup(<ComposerErrorSlot onReconnect={() => {}} {...props} status={connected} recovery={<span>stopped</span>} refusal={<span>switch</span>} />)).toBe('<span>stopped</span>')
+    expect(renderToStaticMarkup(<ComposerErrorSlot onReconnect={() => {}} {...props} status={connected} refusal={<span>switch</span>} />)).toBe('<span>switch</span>')
     for (const retryable of [false, true]) {
-      expect(renderToStaticMarkup(<ComposerErrorSlot {...props} status={{ type: 'error', error: {
+      expect(renderToStaticMarkup(<ComposerErrorSlot onReconnect={() => {}} {...props} status={{ type: 'error', error: {
         code: 'transport', message: 'private-connection', retryable
       } }} />)).not.toMatch(/Claude:|private-connection/)
     }

@@ -151,31 +151,34 @@ In the container, `Composer` selects `status`, derives `{ canSend }`, and:
 
 ### 5. Re-pair gate — `shouldOfferRepair` ([#167](../codebase/167.md))
 
-A second pure predicate beside `composerAvailability`, over the same `ConnectionStatus`: whether the
-conversation screen should proactively surface a re-pair escape hatch. Through #167 that was a bare
-`Re-pair` text button beneath the composer; since
-[#963](https://github.com/pyrycode/pyrycode-desktop/issues/963) it is the filled button that takes the
-composer status row's error slot in place of [the chip](conversation-shell-composer-error-chip.md#composer-error-chip-797)
-— see [Conversation shell — composer § Actionable-error
-button](conversation-shell-composer-repair-button.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963) for
-the current surface and [Conversation shell — chrome § Re-pair
-control](conversation-shell-chrome.md#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963)
-for the retired one. This predicate itself is unchanged by that move, reused byte-for-byte.
+`shouldOfferRepair` and `shouldOfferReconnect` are pure, disjoint decisions over
+`ConnectionStatus`, used by the [composer's actionable-error slot](conversation-shell-composer-repair-button.md).
+Since [#1510](https://github.com/pyrycode/pyrycode-desktop/issues/1510), terminal failure alone
+cannot offer re-pairing:
 
 ```ts
 export function shouldOfferRepair(status: ConnectionStatus): boolean {
-  return status.type === 'error' && !status.error.retryable && status.error.code !== 'unpair'
+  return status.type === 'error' && !status.error.retryable && status.error.code === 'pairing-rejected'
+}
+
+export function shouldOfferReconnect(status: ConnectionStatus): boolean {
+  return (
+    status.type === 'error' && !status.error.retryable &&
+    status.error.code !== 'pairing-rejected' &&
+    status.error.code !== 'unpair' && status.error.code !== 'not-paired'
+  )
 }
 ```
 
-Unlike `composerAvailability`, this is a boolean over the single `error` arm, not a total mapping over
-all four — no `assertNever` exhaustiveness switch is needed for a one-arm gate. `!retryable` is the
-primary gate (a terminal transport/handshake failure is always non-retryable; a retryable daemon
-wire-error like `server.binary_offline` is excluded); `code !== 'unpair'` is a self-loop guard excluding
-the synthetic error `runUnpair` ([unpair channel](unpair-channel.md), #166) itself dispatches on a
-failed clear — without it, a failed re-pair would immediately re-satisfy the predicate and re-offer
-itself. A transient transport drop never reaches `error` at all (the relay supervisor absorbs and
-re-dials it), so it is out of scope for this predicate by construction.
+A sealed `auth.invalid_token` frame establishes `pairing-rejected`. A bare fatal close,
+including 4421 or 4401, establishes only a connection failure and offers Reconnect.
+Transport, handshake and unknown terminal error codes therefore take the reconnect arm.
+`unpair` is excluded to avoid the failed-removal self-loop; `not-paired` has no saved
+host to dial. Both predicates reject retryable errors and every non-error status;
+remaining errors retain the chip. Unit tables assert both decisions together so an
+accidental overlap cannot pass as two independently plausible gates.
+
+These recovery gates do not enable sending. `composerAvailability` (§4) still:
 
 - **Guards `handleSubmit`** with `if (!canSend) return` at the top — the authoritative gate, blocking the **Enter** path (`handleKeyDown → handleSubmit`) as well as the button. `submitMessage` is never reached while not connected, so no `sendCommand` and no optimistic `dispatch` fire; the input is **not** cleared.
 - **Natively disables** the send `<button>` with `disabled={!canSend}` (a disabled button fires no `onClick` — the visible affordance, platform-blocked in addition to the handler guard).
@@ -204,8 +207,8 @@ Unlike `composerAvailability`, this is not an exhaustive per-arm switch: every n
 
 `CONNECTION_BANNER_COPY` ships alongside it — a single client-owned string constant. Through [#968](../codebase/968.md)
 it was lexically distinct from all three `composerAvailability` hints; those retired with the caption, and
-it is now argued distinct from the status row's two remaining strings instead (`COMPOSER_ERROR_CHIP_COPY`
-§8, `COMPOSER_REPAIR_BUTTON_COPY` §9), so the banner and the row directly above the message box never read
+it is now argued distinct from the status row's chip and button strings instead (`COMPOSER_ERROR_CHIP_COPY`
+§8, `COMPOSER_REPAIR_BUTTON_COPY` and `COMPOSER_RECONNECT_BUTTON_COPY` §9), so the banner and the row directly above the message box never read
 as the same string stacked twice. One constant, not a per-arm map: every non-connected arm is a state
 where pyry is unreachable, so one sentence covers all three honestly.
 
@@ -248,11 +251,9 @@ A second binding lives outside this module, on `ComposerSendButton`'s running va
 
 ### 8. Error chip copy — `composerSend.ts` (#797)
 
-Two of the three strings this module now owns about the single `ConnectionStatus` fact (with
-`CONNECTION_BANNER_COPY` §6 and `COMPOSER_REPAIR_BUTTON_COPY` §9 — [#968](../codebase/968.md) retired the
-three `composerAvailability` captions that used to sit beside them, so the set shrank from five to three),
-but unlike §4–§7 these are plain constants, not predicates — no `shouldShowErrorChip` was added beside
-them. The gate is already the discriminant of the one arm the [composer status row's error chip](conversation-shell-composer-error-chip.md#composer-error-chip-797)
+The chip's visible copy and hidden prefix share this module with the connection banner
+(§6) and both recovery buttons (§9). These are plain constants, not predicates — no
+`shouldShowErrorChip` was added beside them. The gate is already the discriminant of the one arm the [composer status row's error chip](conversation-shell-composer-error-chip.md#composer-error-chip-797)
 belongs to (`status.type === 'error'`), so a named predicate would only restate that in an export and a
 test matrix.
 
@@ -275,33 +276,28 @@ down!`; an editor's trim would silently degrade the announcement. `composerSend.
 These two live here, beside `CONNECTION_BANNER_COPY`, rather than as module-level constants in
 `ConversationScreen.tsx` (where `THINKING_COPY`/`STALL_COPY`/`EMPTY_THREAD_COPY` live): every string that
 speaks about `ConnectionStatus` lives in this one module, which is what makes the lexical-distinctness
-comparison between all four reviewable in one place.
+comparison reviewable in one place.
 
 ### 9. Actionable-error button copy — `COMPOSER_REPAIR_BUTTON_COPY` ([#963](https://github.com/pyrycode/pyrycode-desktop/issues/963))
 
-The third string in the lexical-distinctness family `COMPOSER_ERROR_CHIP_COPY`'s docstring argues for
-(`CONNECTION_BANNER_COPY` and this one — [#968](../codebase/968.md) retired the three `composerAvailability`
-hints that used to share this set) — the label of the button that takes the chip's slot whenever
-`shouldOfferRepair` (§5) is true:
+The two client-owned labels live beside the connection banner and error-chip copy in
+`composerSend.ts`. The corresponding predicate in §5 selects exactly one:
 
 ```ts
 export const COMPOSER_REPAIR_BUTTON_COPY = 'Pairing error - Re-pair'
+export const COMPOSER_RECONNECT_BUTTON_COPY = 'Connection error - Reconnect'
 ```
 
-The design's pattern is "Type of error - Action", and both halves are load-bearing: the type is what
-lets this occupant drop the chip's visually-hidden `Error: ` prefix (the label already says it's an
-error), and the action is what makes the control read as a button rather than a status. It leads with
-"Pairing", sharing no leading word with `Host connection down!` or `Cannot reach pyrybox…`. Apostrophe-free,
-ASCII hyphen-minus separator, same reason as its siblings (`renderToStaticMarkup` escapes `'` → `&#x27;`).
+Both follow “Type of error - Action” with an ASCII hyphen-minus separator. Their
+visible text is their accessible name: no `aria-label`, hidden `Error: ` prefix or
+additional live region. The connection banner already announces loss of connectivity.
+Both render with `button-small button-small--error` in the same trailing slot.
 
-**Unlike every string above it, this one is also the accessible name** — the button carries no
-`aria-label`, so the visible text is the whole of what a screen reader announces. And unlike the chip's
-copy, its zero-daemon-substring guarantee needs a sharper statement: `ComposerErrorChip` narrows on
-`status.type` alone and never touches the error arm, while this button's gate (`shouldOfferRepair`)
-*reads* `status.error.retryable` and `.code`. Those reads are confined to that predicate's boolean and
-reach no markup — see [Conversation shell — composer § Actionable-error
-button](conversation-shell-composer-repair-button.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963) for
-the structural argument and the sentinel test that pins it.
+Error fields select the branch but never supply markup, attributes or accessible copy.
+Static-render tests use sentinel messages on both buttons and a sentinel code on
+Reconnect; repair must retain the real `pairing-rejected` code to exercise its branch.
+See [the actionable-error slot](conversation-shell-composer-repair-button.md) for
+host resolution, recovery ownership and interaction coverage.
 
 ### 10. Attachments named on the outbound frame — `takeAttachments` ([#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039), reworked by [#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055))
 
@@ -416,7 +412,7 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 
 ## Edge cases and limitations
 
-- **Not connected** ([#31](../codebase/31.md); the caption retired by [#968](../codebase/968.md)) — while `selectStatus` is not `connected`, the send button is `disabled` and the `handleSubmit` early-return inerts the Enter path. No `sendCommand`, no echo, input not cleared. The textarea stays enabled (drafting allowed); the control re-enables reactively on connect. `composerAvailability` never touches `status.error`, so no daemon-supplied string reaches this gate at all; the same non-connected state shows the prominent [connection banner](conversation-shell-chrome.md#connection-banner-279) (#279), which is now the sole announcement of the transition, and in the `error` arm the status row directly above the message box carries [the chip or the re-pair button](conversation-shell-composer-error-chip.md#composer-error-chip-797) (#797/#963).
+- **Not connected** ([#31](../codebase/31.md); the caption retired by [#968](../codebase/968.md)) — while `selectStatus` is not `connected`, the send button is `disabled` and the `handleSubmit` early-return inerts the Enter path. No `sendCommand`, no echo, input not cleared. The textarea stays enabled (drafting allowed); the control re-enables reactively on connect. `composerAvailability` never touches `status.error`, so no daemon-supplied string reaches this gate at all; the same non-connected state shows the prominent [connection banner](conversation-shell-chrome.md#connection-banner-279) (#279), which is now the sole announcement of the transition, and in the `error` arm the status row directly above the message box carries [the chip or a recovery button](conversation-shell-composer-error-chip.md#composer-error-chip-797) (#797/#963).
 - **Whitespace-only / empty input** — early `return false`; no send, no dispatch, no clear (AC1).
 - **Send-bridge failure** — `try/catch` swallows it (`console.error`); the process does not crash and the optimistic echo still appends (AC4). There is deliberately **no** send-failure UI (no banner, retry, or echo rollback) — the store has no per-message delivery state this milestone. Since #1055, one thing **is** rolled back on this path: a `takeAttachments` take is undone via its own `rollback()`, and the echo's `attachments` field — unlike its `text` — is withheld, because a frame that never reached the bridge named no ids (§10).
 - **Daemon re-echoes the sent message** — the same-`message_id` copy is dropped by `appendUnique`; the thread shows one bubble (AC3).

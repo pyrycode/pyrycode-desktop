@@ -1,6 +1,14 @@
-import type { Page } from '@playwright/test'
+import type { ElectronApplication, Page } from '@playwright/test'
 import { test, expect, SEEDED_ROW, SECOND_SEEDED_ROW } from './fixtures/launchPairedApp'
-import { COMPOSER_REPAIR_BUTTON_COPY } from '../src/renderer/src/screens/conversation/composerSend'
+import { COMPOSER_REPAIR_BUTTON_COPY, COMPOSER_RECONNECT_BUTTON_COPY } from '../src/renderer/src/screens/conversation/composerSend'
+
+import { encodeEnvelope } from '../src/main/transport/codec'
+import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
+import { RECONNECT_SERVER_CHANNEL } from '../src/shared/ipc/reconnectServer'
+import { UNPAIR_SERVER_CHANNEL } from '../src/shared/ipc/unpair'
+
+const rejection = () => encodeEnvelope({ id: 50, type: 'error', ts: '2026-09-19T00:00:00Z',
+  payload: { code: 'auth.invalid_token', message: 'private pairing detail', retryable: false } })
 
 /**
  * The composer status row's three geometric facts (#963 AC3), read in one evaluate so they describe one
@@ -52,10 +60,10 @@ function rowName(row: { name: string | null }): string {
 }
 
 // Composer recovery preserves saved hosts; explicit removal is covered by the Settings specs.
-test('re-pair: a fatal relay close surfaces Re-pair, which opens a recovery modal', async ({
+test('re-pair: a sealed pairing rejection opens a recovery modal', async ({
   launchPairedApp
 }) => {
-  const { page, forwarder } = await launchPairedApp()
+  const { page, daemon } = await launchPairedApp()
 
   const pairingBox = page.locator('[aria-label="Pairing code"]')
 
@@ -66,15 +74,9 @@ test('re-pair: a fatal relay close surfaces Re-pair, which opens a recovery moda
   expect(atRest.rowHeight).toBe(24)
   expect(atRest.groupFromBottom).toBe(0)
 
-  // The client leg is connected once the fixture resolves (Send-enabled ⇐ the Noise handshake completed
-  // over the live relay socket), so fire the fatal close immediately. 4401 ∈ the client's
-  // DEFAULT_FATAL_CLOSE_CODES, so the supervised client classifies it as terminal (non-retryable) and
-  // arms no re-dial — no reconnect races the assertion.
-  forwarder.closeClientLeg(4401)
+  // A sealed invalid-token frame establishes pairing rejection; a bare close does not.
+  daemon.pushFrame(rejection())
 
-  // AC1/AC2 — the fatal close → terminal → `error` status → shouldOfferRepair true → the actionable
-  // button takes the status row's error slot, and the chip does not (one occupant per slot). Playwright
-  // auto-wait absorbs the close → terminal → re-render latency.
   const repair = page.getByRole('button', { name: COMPOSER_REPAIR_BUTTON_COPY, exact: true })
   await expect(repair).toBeVisible()
   await expect(page.locator('.composer-status__error')).toHaveCount(0)
@@ -136,10 +138,7 @@ test('re-pair with a second server preserves both hosts in the paired shell', as
     .click()
   await expect(page.locator('.conversation')).toBeVisible()
 
-  // Server A's leg only. 4401 ∈ the client's DEFAULT_FATAL_CLOSE_CODES, so its supervised client
-  // classifies the close as terminal and arms no re-dial; server B's forwarder is untouched and its
-  // connection stays live and un-handshaken throughout.
-  serverA.forwarder.closeClientLeg(4401)
+  serverA.daemon.pushFrame(rejection())
 
   const repair = page.getByRole('button', { name: COMPOSER_REPAIR_BUTTON_COPY, exact: true })
   await expect(repair).toBeVisible()
@@ -164,3 +163,75 @@ test('re-pair with a second server preserves both hosts in the paired shell', as
     page.locator('.channel-list__row-open').filter({ hasText: rowName(SECOND_SEEDED_ROW) })
   ).toBeVisible()
 })
+
+// Observe real main-process dispatch and authenticated connection events, without replacing reconnect.
+async function observeRecovery(app: ElectronApplication): Promise<void> {
+  await app.evaluate(({ ipcMain, BrowserWindow }, channels) => {
+    const counts = { reconnect: [] as string[], connected: [] as string[], unpair: 0 }
+    const handlers = (ipcMain as typeof ipcMain & { _invokeHandlers: Map<string, Function> })._invokeHandlers
+    for (const channel of [channels.reconnect, channels.unpair]) {
+      const original = handlers.get(channel)!
+      ipcMain.removeHandler(channel)
+      ipcMain.handle(channel, async (event, request) => {
+        if (channel === channels.reconnect) counts.reconnect.push(request.serverId)
+        else counts.unpair++
+        return original(event, request)
+      })
+    }
+    const contents = BrowserWindow.getAllWindows()[0].webContents
+    const send = contents.send.bind(contents)
+    contents.send = (channel, ...values) => {
+      if (channel === channels.events && values[0]?.type === 'connected') {
+        counts.connected.push(values[0].serverId)
+      }
+      send(channel, ...values)
+    }
+    ipcMain.handle('test:composer-recovery-counts', () => counts)
+  }, { reconnect: RECONNECT_SERVER_CHANNEL, unpair: UNPAIR_SERVER_CHANNEL, events: DAEMON_EVENT_CHANNEL })
+}
+
+async function recoveryCounts(app: ElectronApplication) {
+  return app.evaluate(({ ipcMain }) => {
+    const handlers = (ipcMain as typeof ipcMain & { _invokeHandlers: Map<string, Function> })._invokeHandlers
+    return handlers.get('test:composer-recovery-counts')!() as {
+      reconnect: string[]; connected: string[]; unpair: number
+    }
+  })
+}
+
+for (const closeCode of [4421, 4401]) {
+  test(`reconnect: bare ${closeCode} redials only the open host and preserves row geometry`, async ({ launchPairedApp }) => {
+    const { app, page, servers } = await launchPairedApp({}, { secondServer: {} })
+    const [serverA, serverB] = servers
+    await page.locator('.channel-list__row-open').filter({ hasText: rowName(SEEDED_ROW) }).click()
+    await expect(page.locator('.conversation')).toBeVisible()
+    await page.setViewportSize({ width: 800, height: 600 })
+    await page.getByPlaceholder('Message…').fill('Retained draft')
+    const atRest = await readStatusRowGeometry(page)
+    expect(atRest).toMatchObject({ rowHeight: 24, groupFromBottom: 0 })
+    await observeRecovery(app)
+
+    serverA.forwarder.closeClientLeg(closeCode)
+    const reconnect = page.getByRole('button', { name: COMPOSER_RECONNECT_BUTTON_COPY, exact: true })
+    await expect(reconnect).toBeVisible()
+    await expect(page.getByRole('button', { name: COMPOSER_REPAIR_BUTTON_COPY, exact: true })).toHaveCount(0)
+    await expect(page.locator('.composer-status__error')).toHaveCount(0)
+    const withButton = await readStatusRowGeometry(page)
+    expect(withButton).toEqual({ rowHeight: 32, groupFromBottom: 0, iconFromBottom: atRest.iconFromBottom })
+    if (closeCode === 4421) await page.screenshot({ path: '/private/tmp/builder-1510-reconnect-800.png' })
+    await reconnect.click()
+    await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
+    await expect.poll(() => recoveryCounts(app)).toEqual({
+      reconnect: [serverA.serverId], connected: [serverA.serverId], unpair: 0
+    })
+    await expect(reconnect).toHaveCount(0)
+    await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
+    await expect(page.getByPlaceholder('Message…')).toHaveValue('Retained draft')
+    await expect(page.locator('.channel-list__row-open').filter({ hasText: rowName(SECOND_SEEDED_ROW) })).toBeVisible()
+    await page.getByRole('button', { name: 'Settings' }).click()
+    await expect(page.locator('.settings__server-row-id')).toHaveText([serverA.serverId, serverB.serverId])
+    expect(await recoveryCounts(app)).toEqual({
+      reconnect: [serverA.serverId], connected: [serverA.serverId], unpair: 0
+    })
+  })
+}

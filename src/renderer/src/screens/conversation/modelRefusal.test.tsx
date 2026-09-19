@@ -74,11 +74,11 @@ it('attributes escaped bounded text to Claude and handles empty model identifier
 it('keeps connection errors and stopped-turn recovery above refusal, with usage below', () => {
   const connected = { type: 'connected' as const, ack: { protocol_version: '1', server_id: 's', conn_id: 'c', capabilities: [] } }
   const props = { onRepair: () => {}, notice: <span>usage</span>, refusal: <span>swap</span> }
-  expect(renderToStaticMarkup(<ComposerErrorSlot {...props} status={connected} />)).toBe('<span>swap</span>')
-  expect(renderToStaticMarkup(<ComposerErrorSlot {...props} status={connected} recovery={<span>stopped</span>} />)).toBe('<span>stopped</span>')
-  expect(renderToStaticMarkup(<ComposerErrorSlot {...props} status={{ type: 'disconnected' }} />)).toBe('')
-  const html = renderToStaticMarkup(<ComposerErrorSlot {...props} status={{ type: 'error', error: { code: 'transport', message: 'private', retryable: false } }} />)
-  expect(html).toContain('Re-pair')
+  expect(renderToStaticMarkup(<ComposerErrorSlot onReconnect={() => {}} {...props} status={connected} />)).toBe('<span>swap</span>')
+  expect(renderToStaticMarkup(<ComposerErrorSlot onReconnect={() => {}} {...props} status={connected} recovery={<span>stopped</span>} />)).toBe('<span>stopped</span>')
+  expect(renderToStaticMarkup(<ComposerErrorSlot onReconnect={() => {}} {...props} status={{ type: 'disconnected' }} />)).toBe('')
+  const html = renderToStaticMarkup(<ComposerErrorSlot onReconnect={() => {}} {...props} status={{ type: 'error', error: { code: 'transport', message: 'private', retryable: false } }} />)
+  expect(html).toContain('Connection error - Reconnect')
   expect(html).not.toContain('swap')
   expect(html).not.toContain('private')
 })

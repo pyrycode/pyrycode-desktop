@@ -54,7 +54,8 @@ import {
   CONNECTION_BANNER_COPY,
   COMPOSER_ERROR_CHIP_COPY,
   COMPOSER_ERROR_CHIP_PREFIX_COPY,
-  COMPOSER_REPAIR_BUTTON_COPY
+  COMPOSER_REPAIR_BUTTON_COPY,
+  COMPOSER_RECONNECT_BUTTON_COPY
 } from './composerSend'
 import {
   USAGE_LIMIT_EXHAUSTED_COPY,
@@ -3593,16 +3594,8 @@ describe('StatusSheet — the Run configuration host modal', () => {
   })
 })
 
-// #963: the status row's right-hand slot, now a THREE-way choice — the actionable-error button, the
-// #797 chip, or nothing — where #167 had a separate block beneath the composer. ComposerErrorSlot is the
-// pure, exported view (the RepairPrompt pattern it replaces, and the ComposerErrorChip pattern it
-// delegates to): server-render it directly with an injected `status` to prove the whole matrix, which no
-// store-bound container test can do (zustand v5's useStore reads getInitialState() = disconnected under
-// server render, so only one arm is reachable there).
-//
-// Every error-arm assertion here is written in BOTH directions — the expected occupant present AND the
-// other absent — because AC1's contract is one occupant per slot, and a one-directional assertion would
-// pass on a slot that rendered both.
+// Inject status to prove the slot's branch decisions and mutual exclusion under static rendering.
+// Store-bound renders use getInitialState(), so they cannot exercise every status without a spy.
 describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
   const ack = {
     protocol_version: '1',
@@ -3611,10 +3604,33 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
     capabilities: []
   }
 
-  it('renders the actionable button and NOT the chip for a terminal, non-retryable error (AC1)', () => {
+  it.each([
+    ['pairing-rejected', 'Pairing error - Re-pair'],
+    ['DAEMON_CODE_SENTINEL', 'Connection error - Reconnect']
+  ])('renders only the fixed button for %s without error fields', (code, copy) => {
+    const markup = renderToStaticMarkup(<ComposerErrorSlot
+      status={{ type: 'error', error: { code, message: 'DAEMON_MESSAGE_SENTINEL', retryable: false } }}
+      onRepair={() => {}} onReconnect={() => {}}
+      notice={<span>NOTICE</span>} recovery={<span>RECOVERY</span>}
+      refusal={<span>REFUSAL</span>} history={<span>HISTORY</span>} taskCount={<span>TASKS</span>}
+    />)
+    expect(markup).toBe(`<button type="button" class="button-small button-small--error">${copy}</button>`)
+    expect(markup).not.toMatch(/DAEMON_|aria-label|title=|data-/)
+  })
+
+  it.each(['unpair', 'not-paired'])('retains only the chip for %s', code => {
+    const markup = renderToStaticMarkup(<ComposerErrorSlot
+      status={{ type: 'error', error: { code, message: 'private', retryable: false } }}
+      onRepair={() => {}} onReconnect={() => {}} notice={null}
+    />)
+    expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
+    expect(markup).not.toContain('<button')
+  })
+
+  it('renders Re-pair and NOT the chip for explicit non-retryable pairing rejection', () => {
     const markup = renderToStaticMarkup(
-      <ComposerErrorSlot
-        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
+      <ComposerErrorSlot onReconnect={() => {}}
+        status={{ type: 'error', error: { code: 'pairing-rejected', message: 'gave up', retryable: false } }}
         onRepair={() => {}}
         notice={null}
       />
@@ -3629,7 +3645,7 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
   // re-pair. shouldOfferRepair's `!retryable` gate is what makes this arm fall through to the chip.
   it('renders the chip and NOT the button for a retryable daemon error (AC1, #167 AC4)', () => {
     const markup = renderToStaticMarkup(
-      <ComposerErrorSlot
+      <ComposerErrorSlot onReconnect={() => {}}
         status={{
           type: 'error',
           error: { code: 'server.binary_offline', message: 'offline', retryable: true }
@@ -3643,13 +3659,10 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
     expect(markup).not.toContain(COMPOSER_REPAIR_BUTTON_COPY)
   })
 
-  // #167's AC5, likewise preserved: the self-inflicted UNPAIR_FAILED_ERROR that runUnpair dispatches
-  // when the clear itself fails. Without shouldOfferRepair's `code !== 'unpair'` gate a failed re-pair
-  // would immediately re-offer itself — a tight loop of a broken capability — so this arm must show the
-  // chip even though it is terminal and non-retryable.
+  // Failed unpair is excluded from both recovery actions to avoid a self-loop.
   it('renders the chip and NOT the button after a failed unpair (AC1, #167 AC5)', () => {
     const markup = renderToStaticMarkup(
-      <ComposerErrorSlot
+      <ComposerErrorSlot onReconnect={() => {}}
         status={{
           type: 'error',
           error: { code: 'unpair', message: 'Could not forget this pairing.', retryable: false }
@@ -3667,30 +3680,30 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
   // rendered-but-empty wrapper.
   it('renders nothing at all while disconnected — not an empty element (AC1)', () => {
     expect(
-      renderToStaticMarkup(<ComposerErrorSlot status={{ type: 'disconnected' }} onRepair={() => {}} notice={null} />)
+      renderToStaticMarkup(<ComposerErrorSlot onReconnect={() => {}} status={{ type: 'disconnected' }} onRepair={() => {}} notice={null} />)
     ).toBe('')
   })
 
   it('renders nothing at all while connecting — not an empty element (AC1)', () => {
     expect(
-      renderToStaticMarkup(<ComposerErrorSlot status={{ type: 'connecting' }} onRepair={() => {}} notice={null} />)
+      renderToStaticMarkup(<ComposerErrorSlot onReconnect={() => {}} status={{ type: 'connecting' }} onRepair={() => {}} notice={null} />)
     ).toBe('')
   })
 
   it('renders nothing at all while connected — not an empty element (AC1)', () => {
     expect(
-      renderToStaticMarkup(<ComposerErrorSlot status={{ type: 'connected', ack }} onRepair={() => {}} notice={null} />)
+      renderToStaticMarkup(<ComposerErrorSlot onReconnect={() => {}} status={{ type: 'connected', ack }} onRepair={() => {}} notice={null} />)
     ).toBe('')
   })
 
   // AC4, and the one assertion this view needs that the chip's own describe cannot supply. Unlike
   // ComposerErrorChip — which narrows on `status.type` and never touches the error arm at all — this
-  // view calls shouldOfferRepair, which READS `status.error.retryable` and `.code`. Those two reads are
+  // view calls shouldOfferReconnect, which READS `status.error.retryable` and `.code`. Those two reads are
   // one line away from a value a future edit could render, so the guarantee is pinned rather than
   // argued: on the arm that reads them, neither sentinel reaches the markup.
   it('never renders ConnectionError.message or .code on the button arm (AC4)', () => {
     const markup = renderToStaticMarkup(
-      <ComposerErrorSlot
+      <ComposerErrorSlot onReconnect={() => {}}
         status={{
           type: 'error',
           error: { code: 'DAEMON_SECRET_CODE', message: 'DAEMON_SECRET_DETAIL', retryable: false }
@@ -3699,7 +3712,7 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
         notice={null}
       />
     )
-    expect(markup).toContain(COMPOSER_REPAIR_BUTTON_COPY)
+    expect(markup).toContain(COMPOSER_RECONNECT_BUTTON_COPY)
     expect(markup).not.toContain('DAEMON_SECRET_DETAIL')
     expect(markup).not.toContain('DAEMON_SECRET_CODE')
   })
@@ -3709,8 +3722,8 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
   // visually-hidden `Error: ` run is not carried over to this occupant.
   it('takes its accessible name from the visible text — no aria-label, no hidden prefix (AC4)', () => {
     const markup = renderToStaticMarkup(
-      <ComposerErrorSlot
-        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
+      <ComposerErrorSlot onReconnect={() => {}}
+        status={{ type: 'error', error: { code: 'pairing-rejected', message: 'gave up', retryable: false } }}
         onRepair={() => {}}
         notice={null}
       />
@@ -3726,8 +3739,8 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
   // transparent button that every other assertion here would still pass.
   it('wears the shared small-button base class and its error variant (AC3)', () => {
     const markup = renderToStaticMarkup(
-      <ComposerErrorSlot
-        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
+      <ComposerErrorSlot onReconnect={() => {}}
+        status={{ type: 'error', error: { code: 'pairing-rejected', message: 'gave up', retryable: false } }}
         onRepair={() => {}}
         notice={null}
       />
@@ -3749,8 +3762,8 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
 
     it('yields to the actionable-error button on a terminal, non-retryable error', () => {
       const markup = renderToStaticMarkup(
-        <ComposerErrorSlot
-          status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
+        <ComposerErrorSlot onReconnect={() => {}}
+          status={{ type: 'error', error: { code: 'pairing-rejected', message: 'gave up', retryable: false } }}
           onRepair={() => {}}
           notice={sentinel}
         />
@@ -3761,7 +3774,7 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
 
     it('yields to the connection-error chip on a retryable daemon error', () => {
       const markup = renderToStaticMarkup(
-        <ComposerErrorSlot
+        <ComposerErrorSlot onReconnect={() => {}}
           status={{
             type: 'error',
             error: { code: 'server.binary_offline', message: 'offline', retryable: true }
@@ -3783,14 +3796,14 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
     ])('renders nothing at all while %s — not the notice, not an empty element', (_label, status) => {
       expect(
         renderToStaticMarkup(
-          <ComposerErrorSlot status={status} onRepair={() => {}} notice={sentinel} />
+          <ComposerErrorSlot onReconnect={() => {}} status={status} onRepair={() => {}} notice={sentinel} />
         )
       ).toBe('')
     })
 
     it('renders the notice, and only the notice, while connected', () => {
       const markup = renderToStaticMarkup(
-        <ComposerErrorSlot status={{ type: 'connected', ack }} onRepair={() => {}} notice={sentinel} />
+        <ComposerErrorSlot onReconnect={() => {}} status={{ type: 'connected', ack }} onRepair={() => {}} notice={sentinel} />
       )
       expect(markup).toBe('<p>USAGE_NOTICE_SENTINEL</p>')
     })
@@ -3800,7 +3813,7 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
     it('renders nothing at all while connected with no notice to draw', () => {
       expect(
         renderToStaticMarkup(
-          <ComposerErrorSlot status={{ type: 'connected', ack }} onRepair={() => {}} notice={null} />
+          <ComposerErrorSlot onReconnect={() => {}} status={{ type: 'connected', ack }} onRepair={() => {}} notice={null} />
         )
       ).toBe('')
     })
@@ -3817,8 +3830,8 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
 
     it('yields to the actionable-error button on a terminal, non-retryable error', () => {
       const markup = renderToStaticMarkup(
-        <ComposerErrorSlot
-          status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
+        <ComposerErrorSlot onReconnect={() => {}}
+          status={{ type: 'error', error: { code: 'pairing-rejected', message: 'gave up', retryable: false } }}
           onRepair={() => {}}
           notice={null}
           taskCount={pill}
@@ -3830,7 +3843,7 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
 
     it('yields to the connection-error chip on a retryable daemon error', () => {
       const markup = renderToStaticMarkup(
-        <ComposerErrorSlot
+        <ComposerErrorSlot onReconnect={() => {}}
           status={{
             type: 'error',
             error: { code: 'server.binary_offline', message: 'offline', retryable: true }
@@ -3851,7 +3864,7 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
       'yields to the %s reading while connected',
       (slot) => {
         const markup = renderToStaticMarkup(
-          <ComposerErrorSlot
+          <ComposerErrorSlot onReconnect={() => {}}
             status={{ type: 'connected', ack }}
             onRepair={() => {}}
             notice={slot === 'notice' ? above : null}
@@ -3868,7 +3881,7 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
 
     it('fills the slot while connected with every reading above it absent (AC1)', () => {
       const markup = renderToStaticMarkup(
-        <ComposerErrorSlot
+        <ComposerErrorSlot onReconnect={() => {}}
           status={{ type: 'connected', ack }}
           onRepair={() => {}}
           notice={null}
@@ -3886,7 +3899,7 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
     ])('renders nothing at all while %s — not the pill, not an empty element', (_label, status) => {
       expect(
         renderToStaticMarkup(
-          <ComposerErrorSlot status={status} onRepair={() => {}} notice={null} taskCount={pill} />
+          <ComposerErrorSlot onReconnect={() => {}} status={status} onRepair={() => {}} notice={null} taskCount={pill} />
         )
       ).toBe('')
     })
@@ -3898,7 +3911,7 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
     it('renders nothing at all while connected with the prop omitted entirely', () => {
       expect(
         renderToStaticMarkup(
-          <ComposerErrorSlot status={{ type: 'connected', ack }} onRepair={() => {}} notice={null} />
+          <ComposerErrorSlot onReconnect={() => {}} status={{ type: 'connected', ack }} onRepair={() => {}} notice={null} />
         )
       ).toBe('')
     })
@@ -4953,10 +4966,10 @@ describe('ConversationScreen — store binding', () => {
   // The same getInitialState SPY as the chip test above, and for the same reason: zustand v5's useStore
   // reads getInitialState() under renderToStaticMarkup, never getState(), so the block's beforeEach
   // cannot stage this arm. The status here differs from the chip test's only in being one shouldOfferRepair
-  // admits — terminal, non-retryable, and not the self-inflicted 'unpair' code — which is what flips the
+  // admits — explicit, non-retryable pairing rejection — which is what flips the
   // slot's occupant.
   it('mounts the actionable button in the status row once the pairing is terminally dead (AC1, AC2)', () => {
-    const restore = stageOpenConnection({ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } })
+    const restore = stageOpenConnection({ type: 'error', error: { code: 'pairing-rejected', message: 'gave up', retryable: false } })
     try {
       const markup = renderToStaticMarkup(<ConversationScreen />)
       expect(markup).toContain(COMPOSER_REPAIR_BUTTON_COPY)
@@ -5620,7 +5633,7 @@ describe('model rejection in the mounted status row', () => {
   it.each([
     [connected, true, null],
     [{ type: 'error', error: { code: 'transport', message: 'untrusted', retryable: true } }, false, COMPOSER_ERROR_CHIP_COPY],
-    [{ type: 'error', error: { code: 'transport', message: 'untrusted', retryable: false } }, false, COMPOSER_REPAIR_BUTTON_COPY],
+    [{ type: 'error', error: { code: 'transport', message: 'untrusted', retryable: false } }, false, COMPOSER_RECONNECT_BUTTON_COPY],
     [{ type: 'disconnected' }, false, null]
   ] as const)('arbitrates connection priority for %j', (status, visible, higherPriorityCopy) => {
     const restore = stageOpenConnection(status)

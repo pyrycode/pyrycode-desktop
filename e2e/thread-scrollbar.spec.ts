@@ -27,10 +27,8 @@ import type {
 // The computed keyword is platform-independent. If the property is not exposed it reads back as the
 // empty string, so the assertion fails loudly rather than degrading into a passing one.
 //
-// THE NEIGHBOUR READS ARE WHAT PROVE THE DETECTOR DISCRIMINATES, and they are the same assertions that
-// discharge the last criterion. A bare `toBe('none')` could in principle pass on an engine answering `none`
-// for every element; reading `.channel-list__tree` in the same run and getting `auto` rules that out.
-// The composer also hides its scrollbar since #1525; composer-message-box.spec.ts covers its overflow.
+// The sidebar and composer share the thread's hidden-scrollbar treatment. Their overflowing states
+// are covered by sidebar-scrollbar.spec.ts and composer-message-box.spec.ts respectively.
 //
 // TRACKPAD MOMENTUM IS NOT SYNTHESIZABLE IN ANY TIER, and that leg of AC2 is an operator eyeball on the
 // built app. Saying so plainly beats a wheel event dressed up as a trackpad. The wheel and the four
@@ -187,7 +185,7 @@ async function clickInsideThread(page: Page): Promise<void> {
   await page.mouse.click(box.x + 4, box.y + box.height / 2)
 }
 
-test('the overflowing thread and composer hide scrollbars while the sidebar keeps its own', async ({
+test('the overflowing thread, composer and sidebar hide their scrollbars', async ({
   launchPairedApp
 }) => {
   const { page } = await launchPairedApp({ buildReplyFrames })
@@ -196,15 +194,8 @@ test('the overflowing thread and composer hide scrollbars while the sidebar keep
   // --- AC1. The thread, in the state where a bar would be drawn. ---
   expect(await scrollbarWidthOf(page, '.conversation__thread')).toBe('none')
 
-  // --- AC5, and the proof that the read above discriminates rather than answering `none` for everything.
-  // Both regions are on screen in this same launch: `.channel-list__tree` is what scrolls in the sidebar
-  // beside the thread; `.composer__input` now shares the thread's hidden-scrollbar treatment (#1525).
-  // The control names the TREE and not `.channel-list` since #1443: the drawn top bar split that
-  // column into a padded card column that no longer scrolls and a tree wrapper inside it that does, and a
-  // control pointed at a non-scrolling element is a weaker one — `scrollbar-width` computes `auto` by
-  // default on any element at all, so it would still answer `auto` and prove nothing about a region that
-  // draws a bar. ---
-  expect(await scrollbarWidthOf(page, '.channel-list__tree')).toBe('auto')
+  // All three scroll containers now use the same policy.
+  expect(await scrollbarWidthOf(page, '.channel-list__tree')).toBe('none')
   expect(await scrollbarWidthOf(page, '.composer__input')).toBe('none')
 
   // --- AC3. Nothing else about the element moved. `overflow-anchor` unset computes `auto`, which is what

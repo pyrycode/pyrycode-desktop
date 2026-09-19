@@ -129,8 +129,8 @@
 
    The detector is a COMPUTED read of `scrollbar-width`, never geometry: `offsetWidth - clientWidth === 0`
    passes with both declarations deleted on any machine drawing overlay bars, and the overlay case cannot be
-   assumed away either. Reading `.channel-list__tree` back as `auto` in the same run proves the read
-   discriminates. `.composer__input` now shares this hidden-scrollbar treatment. */
+   assumed away either. `.channel-list__tree` and `.composer__input` share this hidden-scrollbar
+   treatment, with their own overflowing-state interaction specs. */
 /* The card's 12px section gap is split between this top padding and `.composer-status`'s top margin.
    The latter stays outside the scrollport so reading older messages preserves the separation.
    These are local insets rather than a `gap` on `.conversation` because a gap there would
@@ -151,7 +151,7 @@
    this element's inline padding until the rows moved to the card's edge, and `e2e/assistant-whitespace`
    reads it as `threadPaddingLeftPx` in exactly that sum.
 
-   So the strip is taken back the way `.channel-list__tree` takes the sidebar's 20 for its scrollbar: a
+   So the strip is taken back the way `.channel-list__tree` extends into the sidebar's 20px inset: a
    negative margin widens the border box, an equal padding returns the content box to where it was. The
    rows are unmoved and the clip box gains the 16 the marker paints into, which lands on the card's own
    20px inset with 4 to spare. LEFT ONLY — the scrollbar edge needs nothing, being hidden

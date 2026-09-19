@@ -129,10 +129,8 @@
 
    The detector is a COMPUTED read of `scrollbar-width`, never geometry: `offsetWidth - clientWidth === 0`
    passes with both declarations deleted on any machine drawing overlay bars, and the overlay case cannot be
-   assumed away either — `.composer__input`'s own note records THIS app measured with a layout-taking bar
-   (clientWidth 616 -> 601). Reading `.channel-list` and `.composer__input` back as `auto` in the same run
-   is what proves the read discriminates, and is the same assertion that pins them as untouched: the
-   composer textarea's bar past five lines is a deliberate signal (#1056), not an oversight. */
+   assumed away either. Reading `.channel-list__tree` back as `auto` in the same run proves the read
+   discriminates. `.composer__input` now shares this hidden-scrollbar treatment. */
 /* #1444 — THE VERTICAL PADDING IS THE CARD'S COLUMN GAP, CARRIED HERE. `Content` (106:3321) is
    gap-[12px] between its three sections, and the 12 above the first row and below the last are both that
    gap. It is a padding on this element rather than a `gap` on `.conversation` because a gap there would
@@ -3674,13 +3672,8 @@
    line down, and for the same reason: --text-body-medium-line IS the height the textarea lays a line out
    at, so a literal would be a second source of truth for it and for --space-1 both.
 
-   PAST THE CEILING NOTHING IS DECLARED. The UA's own `overflow-y: auto` scrolls the draft and Chromium
-   keeps the caret in view without help. One consequence, recorded rather than corrected: at six lines the
-   scrollbar takes 15px from the CONTENT width (clientWidth 616 → 601, measured) while the border box
-   holds, so nothing outside the textarea moves but the wrapped text re-wraps once at that boundary. The
-   one declaration that removes it, `scrollbar-gutter: stable`, buys it by narrowing the RESTING text
-   column by the same 15px, which AC1 forbids — and a scrollbar is the honest signal that the draft
-   continues past the box, which is this ticket's own subject. The design draws no scrolled state.
+   Past the ceiling, native overflow keeps the draft scrollable and the caret in view. Hide the scrollbar
+   with the same paint-only treatment as `.conversation__thread`, preserving the five-line height cap.
 
    field-sizing also makes the intrinsic WIDTH content-based. `flex: 1 1 auto; min-width: 0` above still
    fills the row — measured at rest, at the ceiling and under a 1000-character draft, all 616px against
@@ -3692,6 +3685,7 @@
   box-sizing: border-box;
   field-sizing: content;
   max-height: calc(5 * var(--text-body-medium-line) + 2 * var(--space-1));
+  scrollbar-width: none;
   padding: var(--space-1) calc(48px + var(--space-2)) var(--space-1) var(--space-4);
   background: none;
   color: var(--color-on-surface);
@@ -3703,6 +3697,10 @@
   line-height: var(--text-body-medium-line);
   letter-spacing: var(--text-body-medium-tracking);
   font-weight: var(--text-body-medium-weight);
+}
+
+.composer__input::-webkit-scrollbar {
+  display: none;
 }
 
 .composer__input::placeholder {

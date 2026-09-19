@@ -265,7 +265,7 @@ test('the message box is the design Input large, with the control inside its rig
 // one launch and this one keeps the draft it never sends.
 test('the box grows a line at a time to a five-line ceiling, then scrolls (AC2, AC3, AC4)', async ({
   launchPairedApp
-}) => {
+}, testInfo) => {
   const { page } = await launchPairedApp()
 
   const box = page.locator('.composer__row')
@@ -309,6 +309,8 @@ test('the box grows a line at a time to a five-line ceiling, then scrolls (AC2, 
       (el) => ({ scroll: el.scrollHeight, client: el.clientHeight })
     )
     expect(overflow.scroll).toBeGreaterThan(overflow.client)
+    await expect(input).toHaveCSS('scrollbar-width', 'none')
+    await expect(input).toHaveCSS('overflow-y', 'auto')
   }
 
   // AC2's last clause: the caret's line stays in view. Typed at the tail rather than filled, so the caret
@@ -322,6 +324,44 @@ test('the box grows a line at a time to a five-line ceiling, then scrolls (AC2, 
     (el) => el.scrollHeight - (el.scrollTop + el.clientHeight)
   )
   expect(belowTheFold).toBeLessThan(LINE_HEIGHT_PX)
+
+  // Computed paint is the detector even with overlay scrollbars or an always-visible OS preference.
+  // Wheel input must still reach both ends; small pixel deltas cover the trackpad's wheel-event path,
+  // though this does not synthesize physical trackpad momentum.
+  const scrollTop = (): Promise<number> => input.evaluate((el) => el.scrollTop)
+  await input.hover()
+  await page.mouse.wheel(0, -1000)
+  await expect.poll(scrollTop).toBe(0)
+  await expect(input).toHaveCSS('scrollbar-width', 'none')
+  await testInfo.attach('composer-overflow-top', {
+    body: await page.screenshot({ path: testInfo.outputPath('composer-overflow-top.png') }),
+    contentType: 'image/png'
+  })
+
+  await page.mouse.wheel(0, 8)
+  await expect.poll(scrollTop).toBeGreaterThan(0)
+  await expect(input).toHaveCSS('scrollbar-width', 'none')
+  await page.mouse.wheel(0, 1000)
+  await expect.poll(() => input.evaluate(
+    (el) => el.scrollHeight - el.clientHeight - el.scrollTop
+  )).toBe(0)
+  await expectBoxHeight(box, GROWN_HEIGHT_PX, 'after wheel scrolling')
+  await testInfo.attach('composer-overflow-bottom', {
+    body: await page.screenshot({ path: testInfo.outputPath('composer-overflow-bottom.png') }),
+    contentType: 'image/png'
+  })
+
+  await input.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home')
+  await input.pressSequentially('start ')
+  await expect.poll(scrollTop).toBe(0)
+  await input.press(process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End')
+  await input.pressSequentially(' end')
+  await expect(input).toHaveValue(`start ${draftOfLines(8)}! end`)
+  await expect.poll(() => input.evaluate(
+    (el) => el.scrollHeight - el.clientHeight - el.scrollTop
+  )).toBeLessThan(LINE_HEIGHT_PX)
+  await expect(input).toHaveCSS('scrollbar-width', 'none')
+  await expectBoxHeight(box, GROWN_HEIGHT_PX, 'after editing both ends')
 
   // --- AC3, by deletion. Back down a line at a time, and exactly 52 again when the draft empties. ---
   await input.fill(draftOfLines(3))

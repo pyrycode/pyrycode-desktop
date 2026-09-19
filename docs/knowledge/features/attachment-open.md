@@ -1,4 +1,4 @@
-# Attachment open (hand a file to the OS's default image viewer)
+# Attachment open (original local files and raster fallback)
 
 Opens an attachment that is **already on this machine** in the operating system's default handler for
 its type, so zoom and pan come from the OS viewer rather than from a viewer this app would otherwise
@@ -18,15 +18,17 @@ had already landed.
 ## Why this needed its own channel, not a relaxed `setWindowOpenHandler`
 
 `setWindowOpenHandler` in `src/main/index.ts` drops every `file:` URL and every custom-protocol URL so
-a hostile link cannot open a local file. That deny is untouched. The window sends only an attachment
-identifier, on `ATTACHMENT_OPEN_CHANNEL`; the background process resolves it through
+a hostile link cannot open a local file. That deny is untouched. The window sends an attachment
+identifier and optional owner on `ATTACHMENT_OPEN_CHANNEL`; main first checks its local-upload map.
+The cached-image fallback resolves the identifier through
 `resolveAttachmentPath` — the same gate [attachment save](attachment-save.md) and
 [attachment bytes](attachment-bytes.md) consume verbatim, with no second escape check written anywhere
 in this slice — and only the background process ever holds a path.
 
 ## The extension question — this ticket's crux, and now closed
 
-The file [`storeAttachment`](attachment-reassembly-and-store.md) writes is deliberately extension-less:
+This section describes the cached-image fallback. The file
+[`storeAttachment`](attachment-reassembly-and-store.md) writes is deliberately extension-less:
 an extension would be model-chosen (the assistant names the file it produced), and a model-chosen
 extension is exactly what makes handing a path to the OS dangerous — a `.command`, `.desktop`, `.app` or
 `.scpt` opens by *executing*. So the type the OS is told about is decided by the file's own leading
@@ -66,6 +68,28 @@ a browser, which executes script inside it. A raster-only set is what makes "ope
 handler" a safe sentence — widening this set is a security decision, not a feature request.
 
 ## The driver — `src/main/attachmentOpen.ts`
+
+Main first tries `createLocalAttachments` (`src/main/localAttachments.ts`) for both file
+and image activation ([#1524](https://github.com/pyrycode/pyrycode-desktop/issues/1524)).
+Only a [successful local upload](attachment-upload.md#data-flow) registers a path.
+Main resolves the requested server against the held registry, then requires exact
+attachment ID, server ID and conversation ID equality with the immutable association.
+Neither a filename nor extra request fields can select a path.
+
+The local driver opens the original read-only, checks the handle is a regular file,
+and closes it before OS handoff. It writes no copy and opens the current path contents
+with the user's default handler, preserving spaces. No match, missing/unreadable files
+or a directory yield `unavailable`. OS refusal or exception yields `open-failed` and
+never triggers copying. Paths and exception text stay out of outcomes and logs; local
+logging uses only static `attachment-local` codes.
+
+A file row sends `localOnly: true`: `unavailable` returns to the renderer, which runs
+[retrieval then save/reveal](attachment-save.md#2-the-copy-driver--srcmainattachmentsavets).
+Image activation supplies its owner without `localOnly`; main falls through on
+`unavailable` to the raster driver below. Thumbnail retrieval independently populates
+that cache. Received/pasted images and earlier-run uploads use this same fallback;
+unscoped legacy requests cannot select an original. The raster signature gate and
+derived-copy collision handling remain unchanged.
 
 ```ts
 export const ATTACHMENT_OPEN_DIR_NAME = 'attachment-views'
@@ -166,7 +190,12 @@ export const ATTACHMENT_OPEN_CHANNEL = 'pyry:attachment-open' as const          
 export const ATTACHMENT_OPEN_EVENT_CHANNEL = 'pyry:attachment-open-event' as const  // main → renderer
 export const MAX_OPEN_IDENTIFIER_LENGTH = 256   // UTF-16 code units
 
-export interface AttachmentOpenRequest { attachmentId: string }
+export interface AttachmentOpenRequest {
+  attachmentId: string
+  conversationId?: string
+  serverId?: string
+  localOnly?: boolean
+}
 export function isAttachmentOpenRequest(value: unknown): value is AttachmentOpenRequest
 
 export type AttachmentOpenFailure = 'refused' | 'unavailable' | 'unsupported-type' | 'open-failed'
@@ -175,16 +204,17 @@ export type AttachmentOpenEvent =
   | { type: 'failed'; attachmentId: string; reason: AttachmentOpenFailure }
 ```
 
-`isAttachmentOpenRequest` is `isAttachmentBytesRequest`'s body verbatim under a new name: shape and
-size only, never canonicity, so a `../..` identifier passes here and is refused at
-`resolveAttachmentPath`. A malformed ask is **dropped** — no filesystem call, no event — because there
-is no identifier to address a reply to.
+`isAttachmentOpenRequest` checks shape and size, leaving fallback identifier canonicity
+to `resolveAttachmentPath`. Optional `conversationId` must be nonempty and at most
+256 UTF-16 units, `serverId` a string and `localOnly` a boolean; explicit `undefined`
+is accepted. `localOnly: true` requires a conversation ID. A malformed ask is dropped
+without an event or filesystem call. Extra filename/path fields are ignored.
 
 **Four failure literals, split on what a consumer can do next** — `storeAttachment`'s test, applied
 where this ticket draws the line:
 
 - `'refused'` — the identifier never named a file here. Permanent; a consumer must not retry.
-- `'unavailable'` — the identifier resolved but nothing readable is at that path. The one a consumer
+- `'unavailable'` — no matching readable original, or no readable cached fallback. The one a consumer
   fetches for: get the attachment ([#996](attachment-retrieval.md)) and ask again.
   `AttachmentBytesFailure`'s member of the same name and meaning.
 - `'unsupported-type'` — the leading bytes matched no member of the closed raster set. Permanent and
@@ -192,7 +222,7 @@ where this ticket draws the line:
   nothing — a consumer's move is to offer the save leg ([attachment save](attachment-save.md), #814)
   instead of the open leg. This is also the answer for a file the wire declared as an image: a declared
   type takes no part in the decision.
-- `'open-failed'` — the derived copy or the hand-off to the OS failed. The only member a plain retry
+- `'open-failed'` — the derived copy or the original/fallback hand-off to the OS failed. The only member a plain retry
   can resolve, which is why it is not merged into `'unavailable'`.
 
 `attachmentId` is echoed on every arm as the correlation key — the window's own value coming back,
@@ -209,15 +239,20 @@ join(app.getPath('userData'), ATTACHMENT_OPEN_DIR_NAME)`. `attachmentBytesListen
 
 `src/preload/index.ts` gains `openAttachment(request)` (fire-and-forget) and
 `onAttachmentOpenEvent(listener)` (subscription returning an unsubscribe handle, raw
-`IpcRendererEvent` stripped) — `requestAttachmentBytes`/`onAttachmentBytesEvent`'s shape verbatim. The
-caller is [#869](conversation-shell-message-bubble-attachments.md#the-attachment-image-thumbnail-1045), shipped:
-`BubbleAttachmentImage.tsx`'s `ready` arm calls `openAttachment({ attachmentId })` from a click handler
-and does not subscribe to `onAttachmentOpenEvent` at all — see § Error handling there. The listener
-side of the pair still has no caller.
+`IpcRendererEvent` stripped) — `requestAttachmentBytes`/`onAttachmentBytesEvent`'s shape verbatim.
+Image activation in `BubbleAttachmentImage.tsx` sends the attachment ID and
+`attachmentAskTarget` owner from its click handler. It still does not subscribe to
+open outcomes. File activation in `downloadAttachment.ts` subscribes before its
+local-only ask so only `unavailable` proceeds to retrieval/save.
 
 ## State and concurrency
 
-None held. Not even `attachmentBytes`'s in-flight counter — no cap is owed, since only a 12-byte
+The local-original map lives once per main process and survives navigation, but not
+restart. Each ID's first owner/path association is immutable; independent repeated
+opens write nothing. It is a path preference, so a local edit or replacement is what
+the OS opens, not the original upload bytes.
+
+The raster driver holds no state. Not even `attachmentBytes`'s in-flight counter — no cap is owed, since only a 12-byte
 prefix ever enters this process and the copy is kernel-side. Exactly one terminal per ask is structural
 (a promise settles once), not an invariant to maintain. The file handle from the prefix read is closed
 in a `finally` on every path. Concurrent opens of one attachment need no coordination: `COPYFILE_EXCL`
@@ -239,7 +274,12 @@ makes the loser reuse the winner's derived file rather than tear it.
 ## Security
 
 Architect self-review verdict **PASS**, no MUST FIX. Full review in
-`docs/specs/architecture/867-open-attachment-in-os-image-viewer.md`. Points not covered above:
+`docs/specs/architecture/867-open-attachment-in-os-image-viewer.md`.
+The original-file path trusts the user's picker/drop selection and current default
+handler; unlike cached daemon bytes, it is not restricted to raster signatures.
+A same-user process can replace the path between the read check and OS handoff.
+No renderer request can name an arbitrary original path. The following points apply
+to the cached-image fallback:
 
 - **The new trust boundary is the file's own bytes deciding a name.** A disk→trusted-decision
   crossing, explicit and single: `matchImageSignature`, bounded by construction (a closed four-member
@@ -273,9 +313,19 @@ Architect self-review verdict **PASS**, no MUST FIX. Full review in
 
 ## Testing
 
-Unit tier only, plain vitest against a temp directory with the `open` seam injected —
-`attachmentBytes.test.ts`'s and `attachmentSave.test.ts`'s harness. Nothing here belongs in Playwright,
-which cannot observe an OS viewer appearing.
+Unit tests use temporary directories and an injected `open` seam. `localAttachments.test.ts`
+checks repeat opens of spaced file/image names, immutable owner/ID matching, fresh-process
+absence, unavailable originals, OS refusal and content-free outcomes/logs.
+`downloadAttachment.test.ts` checks original-first sequencing and fallback only on
+`unavailable`.
+
+`e2e/sent-local-attachment.spec.ts` drives actual picker and native path-backed drop
+uploads through fake transport, sends the attachment, then records OS-open calls.
+Injecting only a renderer upload-completed event would bypass registration and prove
+nothing about it. Await each positive open before asserting no copies. The spec also
+covers returning to the chat, missing-original fallback, failed/cancelled uploads and
+pasted-image fallback. For derived paths, compare against `realpath(userDataDir)`:
+Electron canonicalizes macOS `/var` temporary paths to `/private/var`.
 
 - `src/shared/ipc/attachmentOpen.test.ts` — the guard's accept/refuse table, the length bound, a
   `../../etc/passwd` identifier accepted here on shape (canonicity is the gate's), a `__proto__`-keyed
@@ -313,7 +363,8 @@ which cannot observe an OS viewer appearing.
   draws a picture for seven extensions
   ([`DRAWABLE_IMAGE_EXTENSIONS`](conversation-shell-message-bubble-attachments.md#the-attachment-image-thumbnail-1045),
   matched on `filename`); this module's `ImageSuffix`/`SIGNATURES`, matched on leading bytes, accepts
-  only the four raster members in the table above. An `.avif` or `.bmp` attachment draws as a picture
+  only the four raster members in the table above. An `.avif` or `.bmp` attachment without a readable
+  local original draws as a picture
   (Chromium decodes both) and its click resolves `unsupported-type` — a control that is silently dead on
   two admitted formats, since #869 wires no feedback for any failure reason (§ Error handling below).
   Left open on purpose: widening `SIGNATURES` and narrowing `DRAWABLE_IMAGE_EXTENSIONS` are each a

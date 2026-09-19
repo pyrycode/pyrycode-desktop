@@ -30,6 +30,7 @@ import { selectDockIcon } from './dockIcon'
 import { registerPairingHandler } from './pairingHandler'
 import { registerPairingStatusHandler } from './pairingStatusHandler'
 import { registerUnpairServerHandler } from './unpairHandler'
+import { registerReconnectServerHandler } from './reconnectServerHandler'
 import { registerServerInfoHandler } from './serverInfoHandler'
 import {
   registerHostLabelHandler,
@@ -617,6 +618,12 @@ app.whenReady().then(() => {
     hostLabel: hostLabelStore
   })
   app.on('will-quit', () => unregisterUnpairServer())
+
+  const unregisterReconnectServer = registerReconnectServerHandler(ipcMain, {
+    registry,
+    diagnosticLog
+  })
+  app.on('will-quit', () => unregisterReconnectServer())
 
   // Every window this app opens goes through here (#519): the first one below, and each dock-reopened
   // replacement from the `activate` handler at the bottom. The two halves of #519 meet in this one

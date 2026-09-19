@@ -10,6 +10,7 @@ import {
 } from '../shared/ipc/pairing'
 import { PAIRING_STATUS_CHANNEL, type PairingStatus } from '../shared/ipc/pairingStatus'
 import { UNPAIR_SERVER_CHANNEL, type UnpairResult } from '../shared/ipc/unpair'
+import { RECONNECT_SERVER_CHANNEL, reconnectServerRequest } from '../shared/ipc/reconnectServer'
 import { SERVER_INFO_CHANNEL, type ServerInfo } from '../shared/ipc/serverInfo'
 import {
   HOST_LABEL_CHANNEL,
@@ -158,6 +159,11 @@ const api = {
    */
   unpairServer: (serverId: string): Promise<UnpairResult> =>
     ipcRenderer.invoke(UNPAIR_SERVER_CHANNEL, { serverId }),
+
+  /** Ask one held host to reconnect; the acknowledgement carries no connection result. */
+  reconnectServer: async (serverId: string): Promise<void> => {
+    await ipcRenderer.invoke(RECONNECT_SERVER_CHANNEL, reconnectServerRequest(serverId))
+  },
 
   /**
    * Ask the background process for the paired server's NON-SECRET identity — its server id and relay

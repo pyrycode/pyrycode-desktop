@@ -193,6 +193,53 @@ function harness(initial: PairedServerRecord[] = []) {
 }
 
 describe('createConnectionRegistry', () => {
+  describe('explicit named-host reconnect', () => {
+    it('reconnects only the exact held host on every request', async () => {
+      const { registry, factory } = harness([record('alpha'), record('beta')])
+      await settle()
+
+      registry.reconnect('alpha')
+      expect(factory.paired.map((entry) => entry.calls.reconnect)).toEqual([1, 0])
+      registry.reconnect('beta')
+      registry.reconnect('alpha')
+      expect(factory.paired.map((entry) => entry.calls.reconnect)).toEqual([2, 1])
+      expect(factory.built[0].calls.reconnect).toBe(0)
+    })
+
+    it('ignores unknown ids without falling back to another host', async () => {
+      const { registry, factory } = harness([record('alpha'), record('beta')])
+      await settle()
+
+      for (const id of ['unknown', 'Alpha', '', '__proto__', 'constructor', 'toString']) {
+        expect(registry.reconnect(id)).toBeUndefined()
+      }
+      expect(factory.built.map((entry) => entry.calls.reconnect)).toEqual([0, 0, 0])
+    })
+
+    it('never reconnects the not-paired stand-in for a string id', async () => {
+      const { registry, factory } = harness()
+      await settle()
+
+      for (const id of ['alpha', '', 'null', '__proto__', 'constructor', 'toString']) {
+        expect(registry.reconnect(id)).toBeUndefined()
+      }
+      expect(factory.built).toHaveLength(1)
+      expect(factory.built[0].calls.reconnect).toBe(0)
+    })
+
+    it.each(['', '__proto__', 'constructor', 'toString'])(
+      'matches the ordinary string id %j when held',
+      async (id) => {
+        const { registry, factory } = harness([record(id), record('beta')])
+        await settle()
+
+        registry.reconnect(id)
+        expect(factory.for(id).calls.reconnect).toBe(1)
+        expect(factory.for('beta').calls.reconnect).toBe(0)
+      }
+    )
+  })
+
   describe('the set follows the records (AC1)', () => {
     it('builds one connection per stored record, each stamped with its own server id', async () => {
       const { factory } = harness([record('alpha'), record('beta')])

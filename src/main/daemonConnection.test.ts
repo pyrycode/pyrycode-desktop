@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createHash } from 'node:crypto'
 import { onCommand, type CommandSource } from './receiveCommand'
 import { createCorrelationRouter } from './correlationRouter'
+import { createConversationRouter } from './conversationRouter'
+import { parseInboundMessage } from './transport/inboundMessage'
 import {
   createDaemonConnection,
   type AttachmentRetrievalConsumer,
@@ -2666,6 +2668,20 @@ describe('createDaemonConnection — context_usage stream (#1419)', () => {
     ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
     return ctx
   }
+
+  it.each([{}, { as_of: '2026-09-18T12:00:00Z' }])(
+    'delivers a correlated context reply under its payload id with optional metadata %j', async (extra) => {
+      const { connection, sink, drivers } = await connected()
+      connection.requestContextUsage('requested-conversation')
+      const requestId = decodeEnvelope(drivers[0].sent[0]).id
+      const before = emitted(sink).length
+      drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({
+        id: 50, type: 'context_usage', ts: FIXED_TS, in_reply_to: requestId,
+        payload: { ...USAGE, ...extra }
+      }) })
+      expect(emitted(sink).slice(before)).toEqual([CARRIED])
+    }
+  )
 
   it('decodes a context_usage into exactly one contextUsage event carrying all eleven fields', async () => {
     const { sink, drivers } = await connected()
@@ -7486,6 +7502,128 @@ describe('createDaemonConnection — interrupt (named interrupt control frame, f
     drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
 
     expect(() => connection.interrupt('conv-42')).not.toThrow()
+  })
+})
+
+describe('createDaemonConnection — requestContextUsage', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  it('sends once using the shared id sequence and does not retry a missing reply', async () => {
+    const { connection, drivers } = await reachConnected()
+    vi.useFakeTimers()
+    connection.send({ conversation_id: 'other', message_id: 'm1', text: 'hello' })
+    connection.requestContextUsage('conv-42')
+    connection.requestModelList('other')
+    expect(drivers[0].sent.map(decodeEnvelope).map((frame) => frame.id)).toEqual([2, 3, 4])
+    expect(decodeEnvelope(drivers[0].sent[1])).toEqual({
+      id: 3, type: 'request_context_usage', ts: FIXED_TS, payload: { conversation_id: 'conv-42' }
+    })
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(drivers[0].sent).toHaveLength(3)
+    connection.stop()
+  })
+
+  it('is inert before startup, while bootstrapping, before authentication and after disconnect/stop', async () => {
+    const { log, records } = captureLog()
+    const { connection, drivers } = build({ diagnosticLog: log })
+    expect(() => connection.requestContextUsage('private-id')).not.toThrow()
+    expect(drivers).toHaveLength(0)
+    connection.start()
+    connection.requestContextUsage('private-id')
+    await tick()
+    connection.requestContextUsage('private-id')
+    expect(drivers[0].sent).toEqual([])
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    drivers[0].emit({ type: 'relay-link-down', code: 1006 })
+    connection.requestContextUsage('private-id')
+    drivers[0].emit({ type: 'terminal', code: 1006, reason: 'closed' })
+    connection.requestContextUsage('private-id')
+    connection.stop()
+    expect(() => connection.requestContextUsage('private-id')).not.toThrow()
+    expect(drivers[0].sent).toEqual([])
+    expect(records.filter((entry) => entry.event === 'context-usage-request-refused')).toEqual(
+      Array.from({ length: 6 }, () => ({ event: 'context-usage-request-refused', code: 'unavailable' }))
+    )
+    expect(JSON.stringify(records)).not.toContain('private-id')
+  })
+
+  it('catches send failures without retrying or logging their content', async () => {
+    const { log, records } = captureLog()
+    const { connection, drivers } = build({ diagnosticLog: log })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    const send = vi.spyOn(drivers[0].handle, 'sendMessage').mockImplementation(() => {
+      throw new Error('private failure details')
+    })
+    vi.useFakeTimers()
+    expect(() => connection.requestContextUsage('private-id')).not.toThrow()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(records.at(-1)).toEqual({ event: 'context-usage-request-failed', code: 'build-or-send-failed' })
+    expect(JSON.stringify(records)).not.toMatch(/private-id|private failure details/)
+    connection.stop()
+  })
+
+  it.each(['conversation.not_found', 'context_usage.unavailable'])(
+    'keeps %s on the generic error path without emitting a reading or retrying', async (code) => {
+      const { connection, sink, drivers } = await reachConnected()
+      vi.useFakeTimers()
+      connection.requestContextUsage('conv-42')
+      const inReplyTo = decodeEnvelope(drivers[0].sent[0]).id
+      const plaintext = encodeEnvelope({ id: 9, type: 'error', ts: FIXED_TS, in_reply_to: inReplyTo,
+        payload: { code, message: 'private daemon detail', retryable: code === 'context_usage.unavailable' } })
+      expect(parseInboundMessage(plaintext)).toMatchObject({ kind: 'daemon-error', outcome: 'unclassified' })
+      const before = emitted(sink).length
+      drivers[0].emit({ type: 'message', plaintext })
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(emitted(sink).slice(before)).toEqual([])
+      expect(drivers[0].sent).toHaveLength(1)
+      expect(vi.getTimerCount()).toBe(0)
+      connection.stop()
+    }
+  )
+
+  it('routes a validated request to its host, strips extra fields and refuses unknown or absent hosts', async () => {
+    const connections = new Map<string, DaemonConnection>()
+    const router = createConversationRouter({ connectionFor: (id) => connections.get(id) ?? null })
+    const host = build({ serverId: 'host-A', wrapSink: router.observe })
+    const other = build({ serverId: 'host-B', wrapSink: router.observe })
+    connections.set('host-A', host.connection)
+    connections.set('host-B', other.connection)
+    host.connection.start()
+    other.connection.start()
+    await tick()
+    for (const ctx of [host, other]) ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    host.drivers[0].emit({ type: 'message', plaintext: conversationCreatedPlaintext({
+      id: 'conv-42', is_promoted: false, cwd: '/workspace', name: null, last_used_at: '', workspace_label: null
+    }) })
+    const source = { on: vi.fn(), removeListener: vi.fn() } satisfies CommandSource
+    const off = onCommand(source, (command) => {
+      if (command.type === 'requestContextUsage') {
+        const conversationId = command.payload.conversation_id
+        router.route(conversationId)?.requestContextUsage(conversationId)
+      }
+    })
+    const receive = source.on.mock.calls[0][1]
+    receive({}, { type: 'requestContextUsage', serverId: 'host-B', payload: {
+      conversation_id: 'conv-42', serverId: 'host-B', token: 'smuggled'
+    } })
+    expect(host.drivers[0].sent.map(decodeEnvelope)).toEqual([
+      { id: 2, ts: FIXED_TS, type: 'request_context_usage', payload: { conversation_id: 'conv-42' } }
+    ])
+    for (const id of ['unknown', '']) {
+      expect(() => receive({}, { type: 'requestContextUsage', payload: { conversation_id: id } })).not.toThrow()
+    }
+    connections.delete('host-A')
+    expect(() => receive({}, { type: 'requestContextUsage', payload: { conversation_id: 'conv-42' } })).not.toThrow()
+    expect(host.drivers[0].sent).toHaveLength(1)
+    expect(other.drivers[0].sent).toEqual([])
+    off()
+    host.connection.stop()
+    other.connection.stop()
   })
 })
 

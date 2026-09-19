@@ -32,6 +32,7 @@ import { buildSendMessage } from './transport/sendMessageEnvelope'
 import { buildRequestDebugBundle } from './transport/requestDebugBundleEnvelope'
 import { buildRequestSessionSettings } from './transport/requestSessionSettingsEnvelope'
 import { buildRequestModelList } from './transport/requestModelListEnvelope'
+import { buildRequestContextUsage } from './transport/requestContextUsageEnvelope'
 import { buildRequestSystemPrompt } from './transport/requestSystemPromptEnvelope'
 import { buildSetSystemPrompt } from './transport/setSystemPromptEnvelope'
 import { buildRequestHistory } from './transport/requestHistoryEnvelope'
@@ -271,6 +272,9 @@ export interface DaemonConnection {
    * one `error` frame, which nothing here retries. Inert no-op when not connected, like send.
    */
   requestModelList(conversationId: string): void
+  /** Ask once for context_usage; the existing inbound path delivers the reading.
+   * Unavailable connections and send failures are inert. No retry or pending state. */
+  requestContextUsage(conversationId: string): void
   /**
    * Ask the daemon for one backward step of a scroll-back walk over a conversation's on-disk history
    * (#1222). Takes the whole PAYLOAD rather than a scalar — unlike its two neighbours above, this verb
@@ -2762,6 +2766,22 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function requestContextUsage(conversationId: string): void {
+    if (driver === null || !authenticated) {
+      deps.diagnosticLog?.event({ event: 'context-usage-request-refused', code: 'unavailable' })
+      return
+    }
+    try {
+      const bytes = buildRequestContextUsage({ id: nextEnvelopeId, ts: now(), conversationId })
+      nextEnvelopeId += 1
+      driver.sendMessage(bytes)
+      deps.diagnosticLog?.event({ event: 'context-usage-request-sent' })
+    } catch {
+      // Drop the exception and never retry: a withheld reply must not induce more requests.
+      deps.diagnosticLog?.event({ event: 'context-usage-request-failed', code: 'build-or-send-failed' })
+    }
+  }
+
   function failHistoryRequest(conversationId: string, code: string): void {
     deps.diagnosticLog?.event({ event: 'history-request-failed', code })
     emitDaemonEvent(sink, { type: 'historyRequestFailed', conversationId,
@@ -3679,6 +3699,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     send,
     requestSessionSettings,
     requestModelList,
+    requestContextUsage,
     requestSystemPrompt,
     requestHistory,
     requestConversations,

@@ -6,7 +6,14 @@ Part of [Daemon connection](daemon-connection.md); see that document for what th
 
 # Connect-on-pair (`reconnect()`, [#82](../codebase/82.md))
 
-`reconnect()` was added so a pairing made **during a running session** dials with no manual step (mirrors mobile #489). Before it, `start()` was once-only (`if (started || stopped) return`); a client that paired mid-session persisted the record but never connected until the next launch. The [pairing handler](pairing-ipc-channel.md) fires its `onPaired` callback after a confirm persists, and the composition root wires `onPaired: () => connection.reconnect()`.
+`reconnect()` was added so a pairing made **during a running session** dials with no manual step
+(mirrors mobile #489). Before it, `start()` was once-only (`if (started || stopped) return`); a
+client that paired mid-session persisted the record but never connected until the next launch.
+The [pairing handler](pairing-ipc-channel.md) fires its value-free `onPaired` callback after a
+confirm persists. The composition root now routes that signal through
+[`registry.reconcile()`](daemon-connection-registry.md): new records create connections, changed
+records reconnect their held connection, and identical records leave it untouched. An explicit
+named-host reconnect can re-dial an unchanged pairing through the separate entry point below.
 
 **`start()` and `reconnect()` both funnel through a private `dial()`** — the single fresh-connect path. `dial()`:
 
@@ -33,7 +40,8 @@ Part of [Daemon connection](daemon-connection.md); see that document for what th
 ```
 renderer confirm invoke ─▶ pairingHandler.listener
                              await confirm()  ─▶ store.save(snapshot)   (record persisted)
-                             onPaired()       ─▶ connection.reconnect()
+                             onPaired()       ─▶ registry.reconcile()
+                                                 changed held record ─▶ connection.reconnect()
                                                    dial(): ++gen, driver?.stop() (old terminal fenced),
                                                            emit {connecting}, bootstrap(gen)
                                                    bootstrap: load() (fresh record) ─▶ createDriver
@@ -45,10 +53,11 @@ The confirm reply (fingerprint/ok channel) and the daemon `connecting`/`connecte
 
 # Teardown-on-unpair (`reconnect()`, [#504](../codebase/504.md))
 
-`reconnect()` gained a second caller: the [unpair channel](unpair-channel.md)'s handler now wires
-`onUnpaired: () => connection.reconnect()` at the composition root, the mirror image of the pairing
-handler's `onPaired: () => connection.reconnect()`. **Zero `daemonConnection.ts` changes were needed** —
-`reconnect()` already did everything the ticket needed, verified line by line:
+Before the per-server registry, the [unpair channel](unpair-channel.md) wired
+`onUnpaired: () => connection.reconnect()` at the composition root, mirroring the pairing handler.
+Current wiring uses `registry.reconcile()` for both signals: an unpair stops and drops only the
+removed host's connection, with a new null-id stand-in when the last record disappears. The earlier
+single-connection implementation relied on the following existing `reconnect()` behavior:
 
 1. `dial()`'s first statement, `++generation`, fences every event the *superseded* driver emits from
    this instant onward — `connected`, `messageReceived`, `messagesReceived`, `assistantDelta`,
@@ -123,14 +132,37 @@ The store's `disconnected` means "we deliberately stopped." Every other non-`con
 
 ## Composition-root wiring (`src/main/index.ts`)
 
-Small, additive changes inside the existing `app.whenReady().then(...)`:
+The synchronous `app.whenReady().then(...)` callback constructs one
+[connection registry](daemon-connection-registry.md) over the shared paired-server store. Its
+factory gives each `createDaemonConnection` its own `serverId` and record view, the shared device
+keypair and logger, and `correlations.observe(router.observe(live.sink))` for event delivery.
+Pairing and unpairing invoke `registry.reconcile()` to make the held set follow the stored records.
 
-- `createWindow()` now **returns** the `BrowserWindow` (to capture the sink handle); its body is otherwise unchanged.
-- A `deviceKeypairStore` is built over the **already-constructed** `secureStore` (`createDeviceKeypairStore({ secureStore, generator: noiseKeyPairGenerator() })`); the `pairedServerStore` is **reused** (no second store).
-- `createDaemonConnection({ deviceKeypair, pairedServer, sink: live.sink, deviceName: hostname(), clientVersion: app.getVersion() })` — `sink: live.sink` since [#519](../codebase/519.md) (originally `sink: mainWindow`, a captured `BrowserWindow`).
-- Started via a root-local `openWindow()`, called once for the first window and once per dock-reopened
-  replacement ([#519](../codebase/519.md)): `window.webContents.on('did-finish-load', () => { live.replayStatus(); connection.start() })` — the connect still defers until the renderer's `useDaemonEventBridge` subscription is in place before the load-bearing `connected` (which arrives only after a network round-trip), and `replayStatus()` additionally re-delivers the connection's last known status so a reopened window converges immediately rather than sitting at `disconnected`. Now `.on`, not the original `.once`: safe because of `start()`'s idempotence (below), and it additionally converges a window that reloads without closing (dev HMR, Cmd-R). See [live window](live-window.md) for the holder itself.
-- Torn down on quit: `app.on('will-quit', () => connection.stop())` (a second `will-quit` listener alongside the existing pairing one — both fire).
+Each window's `did-finish-load` calls `live.replayStatus()` then `registry.start()`. The registry's
+idempotent start waits for its initial store read; reopening or reloading a window replays status
+without replacing live connections. Quit calls `registry.stop()` before draining history, and
+again idempotently on `will-quit`. See [live window](live-window.md) for the window holder.
+
+For explicit recovery of one host, `registerReconnectServerHandler(ipcMain, { registry,
+diagnosticLog })` is registered once after the registry, beside the unpair handler. Its cleanup
+removes `pyry:reconnect-server` on `will-quit`; registration is process-wide, outside `openWindow`.
+`window.pyry.reconnectServer(serverId)` sends the fixed-channel request and the handler validates
+it before calling `registry.reconnect(serverId)`. See the
+[registry's IPC contract](daemon-connection-registry.md#named-host-reconnect-ipc) for exact matching,
+no-op cases, the closed request shape and constant diagnostics.
+
+A matched request calls the held `DaemonConnection.reconnect()`: each call starts a fresh dial,
+even when the pairing record is unchanged. This can restart dialing after a terminal failure ended
+[relay supervision](relay-supervisor.md). Repeated requests are not idempotent or coalesced;
+the existing [generation fence](#the-generation-fence) supersedes earlier work, and `stop()` keeps
+a permanently stopped connection inert. Automatic retry policy is unchanged.
+
+The invoke acknowledgement contains no result data and does not wait for a handshake. A fresh
+dial emits `connecting` synchronously, then reports progress and outcome through existing
+`DAEMON_EVENT_CHANNEL` events stamped with the connection's server id. Callers must observe those
+events to learn whether reconnect succeeded. The named entry point ends at preload; the composer
+control and its integrated proof belong to
+[#1510](https://github.com/pyrycode/pyrycode-desktop/issues/1510).
 
 # State + concurrency model
 
@@ -158,4 +190,7 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 - **Content-free-log by construction; classify-don't-forward.** No `console.*` (a stray log could echo the token, keys, or handshake bytes). Every caught error object is **dropped** — only a static category `code` is surfaced — because a codec/keychain error message can echo the token or transcript bytes. Pinned by a six-method `console`-spy across the happy path and every reject branch (inherited [#5](wire-codec.md)/[#7](noise-session.md)/[#22](relay-supervisor.md)/[#50](noise-relay-driver.md)). Since [#128](../codebase/128.md) the module also *shadows* its lifecycle onto the injected [#126 diagnostic log](diagnostic-log.md) — but still content-free: only the static classification `code` and the event name reach the sink, never the caught object, the banner text, the ack bytes, or the numeric close code. See § Diagnostic logging.
 - **Fail-closed inputs.** A wrong-length/bad-base64 server key, a missing record (`load()` → `null`), or a malformed one (`MalformedPairedServerRecordError`) each surfaces as a non-connected event, never a crash.
 - **The token-in-header exposure is the bounded, documented caveat.** The real device token rides in the relay-readable `X-Pyrycode-Token` upgrade header — mirroring the mobile contract (deviating would drift from mobile). It is **not** a standalone impersonation credential: the daemon authenticates the device via the Noise_IK static-key handshake (the device static private key never leaves the machine), so a relay that harvests the header token cannot impersonate the device. The standing mitigation is log-freedom.
-- **No new IPC surface.** It emits on the existing `DAEMON_EVENT_CHANNEL` via `emitDaemonEvent`; no new channel, `contextBridge` API, or `ipcMain` handler. Window `webPreferences` (`sandbox`, `contextIsolation`) are unchanged.
+- **A narrow reconnect capability.** The fixed `pyry:reconnect-server` invoke can reach only a held
+  host through the registry; it cannot supply an endpoint, read pairing secrets or expose a
+  connection object. Lifecycle outcomes still use `DAEMON_EVENT_CHANNEL` via `emitDaemonEvent`.
+  Window `webPreferences` (`sandbox`, `contextIsolation`) are unchanged.

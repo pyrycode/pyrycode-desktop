@@ -156,18 +156,18 @@ uses. Measured in the built app rather than predicted: box height 52/72/92/112/1
 lines, holding at 132 past them, and exactly 52 again once the draft empties — by deletion or after a
 real send.
 
-Past the ceiling nothing is declared. The UA's own `overflow-y: auto` scrolls the draft, and Chromium
-keeps the caret's line in view unassisted — measured at 8 lines, `scrollTop` settles 6px short of its own
-maximum, because Chromium flushes the caret's own ~16px text box to the visible bottom edge rather than
+Past the ceiling, the UA's own `overflow-y: auto` keeps the draft scrollable within the five-line cap.
+Since [#1525](https://github.com/pyrycode/pyrycode-desktop/issues/1525), `.composer__input` hides scrollbar
+paint with `scrollbar-width: none` and a separate `.composer__input::-webkit-scrollbar { display: none; }`
+rule, matching the [thread's treatment](conversation-shell-chrome.md#layout-contract). The scrollbar
+stays hidden at rest and while scrolling, including with an always-visible OS scrollbar preference;
+native wheel, trackpad and keyboard editing still reach the text. This supersedes the earlier choice
+to keep the bar visible as an overflow signal. No gutter is reserved with `scrollbar-gutter: stable`.
+
+Chromium keeps the caret's line in view unassisted — measured at 8 lines, `scrollTop` settles 6px short
+of its own maximum, because Chromium flushes the caret's own ~16px text box to the visible bottom edge rather than
 the full 20px line box; an assertion of "scrolled fully to the bottom" would fail against a correct
-render, so the covering spec asserts "less than one line remains below the fold" instead. One cosmetic
-consequence, left as-is rather than fixed: past five lines the UA scrollbar takes 15px from the
-textarea's *content* width only (`clientWidth` 616 → 601; the border box holds at 616), so the wrapped
-text re-wraps once at that boundary. `scrollbar-gutter: stable` would remove the re-wrap by reserving the
-same 15px at rest instead — declined, because that narrows the *resting* text column by 15px, which this
-ticket's AC1 (the resting box is byte-identical) forbids, and because a scrollbar is the honest signal
-that the draft continues past the box, which is this ticket's own subject. The design draws no scrolled
-state to match against.
+render, so the covering spec asserts "less than one line remains below the fold" instead.
 
 `field-sizing` also makes the textarea's intrinsic *width* content-based, not only its height —
 untested by any assertion this repo shipped before #1056. `flex: 1 1 auto; min-width: 0` (already on this
@@ -199,7 +199,13 @@ green rather than why it fails to detect anything here.
 
 Covered in `e2e/composer-message-box.spec.ts` beside the resting checks — geometry is invisible to the
 `renderToStaticMarkup` renderer tier, so every assertion here is Playwright. Driven with explicit newlines
-(`'a\nb\nc\n…'`), not wrap, so the detector doesn't move with the sidebar's width.
+(`'a\nb\nc\n…'`), not wrap, so the detector doesn't move with the sidebar's width. The overflow checks first
+prove `scrollHeight > clientHeight`, then read `scrollbar-width: none` and `overflow-y: auto`.
+Wheel travel in both directions and keyboard edits at both ends must retain the height cap and hidden
+scrollbar. Small pixel wheel deltas cover the trackpad event path, but do not simulate physical trackpad
+momentum, which requires a manual check. See [scrollbar detection](conversation-shell-chrome.md#layout-contract)
+for why a zero-width gutter can pass with the hiding rule deleted. The sidebar now shares this
+hidden-scrollbar policy, with its own [wheel and focus coverage](channel-list.md#css-channelscss).
 
 ## Composer footer row (#811)
 

@@ -24,16 +24,11 @@ import type {
 // THE DETECTOR IS THE COMPUTED `scrollbar-width`, AND A GEOMETRY READ IS DELIBERATELY NOT WRITTEN.
 // `offsetWidth - clientWidth === 0` proves nothing on a machine drawing overlay bars, where that gutter is
 // already 0 with the declaration DELETED — such an assertion passes against an app with no feature in it.
-// Nor can the overlay case simply be assumed away: `.composer__input`'s own comment records THIS app
-// measured with a layout-taking bar (clientWidth 616 -> 601 when the textarea's bar appears). The computed
-// keyword is platform-independent, and if the property were somehow not exposed it reads back as the empty
-// string, so the assertion fails loudly rather than degrading into a passing one.
+// The computed keyword is platform-independent. If the property is not exposed it reads back as the
+// empty string, so the assertion fails loudly rather than degrading into a passing one.
 //
-// THE NEIGHBOUR READS ARE WHAT PROVE THE DETECTOR DISCRIMINATES, and they are the same assertions that
-// discharge the last criterion. A bare `toBe('none')` could in principle pass on an engine answering `none`
-// for every element; reading `.channel-list` (the sidebar's scroll column, on screen beside the thread in
-// the two-pane layout) and `.composer__input` (whose bar past five lines is a deliberate #1056 signal) in
-// the SAME run and getting `auto` back rules that out. One read, two jobs.
+// The sidebar and composer share the thread's hidden-scrollbar treatment. Their overflowing states
+// are covered by sidebar-scrollbar.spec.ts and composer-message-box.spec.ts respectively.
 //
 // TRACKPAD MOMENTUM IS NOT SYNTHESIZABLE IN ANY TIER, and that leg of AC2 is an operator eyeball on the
 // built app. Saying so plainly beats a wheel event dressed up as a trackpad. The wheel and the four
@@ -190,7 +185,7 @@ async function clickInsideThread(page: Page): Promise<void> {
   await page.mouse.click(box.x + 4, box.y + box.height / 2)
 }
 
-test('the overflowing thread draws no scrollbar while its neighbours keep theirs', async ({
+test('the overflowing thread, composer and sidebar hide their scrollbars', async ({
   launchPairedApp
 }) => {
   const { page } = await launchPairedApp({ buildReplyFrames })
@@ -199,16 +194,9 @@ test('the overflowing thread draws no scrollbar while its neighbours keep theirs
   // --- AC1. The thread, in the state where a bar would be drawn. ---
   expect(await scrollbarWidthOf(page, '.conversation__thread')).toBe('none')
 
-  // --- AC5, and the proof that the read above discriminates rather than answering `none` for everything.
-  // Both regions are on screen in this same launch: `.channel-list__tree` is what scrolls in the sidebar
-  // beside the thread, `.composer__input` the textarea below it whose bar past five lines is deliberate
-  // (#1056). The control names the TREE and not `.channel-list` since #1443: the drawn top bar split that
-  // column into a padded card column that no longer scrolls and a tree wrapper inside it that does, and a
-  // control pointed at a non-scrolling element is a weaker one — `scrollbar-width` computes `auto` by
-  // default on any element at all, so it would still answer `auto` and prove nothing about a region that
-  // draws a bar. ---
-  expect(await scrollbarWidthOf(page, '.channel-list__tree')).toBe('auto')
-  expect(await scrollbarWidthOf(page, '.composer__input')).toBe('auto')
+  // All three scroll containers now use the same policy.
+  expect(await scrollbarWidthOf(page, '.channel-list__tree')).toBe('none')
+  expect(await scrollbarWidthOf(page, '.composer__input')).toBe('none')
 
   // --- AC3. Nothing else about the element moved. `overflow-anchor` unset computes `auto`, which is what
   // leaves Chromium's scroll anchoring on — the mechanism thread-scroll-pin.spec.ts's three thumbnail tests

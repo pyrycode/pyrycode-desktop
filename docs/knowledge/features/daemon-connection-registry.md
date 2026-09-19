@@ -17,15 +17,12 @@ It is Electron-free, filesystem-free and socket-free — the store, the connecti
 
 ## The stable stand-in
 
-The composition root binds `registry.active` once, in place of the connection it used to construct
-directly. `active`'s type is `Omit<DaemonConnection, 'start' | 'stop' | 'reconnect'>` — deliberately
-narrower than the full interface, so the 22 existing call sites (`send`, `interrupt`, the attachment
-upload/retrieval, the 21-arm command switch, …) keep their exact current shape while becoming
-**structurally unable** to start, stop or re-dial one connection through the stand-in. Each member
-resolves the *current* last-held connection at call time, so with more than one connection it answers
-for whichever server was paired most recently — where these call sites already reached after a
-re-pair, before this ticket. Routing them per server is #1118/#1119/#1120, deliberately out of scope
-here.
+`registry.active` is the compatibility view over the current last-held connection. Its type is
+`ActiveConnection = Omit<DaemonConnection, 'start' | 'stop' | 'reconnect'>`, and `viewOf` also omits
+those lifecycle members from the runtime object. The views returned by `connectionFor` and
+`soleConnection` have the same restriction. The composition root retired its `registry.active`
+binding once [per-server routing](daemon-connection-routing.md) covered every caller; named-host
+reconnect belongs on the registry itself, where the held connection is resolved explicitly.
 
 ## The entry set and its one invariant
 
@@ -87,17 +84,59 @@ could echo the blob.
 
 | Site | Before #1117 | After |
 |---|---|---|
-| connection construction | one `createDaemonConnection({ serverId: null, … })` | `createConnectionRegistry({ createConnection: ({ serverId, pairedServer }) => createDaemonConnection({ …, serverId, pairedServer }), store: pairedServerStore })`, then `const connection = registry.active` |
+| connection construction | one `createDaemonConnection({ serverId: null, … })` | `createConnectionRegistry({ createConnection: ({ serverId, pairedServer }) => createDaemonConnection({ …, serverId, pairedServer }), store: pairedServerStore })` |
 | `onPaired` | `connection.reconnect()` | `registry.reconcile()` |
 | `onUnpaired` | `connection.reconnect()` | `registry.reconcile()` |
 | `did-finish-load` | `connection.start()` | `registry.start()` — idempotent, deferred behind the registry's own first store read so a load that outruns that read still dials the right set |
 | `will-quit` | `connection.stop()` | `registry.stop()` — reaches every held connection, so a quit never leaks a second server's socket, and latches so a reconcile still in flight builds nothing after |
 
-`bundleSink`/`windowLocalSink` stay bound to `null`, the orchestrator stays constructed once, and
-`pairingHandler.ts`/`unpairHandler.ts` are untouched — the signals stay value-free by design. The
+The pairing and unpairing signals stay value-free by design. The
 `app.whenReady().then(() => { … })` callback stays non-`async`: the registry does its own store read
 after returning synchronously from its constructor, which is what lets the two "this callback
 completes in one tick" comments guarding the pairing/unpair handler registrations keep holding.
+
+### Named-host reconnect IPC
+
+`ConnectionRegistry.reconnect(serverId: string): void` looks through the entries held at the
+instant of the call with `Array.find(entry => entry.serverId === serverId)` and invokes only that
+connection's `reconnect()`. There is no object-key lookup, normalization, fallback to another host,
+or wait for reconciliation. Unknown ids are no-ops. Every string is a no-op while only the
+`serverId: null` stand-in exists, including during the initial store read. Empty strings and ids
+such as `__proto__`, `constructor`, and `toString` match only when that exact string is held.
+
+The preload entry point is `window.pyry.reconnectServer(serverId: string): Promise<void>`.
+[`src/shared/ipc/reconnectServer.ts`](../../../src/shared/ipc/reconnectServer.ts) exports
+`RECONNECT_SERVER_CHANNEL = 'pyry:reconnect-server'`, `ReconnectServerRequest`, the pure
+`reconnectServerRequest(serverId)` constructor returning a fresh `{ serverId }`, and
+`isReconnectServerRequest`. The guard requires a non-null, non-array object with exactly one own
+key, `serverId`, holding a string. `Reflect.ownKeys` counts symbol and non-enumerable extras as well
+as ordinary fields, including extras valued `undefined`. An inherited id is insufficient; a null
+prototype or a non-enumerable own `serverId` is acceptable. There is no id length restriction.
+The [unpair channel](unpair-channel.md)'s more permissive guard is not this request's contract.
+
+[`registerReconnectServerHandler`](../../../src/main/reconnectServerHandler.ts) registers the
+fixed channel once in `src/main/index.ts`, beside unpair and after registry construction; its
+returned cleanup removes that handler on `will-quit`. It holds only
+`Pick<ConnectionRegistry, 'reconnect'>` and the shared diagnostic logger. An accepted request
+forwards its id once. A malformed request skips the registry entirely. Both resolve `undefined`,
+as does a caught dispatch exception; preload also discards any invoke result data.
+
+The handler supplies only fresh constant records to the [diagnostic log](diagnostic-log.md):
+
+| Condition | Diagnostic fields |
+|---|---|
+| Malformed request | `{ event: 'reconnect-server-refused', code: 'malformed-request' }` |
+| Accepted request, including an unknown id | `{ event: 'reconnect-server-requested' }` |
+| Dispatch throws, after the requested event | `{ event: 'reconnect-server-failed', code: 'dispatch-failed' }` |
+
+Neither the request, server id, IPC event nor exception details enter those records or the
+acknowledgement. A resolved promise or `reconnect-server-requested` log therefore proves no
+connection outcome. Progress and outcomes remain on `DAEMON_EVENT_CHANNEL`; see the
+[connection lifecycle](daemon-connection-lifecycle.md#composition-root-wiring-srcmainindexts).
+Each matched request reaches the existing fresh-dial lifecycle, including repeated requests;
+generation fencing supersedes older attempts and a permanently stopped connection stays inert.
+The API adds no automatic retry policy. The visible composer control and integrated proof belong
+to [#1510](https://github.com/pyrycode/pyrycode-desktop/issues/1510).
 
 ## What this doesn't do
 
@@ -108,15 +147,14 @@ completes in one tick" comments guarding the pairing/unpair handler registration
   exactly what an unpair is supposed to produce anyway. Deliberately undefended: no such failure has
   been observed, and distinguishing "this server is gone" from "this server failed" belongs to
   per-server status removal (#1085), not here.
-- **No per-server routing on `active`, at the time this ticket shipped.** Its 22 delegating members
-  all reached whichever connection was paired most recently. #1118 (below) closed this for the ten
-  members that carry a conversation id; #1119 (below) closed it for the five that carry a modal,
-  question-batch or session id. Only `interrupt` — which carries no payload at all — is left on
-  `active` for that reason; it is #1120's.
-- **No new IPC surface, no new logged field.** Two [diagnostic log](diagnostic-log.md) events,
+- **No host selection on `active`.** It delegates to the last-held connection. Production commands
+  use [per-server routing](daemon-connection-routing.md) to select a connection view; explicit
+  reconnect takes its server id directly through the registry method above.
+- **No pairing content in diagnostics.** The registry emits two [diagnostic log](diagnostic-log.md) events,
   `registry-reconciled { count }` and `registry-reconcile-failed { code: 'unreadable-collection' }` —
-  counts and a static code, never a server id or a record. `DiagnosticEvent` has no server-id field
-  and no index signature, so this is enforced by the type system, not by discipline.
+  counts and a static code, never a server id or a record. The reconnect IPC handler's events
+  above likewise contain only constants. The logger's string fields do not enforce that rule;
+  each producer must construct its own safe record.
 - **The registry retains each `PairedServerRecord` in memory**, beside the connection it belongs to,
   purely to detect a re-pair by value — not a new exposure, since the connection already holds the
   same token and static key inside its `hello`/headers, and the retention ends when the entry drops.
@@ -127,6 +165,20 @@ completes in one tick" comments guarding the pairing/unpair handler registration
   here" — that isn't true (the function would keep compiling and silently ignore the new field). Code
   review flagged this as a non-blocking SHOULD FIX; a field added to the wire payload alongside a
   daemon change must have `sameRecord` updated by hand.
+
+## Testing
+
+[`connectionRegistry.test.ts`](../../../src/main/connectionRegistry.test.ts) checks independent
+alpha/beta targeting, repeated calls, unknown ids, the null stand-in, and held empty/prototype-shaped
+ids. Existing assertions still prove lifecycle methods absent from connection views. The
+[request tests](../../../src/shared/ipc/reconnectServer.test.ts) pin the closed shape, including
+`undefined`, symbol and non-enumerable extras. The
+[handler tests](../../../src/main/reconnectServerHandler.test.ts) check registration/removal,
+dispatch/refusal, empty acknowledgements and exact diagnostic records, including a throwing
+dispatch. The [preload test](../../../src/preload/reconnectServer.test.ts) makes mocked `invoke`
+return data and proves the exposed API discards it; an always-undefined mock would miss a bridge
+that accidentally forwarded results. These unit seams do not prove a renderer gesture reaches
+a real connection.
 
 ## Revisions found during implementation
 
@@ -149,4 +201,3 @@ Full design, the security review (`PASS`, one MUST FIX resolved before ship — 
 `will-quit` landing mid-reconcile could dial after the app had already torn down, closed by the
 post-`await` `stopped` re-check above), and the 19-case test table live in
 `docs/specs/architecture/1117-connection-registry.md`.
-

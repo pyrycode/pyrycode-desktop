@@ -8,10 +8,10 @@ Introduced in [#1420](../../specs/architecture/1420-reported-context-store.md), 
 [#1419](daemon-event-channel-sealed-union-history-recent.md)'s carried `contextUsage` daemon event — which
 [#1454](https://github.com/pyrycode/pyrycode-desktop/issues/1454)/[#1455](https://github.com/pyrycode/pyrycode-desktop/issues/1455)/[#1459](https://github.com/pyrycode/pyrycode-desktop/issues/1459)/[#1460](https://github.com/pyrycode/pyrycode-desktop/issues/1460)
 decode off the daemon's `context_usage` frame and its three inventories — into a per-conversation store
-plus its own bridge. Shipped dormant: nothing renders yet.
-[#1421](https://github.com/pyrycode/pyrycode-desktop/issues/1421) draws the footer reading and the gauge;
-[#1254](https://github.com/pyrycode/pyrycode-desktop/issues/1254) draws the breakdown popover; both own the
-visual-fidelity check and the DOM-sink discipline this slice only inherits.
+plus its own bridge. [#1421](https://github.com/pyrycode/pyrycode-desktop/issues/1421) uses the held
+reading in the footer and the run-configuration gauge, with settings-derived totals as the fallback
+only when no reading exists. [#1254](https://github.com/pyrycode/pyrycode-desktop/issues/1254) owns the
+breakdown popover.
 
 **Named `reportedContextStore`, not `contextUsageStore` — a forced break with the family convention, for a
 concrete collision rather than a stylistic one.** Every sibling here takes its name from its event arm
@@ -68,6 +68,26 @@ ticket's question if it ever becomes one, and building an eviction policy for a 
 is what that store's header forbids.
 
 ## How it works
+
+The receive bridge remains passive: it subscribes to `contextUsage` events and writes readings.
+On each eligible [chat activation](paired-shell-conversation-exits.md#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166),
+including reopening the same chat, `PairedShell`'s `activateDeps.requestConversationConfig` sends exactly one
+`requestContextUsage` through `window.pyry.sendCommand`, immediately beside `requestRunConfigSnapshot`
+and naming the same conversation. The connected-owner guard blocks unavailable or unresolved hosts;
+the React-free sender also rejects null/empty ids. Created chats whose list row has not arrived use
+the existing [deferred initialization](conversation-shell.md#created-chat-initialization).
+
+Keep this ask at activation: adding it inside `requestRunConfigSnapshot` would also request context
+on sheet opens and settings refreshes. Opening Run configuration sends no additional context ask.
+The [outbound transport](daemon-connection-methods.md#public-surface) remains synchronous
+fire-and-forget; main owns send diagnostics, and neither layer retries a failure, error or silence.
+The bridge and store gain no request effect or pending state.
+
+A reply for the chat replaces its held reading through the same receive path as unsolicited turn-end
+reports. Both the footer and run-configuration gauge prefer that reading before any new turn through
+`contextTokenSource`, keeping their existing visuals and absent-only transcript fallback. Reopening
+does not clear the held reading while awaiting a reply. See the
+[#1504 design](../../specs/architecture/1504-context-reading-on-chat-open.md).
 
 ### The store (`src/renderer/src/store/reportedContextStore.ts`)
 
@@ -137,9 +157,21 @@ subscribeReportedContext(onDaemonEvent, setReportedContext): () => void
 ReportedContextData(): null
 ```
 
-`announcedModelBridge`'s shape: reactive-only, no request half, no `connected`-edge trigger, no retry — the
-daemon pushes the reading unsolicited after every turn end, and a client-side retry against a relay
-withholding the frame would be a self-inflicted spin. **One route, no comparison** — the sharpest contrast
+`announcedModelBridge`'s shape: receive-only, no send effect, no `connected`-edge trigger and no retry.
+It accepts both unsolicited turn-end readings and replies to `request_context_usage` through the
+same `parseContextUsagePayload` → `contextUsage` path. The reply's envelope `in_reply_to` identifies
+the request on the wire, but the stored key comes only from the payload's `conversation_id`.
+There is no pending-request lookup or substitution of the requested or active conversation id.
+Optional `as_of` is ignored by the named-field parser and reaches neither the event nor the store;
+displaying its meaning is separate work. Readings still replace by arrival order, with no timestamp
+comparison or expiry.
+
+The request errors `conversation.not_found` and retryable `context_usage.unavailable` keep generic
+error handling upstream; neither produces a `contextUsage` event. This bridge ignores other event
+arms, so an error neither clears a held reading nor fabricates one for an absent key. The outbound
+method also never retries either error, a send failure or silence.
+
+**One route, no comparison** — the sharpest contrast
 with `usageLimitBridge`, which routes on an exact-equality test against a benign status: this arm has no
 benign value, so the whole module is comparison-free and there is nothing for a hostile string to steer.
 `translateContextUsage` returns a fresh named-field literal (never `return event`, never a spread) so
@@ -155,11 +187,11 @@ effect, so the leaf server-renders to `''` without a bridge mock.
 ### The pairing clear
 
 `clearAllReportedContext` joins `ClearPairingScopedStateDeps` and is wired through `PairedShell.tsx`. No
-`connected`-edge clear, for `usageLimitStore`'s reason: after a reconnect the window is whatever claude
-last reported, the next turn end re-reports it, and there is no request half to re-fetch a value blanked
-there. A pairing that has **ended** is the opposite: nothing writes the map until the new daemon's next
-turn ends, and until then a surface would attribute a departed machine's model identity, MCP server names
-and memory-file paths to the new one. Position among the in-memory clears is free; it precedes
+`connected`-edge clear: after a reconnect the held value remains claude's last reported reading until
+another arrives. The outbound request capability does not change that lifetime or guarantee a reply.
+A pairing that has **ended** clears the map so a surface cannot attribute the departed machine's
+model identity, MCP server names or memory-file paths to the new one while awaiting its first reading.
+Position among the in-memory clears is free; it precedes
 `clearAllLastRead`, the only effect that reaches outside memory and so the only one that can throw.
 
 ## Lessons learned (#1420)
@@ -187,6 +219,14 @@ and memory-file paths to the new one. Position among the in-memory clears is fre
   lines including the 441-line plan, finished well inside the run budget with no continuation leg — a data
   point *for* that ruling, not against it. See [#1320](usage-limit-store.md)'s identical call one arm
   earlier.
+
+## Testing
+
+`e2e/composer-context-claude-reading.spec.ts` holds the correlated on-open reply until both surfaces
+show the transcript fallback, then verifies their replacement before any turn. An unsolicited
+turn-end reading alone cannot prove the activation request. Unavailable-host checks observe
+`window.pyry.sendCommand`: absent socket frames could otherwise hide a renderer send dropped by main.
+The sender unit tests cover null/empty ids, repeated explicit asks and no scheduled retry.
 
 ## Edge cases and limitations
 

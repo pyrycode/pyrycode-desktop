@@ -30,6 +30,7 @@ import { selectDockIcon } from './dockIcon'
 import { registerPairingHandler } from './pairingHandler'
 import { registerPairingStatusHandler } from './pairingStatusHandler'
 import { registerUnpairServerHandler } from './unpairHandler'
+import { registerReconnectServerHandler } from './reconnectServerHandler'
 import { registerServerInfoHandler } from './serverInfoHandler'
 import {
   registerHostLabelHandler,
@@ -618,6 +619,12 @@ app.whenReady().then(() => {
   })
   app.on('will-quit', () => unregisterUnpairServer())
 
+  const unregisterReconnectServer = registerReconnectServerHandler(ipcMain, {
+    registry,
+    diagnosticLog
+  })
+  app.on('will-quit', () => unregisterReconnectServer())
+
   // Every window this app opens goes through here (#519): the first one below, and each dock-reopened
   // replacement from the `activate` handler at the bottom. The two halves of #519 meet in this one
   // function — routing (make the new window the live target) and convergence (bring it up to date).
@@ -773,6 +780,12 @@ app.whenReady().then(() => {
         // in the model-list store, unchanged and unbranched.
         const conversationId = command.payload.conversation_id
         router.route(conversationId)?.requestModelList(conversationId)
+        return
+      }
+      case 'requestContextUsage': {
+        // Use the same id for host lookup and sending; an unknown host never falls back.
+        const conversationId = command.payload.conversation_id
+        router.route(conversationId)?.requestContextUsage(conversationId)
         return
       }
       case 'requestHistory':

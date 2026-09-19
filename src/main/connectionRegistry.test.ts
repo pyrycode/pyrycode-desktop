@@ -83,6 +83,7 @@ interface BuiltConnection {
    * the argument, not a count: the delegate that dropped it would still count right.
    */
   newSessions: string[]
+  contextRequests: string[]
   /**
    * The conversation ids this connection's `interrupt` was handed (#1092), recorded beside `calls` for
    * the reason `newSessions` is: `calls.interrupt` survives as this file's lifecycle-delegation probe
@@ -101,12 +102,14 @@ function createFactoryFake() {
   }): DaemonConnection => {
     const calls = { start: 0, stop: 0, reconnect: 0, interrupt: 0 }
     const newSessions: string[] = []
+    const contextRequests: string[] = []
     const interrupts: string[] = []
     built.push({
       serverId: spec.serverId,
       pairedServer: spec.pairedServer,
       calls,
       newSessions,
+      contextRequests,
       interrupts
     })
     const noop = (): void => {}
@@ -130,6 +133,7 @@ function createFactoryFake() {
       send: noop,
       requestSessionSettings: noop,
       requestModelList: noop,
+      requestContextUsage: (conversationId) => { contextRequests.push(conversationId) },
       requestHistory: noop,
       requestSystemPrompt: noop,
       requestConversations: noop,
@@ -193,6 +197,53 @@ function harness(initial: PairedServerRecord[] = []) {
 }
 
 describe('createConnectionRegistry', () => {
+  describe('explicit named-host reconnect', () => {
+    it('reconnects only the exact held host on every request', async () => {
+      const { registry, factory } = harness([record('alpha'), record('beta')])
+      await settle()
+
+      registry.reconnect('alpha')
+      expect(factory.paired.map((entry) => entry.calls.reconnect)).toEqual([1, 0])
+      registry.reconnect('beta')
+      registry.reconnect('alpha')
+      expect(factory.paired.map((entry) => entry.calls.reconnect)).toEqual([2, 1])
+      expect(factory.built[0].calls.reconnect).toBe(0)
+    })
+
+    it('ignores unknown ids without falling back to another host', async () => {
+      const { registry, factory } = harness([record('alpha'), record('beta')])
+      await settle()
+
+      for (const id of ['unknown', 'Alpha', '', '__proto__', 'constructor', 'toString']) {
+        expect(registry.reconnect(id)).toBeUndefined()
+      }
+      expect(factory.built.map((entry) => entry.calls.reconnect)).toEqual([0, 0, 0])
+    })
+
+    it('never reconnects the not-paired stand-in for a string id', async () => {
+      const { registry, factory } = harness()
+      await settle()
+
+      for (const id of ['alpha', '', 'null', '__proto__', 'constructor', 'toString']) {
+        expect(registry.reconnect(id)).toBeUndefined()
+      }
+      expect(factory.built).toHaveLength(1)
+      expect(factory.built[0].calls.reconnect).toBe(0)
+    })
+
+    it.each(['', '__proto__', 'constructor', 'toString'])(
+      'matches the ordinary string id %j when held',
+      async (id) => {
+        const { registry, factory } = harness([record(id), record('beta')])
+        await settle()
+
+        registry.reconnect(id)
+        expect(factory.for(id).calls.reconnect).toBe(1)
+        expect(factory.for('beta').calls.reconnect).toBe(0)
+      }
+    )
+  })
+
   describe('the set follows the records (AC1)', () => {
     it('builds one connection per stored record, each stamped with its own server id', async () => {
       const { factory } = harness([record('alpha'), record('beta')])
@@ -451,6 +502,14 @@ describe('createConnectionRegistry', () => {
   // server; this answers for the one NAMED, which is the whole difference between a command reaching
   // the right daemon and reaching whichever was paired last.
   describe('the per-server accessor', () => {
+    it('forwards context requests only to the named host', async () => {
+      const { factory, registry } = harness([record('alpha'), record('beta')])
+      await settle()
+      registry.connectionFor('alpha')?.requestContextUsage('conv-42')
+      expect(factory.for('alpha').contextRequests).toEqual(['conv-42'])
+      expect(factory.for('beta').contextRequests).toEqual([])
+    })
+
     it('reaches the named server, not the most recently paired one', async () => {
       const { factory, registry } = harness([record('alpha'), record('beta')])
       await settle()

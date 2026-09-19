@@ -32,6 +32,7 @@ import type {
   SetSessionSettingsPayload,
   RequestSessionSettingsPayload,
   RequestModelListPayload,
+  RequestContextUsagePayload,
   RequestSystemPromptPayload,
   RequestHistoryPayload,
   InterruptPayload,
@@ -293,6 +294,7 @@ export type RendererCommand =
   | { type: 'requestDebugBundle'; serverId?: string }
   | { type: 'requestSessionSettings'; payload: RequestSessionSettingsPayload }
   | { type: 'requestModelList'; payload: RequestModelListPayload }
+  | { type: 'requestContextUsage'; payload: RequestContextUsagePayload }
   | { type: 'requestHistory'; payload: RequestHistoryPayload }
   | { type: 'requestSystemPrompt'; payload: RequestSystemPromptPayload }
   | { type: 'requestConversations'; serverId?: string }
@@ -455,6 +457,8 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       // arm above records: structured clone PRESERVES an explicitly-undefined property across the IPC
       // bridge, so `'payload' in value` alone would pass one straight through to the wire.
       return 'payload' in value && isRequestModelListPayload(value.payload)
+    case 'requestContextUsage':
+      return 'payload' in value && isRequestContextUsagePayload(value.payload)
     case 'requestHistory':
       // Payload-required (#1222) — the neighbour's idiom verbatim, including why the
       // explicitly-`undefined` case is refused by the payload guard and not by the `in` check.
@@ -920,6 +924,13 @@ function isRequestSessionSettingsPayload(value: unknown): value is RequestSessio
  *  not rejected here, and cannot reach the wire because that rebuild bounds the frame to the one id.
  *  Pure; never throws. */
 function isRequestModelListPayload(value: unknown): value is RequestModelListPayload {
+  if (typeof value !== 'object' || value === null) return false
+  return 'conversation_id' in value && typeof value.conversation_id === 'string'
+}
+
+/** Structural string check, including ''. Routing decides whether the id names a host;
+ * buildRequestContextUsage discards extra fields before encoding. */
+function isRequestContextUsagePayload(value: unknown): value is RequestContextUsagePayload {
   if (typeof value !== 'object' || value === null) return false
   return 'conversation_id' in value && typeof value.conversation_id === 'string'
 }

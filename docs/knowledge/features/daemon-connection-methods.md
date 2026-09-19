@@ -31,6 +31,7 @@ export interface DaemonConnection {
   requestConversations(): void  // #139: encrypt a bare list_conversations control frame onto the live session
   requestSessionSettings(conversationId?: string): void  // #491, widened #945: encrypt a request_session_settings onto the live session; the builder normalises an absent id to conversation_id: ''
   requestModelList(conversationId: string): void  // #1165: encrypt a request_model_list onto the live session; the id is REQUIRED, unlike its bare-optional sibling above
+  requestContextUsage(conversationId: string): void  // ask once for context_usage; required id, no retry or pending state
   requestHistory(payload: RequestHistoryPayload): void  // #1222: encrypt a request_history onto the live session, asking for one backward step of a scroll-back walk; takes the WHOLE payload (three fields), unlike its two neighbours above; answered by history_page → historyPageReceived or error → historyRequestFailed, correlated by envelope id since the reply names no conversation
   requestSystemPrompt(conversationId: string): void  // #1230: encrypt a request_system_prompt onto the live session, asking what system prompt a conversation holds and whether the running session was started with a different one; the id is REQUIRED, requestModelList's rule; answered by ONE system_prompt → systemPromptReceived, correlated by envelope id since the reply names no conversation, and by NOTHING ELSE — this verb has no error frame at all, so nothing retries and an unroutable id must be refused before the send
   newSession(conversationId: string): void  // #1217: encrypt a new_session onto the live session — KILLS claude and spawns a fresh one under a new session id; the id is REQUIRED (unlike the wire type, which mirrors the daemon's optional field); fire-and-forget, NO reply of any kind
@@ -187,6 +188,38 @@ line for it, and its test factory fake gained a `noop` — a **tsc-only** break,
 full `DaemonConnection` object literal (`npm run build` is the gate, not `npm test`). Ships with no
 renderer sender at all — [#1166](https://github.com/pyrycode/pyrycode-desktop/issues/1166) is the trigger
 that fires it on conversation open.
+
+**`requestContextUsage(conversationId)`** sends one client→daemon `request_context_usage`
+envelope under the existing negotiated `interactive` capability. The renderer command is
+`{ type: 'requestContextUsage', payload: { conversation_id: string } }`, using the shared
+`RequestContextUsagePayload`. Its payload is required at compile time; the
+[command boundary](command-channel.md) rejects absent, undefined or null payloads and
+missing or non-string ids. Like `requestModelList`, it accepts `''` and extra fields
+structurally. The conversation router refuses an empty or unknown id or a missing host,
+with no fallback to another host or conversation. Main's `buildRequestContextUsage`
+encodes a fresh payload containing only the exact `conversation_id`, so extra renderer
+fields cannot reach the wire or select a destination.
+
+The method requires a driver and an authenticated connection; otherwise it sends nothing.
+It uses the shared `nextEnvelopeId` sequence and `now()` timestamp, advancing the id after
+successful encoding and before the single send. Build/send failures return without
+throwing. Diagnostics contain only static sent/refused/failed codes, never identifiers,
+readings or caught exceptions.
+
+The daemon answers with one `context_usage` whose envelope `in_reply_to` identifies the
+request, or an `error` carrying `conversation.not_found` or retryable
+`context_usage.unavailable`. Both errors retain generic `unclassified` handling and
+neither clears nor fabricates a reading. **No automatic retry follows a send failure,
+missing reply or either daemon error**, including the retryable one. There is no pending
+request map or timer. A valid reply follows the existing parser → `contextUsage` →
+[reported-context bridge/store](reported-context-store.md#the-bridge-srcrenderersrcstorereportedcontextbridgets)
+path under its payload's conversation id, just like an unsolicited reading. Optional
+`as_of` is tolerated and discarded; it does not affect delivery.
+
+The receive-path tests deliberately use different requested and returned conversation ids:
+a test reusing one id would miss attribution to the request instead of the payload.
+The outbound contract ships dormant in [#1503](../../specs/architecture/1503-request-context-usage.md);
+[#1504](https://github.com/pyrycode/pyrycode-desktop/issues/1504) owns the later on-open trigger.
 
 **`newSession(conversationId)` was added in [#1217](https://github.com/pyrycode/pyrycode-desktop/issues/1217)**
 — asks the daemon to **kill** the supervised claude process in the named conversation and spawn a fresh

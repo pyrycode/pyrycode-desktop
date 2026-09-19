@@ -65,18 +65,9 @@ export interface ComposerEffortMenuModel {
  *
  * THREE RENDERINGS:
  *
- *   effort === ''                    → null           the session's effort is not known; draw nothing
- *   effort, and no published levels  → no options     AC3's inert label
- *   effort and levels                → the menu
- *
- * The first is AC1's second half, and #988 shipped it for the identical case one button to the left.
- * selectEffectiveSettings resolves `effort` to '' until a run-config snapshot has arrived, and the
- * snapshot lands on a turn-end edge, so that window is ordinary app startup rather than an edge case.
- * Every other rendering would draw an empty gap where a label belongs; ContextUsageControl takes the
- * same posture for its own unavailable reading and #811's no-placeholder rule points the same way.
- * THE SHEET TAKES THE OPPOSITE POSTURE on this same field — RunConfigSections' EffortSection renders a
- * present, empty `run-config__effort-current` line, "inventing no distinction the snapshot does not
- * carry". Two shipped precedents, opposite outcomes; the footer follows its own neighbour.
+ *   unset effort, no levels          → null           nothing known or offered
+ *   known effort, no levels          → no options     read-only label
+ *   published levels                 → the menu       Effort label while unset
  *
  * THE SECOND IS ONE ARM COVERING ALL THREE nothing-to-offer readings — no frame has arrived for the
  * conversation, the session's model matches no published row, and the matched row publishes an empty
@@ -97,9 +88,9 @@ export interface ComposerEffortMenuModel {
  * rather than an absence, and it now resolves the row the daemon publishes for that default instead of
  * missing every row — so an unconfigured chat reaches the MENU rendering above where it used to reach
  * the inert one permanently, which measured live is the common case rather than an edge. Nothing else
- * moved: the label, the currentId, the options mapping, the `effort === ''` rendering and both arms are
- * untouched, and with no inherited-default row published this still resolves nothing and still draws the
- * inert label. The three OTHER callers of publishedRowFor keep missing on an empty model deliberately —
+ * moved in that lookup: with no inherited-default row published it still resolves nothing and
+ * keeps a known effort read-only. The three OTHER callers of publishedRowFor keep missing on an empty
+ * model deliberately —
  * effortRowFor's docblock names them and why, one being the permission-mode trigger beside this one.
  *
  * `?? []` guards the shape rather than the type: `effort_levels` is a non-optional `string[]`, but
@@ -125,10 +116,10 @@ export function composerEffortMenuModel(
   model: string,
   effort: string
 ): ComposerEffortMenuModel | null {
-  if (effort === '') return null
   const levels = effortRowFor(models, model)?.effort_levels ?? []
+  if (effort === '' && levels.length === 0) return null
   return {
-    label: effort,
+    label: effort || COMPOSER_EFFORT_MENU_LABEL,
     currentId: effort,
     options: levels.map((level) => ({ id: level, label: level }))
   }

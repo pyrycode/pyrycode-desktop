@@ -307,3 +307,62 @@ test('composer footer: the effort menu labels, offers, submits and reverts (AC1-
   await expect(label).toHaveText(HAPPY_EFFORT)
   await expect(page.locator('.composer__footer [aria-haspopup="menu"]')).toHaveCount(3)
 })
+
+for (const model of [GRADED.value, '']) {
+  test(`unset effort becomes selectable after levels arrive (model ${model || 'inherited'})`, async ({
+    launchPairedApp
+  }) => {
+    const captured: Envelope[] = []
+    const fake = capturingFake(captured)
+    const { page, daemon, forwarder } = await launchPairedApp({
+      buildReplyFrames: (bytes) => {
+        const env = decodeEnvelope(bytes)
+        if (env.type !== 'request_session_settings') return fake(bytes)
+        captured.push(env)
+        return [encodeEnvelope({
+          id: REPLY_ENVELOPE_ID, type: 'session_settings', ts: FIXED_TS,
+          in_reply_to: env.id,
+          payload: { ...BASELINE_RUN_CONFIG, model, effort: '' }
+        })]
+      }
+    })
+    const label = page.locator('.composer__effort-label')
+    const trigger = page.locator('.composer__effort')
+    const panel = page.getByRole('menu', { name: 'Effort', exact: true })
+    const writes = () => captured.filter(e => e.type === 'set_session_settings')
+    // The permission control establishes that the empty-effort snapshot has rendered.
+    await expect(page.locator('.composer__permission')).toBeVisible()
+    await expect(label).toHaveCount(0)
+    daemon.pushFrame(modelListFrame([{ ...GRADED, value: model || 'default' }]))
+    await expect(trigger).toHaveText('Effort')
+    await trigger.click()
+    await expect(panel.getByRole('menuitem')).toHaveText(['brisk', 'steady', 'deep'])
+    await expect(panel.locator('[aria-current="true"]')).toHaveCount(0)
+    expect(writes()).toHaveLength(0)
+    await page.screenshot({ path: `/tmp/builder-1528-visual/unset-${model ? 'explicit' : 'inherited'}.png`, animations: 'disabled' })
+
+    await panel.getByRole('menuitem', { name: REJECTED_EFFORT, exact: true }).click()
+    await expect(label).toHaveText(REJECTED_EFFORT)
+    await expect.poll(() => settingsFramesMatching(captured, {
+      session_id: SESSION_ID, effort: REJECTED_EFFORT
+    })).toBe(1)
+    const rejected = writes()[0]
+    daemon.pushFrame(settingsErrorFrame(rejected.id))
+    await expect(trigger).toHaveText('Effort')
+    await trigger.click()
+    await expect(panel.locator('[aria-current="true"]')).toHaveCount(0)
+    await panel.getByRole('menuitem', { name: HAPPY_EFFORT, exact: true }).click()
+    await expect(label).toHaveText(HAPPY_EFFORT)
+    await expect.poll(() => settingsFramesMatching(captured, {
+      session_id: SESSION_ID, effort: HAPPY_EFFORT
+    })).toBe(1)
+    await trigger.click()
+    await expect(panel.locator('[aria-current="true"]')).toHaveText(HAPPY_EFFORT)
+
+    forwarder.closeClientLeg(4401)
+    await expect(trigger).toHaveCount(0)
+    await expect(panel).toHaveCount(0)
+    await expect(label).toHaveText(HAPPY_EFFORT)
+    expect(writes()).toHaveLength(2)
+  })
+}

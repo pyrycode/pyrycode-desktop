@@ -27,8 +27,9 @@ control before the context reading.
 
 The two triggers look interchangeable but differ in one load-bearing way: the model trigger **looks up**
 its label (a row's `display_name`, joined on the session's model), while this trigger's label **is** the
-session's value, unmodified. Claude's own control displays effort levels lowercase and byte-identical to
-the machine values it accepts, so there is no display convention to reproduce and no relabelling to do.
+session's value, unmodified, or the client-owned **Effort** label while unset. Claude's own control
+displays effort levels lowercase and byte-identical to the machine values it accepts, so there is
+no display convention to reproduce and no relabelling to do.
 The row lookup (`effortRowFor` since #1168, `publishedRowFor` before it) is used here only to find the
 **levels** — never the label.
 
@@ -43,18 +44,16 @@ uses the inert span described in [The write](#the-write).
 
 | Input | Rendering |
 |---|---|
-| `effort === ''` (no run-config snapshot has arrived) | `null` — nothing in the row |
+| `effort === ''` and no published levels | `null` — nothing in the row |
 | `effort !== ''`, and the matched row publishes no levels | an inert `<span>`: the label, no chevron, no role, no tabindex, no handler, no `.composer-options-anchor` |
-| `effort !== ''` and the matched row publishes levels | `ComposerOptionsMenu` with the levels as options |
+| The matched row publishes levels, with any effort value | `ComposerOptionsMenu` with the levels as options; **Effort** while unset, otherwise the effort value |
 
-**The first rendering is AC1's second half, and [the model menu](composer-model-menu.md) shipped it for
-the identical case one button to the left.** `selectEffectiveSettings` resolves `effort` to `''` until a
-run-config snapshot has arrived, and the snapshot lands on a turn-end edge, so the window is ordinary app
-startup rather than an edge case. `ContextUsageControl` takes the same posture for its own unavailable
-reading, and #811's no-placeholder rule points the same way. **The run-configuration sheet takes the
-opposite posture on this same field** — `RunConfigSections`' `EffortSection` renders a present, empty
-`run-config__effort-current` line, "inventing no distinction the snapshot does not carry." Two shipped
-precedents, opposite outcomes; the footer follows its own neighbour rather than the sheet.
+**Resolve capability before visibility.** An empty effort does not mean there are no choices.
+Resolve levels through `effortRowFor` first, including the inherited-default model lookup below;
+only an unset effort with no published levels stays hidden. The model-list subscription makes
+levels arriving after mount reveal the trigger without selecting a value or sending a setting.
+The **Effort** label names the available control, not an inferred daemon default. This distinction
+fixes [#1528](https://github.com/pyrycode/pyrycode-desktop/issues/1528) without inventing a level.
 
 **The second rendering is one arm covering all three nothing-to-offer readings** — no list has arrived
 for the conversation, the session's model matches no published row, and the matched row publishes an
@@ -81,10 +80,11 @@ sheet's own Effort section) both resolve their row through `effortRowFor` — `p
 lookup *argument* substituted: an empty model, the wire's inherited daemon default and explicitly not an
 absence, looks up the row the daemon publishes for that default (`value: 'default'`) instead of matching
 nothing. Every other model still passes straight through to `publishedRowFor`'s unchanged `===`. This is
-why a chat nobody has set a model on now reaches the **menu** rendering below instead of the inert one it
+why a chat nobody has set a model on now reaches the **menu** rendering above instead of the inert one it
 drew permanently before #1168 — measured against a live daemon, that was the common case for an
 unconfigured chat, not an edge one. With no `default` row published, or no `model_list` frame received at
-all, `effortRowFor` still returns `undefined` and this control still draws the inert arm.
+all, `effortRowFor` still returns `undefined` and this control keeps a known effort inert and hides
+an unset effort.
 `RunningModelSection` and `ModelSection` keep calling `publishedRowFor` directly and are unmoved — in
 particular [the permission-mode menu](composer-permission-mode-menu.md#the-auto-hiding-join-1022)
 deliberately did not follow, since its `supports_auto_mode` read would otherwise start hiding `auto` on
@@ -100,8 +100,8 @@ own tests pinned (an announcement with no session model, which still marks nothi
 **`truncated_fields` is deliberately not read.** The shared panel's option is `{ id, label }` with one
 text child, so a cut report here would need either a new prop on a component four tickets share
 (forbidden) or client copy fused into a daemon-authored node (rejected at `EffortSection`'s own
-cut-marker rationale). A cut-to-nothing list collapses into the inert arm beside no-list-yet; the
-run-configuration sheet remains the surface that reports both readings.
+cut-marker rationale). A cut-to-nothing list behaves like no-list-yet: a known effort stays inert
+and an unset effort hides; the run-configuration sheet remains the surface that reports both readings.
 
 **The entries are exactly the published levels**, in the daemon's order — nothing deduped, dropped,
 reordered or synthesised, per AC2. `id` is the level itself, so `onSelect(id)` submits it with no lookup.
@@ -114,14 +114,15 @@ is not reopened here — the same tension #988 named for a duplicate `value` and
 **The marking:** `currentId` is the session's `effort` itself, not a looked-up level — the options' ids
 *are* the levels, so the panel's existing `option.id === currentId` branch marks the matching row on its
 own, with no special case. An effort matching no published level marks nothing: the daemon may narrow a
-list for a session already running a level outside it.
+list for a session already running a level outside it. An unset effort keeps `currentId: ''`, so
+no published level is marked current.
 
 ## The write
 
 `onSelect` is optional. The container supplies it only when the conversation's
 unambiguous owning host reports `connected` and the session ID is addressable.
-Without it, a held effort renders as an inert label even when levels are published;
-an open menu unmounts. The published-level rules above still apply when connected.
+Without it, a held effort or the unset **Effort** label renders as an inert label even when levels
+are published; an open menu unmounts. The published-level rules above still apply when connected.
 
 The callback calls `changeConnectedSetting(conversationId, { field: 'effort', value })`,
 which re-reads current ownership, status and session ID before `changeSetting` and
@@ -133,8 +134,9 @@ for the sheet and sibling menus; reconnection never replays a blocked choice.
 Picking a level moves the trigger's label to the optimistic value at once and reverts it if the change is
 rejected — not local state: `selectEffectiveSettings`'s pending-overlay-over-confirmed-over-snapshot
 composition moves it, and the same composition reverts it when the store drops the pending record on
-rejection. This menu says nothing more on a rejection: the row has a hard 20px height with no slot for an
-error line, and the sheet already names the rejection.
+rejection. If the prior effort was unset, rollback restores **Effort** with no option selected
+while levels remain published. This menu says nothing more on a rejection: the row has a hard 20px
+height with no slot for an error line, and the sheet already names the rejection.
 
 ## CSS: three rules on `.composer__footer-button`, and the third-glyph call taken
 
@@ -186,14 +188,12 @@ standalone tidy-up rather than to whichever control happens to land next.
 
 ## The default apply (#1169)
 
-Before [#1169](../codebase/1169.md), a chat whose session reported no explicit effort
-(`SessionSettingsPayload.effort === ''`, the wire's "inherited daemon default") drew the first rendering
-above — `null` — forever, since unlike the model there was nothing to fall back on: claude's session-open
-line carries no effort field at all. #1169 makes sure such a session *has* a level rather than reporting
-one nobody holds: **a new chat opens at the last effort level used**, remembered client-side on a daemon
-confirm ([Last-effort store](last-effort-store.md)) and validated against the opened chat's own published
-levels before it is applied. With nothing usable remembered, the control still stays blank — no level is
-invented, #988's constraint intact.
+A new chat can open at the last confirmed effort level, remembered client-side on a daemon
+confirm ([Last-effort store](last-effort-store.md)) and validated against the opened chat's own
+published levels before it is applied. `SessionSettingsPayload.effort === ''` means the inherited
+daemon default; claude's session-open line carries no effort field from which to infer a level.
+With nothing usable remembered, effort remains unset: published levels expose **Effort** with
+nothing selected, while no levels keep it hidden. Showing that menu does not apply a default.
 
 **A separate file and a separate leaf, not an effect inside this control.** `EffortDefaultData.tsx`
 (`src/renderer/src/screens/conversation/EffortDefaultData.tsx`) holds a pure decision function,
@@ -276,7 +276,7 @@ JSX text position (React's default escaping) plus four non-sink places, all the 
 `__proto__`-as-key hazard closed by that alone), the `option.id === currentId` string comparison, the
 `onSelect` pass-through into the write payload, and an array index. No plain object is keyed by any of it,
 and the write gate logs only static availability codes, never these values. The panel's `aria-label` is the client-owned `COMPOSER_EFFORT_MENU_LABEL =
-'Effort'`, naming the panel, never the trigger's visible text; the trigger itself carries no `aria-label`,
+'Effort'`, also used as the unset trigger's visible text; the trigger itself carries no `aria-label`,
 so its accessible name stays its visible, auto-escaped text.
 
 **No client-side allowlist is added.** The daemon's inbound validator for effort is a closed enum at the
@@ -295,6 +295,14 @@ to confirm none reaches one. The container is proven only at its `ConversationSc
 seeding a non-empty model *and* a non-empty effort so both footer menus render at once — the only way to
 pin the row's order (Actions → model → effort → reading) and confirm the popup/anchor counts still hold
 at exactly one with no list published.
+
+The unset cases in `e2e/composer-effort-menu.spec.ts` start with neither a current nor a saved
+effort and deliver levels after mount, for both explicit and inherited models. A fixture that
+starts with a known effort cannot catch an early return on empty effort; static markup alone
+cannot prove the model-list subscription. These cases check exact option order, no current row,
+no visibility-triggered write, a delayed rejection restoring unset, a successful selection, and
+an open menu becoming read-only on disconnect. The separate remembered-default spec still
+covers automatic application; making an unset menu visible must not substitute for that flow.
 
 Two lessons from the e2e drive (`e2e/composer-effort-menu.spec.ts`), extending
 [the model menu's own e2e lessons](composer-model-menu.md#testing):

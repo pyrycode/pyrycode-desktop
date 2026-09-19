@@ -123,3 +123,33 @@ the association is a path preference, not an immutable snapshot of the uploaded 
 
 **Reviewer:** builder, self-review using `builder/security-review.md`.
 **Date:** 2026-09-19.
+
+## Revisions
+
+### 2026-09-19 — verifier triage: sidebar inspection read
+
+The dispatcher failed in the sidebar naming-retry test while reading
+`workspaceAttempts`; its launch-fate report shows the app remained alive and
+exited cleanly. The attachment changes do not touch this spec or its launch
+fixtures. The precise underlying protocol error was not retained by that run,
+so an attachment regression or a specific V8 cause cannot be inferred from it.
+
+Additional files read: `e2e/fixtures/mainProcessRead.ts` → `readMainProcess` and
+`NOT_YET_AVAILABLE`; its unit tests; `e2e/chat-history-recording.spec.ts` → the
+confirmed-deletion counter polls; `docs/knowledge/features/e2e-harness.md`
+§ Tolerating a transient inspection-context loss on reads. Ticket #1502 records
+the same live-app failure signature and the existing read-only tolerance.
+
+Apply that helper only to the observed `workspaceAttempts` read in
+`e2e/sidebar-add-workspace.spec.ts`. Poll for a nonempty string for at most five
+seconds, retaining the successful value instead of performing a second read.
+Never replay the listener installation, clicks or pushed events. Other errors
+still propagate through the existing helper. Inject one transient error at this
+read seam to prove RED before the change and GREEN afterward; then the real
+Electron read must supply the attempt ID used by the existing isolation checks.
+No production, IPC, security or visual contract changes. This rework adds one
+test-file edit and this revision, staying below the original 800-line budget.
+
+Documentation handoff additionally pending: `docs/knowledge/features/e2e-harness.md`
+§ Tolerating a transient inspection-context loss on reads should list the sidebar
+naming-retry read as a consumer of the existing helper.

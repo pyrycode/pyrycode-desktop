@@ -21,8 +21,8 @@ Measured from `pyrycode/internal/protocol/settings.go` and `internal/relay/v2ses
 `permission_mode`, deliberately, so the escalation keeps exactly one spelling on the wire: the `yolo` bit
 the run-configuration sheet's toggle already owns.
 
-So this menu **renders six labels and offers five entries**. A session sitting in bypass shows
-`Bypass permissions` on the button and is offered the other five; picking one moves it out of bypass,
+So this menu **renders six known labels and offers up to five entries**. A session sitting in bypass shows
+`Bypass approvals` on the button and is offered the settable modes; picking one moves it out of bypass,
 because the daemon clears the bit for any mode it accepts. **Nothing here can move a session into bypass**,
 and nothing here tries to — adding the sixth entry "for symmetry" would be a one-click privilege escalation
 in the input footer. The two counts are pinned by name in `ComposerPermissionModeMenu.test.tsx`.
@@ -34,24 +34,24 @@ The three footer menus look interchangeable but differ in two load-bearing ways:
 - **Its vocabulary is client-owned, and only one entry of it is conditional.** The model and effort menus
   each read `model_list` and have a third rendering — an inert label that opens nothing — for the three
   ways that list can be missing. Nobody publishes the set of settable permission modes to this client, so
-  there is no list frame to *wait for* and no empty-list arm, and there is never "nothing to offer": every
-  mode that renders at all renders an **operable** trigger. That stayed true when
+  there is no list frame to *wait for* and no empty-list arm: a known mode has four or five choices
+  whenever the session is addressable and its owning host is connected. That stayed true when
   [#1022](https://github.com/pyrycode/pyrycode-desktop/issues/1022) gave this control a
   `publishedRowFor` lookup and a model-list store read — see § The `auto`-hiding join below — because the
   read only ever *subtracts* one named entry from the constant; it never grows or replaces the list. This
-  is **two renderings, not three** — `permissionMode === ''` draws nothing (no run-config snapshot has
-  arrived yet, or the session was never resolved — one string, two readings, both meaning this control has
-  nothing true to say), and any other string draws four or five entries, including the bypass reading,
-  which gets no branch of its own.
+  gives the pure model function **two outcomes** — `permissionMode === ''` returns nothing (no snapshot
+  has arrived, or the session was never resolved), and any other string returns four or five entries,
+  including the bypass reading,
+  which gets no branch of its own. The view holds the label inert when selection is unavailable.
 - **Its label is looked up, not verbatim.** Claude publishes effort levels byte-identical to what it
   accepts, so the effort trigger relabels nothing. Permission modes arrive as camelCase machine identifiers
-  (`acceptEdits`); Figma `115:3678` draws the display form (`Auto`), and the shared panel's `id`/`label`
+  (`acceptEdits`); the trigger displays `Auto-approve edits`, and the shared panel's `id`/`label`
   split — [`ComposerOptionsPanelOption`](conversation-shell-composer-options-panel.md) — exists for exactly
   this consumer, which its own docblock names.
 
-Because the control is operable whenever a mode is known, it is the first footer menu with **no inert
-arm at all** — the model and effort menus wear `.composer__footer-button` on an inert `<span>` while
-waiting for their list; this one never does. That is what moves the footer's anchor and `aria-haspopup`
+Because a missing model list does not make this control inert, it can be operable while the model and
+effort menus wear `.composer__footer-button` on an inert `<span>` waiting for their list. Host/session
+availability still gates all three controls. That is what moves the footer's anchor and `aria-haspopup`
 counts: this control adds a second one to a row four unit assertions (`ConversationScreen.test.tsx`) and
 six e2e assertions (`composer-model-menu.spec.ts`, `composer-effort-menu.spec.ts`) had pinned at one. Each
 count moved by exactly one — the steps *between* them, which isolate each sibling control, are unchanged.
@@ -108,8 +108,8 @@ const hidesAuto = row !== undefined && row.supports_auto_mode === false
   an empty model is what keeps `auto` offered there, so this control keeps the plain `publishedRowFor`
   miss deliberately — see [Composer effort menu](composer-effort-menu.md#composereffortmenumodel-one-pure-function-deciding-all-three-renderings)
   for the wrapper itself.
-- **A session already running `auto` on a refusing model still labels the trigger `Auto` and marks nothing
-  in the panel** — the same no-matching-entry branch a session in bypass already uses. `currentId` stays
+- **A session already running `auto` on a refusing model still labels the trigger `Auto approval` and
+  marks nothing in the panel** — the same no-matching-entry branch a session in bypass already uses. `currentId` stays
   the session's mode verbatim; hiding an entry never changes what the trigger says.
 - **`AUTO_PERMISSION_MODE = 'auto'`** is the one new exported constant, module-level. Both the filter and
   the two test tiers name it rather than each typing their own copy of the string, and a unit assertion
@@ -123,7 +123,23 @@ reads and the field's own docblock.
 
 ## The label lookup and its `__proto__` hazard
 
-`PERMISSION_MODE_LABELS` is a frozen `Readonly<Record<string, string>>` over the six known modes. It is
+`PERMISSION_MODE_LABELS` supplies the same behaviour-based copy to the trigger and menu:
+
+| Mode value | Display label |
+| --- | --- |
+| `default` | Manual approval |
+| `acceptEdits` | Auto-approve edits |
+| `plan` | Plan |
+| `auto` | Auto approval |
+| `dontAsk` | Approved actions only |
+| `bypassPermissions` | Bypass approvals |
+
+These are display names, not changes to permission behaviour. **Manual approval still respects existing
+allow rules**; it does not promise a prompt for every action. Selection sends the existing mode value,
+and Bypass approvals remains a reported state only in this menu, never a selectable entry. See the
+[label-change spec](../../specs/architecture/1546-permission-mode-labels.md).
+
+The mapping is a `Readonly<Record<string, string>>` over the six known modes. It is
 read through `permissionModeLabel(mode)`, which guards with
 `Object.prototype.hasOwnProperty.call(PERMISSION_MODE_LABELS, mode)` before indexing, and falls through to
 the mode itself verbatim when the check fails.
@@ -175,18 +191,18 @@ unambiguous owning host reporting `connected`. Missing ownership/status and all
 non-connected statuses withhold it. The held label remains readable, but the
 chevron and open menu disappear. `changeConnectedSetting` checks current stores
 again before any command or optimistic change. Reconnection restores the existing
-Auto capability gate without replaying blocked choices; see
+`auto` capability gate without replaying blocked choices; see
 [the shared settings availability contract](conversation-shell-run-configuration.md#run-configuration-modeleffortyolo-sections-188).
 
 The pure model function alone cannot prove container wiring: it still computes
-Auto choices with no published list. Missing conversation ownership now makes the
+Auto approval choices with no published list. Missing conversation ownership now makes the
 mounted view inert instead. `e2e/composer-permission-mode-auto.spec.ts` proves the
 live per-model capability filter, while `e2e/offline-session-settings.spec.ts`
 proves host availability through mouse/keyboard actions and outbound commands.
 
 Allowed selections and rejection rollback still use `selectEffectiveSettings`'s
 pending-over-confirmed-over-snapshot composition, shared with the model and effort
-triggers and this control's Auto-hiding model join.
+triggers and this control's `auto`-hiding model join.
 
 ## CSS: a fourth footer-button consumer, and the fourth-glyph lift declined again
 
@@ -198,23 +214,17 @@ nothing about that rule is re-forked here. Three new declarations:
   class, so a readable held label does not claim to be clickable.
 - **`.composer__permission-label { min-width: 0; max-width: 120px; overflow: hidden; text-overflow: ellipsis }`**
   — its own rule rather than reusing `.composer__model-label`'s identical bound, since each footer e2e spec
-  locates its own label class bare (a second wearer breaks Playwright strict mode). 120px is derived from
-  the client-owned vocabulary: #988 measured the 13-character context reading at ~6.35px/char, so the
-  longest display name (`Bypass permissions`, 18 characters) draws at ~114px. It is deliberately **not**
-  tuned tighter to buy row width — ellipsizing the one label naming a security posture would be the wrong
-  place to economize.
+  locates its own label class bare (a second wearer breaks Playwright strict mode). The 120px bound is
+  unchanged by the label rename; `Approved actions only` (`dontAsk`, 21 characters) is now the longest
+  known label. The full text remains in the trigger's accessible name even when visually ellipsized.
 - **`.composer__permission-icon { flex: 0 0 auto }`** — `.composer__actions-icon`'s one declaration,
   repeated rather than shared.
 
-**The row is now over its width budget at the app's 800px minimum window, as
-[the effort menu's](composer-effort-menu.md) own note predicted it would be.** At that width the
-conversation pane is 400px, less two `--space-4` paddings and four `--space-5` gaps leaves 288px for five
-items; realistic content (Actions ~56px, this control ~56px at `Default`, a model display name ~75px,
-`medium` ~62px, the context reading 82.5px) totals ~331px. The e2e geometry detector
-(`.composer__footer` still 20px tall, `document.body.scrollWidth <= clientWidth`) still passes, because a
-drive can only seed short labels — it will not catch this on its own. **The fix stays what
-`.composer__effort-label`'s note already named: a whole-row shrink policy on `.composer__footer`, not a
-number retuned in any single control's rule.** No sibling bound was touched here.
+The [footer row shrink policy](conversation-shell-composer-message-box.md#footer-row-shrink-policy-1107)
+keeps all controls within the 800px minimum window by compressing gaps and ellipsizing labels together.
+Full selectable labels fit in the open dropdown. A body-overflow check alone cannot prove the footer
+fits inside its clipped pane: `e2e/composer-footer-overflow.spec.ts` seeds the longest permission label
+with long model/effort labels and full context usage, then measures the footer's own overflow and controls.
 
 **The fourth-glyph CSS lift is declined a fourth time.** `.composer__actions-icon`'s standing note had
 assigned this ticket two lifts — collapsing the four identical `flex: 0 0 auto` glyph rules into one shared
@@ -253,31 +263,37 @@ row to *subtract* from it — and the same structural argument extends to that r
 Renderer tests are static server renders (CLAUDE.md); `ComposerPermissionModeMenu.test.tsx` covers
 `composerPermissionModeMenuModel` as data (both renderings, all six modes labeled, an unknown mode falling
 through verbatim while still offering five and marking none, the bypass reading labeling
-`Bypass permissions` while still offering five and marking none) and the view against it (the anchor/panel
+`Bypass approvals` while still offering five and marking none) and the view against it (the anchor/panel
 wiring, the label's own bounded element, the chevron `aria-hidden`, the panel's client-owned name, and the
 `__proto__`/`constructor`/`toString` attribute sweep above). `ConversationScreen.test.tsx` gained a new mount
 test seeding all three footer menus' snapshot fields at once to pin the row's final order
 (Actions → permission → model → effort → reading) — the only proof this control is wired in, since every
 assertion in its own file passes on an unmounted component.
 
+Literal expectations pin all six trigger labels and the five selectable ID/label pairs independently
+of `PERMISSION_MODE_LABELS`; deriving the expected copy from that mapping would let a wrong label pass.
+The permission-menu Playwright spec also pins the five displayed labels literally and checks the open
+panel and each row fit at 800px. Keep negative label assertions current too:
+`e2e/offline-session-settings.spec.ts` must check absence of `Auto approval` after a refusing model arrives.
+An absence check for the former `Auto` label would pass even if the renamed option were incorrectly
+offered. The capability drive below supplies the positive baseline that all five choices can appear.
+
 **#1022 extended the model-function cases** rather than adding a typed fixture list: a row for the
 session's model saying `false` (the other four ids, no `auto`); every unknown reading — `models` null, an
 empty `models` array, a populated list matching no row, a row whose `value` is a superstring of the
 session's model (the truncation-cut shape), and `supports_auto_mode` forced to `undefined` through a cast
 (the bare-`as` reading) — offering all five; a row saying `true` offering all five; a session running
-`auto` on a refusing row still labelling `Auto` and marking nothing while offering four; and a floor
+`auto` on a refusing row still labelling `Auto approval` and marking nothing while offering four; and a floor
 assertion across the whole matrix that `options.length` never drops below
 `SETTABLE_PERMISSION_MODES.length - 1`. The shipped `view()`/`panel()` test helpers took the two new
 inputs as trailing optional parameters defaulting to `(null, '')` — the reading that was this control's
 only one before #1022 — so every pre-existing call site reads unchanged and doubles as evidence for the
 fail-open rule.
 
-**React escapes a text child, so a client-owned label with an apostrophe is not byte-identical in
-markup** — `Don't ask` renders in `renderToStaticMarkup` output as `Don&#x27;t ask`. Every markup assertion
-on a label routes through a `rendered()` helper that derives the escaped form from React itself, rather than
-hand-rolling an escaper that could disagree with the renderer about what escaping means. Playwright is
-unaffected: it reads DOM text, so the e2e locators match the label verbatim. Worth reusing for any later
-footer label carrying an apostrophe or an ampersand.
+**React escapes text children, including client-owned labels.** The existing `rendered()` helper derives
+escaped markup from React for assertions that need it, rather than hand-rolling an escaper. The current
+six labels need no apostrophe escaping; unknown modes and future copy can still require it. Playwright
+reads DOM text, so its locators match the label verbatim.
 
 `e2e/composer-permission-mode-menu.spec.ts` drives a `bypassPermissions` snapshot first (before a later
 confirmed pick could mask it), then a `default` snapshot, then a pick with a correlated reply, then a pick
@@ -290,9 +306,9 @@ that claim stays intact. `e2e/real-claude-permission-mode.spec.ts` (#682's AC5) 
 daemon, reads the baseline mode off the button rather than assuming one, picks a different settable mode,
 and drives a fresh turn-end edge to confirm a **re-read** snapshot still names the picked mode — carrying
 the same honest limit `real-daemon-session-settings.spec.ts` already records: the app-level `confirmed`
-override survives the reopen, so the post-change label is not *provably* snapshot-sourced. This ticket
-carries `needs-real-claude`; the tier runs under the operator's `npm run e2e:real:gate`, not in CI. Its
-`picked` can only ever resolve to `Default` or `Accept edits`, never `Auto`, so #1022 owes it nothing.
+override survives the reopen, so the post-change label is not *provably* snapshot-sourced. The real tier
+runs under `npm run e2e:real:gate`. Its `picked` can only ever resolve to `Manual approval` or
+`Auto-approve edits`, so it does not exercise the `auto` capability filter.
 
 **`e2e/composer-permission-mode-auto.spec.ts` (new, #1022)** is the AC5 case for the `auto`-hiding join,
 and the only proof the container actually passes `conversationId` through — a static render cannot open
@@ -300,8 +316,8 @@ the panel, and the pure model function stays green with the mount unwired. One c
 `composer-effort-menu.spec.ts`'s shape and fake-daemon templates: push a `model_list` with two invented
 rows (the session's model refusing `auto`, a second row accepting it — so the flag is read per row, not
 per list); push `thinking` → `idle` to trigger the run-config re-fetch that turn-end edge causes; open the
-panel and assert **exactly** the four remaining display names, in order, with no `Auto` item — *and*, as a
-baseline taken **before** any list arrives, that all five show (an implementation that hid `auto`
+panel and assert **exactly** the four remaining display names, in order, with no `Auto approval` item —
+*and*, as a baseline taken **before** any list arrives, that all five show (an implementation that hid `auto`
 unconditionally would otherwise pass the rest of the drive); then push a replacement `model_list` where the
 same row now accepts `auto`, reopen, and assert five again — proving the join is live per row rather than a
 constant.

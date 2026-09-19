@@ -704,6 +704,7 @@ interface CodeBlockChromeMetrics {
     space2: string
     space3: string
     space4: string
+    space7: string
     labelMedium: TypeQuartet
     codeBodyLine: string
     bodySmallSize: string
@@ -799,6 +800,7 @@ const readCodeBlockChromeMetrics = (page: Page, index: number): Promise<CodeBloc
           space2: token('--space-2'),
           space3: token('--space-3'),
           space4: token('--space-4'),
+          space7: token('--space-7'),
           labelMedium: {
             fontSize: token('--text-label-medium-size'),
             lineHeight: token('--text-label-medium-line'),
@@ -1333,7 +1335,10 @@ test('a fenced code block wears the desktop chrome, every value read from the to
   expect(chrome.body.paddingTop).toBe(chrome.token.space3)
   expect(chrome.body.paddingBottom).toBe(chrome.token.space3)
   expect(chrome.body.paddingLeft).toBe(chrome.token.space4)
-  expect(chrome.body.paddingRight).toBe(chrome.token.space4)
+  // Message code reserves a rail for its copy target; other body gutters stay unchanged.
+  expect(parseFloat(chrome.body.paddingRight)).toBe(
+    parseFloat(chrome.token.space4) + parseFloat(chrome.token.space7)
+  )
 
   // AC3 — the 20px leading, from the off-scale token rather than from a bare 20px in the stylesheet. The
   // size beside it is the discriminator: the scale carries no 12/20 step, so a body that borrowed a 20px

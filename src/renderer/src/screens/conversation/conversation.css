@@ -952,6 +952,44 @@
   border-radius: var(--radius-xs);
 }
 
+.code-block--copyable {
+  position: relative;
+}
+
+/* Reserve a rail for the whole pointer target, including on wrapped code lines. */
+.code-block--copyable .code-block__body {
+  padding-right: calc(var(--space-4) + var(--space-7));
+  /* Empty fences still need one line's height to contain the copy target. */
+  min-height: calc(var(--text-code-body-line) + var(--space-3) * 2);
+}
+
+.code-block__copy {
+  position: absolute;
+  right: var(--space-1);
+  bottom: var(--space-1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2);
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-inverse-primary);
+  cursor: pointer;
+}
+
+.code-block__copy:hover {
+  color: var(--color-primary);
+}
+
+.code-block__copy:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.code-block__copy-icon {
+  display: block;
+}
+
 /* The header bar and its label (Figma 134:4809's Header node, one box — the bar's only content is the
    label, and the padding, type, nowrap and clip all coexist on one element). 8/16 → --space-2/--space-4,
    two EXACT scale steps: #623's rounding argument here, over the mobile mock's py 6 sitting midway between

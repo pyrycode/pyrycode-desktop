@@ -62,3 +62,9 @@ None.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-19
+
+## Revisions
+
+- 2026-09-19: Existing `e2e/assistant-whitespace.spec.ts` asserts the old symmetric body gutters. Update its right-padding expectation to include the planned copy rail and run that touched spec. No remote feature branch overlaps this additional test file; production design and size limits are unchanged.
+- Clipboard verification uses `availableFormats()` to exclude `text/html`: measured on macOS, `readHTML()` returns the plain-text contents even for a plain-only clipboard.
+- The empty-fence case exposed the button crossing into the header because an empty pre has no line box. Give copyable bodies a token-derived one-line minimum height; the added e2e case proves both empty copying and containment. Nonempty block sizing is unchanged.

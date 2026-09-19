@@ -28,7 +28,7 @@
    converge them.
 
    NO `gap` HERE, and the absence is load-bearing. The node's 12px column gap is carried as
-   `.conversation__thread`'s own vertical padding instead, because a gap on this element would apply
+   `.conversation__thread`'s top padding and `.composer-status`'s top margin, because a gap here would apply
    between EVERY child — and the 8px between `.composer-status` and `.composer` (the drawn Input area's
    own gap-[8px], which .composer's block records as the whole distance) would silently become 20.
 
@@ -131,9 +131,9 @@
    passes with both declarations deleted on any machine drawing overlay bars, and the overlay case cannot be
    assumed away either. Reading `.channel-list__tree` back as `auto` in the same run proves the read
    discriminates. `.composer__input` now shares this hidden-scrollbar treatment. */
-/* #1444 — THE VERTICAL PADDING IS THE CARD'S COLUMN GAP, CARRIED HERE. `Content` (106:3321) is
-   gap-[12px] between its three sections, and the 12 above the first row and below the last are both that
-   gap. It is a padding on this element rather than a `gap` on `.conversation` because a gap there would
+/* The card's 12px section gap is split between this top padding and `.composer-status`'s top margin.
+   The latter stays outside the scrollport so reading older messages preserves the separation.
+   These are local insets rather than a `gap` on `.conversation` because a gap there would
    apply between every child of the column and would turn the drawn 8px between `.composer-status` and
    `.composer` into 20 — see .conversation's own block.
 
@@ -171,7 +171,7 @@
   flex-direction: column;
   gap: var(--space-4);
   margin-left: calc(-1 * var(--space-4));
-  padding: var(--space-3) 0 var(--space-3) var(--space-4);
+  padding: var(--space-3) 0 0 var(--space-4);
 }
 
 /* The inert fallback for the rule above — see its comment. `scrollbar-width: none` is what hides the bar on
@@ -1388,6 +1388,7 @@
    right-aligns whichever occupant the slot holds with no spacer. */
 .composer-status {
   flex: 0 0 auto;
+  margin-top: var(--space-3);
   min-height: 24px;
   display: flex;
   align-items: flex-end;

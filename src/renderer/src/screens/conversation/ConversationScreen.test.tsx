@@ -5535,6 +5535,26 @@ describe('ConversationScreen — store binding', () => {
   // renders (its popup advertised via aria-haspopup="menu"); it starts closed, so no menu surface is
   // present at first paint (the open toggle is untested useState glue — effects don't run under server
   // render). The pure view's open/closed contract is proven in the ThreadOverflowMenuView describe above.
+  it.each([
+    ['Current channel', 'Current channel'],
+    [null, 'Unnamed conversation'],
+    ['<script>example</script>', '&lt;script&gt;example&lt;/script&gt;']
+  ])('renders the active top-bar name as text: %s', (name, expected) => {
+    const snapshot = vi.spyOn(activeConversationStore, 'getInitialState').mockReturnValue({
+      ...activeConversationStore.getInitialState(),
+      activeConversation: {
+        id: 'top-bar-chat', name, cwd: '/workspace', is_promoted: false,
+        last_used_at: '2026-09-19T00:00:00Z', workspace_label: null
+      }
+    })
+    try {
+      const markup = renderToStaticMarkup(<ConversationScreen onBack={() => {}} />)
+      expect(markup).toContain(`<p class="conversation__overflow-title">${expected}</p>`)
+    } finally {
+      snapshot.mockRestore()
+    }
+  })
+
   it('renders the overflow trigger, collapsed, when onBack is provided (the shell-mounted thread, AC1)', () => {
     const markup = renderToStaticMarkup(<ConversationScreen onBack={() => {}} />)
     expect(markup).toContain('conversation__overflow')

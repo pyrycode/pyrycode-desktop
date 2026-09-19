@@ -4631,15 +4631,37 @@
    keep painting above this menu by DOM order. A competing z-index here would lift the menu above those
    overlays; the menu and a sheet/modal never coexist anyway (an outside-click dismisses the menu).
 
-   The column's own default `align-items: stretch` is what spans the rule across the card's content box,
-   and the anchor below overrides it with `align-self: flex-end` — which is the node's justify-end on its
-   `Buttons` row. A separate full-width row element would buy nothing and would be a third class. The
-   padding-bottom is the bar's own pb-[16px], the last term of the drawn 97. */
+   The column stretches the title/menu row and divider across the content box. The bar's 16px bottom
+   padding keeps the first message at the existing inset after the row grew from 24px to 28px. */
 .conversation__overflow {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   padding-bottom: var(--space-4);
+  border-radius: var(--radius-xs);
+}
+
+.conversation__overflow-content {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+/* Only the title clips: the adjacent anchor must keep its popup visible outside the row. */
+.conversation__overflow-title {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-on-primary-container);
+  font-family: var(--font-sans);
+  font-size: var(--text-title-large-size);
+  line-height: var(--text-title-large-line);
+  letter-spacing: var(--text-title-large-tracking);
+  font-weight: var(--text-title-large-weight);
 }
 
 /* THE ANCHOR (#1444) — a shrink-wrapped box around the trigger and its menu, at the bar's trailing edge.
@@ -4656,20 +4678,17 @@
    all go on to click a menu ITEM. e2e/chat-top-bar-geometry.spec.ts is where that click now lives.
    Moving the ref off this element requires moving the menu's anchor with it. */
 .conversation__overflow-anchor {
-  align-self: flex-end;
+  flex: 0 0 auto;
   position: relative;
   display: flex;
 }
 
-/* THE RULE (#1444, `Rectangle` 497:1899) — 1px, --space-5 under the button row, spanning the card's
+/* THE RULE (`Rectangle` 497:1899) — 1px, --space-4 under the content row, spanning the card's
    content box. A SIBLING, not the bar's `border-bottom`: a border cannot carry the node's 60% without
    fading the glyph with it, and this file paints opacity as a de-emphasis device on its own element.
 
-   ⭐ THE COLOUR'S FIGMA NAME IS NOT ITS TOKEN NAME. The node is STYLED `inverse-primary` and resolves to
-   #9dcbfc, which is this repo's --color-primary; `tokens.css` has its own --color-inverse-primary at
-   #32628d, a different colour entirely. Reach for the value, not the style name. `channels.css` records
-   the same near-miss above the sidebar's identical line (#1443); the two are not joined onto one selector
-   list because they live in different files, and these stylesheets share no selectors.
+   The updated Figma variable resolves to the dark scheme's Inverse Primary token. The ellipsis keeps
+   Primary; the divider has its own color and opacity.
 
    `flex: 0 0 auto` keeps a 1px box 1px tall in the column — a flex item's default `flex-shrink: 1` would
    let it be rounded away under pressure. It sits OUTSIDE the scroller, so no scrollbar moves its trailing
@@ -4677,8 +4696,8 @@
 .conversation__overflow-rule {
   flex: 0 0 auto;
   height: 1px;
-  margin-top: var(--space-5);
-  background: var(--color-primary);
+  margin-top: var(--space-4);
+  background: var(--color-inverse-primary);
   opacity: 0.6;
 }
 
@@ -4714,7 +4733,9 @@
   display: block;
 }
 
-/* The opened menu surface — no Figma frame (the mobile file draws a native Android overflow menu, the
+/* Known visual deviation: the divider can paint across this existing menu; #1542 owns its layering
+   fix and migration to the shared footer dropdown.
+   The opened menu surface — no Figma frame (the mobile file draws a native Android overflow menu, the
    documented #148 gap), so an M3-idiom dropdown: right-anchored below the trigger (top: 100% of
    `.conversation__overflow-anchor`, the 24px box around the trigger since #1444 — read that rule before
    moving either offset), a surface-container card with an elevation border. The .status-sheet panel surface

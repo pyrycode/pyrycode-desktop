@@ -44,3 +44,7 @@ Pending for the documentation stage: the ticket specifies no documentation requi
 ## Open questions
 
 None. Existing reseed behavior and resolved design tokens cover the contract.
+
+## Revisions
+
+- Visual review found the pre-existing divider painting across the first menu item, already tracked by #1542. That ticket explicitly owns menu layering and the shared-dropdown migration; this implementation retains the existing menu and documents the visible limitation. No design or scope change. Captures at 800×772 and 1280×772 show the updated title/row and the long-name menu state; all focused interaction checks pass.

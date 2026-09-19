@@ -10,8 +10,12 @@ Part of [Conversation shell](conversation-shell.md); see that document for what 
 
 ```
 ConversationScreen            .conversation        (flex column, full height, position: relative)
-├── ThreadOverflowMenu         .conversation__overflow (trigger + menu, gated on onBack, #276; grew from 1 to 3 items in #962; the band's last survivor since #1064 deleted the leading arrow it used to balance; the card's own drawn in-flow top bar since #1444 — a 24px trigger justified to the trailing edge over a full-width 1px rule, no longer an absolute box)
-├── ConnectionBannerControl    .conversation__banner (null unless not-connected, top of thread, #279; the first thing under the overflow menu's gate since #1061 deleted the header row that used to sit here — and, since #1064, the first thing in `.conversation` at all)
+├── ThreadOverflowMenu         .conversation__overflow (in-flow top bar, gated on onBack)
+│   ├── Title/menu row         .conversation__overflow-content (28px, top-aligned)
+│   │   ├── Current name       .conversation__overflow-title (one line, ellipsis)
+│   │   └── Trigger + menu     .conversation__overflow-anchor (24×24px anchor)
+│   └── Divider                .conversation__overflow-rule (full-width, 1px)
+├── ConnectionBannerControl    .conversation__banner (null unless not-connected; below the top bar)
 ├── (WorkspaceChip used to mount here, #278 — deleted outright by #1486; the empty thread's copy is now the first thing below the banner)
 ├── Timeline                  .conversation__thread (null when empty; the single thread surface since #179, #203)
 │   └── TimelineRow × N       .message-row--user/.bubble--user (userText, #179) · .message-row--daemon/.bubble--daemon (assistantText) · .tool-row/.tool-row__chip (toolCall, #218; resolved modifiers #230)
@@ -29,6 +33,22 @@ ConversationScreen            .conversation        (flex column, full height, po
 ├── BackgroundTaskPanel (if open)  .status-sheet-overlay (absolute overlay, interim chrome pending #580, #581)
 └── PermissionModal (if any)  .permission-modal-overlay (absolute overlay, last child, null when no outstanding prompt, #224)
 ```
+
+The top bar reads the current name through `ConversationScreen`'s existing
+`selectActiveConversation` subscription. A null name or absent snapshot displays
+`Unnamed conversation`. Conversation switches update the title; renames and automatic
+naming arrive through the mounted [list reseed bridge](paired-shell-conversation-exits.md#the-list-reseed-activeconversationreseedbridgets-1184)
+without reactivating the chat. The name is escaped paragraph text. Its title-large tokens
+give Roboto Regular, 22px/28px, zero tracking and On Primary Container (`#cfe4ff`).
+
+Only the title clips: `flex: 1 1 0`, `min-width: 0`, `white-space: nowrap` and ellipsis
+let it shrink beside the non-shrinking anchor, with a 16px gap. Clipping the whole row
+would also clip the popup. The 24px anchor owns both popup positioning
+(`top: 100%; right: 0`) and the outside-click ref; moving that ref onto the full row
+would make title clicks count as inside the menu. Title clicks and Escape dismiss it,
+returning focus to the trigger. Enter/Space opens the menu, and Tab reaches its actions.
+The existing divider can paint across the open menu; the layering fix and shared-dropdown
+migration are tracked by [#1542](https://github.com/pyrycode/pyrycode-desktop/issues/1542).
 
 `MessageBubble` and `Composer` are **in-file functions** inside `ConversationScreen.tsx` — they are tiny. (`UnpairControl` was a third until [#1061](https://github.com/pyrycode/pyrycode-desktop/issues/1061) deleted it — see [Unpair control](#unpair-control-166-deleted-by-1061) below.) `MessageThread` and `StatusSheet` are also in-file but **exported** ([#69](../codebase/69.md), [#177](../codebase/177.md)), so tests server-render them as pure views — `RepairPrompt` joined them in [#167](../codebase/167.md) and was retired, folded into `ComposerErrorSlot`, by [#963](https://github.com/pyrycode/pyrycode-desktop/issues/963); see [Re-pair control](#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963) below. `PermissionModal`/`PermissionModalView` live in their own file, `PermissionModal.tsx` ([#224](../codebase/224.md)), the same split one level up. `ConversationScreen` is the store-bound container; `MessageThread`/`StatusSheet`/`PermissionModalView` are the props-in/markup-out views — the same container/view split `PairingScreen`/`PairingView` uses ([#55](../codebase/55.md)). The load-bearing contracts are the props/types, not the file boundaries (see Seams).
 
@@ -78,9 +98,22 @@ which perturbs the very scroll offset the test then asserts on.
 
 Bubbles use `max-width: min(680px, 75%)` (not a fixed width) so they reflow as the window resizes — the desktop divergence from the mock's fixed `330px`. Bubble corners are asymmetric via `border-radius` (order **TL TR BR BL**): the user bubble clips its bottom-right, the daemon bubble its bottom-left.
 
+[`chat-top-bar-geometry.spec.ts`](../../../e2e/chat-top-bar-geometry.spec.ts) checks the
+bar against an actually scrolling thread. At 800px and 1280px it also proves real text
+overflow beside a usable open menu; an ellipsis style alone cannot establish truncation.
+List-reply refresh checks retain an unsent draft, distinguishing a title update from
+chat reactivation. Static renders prove the named/null/escaped text cases, but cannot
+prove these updates, geometry or dismissal; see [test boundaries](development-verification.md#what-each-test-tier-proves).
+
 ## Theme
 
 Every style references a token from `theme/tokens.css` — no color/type/spacing literal in `conversation.css`. Bare structural geometry (`100%`, flex ratios, the `48px` send button, the bubble measure) stays literal; those are layout, not theme. See [ADR 0003](../decisions/0003-m3-theme-tokens-css-custom-properties.md).
+
+For the [messaging top-bar design](../../specs/architecture/1541-channel-name-top-bar.md),
+Figma's generated-code fallback colors use a different scheme. Resolved variables and
+the screenshot establish On Primary Container for the title and Inverse Primary for
+the divider; the menu glyph keeps Primary. Check these roles separately rather than
+copying fallback hex values or assuming the divider and glyph share a color.
 
 **`.conversation` paints no background since #1058.** It used to paint `--color-surface`, the same
 colour the paired shell paints behind it, which is why the pane never read as a pane; the card (a
@@ -125,18 +158,22 @@ the open thread* — the arrow was its only source.
 than sitting beside a control in flow. Both were expected consequences of the deletion, not regressions
 to compensate for: no padding, spacer or reserved band was added to hold the old offset.
 [#1444](../../specs/architecture/1444-chat-top-bar-and-inset.md) ended that interim by drawing the card's
-own top bar (Figma `Content` 106:3321): `.conversation` gained the card's 24/20/16 inset,
-`.conversation__overflow` became an in-flow bar — a 24px trigger justified to the trailing edge, a 1px
-`--color-primary` rule at 60% opacity 20px under it, 16px of the bar's own foot — and the first message
-row now sits at the drawn 97px below the card's top edge. The back affordance is still not coming back;
-only the interim absolute-positioned overflow trigger that stood in for it is gone.
+own top bar (Figma `Content` 106:3321): `.conversation` gained the card's 24/20/16 inset
+and `.conversation__overflow` became an in-flow bar outside the message scroller.
+The [current design](../../specs/architecture/1541-channel-name-top-bar.md) uses a 28px
+name/menu row with the 24×24px trigger at its top right. A full-width 1px divider sits
+16px below the row, using `--color-inverse-primary` (`#32628d`) at 60% opacity, followed
+by 16px bottom padding. The bar remains 61px tall (`28 + 16 + 1 + 16`) and has the
+6px `--radius-xs` corners. With the card's 24px top inset and the 12px gap below the
+bar, the first message still starts 97px below the card's top. The bar stays visible
+while the thread scrolls.
 
 The back arrow used to sit ahead of a separate unpair header row, a deliberate interim pending a future
 top-app-bar ticket that would consolidate back + title + overflow + unpair into the one bar Figma 16-9
 shows. [#1061](https://github.com/pyrycode/pyrycode-desktop/issues/1061) deleted that header row rather
 than folding it into such a bar, and #1064 finished the same reading of Figma 106:3321 by deleting the
-arrow itself: the bar that eventually gets drawn carries a channel title and a channel settings button,
-not unpair or a leading arrow — see [Unpair control](#unpair-control-166-deleted-by-1061) below for
+arrow itself. The current bar carries the conversation title and overflow menu; see
+[Unpair control](#unpair-control-166-deleted-by-1061) below for
 where unpair goes instead. Two comments elsewhere still cite `BackControl` as design provenance rather
 than as a rule (`SettingsScreen.tsx` ×2, `ChannelList.tsx` ×1, both naming it as the precedent their own
 `BackControl`s mirror) — left as-is; #1064 scoped its comment sweep to citations of the deleted

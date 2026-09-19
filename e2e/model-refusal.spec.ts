@@ -202,7 +202,7 @@ test('connection errors and stopped-turn recovery take priority over the offer, 
       })
     }, { channel: DAEMON_EVENT_CHANNEL, retryable })
     if (retryable) await expect(page.locator('.composer-status__error')).toBeVisible()
-    else await expect(page.getByRole('button', { name: /Re-pair/ })).toBeVisible()
+    else await expect(page.getByRole('button', { name: 'Connection error - Reconnect', exact: true })).toBeVisible()
     await expect(action).toHaveCount(0)
     await expect(usage).toHaveCount(0)
     await expect(page.locator('.model-refusal')).toHaveCount(1)

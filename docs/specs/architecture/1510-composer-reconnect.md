@@ -63,3 +63,14 @@ Pending for documentation stage: update `docs/knowledge/features/conversation-sh
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-19
+
+## Revisions
+
+### 2026-09-19 — verifier interaction-test regressions
+
+The verifier found four missed expectations in `chat-history-recording.spec.ts`,
+`model-refusal.spec.ts` and `stopped-turn.spec.ts`. Ordinary terminal errors now
+assert the exact reconnect copy while retaining history and precedence checks.
+The pending saved-reading cancellation scenario instead sends a sealed
+`auth.invalid_token` frame because its subject is host repair. This completes the
+planned test migration; production behavior and the security contract are unchanged.

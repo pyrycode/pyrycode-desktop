@@ -105,5 +105,5 @@ test('connection errors outrank recovery, recovery outranks usage, and trailing 
       type: 'failed', serverId: 'fake-daemon', error: { code: 'transport', message: '', retryable: false }
     })
   }, DAEMON_EVENT_CHANNEL)
-  await expect(page.getByRole('button', { name: /Re-pair/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Connection error - Reconnect', exact: true })).toBeVisible()
 })

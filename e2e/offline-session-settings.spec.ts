@@ -54,7 +54,7 @@ test('pre-opened composer menus discard mouse and keyboard choices offline, then
   const cases = [
     ['.composer__model', 'Model', 'Sonnet', '.composer__model-label', 'Opus'],
     ['.composer__effort', 'Effort', 'high', '.composer__effort-label', 'low'],
-    ['.composer__permission', 'Permission mode', 'Plan', '.composer__permission-label', 'Default']
+    ['.composer__permission', 'Permission mode', 'Plan', '.composer__permission-label', 'Manual approval']
   ]
   for (const [trigger, menuName, choice, label, held] of cases) {
     await settings(app)
@@ -141,7 +141,7 @@ test('missing ownership/status and every non-connected status fail closed, prese
     await expect(page.locator('.composer__model')).toHaveCount(0)
     await expect(page.locator('.composer__effort')).toHaveCount(0)
     await expect(page.locator('.composer__permission')).toHaveCount(0)
-    await expect(page.locator('.composer__permission-label')).toHaveText('Default')
+    await expect(page.locator('.composer__permission-label')).toHaveText('Manual approval')
   }
   await connection(app, 'connected')
   await event(app, { type: 'conversationsReceived', serverId: FIRST_SERVER_ID, conversations: [] })
@@ -159,7 +159,7 @@ test('missing ownership/status and every non-connected status fail closed, prese
     models: [{ ...MODELS[0], supports_auto_mode: false, effort_levels: [] }], droppedModels: 0 })
   await expect(page.locator('.composer__effort')).toHaveCount(0)
   await page.locator('.composer__permission').click()
-  await expect(page.getByRole('menuitem', { name: 'Auto', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('menuitem', { name: 'Auto approval', exact: true })).toHaveCount(0)
 })
 
 test('remembered effort waits offline without consuming its attempt, and reconnect cannot retry an attempt', async ({ launchPairedApp }) => {

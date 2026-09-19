@@ -35,3 +35,8 @@ Sizing: one deliverable, one production file, approximately 150 total written li
 ## Documentation handoff
 
 Pending documentation stage: no explicit documentation requirement appears in the ticket. Refresh obsolete label examples in `docs/knowledge/features/composer-permission-mode-menu.md`, especially “The wire contract is asymmetric, and that asymmetry is the whole design” and “The auto-hiding join”; preserve the documented availability and permission semantics, including existing allow rules for Manual approval.
+
+## Revisions
+
+- 2026-09-19: Final literal search found three old-copy expectations in `e2e/offline-session-settings.spec.ts` (held mode during disconnect and auto-mode exclusion). Update those expectations and run that focused spec as well. Its branch-overlap check is clear; production scope and behaviour are unchanged.
+- Visual capture records Electron content viewports of 1100×772 and 800×572 for 1100×800 and 800×600 native windows. Dropdown rows fit in full at both sizes. The footer retains the documented ellipsis policy, with full accessible names; no layout or style revision is needed.

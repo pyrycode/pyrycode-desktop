@@ -49,26 +49,25 @@ import { isAddressableSessionId } from './runSettingsControls'
 // spelling on the wire: the `yolo` bit the run-configuration sheet's toggle already owns.
 //
 // So this control renders six labels and offers five entries. A session sitting in bypass shows
-// `Bypass permissions` on the button and is offered the other five; picking one moves it out of bypass,
+// `Bypass approvals` on the button and is offered the other five; picking one moves it out of bypass,
 // because the daemon clears the bit for any mode it accepts. NOTHING HERE CAN MOVE A SESSION INTO BYPASS,
 // and nothing here should try: adding the sixth entry "for symmetry" would put a one-click privilege
 // escalation in the input footer. The two counts are pinned by name in ComposerPermissionModeMenu.test.tsx.
 
 /** Display names for the six modes the daemon can report — the client's own copy, since neither the
- *  daemon nor claude publishes a display form. Each is a faithful rendering of its machine value and
- *  nothing shorter: `Bypass permissions` is emphatically not abbreviated to buy row width, because the
- *  one label naming a security posture is the last one to make ambiguous.
+ *  daemon nor claude publishes a display form. Labels describe how actions are approved; they do not
+ *  change permission behaviour. Manual approval still respects existing allow rules.
  *
  *  A mode outside this record renders VERBATIM (the RunningModelSection posture) — the reading
  *  runConfigSnapshot's own test assigns to this ticket. Read through permissionModeLabel below and NEVER
  *  by a bare index: the key is a daemon-controlled string. */
 export const PERMISSION_MODE_LABELS: Readonly<Record<string, string>> = {
-  default: 'Default',
-  acceptEdits: 'Accept edits',
+  default: 'Manual approval',
+  acceptEdits: 'Auto-approve edits',
   plan: 'Plan',
-  auto: 'Auto',
-  dontAsk: "Don't ask",
-  bypassPermissions: 'Bypass permissions'
+  auto: 'Auto approval',
+  dontAsk: 'Approved actions only',
+  bypassPermissions: 'Bypass approvals'
 }
 
 /** The five modes this control may submit, in the daemon's own declared order. `bypassPermissions` is

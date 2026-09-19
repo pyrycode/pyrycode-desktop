@@ -73,12 +73,14 @@ above — at 34, not 50; see [Channel List — the workspace row's own nest](cha
 for that file's own numbers. `e2e/sidebar-tree-geometry.spec.ts` is the sole gate that can see any of
 this: renderer specs are static server renders with no layout engine.
 
-**Testing.** `e2e/sidebar-tree-geometry.spec.ts`, a new file beside `sidebar-row-geometry.spec.ts`
-(which owns the row's own box and scopes itself to it), seeds one promoted row, mints an unpromoted one
-through the FAB so both sections and the divider render, and reads every offset above as a box
-coordinate from the card's edge: proved red first at the header's 0-for-20 against the unpatched build.
-The trailing edge is read off `.channel-list`'s `clientWidth` so a classic scrollbar on the host machine
-cannot move it. `host-label-sidebar.spec.ts`'s trailing-inset constant went from 16 to 0 with the dots.
+**Testing.** `e2e/sidebar-tree-geometry.spec.ts` complements `sidebar-row-geometry.spec.ts`, which
+owns the row's own box. It seeds one promoted row, creates an unpromoted row through Add workspace,
+and reads the offsets from the card's edge. The trailing-edge calculation accounts for the actual
+scrollport, `.channel-list__tree`, whose negative right margin and matching padding preserve the
+content inset. Since [#1527](https://github.com/pyrycode/pyrycode-desktop/issues/1527), the tree's
+scrollbar is hidden. Its zero gutter is a geometry input, not evidence that the bar is hidden:
+overlay bars also have zero width. [Sidebar scrollbar coverage](channel-list.md#css-channelscss)
+checks computed paint policy and overflowing wheel/focus behavior separately.
 
 ## Related
 

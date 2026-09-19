@@ -319,6 +319,25 @@ placement/geometry/testing lessons from wiring it in.
 
 ### CSS (`channels.css`)
 
+`.channel-list__tree` scrolls inside the padded card; the top bar and its rule remain outside
+that scrollport. Since [#1527](https://github.com/pyrycode/pyrycode-desktop/issues/1527), it shares
+the [thread and composer's hidden-scrollbar policy](conversation-shell-chrome.md#layout-contract):
+`scrollbar-width: none` plus a separate `::-webkit-scrollbar { display: none; }` fallback hide the
+bar at rest and during scrolling, including with an always-visible OS scrollbar preference.
+`overflow-y: auto` preserves native wheel, trackpad and focus scrolling. Keep the negative
+`--space-5` right margin and matching padding: the scrollport extends through the card's 20px
+right inset while the content retains its existing inset and row positions. The 28px top
+padding scrolls with the tree; see [tree geometry](channel-list-tree-inset.md).
+
+[`e2e/sidebar-scrollbar.spec.ts`](../../../e2e/sidebar-scrollbar.spec.ts) seeds 20 channels and
+20 chats after the fixture's single-row launch, at 1100×800 and 800×600. It proves overflow,
+checks both hiding declarations and `overflow-y: auto` before and after input, reaches the first
+and last rows by wheel, and Tabs through every row to reveal and focus the last one while the
+top bar stays fixed. A zero gutter alone cannot prove hiding: overlay bars consume no layout
+width even when visible. Static renderer tests cannot observe either CSS paint or focus
+scrolling. Physical trackpad momentum and changing the OS scrollbar preference were not
+manually exercised; computed style verifies the policy independently of that preference.
+
 Failed hosts keep their dots visible on hover and reserve separate pen and repair targets.
 A DOM-presence assertion misses overlapping controls; exercise the actual Edit host and
 Repair host clicks (`e2e/sidebar-offline-mutations.spec.ts`).

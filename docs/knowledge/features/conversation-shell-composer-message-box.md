@@ -204,8 +204,8 @@ prove `scrollHeight > clientHeight`, then read `scrollbar-width: none` and `over
 Wheel travel in both directions and keyboard edits at both ends must retain the height cap and hidden
 scrollbar. Small pixel wheel deltas cover the trackpad event path, but do not simulate physical trackpad
 momentum, which requires a manual check. See [scrollbar detection](conversation-shell-chrome.md#layout-contract)
-for why a zero-width gutter can pass with the hiding rule deleted and why the sidebar remains an `auto`
-control.
+for why a zero-width gutter can pass with the hiding rule deleted. The sidebar now shares this
+hidden-scrollbar policy, with its own [wheel and focus coverage](channel-list.md#css-channelscss).
 
 ## Composer footer row (#811)
 

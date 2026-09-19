@@ -166,18 +166,12 @@ test('real claude restarts on Reset session and the turn stream survives it', as
 
   // `>= 1` is sound HERE and only here: this conversation was minted through the plus moments ago and has
   // no history, so any non-empty assistant row is this turn's. Every later count is measured against the
-  // baseline below instead, because that property stops holding the moment a turn has landed.
+  // post-reset baseline below instead, because that property stops holding the moment a turn has landed.
   await expect
     .poll(() => nonEmptyAssistantCount(page), { timeout: TURN_TIMEOUT_MS })
     .toBeGreaterThanOrEqual(1)
-  // The turn is over, not merely started: the cursor drops on turn_end. Capturing the baseline before
-  // this would race a still-streaming row.
+  // The turn is over, not merely started: the cursor drops on turn_end. Reset only after it quiesces.
   await expect(page.locator(CURSOR_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
-
-  // --- THE BASELINE (AC5), captured strictly after the first turn quiesced, so it is race-free. The
-  // closing assertion is `> baseline` rather than a bare non-zero count, which would already be true here
-  // and would prove nothing about the turn after the restart. ---
-  const baseline = await nonEmptyAssistantCount(page)
 
   // A precondition read, not the proof: an ordinary turn draws no session boundary, so the delimiter
   // counted after the restart is the restart's. The proof is the positive count below.
@@ -237,15 +231,18 @@ test('real claude restarts on Reset session and the turn stream survives it', as
   await expect(page.locator(STATUS_LABEL_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
 
   // --- THE TURN STREAM SURVIVES THE RESTART (AC5) — the whole point of this tier. A second real turn,
-  // against the process the daemon just spawned, counted against the baseline. It pays a cold start
+  // against the process the daemon just spawned, counted against a post-reset baseline. It pays a cold start
   // again, which is why the spec's budget carries two turn windows. ---
   await expect(sendButton).toBeEnabled({ timeout: TURN_TIMEOUT_MS })
+  // The handoff turn can append assistant rows during reset. Include them in the baseline so they
+  // cannot satisfy the second message's response check if the restarted process stops responding.
+  const postResetBaseline = await nonEmptyAssistantCount(page)
   await composer.fill(secondMessage)
   await sendButton.click()
 
   await expect
     .poll(() => nonEmptyAssistantCount(page), { timeout: TURN_TIMEOUT_MS })
-    .toBeGreaterThan(baseline)
+    .toBeGreaterThan(postResetBaseline)
 
   // Still exactly one boundary. The second turn was sent strictly after the count reached 1 and the count
   // has not moved, so the assistant row it produced arrived AFTER that boundary — which is AC5's ordering

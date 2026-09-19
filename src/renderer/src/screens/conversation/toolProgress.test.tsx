@@ -38,8 +38,8 @@ describe('tool elapsed display', () => {
       expect(renderToStaticMarkup(<ToolRow item={{ ...item, elapsedSeconds: 65, ...completion }} />)).not.toContain('1m 05s')
     }
   })
-  it.each(['stalled', 'compacting', 'retrying'] as const)('does not alter %s copy', (state) => {
-    const props = { state, toolName: 'Bash', retry: { current: 1, total: 3 }, resetting: null, thinkingTokens: null }
+  it.each(['stalled', 'compacting', 'retrying', 'resetting'] as const)('does not alter %s copy', (state) => {
+    const props = { state, toolName: 'Bash', retry: { current: 1, total: 3 }, resetting: { phase: 'restarting', handoff: 'written' } as const, thinkingTokens: null }
     expect(renderToStaticMarkup(<ThinkingIndicator {...props} toolElapsedSeconds={65} />)).toBe(renderToStaticMarkup(<ThinkingIndicator {...props} />))
   })
 })

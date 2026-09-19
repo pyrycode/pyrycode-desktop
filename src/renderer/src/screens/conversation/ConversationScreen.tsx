@@ -109,6 +109,7 @@ import { isAtBottom, isNearTop } from './threadScrollPosition'
 import { toolHeadlineRuns } from './toolHeadline'
 import { listedInputFields, shellCommandBlock } from './toolBody'
 import { serverIdForOpenConversation } from './unpairAction'
+import { selectDraft, useComposerDraftStore } from '../../store/composerDraftStore'
 import { conversationListStore, useConversationListStore, selectConversations } from '../../store/conversationListStore'
 import { dropQueuedMessage } from './dropQueuedMessage'
 import { foldQueuedRows, type QueuedRowHandle } from './foldQueuedRows'
@@ -510,6 +511,7 @@ export function ConversationScreen({
           above (the BackgroundTaskPanel idiom below); the question store read stays inside the slot, so a
           question arriving never re-renders this screen. */}
       <ComposerSlot
+        serverId={selectedHost}
         statusArea={(sendText) => (
           <ComposerStatusArea
             isRunning={isTurnRunning(phase)}
@@ -3450,20 +3452,26 @@ export function ComposerSendButton({
 // batch belongs to the conversation on screen, ComposerSlot below draws the panel in this component's
 // slot and passes `covered` so the whole composer goes behind it.
 function Composer({
+  serverId,
+  conversationId,
   phase,
   onMessageSent,
   covered,
   beforeComposer
 }: {
+  serverId: string | null
+  conversationId: string | null
   phase: TurnPhase
   onMessageSent: () => void
   covered: boolean
   beforeComposer: (sendText: (value: string) => boolean) => ReactNode
 }): JSX.Element {
-  // Thin controlled container over composerSend.submitMessage (the pairing container/pure-logic
-  // split). Input text is ephemeral single-value screen-local state → useState, never the store
-  // (ADR 0006). `dispatch` identity is stable, so selecting it adds no re-render churn.
-  const [text, setText] = useState('')
+  // Selected coordinates survive metadata refreshes; only transient UI belongs to the keyed pane.
+  const text = useComposerDraftStore(s => selectDraft(s, serverId, conversationId))
+  const setDraft = useComposerDraftStore(s => s.setDraft)
+  const setText = (value: string): void => {
+    if (serverId !== null && conversationId !== null) setDraft(serverId, conversationId, value)
+  }
   // #179: the optimistic echo now writes into timelineStore (a userText ThreadEvent), not sessionStore
   // — content lives in one store. The send gate below still reads sessionStore's connection status;
   // two stores in one component is fine (status vs. content are orthogonal facets).
@@ -3553,7 +3561,10 @@ function Composer({
   // both calls sit in one discrete handler that React 18 batches, so the render mounting the echo lands
   // after the whole handler either way.
   const handleSubmit = (): void => {
-    if (sendText(text)) setText('')
+    if (sendText(text)) {
+      setText('')
+      window.pyry.sendDiagnostic({ event: 'composer-draft-cleared', code: 'local-submit' })
+    }
   }
 
   // New session uses its own command, with the same current-owner gate as message sends.
@@ -3562,9 +3573,7 @@ function Composer({
     sendNewSession(activeConversationId, { sendCommand: window.pyry.sendCommand })
   }
 
-  // #940: the slash-command type-ahead over the message box. It reads the composer's own `text` and
-  // writes a completion back through `setText` — no store write, no second send path, and `sendText`
-  // above is untouched. Its container owns the panel's element and the two refs the markup attaches.
+  // Completion writes the same retained draft as typing; sending keeps its existing single path.
   const typeAhead = useSlashCommandTypeAhead({
     text,
     conversationId: activeConversationId,
@@ -3642,7 +3651,7 @@ function Composer({
     // jobs is why it was chosen over the alternatives. It hides the subtree, drops it from the tab order
     // and drops it from the accessibility tree, while leaving every element MOUNTED — so the draft in
     // `text` above survives the batch and is still in the message box when the daemon dismisses it. A
-    // conditional render would discard that draft; `aria-hidden` alone would leave a focusable invisible
+    // conditional render would reset transient controls; `aria-hidden` alone would leave a focusable invisible
     // textarea whose Enter still sends. `.composer__footer` and `.composer__row` are CHILDREN of this
     // div, so the one attribute takes the footer menus, the context reading and the send/stop control
     // with it — there is no second element to hide separately, and nothing to draw a disabled state for.
@@ -3847,11 +3856,13 @@ function Composer({
  * its active question while the composer independently retains the draft beneath both request types.
  */
 export function ComposerSlot({
+  serverId = null,
   conversationId,
   phase,
   onMessageSent,
   statusArea
 }: {
+  serverId?: string | null
   conversationId: string | null
   phase: TurnPhase
   onMessageSent: () => void
@@ -3865,6 +3876,7 @@ export function ComposerSlot({
   )
   return (
     <Composer
+      serverId={serverId} conversationId={conversationId}
       phase={phase} onMessageSent={onMessageSent} covered={hasPermission || batch !== undefined}
       beforeComposer={(sendText) => (
         <>

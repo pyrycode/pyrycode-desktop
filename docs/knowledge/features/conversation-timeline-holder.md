@@ -182,6 +182,12 @@ for cache reuse and cancellation, and [saved coverage](chat-history.md#snapshot-
 for its distinction from current server history. Evicted saved slices reload on
 opening within the same ten-slot bound; eviction never deletes their disk copies.
 
+Newly created chats use `initializeCreatedTimeline(serverId, conversationId)` after activation.
+Creation establishes an empty live slice owned by its stamped host, replacing any same-ID content
+from another host, with no local read, history request or restoration provenance. `markViewed`
+alone cannot establish that ownership; see the [creation-time loading regression and delayed-list
+coverage](paired-shell-routing.md#the-conversation-switch-remount-bug-and-the-panekey-fix).
+
 ### Stopped records and history isolation
 
 Each slice holds its own [latest live stop](thread-timeline-internals.md#stopped-turn-state).

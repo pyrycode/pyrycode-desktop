@@ -1,48 +1,12 @@
+import type { Page } from '@playwright/test'
 import { test, expect } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
-import type { ConversationSummary } from '../src/shared/wire/types'
+import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
+import type { ConversationSummary, SendMessagePayload } from '../src/shared/wire/types'
 
-// Fake-stack UI e2e for the CONVERSATION-TO-CONVERSATION SWITCH (#670). Before the two-pane shell this
-// drive was unreachable: the Channel List was unmounted while a thread was open, so every route into a
-// thread came from the list and ConversationScreen was remounted on the way. The shell keeps the sidebar
-// mounted beside the thread, so switching conversations now happens WITHOUT leaving `route='thread'` —
-// and it is the primary interaction the two-pane layout exists to enable.
-//
-// What that costs, and what this spec pins: React reconciles two consecutive `thread` renders by
-// PRESERVING the pane's subtree, so ConversationScreen's screen-local state (the composer draft, the
-// Channel-info sheet's open flag, the run-config snapshot, the scroll pin) would carry from the old
-// conversation into the new one. The file states five times that those "reset to closed on remount for
-// free" (ConversationScreen.tsx:137,:142,:147,:152,:162) — an assumption the shell falsified. Keying the
-// pane on the active conversation id restores it. AC4's own wording is the contract being tested:
-// "opening a conversation afterwards shows that conversation's thread, never a stale one from a previous
-// selection".
-//
-// The COMPOSER DRAFT is the observable, chosen because it is the sharpest: it is plain `useState('')` in
-// Composer (ConversationScreen.tsx:1787) with no store behind it and no daemon round trip, so a non-empty
-// draft after a switch can only mean the subtree survived. The store-backed halves of a switch (timeline
-// rows, session id) are already cleared by activateConversation and are covered by its own unit tests —
-// they would stay green with the pane unkeyed, which is exactly why they are not the observable here.
-//
-// BOTH activation paths are driven, because both leave the route on `thread` and both must re-key the
-// pane: the plus's create→nav (useConversationCreatedNav) and the sidebar row click (onOpen).
-//
-// One `test`, one `launchPairedApp` launch, one sequential drive; it runs under the default `npm run e2e`
-// (the filename does not match the config's `real-*` testIgnore).
-//
-// SECRET HYGIENE (carried verbatim from the siblings): every assertion reads DOM values / counts only.
-// DRAFT_* are non-secret display literals typed into a composer that never sends them — no Send is
-// clicked, so no message text reaches the wire. The pairing plumbing (synthetic token, fake static key)
-// lives in launchPairedApp and is never echoed.
-
-// EXACTLY ONE clickable seed: launchPairedApp reaches the thread by clicking a single strict
-// `.channel-list__row-open`, so a second seed would strict-violate at launch (the sibling specs' constraint).
-// The second conversation this drive needs is therefore MINTED through the plus rather than seeded — which is
-// #1426 — UNPROMOTED so the seed lands in the Chats tree, whose workspace row carries the `Create chat`
-// plus this spec now mints through (the deleted FAB needed no group). Named so its title is a crisp filter target,
-// distinct from the minted row's. Fixed literals only — deterministic, no Date.now()/randomness.
 const SEED: ConversationSummary = {
   id: 'seed-conversation',
-  name: 'Seeded channel',
+  name: 'Seeded chat',
   is_promoted: false,
   is_archived: false,
   cwd: '/fake/workspace',
@@ -50,72 +14,173 @@ const SEED: ConversationSummary = {
   last_used_at: '2026-07-07T12:00:00.000Z',
   workspace_label: null
 }
+const FIRST = '  first line\n\nthird line  \n'
+const SECOND = '\n  another draft\n\nlast  '
 
-// The plus-created row's displayed title: it is minted unnamed (name: null), so titleFor(null) = 'Untitled'.
-const UNTITLED = 'Untitled'
+async function openRow(page: Page, name: string): Promise<void> {
+  await page.locator('.channel-list__row').filter({ hasText: name })
+    .locator('.channel-list__row-open').click()
+}
 
-// Two distinct drafts, one per pane occupant, so a failure diagnostic names WHICH conversation's state
-// leaked rather than just reporting a non-empty box.
-const DRAFT_IN_SEED = 'draft typed in the seeded channel'
-const DRAFT_IN_CREATED = 'draft typed in the created discussion'
+async function openInfo(page: Page): Promise<void> {
+  await page.locator('.conversation__overflow-trigger').click()
+  await page.getByRole('menuitem', { name: 'Channel info' }).click()
+  await expect(page.locator('.status-sheet')).toBeVisible()
+}
 
-// The create round trip (create_conversation → correlated conversation_created → nav) is a fast in-process
-// hop, but the assertion that follows it is an auto-waiting one, so it carries headroom for a cold runner.
-const ROUNDTRIP_TIMEOUT_MS = 15_000
-
-test('switching conversations without leaving the thread remounts the chat pane', async ({
+test('drafts survive create/sidebar switches and screen exits while transient panels reset', async ({
   launchPairedApp
 }) => {
-  const buildReplyFrames = conversationStateFake({ conversations: [SEED] })
-  const { page } = await launchPairedApp({ buildReplyFrames })
-
-  // launchPairedApp lands IN the seeded row's thread (it clicked the seeded row to get here), with
-  // activeConversation = SEED and the sidebar mounted beside it (#670).
-  const thread = page.locator('.conversation')
+  const fake = conversationStateFake({ conversations: [SEED] })
+  const sent: SendMessagePayload[] = []
+  let holdCreatedList = false
+  let createdList: Uint8Array[] = []
+  const { page, daemon, forwarder } = await launchPairedApp({
+    buildReplyFrames: inbound => {
+      const envelope = decodeEnvelope(inbound)
+      if (envelope.type === 'send_message') {
+        sent.push(envelope.payload as SendMessagePayload)
+        return [] // Deliberately no acknowledgement: clearing is local.
+      }
+      const reply = fake(inbound)
+      if (envelope.type === 'create_conversation') holdCreatedList = true
+      if (envelope.type === 'list_conversations' && holdCreatedList) {
+        createdList = reply
+        return []
+      }
+      return reply
+    }
+  })
+  await page.setViewportSize({ width: 1280, height: 900 })
   const composer = page.getByPlaceholder('Message…')
-  await expect(thread).toHaveCount(1)
-
-  // --- 1. Type a draft into the SEED thread's composer. `toHaveValue` pins that the box really holds it,
-  // so the emptiness asserted after each switch below is a transition this drive caused, rather than an
-  // assertion against a box that was never filled (the siblings' non-vacuity anchor). ---
-  await composer.fill(DRAFT_IN_SEED)
-  await expect(composer).toHaveValue(DRAFT_IN_SEED)
-
-  // --- 2. The CREATE path: the workspace plus mints a second conversation and the correlated conversation_created
-  // drives useConversationCreatedNav → activate + `open`. The route was ALREADY `thread`, so `open` is a
-  // no-op transition and nothing about the route changes — the pane's occupant does. The draft above must
-  // not survive that. This assertion auto-waits the whole create round trip: until the nav lands, the box
-  // still holds DRAFT_IN_SEED and the poll retries. ---
+  const emptyHeight = await composer.evaluate(el => el.getBoundingClientRect().height)
+  await composer.fill(FIRST)
+  await openInfo(page)
   await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
-  await expect(composer).toHaveValue('', { timeout: ROUNDTRIP_TIMEOUT_MS })
-  // The pane never emptied on the way: the switch happened THROUGH the thread route, not via the list.
-  await expect(thread).toHaveCount(1)
-
-  // --- 3. Type a second draft, now into the created discussion's composer. ---
-  await composer.fill(DRAFT_IN_CREATED)
-  await expect(composer).toHaveValue(DRAFT_IN_CREATED)
-
-  // --- 4. The SIDEBAR path: click the seeded row's open control while the created thread is up. Scoped by
-  // title so it cannot strict-violate against the minted row's own row-open. onOpen records SEED active and
-  // dispatches `open` — again a no-op on the route, again a new pane occupant. ---
-  await page
-    .locator('.channel-list__row')
-    .filter({ hasText: 'Seeded channel' })
-    .locator('.channel-list__row-open')
-    .click()
   await expect(composer).toHaveValue('')
-  await expect(thread).toHaveCount(1)
+  await expect(page.locator('.status-sheet')).toHaveCount(0)
+  // Draft before the created chat appears in a list: ownership comes from the create event.
+  await composer.fill(SECOND)
+  await expect(composer).toHaveValue(SECOND)
+  await expect.poll(() => createdList.length).toBeGreaterThan(0)
+  // Creation itself settles the empty live timeline, even before metadata/history arrives.
+  await expect(page.getByText('Loading saved messages…', { exact: true })).toHaveCount(0)
+  holdCreatedList = false
+  for (const frame of createdList) daemon.pushFrame(frame)
+  await expect(page.locator('.channel-list__row').filter({ hasText: 'Untitled' })).toBeVisible()
+  await expect(composer).toHaveValue(SECOND)
+  await openInfo(page)
+  await openRow(page, 'Seeded chat')
+  await expect(composer).toHaveValue(FIRST)
+  await expect(page.locator('.status-sheet')).toHaveCount(0)
+  await expect.poll(() => composer.evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThan(emptyHeight)
+  await page.screenshot({ path: '/tmp/builder-1523-restored-draft.png', animations: 'disabled' })
+  await openRow(page, 'Untitled')
+  await expect(composer).toHaveValue(SECOND)
 
-  // --- 5. The other direction, so the proof is not one-way: back to the minted row, still without leaving
-  // the thread. A pane keyed on the conversation id remounts on every id change; a pane that only remounted
-  // when the id happened to move in one direction would pass step 4 and fail here. ---
-  await composer.fill(DRAFT_IN_SEED)
-  await expect(composer).toHaveValue(DRAFT_IN_SEED)
-  await page
-    .locator('.channel-list__row')
-    .filter({ hasText: UNTITLED })
-    .locator('.channel-list__row-open')
-    .click()
+  // Editing and explicitly emptying a restored value both survive the next remount.
+  await composer.fill('edited\n\n  ')
+  await openRow(page, 'Seeded chat')
+  await expect(composer).toHaveValue(FIRST)
+  await openRow(page, 'Untitled')
+  await expect(composer).toHaveValue('edited\n\n  ')
+  await composer.fill('')
+  await openRow(page, 'Seeded chat')
+  await openRow(page, 'Untitled')
   await expect(composer).toHaveValue('')
-  await expect(thread).toHaveCount(1)
+  await composer.fill(SECOND)
+
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await expect(page.locator('section[aria-label="Settings screen"]')).toBeVisible()
+  await page.getByRole('button', { name: 'Back', exact: true }).click()
+  await openRow(page, 'Untitled')
+  await expect(composer).toHaveValue(SECOND)
+
+  await page.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect(composer).toHaveValue('')
+  await expect.poll(() => sent.length).toBe(1)
+  expect(sent[0]).toMatchObject({ conversation_id: 'created-1', text: SECOND.trim() })
+  await openRow(page, 'Seeded chat')
+  await expect(composer).toHaveValue(FIRST)
+  await composer.press('Enter')
+  await expect(composer).toHaveValue('')
+  await expect.poll(() => sent.length).toBe(2)
+  expect(sent[1]).toMatchObject({ conversation_id: SEED.id, text: FIRST.trim() })
+  await openRow(page, 'Untitled')
+  await expect(composer).toHaveValue('')
+  await openRow(page, 'Seeded chat')
+  await expect(composer).toHaveValue('')
+
+  await composer.fill('  \n\n ')
+  await composer.press('Enter')
+  await openRow(page, 'Untitled')
+  await openRow(page, 'Seeded chat')
+  await expect(composer).toHaveValue('  \n\n ')
+  expect(sent).toHaveLength(2)
+
+  // Completion edits the retained draft. An Actions command does not clear it.
+  daemon.pushFrame(encodeEnvelope({
+    id: 1, type: 'slash_command_list', ts: '2026-09-02T12:00:00.000Z',
+    payload: { conversation_id: SEED.id, dropped_commands: 0, commands: [
+      { name: 'compact', argument_hint: '', description: '', aliases: [], truncated_fields: null }
+    ] }
+  }))
+  await composer.fill('/comp')
+  await expect(page.getByRole('menu', { name: 'Slash commands', exact: true })).toBeVisible()
+  await composer.press('Enter')
+  await expect(composer).toHaveValue('/compact')
+  await composer.press('Escape')
+  await openRow(page, 'Untitled')
+  await openRow(page, 'Seeded chat')
+  await expect(composer).toHaveValue('/compact')
+  await page.getByRole('button', { name: 'Actions', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Compact session', exact: true }).click()
+  await expect.poll(() => sent.length).toBe(3)
+  await expect(composer).toHaveValue('/compact')
+  await openRow(page, 'Untitled')
+  await openRow(page, 'Seeded chat')
+  await expect(composer).toHaveValue('/compact')
+
+  // An unavailable host rejects Enter before the local success point.
+  await forwarder.close()
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
+  await composer.fill('offline draft\n  ')
+  await composer.press('Enter')
+  await openRow(page, 'Untitled')
+  await openRow(page, 'Seeded chat')
+  await expect(composer).toHaveValue('offline draft\n  ')
+  expect(sent).toHaveLength(3)
+})
+
+test('identical conversation IDs on different hosts own separate drafts and pane state', async ({
+  launchPairedApp
+}) => {
+  const first = { ...SEED, name: 'First host channel', is_promoted: true }
+  const second = { ...SEED, name: 'Second host channel', is_promoted: true }
+  const { page, servers } = await launchPairedApp(
+    { buildReplyFrames: conversationStateFake({ conversations: [first] }) },
+    { secondServer: { buildReplyFrames: conversationStateFake({ conversations: [second] }) } }
+  )
+  const composer = page.getByPlaceholder('Message…')
+  await openRow(page, 'First host channel')
+  await composer.fill(FIRST)
+  await openInfo(page)
+  await openRow(page, 'Second host channel')
+  await expect(composer).toHaveValue('')
+  await expect(page.locator('.status-sheet')).toHaveCount(0)
+  await composer.fill(SECOND)
+  await openRow(page, 'First host channel')
+  await expect(composer).toHaveValue(FIRST)
+  // A later list from the other host must not change the selected draft owner.
+  servers[1].daemon.pushFrame(encodeEnvelope({
+    id: 2, type: 'conversations', ts: '2026-09-02T12:00:00.000Z',
+    payload: { conversations: [{ ...second, name: 'Refreshed second channel' }] }
+  }))
+  await expect(page.locator('.channel-list__row').filter({ hasText: 'Refreshed second channel' })).toBeVisible()
+  await expect(composer).toHaveValue(FIRST)
+  await composer.fill('first edited after refresh')
+  await openRow(page, 'Refreshed second channel')
+  await expect(composer).toHaveValue(SECOND)
+  await openRow(page, 'First host channel')
+  await expect(composer).toHaveValue('first edited after refresh')
 })

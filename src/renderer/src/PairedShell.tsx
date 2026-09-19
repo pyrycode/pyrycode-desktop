@@ -412,12 +412,12 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // The chat pane's identity (see PairedShellView's `paneKey` prop). Screen-local, ADR 0006, beside the
   // nav reducer. The two paths that activate a conversation are BOTH right here
   // (the created-event nav below and `onOpen`), each already holding the conversation it is activating, so
-  // the id is recorded from the nav action rather than read back out of a store. The set is exactly
+  // the host/id pair is recorded from the nav action rather than read back out of a store. The set is exactly
   // co-located with `activateConversation` — that call is the marker for "a third activation must record
   // the id too". The nullary `open` (a notification click, below) records nothing on purpose: it means
   // "show the conversation that is already active", so the pane's identity has not changed. Nothing clears
   // it on the way out. In-app pairing now preserves the background subtree, so
-  // both this identity and the composer's local draft survive idle cancellation.
+  // this identity and all transient pane controls survive idle cancellation.
   const [paneKey, setPaneKey] = useState<string | null>(null)
   const cancelCreatedInitialization = useRef<(() => void) | null>(null)
   useEffect(() => () => cancelCreatedInitialization.current?.(), [])
@@ -469,17 +469,20 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // created discussion opens on an empty thread instead of the last one's history.
   // #670: the FAB's create is a conversation switch too when a thread is already open — `open` is
   // absolute, so the route does not move and the pane would otherwise keep the previous discussion's
-  // composer draft. Re-key it on the minted id.
+  // transient controls. Re-key it on the creating host and minted id.
   useConversationCreatedNav((created, serverId) => {
     localRead.current?.cancel()
-    setSavedTimelineTarget(undefined)
+    setSavedTimelineTarget(serverId === undefined ? undefined : { serverId, conversationId: created.id })
     cancelCreatedInitialization.current?.()
     leaveRecovery()
     activateConversation(activateDeps, created)
+    if (serverId !== undefined) {
+      conversationTimelineStore.getState().initializeCreatedTimeline(serverId, created.id)
+    }
     cancelCreatedInitialization.current = initializeCreatedConversationAfterList(
       created.id, serverId, activateDeps.requestConversationConfig
     )
-    setPaneKey(created.id)
+    setPaneKey(JSON.stringify([serverId ?? null, created.id]))
     dispatch({ type: 'open' })
   })
   // #652: the delete confirmation → thread exit. Symmetric with the created-event nav above and driven
@@ -593,7 +596,10 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
             timelines: conversationTimelineStore, read: window.pyry.chatHistory, log: window.pyry.sendDiagnostic
           }, conversation.serverId, conversation.id)
         }
-        setPaneKey(conversation.id)
+        setPaneKey(JSON.stringify([
+          'serverId' in conversation && typeof conversation.serverId === 'string' ? conversation.serverId : null,
+          conversation.id
+        ]))
         dispatch({ type: 'open' })
       }}
       onOpenSettings={() => { leaveRecovery(); dispatch({ type: 'openSettings' }) }}

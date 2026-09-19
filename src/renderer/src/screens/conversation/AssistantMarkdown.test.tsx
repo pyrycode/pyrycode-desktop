@@ -30,6 +30,19 @@ const lines = (...src: string[]): string => src.join('\n')
 const count = (markup: string, pattern: RegExp): number => [...markup.matchAll(pattern)].length
 
 describe('AssistantMarkdown', () => {
+  it('adds a native copy button to each code block, but not inline code', () => {
+    const markup = render(lines(
+      '`inline`', '', '```ts', '  const tag = "<b>&amp;</b>"', '', '```',
+      '', '```', 'second block', '```'
+    ))
+    expect(count(markup, /<button type="button"[^>]*aria-label="Copy code"/g)).toBe(2)
+    expect(count(markup, /class="code-block__header"/g)).toBe(1)
+    expect(markup).toContain('<code>inline</code>')
+    expect(markup).toContain('  const tag = &quot;&lt;b&gt;&amp;amp;&lt;/b&gt;&quot;\n\n</code>')
+    expect(markup).not.toContain('<b>')
+    expect(render('`inline only`')).not.toContain('<button')
+  })
+
   it('converts every listed block construct to its element (AC1)', () => {
     const markup = render(
       lines(
@@ -231,7 +244,7 @@ describe('AssistantMarkdown', () => {
     // One string, so "a header exists", "it names the fence's own language" and "it sits inside the
     // block, above the body" are a single claim rather than three assertions that could hold apart.
     expect(markup).toContain(
-      '<div class="code-block"><div class="code-block__header">typescript</div><pre class="code-block__body">'
+      '<div class="code-block code-block--copyable"><div class="code-block__header">typescript</div><pre class="code-block__body">'
     )
     expect(markup).toContain('const x: number = 1')
   })
@@ -241,7 +254,7 @@ describe('AssistantMarkdown', () => {
     // The wrapper IMMEDIATELY followed by the body is the proof that no empty bar sits between them —
     // stronger than the absence assertion below, which alone would also pass on a header rendered
     // somewhere else entirely.
-    expect(markup).toContain('<div class="code-block"><pre class="code-block__body">')
+    expect(markup).toContain('<div class="code-block code-block--copyable"><pre class="code-block__body">')
     expect(markup).toContain('const x = 1')
     expect(markup).not.toContain('code-block__header')
   })
@@ -271,7 +284,7 @@ describe('AssistantMarkdown', () => {
     expect(markup).toContain('<div class="code-block__header">&lt;b&gt;x&lt;/b&gt;</div>')
     expect(markup).toContain('const x = 1')
     // Negative: no real element was constructed from it.
-    expect(markup).not.toContain('<b')
+    expect(markup).not.toMatch(/<b(?:\s|>)/)
   })
 
   // #1079 — the GFM table subset. Every case below is about the SUBSET being exactly one construct

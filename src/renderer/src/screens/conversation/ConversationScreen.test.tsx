@@ -1270,11 +1270,9 @@ describe('Timeline — the streamed assistant text', () => {
     expect(markup).toContain('<pre class="tool-row__result">RESULT_SENTINEL_zzz</pre>')
   })
 
-  it('draws the same chrome as a message fenced code block, header included (AC5)', () => {
-    // ONE substring, asserted from both sides, so a structural divergence in either fails here — which
-    // is what makes "a later restyle of one lands on both" a test rather than a claim. The chrome
-    // itself lives entirely in CSS keyed on these two classes (#721 was a pure restyle across two CSS
-    // files and zero TSX), so sharing the classes is what shares the chrome.
+  it('shares base chrome with message fences and keeps copying message-only (AC5)', () => {
+    // Both surfaces keep the code-block and code-block__body classes for shared styling.
+    // Message fences additionally carry the copy modifier and control; Bash commands do not.
     const row = renderToStaticMarkup(
       <ToolRow
         item={toolItem({ isError: false, resultSummary: '184 lines' }, { command: 'ls -la' }, 'Bash')}
@@ -1283,7 +1281,10 @@ describe('Timeline — the streamed assistant text', () => {
     )
     const fence = renderToStaticMarkup(<AssistantMarkdown text={'```\nls -la\n```'} />)
     expect(row).toContain(CODE_BLOCK)
-    expect(fence).toContain(CODE_BLOCK)
+    expect(fence).toContain('<div class="code-block code-block--copyable"><pre class="code-block__body">')
+    expect(fence).toContain('<button type="button" class="code-block__copy" aria-label="Copy code">')
+    expect(row).not.toContain('code-block--copyable')
+    expect(row).not.toContain('aria-label="Copy code"')
     // AC1's no language header, and #721's divider-on-the-header decision is what keeps the headerless
     // form from drawing a doubled edge.
     expect(row).not.toContain('code-block__header')

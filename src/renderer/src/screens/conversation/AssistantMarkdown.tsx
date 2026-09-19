@@ -1,4 +1,4 @@
-import { Children, isValidElement, type ReactNode } from 'react'
+import { Children, isValidElement, useRef, type ReactNode } from 'react'
 import Markdown, { type Components } from 'react-markdown'
 import { gfmTable } from 'micromark-extension-gfm-table'
 import { gfmTableFromMarkdown } from 'mdast-util-gfm-table'
@@ -11,6 +11,7 @@ import { gfmStrikethroughFromMarkdown } from 'mdast-util-gfm-strikethrough'
 // exists in this shape.
 import type {} from 'remark-parse'
 import type { Processor } from 'unified'
+import { copyMessageText } from './copyMessageText'
 
 // #608: assistant-reply markdown → React elements. Daemon-supplied text may render as content
 // (operator decision, 2026-08-20), so the question here is markup handling, not provenance.
@@ -32,12 +33,8 @@ import type { Processor } from 'unified'
 //     per-construct packages rather than the bundle plus an override. THE COUNT IN THIS SENTENCE IS
 //     PART OF THE CONTRACT — a fourth construct here is a change to what this module can parse out of
 //     untrusted daemon text.
-//   • NO FORM CONTROL, and #1080 had to spend an override to keep it that way. The task-list extension's
-//     hast handler emits an `<input type="checkbox" disabled>` per item, which would have been the first
-//     element type to cross this boundary by package default rather than by decision. `components.input`
-//     below renders an inert `<span>` instead, so the window that holds the transport bridge contains no
-//     control, no submission target and no autofill surface from a reply. Inert-by-absence again, and
-//     the reason the emitted element set is still readable in this one file.
+//   • No source-authored form controls: task-list inputs become inert spans. CodeBlock adds only
+//     a client-owned, non-submitting Copy code button; its label and behavior are fixed here.
 //   • No `skipHtml`. It reads like the safe option and is not: it DELETES tags and promotes their
 //     text content into the message (`<b>bold</b>` → `bold`). The default escapes instead, which
 //     matches the bubble's existing posture at ConversationScreen.tsx:493 ("HTML inside a delta
@@ -265,7 +262,7 @@ const components: Components = {
   },
   // #1080 — the task-list mark, and THE ANSWER TO "should a reply contain a checkbox": no. The task-list
   // extension's hast handler emits `<input type="checkbox" disabled>` into the item's first paragraph;
-  // this renders an inert <span> in its place, so no form control exists in the window at all. A
+  // this renders an inert <span> in its place, so no source-authored checkbox exists. A
   // `disabled` checkbox would already have satisfied "not interactive" — it takes no click, no focus and
   // no keyboard toggle — but it READS as a control the reader could tick, and a reply is a transcript.
   // Removing the element is also what leaves nothing to keep correct later: no disabled attribute a
@@ -304,20 +301,48 @@ const components: Components = {
   //
   // Bound by the rule above: `children` is destructured and nothing is spread, so the `<code>` child
   // (its `language-*` class and all) passes through verbatim and every other attribute is dropped.
-  pre: ({ children }) => {
-    const language = fenceLanguage(children)
-    return (
-      <div className="code-block">
-        {/* `!== null`, not a bare && on the string: the guard names the one falsy value the helper can
-            return, so an empty-string language can never render an empty header bar — the shape the
-            no-language criterion forbids. The label is a React TEXT child, interpolated into no
-            className, id, data-* or style; React escapes it, and that is the whole inertness argument
-            (the same one ConversationScreen.tsx:499-503 makes for the in-progress tail). */}
-        {language !== null && <div className="code-block__header">{language}</div>}
-        <pre className="code-block__body">{children}</pre>
-      </div>
-    )
+  pre: CodeBlock
+}
+
+function CodeBlock({ children }: { children?: ReactNode }): JSX.Element {
+  const body = useRef<HTMLPreElement>(null)
+  const language = fenceLanguage(children)
+
+  const copy = async (): Promise<void> => {
+    // textContent preserves literal characters and trailing newlines; chrome stays outside the pre.
+    const text = body.current?.querySelector('code')?.textContent
+    if (text == null) {
+      window.pyry.sendDiagnostic({ event: 'code-block-copy', code: 'missing-code' })
+      return
+    }
+    const copied = await copyMessageText(text)
+    window.pyry.sendDiagnostic({ event: 'code-block-copy', code: copied ? 'copied' : 'failed' })
   }
+
+  return (
+    <div className="code-block code-block--copyable">
+      {language !== null && <div className="code-block__header">{language}</div>}
+      <pre ref={body} className="code-block__body">{children}</pre>
+      <button
+        type="button"
+        className="code-block__copy"
+        aria-label="Copy code"
+        onClick={() => void copy()}
+      >
+        {/* Exact copy glyph used by BubbleMeta; the button supplies its accessible name. */}
+        <svg
+          className="code-block__copy-icon"
+          viewBox="0 0 11 12"
+          width="11"
+          height="12"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path d="M4.71429 0C3.84754 0 3.14286 0.672656 3.14286 1.5V7.5C3.14286 8.32734 3.84754 9 4.71429 9H9.42857C10.2953 9 11 8.32734 11 7.5V2.79844C11 2.39062 10.8257 1.99922 10.5163 1.71562L9.09955 0.417188C8.80737 0.15 8.41696 0 8.01183 0H4.71429ZM1.57143 3C0.704688 3 0 3.67266 0 4.5V10.5C0 11.3273 0.704688 12 1.57143 12H6.28571C7.15246 12 7.85714 11.3273 7.85714 10.5V10.125H6.28571V10.5H1.57143V4.5H1.96429V3H1.57143Z" />
+        </svg>
+      </button>
+    </div>
+  )
 }
 
 /**

@@ -1,6 +1,6 @@
 # Conversation shell — composer status row and error slot
 
-The status row directly above the message box: its activity/thinking display, its error chip, that chip's fold into an actionable re-pair button, and the retry/compacting/stall statuses folded into its label. Split from [Composer](conversation-shell-composer.md) 2026-09-05, once this ticket's message-box growth would have pushed the combined document over the size cap.
+The status row directly above the message box: its activity/thinking display, its error chip, that chip's fold into an actionable repair or reconnect button, and the retry/compacting/stall statuses folded into its label. Split from [Composer](conversation-shell-composer.md) 2026-09-05, once this ticket's message-box growth would have pushed the combined document over the size cap.
 
 Part of [Composer](conversation-shell-composer.md); see that document for the message box and footer row, and [Conversation shell](conversation-shell.md) for the screen overall.
 
@@ -27,7 +27,8 @@ and no other, and why it never destructures `status.error`.
 ## Actionable-error button, and the row that grows to fit it (#963)
 
 Split out to its own page: [Actionable-error button, and the row that grows to fit it](conversation-shell-composer-repair-button.md) —
-the `Pairing error - Re-pair` button that takes the chip's slot when `shouldOfferRepair` is true, the
+the `Pairing error - Re-pair` button for explicit non-retryable pairing rejection and
+`Connection error - Reconnect` for other terminal failures except `unpair` and `not-paired`, the
 row's growth from 24 to 32px to fit it, and the retired `RepairPrompt`/`RepairControl`/`.composer__repair`
 block this retires.
 
@@ -53,7 +54,7 @@ slash command**, as of [#1496](https://github.com/pyrycode/pyrycode-desktop/issu
 outside `sendText` entirely; see [New session control
 action](conversation-shell-actions-menu-and-reader-cutover.md#new-session-control-action-1218-folded-to-the-menus-only-reset-row-by-1496).
 
-Recovery has priority after re-pair and connection errors, before refusal recovery,
+Recovery has priority after re-pair, reconnect and connection errors, before refusal recovery,
 model-settings rejection, Claude reports and usage notices; it is visible only while connected. The
 next local submitted message or daemon turn activity clears recovery while preserving the
 boundary; the stopped turn's trailing idle does **not** clear it. Session boundaries,
@@ -101,7 +102,7 @@ fixed client copy in a `role="alert"` element. It is available both with the ord
 composer and while the [questionnaire's model footer](composer-model-menu.md#availability-during-question-batches)
 is visible; rejection leaves the question answerable and rolls back the optimistic label.
 
-The single-occupant priority is repair button → connection-error chip → stopped-turn
+The single-occupant priority is repair button → reconnect button → connection-error chip → stopped-turn
 recovery → refusal Switch back (with any rejection feedback) → model rejection → Claude
 stopping report → usage notice → history failure → task count. Recovery and notices require `connected`;
 disconnected and connecting states hide them without clearing held reports.

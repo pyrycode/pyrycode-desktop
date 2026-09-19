@@ -8,27 +8,28 @@ slot's other occupants.
 
 ## Actionable-error button, and the row that grows to fit it (#963)
 
-**An error the operator can act on becomes a button in the chip's own slot** (Juhana's ruling, 2026-09-02),
-reading `Pairing error - Re-pair`, exactly when `shouldOfferRepair` is true. This retires
-[#167's separate `RepairPrompt`/`RepairControl`/`.composer__repair` block](conversation-shell-chrome.md#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963)
-that used to sit beneath the composer — one escape hatch, in the slot the operator is already looking at,
-rather than two surfaces for the same terminal state.
+**An actionable connection error becomes one button in the chip's slot.**
+`Pairing error - Re-pair` requires a non-retryable `pairing-rejected` error.
+`Connection error - Reconnect` handles other non-retryable errors except `unpair`
+and `not-paired`. Retryable errors and those two exclusions keep the existing chip.
+The [pure gates](composer-send.md#5-re-pair-gate--shouldofferrepair-167) are disjoint.
+A bare fatal close, including 4421 or 4401, is not evidence of broken pairing;
+only the sealed invalid-token rejection establishes the repair branch.
 
-**`ComposerErrorSlot`** is the pure view for the trailing slot. Repair takes
-precedence over the connection-error chip because `shouldOfferRepair` is a strict
-subset of the error state. Retryable connection errors and `code: 'unpair'` still
-get the chip. Connected-only occupants follow in the [status priority](conversation-shell-composer-status.md#model-settings-rejection)
-below. Props keep this decision testable with static markup; the container owns
-store reads.
+**`ComposerErrorSlot`** checks repair, reconnect, then the connection-error chip,
+followed by the unchanged [connected-only priority](conversation-shell-composer-status.md#model-settings-rejection).
+Its injected `status`, `onRepair` and `onReconnect` keep the view statically testable;
+the container owns store reads and actions. Both buttons reuse
+`button-small button-small--error`; the old beneath-composer `RepairPrompt`,
+`RepairControl` and `.composer__repair` remain retired.
 
-**The error arm is read for a decision, never for markup.** `ComposerErrorChip` can state the stronger
-"never destructures `status.error`"; this view cannot, because `shouldOfferRepair` reads
-`.retryable`/`.code`. Both reads are confined to that predicate's boolean — no local in `ComposerErrorSlot`
-binds `status.error`, and the button's text is `COMPOSER_REPAIR_BUTTON_COPY` and nothing else. A test on
-the button arm with sentinel `code`/`message` values asserts neither reaches the markup, which is what
-makes the guarantee falsifiable rather than a comment. No visually-hidden `Error: ` prefix on the button,
-unlike the chip — the label already leads with "Pairing error", so the accessible name (the visible text;
-no `aria-label`) says it is an error without one.
+**Error fields select a branch, never markup.** The predicates read `.retryable`
+and `.code`, but button content comes only from the client-owned copy constants.
+Sentinel messages on both branches and a sentinel code on Reconnect must reach no
+markup or attributes. The repair test needs the actual `pairing-rejected` code;
+replacing it with an arbitrary sentinel would silently test Reconnect instead.
+Visible text supplies each accessible name, with no `aria-label` or hidden prefix:
+both labels already say “error”. The banner owns the disconnect announcement.
 
 No fourth component for the button markup itself (`ComposerRepairButton` was considered and dropped): six
 lines of markup with no branch of its own would add a name and a test surface without adding a decision.
@@ -37,7 +38,7 @@ lines of markup with no branch of its own would add a name and a test surface wi
 Its connection status comes from `useOpenConnectionStatus`, the same hook used by the composer
 send gate and connection banner: resolve the open conversation's client-stamped server, then read
 that server's status. Missing or ambiguous attribution renders disconnected. A different host's
-failure cannot disable this thread or give it a repair button. See
+failure cannot disable this thread or give it a recovery button. See
 [Session store](session-store.md#one-slot-per-server-since-1133).
 
 `handleRepair` re-resolves the open conversation's server at click time and calls
@@ -47,8 +48,16 @@ using the existing pairing input and fingerprint confirmation. Cancel returns to
 same-host confirmation replaces credentials and reconnects while preserving held conversations.
 Explicit host removal remains in Settings.
 
-**`COMPOSER_REPAIR_BUTTON_COPY = 'Pairing error - Re-pair'`** joins `composerSend.ts` beside
-`COMPOSER_ERROR_CHIP_COPY` — see [Composer send § 9](composer-send.md#9-actionable-error-button-copy-composerrepairbuttoncopy-963).
+`handleReconnect` also re-reads the active conversation and conversation list at click
+time. `serverIdForOpenConversation` must find one unique owner before it invokes
+`window.pyry.reconnectServer(serverId)`; missing or ambiguous ownership is a no-op.
+It awaits the existing named-host bridge without navigating to recovery, unpairing,
+clearing credentials/stores or setting optimistic connection state. Main-process
+lifecycle events remain authoritative. A rejected bridge call emits only the fixed
+`composer-reconnect-failed` / `bridge-rejected` diagnostic, with no error details.
+
+`COMPOSER_REPAIR_BUTTON_COPY` and `COMPOSER_RECONNECT_BUTTON_COPY` live beside the
+connection copy in `composerSend.ts`; see [Composer send § 9](composer-send.md#9-actionable-error-button-copy-composerrepairbuttoncopy-963).
 
 ### The row grows to fit the button, and only then
 
@@ -98,35 +107,28 @@ would be pinning the banner's geometry under a name that claims to be about this
 facts (height, and the status group's offset from the row's bottom edge) are what
 `e2e/unpair-repair.spec.ts` asserts instead, both relative to the row.
 
-**Testing.** `ConversationScreen.test.tsx` replaces the `RepairPrompt` describe with a `ComposerErrorSlot`
-describe covering all three arms in both directions (occupant present *and* the other occupant's markup
-absent) plus the sentinel/no-attribute cases above; the `ComposerErrorChip` describe and its `disconnected`
-container assertion are untouched. **One #797 container assertion did not survive as originally planned**
-— the ticket expected both chip container assertions to stay true unedited, but the error-arm one staged
-`code: 'transport', retryable: false`, which is exactly the status `shouldOfferRepair` now admits, so the
-slot correctly filled with the button and the test went red rather than vacuous. Repointed onto a
-retryable daemon error (`server.binary_offline`), an arm the chip still owns (#167's AC4), which keeps the
-test's actual claim (`trailing` reaches the row with the chip in it) intact. A sibling container test
-proves the button's own arm the same way, spying `sessionStore.getInitialState` (not a `beforeEach`
-`setState`, per the [standing zustand v5 lesson](conversation-shell-composer-error-chip.md#composer-error-chip-797) above), and additionally proves
-`.composer__repair` is absent in the exact state that used to render it.
+**Testing.** `composerSend.test.ts` proves the disjoint gate matrix, including
+retryability, all non-error statuses and both exclusions. `ConversationScreen.test.tsx`
+checks exact button markup, mutual exclusion, sentinel isolation and lower-priority
+occupants. Store-bound static renders must spy on `getInitialState`, not merely
+call `setState`: Zustand v5 reads the initial snapshot under `renderToStaticMarkup`.
+Stage `pairing-rejected` for repair, an ordinary terminal code for reconnect, and a
+retryable error for the chip; all three are different test subjects.
 
-**A fifth production file: `QuestionPanel.tsx`.** The shared `.button-small` base class means the question
-panel's three buttons' `className` attributes changed too (`button-small` prepended, not replacing their
-own class), so `QuestionPanel.test.tsx`'s exact-string markup assertion on the Cancel button moved with
-it — see [Question panel § Step controls](conversation-shell-question-panel.md#step-controls-916).
+**`e2e/unpair-repair.spec.ts` owns clicks and geometry.** Repair scenarios send a
+sealed `auth.invalid_token` frame and open the existing host-recovery flow. Bare
+4421 and 4401 closes instead show Reconnect with two hosts paired. After clicking,
+wait for Send to become enabled and the selected host's authenticated connection
+event before asserting that only that host redialled, both saved hosts and the draft
+remain, and neither unpair nor recovery navigation occurred. Button disappearance
+alone would also pass during connecting and cannot prove completion.
 
-**e2e (`e2e/unpair-repair.spec.ts`) drives the geometry and the click**, none of which a static render can
-reach: the row's height (24 → 32), the status group's offset from the row's bottom edge (unchanged across
-that transition), the focus ring (Chromium only paints it after keyboard-driven focus, so the spec presses
-a key before calling `.focus()`), and the click opening recovery beside the sidebar without unpairing.
-The button's locator moved from `getByRole('button', { name: 'Re-pair', exact: true })` to
-`COMPOSER_REPAIR_BUTTON_COPY`, imported rather than retyped so a copy change cannot leave the spec passing
-against a string nothing renders; the spec's header comment, which used to describe **four**
-`.conversation__unpair` buttons (Unpair/Cancel/Confirm/Re-pair), now describes three — the button does not
-wear that class.
+At 800px width the reconnect scenarios assert a 24px resting row becoming 32px,
+the status group's bottom flush with the row and the icon's unchanged bottom offset.
+The longer reconnect label uses the existing Error treatment without new CSS.
+The repair scenario also checks the focus ring: Chromium paints it after keyboard
+input, so press a key before calling `.focus()` in that assertion.
 
-The sentinel test enforces the trust boundary: error fields may select the control but cannot
-supply its markup. Recovery entry now performs navigation only; credential changes remain behind
-the pairing form's fingerprint confirmation.
-
+Other history and precedence scenarios must make the same fixture distinction:
+a terminal transport error tests Reconnect priority; a repair-cancellation test
+requires the sealed rejection. Bare 4401 cannot stand in for invalid credentials.

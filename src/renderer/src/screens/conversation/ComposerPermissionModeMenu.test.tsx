@@ -51,20 +51,19 @@ it('renders only the settings report through pending, acknowledged and unavailab
 //
 // THE FIXTURE MODES ARE THE REAL ONES, and that inverts the sibling files' rule rather than breaking it.
 // The effort and model menus invent their fixtures because their vocabularies are the DAEMON's and a
-// client-side copy is the bug those tickets exist to prevent. This menu's five entries are a CLIENT-OWNED
+// client-side copy is the bug those tickets exist to prevent. This menu's six entries are a CLIENT-OWNED
 // constant — the whole point of the design — so the vocabulary belongs in the repo, and a test that
 // invented one would assert nothing about the thing that ships. What is derived rather than typed is every
-// COUNT and every membership claim, so a sixth mode inherits the guards.
+// COUNT and every membership claim, so a new mode inherits the guards.
 
 const BYPASS = 'bypassPermissions'
 
-// The one mode the read half reports and the write half refuses. Held as a const so the entries guard
-// below reads as a membership claim rather than as a literal typed beside the list it polices.
+// Bypass is selectable through yolo, while the other modes use permission_mode.
 const KNOWN_MODES = Object.keys(PERMISSION_MODE_LABELS)
 
-// #1022 — the entries the daemon can never take away, derived rather than typed: a four-name list here
+// #1022 — the entries the daemon can never take away, derived rather than typed: a five-name list here
 // would be a second copy of the vocabulary, and it would keep passing if the filter dropped the wrong
-// mode. This is also AC4's floor — the offered list is never shorter than these four.
+// mode. This is also AC4's floor — the offered list is never shorter than these five.
 const UNCONDITIONAL_MODES = SETTABLE_PERMISSION_MODES.filter((m) => m !== AUTO_PERMISSION_MODE)
 
 // #1022 — the model-list fixtures. The VALUES ARE INVENTED, the sibling files' rule: these are the
@@ -150,22 +149,14 @@ function panel(permissionMode: string, models: ModelListEntry | null = null, mod
 }
 
 describe('the vocabulary', () => {
-  // THE ASYMMETRY, pinned as two counts rather than as prose. The read half reports six modes and the
-  // write half accepts five; this control therefore renders six labels and offers five entries. A
-  // contributor adding the sixth entry "for symmetry" would be adding a one-click privilege escalation to
-  // the footer, and this is the test that stops them.
-  it('renders six labels and offers five entries (AC2)', () => {
+  it('renders and offers all six known modes', () => {
     expect(KNOWN_MODES).toHaveLength(6)
-    expect(SETTABLE_PERMISSION_MODES).toHaveLength(5)
-  })
-
-  it('never offers the escalation mode, and still knows how to label it (AC2)', () => {
-    expect(SETTABLE_PERMISSION_MODES).not.toContain(BYPASS)
-    expect(KNOWN_MODES).toContain(BYPASS)
+    expect(SETTABLE_PERMISSION_MODES).toHaveLength(6)
+    expect(SETTABLE_PERMISSION_MODES).toContain(BYPASS)
   })
 
   // Every settable mode is labelled, so no entry can render its raw camelCase identifier — a derivation
-  // over the constant, so a sixth settable mode inherits it.
+  // over the constant, so a new settable mode inherits it.
   it('labels every mode it offers', () => {
     for (const mode of SETTABLE_PERMISSION_MODES) expect(KNOWN_MODES).toContain(mode)
   })
@@ -191,19 +182,19 @@ describe('permission mode display copy', () => {
       { id: 'acceptEdits', label: 'Auto-approve edits' },
       { id: 'plan', label: 'Plan' },
       { id: 'auto', label: 'Auto approval' },
-      { id: 'dontAsk', label: 'Approved actions only' }
+      { id: 'dontAsk', label: 'Approved actions only' },
+      { id: 'bypassPermissions', label: 'Bypass approvals' }
     ]
     expect(composerPermissionModeMenuModel(null, '', 'default')?.options).toEqual(options)
     const markup = panel('default')
     for (const { label } of options) expect(markup).toContain(`>${label}<`)
-    expect(markup).not.toContain('Bypass approvals')
   })
 })
 
 describe('composerPermissionModeMenuModel', () => {
   // AC1 and AC2 in one shape: the label is the DISPLAY name for the session's mode, the entries are the
-  // five settable modes with the machine value as `id`, and the current one is the session's mode itself.
-  it('labels the trigger with the display name and offers the five settable modes (AC1, AC2)', () => {
+  // six settable modes with the machine value as `id`, and the current one is the session's mode itself.
+  it('labels the trigger with the display name and offers the six settable modes (AC1, AC2)', () => {
     expect(composerPermissionModeMenuModel(null, '', 'acceptEdits')).toStrictEqual({
       label: PERMISSION_MODE_LABELS.acceptEdits,
       currentId: 'acceptEdits',
@@ -214,14 +205,14 @@ describe('composerPermissionModeMenuModel', () => {
     })
   })
 
-  // The entries never move with the session's mode: same five, same order, whatever is running — which is
-  // what makes "exactly the five settable modes" true for the bypass reading too.
-  it.each([...SETTABLE_PERMISSION_MODES, BYPASS, 'a-mode-this-client-has-never-heard-of'])(
-    'offers the same five entries, in order, while the session runs %s (AC2)',
+  // The entries never move with the session's mode: same six, same order, whatever is running — which is
+  // what makes "exactly the six settable modes" true for the bypass reading too.
+  it.each([...SETTABLE_PERMISSION_MODES, 'a-mode-this-client-has-never-heard-of'])(
+    'offers the same six entries, in order, while the session runs %s (AC2)',
     (mode) => {
       const menu = composerPermissionModeMenuModel(null, '', mode)
       expect(menu?.options.map((o) => o.id)).toStrictEqual([...SETTABLE_PERMISSION_MODES])
-      expect(menu?.options.map((o) => o.id)).not.toContain(BYPASS)
+      expect(menu?.options.map((o) => o.id)).toContain(BYPASS)
     }
   )
 
@@ -234,11 +225,8 @@ describe('composerPermissionModeMenuModel', () => {
     expect(composerPermissionModeMenuModel(null, '', '')).toBeNull()
   })
 
-  // AC2's bypass half, at the decision layer. A session sitting in bypass is a real, reachable state — the
-  // run-configuration sheet's YOLO toggle puts it there — and this control must name it honestly while
-  // offering only what it may send. currentId matching no entry marks nothing through the panel's existing
-  // branch: no special case, no null arm, and emphatically not a reason to withhold the menu.
-  it('labels a session in bypass and still offers the five (AC2)', () => {
+  // Bypass can be selected from either the footer or the settings sheet.
+  it('labels a session in bypass and still offers the six (AC2)', () => {
     const menu = composerPermissionModeMenuModel(null, '', BYPASS)
     expect(menu?.label).toBe(PERMISSION_MODE_LABELS[BYPASS])
     expect(menu?.currentId).toBe(BYPASS)
@@ -290,7 +278,7 @@ describe('composerPermissionModeMenuModel', () => {
 // THE ASYMMETRY THAT MAKES THIS SAFE, and the reason every assertion below is a derivation: the offered
 // list is the client-owned constant MINUS one named mode. It is never computed FROM the row, so the
 // worst a hostile flag achieves is removing `auto` — it can neither hide `default` and `plan` nor add
-// the escalation. `UNCONDITIONAL_MODES` is derived for exactly that reason; a typed four-name list would
+// a new entry. `UNCONDITIONAL_MODES` is derived for exactly that reason; a typed five-name list would
 // keep passing if the filter dropped the wrong mode.
 describe('the auto mode a model can refuse', () => {
   // The filter names ONE string, and this is what stops a rename from silently disabling it: the mode it
@@ -301,9 +289,9 @@ describe('the auto mode a model can refuse', () => {
     expect(UNCONDITIONAL_MODES).not.toContain(AUTO_PERMISSION_MODE)
   })
 
-  // AC1. The other four in their EXISTING order — the filter drops an entry, it does not reorder or
+  // AC1. The other five in their EXISTING order — the filter drops an entry, it does not reorder or
   // rebuild the list.
-  it('offers the other four modes in order and no auto entry (AC1)', () => {
+  it('offers the other five modes in order and no auto entry (AC1)', () => {
     const menu = composerPermissionModeMenuModel(LIST, REFUSING.value, 'plan')
     expect(menu?.options.map((o) => o.id)).toStrictEqual([...UNCONDITIONAL_MODES])
     expect(menu?.options.map((o) => o.label)).toStrictEqual(
@@ -312,7 +300,7 @@ describe('the auto mode a model can refuse', () => {
   })
 
   // AC2, as ONE table rather than five tests, because these are one reading: the client does not
-  // positively know the model refuses `auto`. Every row here must offer all five, and the last two are
+  // positively know the model refuses `auto`. Every row here must offer all six, and the last two are
   // the ones a fail-CLOSED implementation would get wrong.
   it.each([
     ['no list has been published for the conversation', null, REFUSING.value],
@@ -324,7 +312,7 @@ describe('the auto mode a model can refuse', () => {
     ['the published value was cut mid-token', LIST, `${REFUSING.value}-full`],
     ['a case fold of the published value', LIST, REFUSING.value.toUpperCase()],
     ['the matched row accepts auto', LIST, ACCEPTING.value]
-  ])('offers all five modes when %s (AC2)', (_why, models, model) => {
+  ])('offers all six modes when %s (AC2)', (_why, models, model) => {
     const menu = composerPermissionModeMenuModel(models, model, 'plan')
     expect(menu?.options.map((o) => o.id)).toStrictEqual([...SETTABLE_PERMISSION_MODES])
   })
@@ -348,8 +336,7 @@ describe('the auto mode a model can refuse', () => {
   // AC3. Hiding an entry never changes what the TRIGGER says. A session already running `auto` on a
   // model that refuses it is a real, reachable state — the operator may have set it elsewhere, or the
   // model may have changed under a running session — and this control names it honestly while offering
-  // only what it may send. Nothing is marked, through the same no-matching-entry branch the bypass
-  // reading already uses: no special case, and emphatically not a reason to withhold the menu.
+  // only what it may send. The missing auto entry marks nothing without withholding the menu.
   it('still labels a session running auto on a refusing model, and marks nothing (AC3)', () => {
     const menu = composerPermissionModeMenuModel(LIST, REFUSING.value, AUTO_PERMISSION_MODE)
     expect(menu?.label).toBe(PERMISSION_MODE_LABELS[AUTO_PERMISSION_MODE])
@@ -365,14 +352,14 @@ describe('the auto mode a model can refuse', () => {
 
   // AC4's floor, across every row shape at once: this menu still has no nothing-to-offer arm. Its
   // entries are a client-owned vocabulary of which exactly one is conditional, so the list can never
-  // fall below four and the trigger can never go inert — which is what still separates this control
+  // fall below five and the trigger can never go inert — which is what still separates this control
   // from both its neighbours, whose entire entry list is the daemon's.
   it.each([
     ['a refusing row', LIST, REFUSING.value],
     ['an accepting row', LIST, ACCEPTING.value],
     ['an empty list', EMPTY, REFUSING.value],
     ['no list at all', null, REFUSING.value]
-  ])('keeps an operable trigger and at least four entries with %s (AC4)', (_why, models, model) => {
+  ])('keeps an operable trigger and at least five entries with %s (AC4)', (_why, models, model) => {
     const menu = composerPermissionModeMenuModel(models, model, 'plan')
     expect(menu?.options.length).toBeGreaterThanOrEqual(UNCONDITIONAL_MODES.length)
     const markup = view('plan', models, model)
@@ -384,9 +371,9 @@ describe('the auto mode a model can refuse', () => {
     expect(markup).toContain('class="composer__footer-button composer__permission"')
   })
 
-  // The panel-level proof of AC1, through the shared component and with no prop added to it: four rows,
+  // The panel-level proof of AC1, through the shared component and with no prop added to it: five rows,
   // the session's mode marked, and the hidden mode's display name absent from the panel entirely.
-  it('feeds four rows to the shared panel with the current one marked (AC1)', () => {
+  it('feeds five rows to the shared panel with the current one marked (AC1)', () => {
     const markup = panel('plan', LIST, REFUSING.value)
     expect(rowCount(markup)).toBe(UNCONDITIONAL_MODES.length)
     for (const mode of UNCONDITIONAL_MODES) {
@@ -449,7 +436,7 @@ describe('ComposerPermissionModeMenuView', () => {
   // THERE IS NO INERT ARM, and that is this control's structural departure from both its neighbours. Their
   // ENTIRE entry list is a daemon-published list that can be absent or empty, so each renders a label that
   // opens nothing; this menu's vocabulary is client-owned and only ONE entry of it is conditional (#1022),
-  // so the list never falls below four and there is never nothing to offer. Every mode that renders at all
+  // so the list never falls below five and there is never nothing to offer. Every mode that renders at all
   // renders an operable trigger — pinned across the whole vocabulary plus the two readings the daemon can
   // invent, so a later "no options" arm has to argue with a test. The same floor is re-asserted over every
   // model-list shape in the auto-mode describe above.
@@ -462,7 +449,7 @@ describe('ComposerPermissionModeMenuView', () => {
 
   // The entries reach the SHARED panel: this menu's own static render cannot show an open panel
   // (useState(false)), so they are fed to the panel directly — the sibling files' idiom.
-  it('feeds the five settable modes to the shared panel with the current one marked (AC2)', () => {
+  it('feeds the six settable modes to the shared panel with the current one marked (AC2)', () => {
     const markup = panel('plan')
     expect(rowCount(markup)).toBe(SETTABLE_PERMISSION_MODES.length)
     for (const mode of SETTABLE_PERMISSION_MODES) {
@@ -472,20 +459,17 @@ describe('ComposerPermissionModeMenuView', () => {
     expect(markup).toContain(`aria-current="true">${rendered(PERMISSION_MODE_LABELS.plan)}<`)
   })
 
-  // AC2's bypass half through the panel, and the row-level proof that the escalation is not offered: five
-  // rows, none marked, and the bypass display name appears nowhere in the panel at all — while the trigger
-  // beside it is still naming that very mode.
-  it('offers five unmarked rows and no bypass row while the session is in bypass (AC2)', () => {
+  it('marks the bypass option when the confirmed session is in bypass', () => {
     const markup = panel(BYPASS)
     expect(rowCount(markup)).toBe(SETTABLE_PERMISSION_MODES.length)
-    expect(countOf(markup, 'aria-current')).toBe(0)
-    expect(markup).not.toContain(rendered(PERMISSION_MODE_LABELS[BYPASS]))
+    expect(countOf(markup, 'aria-current')).toBe(1)
+    expect(markup).toContain(`aria-current="true">${rendered(PERMISSION_MODE_LABELS[BYPASS])}<`)
     expect(view(BYPASS)).toContain(
       `<span class="composer__permission-label">${rendered(PERMISSION_MODE_LABELS[BYPASS])}</span>`
     )
   })
 
-  // The other half of the marking rule, for a mode the client cannot name: five rows, none marked, through
+  // The other half of the marking rule, for a mode the client cannot name: six rows, none marked, through
   // the panel's same no-special-case branch.
   it('marks no row when the session runs a mode this client does not know (AC2)', () => {
     const markup = panel('ultraPermissive')

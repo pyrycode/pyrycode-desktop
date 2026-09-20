@@ -229,8 +229,7 @@ const EFFORT_LEVELS_FIELD = 'effort_levels'
 // escapes ' → &#x27; (the #188/#279 lesson), so keeping the strings clean keeps them readable. This map
 // is the single source of the copy; each section reads its own key. The em-dash is not escaped.
 // `permissionMode` (#1021) is required by the total Record and RENDERS NOWHERE in this sheet, which
-// draws an error line only for its three sections and keeps the YOLO toggle as the sole way in and out
-// of bypass. It is type-satisfying, not a feature; #682's control is what will surface it.
+// draws an error line only for its three sections. The footer owns the permission-mode menu.
 const RUN_CONFIG_ERROR_COPY: Record<SettingsChange['field'], string> = {
   model: 'Could not change the model — try again.',
   effort: 'Could not change the effort — try again.',

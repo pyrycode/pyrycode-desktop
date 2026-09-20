@@ -41,7 +41,9 @@ export function subscribeConfirmedRunConfig(deps: {
   // Capture dispatch before either event subscriber removes the pending write.
   const offWrites = deps.writes.subscribe((next, previous) => {
     for (const [id, change] of next.pending) {
-      if (change.field === 'permissionMode' && !previous.pending.has(id)) pending.set(id, change.value)
+      if (previous.pending.has(id)) continue
+      if (change.field === 'permissionMode') pending.set(id, change.value)
+      if (change.field === 'yolo' && change.value) pending.set(id, 'bypassPermissions')
     }
   })
   const offEvents = deps.onDaemonEvent(event => {

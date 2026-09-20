@@ -194,7 +194,8 @@ test('remembered effort waits offline without consuming its attempt, and reconne
   await event(app, { type: 'sessionSettingsUpdated', changeId: (await read())[0].changeId })
   await connection(app, 'connecting')
   await settings(app, '')
-  await expect(page.locator('.composer__effort-label')).toHaveText('Effort')
+  // An unavailable applied reading keeps the saved choice visible.
+  await expect(page.locator('.composer__effort-label')).toHaveText('high')
   // Reconnect clears the prior confirmed overlay, so the empty snapshot becomes eligible.
   // While unavailable, a fresh conversation has no attempt or overlay to hide a bad apply.
   const fresh = { ...SEEDED_ROW, id: 'fresh-effort', name: 'Fresh effort' }

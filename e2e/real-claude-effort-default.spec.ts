@@ -85,21 +85,30 @@ test('applied effort, confirmed preference, restart and recall in chats and chan
       token: daemon.pairFields.token, server_static_pubkey: daemon.pairFields.server_static_pubkey
     }))
     await expect(page.locator('.channel-list__row-open')).toBeVisible({ timeout: 45_000 })
-    const originalName = 'Effort explicit seed'
     await page.locator('.channel-list__row-open').click()
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
-    // Give the seed a unique UI name before another unnamed chat exists.
-    await page.locator('.channel-list__chat-edit').click()
-    const edit = page.getByRole('dialog')
-    await edit.getByRole('textbox', { name: 'Channel name:', exact: true }).fill(originalName)
-    await edit.getByRole('button', { name: 'OK', exact: true }).click()
-    await expect(page.locator('.channel-list__row-open')).toHaveText(originalName)
     await turn(page, 1)
     const inherited = await refresh(page, proof)
     expect(inherited.effort).toBe('')
     expect(inherited.effectiveEffort, 'live daemon must report applied effort after a turn').not.toBeUndefined()
     expect(inherited.effectiveEffort).not.toBe('')
     expect(await page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBeNull()
+
+    // Pool.mintSettings copies the bootstrap's saved effort into new sessions. Keep that seed
+    // unset: choosing there would make later chats explicit already, so recall must not run.
+    const beforeCreate = proof.readings.length
+    await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
+    const unset = await showFresh(page, proof, beforeCreate)
+    expect(unset.conversationId).not.toBe(inherited.conversationId)
+    expect(unset.effort).toBe('')
+    const originalName = 'Effort explicit chat'
+    await page.locator('.channel-list__row').filter({
+      has: page.locator('.channel-list__row-open[aria-current="true"]')
+    }).locator('.channel-list__chat-edit').click()
+    const edit = page.getByRole('dialog')
+    await edit.getByRole('textbox', { name: 'Channel name:', exact: true }).fill(originalName)
+    await edit.getByRole('button', { name: 'OK', exact: true }).click()
+    await expect(page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText(originalName)
 
     await page.locator('.composer__effort').click()
     const panel = page.getByRole('menu', { name: 'Effort', exact: true })
@@ -115,13 +124,18 @@ test('applied effort, confirmed preference, restart and recall in chats and chan
     expect(selected.effort).toBe(picked)
     expect(await page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBe(picked)
     const originalId = selected.conversationId
+    await turn(page, 2)
+    const running = await refresh(page, proof)
+    expect(running.effectiveEffort).not.toBeUndefined()
+    expect(running.effectiveEffort).not.toBe('')
 
     // The shared lifecycle owns both processes and preserves the isolated profile.
     page = (await relaunch()).page
     proof = await observe(page)
     expect(await page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBe(picked)
-    await expect(page.locator('.channel-list__row-open')).toBeVisible({ timeout: 45_000 })
-    await page.locator('.channel-list__row-open').click()
+    const original = page.getByRole('button', { name: originalName, exact: true })
+    await expect(original).toBeVisible({ timeout: 45_000 })
+    await original.click()
     const restored = await showFresh(page, proof, 0)
     expect(restored.conversationId).toBe(originalId)
     expect(restored.effort).toBe(picked)
@@ -138,13 +152,18 @@ test('applied effort, confirmed preference, restart and recall in chats and chan
         await page.locator('.create-channel-overlay .modal__action--confirm').click()
       }
       await expect(page.locator('.bubble')).toHaveCount(0)
+      await expect.poll(() => proof.readings.length, { timeout: ROUNDTRIP }).toBeGreaterThan(before)
+      const opening = proof.readings[before]
+      expect(opening.conversationId).not.toBe(originalId)
+      expect(opening.conversationId).not.toBe(inherited.conversationId)
+      expect(opening.effort, 'recall requires an empty saved choice at opening').toBe('')
       await expect.poll(proof.confirmations, { timeout: ROUNDTRIP }).toBeGreaterThan(ackBefore)
       await expect.poll(() => proof.readings.slice(before).some(r => r.effort === picked), { timeout: ROUNDTRIP }).toBe(true)
       const recalled = await showFresh(page, proof, before)
       expect(recalled.conversationId).not.toBe(originalId)
       expect(recalled.effort).toBe(picked)
       expect(proof.confirmations()).toBe(ackBefore + 1)
-      await turn(page, kind === 'chat' ? 2 : 3)
+      await turn(page, kind === 'chat' ? 3 : 4)
       const applied = await refresh(page, proof)
       expect(applied.effectiveEffort).not.toBeUndefined()
       expect(applied.effectiveEffort).not.toBe('')
@@ -167,7 +186,7 @@ test('applied effort, confirmed preference, restart and recall in chats and chan
     const remembered = levels[otherIndex]
     expect(await page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBe(remembered)
     const beforeReopen = proof.readings.length
-    // The seed is the first chat row; the new channel belongs to the other tree.
+    // Reopen the named explicit chat independently of sidebar ordering.
     await page.getByRole('button', { name: originalName, exact: true }).click()
     const explicit = await showFresh(page, proof, beforeReopen)
     expect(explicit.conversationId).toBe(originalId)

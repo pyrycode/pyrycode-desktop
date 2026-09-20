@@ -237,3 +237,17 @@ describe('runConfigStore', () => {
     expect(store.getState().setSnapshot).toBe(before)
   })
 })
+
+
+it('replaces a previous applied reading with null or omission and clears on exit', () => {
+  const store = createRunConfigStore()
+  const base = { model: '', effort: 'saved', yolo: false, permissionMode: 'default', usedTokens: 0, windowTokens: 0 }
+  store.getState().setSnapshot({ ...base, effectiveEffort: 'applied' })
+  store.getState().setSnapshot({ ...base, effectiveEffort: null })
+  expect(store.getState().snapshot?.effectiveEffort).toBeNull()
+  store.getState().setSnapshot(base)
+  expect(store.getState().snapshot?.effectiveEffort).toBeUndefined()
+  expect(Object.prototype.hasOwnProperty.call(store.getState().snapshot, 'effectiveEffort')).toBe(false)
+  store.getState().clearSnapshot()
+  expect(store.getState().snapshot).toBeNull()
+})

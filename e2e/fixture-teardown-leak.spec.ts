@@ -96,3 +96,37 @@ test('a setup failure after launch still reaps the app and its user-data dir', a
   expect.soft(await waitForDeath(record.pid)).toBe(true)
   expect.soft(existsSync(record.userDataDir)).toBe(false)
 })
+
+for (const failAfterRestart of [false, true]) {
+  test(`same-profile relaunch reaps both apps on ${failAfterRestart ? 'failure' : 'success'}`, async () => {
+    test.setTimeout(TEST_TIMEOUT_MS)
+    const launched: Array<{ pid: number; userDataDir: string }> = []
+    const attempt = withIsolatedElectronApp(async (initial) => {
+      const firstPid = initial.app.process().pid
+      expect(firstPid).toBeDefined()
+      launched.push({ pid: firstPid!, userDataDir: initial.userDataDir })
+      await initial.page.evaluate(() => localStorage.setItem('pyry.lastEffort', 'low'))
+
+      const restarted = await initial.relaunch()
+      const nextPid = restarted.app.process().pid
+      expect(nextPid).toBeDefined()
+      launched.push({ pid: nextPid!, userDataDir: restarted.userDataDir })
+      expect(nextPid !== firstPid).toBe(true)
+      expect(await waitForDeath(firstPid!)).toBe(true)
+      expect(isAlive(nextPid!)).toBe(true)
+      expect(restarted.userDataDir === initial.userDataDir).toBe(true)
+      expect(existsSync(restarted.userDataDir)).toBe(true)
+      expect(await restarted.page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBe('low')
+      await expect(initial.relaunch()).rejects.toThrow('restart fixture: stale app handle')
+      if (failAfterRestart) throw new Error(SETUP_FAILURE_SENTINEL)
+    })
+
+    if (failAfterRestart) await expect(attempt).rejects.toThrow(SETUP_FAILURE_SENTINEL)
+    else await attempt
+    expect(launched).toHaveLength(2)
+    for (const record of launched) {
+      expect.soft(await waitForDeath(record.pid)).toBe(true)
+      expect.soft(existsSync(record.userDataDir)).toBe(false)
+    }
+  })
+}

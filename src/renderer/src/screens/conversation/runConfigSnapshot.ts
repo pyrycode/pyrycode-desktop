@@ -39,6 +39,7 @@ export function toRunConfigSnapshot(event: DaemonEvent): RunConfigSnapshot | nul
       return {
         model: event.model,
         effort: event.effort,
+        ...(event.effectiveEffort === undefined ? {} : { effectiveEffort: event.effectiveEffort }),
         yolo: event.yolo,
         permissionMode: event.permissionMode,
         usedTokens: event.used_tokens,

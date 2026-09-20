@@ -103,6 +103,7 @@ function sessionSettingsFrame(inReplyTo: number, sessionId: string, effort: stri
       session_id: sessionId,
       model: GRADED.value,
       effort,
+      effective_effort: effort,
       yolo: false,
       // Required since #1020 — a missing key is decode-rejected at runtime and reads as the controls
       // never mounting, which would make every assertion below vacuous.
@@ -144,6 +145,7 @@ test('a confirmed run-configuration override does not follow the operator into t
   // owns when B's reply lands and there is a window in which B has asked and heard nothing — the state
   // the operator is really in for one round trip after every switch.
   const requests: CapturedRequest[] = []
+  let saved = A_BASELINE
   const stateFake = conversationStateFake({ conversations: [SEED] })
   const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
     const envelope = decodeEnvelope(inbound)
@@ -151,13 +153,14 @@ test('a confirmed run-configuration override does not follow the operator into t
       const conversationId = (envelope.payload as { conversation_id: string }).conversation_id
       requests.push({ conversationId, envelopeId: envelope.id })
       return conversationId === SEED.id
-        ? [sessionSettingsFrame(envelope.id, SESSION_A, A_BASELINE)]
+        ? [sessionSettingsFrame(envelope.id, SESSION_A, saved)]
         : []
     }
     // The confirm is answered inline: this drive needs the override CONFIRMED, not optimistic. A pending
     // marker would also survive the switch on the broken build, but `confirmed` is the half no reply can
     // ever displace, so settling it here is what makes the seed the durable one.
     if (envelope.type === 'set_session_settings') {
+      saved = (envelope.payload as SetSessionSettingsPayload).effort ?? saved
       return [
         sessionSettingsUpdatedFrame(
           envelope.id,
@@ -210,7 +213,7 @@ test('a confirmed run-configuration override does not follow the operator into t
   // vacuously, and Playwright's auto-wait makes it a real wait rather than a race. On the broken build
   // A's confirmed override survives the switch, composes over B's absent snapshot, and this locator stays
   // mounted reading A_PICKED. ---
-  await expect(label).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(label).toHaveText('Effort', { timeout: ROUNDTRIP_TIMEOUT_MS })
 
   // --- 5. THE MUTATION CHECK, and it must come LAST. B's own reply — correlated to B's own request —
   // lands and mounts B's reading, which proves this drive was not asserting against a dead pipeline and

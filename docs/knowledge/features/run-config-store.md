@@ -1,8 +1,8 @@
 # Run configuration store
 
 The renderer's held copy of the active session's **Model / Effort / YOLO** settings — a dedicated,
-unidirectional Zustand store fed by an app-lifetime subscription and refreshed on two daemon-event
-edges, so the [Run configuration sheet](conversation-shell-run-configuration.md#run-configuration-sheet-177) can
+unidirectional Zustand store fed by an app-lifetime subscription and refreshed as conversations and
+settings change, so the [Run configuration sheet](conversation-shell-run-configuration.md#run-configuration-sheet-177) can
 display how the session is running. The store is now live app-wide (#810, see § Live outside the
 sheet below) rather than fed only by the sheet's own open transition.
 
@@ -144,19 +144,20 @@ Related.
 
 ## What it does
 
-Requests the session settings on four occasions — every time the Run configuration sheet opens,
-every rising edge to `connected`, every running → not-running turn transition (#810), and, since
-[#1166](https://github.com/pyrycode/pyrycode-desktop/issues/1166), every conversation activation
-(including a re-open of the chat already open) — and holds the arriving `model` / `effort` / `yolo` /
-`permissionMode` (#1020, see § Permission mode below) plus the two usage figures (#192) in a read-only
-store until the next one arrives. The fourth occasion fires the same `requestRunConfigSnapshot` sender as
-the sheet's own per-open request, from `PairedShell`'s activation seam rather than the sheet — see
-[Paired shell — conversation exits and stamps § The run-configuration and model-list
-ask](paired-shell-conversation-exits.md#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166).
-It exists because a chat that has never had a turn crosses none of the other three edges, so before #1166
-its footer controls and the sheet sat inert until one eventually fired; the daemon has answered a
-never-messaged conversation with its own bound `session_id` and stored values since pyrycode#2085, which
-is what made asking on open worth doing.
+Requests settings on sheet open, connection, turn completion, every conversation activation
+(including reopening the current chat), and a correlated successful effort write. Activation
+supplies the bound session and saved choices even before a first message; see the
+[activation seam](paired-shell-conversation-exits.md#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166).
+The [write bridge](run-settings-write-store.md#remembering-the-confirmed-level-1169) refreshes after
+remembering a confirmed effort choice, so an acknowledgement cannot substitute for an applied reading.
+
+The held snapshot separates saved `effort` from optional `effectiveEffort`. Omission means unavailable,
+null means Claude reports no model effort parameter, and strings (including empty) are preserved.
+Whole-snapshot replacement drops a prior reading when a later reply omits it. The
+[footer](composer-effort-menu.md) uses this reading with only a pending-write overlay; recall eligibility
+continues to use saved/pending/confirmed choices. Snapshot clearing and conversation attribution cover
+the effective reading together with the other fields, including across hosts.
+
 Deliberately **not** a [session store](session-store.md) facet: a settings arrival never touches
 connection/messages state and vice versa, so it re-renders only components selecting this slice.
 
@@ -167,6 +168,7 @@ connection/messages state and vice versa, so it re-renders only components selec
 ```ts
 export interface RunConfigSnapshot {
   model: string; effort: string; yolo: boolean
+  effectiveEffort?: string | null            // applied reading, independent of saved effort
   permissionMode: string                     // #1020 — '' means "no session was resolved"
   usedTokens: number; windowTokens: number   // #192 — windowTokens === 0 means "usage unavailable"
 }
@@ -241,7 +243,8 @@ path unit-tests with plain spies — no React, no store, no Electron:
 
 ```ts
 toRunConfigSnapshot(event: DaemonEvent): RunConfigSnapshot | null
-// runConfigReceived → {model, effort, yolo, permissionMode, usedTokens, windowTokens} verbatim
+// runConfigReceived → {model, effort, effectiveEffort?, yolo, permissionMode, usedTokens, windowTokens}
+// effectiveEffort preserves omission, null and strings; the other fields copy verbatim.
 // (explicit copy, not a spread — keeps the store shape immune to DaemonEvent gaining an unrelated
 // field later; the two usage figures map the wire snake_case used_tokens/window_tokens to the
 // store's camelCase — permissionMode is already camelCase on the event, #1020, and copies straight
@@ -388,7 +391,8 @@ turnState{id, idle}                → trigger: delete(id) — true (→ request
 
 sheet opens → <RunConfigData/> mounts → requestRunConfigSnapshot(sendCommand)   [one per open, unchanged]
 
-daemon → session_settings → runConfigReceived{sessionId,model,effort,yolo,permissionMode,used_tokens,window_tokens}
+correlated effort confirmation → RunSettingsWriteData → remember choice → requestSessionSettings
+daemon → session_settings → runConfigReceived{sessionId,model,effort,effectiveEffort?,yolo,permissionMode,used_tokens,window_tokens}
   → the one app-level listener → toRunConfigSnapshot → setSnapshot(s)  AND  toSnapshotSessionId → setSessionId(id)
   → runConfigStore                                          [most recent snapshot wins]
   → sessionIdStore                                          [id held verbatim, including '']
@@ -401,13 +405,10 @@ daemon → session_settings → runConfigReceived{sessionId,model,effort,yolo,pe
   `import { useRunConfigStore, selectSnapshot } from '@renderer/store/runConfigStore'`.
 - **Mount point:** `src/renderer/src/screens/conversation/ConversationScreen.tsx`, inside
   `<StatusSheet>` — `RunConfigData` (write) first, `RunConfigSections` (read, #188) second.
-- **Names the active conversation, since #946.** All three request sites — the sheet's own per-open
-  request, `runConfigLive.ts`'s two-edge refresh, and, since #1166, `PairedShell`'s activation seam —
-  resolve or receive the conversation id and send nothing when it is unaddressable; the first two resolve
-  `activeConversationStore.getState().activeConversation?.id ?? null` at call time (see § Conversation-keyed
-  since 2026-08-20 above), while the third is handed `conversation.id` directly by `activateConversation`,
-  which never reaches a caller with nothing to name. `MILESTONE_CONVERSATION_ID` (`composerSend.ts`) is
-  not read by this path.
+- **Names the active conversation.** Sheet-open, live refresh and effort-confirmation requests resolve
+  `activeConversationStore.getState().activeConversation?.id ?? null` at invocation. Activation passes
+  `conversation.id` directly. `requestRunConfigSnapshot` sends nothing for an unaddressable id;
+  `MILESTONE_CONVERSATION_ID` is not read by this path.
 
 ## Running model section (#560, resolved onto the published rows by #975)
 

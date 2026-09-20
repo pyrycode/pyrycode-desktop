@@ -86,6 +86,7 @@ function runConfigFrame(inReplyTo: number, sessionId: string): Uint8Array {
       session_id: sessionId,
       model: GRADED.value,
       effort: BASELINE_EFFORT,
+      effective_effort: BASELINE_EFFORT,
       yolo: false,
       permission_mode: 'default',
       used_tokens: 50_000,
@@ -241,7 +242,7 @@ test('an idle-eviction marker for another chat never steers this chat’s settin
   // is B's whether or not the gate exists, so a drive that only read the end state would pass with the
   // gate deleted. ---
   daemon.pushFrame(sessionTransitionFrame(requestB!.conversationId, SESSION_B_ROTATED))
-  await trigger(FIRST_PICK).click()
+  await trigger(BASELINE_EFFORT).click()
   await expect(panel).toBeVisible()
   await panel.getByRole('menuitem', { name: SECOND_PICK, exact: true }).click()
   await expect

@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util'
-import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { test, expect, SEEDED_ROW, SECOND_SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type {
   Envelope,
@@ -83,6 +83,7 @@ const BASELINE_RUN_CONFIG: SessionSettingsPayload = {
   session_id: SESSION_ID,
   model: GRADED.value,
   effort: BASELINE_EFFORT,
+  effective_effort: BASELINE_EFFORT,
   yolo: false,
   // Required since #1020 — see the note on run-config-settings.spec.ts's baseline: a missing key is
   // decode-rejected at runtime and reads as the controls never mounting.
@@ -91,13 +92,13 @@ const BASELINE_RUN_CONFIG: SessionSettingsPayload = {
   window_tokens: 200_000
 }
 
-function sessionSettingsFrame(inReplyTo: number): Uint8Array {
+function sessionSettingsFrame(inReplyTo: number, effort = BASELINE_EFFORT): Uint8Array {
   return encodeEnvelope({
     id: REPLY_ENVELOPE_ID,
     type: 'session_settings',
     ts: FIXED_TS,
     in_reply_to: inReplyTo,
-    payload: BASELINE_RUN_CONFIG
+    payload: { ...BASELINE_RUN_CONFIG, effort, effective_effort: effort }
   })
 }
 
@@ -156,6 +157,7 @@ function modelListFrame(models: readonly WireModelOption[]): Uint8Array {
  * closure stays stateless: the one scripted rejection is keyed to the level the spec picks last.
  */
 function capturingFake(captured: Envelope[]): (inbound: Uint8Array) => Uint8Array[] {
+  let applied = BASELINE_EFFORT
   return (inbound) => {
     const env = decodeEnvelope(inbound)
     captured.push(env)
@@ -163,13 +165,16 @@ function capturingFake(captured: Envelope[]): (inbound: Uint8Array) => Uint8Arra
       case 'list_conversations':
         return [seedConversationsFrame()]
       case 'request_session_settings':
-        return [sessionSettingsFrame(env.id)]
+        return [sessionSettingsFrame(env.id, applied)]
       // The rejected change is answered by the TEST BODY rather than here, and that is what makes the
       // optimistic overlay observable at all: this fake runs in-process over a loopback forwarder, so a
       // reply returned here lands within the same frame the click did and the intermediate state is gone
       // before any assertion can see it. Withholding the reply parks the change in flight until the body
       // pushes a correlated error — the daemon does send that frame, and only its TIMING is the test's.
       case 'set_session_settings':
+        if ((env.payload as SetSessionSettingsPayload).effort !== REJECTED_EFFORT) {
+          applied = (env.payload as SetSessionSettingsPayload).effort ?? applied
+        }
         return (env.payload as SetSessionSettingsPayload).effort === REJECTED_EFFORT
           ? []
           : [sessionSettingsUpdatedFrame(env.id)]
@@ -314,15 +319,17 @@ for (const model of [GRADED.value, '']) {
   }) => {
     const captured: Envelope[] = []
     const fake = capturingFake(captured)
+    let saved = ''
     const { page, daemon, forwarder } = await launchPairedApp({
       buildReplyFrames: (bytes) => {
         const env = decodeEnvelope(bytes)
+        if (env.type === 'set_session_settings' && (env.payload as SetSessionSettingsPayload).effort === HAPPY_EFFORT) saved = HAPPY_EFFORT
         if (env.type !== 'request_session_settings') return fake(bytes)
         captured.push(env)
         return [encodeEnvelope({
           id: REPLY_ENVELOPE_ID, type: 'session_settings', ts: FIXED_TS,
           in_reply_to: env.id,
-          payload: { ...BASELINE_RUN_CONFIG, model, effort: '' }
+          payload: { ...BASELINE_RUN_CONFIG, model, effort: saved, effective_effort: saved ? BASELINE_EFFORT : undefined }
         })]
       }
     })
@@ -332,14 +339,14 @@ for (const model of [GRADED.value, '']) {
     const writes = () => captured.filter(e => e.type === 'set_session_settings')
     // The permission control establishes that the empty-effort snapshot has rendered.
     await expect(page.locator('.composer__permission')).toBeVisible()
-    await expect(label).toHaveCount(0)
+    await expect(label).toHaveText('Effort')
     daemon.pushFrame(modelListFrame([{ ...GRADED, value: model || 'default' }]))
     await expect(trigger).toHaveText('Effort')
     await trigger.click()
     await expect(panel.getByRole('menuitem')).toHaveText(['brisk', 'steady', 'deep'])
     await expect(panel.locator('[aria-current="true"]')).toHaveCount(0)
     expect(writes()).toHaveLength(0)
-    await page.screenshot({ path: `/tmp/builder-1528-visual/unset-${model ? 'explicit' : 'inherited'}.png`, animations: 'disabled' })
+    await page.screenshot({ path: `/tmp/builder-1549-visual/unset-${model ? 'explicit' : 'inherited'}.png`, animations: 'disabled' })
 
     await panel.getByRole('menuitem', { name: REJECTED_EFFORT, exact: true }).click()
     await expect(label).toHaveText(REJECTED_EFFORT)
@@ -352,17 +359,68 @@ for (const model of [GRADED.value, '']) {
     await trigger.click()
     await expect(panel.locator('[aria-current="true"]')).toHaveCount(0)
     await panel.getByRole('menuitem', { name: HAPPY_EFFORT, exact: true }).click()
-    await expect(label).toHaveText(HAPPY_EFFORT)
+    await expect(label).toHaveText(BASELINE_EFFORT)
     await expect.poll(() => settingsFramesMatching(captured, {
       session_id: SESSION_ID, effort: HAPPY_EFFORT
     })).toBe(1)
     await trigger.click()
-    await expect(panel.locator('[aria-current="true"]')).toHaveText(HAPPY_EFFORT)
+    await expect(panel.locator('[aria-current="true"]')).toHaveText(BASELINE_EFFORT)
 
     forwarder.closeClientLeg(4401)
     await expect(trigger).toHaveCount(0)
     await expect(panel).toHaveCount(0)
-    await expect(label).toHaveText(HAPPY_EFFORT)
+    await expect(label).toHaveText(BASELINE_EFFORT)
     expect(writes()).toHaveLength(2)
   })
 }
+
+
+test('applied readings remain isolated across hosts, with null, omitted and empty reads', async ({ launchPairedApp }) => {
+  let reading: string | null | undefined = null
+  const requests: number[] = []
+  const sent: string[] = []
+  let holdFirst = false
+  const first = (bytes: Uint8Array): Uint8Array[] => {
+    const env = decodeEnvelope(bytes)
+    sent.push(env.type)
+    if (env.type === 'request_session_settings') {
+      requests.push(env.id)
+      if (holdFirst) return []
+    }
+    return capturingFake([])(bytes)
+  }
+  const second = (bytes: Uint8Array): Uint8Array[] => {
+    const env = decodeEnvelope(bytes)
+    sent.push(env.type)
+    if (env.type === 'list_conversations') return [seedConversationsFrame(SECOND_SEEDED_ROW)]
+    if (env.type !== 'request_session_settings') return []
+    return [encodeEnvelope({ id: 1, type: 'session_settings', ts: FIXED_TS, in_reply_to: env.id,
+      payload: { ...BASELINE_RUN_CONFIG, session_id: 'second-session', effort: 'saved-elsewhere', effective_effort: reading } })]
+  }
+  const { page, daemon } = await launchPairedApp({ buildReplyFrames: first }, { secondServer: { buildReplyFrames: second } })
+  const label = page.locator('.composer__effort-label')
+  await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await expect(label).toHaveText(BASELINE_EFFORT)
+  holdFirst = true
+  const before = requests.length
+  await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await expect.poll(() => requests.length).toBeGreaterThan(before)
+  const delayed = requests[requests.length - 1]
+  await page.getByRole('button', { name: SECOND_SEEDED_ROW.name!, exact: true }).click()
+  await expect(label).toHaveText('Effort')
+  await expect(label).toHaveAttribute('title', 'Claude reports no model effort parameter.')
+  // A delayed response from the previous host must never supply B's applied value.
+  daemon.pushFrame(sessionSettingsFrame(delayed, 'foreign-reading'))
+  for (const value of [undefined, '', 'second-applied'] as const) {
+    reading = value
+    await page.getByRole('button', { name: SECOND_SEEDED_ROW.name!, exact: true }).click()
+    await expect(label).toHaveText(value || 'Effort')
+    if (!value) await expect(label).toHaveAttribute('title', 'Claude default; applied effort is unavailable.')
+  }
+  holdFirst = false
+  await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await expect(label).toHaveText(BASELINE_EFFORT)
+  expect(sent).not.toContain('set_session_settings')
+  expect(sent).not.toContain('send_message')
+  expect(await page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBeNull()
+})

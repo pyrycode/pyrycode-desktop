@@ -5133,6 +5133,7 @@ describe('ConversationScreen — store binding', () => {
       snapshot: {
         model: 'seeded-session-model',
         effort: 'seeded-session-effort',
+        effectiveEffort: 'seeded-session-effort',
         yolo: false,
         permissionMode: 'default',
         usedTokens: 168000,
@@ -5183,6 +5184,7 @@ describe('ConversationScreen — store binding', () => {
       snapshot: {
         model: 'seeded-session-model',
         effort: 'seeded-session-effort',
+        effectiveEffort: 'seeded-session-effort',
         yolo: false,
         permissionMode: 'acceptEdits',
         usedTokens: 168000,
@@ -5254,6 +5256,7 @@ describe('ConversationScreen — store binding', () => {
       snapshot: {
         model: 'seeded-session-model',
         effort: 'seeded-session-effort',
+        effectiveEffort: 'seeded-session-effort',
         yolo: false,
         permissionMode: 'acceptEdits',
         usedTokens: 168000,

@@ -23,7 +23,7 @@ async function connection(app: PairedApp, type: string, serverId = FIRST_SERVER_
 
 async function settings(app: PairedApp, effort = 'low', conversationId = SEEDED_ROW.id, sessionId = 'settings-session'): Promise<void> {
   await event(app, { type: 'runConfigReceived', serverId: FIRST_SERVER_ID, conversationId,
-    sessionId, model: 'opus', effort, yolo: false, permissionMode: 'default',
+    sessionId, model: 'opus', effort, effectiveEffort: effort, yolo: false, permissionMode: 'default',
     used_tokens: 100, window_tokens: 1000 })
   await event(app, { type: 'modelList', serverId: FIRST_SERVER_ID, conversationId, models: MODELS, droppedModels: 0 })
 }
@@ -174,7 +174,7 @@ test('remembered effort waits offline without consuming its attempt, and reconne
   await event(app, { type: 'sessionSettingsUpdated', changeId: (await read())[0].changeId })
   await connection(app, 'connecting')
   await settings(app, '')
-  await expect(page.locator('.composer__effort-label')).toHaveText('high')
+  await expect(page.locator('.composer__effort-label')).toHaveText('Effort')
   // Reconnect clears the prior confirmed overlay, so the empty snapshot becomes eligible.
   // While unavailable, a fresh conversation has no attempt or overlay to hide a bad apply.
   const fresh = { ...SEEDED_ROW, id: 'fresh-effort', name: 'Fresh effort' }

@@ -1,9 +1,11 @@
 import { useMemo } from 'react'
 import { ComposerOptionsMenu, type ComposerOptionsPanelOption } from './ComposerOptionsPanel'
 import { useModelListStore, selectModelListFor, type ModelListEntry } from '../../store/modelListStore'
-import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
+import { useRunConfigStore, selectSnapshot, type RunConfigSnapshot } from '../../store/runConfigStore'
 import { useSessionIdStore, selectSessionId } from '../../store/sessionIdStore'
-import { useRunSettingsWriteStore, selectEffectiveSettings } from '../../store/runSettingsWriteStore'
+import {
+  useRunSettingsWriteStore, selectEffectiveSettings, type RunSettingsWriteState
+} from '../../store/runSettingsWriteStore'
 import { effortRowFor, useSessionSettingsConnected, changeConnectedSetting } from './RunConfigSections'
 import { isAddressableSessionId } from './runSettingsControls'
 
@@ -14,7 +16,7 @@ import { isAddressableSessionId } from './runSettingsControls'
 // return — is ComposerOptionsMenu's. It adds NO prop to that component: four consumers share it.
 //
 // It assembles rather than invents. The panel is #838/#839/#840's, the levels are #974's, the write is
-// #256's and the match rule is #560/#975/#976's — this file is the wiring plus the three renderings.
+// #256's and the match rule is #560/#975/#976's; applied display is independent of saved choice.
 //
 // WHERE IT DEPARTS FROM ITS NEIGHBOUR is worth stating once, because the two look interchangeable: the
 // model trigger LOOKS UP its label (a row's display_name, joined on the session's model), while this
@@ -58,69 +60,16 @@ export interface ComposerEffortMenuModel {
   currentId: string
 }
 
-/**
- * The whole decision, as a pure function of the three inputs — so every rule below is unit-testable as
- * data rather than only through markup (ComposerModelMenu's property, and the only way a menu whose
- * entries are the daemon's can be asserted at all under a static render that cannot open the panel).
- *
- * THREE RENDERINGS:
- *
- *   unset effort, no levels          → null           nothing known or offered
- *   known effort, no levels          → no options     read-only label
- *   published levels                 → the menu       Effort label while unset
- *
- * THE SECOND IS ONE ARM COVERING ALL THREE nothing-to-offer readings — no frame has arrived for the
- * conversation, the session's model matches no published row, and the matched row publishes an empty
- * list. `effort_levels` collapses absent, null and [] into one position by wire contract, precisely
- * because a client's behaviour is identical for all three, so there is one case here and not two.
- *
- * AND NEVER A FALLBACK. An absent, unmatched or empty list must not mean "offer every level": there is
- * no level list in this repo to fall back to — #976 deleted the last one — and re-minting one here
- * would put a second copy of the vocabulary back in the place it was removed from.
- *
- * THE ROW IS THE SESSION'S MODEL, resolved by exact equality on `value` — the same string and the same
- * rule EffortSection and the model trigger both join. No family derivation, no substring, prefix, case
- * fold or trim anywhere on this path — `value` is an argument (`default`, `sonnet`, `opus[1m]`), not a
- * parseable identifier.
- *
- * #1168 MOVED THAT LOOKUP FROM publishedRowFor TO effortRowFor, the one home the two EFFORT surfaces
- * share, and it is the whole of that slice here. An empty model is the wire's inherited daemon default
- * rather than an absence, and it now resolves the row the daemon publishes for that default instead of
- * missing every row — so an unconfigured chat reaches the MENU rendering above where it used to reach
- * the inert one permanently, which measured live is the common case rather than an edge. Nothing else
- * moved in that lookup: with no inherited-default row published it still resolves nothing and
- * keeps a known effort read-only. The three OTHER callers of publishedRowFor keep missing on an empty
- * model deliberately —
- * effortRowFor's docblock names them and why, one being the permission-mode trigger beside this one.
- *
- * `?? []` guards the shape rather than the type: `effort_levels` is a non-optional `string[]`, but
- * WireModelOption's docblock records that a frame reached through a bare `as` can yield undefined, and
- * EffortSection writes the same expression for the same reason.
- *
- * `truncated_fields` is deliberately NOT read. The shared panel's option is { id, label } with one text
- * child, so a cut report here would need either a new prop on a component four tickets share
- * (forbidden) or client copy fused into a daemon-authored node (rejected in EffortSection's cut-marker
- * rationale). A cut-to-nothing list therefore collapses into the inert arm beside no-list-yet, and the
- * run-configuration sheet remains the surface that reports both readings.
- *
- * The entries are EXACTLY the published levels, in the daemon's order — nothing deduped, dropped,
- * reordered or synthesised. `id` is the level itself, so onSelect(id) submits it with no lookup. A
- * REPEATED published level is therefore a duplicate React key in a panel that takes no new prop: it is
- * carried anyway, because AC2's "exactly the published levels" outranks a tidier list and both entries
- * submit the identical string, so the pick is still correct. EffortSection reaches the same conclusion
- * by keying on the array index, which the shared panel does not offer; the panel's key is #838's and is
- * not reopened here.
- */
+/** Resolve published choices independently of the nullable applied reading. */
 export function composerEffortMenuModel(
   models: ModelListEntry | null | undefined,
   model: string,
-  effort: string
-): ComposerEffortMenuModel | null {
+  effort: string | null | undefined
+): ComposerEffortMenuModel {
   const levels = effortRowFor(models, model)?.effort_levels ?? []
-  if (effort === '' && levels.length === 0) return null
   return {
     label: effort || COMPOSER_EFFORT_MENU_LABEL,
-    currentId: effort,
+    currentId: effort ?? '',
     options: levels.map((level) => ({ id: level, label: level }))
   }
 }
@@ -154,12 +103,14 @@ export function ComposerEffortMenuView({
   onSelect
 }: {
   model: string
-  effort: string
+  effort: string | null | undefined
   models: ModelListEntry | null
   onSelect?: (level: string) => void
 }): JSX.Element | null {
   const menu = composerEffortMenuModel(models, model, effort)
-  if (menu === null) return null
+  const description = effort === null
+    ? 'Claude reports no model effort parameter.'
+    : !effort ? 'Claude default; applied effort is unavailable.' : undefined
 
   // AC3. Not `options={[]}` through the shared menu, which would advertise a popup and open an empty
   // panel: an inert element with no role, no tabindex and no handler — the sheet's own
@@ -169,7 +120,7 @@ export function ComposerEffortMenuView({
   if (!onSelect || menu.options.length === 0) {
     return (
       <span className="composer__footer-button">
-        <span className="composer__effort-label">{menu.label}</span>
+        <span className="composer__effort-label" title={description}>{menu.label}</span>
       </span>
     )
   }
@@ -185,7 +136,7 @@ export function ComposerEffortMenuView({
       ariaLabel={COMPOSER_EFFORT_MENU_LABEL}
       triggerContent={
         <>
-          <span className="composer__effort-label">{menu.label}</span>
+          <span className="composer__effort-label" title={description}>{menu.label}</span>
           {/* aria-hidden is load-bearing: the trigger carries no aria-label, so its accessible name is
               computed from its contents — and there is no client-owned constant to fall back on, so the
               e2e locator matches this label exactly. */}
@@ -240,16 +191,14 @@ export function ComposerEffortMenu({
   )
   const models = useModelListStore(selectModels)
 
-  // The pending optimistic overlay > the client-confirmed override > the snapshot base. This
-  // composition is also what moves the label to the picked level at once and what reverts it when the
-  // store drops the pending record on a rejection — there is no local state here, and there must not
-  // be: a second copy of the displayed value could disagree with the sheet's.
+  // Capability lookup uses the explicit model choice; effort display uses the applied reading.
   const effective = selectEffectiveSettings(snapshot, writeState)
+  const appliedEffort = selectAppliedEffort(snapshot, writeState)
 
   return (
     <ComposerEffortMenuView
       model={effective.model}
-      effort={effective.effort}
+      effort={appliedEffort}
       models={models}
       // An arrow, so `window.pyry` is dereferenced at INTERACTION time and never during render —
       // hoisting it (or the deps object) would move the dereference into the render path, where
@@ -263,4 +212,17 @@ export function ComposerEffortMenu({
         : undefined}
     />
   )
+}
+
+
+/** A pending pick is optimistic; a confirmed choice never masks Claude's applied reading. */
+export function selectAppliedEffort(
+  snapshot: RunConfigSnapshot | null,
+  writes: RunSettingsWriteState
+): string | null | undefined {
+  let effort = snapshot?.effectiveEffort
+  for (const change of writes.pending.values()) {
+    if (change.field === 'effort') effort = change.value
+  }
+  return effort
 }

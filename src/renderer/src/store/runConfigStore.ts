@@ -37,6 +37,8 @@ import { useStore } from 'zustand'
 export interface RunConfigSnapshot {
   model: string
   effort: string
+  /** Applied reading: omission is unavailable; null means no model effort parameter. */
+  effectiveEffort?: string | null
   yolo: boolean
   permissionMode: string
   usedTokens: number

@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { WireModelOption } from '@shared/wire/types'
 import type { ModelListEntry } from '../../store/modelListStore'
 import {
-  selectAppliedEffort,
+  selectDisplayedEffort,
   ComposerEffortMenuView,
   COMPOSER_EFFORT_MENU_LABEL,
   composerEffortMenuModel
@@ -386,7 +386,7 @@ it('shows applied readings over saved and confirmed choices, with pending-only r
   const writes = store.getState()
   const snapshot: RunConfigSnapshot = { model: GRADED.value, effort: 'saved', effectiveEffort: 'applied',
     yolo: false, permissionMode: 'default', usedTokens: 0, windowTokens: 0 }
-  const reading = () => selectAppliedEffort(snapshot, store.getState())
+  const reading = () => selectDisplayedEffort(snapshot, store.getState())
   writes.dispatch({ type: 'changeDispatched', changeId: 'old', change: { field: 'effort', value: 'confirmed' } })
   writes.dispatch({ type: 'settingsConfirmed', changeId: 'old' })
   expect(reading()).toBe('applied')
@@ -394,11 +394,42 @@ it('shows applied readings over saved and confirmed choices, with pending-only r
   expect(reading()).toBe('pending')
   writes.dispatch({ type: 'settingsRejected', changeId: 'new' })
   expect(reading()).toBe('applied')
-  expect(selectAppliedEffort({ ...snapshot, effectiveEffort: null }, store.getState())).toBeNull()
+  expect(selectDisplayedEffort({ ...snapshot, effectiveEffort: null }, store.getState())).toBeNull()
   writes.dispatch({ type: 'conversationSwitched' })
-  expect(selectAppliedEffort(null, store.getState())).toBeUndefined()
+  expect(selectDisplayedEffort(null, store.getState())).toBeUndefined()
 })
 
+
+it.each([undefined, ''])('keeps a confirmed choice when the applied reading is %s', effectiveEffort => {
+  const store = createRunSettingsWriteStore()
+  const snapshot: RunConfigSnapshot = { model: GRADED.value, effort: '', effectiveEffort,
+    yolo: false, permissionMode: 'default', usedTokens: 0, windowTokens: 0 }
+  const dispatch = store.getState().dispatch
+  dispatch({ type: 'changeDispatched', changeId: 'pick', change: { field: 'effort', value: EFFORT } })
+  expect(selectDisplayedEffort(snapshot, store.getState())).toBe(EFFORT)
+  dispatch({ type: 'settingsConfirmed', changeId: 'pick' })
+  expect(selectDisplayedEffort(snapshot, store.getState())).toBe(EFFORT)
+  const refreshed = { ...snapshot, effort: EFFORT }
+  expect(selectDisplayedEffort(refreshed, store.getState())).toBe(EFFORT)
+
+  dispatch({ type: 'changeDispatched', changeId: 'refused', change: { field: 'effort', value: LEVELS[0] } })
+  dispatch({ type: 'settingsRejected', changeId: 'refused' })
+  expect(selectDisplayedEffort(refreshed, store.getState())).toBe(EFFORT)
+  dispatch({ type: 'conversationSwitched' })
+  expect(selectDisplayedEffort(null, store.getState())).toBeUndefined()
+  // Reopening the chat restores the server's saved choice without a client override.
+  expect(selectDisplayedEffort(refreshed, store.getState())).toBe(EFFORT)
+  expect(selectDisplayedEffort({ ...refreshed, effectiveEffort: LEVELS[0] }, store.getState())).toBe(LEVELS[0])
+  expect(selectDisplayedEffort({ ...refreshed, effectiveEffort: null }, store.getState())).toBeNull()
+})
+
+it('describes a selected value without claiming an applied reading', () => {
+  const html = renderToStaticMarkup(<ComposerEffortMenuView
+    model={GRADED.value} effort={EFFORT} models={LIST} onSelect={noop} selectedOnly
+  />)
+  expect(html).toContain(EFFORT)
+  expect(html).toContain('title="Selected effort; applied effort is unavailable."')
+})
 
 it('escapes an applied reading without putting it in any attribute', () => {
   const hostile = '<img src=x onerror=alert(1)>'

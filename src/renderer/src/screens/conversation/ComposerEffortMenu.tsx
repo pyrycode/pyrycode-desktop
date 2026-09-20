@@ -100,17 +100,20 @@ export function ComposerEffortMenuView({
   model,
   effort,
   models,
-  onSelect
+  onSelect,
+  selectedOnly = false
 }: {
   model: string
   effort: string | null | undefined
   models: ModelListEntry | null
   onSelect?: (level: string) => void
+  selectedOnly?: boolean
 }): JSX.Element | null {
   const menu = composerEffortMenuModel(models, model, effort)
   const description = effort === null
     ? 'Claude reports no model effort parameter.'
-    : !effort ? 'Claude default; applied effort is unavailable.' : undefined
+    : !effort ? 'Claude default; applied effort is unavailable.'
+      : selectedOnly ? 'Selected effort; applied effort is unavailable.' : undefined
 
   // AC3. Not `options={[]}` through the shared menu, which would advertise a popup and open an empty
   // panel: an inert element with no role, no tabindex and no handler — the sheet's own
@@ -191,14 +194,15 @@ export function ComposerEffortMenu({
   )
   const models = useModelListStore(selectModels)
 
-  // Capability lookup uses the explicit model choice; effort display uses the applied reading.
+  // Keep a saved choice visible before launch; a reported applied value takes precedence.
   const effective = selectEffectiveSettings(snapshot, writeState)
-  const appliedEffort = selectAppliedEffort(snapshot, writeState)
+  const displayedEffort = selectDisplayedEffort(snapshot, writeState)
 
   return (
     <ComposerEffortMenuView
       model={effective.model}
-      effort={appliedEffort}
+      effort={displayedEffort}
+      selectedOnly={snapshot?.effectiveEffort === undefined || snapshot.effectiveEffort === ''}
       models={models}
       // An arrow, so `window.pyry` is dereferenced at INTERACTION time and never during render —
       // hoisting it (or the deps object) would move the dereference into the render path, where
@@ -215,12 +219,16 @@ export function ComposerEffortMenu({
 }
 
 
-/** A pending pick is optimistic; a confirmed choice never masks Claude's applied reading. */
-export function selectAppliedEffort(
+/** Keep the selected value when no applied reading exists, including before the first message.
+ * Explicit null means Claude reports no effort parameter and must not fall back to a saved choice. */
+export function selectDisplayedEffort(
   snapshot: RunConfigSnapshot | null,
   writes: RunSettingsWriteState
 ): string | null | undefined {
   let effort = snapshot?.effectiveEffort
+  if (effort === undefined || effort === '') {
+    effort = (writes.confirmed.effort ?? snapshot?.effort) || effort
+  }
   for (const change of writes.pending.values()) {
     if (change.field === 'effort') effort = change.value
   }

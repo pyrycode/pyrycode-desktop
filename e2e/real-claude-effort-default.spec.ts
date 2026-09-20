@@ -7,8 +7,8 @@ import type { DaemonEvent } from '../src/shared/ipc/events'
 
 // The bootstrap turn populates the daemon's model-list fallback for never-messaged conversations.
 // Observe real settings replies and acknowledgements; no store injection or optimistic-label proof.
-// The dispatcher owns execution with a daemon containing pyrycode#2517 and its existing credential.
-test.use({ seedPromoted: false })
+// Use an effort-capable model: the fixture's default Haiku reports a null effort parameter.
+test.use({ seedPromoted: false, claudeModel: 'opus' })
 const ROUNDTRIP = 15_000
 const TURN = 120_000
 
@@ -58,7 +58,8 @@ async function turn(page: Page, number: number): Promise<void> {
 async function showFresh(page: Page, proof: Awaited<ReturnType<typeof observe>>, after: number): Promise<Reading> {
   await expect.poll(() => proof.readings.length, { timeout: ROUNDTRIP }).toBeGreaterThan(after)
   const reading = proof.readings[proof.readings.length - 1]
-  await expect(page.locator('.composer__effort-label')).toHaveText(reading.effectiveEffort || 'Effort')
+  const expected = reading.effectiveEffort === null ? 'Effort' : reading.effectiveEffort || reading.effort || 'Effort'
+  await expect(page.locator('.composer__effort-label')).toHaveText(expected)
   return reading
 }
 
@@ -91,6 +92,7 @@ test('applied effort, confirmed preference, restart and recall in chats and chan
     const inherited = await refresh(page, proof)
     expect(inherited.effort).toBe('')
     expect(inherited.effectiveEffort, 'live daemon must report applied effort after a turn').not.toBeUndefined()
+    expect(inherited.effectiveEffort).not.toBeNull()
     expect(inherited.effectiveEffort).not.toBe('')
     expect(await page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBeNull()
 
@@ -122,12 +124,18 @@ test('applied effort, confirmed preference, restart and recall in chats and chan
     await expect.poll(proof.confirmations, { timeout: ROUNDTRIP }).toBeGreaterThan(ackBeforePick)
     const selected = await showFresh(page, proof, beforePick)
     expect(selected.effort).toBe(picked)
+    expect(selected.effectiveEffort).toBeUndefined()
+    await expect(page.locator('.composer__effort-label')).toHaveText(picked)
+    await expect(page.locator('.composer__effort-label')).toHaveAttribute('title', 'Selected effort; applied effort is unavailable.')
+    await page.locator('.composer__effort').click()
+    await expect(panel.locator('[aria-current="true"]')).toHaveText(picked)
+    await page.keyboard.press('Escape')
+    await expect(page.locator('[data-thread-role="user"]')).toHaveCount(0)
     expect(await page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBe(picked)
     const originalId = selected.conversationId
     await turn(page, 2)
     const running = await refresh(page, proof)
-    expect(running.effectiveEffort).not.toBeUndefined()
-    expect(running.effectiveEffort).not.toBe('')
+    expect(running.effectiveEffort).toBe(picked)
 
     // The shared lifecycle owns both processes and preserves the isolated profile.
     page = (await relaunch()).page
@@ -162,11 +170,12 @@ test('applied effort, confirmed preference, restart and recall in chats and chan
       const recalled = await showFresh(page, proof, before)
       expect(recalled.conversationId).not.toBe(originalId)
       expect(recalled.effort).toBe(picked)
+      expect(recalled.effectiveEffort).toBeUndefined()
+      await expect(page.locator('.composer__effort-label')).toHaveText(picked)
       expect(proof.confirmations()).toBe(ackBefore + 1)
       await turn(page, kind === 'chat' ? 3 : 4)
       const applied = await refresh(page, proof)
-      expect(applied.effectiveEffort).not.toBeUndefined()
-      expect(applied.effectiveEffort).not.toBe('')
+      expect(applied.effectiveEffort).toBe(picked)
       expect(applied.effort).toBe(picked)
       expect(proof.confirmations()).toBe(ackBefore + 1)
       await expect(page.locator('[data-thread-role="user"]')).not.toContainText('/effort')

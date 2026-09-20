@@ -23,8 +23,9 @@ export function subscribeConfirmedRunConfig(deps: {
   let timer: ReturnType<typeof setInterval> | undefined
   let awaiting = false
   const stop = () => { clearInterval(timer); timer = undefined; target = null }
+  // Reset and replacement invalidate readings without erasing each other's guards.
   const invalidate = () => {
-    stop(); pending.clear(); expectedSession = null; resetting = false
+    stop(); pending.clear(); awaiting = false
     const snapshot = deps.config.getState().snapshot
     if (snapshot !== null) deps.config.getState().setSnapshot({ ...snapshot, permissionMode: '' })
     deps.log('invalidated')
@@ -33,6 +34,7 @@ export function subscribeConfirmedRunConfig(deps: {
     const next = deps.getContext()
     if (next.conversationId !== context.conversationId || next.serverId !== context.serverId) {
       context = next
+      expectedSession = null; resetting = false
       invalidate()
     }
   })
@@ -44,8 +46,9 @@ export function subscribeConfirmedRunConfig(deps: {
   })
   const offEvents = deps.onDaemonEvent(event => {
     if (!context.conversationId || !context.serverId || event.serverId !== context.serverId) return
-    if (event.type === 'connected') { invalidate(); return }
+    if (event.type === 'connected') { expectedSession = null; resetting = false; invalidate(); return }
     if (event.type === 'resetting' && event.conversationId === context.conversationId) {
+      if (event.active && !resetting) expectedSession = null
       invalidate(); resetting = event.active
       if (!resetting) deps.refresh()
       return
@@ -53,7 +56,7 @@ export function subscribeConfirmedRunConfig(deps: {
     if (event.type === 'sessionTransition' && event.conversationId === context.conversationId) {
       invalidate(); expectedSession = event.newSessionId
       deps.setSessionId(event.newSessionId)
-      deps.refresh()
+      if (!resetting) deps.refresh()
       return
     }
     if (event.type === 'runConfigReceived') {
@@ -72,9 +75,10 @@ export function subscribeConfirmedRunConfig(deps: {
       const requested = pending.get(event.changeId)
       if (requested === undefined || resetting) return
       pending.delete(event.changeId)
-      stop()
+      // Rejection leaves an earlier acknowledgement's target and deadline intact.
       deps.log(event.type === 'sessionSettingsUpdated' ? 'acknowledged' : 'rejected')
       if (event.type === 'sessionSettingsUpdated') {
+        stop()
         target = requested
         const deadline = Date.now() + 15_000
         timer = setInterval(() => {
@@ -82,7 +86,7 @@ export function subscribeConfirmedRunConfig(deps: {
           // Wait for a reply before retrying: slow round trips must not supersede themselves.
           if (!awaiting) { awaiting = true; deps.refresh() }
         }, 500)
-      }
+      } else if (target !== null && awaiting) return
       awaiting = true
       deps.refresh()
     }

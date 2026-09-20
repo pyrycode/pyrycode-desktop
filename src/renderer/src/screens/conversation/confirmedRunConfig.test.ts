@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import type { DaemonEvent, StampedDaemonEvent } from '@shared/ipc/events'
 import { createRunConfigStore } from '../../store/runConfigStore'
 import { createRunSettingsWriteStore } from '../../store/runSettingsWriteStore'
+import { foldWriteEvent } from '../../store/runSettingsWriteBridge'
 import { subscribeConfirmedRunConfig } from './confirmedRunConfig'
 
 afterEach(() => vi.useRealTimers())
@@ -23,11 +24,12 @@ function setup() {
     type: 'runConfigReceived', conversationId: context.conversationId, sessionId,
     model: 'running-model', effort: 'high', effectiveEffort: 'low', yolo: false, permissionMode, used_tokens: 0, window_tokens: 0
   } as DaemonEvent)
-  const pick = () => writes.getState().dispatch({ type: 'changeDispatched', changeId: 'pick', change: { field: 'permissionMode', value: 'plan' } })
-  const settle = (rejected = false) => {
+  const pick = (value = 'plan', changeId = 'pick') => writes.getState().dispatch({ type: 'changeDispatched', changeId, change: { field: 'permissionMode', value } })
+  const settle = (rejected = false, changeId = 'pick') => {
     // Write bridge runs first: correlation must survive removal from its pending map.
-    writes.getState().dispatch({ type: rejected ? 'settingsRejected' : 'settingsConfirmed', changeId: 'pick' })
-    emit({ type: rejected ? 'sessionSettingsRejected' : 'sessionSettingsUpdated', changeId: 'pick', sessionId: 'session' } as DaemonEvent)
+    foldWriteEvent({ getPending: () => writes.getState().pending, dispatch: writes.getState().dispatch,
+      rememberEffort: vi.fn() }, { type: rejected ? 'settingsRejected' : 'settingsConfirmed', changeId })
+    emit({ type: rejected ? 'sessionSettingsRejected' : 'sessionSettingsUpdated', changeId, sessionId: 'session' } as DaemonEvent)
   }
   const switchTo = (conversationId: string, serverId: string) => { context = { conversationId, serverId }; contextChanged() }
   return { config, writes, refresh, log, off, emit, report, pick, settle, switchTo, unsubscribe }
@@ -59,6 +61,59 @@ it('refreshes rejection once and preserves empty mode with a resolved session', 
   expect(h.config.getState().snapshot?.permissionMode).toBe('')
   vi.advanceTimersByTime(15_000)
   expect(h.refresh).toHaveBeenCalledTimes(1)
+  h.off()
+})
+
+it.each([false, true])('preserves acknowledged confirmation across rejection with an outstanding read: %s', outstanding => {
+  const h = setup()
+  h.report('default'); h.pick('acceptEdits', 'first'); h.settle(false, 'first')
+  if (!outstanding) h.report('default')
+  h.pick('dontAsk', 'later'); h.settle(true, 'later')
+  const reads = outstanding ? 1 : 2
+  expect(h.refresh).toHaveBeenCalledTimes(reads)
+  expect(h.config.getState().snapshot?.permissionMode).toBe('default')
+  vi.advanceTimersByTime(500)
+  expect(h.refresh).toHaveBeenCalledTimes(reads)
+  h.report('default')
+  vi.advanceTimersByTime(500)
+  expect(h.refresh).toHaveBeenCalledTimes(reads + 1)
+  h.report('acceptEdits')
+  vi.advanceTimersByTime(15_000)
+  expect(h.refresh).toHaveBeenCalledTimes(reads + 1)
+  expect(h.config.getState().snapshot?.permissionMode).toBe('acceptEdits')
+  h.off()
+})
+
+it('does not extend an acknowledged confirmation deadline when a later write is rejected', () => {
+  const h = setup()
+  h.report('default'); h.pick('acceptEdits', 'first'); h.settle(false, 'first')
+  vi.advanceTimersByTime(14_000)
+  h.report('default'); h.pick('dontAsk', 'later'); h.settle(true, 'later')
+  h.report('default'); vi.advanceTimersByTime(500)
+  expect(h.refresh).toHaveBeenCalledTimes(3)
+  h.report('default'); vi.advanceTimersByTime(500)
+  expect(h.log).toHaveBeenCalledWith('unconfirmed')
+  vi.advanceTimersByTime(15_000)
+  expect(h.refresh).toHaveBeenCalledTimes(3)
+  expect(h.config.getState().snapshot?.permissionMode).toBe('default')
+  h.off()
+})
+
+it('keeps reset suppression across replacement and the replacement guard across reset completion', () => {
+  const h = setup()
+  h.report(); h.pick(); h.settle()
+  h.emit({ type: 'resetting', conversationId: 'chat', active: true, phase: 'restarting', handoff: 'skipped' })
+  h.emit({ type: 'sessionTransition', conversationId: 'chat', newSessionId: 'replacement', reason: 'clear', occurredAt: '', workspaceCwd: null })
+  h.report('default', 'replacement')
+  vi.advanceTimersByTime(1000)
+  expect(h.refresh).toHaveBeenCalledTimes(1)
+  expect(h.config.getState().snapshot?.permissionMode).toBe('')
+  h.emit({ type: 'resetting', conversationId: 'chat', active: false, phase: '', handoff: '' })
+  expect(h.refresh).toHaveBeenCalledTimes(2)
+  h.report('default', 'session')
+  expect(h.config.getState().snapshot?.permissionMode).toBe('')
+  h.report('plan', 'replacement')
+  expect(h.config.getState().snapshot?.permissionMode).toBe('plan')
   h.off()
 })
 

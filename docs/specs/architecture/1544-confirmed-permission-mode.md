@@ -105,6 +105,8 @@ can accompany a resolved session.
 - [Trust boundaries] `onDriverEvent` retains request correlation; the new subscriber checks client-stamped server ownership, active conversation and replacement session before accepting a report. Main invalidation prevents old same-conversation requests crossing a session boundary.
 - [Permissions] The client-owned settable list still excludes bypass. Acknowledgement never establishes enforcement; only a fresh `session_settings` report changes the label. Daemon write no-op behavior is outside scope per upstream 2510.
 - [Concurrency] One bounded timer per subscription; all context exits cancel it. Local change tracking avoids dependence on write-bridge registration order. Tests must hold early replies and prove cleanup.
+- [Concurrency, verifier rework] The original review missed overlapping settlements: rejecting a later pick must retain the earlier acknowledged target and its original deadline, sharing an outstanding read instead of superseding it. `subscribeConfirmedRunConfig` clears that target only on a new acknowledgement, confirmation, timeout or context invalidation.
+- [Trust boundaries, verifier rework] Replacement during an active reset must not admit even a matching-session reading before reset completion. Keep the reset latch across `sessionTransition` and the replacement-session guard across `resetting(active:false)`; context exit or a new reset clears the old guard. Held-reply tests cover both reset/transition orderings.
 - [Logs and rendering] Only static diagnostic codes; existing escaped, bounded text and own-property label lookup remain. No daemon value reaches logs or attributes.
 - [Tokens, storage, crypto] No production secret, storage or cryptographic changes. Live fixture keeps isolated HOME, existing credentials handling and cleanup; controlled Read file is synthetic and outside the workspace but inside the fixture home.
 - [Electron and network] No IPC surface, window security, transport or TLS change. Preserve the guarded launcher; fake Electron execution requires approved host execution.
@@ -130,3 +132,11 @@ can accompany a resolved session.
   including the return to the first host. Prove a wrong-host report cannot restore the label.
   Keep the existing offline input, model/effort and capability assertions. No production
   design or security boundary changes; this adds one test file to the affected scope.
+- 2026-09-20 (confirmation lifecycle rework): Verifier probes exposed cancellation of an
+  acknowledged change by a later rejection and early release of reset suppression on
+  replacement. Separate confirmation invalidation from context/reset identity; preserve
+  the active target, serialized read and original deadline on rejection. Preserve reset
+  suppression through replacement and replacement identity through reset completion.
+  Store/bridge tests cover held and answered reads plus the original timeout; the fake
+  drive proves default → acknowledged edits → rejected dontAsk → confirmed edits and
+  transition-before-reset-completion, including old-session rejection after completion.

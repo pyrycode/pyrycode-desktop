@@ -4,6 +4,7 @@ import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { Envelope, EnvelopeType, SetSessionSettingsPayload } from '../src/shared/wire/types'
 
 const SESSION = 'session-1544'
+type ProbeWindow = typeof window & { permissionEvents: string[] }
 const frame = (type: EnvelopeType, payload: unknown, in_reply_to?: number): Uint8Array =>
   encodeEnvelope({ id: 1, type, ts: '2026-09-20T00:00:00Z', payload, in_reply_to })
 
@@ -26,6 +27,13 @@ test('permission footer follows confirmation through held writes, reads and sess
   const requests = () => captured.filter(e => e.type === 'request_session_settings')
   const writes = () => captured.filter(e => e.type === 'set_session_settings')
   const label = page.locator('.composer__permission-label')
+  await page.evaluate(() => {
+    const probe = window as ProbeWindow
+    probe.permissionEvents = []
+    window.pyry.onDaemonEvent(event => probe.permissionEvents.push(event.type))
+  })
+  const received = (type: string) => page.evaluate(type =>
+    (window as ProbeWindow).permissionEvents.filter(event => event === type).length, type)
   const panel = page.getByRole('menu', { name: 'Permission mode', exact: true })
   const pick = async (name: string) => {
     await page.locator('.composer__permission').click()
@@ -71,50 +79,66 @@ test('permission footer follows confirmation through held writes, reads and sess
   // An old-mode reply does not exhaust the confirmation refresh. Hold its successor.
   const retry = await nextRead(beforeAck + 1)
   await expect(label).toHaveText('Bypass approvals')
+  mode = 'default'
   daemon.pushFrame(reading(retry))
+  await expect(label).toHaveText('Manual approval')
 
-  await pick('Plan')
+  await pick('Auto-approve edits')
   await expect.poll(() => writes().length).toBe(2)
-  expect(writes()[1].payload).toEqual({ session_id: SESSION, permission_mode: 'plan' } satisfies SetSessionSettingsPayload)
-  await expect(label).toHaveText('Bypass approvals')
-  const beforePlan = requests().length
+  expect(writes()[1].payload).toEqual({ session_id: SESSION, permission_mode: 'acceptEdits' } satisfies SetSessionSettingsPayload)
+  await expect(label).toHaveText('Manual approval')
+  const beforeEdits = requests().length
   daemon.pushFrame(frame('session_settings_updated', { session_id: SESSION }, writes()[1].id))
-  const planRead = await nextRead(beforePlan)
-  await expect(label).toHaveText('Bypass approvals')
-  mode = 'plan'
-  daemon.pushFrame(reading(planRead))
-  await expect(label).toHaveText('Plan')
+  daemon.pushFrame(reading(await nextRead(beforeEdits)))
+  const editsRead = await nextRead(beforeEdits + 1)
+  await expect(label).toHaveText('Manual approval')
   await page.locator('.composer__permission').click()
-  await expect(panel.locator('[aria-current="true"]')).toHaveText('Plan')
+  await expect(panel.locator('[aria-current="true"]')).toHaveText('Manual approval')
   await panel.getByRole('menuitem', { name: 'Approved actions only', exact: true }).click()
   await expect.poll(() => writes().length).toBe(3)
-  await expect(label).toHaveText('Plan')
+  await expect(label).toHaveText('Manual approval')
   const beforeReject = requests().length
   daemon.pushFrame(frame('error', {}, writes()[2].id))
-  daemon.pushFrame(reading(await nextRead(beforeReject)))
-  await expect(label).toHaveText('Plan')
+  await expect.poll(() => received('sessionSettingsRejected')).toBe(1)
+  expect(requests().length).toBe(beforeReject)
+  daemon.pushFrame(reading(editsRead))
+  const confirmationRead = await nextRead(beforeReject)
+  await expect(label).toHaveText('Manual approval')
+  mode = 'acceptEdits'
+  daemon.pushFrame(reading(confirmationRead))
+  await expect(label).toHaveText('Auto-approve edits')
+  await page.locator('.composer__permission').click()
+  await expect(panel.locator('[aria-current="true"]')).toHaveText('Auto-approve edits')
+  await page.keyboard.press('Escape')
   await expect(page.locator('.composer__footer [role="alert"]')).toHaveCount(0)
 
   // Empty confirmation is unavailable even with a real session and yolo:false.
   daemon.pushFrame(reading(await refresh(), ''))
   await expect(label).toHaveCount(0)
   daemon.pushFrame(reading(await refresh()))
-  await expect(label).toHaveText('Plan')
+  await expect(label).toHaveText('Auto-approve edits')
   const oldRead = await refresh()
   daemon.pushFrame(frame('resetting', { conversation_id: SEEDED_ROW.id, active: true, phase: 'restarting', handoff: 'skipped' }))
   await expect(label).toHaveCount(0)
   daemon.pushFrame(reading(oldRead, 'default'))
   await expect(label).toHaveCount(0)
   const beforeReset = requests().length
-  daemon.pushFrame(frame('resetting', { conversation_id: SEEDED_ROW.id, active: false, phase: '', handoff: '' }))
-  const resetRead = await nextRead(beforeReset)
   session = 'replacement'
   daemon.pushFrame(frame('session_transition', { conversation_id: SEEDED_ROW.id, previous_session_id: SESSION,
     new_session_id: session, reason: 'clear', occurred_at: '2026-09-20T00:00:00Z', workspace_cwd: null }))
-  const replacementRead = await nextRead(beforeReset + 1)
-  daemon.pushFrame(reading(resetRead, 'default', SESSION))
+  await expect.poll(() => received('sessionTransition')).toBe(1)
+  expect(requests().length).toBe(beforeReset)
+  const beforeSuppressed = await received('runConfigReceived')
+  daemon.pushFrame(reading(await refresh(), 'default'))
+  await expect.poll(() => received('runConfigReceived')).toBe(beforeSuppressed + 1)
   await expect(label).toHaveCount(0)
-  daemon.pushFrame(reading(replacementRead, 'bypassPermissions'))
+  const beforeComplete = requests().length
+  daemon.pushFrame(frame('resetting', { conversation_id: SEEDED_ROW.id, active: false, phase: '', handoff: '' }))
+  const resetRead = await nextRead(beforeComplete)
+  daemon.pushFrame(reading(resetRead, 'default', SESSION))
+  await expect.poll(() => received('runConfigReceived')).toBe(beforeSuppressed + 2)
+  await expect(label).toHaveCount(0)
+  daemon.pushFrame(reading(await refresh(), 'bypassPermissions'))
   await expect(label).toHaveText('Bypass approvals')
 
   // A held reply for the departed chat cannot populate the newly opened chat.

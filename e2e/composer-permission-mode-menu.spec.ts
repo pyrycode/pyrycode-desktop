@@ -52,9 +52,9 @@ test('permission footer follows confirmation through held writes, reads and sess
   await expect(label).toHaveText('Bypass approvals')
   await page.locator('.composer__permission').click()
   await expect(panel.getByRole('menuitem')).toHaveText([
-    'Manual approval', 'Auto-approve edits', 'Plan', 'Auto approval', 'Approved actions only'
+    'Manual approval', 'Auto-approve edits', 'Plan', 'Auto approval', 'Approved actions only', 'Bypass approvals'
   ])
-  await expect(panel.locator('[aria-current="true"]')).toHaveCount(0)
+  await expect(panel.locator('[aria-current="true"]')).toHaveText('Bypass approvals')
   await page.screenshot({ path: testInfo.outputPath('permission-menu-1100.png'), animations: 'disabled' })
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(800, 600))
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(800)
@@ -112,11 +112,35 @@ test('permission footer follows confirmation through held writes, reads and sess
   await page.keyboard.press('Escape')
   await expect(page.locator('.composer__footer [role="alert"]')).toHaveCount(0)
 
+  // Bypass uses the existing yolo write. Rejection and acknowledgement alone cannot change the label.
+  await pick('Bypass approvals')
+  await expect.poll(() => writes().length).toBe(4)
+  expect(writes()[3].payload).toEqual({ session_id: SESSION, yolo: true } satisfies SetSessionSettingsPayload)
+  await expect(label).toHaveText('Auto-approve edits')
+  daemon.pushFrame(frame('error', {}, writes()[3].id))
+  await expect.poll(() => received('sessionSettingsRejected')).toBe(2)
+  await expect(label).toHaveText('Auto-approve edits')
+
+  await pick('Bypass approvals')
+  await expect.poll(() => writes().length).toBe(5)
+  expect(writes()[4].payload).toEqual({ session_id: SESSION, yolo: true } satisfies SetSessionSettingsPayload)
+  const beforeBypass = requests().length
+  daemon.pushFrame(frame('session_settings_updated', { session_id: SESSION }, writes()[4].id))
+  daemon.pushFrame(reading(await nextRead(beforeBypass)))
+  const bypassRead = await nextRead(beforeBypass + 1)
+  await expect(label).toHaveText('Auto-approve edits')
+  mode = 'bypassPermissions'
+  daemon.pushFrame(reading(bypassRead))
+  await expect(label).toHaveText('Bypass approvals')
+  await page.locator('.composer__permission').click()
+  await expect(panel.locator('[aria-current="true"]')).toHaveText('Bypass approvals')
+  await page.keyboard.press('Escape')
+
   // Empty confirmation is unavailable even with a real session and yolo:false.
   daemon.pushFrame(reading(await refresh(), ''))
   await expect(label).toHaveCount(0)
   daemon.pushFrame(reading(await refresh()))
-  await expect(label).toHaveText('Auto-approve edits')
+  await expect(label).toHaveText('Bypass approvals')
   const oldRead = await refresh()
   daemon.pushFrame(frame('resetting', { conversation_id: SEEDED_ROW.id, active: true, phase: 'restarting', handoff: 'skipped' }))
   await expect(label).toHaveCount(0)

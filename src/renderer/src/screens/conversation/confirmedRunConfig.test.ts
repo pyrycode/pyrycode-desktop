@@ -53,6 +53,27 @@ it('retains reports while pending and acknowledged, retries an early old reading
   h.off()
 })
 
+it('confirms a bypass selection through fresh reports without an optimistic label', () => {
+  const previous = 'plan', confirmed = 'bypassPermissions'
+  const h = setup()
+  h.report(previous)
+  h.writes.getState().dispatch({ type: 'changeDispatched', changeId: 'pick', change: { field: 'yolo', value: true } })
+  expect(h.refresh).not.toHaveBeenCalled()
+  expect(h.config.getState().snapshot?.permissionMode).toBe(previous)
+  h.settle()
+  expect(h.refresh).toHaveBeenCalledTimes(1)
+  expect(h.config.getState().snapshot?.permissionMode).toBe(previous)
+  h.report(previous)
+  vi.advanceTimersByTime(500)
+  expect(h.refresh).toHaveBeenCalledTimes(2)
+  h.report(confirmed)
+  vi.advanceTimersByTime(15_000)
+  expect(h.refresh).toHaveBeenCalledTimes(2)
+  expect(h.log).toHaveBeenCalledWith('confirmed')
+  expect(h.config.getState().snapshot?.permissionMode).toBe(confirmed)
+  h.off()
+})
+
 it('refreshes rejection once and preserves empty mode with a resolved session', () => {
   const h = setup()
   h.report(); h.pick(); h.settle(true)

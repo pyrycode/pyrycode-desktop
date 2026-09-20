@@ -43,16 +43,9 @@ import { isAddressableSessionId } from './runSettingsControls'
 // ComposerModelMenu.tsx / ComposerEffortMenu.tsx precedent, and it adds no CSS import: its styles live in
 // conversation.css, whose single importer is ConversationScreen.tsx.
 
-// THE WIRE CONTRACT IS ASYMMETRIC AND THAT ASYMMETRY IS THE WHOLE DESIGN. Measured from the daemon's
-// `validPermissionMode` on 2026-09-03: the READ half reports six modes, the WRITE half accepts five —
-// `bypassPermissions` is refused on `permission_mode`, deliberately, so the escalation keeps exactly one
-// spelling on the wire: the `yolo` bit the run-configuration sheet's toggle already owns.
-//
-// So this control renders six labels and offers five entries. A session sitting in bypass shows
-// `Bypass approvals` on the button and is offered the other five; picking one moves it out of bypass,
-// once the running child confirms the change. NOTHING HERE CAN MOVE A SESSION INTO BYPASS,
-// and nothing here should try: adding the sixth entry "for symmetry" would put a one-click privilege
-// escalation in the input footer. The two counts are pinned by name in ComposerPermissionModeMenu.test.tsx.
+// All six modes are selectable. The daemon accepts bypass only as `yolo: true`;
+// the other five use `permission_mode`. The footer shares the settings sheet's
+// existing bypass control and keeps its label on the last confirmed mode.
 
 /** Display names for the six modes the daemon can report — the client's own copy, since neither the
  *  daemon nor claude publishes a display form. Labels describe how actions are approved; they do not
@@ -70,19 +63,14 @@ export const PERMISSION_MODE_LABELS: Readonly<Record<string, string>> = {
   bypassPermissions: 'Bypass approvals'
 }
 
-/** The five modes this control may submit, in the daemon's own declared order. `bypassPermissions` is
- *  absent, and its absence is a security property rather than an omission — see the header.
- *
- *  Five plain literals, deliberately: this is the daemon's declared vocabulary stated verbatim, and
- *  substituting AUTO_PERMISSION_MODE into the middle of it would obscure the one thing the list exists to
- *  say. The two are tied together by an assertion instead — the filtered mode must be a member of this
- *  list — so a rename cannot silently disable the filter. */
+/** Client-owned menu order. Bypass uses the yolo write rather than permission_mode. */
 export const SETTABLE_PERMISSION_MODES: readonly string[] = [
   'default',
   'acceptEdits',
   'plan',
   'auto',
-  'dontAsk'
+  'dontAsk',
+  'bypassPermissions'
 ]
 
 /** #1022 — the one settable mode a MODEL can refuse, and therefore the only entry above that is
@@ -127,9 +115,9 @@ function permissionModeLabel(mode: string): string {
 /** What the trigger shows and what the menu offers.
  *
  *  There is no empty-`options` arm here, unlike both siblings: the entries are this client's own
- *  vocabulary less at most one mode, so the array is always four or five. `currentId` is the session's own
+ *  vocabulary less at most one mode, so the array is always five or six. `currentId` is the session's own
  *  mode VERBATIM — the machine value, not the display name — because the panel matches on `id`, and
- *  because a mode appearing in no entry (a session in bypass, a mode this client cannot name, or since
+ *  because a mode appearing in no entry (a mode this client cannot name, or since
  *  #1022 a session running `auto` on a model that refuses it) must mark nothing through the panel's
  *  existing `option.id === currentId` branch rather than through a special case here. */
 export interface ComposerPermissionModeMenuModel {
@@ -145,7 +133,7 @@ export interface ComposerPermissionModeMenuModel {
  * TWO RENDERINGS, where the neighbours have three — and #1022 did NOT add a third:
  *
  *   permissionMode === ''   → null      no mode is known; draw nothing
- *   any other string        → the menu  four entries or five, never fewer and never none
+ *   any other string        → the menu  five entries or six, never fewer and never none
  *
  * An absent or empty confirmed report renders nothing, including when the session is
  * resolved but its current child has not confirmed a mode. Neither yolo nor initialization
@@ -155,16 +143,14 @@ export interface ComposerPermissionModeMenuModel {
  * shortcut: the label names whatever the daemon reports (#682's "a session already in it still shows
  * bypassPermissions"), and the entries stay what it may send.
  *
- * #1022 — THE ENTRY LIST IS NOW FOUR OR FIVE, and the whole of that decision is `hidesAuto` below.
+ * #1022 — THE ENTRY LIST IS NOW FIVE OR SIX, and the whole of that decision is `hidesAuto` below.
  *
  * THE FILTER CAN ONLY EVER SUBTRACT, AND ONLY EVER ONE NAMED MODE. The offered list is this client's own
  * constant MINUS `AUTO_PERMISSION_MODE`; it is never computed FROM the published row. That is the
  * security property: the worst a hostile or merely buggy daemon achieves by lying with
  * `supports_auto_mode: false` is removing one middle-permission entry, while `default` and `plan` — the
- * two safest options — are unconditional and cannot be hidden, and no row can ADD an entry, least of all
- * the escalation the header excludes. A design that derived the entries from the row instead would be
- * exploitable. It is also worth stating what this is NOT: the hide is a UX affordance, never an
- * authorization boundary. The daemon enforces the write; the label keeps its last confirmed
+ * two safest options — are unconditional and cannot be hidden, and no row can ADD an entry.
+ * The hide is a UX affordance, never an authorization boundary. The daemon enforces the write; the label keeps its last confirmed
  * reading through both acknowledgement and rejection.
  *
  * FAILING OPEN IS THE RULE, not a fallback (AC2): `auto` is offered wherever the client does not
@@ -221,7 +207,7 @@ export function composerPermissionModeMenuModel(
  * arms server-render directly under the repo's `node` vitest environment. An absent selection callback
  * keeps the held value readable without offering a write.
  *
- * SECURITY — this is a render boundary for daemon-reported text, even though five of its six labels are
+ * SECURITY — this is a render boundary for daemon-reported text, even though all six known labels are
  * client-owned constants. `permissionMode` crossed the subprocess trust boundary and DECODED IS NOT
  * SANITIZED: #1020 made the shape trusted and nothing more. An unrecognised mode falls through
  * permissionModeLabel VERBATIM, so this element renders daemon text on that arm and is treated as a sink
@@ -264,8 +250,7 @@ export function ComposerPermissionModeMenuView({
     <ComposerOptionsMenu
       options={menu.options}
       // AC2's marking. The panel renders aria-current="true" on the matching row and omits the attribute
-      // entirely otherwise, so the marking needs no new prop — and a session in bypass, whose mode is in no
-      // entry, marks nothing through that same branch.
+      // entirely otherwise, including unknown modes or auto on a model that refuses it.
       currentId={menu.currentId}
       onSelect={onSelect}
       ariaLabel={COMPOSER_PERMISSION_MODE_MENU_LABEL}
@@ -337,11 +322,12 @@ export function ComposerPermissionModeMenu({
       models={models}
       // An arrow, so `window.pyry` is dereferenced at INTERACTION time and never during render — hoisting
       // it (or the deps object) would move the dereference into the render path, where window.pyry does not
-      // exist under renderToStaticMarkup and every container smoke test would throw. The mode is submitted
-      // as the entry's own machine value, which is a client-owned constant: this is the one footer menu
-      // whose outbound value never came off the wire.
+      // exist under renderToStaticMarkup and every container smoke test would throw. Bypass uses the
+      // existing yolo control; other choices submit their client-owned permission-mode value.
       onSelect={connected && isAddressableSessionId(sessionId)
-        ? (value) => changeConnectedSetting(conversationId, { field: 'permissionMode', value })
+        ? (value) => changeConnectedSetting(conversationId, value === 'bypassPermissions'
+          ? { field: 'yolo', value: true }
+          : { field: 'permissionMode', value })
         : undefined}
     />
   )

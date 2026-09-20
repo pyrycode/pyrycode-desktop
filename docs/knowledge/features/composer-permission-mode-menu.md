@@ -13,20 +13,19 @@ trigger's label, and what picking one does — the same three things [the model]
 shape (pure model function, pure view, thin store-bound container) reused a third time, in its own file
 (`ComposerPermissionModeMenu.tsx`).
 
-## The wire contract is asymmetric, and that asymmetry is the whole design
+## Selecting bypass
 
-Measured from `pyrycode/internal/protocol/settings.go` and `internal/relay/v2session_settings.go` on
-2026-09-03: the **read** half reports **six** modes — `default`, `acceptEdits`, `plan`, `auto`, `dontAsk`,
-`bypassPermissions`. The **write** half accepts **five** — `bypassPermissions` is refused on
-`permission_mode`, deliberately, so the escalation keeps exactly one spelling on the wire: the `yolo` bit
-the run-configuration sheet's toggle already owns.
+All six known modes are selectable as of 2026-09-20.
+Juhana requested that Bypass approvals remain available after choosing another mode.
+The earlier display-only restriction no longer applies.
+The daemon still refuses `bypassPermissions` on `permission_mode`.
+Selecting Bypass approvals sends the existing `yolo: true` setting instead.
+Other choices send their own `permission_mode` value.
+Each write contains only one changed field.
 
-So this menu **renders six known labels and offers up to five entries**. A session sitting in bypass shows
-`Bypass approvals` on the button and is offered the settable modes. A pick can leave the
-running child unchanged even after acknowledgement. The label changes only when a fresh
-settings report confirms the applied mode. **Nothing here can move a session into bypass**,
-and nothing here tries to — adding the sixth entry "for symmetry" would be a one-click privilege escalation
-in the input footer. The two counts are pinned by name in `ComposerPermissionModeMenu.test.tsx`.
+The footer shares the settings sheet's bypass control.
+The label and current menu row change only after a fresh settings report confirms the applied mode.
+Pending, acknowledged or rejected writes cannot replace that confirmed reading.
 
 ## Where this control departs from its two neighbours
 
@@ -35,13 +34,13 @@ The three footer menus look interchangeable but differ in two load-bearing ways:
 - **Its vocabulary is client-owned, and only one entry of it is conditional.** The model and effort menus
   each read `model_list` and have a third rendering — an inert label that opens nothing — for the three
   ways that list can be missing. Nobody publishes the set of settable permission modes to this client, so
-  there is no list frame to *wait for* and no empty-list arm: a known mode has four or five choices
+  there is no list frame to *wait for* and no empty-list arm: a known mode has five or six choices
   whenever the session is addressable and its owning host is connected. That stayed true when
   [#1022](https://github.com/pyrycode/pyrycode-desktop/issues/1022) gave this control a
   `publishedRowFor` lookup and a model-list store read — see § The `auto`-hiding join below — because the
   read only ever *subtracts* one named entry from the constant; it never grows or replaces the list. This
   gives the pure model function **two outcomes** — `permissionMode === ''` returns nothing (no snapshot
-  has arrived, the session was never resolved, or running confirmation is unavailable), and any other string returns four or five entries,
+  has arrived, the session was never resolved, or running confirmation is unavailable), and any other string returns five or six entries,
   including the bypass reading,
   which gets no branch of its own. The view holds the label inert when selection is unavailable.
 - **Its label is looked up, not verbatim.** Claude publishes effort levels byte-identical to what it
@@ -61,7 +60,7 @@ count moved by exactly one — the steps *between* them, which isolate each sibl
 
 `WireModelOption.supports_auto_mode` says whether claude accepts `auto` permission mode for the running
 model — it refuses per model (Haiku 4.5 does not have it, Sonnet 5 does, measured 2026-08-21). #682 shipped
-this menu offering all five settable modes unconditionally and parked the flag, because the shared options
+this menu offering all five then-settable modes unconditionally and parked the flag, because the shared options
 panel ([`ComposerOptionsPanel`](conversation-shell-composer-options-panel.md), Figma `121:3879`) draws five
 identical rows with no unavailable-row state — greying one out would have meant inventing a new visual
 *and* a new prop on a surface four menus share. **The operator settled it 2026-09-04: hide the option
@@ -80,8 +79,7 @@ const hidesAuto = row !== undefined && row.supports_auto_mode === false
   `SETTABLE_PERMISSION_MODES` — the client-owned constant — minus `AUTO_PERMISSION_MODE`; it is never
   computed *from* the published row. A hostile or merely buggy daemon lying with `supports_auto_mode:
   false` can remove at most one middle-permission entry; `default` and `plan`, the two safest options, are
-  unconditional and cannot be hidden, and no row can *add* an entry, least of all `bypassPermissions`. A
-  design that derived the entries from the row instead would have been exploitable. The hide is a UX
+  unconditional and cannot be hidden, and no row can add an entry. The hide is a UX
   affordance, never an authorization boundary: the daemon is the actual enforcement point, refusing a mode
   it does not accept. A rejected permission pick leaves the confirmed label intact.
 - **Fails open, by construction, not by a fallback.** `auto` is offered wherever the client does not
@@ -109,7 +107,7 @@ const hidesAuto = row !== undefined && row.supports_auto_mode === false
   miss deliberately — see [Composer effort menu](composer-effort-menu.md#composereffortmenumodel-one-pure-function-deciding-all-three-renderings)
   for the wrapper itself.
 - **A session already running `auto` on a refusing model still labels the trigger `Auto approval` and
-  marks nothing in the panel** — the same no-matching-entry branch a session in bypass already uses. `currentId` stays
+  marks nothing in the panel**. `currentId` stays
   the session's mode verbatim; hiding an entry never changes what the trigger says.
 - **`AUTO_PERMISSION_MODE = 'auto'`** is the one new exported constant, module-level. Both the filter and
   the two test tiers name it rather than each typing their own copy of the string, and a unit assertion
@@ -160,7 +158,7 @@ once the new join exists.
 
 The unrecognized-mode fallthrough is the same posture `runConfigSnapshot.ts`'s own test assigns to this
 ticket ("what to display for an unknown mode belongs to #682"), and it is why the label element is treated
-as a daemon-text sink unconditionally even though five of its six values are client-owned strings.
+as a daemon-text sink unconditionally even though all six known labels are client-owned strings.
 
 ## The trigger, the container, and the write
 
@@ -184,8 +182,8 @@ every store tick), composing them with `selectEffectiveSettings` in the render b
 `effective.model` into the view alongside the held model list. The permission value comes directly
 from `runConfigStore.snapshot.permissionMode`. `onSelect` is an arrow so `window.pyry` is
 dereferenced at interaction time and never during render, and forwards to
-`changeConnectedSetting(conversationId, { field: 'permissionMode', value })` — the mode's own machine value, submitted with no
-reverse lookup.
+`changeConnectedSetting`. Bypass submits `{ field: 'yolo', value: true }`.
+Other modes submit `{ field: 'permissionMode', value }` with their own machine value.
 
 The container supplies the callback only with an addressable session ID and an
 unambiguous owning host reporting `connected`. Missing ownership/status and all
@@ -215,7 +213,7 @@ Operator bypass can coexist with stored default.
 A default-only pick can therefore acknowledge without changing the running child.
 The footer keeps Bypass approvals until the daemon reports a different mode.
 
-After acknowledgement, `subscribeConfirmedRunConfig` refreshes immediately.
+After a permission-mode write or bypass-enable acknowledgement, `subscribeConfirmedRunConfig` refreshes immediately.
 It checks again every 500ms for at most 15 seconds, waiting for each outstanding reply.
 An early reply with the old mode keeps that label and leaves confirmation pending.
 A rejection refreshes once while preserving any earlier acknowledged change's
@@ -274,41 +272,38 @@ logs only static availability codes, never mode values, matching [ADR 0007](../d
 rule. The panel's `aria-label` is the client-owned `COMPOSER_PERMISSION_MODE_MENU_LABEL`, never the
 trigger's own daemon-authored visible text.
 
-The privilege-escalation angle is this control's actual security question, and it is closed structurally:
-`SETTABLE_PERMISSION_MODES` has five entries, `bypassPermissions` is not among them, and two tests assert
-its absence as a derivation over the returned ids (a count, so the guard cannot pass vacuously) rather than
-trusting a comment. A future contributor adding the sixth mode "for symmetry" would be adding a one-click
-privilege escalation to the footer. #1022 does not reopen this list — it reads a boolean off a published
-row to *subtract* from it — and the same structural argument extends to that read: see § The
-`auto`-hiding join above for why a hostile daemon can only ever remove `auto`, never add
-`bypassPermissions` or steer the operator toward a more permissive mode.
+Bypass is an explicit user selection using the existing yolo setting.
+Opening the menu never changes permissions.
+The model capability filter can remove only Auto approval.
+Host availability, session ownership and confirmed reporting remain required.
+No daemon validation or wire contract changed.
 
 ## Testing
 
 Renderer tests are static server renders (CLAUDE.md); `ComposerPermissionModeMenu.test.tsx` covers
 `composerPermissionModeMenuModel` as data (both renderings, all six modes labeled, an unknown mode falling
-through verbatim while still offering five and marking none, the bypass reading labeling
-`Bypass approvals` while still offering five and marking none) and the view against it (the anchor/panel
+through verbatim while offering six and marking none, the bypass reading labeling
+`Bypass approvals` and marking its own row) and the view against it (the anchor/panel
 wiring, the label's own bounded element, the chevron `aria-hidden`, the panel's client-owned name, and the
 `__proto__`/`constructor`/`toString` attribute sweep above). `ConversationScreen.test.tsx` gained a new mount
 test seeding all three footer menus' snapshot fields at once to pin the row's final order
 (Actions → permission → model → effort → reading) — the only proof this control is wired in, since every
 assertion in its own file passes on an unmounted component.
 
-Literal expectations pin all six trigger labels and the five selectable ID/label pairs independently
+Literal expectations pin all six trigger labels and the six selectable ID/label pairs independently
 of `PERMISSION_MODE_LABELS`; deriving the expected copy from that mapping would let a wrong label pass.
-The permission-menu Playwright spec also pins the five displayed labels literally and checks the open
+The permission-menu Playwright spec also pins the six displayed labels literally and checks the open
 panel and each row fit at 800px. Keep negative label assertions current too:
 `e2e/offline-session-settings.spec.ts` must check absence of `Auto approval` after a refusing model arrives.
 An absence check for the former `Auto` label would pass even if the renamed option were incorrectly
-offered. The capability drive below supplies the positive baseline that all five choices can appear.
+offered. The capability drive below supplies the positive baseline that all six choices can appear.
 
 **#1022 extended the model-function cases** rather than adding a typed fixture list: a row for the
-session's model saying `false` (the other four ids, no `auto`); every unknown reading — `models` null, an
+session's model saying `false` (the other five ids, no `auto`); every unknown reading — `models` null, an
 empty `models` array, a populated list matching no row, a row whose `value` is a superstring of the
 session's model (the truncation-cut shape), and `supports_auto_mode` forced to `undefined` through a cast
-(the bare-`as` reading) — offering all five; a row saying `true` offering all five; a session running
-`auto` on a refusing row still labelling `Auto approval` and marking nothing while offering four; and a floor
+(the bare-`as` reading) — offering all six; a row saying `true` offering all six; a session running
+`auto` on a refusing row still labelling `Auto approval` and marking nothing while offering five; and a floor
 assertion across the whole matrix that `options.length` never drops below
 `SETTABLE_PERMISSION_MODES.length - 1`. The shipped `view()`/`panel()` test helpers took the two new
 inputs as trailing optional parameters defaulting to `(null, '')` — the reading that was this control's
@@ -322,6 +317,7 @@ reads DOM text, so its locators match the label verbatim.
 
 `e2e/composer-permission-mode-menu.spec.ts` holds writes and settings replies to prove
 pending, acknowledged and rejected picks retain the last report.
+It verifies that bypass uses only `yolo: true` and that rejection keeps the previous label.
 It covers delayed confirmation, rejection during an earlier confirmation wait,
 empty reports on resolved sessions, context changes and reset/replacement ordering.
 The store/bridge tests cover the same boundaries and the original retry deadline.
@@ -329,7 +325,8 @@ The store/bridge tests cover the same boundaries and the original retry deadline
 `e2e/real-claude-permission-mode.spec.ts` starts an operator-bypass child with stored
 default and checks the correlated report and footer.
 An acknowledged default-only pick must leave Bypass approvals intact.
-Plan and Manual approval must then be confirmed within 15 seconds each, without another turn.
+Plan, a return to Bypass approvals, and Manual approval must then be confirmed
+within 15 seconds each, without another turn.
 The same session must request approval for an outside-workspace Read.
 The modal prompt carries the tool name; its title is the generic Permission required.
 The test checks conversation identity, Read-only tool activity and a fresh file witness
@@ -343,10 +340,10 @@ the panel, and the pure model function stays green with the mount unwired. One c
 `composer-effort-menu.spec.ts`'s shape and fake-daemon templates: push a `model_list` with two invented
 rows (the session's model refusing `auto`, a second row accepting it — so the flag is read per row, not
 per list); push `thinking` → `idle` to trigger the run-config re-fetch that turn-end edge causes; open the
-panel and assert **exactly** the four remaining display names, in order, with no `Auto approval` item —
-*and*, as a baseline taken **before** any list arrives, that all five show (an implementation that hid `auto`
+panel and assert **exactly** the five remaining display names, in order, with no `Auto approval` item —
+*and*, as a baseline taken **before** any list arrives, that all six show (an implementation that hid `auto`
 unconditionally would otherwise pass the rest of the drive); then push a replacement `model_list` where the
-same row now accepts `auto`, reopen, and assert five again — proving the join is live per row rather than a
+same row now accepts `auto`, reopen, and assert six again — proving the join is live per row rather than a
 constant.
 
 See [PR #1025](https://github.com/pyrycode/pyrycode-desktop/pull/1025) and

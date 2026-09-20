@@ -46,7 +46,7 @@ import type {
 // than a second copy free to drift.
 //
 // ONE test() block, ONE launch, ONE continuous drive (paired-shell-navigation.spec.ts's shape): each
-// launch pays a full handshake, the ordering is load-bearing (the five-entry reading is only reachable
+// launch pays a full handshake, the ordering is load-bearing (the six-entry reading is only reachable
 // before any list arrives), and no step mutates persistent state.
 //
 // THE STANDING RULE IS KEPT: a fake-tier spec may not supply an input production does not produce. The
@@ -73,7 +73,7 @@ const SESSION_ID = 'session-1022'
 // than typed, and asserted below to be a mode that survives the filter.
 const [BASELINE_MODE] = SETTABLE_PERMISSION_MODES
 
-// The four entries a model can never take away, derived rather than typed: a four-name list here would
+// The five entries a model can never take away, derived rather than typed: a five-name list here would
 // keep passing if the production filter dropped the wrong mode.
 const UNCONDITIONAL_MODES = SETTABLE_PERMISSION_MODES.filter((m) => m !== AUTO_PERMISSION_MODE)
 
@@ -233,7 +233,7 @@ test('composer footer: the permission-mode menu hides auto on a model that refus
   // The permission trigger has NOT moved: hiding an entry never changes what the trigger says.
   await expect(label).toHaveText(displayed(BASELINE_MODE))
 
-  // --- AC1 and AC5. Exactly the four remaining modes, by display name, in their existing order —
+  // --- AC1 and AC5. Exactly the five remaining modes, by display name, in their existing order —
   // toHaveText on an array is exact and ordered, so a dropped, invented, reordered or extra entry fails
   // here. And `Auto` is gone rather than merely unmarked. ---
   await trigger.click()

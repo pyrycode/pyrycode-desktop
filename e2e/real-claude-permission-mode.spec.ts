@@ -19,7 +19,7 @@ type Proof = { readings: Reading[]; acks: string[]; turns: string[];
   tools: { conversationId: string; read: boolean }[]; off: () => void }
 type DriveWindow = typeof window & { permissionProof: Proof }
 
-test('operator bypass stays confirmed through a no-op write, then Plan and Manual approval enforce Read', async ({ relay, daemon, page }, testInfo) => {
+test('operator bypass stays confirmed through a no-op write, then the menu returns to bypass and Manual approval enforces Read', async ({ relay, daemon, page }, testInfo) => {
   test.setTimeout(360_000)
   const { stdout } = await promisify(execFile)(process.env.PYRY_BIN || 'pyry', ['version'], { timeout: 10_000 })
   const revision = /^pyry (?:dev-)?([a-f0-9]{7,40})\s*$/.exec(stdout)?.[1]
@@ -94,6 +94,7 @@ test('operator bypass stays confirmed through a no-op write, then Plan and Manua
     // Stored default can acknowledge without applying. The footer must continue to tell the truth.
     await pick('Manual approval', 'bypassPermissions')
     await pick('Plan', 'plan')
+    await pick('Bypass approvals', 'bypassPermissions')
     await pick('Manual approval', 'default')
     expect((await proof()).modals).toHaveLength(0)
     expect((await proof()).tools).toHaveLength(0)
@@ -119,7 +120,7 @@ test('operator bypass stays confirmed through a no-op write, then Plan and Manua
     await expect(label).toHaveText('Manual approval')
     await testInfo.attach('permission-confirmation-result', {
       body: Buffer.from(JSON.stringify({ executed: true, daemonRevision: revision, noOpRemainedBypass: true,
-        planConfirmed: true, manualConfirmed: true, sameSessionReadApproval: true,
+        planConfirmed: true, bypassReselected: true, manualConfirmed: true, sameSessionReadApproval: true,
         readWitnessReturned: true })), contentType: 'application/json'
     })
   } finally {

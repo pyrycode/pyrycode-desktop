@@ -79,3 +79,11 @@ Pending for the documentation stage: reconcile the saved/applied/default distinc
 
 **Reviewer:** builder self-review per `builder/security-review.md`.
 **Date:** 2026-09-20
+
+
+## Revisions
+
+- 2026-09-20: `selectAppliedEffort` is a pure helper in the existing menu module so the pending/settled distinction can be tested without effects. Zustand static renders read `getInitialState`, so mutating the singleton does not provide a valid container fixture.
+- Updated the existing footer, offline, scoped-read and session-transition test fixtures to supply applied readings explicitly. Their former saved-only labels would assert the retired display contract. No additional production file is needed.
+- The live spec observes only sanitized settings/confirmation fields, reads the actual daemon's `version` output using the existing live-test pattern, restarts Electron over its isolated profile, and records the revision as an attachment. Execution remains pending at the dispatcher gate. The seed gets a unique name through the existing editor to keep reopening independent of duplicate unnamed chats.
+- Final implementation stays within four production files and roughly 550 written lines including the plan and test updates; no new exported type/component/store, no required consumer cascade, and no new state machine.

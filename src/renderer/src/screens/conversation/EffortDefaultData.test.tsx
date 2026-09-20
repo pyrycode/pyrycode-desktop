@@ -207,3 +207,15 @@ describe('EffortDefaultData (container)', () => {
     ).toBe('')
   })
 })
+
+
+it.each([undefined, null, '', 'brisk'])('recalls with applied reading %j when the explicit choice is empty', effectiveEffort => {
+  const writes = createRunSettingsWriteStore()
+  const snapshot: RunConfigSnapshot = { model: GRADED.value, effort: '', effectiveEffort,
+    yolo: false, permissionMode: 'default', usedTokens: 0, windowTokens: 0 }
+  const explicit = selectEffectiveSettings(snapshot, writes.getState())
+  expect(effortDefaultToApply({ ...APPLIES, ...explicit })).toBe(REMEMBERED)
+  for (const remembered of ['', 'STEADY', ' steady ', '__proto__', 'unpublished']) {
+    expect(effortDefaultToApply({ ...APPLIES, ...explicit, remembered })).toBeNull()
+  }
+})

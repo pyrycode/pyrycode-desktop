@@ -3,10 +3,13 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { WireModelOption } from '@shared/wire/types'
 import type { ModelListEntry } from '../../store/modelListStore'
 import {
+  selectAppliedEffort,
   ComposerEffortMenuView,
   COMPOSER_EFFORT_MENU_LABEL,
   composerEffortMenuModel
 } from './ComposerEffortMenu'
+import type { RunConfigSnapshot } from '../../store/runConfigStore'
+import { createRunSettingsWriteStore } from '../../store/runSettingsWriteStore'
 import { ComposerOptionsPanel } from './ComposerOptionsPanel'
 
 // #989: ComposerModelMenu.test.tsx's two halves, one button to the right — the decision as a plain
@@ -126,8 +129,8 @@ describe('composerEffortMenuModel', () => {
   it.each([
     ['a matched row publishing none', LIST, FLAT.value],
     ['no list at all', null, GRADED.value]
-  ])('renders nothing when the session effort is not known, with %s (AC1)', (_why, models, model) => {
-    expect(composerEffortMenuModel(models as ModelListEntry | null, model, '')).toBeNull()
+  ])('keeps an unselected read-only label with %s', (_why, models, model) => {
+    expect(composerEffortMenuModel(models as ModelListEntry | null, model, '')).toMatchObject({ label: 'Effort', currentId: '', options: [] })
   })
 
   // An effort appearing in no published level still offers the levels and marks NONE — the panel's
@@ -365,4 +368,42 @@ describe('composerEffortMenuModel / View — the inherited-default session (#116
     expect(view(WITH_INHERITED, '', '')).toContain('>Effort</span>')
     expect(view(WITH_INHERITED, '', '')).toContain('aria-haspopup="menu"')
   })
+})
+
+
+describe('applied effort presentation', () => {
+  it.each([undefined, null, ''])('keeps %j unselected with a static explanation', effort => {
+    const html = renderToStaticMarkup(<ComposerEffortMenuView model={GRADED.value} models={LIST} effort={effort} onSelect={noop} />)
+    expect(html).toContain('>Effort</span>')
+    expect(html).toContain(effort === null ? 'Claude reports no model effort parameter.' : 'Claude default; applied effort is unavailable.')
+    expect(composerEffortMenuModel(LIST, GRADED.value, effort)?.currentId).toBe('')
+  })
+})
+
+
+it('shows applied readings over saved and confirmed choices, with pending-only rollback', () => {
+  const store = createRunSettingsWriteStore()
+  const writes = store.getState()
+  const snapshot: RunConfigSnapshot = { model: GRADED.value, effort: 'saved', effectiveEffort: 'applied',
+    yolo: false, permissionMode: 'default', usedTokens: 0, windowTokens: 0 }
+  const reading = () => selectAppliedEffort(snapshot, store.getState())
+  writes.dispatch({ type: 'changeDispatched', changeId: 'old', change: { field: 'effort', value: 'confirmed' } })
+  writes.dispatch({ type: 'settingsConfirmed', changeId: 'old' })
+  expect(reading()).toBe('applied')
+  writes.dispatch({ type: 'changeDispatched', changeId: 'new', change: { field: 'effort', value: 'pending' } })
+  expect(reading()).toBe('pending')
+  writes.dispatch({ type: 'settingsRejected', changeId: 'new' })
+  expect(reading()).toBe('applied')
+  expect(selectAppliedEffort({ ...snapshot, effectiveEffort: null }, store.getState())).toBeNull()
+  writes.dispatch({ type: 'conversationSwitched' })
+  expect(selectAppliedEffort(null, store.getState())).toBeUndefined()
+})
+
+
+it('escapes an applied reading without putting it in any attribute', () => {
+  const hostile = '<img src=x onerror=alert(1)>'
+  const html = view(LIST, GRADED.value, hostile)
+  expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;')
+  expect(html).not.toContain('<img')
+  for (const attribute of html.match(/[a-z-]+="[^"]*"/g) ?? []) expect(attribute).not.toContain(hostile)
 })

@@ -22,6 +22,7 @@ import type { StoreApi } from 'zustand/vanilla'
 import type { RunSettingsWriteStore } from './runSettingsWriteStore'
 import { conversationTimelineStore, type ConversationTimelineStore } from './conversationTimelineStore'
 import { activeConversationStore } from './activeConversationStore'
+import { requestRunConfigSnapshot } from '../screens/conversation/runConfigSnapshot'
 
 /** Compile-time exhaustiveness guard: a new SettingsChange field without a case is a type error. */
 function assertNever(x: never): never {
@@ -173,6 +174,8 @@ export interface FoldWriteEventDeps {
   getPending: () => ReadonlyMap<string, SettingsChange>
   dispatch: (event: RunSettingsWriteEvent) => void
   rememberEffort: (level: string) => void
+  refresh?: () => void
+  log?: (code: 'confirmed' | 'rejected') => void
 }
 
 /**
@@ -188,9 +191,16 @@ export interface FoldWriteEventDeps {
  * the writes run in the order a reader expects. Both are synchronous, so no observer sees between them.
  */
 export function foldWriteEvent(deps: FoldWriteEventDeps, event: RunSettingsWriteEvent): void {
-  const level = confirmedEffortLevel(deps.getPending(), event)
+  const pending = deps.getPending()
+  const level = confirmedEffortLevel(pending, event)
+  const rejected = event.type === 'settingsRejected' && pending.get(event.changeId)?.field === 'effort'
   deps.dispatch(event)
-  if (level !== null) deps.rememberEffort(level)
+  if (rejected) deps.log?.('rejected')
+  if (level !== null) {
+    deps.rememberEffort(level)
+    deps.log?.('confirmed')
+    deps.refresh?.()
+  }
 }
 
 /** Observe live edges, never held model readings or history. Both subscriptions share app lifetime. */
@@ -257,7 +267,12 @@ export function RunSettingsWriteData(): null {
         {
           getPending: () => runSettingsWriteStore.getState().pending,
           dispatch: runSettingsWriteStore.getState().dispatch,
-          rememberEffort: lastEffortStore.getState().setLastEffort
+          rememberEffort: lastEffortStore.getState().setLastEffort,
+          refresh: () => requestRunConfigSnapshot(
+            window.pyry.sendCommand,
+            activeConversationStore.getState().activeConversation?.id ?? null
+          ),
+          log: code => window.pyry.sendDiagnostic({ event: 'composer-effort', code })
         },
         event
       )

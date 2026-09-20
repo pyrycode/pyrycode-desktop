@@ -377,3 +377,23 @@ describe('foldWriteEvent', () => {
     expect(rememberEffort).not.toHaveBeenCalled()
   })
 })
+
+
+describe('confirmed effort refresh', () => {
+  it('refreshes after remembering only a correlated successful effort choice', () => {
+    const pending = new Map<string, SettingsChange>([['choice', { field: 'effort', value: 'medium' }]])
+    const order: string[] = []
+    const deps = { getPending: () => pending, dispatch: () => order.push('dispatch'),
+      rememberEffort: () => order.push('remember'), refresh: () => order.push('refresh') }
+    foldWriteEvent(deps, { type: 'settingsConfirmed', changeId: 'choice' })
+    expect(order).toEqual(['dispatch', 'remember', 'refresh'])
+    for (const event of [
+      { type: 'settingsConfirmed', changeId: 'foreign' },
+      { type: 'settingsRejected', changeId: 'choice' }
+    ] as const) {
+      order.length = 0
+      foldWriteEvent(deps, event)
+      expect(order).toEqual(['dispatch'])
+    }
+  })
+})

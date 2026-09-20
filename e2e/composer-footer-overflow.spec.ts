@@ -95,6 +95,7 @@ const WORST_CASE_RUN_CONFIG: SessionSettingsPayload = {
   session_id: SESSION_ID,
   model: PUBLISHED_MODEL.value,
   effort: LONG_EFFORT,
+  effective_effort: LONG_EFFORT,
   yolo: false,
   permission_mode: WIDEST_MODE,
   used_tokens: WINDOW_TOKENS,

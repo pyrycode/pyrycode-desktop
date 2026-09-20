@@ -106,6 +106,7 @@ function sessionSettingsFrame(inReplyTo: number, sessionId: string, effort: stri
       // substitution stays pinned where it belongs, in the unit table.
       model: GRADED.value,
       effort,
+      effective_effort: effort || A_BASELINE,
       yolo: false,
       // Required since #1020 — a missing key is decode-rejected at runtime and reads as the controls
       // never mounting, which would make every assertion below vacuous.
@@ -168,6 +169,7 @@ test('a new chat opens at the last effort level used, and a chat with its own le
   // they first ask: the first is B, the second is C.
   const requests: CapturedRequest[] = []
   const minted: string[] = []
+  const saved = new Map<string, string>()
   const stateFake = conversationStateFake({ conversations: [SEED] })
 
   const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
@@ -177,18 +179,23 @@ test('a new chat opens at the last effort level used, and a chat with its own le
       const conversationId = (envelope.payload as { conversation_id: string }).conversation_id
       requests.push({ conversationId, envelopeId: envelope.id })
       if (conversationId === SEED.id) {
-        return [sessionSettingsFrame(envelope.id, SESSION_A, A_BASELINE)]
+        return [sessionSettingsFrame(envelope.id, SESSION_A, saved.get(SESSION_A) ?? A_BASELINE)]
       }
       if (!minted.includes(conversationId)) minted.push(conversationId)
       // B reports NO effort of its own; C reports one. Both are answered inline, so the drive is gated on
       // renderings rather than on when a reply is released.
-      return minted.indexOf(conversationId) === 0
-        ? [sessionSettingsFrame(envelope.id, SESSION_B, '')]
-        : [sessionSettingsFrame(envelope.id, SESSION_C, C_BASELINE)]
+      if (minted.indexOf(conversationId) === 0) return [sessionSettingsFrame(envelope.id, SESSION_B, saved.get(SESSION_B) ?? '')]
+      if (minted.indexOf(conversationId) === 1) return [sessionSettingsFrame(envelope.id, SESSION_C, C_BASELINE)]
+      return [sessionSettingsFrame(envelope.id, 'session-rejected', '')]
     }
     // Every change is confirmed. A confirm is what writes the remembered level (a rejected level is not a
     // level that was used), so the seed this whole drive rests on is settled here rather than optimistic.
     if (envelope.type === 'set_session_settings') {
+      const change = envelope.payload as SetSessionSettingsPayload
+      if (change.session_id === 'session-rejected') return [encodeEnvelope({
+        id: REPLY_ENVELOPE_ID, type: 'error', ts: FIXED_TS, in_reply_to: envelope.id, payload: {}
+      })]
+      if (change.effort) saved.set(change.session_id, change.effort)
       return [
         sessionSettingsUpdatedFrame(
           envelope.id,
@@ -229,7 +236,7 @@ test('a new chat opens at the last effort level used, and a chat with its own le
   // list arrives once it has asked, so the levels the remembered value is validated against are B's. ---
   await newChat()
   await expect
-    .poll(() => requests.filter((r) => r.conversationId !== SEED.id).length, {
+    .poll(() => new Set(requests.filter((r) => r.conversationId !== SEED.id).map(r => r.conversationId)).size, {
       timeout: ROUNDTRIP_TIMEOUT_MS
     })
     .toBe(1)
@@ -255,7 +262,7 @@ test('a new chat opens at the last effort level used, and a chat with its own le
   // is remembered, so the empty-effort precondition is the only thing that can hold the apply back. ---
   await newChat()
   await expect
-    .poll(() => requests.filter((r) => r.conversationId !== SEED.id).length, {
+    .poll(() => new Set(requests.filter((r) => r.conversationId !== SEED.id).map(r => r.conversationId)).size, {
       timeout: ROUNDTRIP_TIMEOUT_MS
     })
     .toBe(2)
@@ -284,4 +291,22 @@ test('a new chat opens at the last effort level used, and a chat with its own le
   // own confirm lands, so this reads 2 rather than 1.
   expect(settingsFramesFor(captured, SESSION_A)).toBe(1)
   expect(settingsFramesFor(captured, SESSION_B)).toBe(1)
+
+  await page.getByRole('button', { name: 'Create channel', exact: true }).click({ force: true })
+  await page.locator('.create-channel__input').fill('Rejected recall')
+  await page.locator('.create-channel-overlay .modal__action--confirm').click()
+  await expect.poll(() => minted.length).toBe(3)
+  const channel = minted[2]
+  daemon.pushFrame(modelListFrame(channel))
+  await expect.poll(() => settingsFramesFor(captured, 'session-rejected')).toBe(1)
+  await expect(label).toHaveText(A_BASELINE)
+  expect(await page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBe(A_PICKED)
+  // New settings and capability responses wake the effect, but cannot retry this opening's refusal.
+  const beforeRefresh = requests.length
+  await page.locator('.channel-list__row-open[aria-current="true"]').click()
+  await expect.poll(() => requests.length).toBeGreaterThan(beforeRefresh)
+  daemon.pushFrame(modelListFrame(channel))
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  expect(settingsFramesFor(captured, 'session-rejected')).toBe(1)
+
 })

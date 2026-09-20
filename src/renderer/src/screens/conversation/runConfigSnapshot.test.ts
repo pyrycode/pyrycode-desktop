@@ -497,3 +497,18 @@ describe('subscribeRunConfig', () => {
     expect(setSessionId).toHaveBeenCalledWith(`sess-${OPEN}`)
   })
 })
+
+
+describe('applied effort readings', () => {
+  it.each([undefined, null, '', 'medium'])('preserves %j independently of saved effort', effectiveEffort => {
+    const event: DaemonEvent = {
+      type: 'runConfigReceived', conversationId: OPEN, sessionId: 'session', model: '',
+      effort: 'high', yolo: false, permissionMode: 'default', used_tokens: 0, window_tokens: 0,
+      ...(effectiveEffort === undefined ? {} : { effectiveEffort })
+    }
+    const snapshot = toRunConfigSnapshot(event)
+    expect(snapshot).toHaveProperty('effort', 'high')
+    expect(snapshot?.effectiveEffort).toBe(effectiveEffort)
+    expect(Object.prototype.hasOwnProperty.call(snapshot, 'effectiveEffort')).toBe(effectiveEffort !== undefined)
+  })
+})

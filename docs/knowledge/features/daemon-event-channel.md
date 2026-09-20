@@ -159,6 +159,28 @@ Three pieces, three layers:
 
 `src/shared/ipc/` is the new IPC-contract module, mirroring how `src/shared/wire/` is the wire module. #18 creates one file in it; #17 later adds its command file (recommended: a sibling `commands.ts` with its own `COMMAND_CHANNEL`, so the two tickets never edit the same file).
 
+### Run-configuration report
+
+`runConfigReceived.effectiveEffort?: string | null` carries the daemon's confirmed
+applied-effort report; `effort` remains the saved choice. The
+[decoder](inbound-message-decode.md#optional-effective-effort-report) preserves
+unavailable as `undefined`, explicit `null` as no effort parameter, and every string
+verbatim. The named-field projection always assigns `effectiveEffort`, so check
+`=== undefined`, not property presence or truthiness. Empty strings remain values.
+
+The report passes the existing [request-correlation gate](daemon-connection-correlation.md#run-configuration-read-attribution-correlation-1176):
+`conversationId` comes from the pending request and `serverId` from the connection's
+origin stamp, never payload keys. Out-of-order replies retain those identities;
+missing/unmatched correlations, duplicates and abandoned replies after reconnect
+emit nothing. Malformed reports fail decoding before consuming the pending request,
+allowing a subsequent valid reply to match it.
+
+This is untrusted display text, never a control input, raw markup, attribute, URL,
+path, cache key or log value. Receiving it sends no settings write and must not
+replace the remembered choice. Carriage currently ends at IPC; renderer snapshots,
+footer selection and remembered-choice handling belong to
+[#1549](https://github.com/pyrycode/pyrycode-desktop/issues/1549).
+
 ### Stopped-turn metadata
 
 Both `DaemonEvent.turnEnd` and `HistoryTimelineEvent.turnEnd` carry optional

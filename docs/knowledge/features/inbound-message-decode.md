@@ -135,6 +135,43 @@ See [the contract and routing](conversation-timeline-store.md#refusal-records-an
 Display bounds belong to the [row](conversation-shell-turn-status.md#model-refusal-records),
 so decoding never truncates the identifier Switch back must send unchanged.
 
+### Optional effective-effort report
+
+`SessionSettingsPayload.effective_effort?: string | null` reports confirmed applied
+effort independently of the required `effort` saved choice. `parseSessionSettingsPayload`
+preserves these states from [the daemon contract](https://github.com/pyrycode/pyrycode/issues/2517):
+
+| Wire value | Decoded value | Meaning |
+|---|---|---|
+| Omitted | `undefined` | Applied reading unavailable or unsupported |
+| `null` | `null` | No effort parameter |
+| Any string | Unchanged string | Applied report, including empty, unfamiliar, whitespace or markup-like text |
+
+The parser checks absence before `requireStringOrNull`; it never defaults the
+report to saved `effort`, trims it or applies an effort allowlist. Original required
+fields still undergo their existing checks, and unknown payload keys are dropped
+by named-field reconstruction. A present Boolean, number, array or object throws
+`WireDecodeError` and rejects the whole frame before diagnostics or IPC. Error
+text names only the static field. Successful diagnostics retain the existing type,
+byte count and hash without report content. `MAX_PLAINTEXT_BYTES` bounds the entire
+frame before JSON decoding; there is no effort-specific length cap.
+
+The [event channel](daemon-event-channel.md#run-configuration-report) carries the
+report as `effectiveEffort`. Renderer snapshots, visible selection and remembered
+choices belong to [#1549](https://github.com/pyrycode/pyrycode-desktop/issues/1549).
+
+## Testing
+
+In `inboundMessage.test.ts`, wrap malformed array payloads in object rows such as
+`{ effectiveEffort: [] }` before passing them to `it.each`. Vitest expands bare array
+rows into callback arguments: `[]` can test `undefined`, and `['private-effort']`
+can test a string, leaving array rejection untested. The connection mapping tests
+use the same object-row shape to exercise rejection through the IPC boundary.
+
+Construct oversized inbound fixtures with `Buffer.from(JSON.stringify(...))`.
+Using `encodeEnvelope` can reject the fixture at its outbound size guard before
+`parseInboundMessage` runs, so it cannot prove the inbound guard works.
+
 ## Security properties
 
 Ticket carries `security-sensitive`; the architect's security-review verdict is **PASS**. This is the "hostile daemon response" trust boundary — decrypted bytes from a relay peer on an internet-exposed surface.

@@ -2,10 +2,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { type Page } from '@playwright/test'
 import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/realDaemon'
-import { electron } from './fixtures/electronLaunch'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
-import { LOOPBACK_RELAY_ENV_FLAG } from '../src/main/relayPolicy'
-import { TEST_SECRET_BACKEND_ENV_FLAG } from '../src/main/secretBackend'
 import type { DaemonEvent } from '../src/shared/ipc/events'
 
 // The bootstrap turn populates the daemon's model-list fallback for never-messaged conversations.
@@ -80,7 +77,7 @@ test('applied effort, confirmed preference, restart and recall in chats and chan
   testInfo.annotations.push({ type: 'daemon-revision', description: revision! })
   await testInfo.attach('daemon-revision', { body: Buffer.from(revision!), contentType: 'text/plain' })
 
-  await withIsolatedElectronApp(async ({ page: initialPage, app, userDataDir }) => {
+  await withIsolatedElectronApp(async ({ page: initialPage, relaunch }) => {
     let page = initialPage
     let proof = await observe(page)
     await pairFromUnpairedLaunch(page, encodePairingPayload({
@@ -119,76 +116,64 @@ test('applied effort, confirmed preference, restart and recall in chats and chan
     expect(await page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBe(picked)
     const originalId = selected.conversationId
 
-    // Real process restart, same isolated profile; the owning helper reaps the profile after both apps.
-    await app.close()
-    const env: Record<string, string> = Object.fromEntries(
-      Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
-    )
-    env[LOOPBACK_RELAY_ENV_FLAG] = '1'
-    env[TEST_SECRET_BACKEND_ENV_FLAG] = '1'
-    delete env.ELECTRON_RENDERER_URL
-    const restarted = await electron.launch({ args: ['.', `--user-data-dir=${userDataDir}`], env })
-    try {
-      page = await restarted.firstWindow()
-      proof = await observe(page)
-      expect(await page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBe(picked)
-      await expect(page.locator('.channel-list__row-open')).toBeVisible({ timeout: 45_000 })
-      await page.locator('.channel-list__row-open').click()
-      const restored = await showFresh(page, proof, 0)
-      expect(restored.conversationId).toBe(originalId)
-      expect(restored.effort).toBe(picked)
-      expect(proof.confirmations()).toBe(0)
+    // The shared lifecycle owns both processes and preserves the isolated profile.
+    page = (await relaunch()).page
+    proof = await observe(page)
+    expect(await page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBe(picked)
+    await expect(page.locator('.channel-list__row-open')).toBeVisible({ timeout: 45_000 })
+    await page.locator('.channel-list__row-open').click()
+    const restored = await showFresh(page, proof, 0)
+    expect(restored.conversationId).toBe(originalId)
+    expect(restored.effort).toBe(picked)
+    expect(proof.confirmations()).toBe(0)
 
-      for (const kind of ['chat', 'channel'] as const) {
-        const before = proof.readings.length
-        const ackBefore = proof.confirmations()
-        if (kind === 'chat') {
-          await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
-        } else {
-          await page.getByRole('button', { name: 'Create channel', exact: true }).click({ force: true })
-          await page.locator('.create-channel__input').fill('Effort recall channel')
-          await page.locator('.create-channel-overlay .modal__action--confirm').click()
-        }
-        await expect(page.locator('.bubble')).toHaveCount(0)
-        await expect.poll(proof.confirmations, { timeout: ROUNDTRIP }).toBeGreaterThan(ackBefore)
-        await expect.poll(() => proof.readings.slice(before).some(r => r.effort === picked), { timeout: ROUNDTRIP }).toBe(true)
-        const recalled = await showFresh(page, proof, before)
-        expect(recalled.conversationId).not.toBe(originalId)
-        expect(recalled.effort).toBe(picked)
-        expect(proof.confirmations()).toBe(ackBefore + 1)
-        await turn(page, kind === 'chat' ? 2 : 3)
-        const applied = await refresh(page, proof)
-        expect(applied.effectiveEffort).not.toBeUndefined()
-        expect(applied.effectiveEffort).not.toBe('')
-        expect(applied.effort).toBe(picked)
-        expect(proof.confirmations()).toBe(ackBefore + 1)
-        await expect(page.locator('[data-thread-role="user"]')).not.toContainText('/effort')
+    for (const kind of ['chat', 'channel'] as const) {
+      const before = proof.readings.length
+      const ackBefore = proof.confirmations()
+      if (kind === 'chat') {
+        await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
+      } else {
+        await page.getByRole('button', { name: 'Create channel', exact: true }).click({ force: true })
+        await page.locator('.create-channel__input').fill('Effort recall channel')
+        await page.locator('.create-channel-overlay .modal__action--confirm').click()
       }
-
-      // Remember a different choice on the channel, then reopen the original explicit chat.
-      await page.locator('.composer__effort').click()
-      const reopenedPanel = page.getByRole('menu', { name: 'Effort', exact: true })
-      const levels = await reopenedPanel.getByRole('menuitem').allTextContents()
-      const otherIndex = levels.findIndex(level => level !== picked)
-      expect(otherIndex).toBeGreaterThanOrEqual(0)
-      const beforeChange = proof.readings.length
-      const ackBeforeChange = proof.confirmations()
-      await reopenedPanel.getByRole('menuitem').nth(otherIndex).click()
-      await expect.poll(proof.confirmations).toBeGreaterThan(ackBeforeChange)
-      await showFresh(page, proof, beforeChange)
-      const remembered = levels[otherIndex]
-      expect(await page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBe(remembered)
-      const beforeReopen = proof.readings.length
-      // The seed is the first chat row; the new channel belongs to the other tree.
-      await page.getByRole('button', { name: originalName, exact: true }).click()
-      const explicit = await showFresh(page, proof, beforeReopen)
-      expect(explicit.conversationId).toBe(originalId)
-      expect(explicit.effort).toBe(picked)
-      await refresh(page, proof)
-      expect(proof.confirmations()).toBe(ackBeforeChange + 1)
-      expect(await page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBe(remembered)
-    } finally {
-      await restarted.close()
+      await expect(page.locator('.bubble')).toHaveCount(0)
+      await expect.poll(proof.confirmations, { timeout: ROUNDTRIP }).toBeGreaterThan(ackBefore)
+      await expect.poll(() => proof.readings.slice(before).some(r => r.effort === picked), { timeout: ROUNDTRIP }).toBe(true)
+      const recalled = await showFresh(page, proof, before)
+      expect(recalled.conversationId).not.toBe(originalId)
+      expect(recalled.effort).toBe(picked)
+      expect(proof.confirmations()).toBe(ackBefore + 1)
+      await turn(page, kind === 'chat' ? 2 : 3)
+      const applied = await refresh(page, proof)
+      expect(applied.effectiveEffort).not.toBeUndefined()
+      expect(applied.effectiveEffort).not.toBe('')
+      expect(applied.effort).toBe(picked)
+      expect(proof.confirmations()).toBe(ackBefore + 1)
+      await expect(page.locator('[data-thread-role="user"]')).not.toContainText('/effort')
     }
+
+    // Remember a different choice on the channel, then reopen the original explicit chat.
+    await page.locator('.composer__effort').click()
+    const reopenedPanel = page.getByRole('menu', { name: 'Effort', exact: true })
+    const levels = await reopenedPanel.getByRole('menuitem').allTextContents()
+    const otherIndex = levels.findIndex(level => level !== picked)
+    expect(otherIndex).toBeGreaterThanOrEqual(0)
+    const beforeChange = proof.readings.length
+    const ackBeforeChange = proof.confirmations()
+    await reopenedPanel.getByRole('menuitem').nth(otherIndex).click()
+    await expect.poll(proof.confirmations).toBeGreaterThan(ackBeforeChange)
+    await showFresh(page, proof, beforeChange)
+    const remembered = levels[otherIndex]
+    expect(await page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBe(remembered)
+    const beforeReopen = proof.readings.length
+    // The seed is the first chat row; the new channel belongs to the other tree.
+    await page.getByRole('button', { name: originalName, exact: true }).click()
+    const explicit = await showFresh(page, proof, beforeReopen)
+    expect(explicit.conversationId).toBe(originalId)
+    expect(explicit.effort).toBe(picked)
+    await refresh(page, proof)
+    expect(proof.confirmations()).toBe(ackBeforeChange + 1)
+    expect(await page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBe(remembered)
   })
 })

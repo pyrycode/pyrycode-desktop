@@ -7,8 +7,8 @@ import type { DaemonEvent } from '../src/shared/ipc/events'
 
 // The bootstrap turn populates the daemon's model-list fallback for never-messaged conversations.
 // Observe real settings replies and acknowledgements; no store injection or optimistic-label proof.
-// The dispatcher owns execution with a daemon containing pyrycode#2517 and its existing credential.
-test.use({ seedPromoted: false })
+// Use an effort-capable model: the fixture's default Haiku reports a null effort parameter.
+test.use({ seedPromoted: false, claudeModel: 'opus' })
 const ROUNDTRIP = 15_000
 const TURN = 120_000
 
@@ -92,6 +92,7 @@ test('applied effort, confirmed preference, restart and recall in chats and chan
     const inherited = await refresh(page, proof)
     expect(inherited.effort).toBe('')
     expect(inherited.effectiveEffort, 'live daemon must report applied effort after a turn').not.toBeUndefined()
+    expect(inherited.effectiveEffort).not.toBeNull()
     expect(inherited.effectiveEffort).not.toBe('')
     expect(await page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBeNull()
 

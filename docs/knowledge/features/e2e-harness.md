@@ -32,7 +32,27 @@ rebuild replaces the renderer assets and can invalidate launch evidence.
 
 Teardown must run on **every** exit path — success, test failure, and a failure raised after a resource (the Electron process, its `--user-data-dir`) came up but before `use()` returns. The naive shape (cleanup code placed textually after `await use(...)`) only covers the first two: Playwright's fixture lifecycle runs that code on pass and fail alike, but a setup-time throw — say `firstWindow()` rejecting — never reaches it, so the process and dir both leak. With `workers: 1`, one leaked launch then poisons every remaining spec in the run, since apps launch serially and the orphan just sits there.
 
-**[#517](../codebase/517.md) fixed this** in the three fixtures that had the naive shape (`realDaemon.ts`'s `page` and `relay`, `smoke.spec.ts`'s local `page`) by converting to nested `try`/`finally`, one level per resource: each `try` textually follows its `const x = await create()`, so "teardown registered before the next `await`" is structural rather than a discipline a future edit can silently break, and close-then-`rm` ordering falls out of the nesting for free (the inner `finally` always completes before the outer one begins). Both teardown steps at the two-resource sites (app close, dir `rm`) are best-effort — wrapped in their own `try`/`catch` that discards the error without logging, since a throwing `finally` would replace the causal error the developer needs and abort the unwind before the outer `rm`, stranding the credential-bearing dir. The `page` fixture body in `realDaemon.ts` was lifted out into an exported `withIsolatedElectronApp(run)` so a regression spec can drive the real setup path directly; see [#517 codebase notes](../codebase/517.md) for the full shape and its one accepted gap (a setup `await` that never settles is not reapable — Playwright kills the worker without unwinding, so no `finally` runs).
+The fixtures use nested `try`/`finally` so app cleanup precedes profile removal, including when
+window setup fails. Both steps are best-effort and discard teardown errors without logging: a
+throwing `finally` would replace the causal error and could strand the credential-bearing directory.
+`realDaemon.ts` exposes `withIsolatedElectronApp(run)` so regression tests exercise the real setup
+path directly. A setup `await` that never settles remains outside this guarantee: Playwright kills
+the worker without unwinding, so no `finally` runs. See [the original teardown repair](../codebase/517.md).
+
+`withIsolatedElectronApp` also owns same-profile restarts through the returned
+`IsolatedElectronApp.relaunch()`. It closes the current app, waits for process exit, then launches
+with the same fixture-owned directory and environment. Each replacement becomes the current app
+before `firstWindow()` is awaited, so a window-setup failure still reaches cleanup. Continue through
+the returned handle; stale handles and concurrent relaunch calls reject. The outer fixture closes
+the active replacement before removing the profile on success or failure. `fixture-teardown-leak.spec.ts`
+checks distinct processes, prior-process exit, persisted effort bytes, stale-handle rejection and
+both cleanup outcomes.
+
+Keep restarts inside this lifecycle: the launch-site guard scans live specs as well as the default
+tier and permits direct Electron launches only in `desktopIsolation.ts` and `realDaemon.ts`.
+An inline restart in a live spec fails that guard even when its profile reuse is otherwise correct.
+The [live effort proof](composer-effort-menu.md#testing-the-default-apply-1169) exercises the shared
+restart while retaining the daemon and its conversations.
 
 ### Two-way separation from the vitest unit run
 

@@ -25,10 +25,11 @@ apart by their own correlation ids.
 
 ### The problem this store solves
 
-`set_session_settings`'s reply carries only `session_id` — no settings — and the change applies on the
-**next session spawn** (daemon ADR 031), so `runConfigStore.snapshot` (the daemon's *live-session* value)
-does not change on an ack. The sheet cannot re-read the new value from the daemon; it has to remember what
-it asked for and trust the daemon's ack/error as the verdict. This store is that memory.
+`set_session_settings`'s acknowledgement carries `session_id`, not the chosen fields. The client
+therefore retains the requested change under its correlation id to distinguish success from rejection.
+That acknowledgement confirms a choice; it does not establish the model's applied effort. A successful
+effort write requests fresh settings, whose separate `effectiveEffort` reading governs the footer.
+The sheet and recall policy keep using this store's explicit-choice composition.
 
 ### The store (`src/renderer/src/store/runSettingsWriteStore.ts`)
 
@@ -79,7 +80,7 @@ whole-value writes that read nothing. The contrast is the coupling, not the coun
   commits **the value the client sent** (the event itself carries none) into `confirmed` and deletes the
   pending marker.
 - **`settingsRejected`** — looks up `pending.get(changeId)`; if absent, **no-op** (fail-closed); else
-  deletes the pending marker (the view rolls back on its own — the optimistic overlay vanishes, revealing
+  deletes the pending marker (the explicit-choice view rolls back — the optimistic overlay vanishes, revealing
   the last confirmed value or the snapshot base) and sets `error` to the rejected field.
 - **`reconnected`** ([#539](../codebase/539.md)) — drops **every** pending marker, regardless of how many
   were outstanding, because main abandons its envelope-id → `changeId` correlation on each re-dial
@@ -117,7 +118,7 @@ whole-value writes that read nothing. The contrast is the coupling, not the coun
     wrote anything would re-render the sheet.
 
 There is no explicit "roll back" mutation: **clearing the pending marker *is* the rollback**, because the
-effective view falls through to the confirmed override or the snapshot base — `reconnected` and
+explicit-choice view falls through to the confirmed override or the snapshot base — `reconnected` and
 `conversationSwitched` are two more callers of that doctrine, not a new mechanism. A no-match (or
 already-clear) arm returns the same state object, so zustand skips the notify.
 
@@ -130,12 +131,17 @@ function selectEffectiveSettings(
 ): Pick<RunConfigSnapshot, 'model' | 'effort' | 'yolo' | 'permissionMode'>
 ```
 
-Composes the displayed value per field, precedence high to low:
+Composes explicit settings for the sheet, sibling controls and recall, precedence high to low:
 
 1. the **last-inserted** `pending` entry for that field, if any (optimistic; `Map` insertion order gives
    last-write-wins for rapid same-field changes);
 2. else `confirmed[field]`, if set;
 3. else the snapshot base (`snapshot?.model ?? ''`, `?? ''`, `?? false`, `snapshot?.permissionMode ?? ''`).
+
+Despite the selector's name, its `effort` is an explicit choice, not Claude's applied reading.
+The [effort footer](composer-effort-menu.md#the-write) uses `selectAppliedEffort` instead: pending
+effort over `snapshot.effectiveEffort`, without the confirmed layer. This allows saved and applied
+values to disagree without blocking recall or masking the daemon's fresh reading.
 
 `??` falls through only on `undefined`, so an empty-string / `false` value at any layer is held verbatim
 — never coerced (the `runConfigStore` no-coercion posture). `selectError(s)` and
@@ -225,8 +231,9 @@ confirmedEffortLevel(pending: ReadonlyMap<string, SettingsChange>, event: RunSet
 // changeId, reconnected, conversationSwitched — is null.
 
 foldWriteEvent(deps: FoldWriteEventDeps, event: RunSettingsWriteEvent): void
-// deps = { getPending: () => pending map, dispatch, rememberEffort: (level) => void }
-// resolves confirmedEffortLevel(deps.getPending(), event), THEN dispatches, THEN remembers if non-null.
+// deps = { getPending, dispatch, rememberEffort, refresh?, log? }
+// resolve the pending match BEFORE dispatch; on success, dispatch → remember → log → refresh.
+// A correlated effort rejection dispatches and logs, but neither remembers nor refreshes.
 ```
 
 **Remember on confirm, not on pick.** A rejected level is not a level that was used, and the confirm is
@@ -238,6 +245,12 @@ itself, and why the read **must precede** the dispatch: reading after would find
 and remember nothing, silently — a change that dispatches the same events the same number of times,
 passes every count assertion, and never persists anything. `foldWriteEvent`'s ordering is pinned by a
 named test asserting `getPending` was called before `dispatch`.
+
+After remembering a correlated effort success, the app-level binding requests settings for the
+conversation active at invocation. Passive readings, unmatched/replayed replies and rejected choices
+cannot refresh or persist through this path. Diagnostics carry only the static `composer-effort`
+event and `confirmed`/`rejected` codes. A confirmation before Claude starts may persist the choice
+while the footer still has no applied reading.
 
 The no-match arm reuses this store's own fail-closed rule rather than restating it: an uncorrelated
 confirm commits nothing in the reducer, so it remembers nothing here either — which is also what closes a
@@ -262,9 +275,9 @@ A headless leaf (`RunSettingsWriteData(): null`) mounted **unconditionally at Ap
 sheet-scoped. A confirm/reject reply can arrive **after** the Run config sheet closes, so the listener
 must outlive the sheet; a sheet-scoped subscription would strand the pending marker. That same rationale
 now covers the `reconnected` clear ([#539](../codebase/539.md)) for free — the edge fires whether or not
-the sheet is open. Since #1169, the settings-folding effect is
-`useEffect(() => subscribeRunSettingsWrite(window.pyry.onDaemonEvent, e => foldWriteEvent({ getPending: () => runSettingsWriteStore.getState().pending, dispatch: runSettingsWriteStore.getState().dispatch, rememberEffort: lastEffortStore.getState().setLastEffort }, e)), [])`
-— every reply still reaches the store exactly as before; the one addition is the fold above. `getState()`
+the sheet is open. The settings subscription passes translated events through `foldWriteEvent`,
+wiring this store's dispatch, last-effort persistence, active-conversation refresh and content-free
+diagnostics. `getState()`
 is read **per event**, never captured at subscription, because this listener is app-lifetime: a `pending`
 snapshot taken at mount would freeze at whatever was in flight when App mounted. `window.pyry` is
 dereferenced only inside the effect (the `SessionIdData` server-render invariant). The returned off-handle
@@ -341,12 +354,10 @@ reply arrived.
 - **`error` persists until the next `changeDispatched`.** A `settingsConfirmed` leaves `error` untouched,
   so a stale rejection error can briefly outlive a later, unrelated success — #257 does not clear it on
   its own signal either; the AC only requires a retry (which does dispatch) to clear it.
-- **No reset when a fresh snapshot arrives *for the same chat*.** A `confirmed` override that matches
-  the next spawn's snapshot becomes redundant but harmless (`override === snapshot`); no divergence
-  occurs in the single-client model, so this stays deferred. The divergence that *did* surface — a
-  confirmed override composing over a *different* chat's snapshot, permanently — was #1167's, and is
-  what `conversationSwitched` retires; see § Scoped to the open chat since #1167 above. This bullet is
-  narrower than the one #1167 closed: it is about a fresh reply for the chat already open, not a switch.
+- **No reset when a fresh snapshot arrives for the same chat.** Confirmed explicit-choice overrides
+  remain available to the sheet and recall policy. They never override the footer's applied effort,
+  which may differ from the saved choice. A conversation switch clears the entire write state;
+  see § Scoped to the open chat since #1167 above.
 
 ## Related
 
@@ -391,7 +402,7 @@ reply arrived.
 - **[#1169](../codebase/1169.md)** — added `confirmedEffortLevel`/`foldWriteEvent`: an effort confirm
   also writes the level into [Last-effort store](last-effort-store.md), read back by
   [Composer effort menu § The default apply](composer-effort-menu.md#the-default-apply-1169) to default a
-  newly opened chat's effort control instead of leaving it blank. No reducer arm changed. See §
+  newly opened conversation's explicit choice when empty. No reducer arm changed. See §
   Remembering the confirmed level above.
 - **[#1167](https://github.com/pyrycode/pyrycode-desktop/issues/1167)** — added `conversationSwitched`,
   the deliberate contrast arm to `reconnected`: it clears `confirmed` and `error` too, because a switch

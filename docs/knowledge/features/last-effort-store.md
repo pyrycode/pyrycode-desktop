@@ -1,26 +1,29 @@
 # Last-effort store
 
-The renderer's persisted, client-owned "last effort level used" preference — a `string | null` slice
-that survives an app restart, so a new chat opens at the effort level the last one was set to instead of
-drawing nothing on [the footer's effort control](composer-effort-menu.md).
+The renderer's persisted, client-owned last successfully confirmed effort choice — a `string | null`
+slice reused by chats and channels with no choice of their own. The [footer](composer-effort-menu.md)
+shows Claude's applied reading independently of this preference.
 
 Introduced in [#1169](../codebase/1169.md). The **data half** only — see [Composer effort default](composer-effort-menu.md#the-default-apply-1169)
 for the decision that reads it and applies it to a newly opened chat.
 
 ## What it does
 
-Holds one persisted value: the effort level the daemon most recently *confirmed* for any chat, or
-`null` when nothing has ever been confirmed (fresh install, or every level so far rejected). `null` is a
-distinct, meaningful state — "nothing to offer" — never coerced into an invented level: with nothing
-usable the footer control stays blank, which is #988's constraint that nothing it displays is
-client-authored.
+Holds the level from the most recent correlated successful deliberate or recalled effort write,
+or `null` when nothing is remembered. A pick still pending, a rejection, an unmatched acknowledgement,
+or a passive settings read cannot update it. A confirmed pre-launch choice can be remembered before
+Claude reports applied effort; success here confirms the choice, not what the model currently applies.
 
-Client-owned: claude's session-open line carries no effort field, so there is no daemon-side notion of
-"the last level used" to read back. It lives entirely in the renderer.
+The three values have separate jobs: saved `effort` establishes the conversation's explicit choice;
+`effectiveEffort` reports Claude's applied level; this preference supplies a candidate when the saved
+choice is empty. An inherited effective reading can exist with empty saved effort and does not block
+recall. With no usable remembered level, the app sends no default write and inherits Claude's setting.
+The footer still shows its effective reading, or unselected **Effort** for an unavailable/null reading.
 
-**One remembered level app-wide.** Not per host, per server, per workspace or per chat — the ticket's
-ruling. Cross-model mismatch is answered downstream, by validating the remembered level against the
-opened chat's own published levels before applying it, not by partitioning this store's one key.
+**One remembered level app-wide**, shared across chats, channels and connected hosts, surviving app
+restarts through the same desktop profile. It is renderer-local and is not synchronised with mobile.
+Recall checks the opened conversation's published levels before applying the preference; unsupported
+values do not replace explicit choices or acquire a fallback. See [the default-apply rules](composer-effort-menu.md#the-default-apply-1169).
 
 ## How it works
 
@@ -96,8 +99,9 @@ level the daemon just confirmed"), so a discriminated-union action set would be 
 
 `lastEffortStore` has exactly one caller of `setLastEffort` in the whole app: `foldWriteEvent` in
 [Run configuration write store § Remembering the confirmed level](run-settings-write-store.md#remembering-the-confirmed-level-1169),
-wired at `RunSettingsWriteData`'s App-level subscription. A rejected level is not a level that was used,
-so nothing here is written on a pick — only on the daemon's confirm, and only for the `effort` field.
+wired at `RunSettingsWriteData`'s App-level subscription. Only a confirmation matching a pending,
+nonempty `effort` write records a choice. The bridge then requests fresh settings; that response's
+effective reading governs the settled footer even when it differs from the remembered choice.
 Applying a remembered level is itself an ordinary change that confirms and re-remembers the same value:
 idempotent, not a loop.
 
@@ -114,7 +118,8 @@ idempotent, not a loop.
 ## Edge cases and limitations
 
 - **Nothing remembered (fresh install, or every level rejected so far)** — `lastEffort` is `null`; the
-  default-apply decision refuses at that step and the footer control stays blank, per #988.
+  default-apply decision sends nothing. This does not imply that applied effort is unknown; the
+  footer reads `effectiveEffort` separately.
 - **A remembered level absent from the opened chat's published levels** — the store still reports it
   (this store does no validation of its own); the membership check lives entirely in
   `effortDefaultToApply`, downstream.

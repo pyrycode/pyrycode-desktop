@@ -50,7 +50,7 @@ import { isAddressableSessionId } from './runSettingsControls'
 //
 // So this control renders six labels and offers five entries. A session sitting in bypass shows
 // `Bypass approvals` on the button and is offered the other five; picking one moves it out of bypass,
-// because the daemon clears the bit for any mode it accepts. NOTHING HERE CAN MOVE A SESSION INTO BYPASS,
+// once the running child confirms the change. NOTHING HERE CAN MOVE A SESSION INTO BYPASS,
 // and nothing here should try: adding the sixth entry "for symmetry" would put a one-click privilege
 // escalation in the input footer. The two counts are pinned by name in ComposerPermissionModeMenu.test.tsx.
 
@@ -147,14 +147,9 @@ export interface ComposerPermissionModeMenuModel {
  *   permissionMode === ''   → null      no mode is known; draw nothing
  *   any other string        → the menu  four entries or five, never fewer and never none
  *
- * The first is #682's AC1 second half, and both neighbours ship it for the identical case one button
- * along.
- * `selectEffectiveSettings` resolves `permissionMode` to '' until a run-config snapshot has arrived, and
- * the snapshot lands on a turn-end edge, so that window is ordinary app startup rather than an edge case.
- * '' is ALSO the daemon's own reading for "no session was resolved" (runConfigStore) — one string reached
- * two ways, and both mean this control has nothing true to say. Every other rendering would draw an empty
- * gap where a label belongs; ContextUsageControl takes the same posture for its own unavailable reading
- * and #811's no-placeholder rule points the same way.
+ * An absent or empty confirmed report renders nothing, including when the session is
+ * resolved but its current child has not confirmed a mode. Neither yolo nor initialization
+ * facts supply a fallback. ContextUsageControl uses the same no-placeholder posture.
  *
  * The second covers the bypass reading with no branch of its own, which is the design rather than a
  * shortcut: the label names whatever the daemon reports (#682's "a session already in it still shows
@@ -169,8 +164,8 @@ export interface ComposerPermissionModeMenuModel {
  * two safest options — are unconditional and cannot be hidden, and no row can ADD an entry, least of all
  * the escalation the header excludes. A design that derived the entries from the row instead would be
  * exploitable. It is also worth stating what this is NOT: the hide is a UX affordance, never an
- * authorization boundary. The daemon refuses a mode it does not accept and #256 rolls the optimistic
- * label back, so nothing here is relied on for safety.
+ * authorization boundary. The daemon enforces the write; the label keeps its last confirmed
+ * reading through both acknowledgement and rejection.
  *
  * FAILING OPEN IS THE RULE, not a fallback (AC2): `auto` is offered wherever the client does not
  * positively know otherwise. Three inputs reach that reading and they are ONE reading, so they get one
@@ -331,21 +326,14 @@ export function ComposerPermissionModeMenu({
   )
   const models = useModelListStore(selectModels)
 
-  // The pending optimistic overlay > the client-confirmed override > the snapshot base. This composition is
-  // #682's AC3 second half and its AC4 in full, with no code of its own: it moves the label to the picked
-  // mode at once, and returns it to the daemon-reported mode when the store drops the pending record on a
-  // rejection. There is no local state here, and there must not be — a second copy of the displayed value
-  // could disagree with the run-configuration sheet's.
-  //
-  // #1022 joins the model list on `effective.model` — the SAME composition, not the snapshot's model — so
-  // picking a model that refuses `auto` drops the entry at once and a rejected model pick brings it back,
-  // through this one expression and no code of its own.
+  // Model intent still controls Auto availability. Permission posture comes only from the
+  // confirmed read: pending or acknowledged writes and initialization facts cannot establish it.
   const effective = selectEffectiveSettings(snapshot, writeState)
 
   return (
     <ComposerPermissionModeMenuView
       model={effective.model}
-      permissionMode={effective.permissionMode}
+      permissionMode={snapshot?.permissionMode ?? ''}
       models={models}
       // An arrow, so `window.pyry` is dereferenced at INTERACTION time and never during render — hoisting
       // it (or the deps object) would move the dereference into the render path, where window.pyry does not

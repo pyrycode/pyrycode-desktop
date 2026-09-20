@@ -11,7 +11,8 @@
 // (`{sheetOpen && <StatusSheet>…}`): the figures did not exist before the first open and froze at the
 // moment of it.
 //
-// THE TWO EDGES, and only those two. Usage moves when a turn runs, so a rising edge to `connected` (a
+// Permission confirmation refreshes separately through confirmedRunConfig. Usage moves when a turn
+// runs, so a rising edge to `connected` (a
 // reading as soon as there is a session to read) and each running → not-running turn transition (keeping it
 // true afterwards) are the whole of it. Polling would spend requests on a value that cannot have changed
 // between turns. Both are TRANSITIONS, not states: `turn_state` is a coarse lifecycle scalar the daemon may
@@ -44,7 +45,11 @@ import { activeConversationStore } from '../../store/activeConversationStore'
 import { runConfigStore } from '../../store/runConfigStore'
 import { sessionIdStore } from '../../store/sessionIdStore'
 import { isTurnRunning } from './ConversationScreen'
-import { requestRunConfigSnapshot, subscribeRunConfig } from './runConfigSnapshot'
+import { requestRunConfigSnapshot } from './runConfigSnapshot'
+import { subscribeConfirmedRunConfig } from './confirmedRunConfig'
+import { runSettingsWriteStore } from '../../store/runSettingsWriteStore'
+import { conversationListStore, selectConversations } from '../../store/conversationListStore'
+import { serverIdForOpenConversation } from './unpairAction'
 
 /**
  * The refresh trigger, as a STATEFUL FACTORY: each call returns a fresh predicate over the daemon-event
@@ -120,13 +125,8 @@ export function createRunConfigRefreshTrigger(): (event: DaemonEvent) => boolean
  * just ended. A nullary seam makes passing the edge's `conversationId` a type error instead of a judgement
  * call at the binding. The id is resolved in `RunConfigLiveData`'s arrow, at call time.
  *
- * A SECOND listener beside `subscribeRunConfig`, deliberately not a widening of it. The two touch disjoint
- * state and can never cross-fire (an event is never both a `runConfigReceived` and an edge), which is the
- * arrangement `conversationDeletedBridge.ts:37-42` documents for exactly this case. Registration order is
- * irrelevant: an edge sends a request whose reply arrives later, and a reply is not an edge. Folding both
- * jobs into `subscribeRunConfig` the way `conversationListBridge` does would mean widening a signature that
- * already takes two same-shaped function parameters (so a cross-wire would need the named-deps-object
- * treatment to stay safe) and editing nine call sites, to save one `onDaemonEvent` registration.
+ * This usage-only listener remains separate from subscribeConfirmedRunConfig, which owns
+ * context invalidation, read delivery and bounded permission-write confirmation refreshes.
  */
 export function subscribeRunConfigRefresh(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
@@ -150,38 +150,34 @@ export function subscribeRunConfigRefresh(
  * write into the session-id store whose two-ingress contract exists precisely because arrival order
  * matters.
  *
- * Two effects, each returning its `onDaemonEvent` off handle as cleanup, so a StrictMode double-mount nets
- * exactly one live listener of each kind (the daemonEventBridge idiom). No timers, no AbortController, no
- * promise: nothing outlives the leaf. `window.pyry` is dereferenced only inside the effects, never during
+ * Both effects clean up their subscriptions; subscribeConfirmedRunConfig also cancels its
+ * confirmation timer. Nothing outlives the leaf. `window.pyry` is dereferenced only inside
+ * the effects, never during
  * render, so it server-renders to `''` without a bridge mock (the QueueData / ConversationActivityData
  * invariant, which App.test's no-window-stub `<App/>` render depends on).
  */
 export function RunConfigLiveData(): null {
   useEffect(() => {
-    // Subscribe first (declared before the refresh effect, so it runs first on mount): the listener is
-    // live before any request goes out. `subscribeRunConfig` is reused verbatim — each runConfigReceived
-    // writes into BOTH app-singleton stores, since the values and the session id they describe arrive on
-    // one frame and are only meaningful together (#491) — and since #1176 only when it describes the
-    // conversation the operator is actually looking at.
-    //
-    // The open conversation is read non-reactively, at call time, through the injected getter (the
-    // conversationLastReadBridge shape), so this leaf still subscribes to nothing and the store is
-    // touched only when a reply arrives, never during render. Spelled the way the refresh effect below
-    // spells it rather than lastReadBridge's explicit-`null` form, so this module's two effects read
-    // identically; the two differ only for an id of `''`, which no daemon-supplied conversation id can
-    // be, and `?? null` is the more fail-closed of the two there since `''` then matches no reply.
-    //
-    // THIRD CONSUMER, recorded and not acted on: conversationLastReadBridge.ts's
-    // `conversationLastReadDeps` notes that two consumers duplicate this getter and that a third is the
-    // signal for a `selectOpenConversationId` selector on activeConversationStore — "a separate
-    // three-line ticket". This is that third. Extracting it here would be adjacent refactoring
-    // (CLAUDE.md), so the signal is left where its author put it, now genuinely due.
-    return subscribeRunConfig(
-      window.pyry.onDaemonEvent,
-      (snapshot) => runConfigStore.getState().setSnapshot(snapshot),
-      (sessionId) => sessionIdStore.getState().setSessionId(sessionId),
-      () => activeConversationStore.getState().activeConversation?.id ?? null
-    )
+    return subscribeConfirmedRunConfig({
+      onDaemonEvent: window.pyry.onDaemonEvent,
+      getContext: () => {
+        const conversationId = activeConversationStore.getState().activeConversation?.id ?? null
+        return { conversationId, serverId: serverIdForOpenConversation(
+          selectConversations(conversationListStore.getState()), conversationId
+        ) }
+      },
+      subscribeContext: listener => {
+        const offActive = activeConversationStore.subscribe(listener)
+        const offOwners = conversationListStore.subscribe(listener)
+        return () => { offActive(); offOwners() }
+      },
+      writes: runSettingsWriteStore,
+      config: runConfigStore,
+      setSessionId: id => sessionIdStore.getState().setSessionId(id),
+      refresh: () => requestRunConfigSnapshot(window.pyry.sendCommand,
+        activeConversationStore.getState().activeConversation?.id ?? null),
+      log: code => window.pyry.sendDiagnostic({ event: 'permission-confirmation', code })
+    })
   }, [])
 
   useEffect(() => {

@@ -112,3 +112,14 @@ can accompany a resolved session.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-20
+
+## Revisions
+
+- 2026-09-20: Retry reads are serialized within the 500ms/15s window: another read
+  waits for the previous report, avoiding a slow response being superseded on every
+  tick. Missing replies time out without extra requests. The deadline and teardown
+  tests cover both outstanding and already-answered reads.
+- 2026-09-20: Invalidation clears only `permissionMode` in the existing snapshot,
+  preserving model, effort and usage behavior at reconnect/reset. Navigation retains
+  its existing whole-snapshot clear. The subscriber receives the injected config store
+  to keep this mutation tested with the real store implementation.

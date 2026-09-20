@@ -1,9 +1,10 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { WireModelOption } from '@shared/wire/types'
 import type { ModelListEntry } from '../../store/modelListStore'
 import {
   AUTO_PERMISSION_MODE,
+  ComposerPermissionModeMenu,
   ComposerPermissionModeMenuView,
   COMPOSER_PERMISSION_MODE_MENU_LABEL,
   PERMISSION_MODE_LABELS,
@@ -11,6 +12,38 @@ import {
   composerPermissionModeMenuModel
 } from './ComposerPermissionModeMenu'
 import { ComposerOptionsPanel } from './ComposerOptionsPanel'
+import { runConfigStore } from '../../store/runConfigStore'
+import { runSettingsWriteStore } from '../../store/runSettingsWriteStore'
+import { sessionIdStore } from '../../store/sessionIdStore'
+import { sessionFactsStore } from '../../store/sessionFactsStore'
+
+it('renders only the settings report through pending, acknowledged and unavailable modes', () => {
+  vi.spyOn(runConfigStore, 'getInitialState').mockImplementation(runConfigStore.getState)
+  vi.spyOn(runSettingsWriteStore, 'getInitialState').mockImplementation(runSettingsWriteStore.getState)
+  vi.spyOn(sessionIdStore, 'getInitialState').mockImplementation(sessionIdStore.getState)
+  vi.spyOn(sessionFactsStore, 'getInitialState').mockImplementation(sessionFactsStore.getState)
+  const snapshot = { model: '', effort: '', yolo: false, permissionMode: 'bypassPermissions', usedTokens: 0, windowTokens: 0 }
+  sessionIdStore.getState().setSessionId('resolved')
+  sessionFactsStore.getState().setSessionFacts({ conversationId: 'chat', claudeCodeVersion: '', permissionMode: 'default', truncatedFields: null })
+  const render = () => renderToStaticMarkup(<ComposerPermissionModeMenu conversationId="chat" />)
+  try {
+    runConfigStore.getState().setSnapshot(snapshot)
+    runSettingsWriteStore.getState().dispatch({ type: 'changeDispatched', changeId: 'pick', change: { field: 'permissionMode', value: 'default' } })
+    expect(render()).toContain('Bypass approvals')
+    runSettingsWriteStore.getState().dispatch({ type: 'settingsConfirmed', changeId: 'pick' })
+    expect(render()).toContain('Bypass approvals')
+    runConfigStore.getState().setSnapshot({ ...snapshot, permissionMode: 'plan' })
+    expect(render()).toContain('Plan')
+    runConfigStore.getState().setSnapshot({ ...snapshot, permissionMode: '' })
+    expect(render()).toBe('')
+  } finally {
+    runConfigStore.getState().clearSnapshot()
+    runSettingsWriteStore.getState().dispatch({ type: 'conversationSwitched' })
+    sessionIdStore.getState().clearSessionId()
+    sessionFactsStore.getState().clearSessionFacts()
+    vi.restoreAllMocks()
+  }
+})
 
 // #682: ComposerEffortMenu.test.tsx's two halves — the decision as a plain function, then the markup.
 // `onSelect` is NOT exercised here: a static render fires no events, so nothing in this file can click.

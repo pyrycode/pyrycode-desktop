@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { promisify } from 'node:util'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -7,7 +8,7 @@ import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 // Preserve the operator-owned stdio approval surface when launching in bypass.
-// Authenticated execution is dispatcher-owned; a prerequisite skip is not acceptance.
+// Run with operator or dispatcher credentials; a prerequisite skip is not acceptance.
 test.use({ skipPermissions: true, stdioPermissionPrompt: true,
   interactiveRunner: 'stream-json', allowRemotePermissions: true })
 const ROUNDTRIP = 15_000
@@ -32,7 +33,8 @@ test('operator bypass stays confirmed through a no-op write, then Plan and Manua
   const noteDir = join(dirname(daemon.workdir), '.pyry/test/handoff-notes')
   await mkdir(noteDir, { recursive: true, mode: 0o700 })
   const note = join(noteDir, 'permission-probe.txt')
-  await writeFile(note, 'synthetic permission witness\n', { mode: 0o600 })
+  const witness = randomUUID()
+  await writeFile(note, `${witness}\n`, { mode: 0o600 })
   await page.evaluate(() => {
     const proof: Proof = { readings: [], acks: [], turns: [], modals: [], tools: [], off: () => {} }
     proof.off = window.pyry.onDaemonEvent(event => {
@@ -43,7 +45,8 @@ test('operator bypass stays confirmed through a no-op write, then Plan and Manua
       if (event.type === 'sessionSettingsUpdated') proof.acks.push(event.sessionId)
       if (event.type === 'turnEnd') proof.turns.push(event.conversationId)
       if (event.type === 'modalShown' && event.class === 'permission') proof.modals.push({
-        conversationId: event.conversationId, read: event.title === 'Read',
+        // The daemon's title is "Permission required"; its prompt carries the tool name.
+        conversationId: event.conversationId, read: event.prompt === 'Read',
         allow: event.options.find(option => option.id === 'allow_once')?.label ?? null
       })
       if (event.type === 'toolUse') proof.tools.push({ conversationId: event.conversationId, read: event.name === 'Read' })
@@ -99,7 +102,8 @@ test('operator bypass stays confirmed through a no-op write, then Plan and Manua
     const panel = page.locator('.permission-panel')
     await expect(panel).toBeVisible({ timeout: TURN })
     const modal = (await proof()).modals.at(-1)!
-    expect(modal.conversationId === initial.conversationId && modal.read).toBe(true)
+    expect(modal.conversationId === initial.conversationId, 'approval belongs to the same conversation').toBe(true)
+    expect(modal.read, 'approval prompt identifies the Read tool').toBe(true)
     expect(modal.allow !== null).toBe(true)
     await panel.getByRole('radio', { name: modal.allow!, exact: true }).press('Space')
     await panel.getByRole('button', { name: 'Continue', exact: true }).click()
@@ -109,10 +113,14 @@ test('operator bypass stays confirmed through a no-op write, then Plan and Manua
     expect(after.tools.length).toBeGreaterThan(0)
     expect(after.tools.every(tool => tool.conversationId === initial.conversationId && tool.read)).toBe(true)
     expect(after.readings.every(r => !r.sessionId || r.sessionId === initial.sessionId)).toBe(true)
+    // The witness is only in the file, never in the message asking Claude to read it.
+    await expect.poll(() => page.locator('[data-thread-role="assistant"]').evaluateAll(
+      (rows, marker) => rows.some(row => row.textContent?.includes(marker)), witness)).toBe(true)
     await expect(label).toHaveText('Manual approval')
     await testInfo.attach('permission-confirmation-result', {
       body: Buffer.from(JSON.stringify({ executed: true, daemonRevision: revision, noOpRemainedBypass: true,
-        planConfirmed: true, manualConfirmed: true, sameSessionReadApproval: true })), contentType: 'application/json'
+        planConfirmed: true, manualConfirmed: true, sameSessionReadApproval: true,
+        readWitnessReturned: true })), contentType: 'application/json'
     })
   } finally {
     await page.evaluate(() => { (window as DriveWindow).permissionProof.off(); delete (window as Partial<DriveWindow>).permissionProof })

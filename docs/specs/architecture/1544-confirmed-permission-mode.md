@@ -93,10 +93,10 @@ the live gate must record its actual binary revision and executed result.
 
 ## Documentation handoff
 
-Pending for documentation stage: Update `docs/knowledge/features/composer-permission-mode-menu.md`
-and `docs/knowledge/features/run-config-store.md` under **Permission mode** to distinguish
-confirmed running posture from stored/acknowledged intent and explain that an empty mode
-can accompany a resolved session.
+Completed during manual recovery: `docs/knowledge/features/composer-permission-mode-menu.md`
+and the **Permission mode** section of `docs/knowledge/features/run-config-store.md`
+now distinguish confirmed running posture from stored and acknowledged intent.
+They cover empty confirmation on resolved sessions, bounded refreshes and lifecycle invalidation.
 
 ## Security review
 
@@ -140,3 +140,17 @@ can accompany a resolved session.
   Store/bridge tests cover held and answered reads plus the original timeout; the fake
   drive proves default → acknowledged edits → rejected dontAsk → confirmed edits and
   transition-before-reset-completion, including old-session rejection after completion.
+- 2026-09-20: Juhana requested manual recovery after the third rework stopped dispatch.
+  The live failure reproduced at the Read attribution assertion on the reviewed production code.
+  The daemon supplies a generic title, Permission required, and carries Read in the prompt.
+  Check the prompt and conversation separately, retaining the Read-only tool assertions.
+  A fresh random witness in the outside-workspace file now also proves successful reading
+  after approval. Its value is absent from the message requesting the read.
+  The corrected authenticated test executed once and passed with zero skips on dedicated
+  daemon `dccd1828`. Its evidence confirms unchanged bypass after the no-op write,
+  Plan and Manual approval within the existing deadlines, same-session Read approval
+  and the returned witness. Production code is unchanged from verifier PASS at `83dbc1f2`.
+  Build and documentation checks passed. Automatic approval review rejected a broader
+  full live-suite rerun because of its scope and potential API usage, so no new full-suite
+  result is claimed. The previous full unit and fake-transport results remain applicable
+  to the unchanged production code.

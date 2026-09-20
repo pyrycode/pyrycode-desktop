@@ -27,8 +27,9 @@ control before the context reading.
 
 The two triggers look interchangeable but differ in one load-bearing way: the model trigger **looks up**
 its label (a row's `display_name`, joined on the session's model), while this trigger's label **is** the
-session's applied `effectiveEffort` reading, unmodified, or the client-owned **Effort** label when that
-reading is unavailable or null. Saved `effort` is the explicit choice; it can be empty or differ from
+session's applied `effectiveEffort` reading, unmodified. When that reading is unavailable, the menu
+shows its confirmed or saved selection. With neither value, or an explicit null reading, it shows
+the client-owned **Effort** label. Saved `effort` is the explicit choice; it can be empty or differ from
 what Claude applies. Claude's own control displays effort levels lowercase and byte-identical to
 the machine values it accepts, so there is
 no display convention to reproduce and no relabelling to do.
@@ -47,15 +48,17 @@ uses the inert span described in [The write](#the-write).
 | Input | Rendering |
 |---|---|
 | No published levels, with any applied reading | An inert `<span>`: the applied level or **Effort**, no chevron, role, tabindex, handler or `.composer-options-anchor` |
-| Published levels, with an omitted, empty or null reading | `ComposerOptionsMenu` labelled **Effort**, with no selected level |
+| Published levels, with an omitted or empty reading and a confirmed or saved choice | `ComposerOptionsMenu` labelled with the selected level |
+| Published levels, with no reading or choice, or an explicit null reading | `ComposerOptionsMenu` labelled **Effort**, with no selected level |
 | Published levels, with a nonempty reading | `ComposerOptionsMenu` labelled with the applied level; marks it only if it matches a published option |
 
 **Resolve capability independently of the reading.** Levels come from `effortRowFor`, including
 the inherited-default model lookup below. Levels arriving after mount make the label operable
 without selecting a value or sending a setting. The label remains visible without levels.
-Omitted and empty readings have the static tooltip “Claude default; applied effort is unavailable.”
-Explicit null instead says “Claude reports no model effort parameter.” Neither selects a row or
-substitutes High, Not set, a saved choice, or a previously viewed reading. These descriptions are
+An omitted or empty reading with a selection has the static tooltip “Selected effort; applied effort
+is unavailable.” Without a selection, it says “Claude default; applied effort is unavailable.”
+Explicit null instead says “Claude reports no model effort parameter.” Null never falls back to a
+saved choice. No state invents a default level or uses another conversation's reading. These descriptions are
 client-owned text; daemon readings never enter the `title` attribute.
 
 **The first rendering covers all three nothing-to-offer readings** — no list has arrived
@@ -140,16 +143,17 @@ change after disconnect. The bridge is dereferenced at interaction time, never d
 render. See [the shared settings availability contract](conversation-shell-run-configuration.md#run-configuration-modeleffortyolo-sections-188)
 for the sheet and sibling menus; reconnection never replays a blocked choice.
 
-`selectAppliedEffort` overlays only pending effort writes on `snapshot.effectiveEffort`.
-Picking a level therefore changes the label optimistically; rejection removes that overlay and
-restores the held applied reading, including the unselected **Effort** state. The menu has no
+`selectDisplayedEffort` uses the applied reading when present, including explicit null.
+An omitted or empty reading falls back to the confirmed choice, then the saved choice.
+Pending effort writes overlay that result. Picking a level changes the label optimistically;
+rejection restores the prior applied, selected or unselected state. The menu has no
 error line in its 20px row; the settings sheet names the rejection.
 
 A correlated successful effort write records the choice in [Last-effort store](last-effort-store.md)
 and requests fresh settings for the currently open conversation. Once pending state clears, the
-footer follows the held applied reading, then the fresh response, even when either differs from
-the requested or saved choice. A confirmed override never masks that reading. A pre-launch choice
-can thus be remembered while applied effort is still unavailable. `selectEffectiveSettings` retains
+footer follows an available applied reading even when it differs from the requested or saved choice.
+Before launch, the confirmed selection stays visible through the acknowledgement and fresh response.
+Its tooltip distinguishes that selection from a running value. `selectEffectiveSettings` retains
 its pending → confirmed → saved composition for recall eligibility, model lookup and the settings
 sheet; using it for applied effort would conflate two different facts.
 
@@ -209,7 +213,8 @@ restarts. The remembered level must occur in the conversation's published levels
 `SessionSettingsPayload.effort === ''` means no explicit choice; Claude may still report an
 inherited applied level through `effectiveEffort`. That passive reading does not disqualify recall.
 With no usable preference, no effort write is sent and Claude's setting is inherited. The footer
-shows the applied reading independently, or **Effort** when unavailable/null. Showing the menu
+shows the applied reading independently, or its saved selection before a reading is available.
+Without either value, or with explicit null, it shows **Effort**. Showing the menu
 does not itself choose a default.
 
 **A separate file and a separate leaf, not an effect inside this control.** `EffortDefaultData.tsx`
@@ -391,7 +396,9 @@ fresh settings and capability responses must not retry it or replace the remembe
 an inherited post-turn reading, a supported deliberate choice, an Electron restart over the same
 profile, recall before the first message in a new chat and channel, and preservation of an existing
 explicit choice after a different preference is remembered. Post-change labels are checked against
-new effective readings, including after real turns; a confirmed choice alone cannot prove display.
+new settings readings, including after real turns. Before each new conversation's first message,
+the test requires the confirmed choice to remain visible with no applied reading. After that message,
+it requires the reported applied effort to equal the selected level.
 No `/effort` line is added to the user thread. The spec attaches the actual daemon revision and
 requires a daemon containing pyrycode#2517. The [executed live gate](https://github.com/pyrycode/pyrycode-desktop/issues/1549#issuecomment-5748800085)
 passed this case on `dccd1828` on 2026-09-20 (22 passed, zero failed, one unrelated skip).

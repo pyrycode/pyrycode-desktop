@@ -18,7 +18,9 @@ The three values have separate jobs: saved `effort` establishes the conversation
 `effectiveEffort` reports Claude's applied level; this preference supplies a candidate when the saved
 choice is empty. An inherited effective reading can exist with empty saved effort and does not block
 recall. With no usable remembered level, the app sends no default write and inherits Claude's setting.
-The footer still shows its effective reading, or unselected **Effort** for an unavailable/null reading.
+The footer shows its effective reading when available. Before a reading is available, it shows the
+conversation's confirmed or saved selection with a tooltip identifying it as selected. With neither
+value, or an explicit null reading, it shows unselected **Effort**.
 
 **One remembered level app-wide**, shared across chats, channels and connected hosts, surviving app
 restarts through the same desktop profile. It is renderer-local and is not synchronised with mobile.

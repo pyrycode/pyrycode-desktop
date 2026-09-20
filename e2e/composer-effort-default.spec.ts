@@ -106,7 +106,8 @@ function sessionSettingsFrame(inReplyTo: number, sessionId: string, effort: stri
       // substitution stays pinned where it belongs, in the unit table.
       model: GRADED.value,
       effort,
-      effective_effort: effort || A_BASELINE,
+      // A new, never-messaged chat has a saved choice but no applied reading.
+      effective_effort: sessionId === SESSION_B ? undefined : effort || A_BASELINE,
       yolo: false,
       // Required since #1020 — a missing key is decode-rejected at runtime and reads as the controls
       // never mounting, which would make every assertion below vacuous.

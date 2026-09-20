@@ -320,6 +320,7 @@ for (const model of [GRADED.value, '']) {
     const captured: Envelope[] = []
     const fake = capturingFake(captured)
     let saved = ''
+    let applied: string | undefined
     const { page, daemon, forwarder } = await launchPairedApp({
       buildReplyFrames: (bytes) => {
         const env = decodeEnvelope(bytes)
@@ -329,7 +330,7 @@ for (const model of [GRADED.value, '']) {
         return [encodeEnvelope({
           id: REPLY_ENVELOPE_ID, type: 'session_settings', ts: FIXED_TS,
           in_reply_to: env.id,
-          payload: { ...BASELINE_RUN_CONFIG, model, effort: saved, effective_effort: saved ? BASELINE_EFFORT : undefined }
+          payload: { ...BASELINE_RUN_CONFIG, model, effort: saved, effective_effort: applied }
         })]
       }
     })
@@ -359,10 +360,24 @@ for (const model of [GRADED.value, '']) {
     await trigger.click()
     await expect(panel.locator('[aria-current="true"]')).toHaveCount(0)
     await panel.getByRole('menuitem', { name: HAPPY_EFFORT, exact: true }).click()
-    await expect(label).toHaveText(BASELINE_EFFORT)
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBe(HAPPY_EFFORT)
+    // Force a fresh read after confirmation: neither an optimistic pick nor a stale label proves this.
+    await page.locator('.channel-list__row-open[aria-current="true"]').click()
+    await expect(label).toHaveText(HAPPY_EFFORT)
+    await expect(label).toHaveAttribute('title', 'Selected effort; applied effort is unavailable.')
     await expect.poll(() => settingsFramesMatching(captured, {
       session_id: SESSION_ID, effort: HAPPY_EFFORT
     })).toBe(1)
+    await trigger.click()
+    await expect(panel.locator('[aria-current="true"]')).toHaveText(HAPPY_EFFORT)
+    await page.keyboard.press('Escape')
+    expect(captured.filter(e => e.type === 'send_message')).toHaveLength(0)
+
+    // Once the assistant reports a value, its reading wins even when it differs from the choice.
+    applied = BASELINE_EFFORT
+    await page.locator('.channel-list__row-open[aria-current="true"]').click()
+    await expect(label).toHaveText(BASELINE_EFFORT)
+    await expect(label).not.toHaveAttribute('title')
     await trigger.click()
     await expect(panel.locator('[aria-current="true"]')).toHaveText(BASELINE_EFFORT)
 
@@ -414,8 +429,8 @@ test('applied readings remain isolated across hosts, with null, omitted and empt
   for (const value of [undefined, '', 'second-applied'] as const) {
     reading = value
     await page.getByRole('button', { name: SECOND_SEEDED_ROW.name!, exact: true }).click()
-    await expect(label).toHaveText(value || 'Effort')
-    if (!value) await expect(label).toHaveAttribute('title', 'Claude default; applied effort is unavailable.')
+    await expect(label).toHaveText(value || 'saved-elsewhere')
+    if (!value) await expect(label).toHaveAttribute('title', 'Selected effort; applied effort is unavailable.')
   }
   holdFirst = false
   await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()

@@ -210,31 +210,37 @@ what the value means and why it is never derived from `yolo`.
 
 ### Permission mode (#1020)
 
-`permissionMode` is the session's permission mode as the daemon reports it, one of claude's **six**
-modes on a resolved session (`default`, `acceptEdits`, `plan`, `auto`, `dontAsk`,
-`bypassPermissions`). `''` is its own real reading, held verbatim like every other field on this
-snapshot — **no session was resolved** — and it arrives on the same frame as `sessionId: ''` (§ The data path
-below); the two are read as a pair, and `''` is never coerced to a mode name or to `null`.
+The snapshot's `permissionMode` reports the running child's confirmed permission mode.
+The six known values are `default`, `acceptEdits`, `plan`, `auto`, `dontAsk` and
+`bypassPermissions`.
+An empty string means confirmation is unavailable.
+It can accompany a non-empty session ID, including while the child is starting or resetting.
+The store preserves the empty string and the footer hides its permission control.
 
-It is **never derived from `yolo` and never derives it**: `yolo` is a boolean and there are six
-modes, so on its own it can only separate `bypassPermissions` from the other five — the reason this
-field exists at all. The two always agree on a resolved session (the daemon stores them so they
-cannot disagree), but this store treats them as two independent fields, not a computed pair.
+The report is independent of stored settings and the `yolo` boolean.
+An operator-bypass child can report `bypassPermissions` while stored default and false
+yolo remain unchanged. Never derive a mode from the boolean or initialization facts.
+Pending writes and acknowledgements describe intent, so they cannot replace this report.
+The model and effort controls retain their existing write overlays.
 
-**No client-side allowlist.** The decode narrows only the field's *type* (`requireString`, not
-`requireNonEmptyString` — `''` is a value, not an absence to reject); the six names above are never
-checked against the wire value anywhere on this chain. This is deliberate: the read half carries six
-modes while the write half's `set_session_settings` (`validPermissionMode`, [#1021 — run
-configuration write store](run-settings-write-store.md)) accepts a closed **five**, excluding
-`bypassPermissions`. Narrowing the read side to those five would be wrong.
+`subscribeConfirmedRunConfig` accepts reports for the active conversation and owning host.
+After a permission acknowledgement it requests a report immediately, then retries every
+500ms within a 15-second window. Each retry waits for the outstanding reply.
+An old-mode reply does not end confirmation polling.
+A rejection requests a refresh without cancelling an earlier acknowledged target or
+extending its deadline. Timeout preserves the latest report.
 
-**No consumer yet.** This ticket is wire-to-store plumbing only — the Run configuration sheet keeps
-its exact current shape, with no new section, copy or display for the mode. #682 (the footer
-permission-mode menu) is the first thing that renders it, and inherits the trust-tier constraint the
-IPC arm's comment (`src/shared/ipc/events.ts`) states: `permissionMode` is daemon-asserted text
-across the main→renderer boundary, so it is a *report*, never a control input — plain text only,
-never markup, an attribute, a URL, a filename, a cache key or a lookup path, and it reaches no log
-sink on either side of the bridge.
+Conversation/host changes, owning-host reconnects, reset and session replacement clear
+permission confirmation while preserving other snapshot fields where applicable.
+Reset suppresses incoming readings until completion.
+A replacement during reset keeps that suppression, and completion keeps the new session guard.
+Main discards superseded requests and requests invalidated by reset or replacement.
+Late replies cannot restore a previous context's permission label.
+
+The read accepts any string, including empty and future mode names.
+The write accepts only the five settable modes and excludes `bypassPermissions`.
+The [footer permission menu](composer-permission-mode-menu.md#permission-mode) renders
+known labels and escapes unknown text. Daemon text never becomes markup, a URL or a log.
 
 ### The data path (`src/renderer/src/screens/conversation/runConfigSnapshot.ts`)
 

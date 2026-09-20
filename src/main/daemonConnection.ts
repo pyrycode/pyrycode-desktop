@@ -801,6 +801,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // onDriverEvent body, no await between a read and a write (the nextEnvelopeId / outstandingAnswers /
   // pendingSettings single-writer rationale).
   const pendingConfigRequests = new Map<number, string>()
+  function invalidateConfigRequests(conversationId: string): void {
+    for (const [id, conversation] of pendingConfigRequests) {
+      if (conversation === conversationId) pendingConfigRequests.delete(id)
+    }
+  }
   // envelopeId → the conversation id that request_history named, for a history page's attribution
   // (#1222). THE SAME PROBLEM pendingConfigRequests solves, on a second reply that names no
   // conversation of its own and cannot grow one (correlation rides `in_reply_to` and nothing in a page
@@ -1703,6 +1708,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             })
             return
           case 'resetting':
+            invalidateConfigRequests(inbound.resetting.conversation_id)
             // The session-reset data path (#1515, decoded at #1514). Emit a fresh literal carrying
             // the routing key, the edge and both closed-set tokens, copied BY NAME from the
             // already-decoded, already-validated payload — never a spread of inbound.resetting (the
@@ -1733,12 +1739,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // which matters for the pair beside the id as much as for the id — together they disclose
             // which conversation the operator reset and whether a handoff note was written.
             //
-            // DELIBERATELY STATELESS: no dedup, no coalescing, no timer, no last-value memo, and none
-            // keyed by the id either. THE RISING EDGE RE-FIRES as the phase advances, so suppressing
-            // a repeat would eat a real transition; and a per-conversation memo would be the only
-            // mutable state on this leg, keyed by a daemon-supplied id and fed by a daemon-supplied
-            // stream. Not compile-forced (this inner switch has no assertNever) — the round-trip test
-            // guards this emit.
+            // Invalidate read correlation without suppressing any reset phase event.
             emitDaemonEvent(sink, {
               type: 'resetting',
               conversationId: inbound.resetting.conversation_id,
@@ -1944,6 +1945,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             })
             return
           case 'session-transition':
+            invalidateConfigRequests(inbound.sessionTransition.conversation_id)
             // The session-boundary data path (#254, widened #285, attributed #1192). Emit a fresh literal
             // carrying the marker's routing key plus the four fields the delimiter slice (#286) reads —
             // `conversationId`, `newSessionId`, `reason`, `occurredAt`, `workspaceCwd` — copied by name
@@ -2737,6 +2739,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // than attributed to whatever chat happens to be open. Unreachable in production —
       // requestRunConfigSnapshot refuses to send an unaddressable id and main/index.ts routes on the
       // same scalar — and fail-closed if it ever becomes reachable.
+      invalidateConfigRequests(conversationId ?? '')
       pendingConfigRequests.set(envelopeId, conversationId ?? '')
     } catch {
       // Never throw out of the module (parity #490): the fixed-shape envelope cannot over-cap, but

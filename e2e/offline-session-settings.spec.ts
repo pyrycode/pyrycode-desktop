@@ -1,4 +1,4 @@
-import { test, expect, FIRST_SERVER_ID, SEEDED_ROW, SECOND_SEEDED_ROW, type PairedApp } from './fixtures/launchPairedApp'
+import { test, expect, FIRST_SERVER_ID, SECOND_SERVER_ID, SEEDED_ROW, SECOND_SEEDED_ROW, type PairedApp } from './fixtures/launchPairedApp'
 import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
 import type { RendererCommand } from '../src/shared/ipc/commands'
 import { conversationStateFake } from './fixtures/conversationStateFake'
@@ -21,11 +21,12 @@ async function connection(app: PairedApp, type: string, serverId = FIRST_SERVER_
     error: { code: 'transport', message: 'Offline', retryable: true } })
 }
 
-async function settings(app: PairedApp, effort = 'low', conversationId = SEEDED_ROW.id, sessionId = 'settings-session'): Promise<void> {
-  await event(app, { type: 'runConfigReceived', serverId: FIRST_SERVER_ID, conversationId,
+async function settings(app: PairedApp, effort = 'low', conversationId = SEEDED_ROW.id,
+  sessionId = 'settings-session', serverId = FIRST_SERVER_ID): Promise<void> {
+  await event(app, { type: 'runConfigReceived', serverId, conversationId,
     sessionId, model: 'opus', effort, effectiveEffort: effort, yolo: false, permissionMode: 'default',
     used_tokens: 100, window_tokens: 1000 })
-  await event(app, { type: 'modelList', serverId: FIRST_SERVER_ID, conversationId, models: MODELS, droppedModels: 0 })
+  await event(app, { type: 'modelList', serverId, conversationId, models: MODELS, droppedModels: 0 })
 }
 
 async function observeCommands(app: PairedApp) {
@@ -71,6 +72,11 @@ test('pre-opened composer menus discard mouse and keyboard choices offline, then
     await expect(page.locator(label)).toHaveText(held)
     expect(await read()).toHaveLength(before)
     await connection(app, 'connected')
+    // Reconnect invalidates permission confirmation until the owning host reports again.
+    await expect(page.locator('.composer__permission-label')).toHaveCount(0)
+    if (trigger !== '.composer__permission') await expect(page.locator(trigger)).toBeVisible()
+    await settings(app)
+    await expect(page.locator('.composer__permission-label')).toHaveText('Manual approval')
     await expect(page.locator(trigger)).toBeVisible()
     expect(await read()).toHaveLength(before)
     await page.locator(trigger).click()
@@ -113,7 +119,12 @@ test('an open sheet retains values but cannot write any field offline; another h
   await page.getByRole('button', { name: 'Close', exact: true }).click()
   await page.screenshot({ path: '/tmp/builder-1380-offline-footer.png', animations: 'disabled' })
   await page.getByRole('button', { name: SECOND_SEEDED_ROW.name!, exact: true }).click()
-  await settings(app, 'low', SECOND_SEEDED_ROW.id, 'second-session')
+  await expect(page.locator('.composer__permission-label')).toHaveCount(0)
+  // A report naming the open chat still cannot establish confirmation from the wrong host.
+  await settings(app, 'low', SECOND_SEEDED_ROW.id, 'second-session', FIRST_SERVER_ID)
+  await expect(page.locator('.composer__permission-label')).toHaveCount(0)
+  await settings(app, 'low', SECOND_SEEDED_ROW.id, 'second-session', SECOND_SERVER_ID)
+  await expect(page.locator('.composer__permission-label')).toHaveText('Manual approval')
   await page.locator('.composer__permission').click()
   await page.getByRole('menuitem', { name: 'Plan', exact: true }).click()
   await expect.poll(async () => (await read()).length).toBe(1)
@@ -121,6 +132,9 @@ test('an open sheet retains values but cannot write any field offline; another h
   await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
   await settings(app)
   await connection(app, 'connected')
+  await expect(page.locator('.composer__permission-label')).toHaveCount(0)
+  await settings(app)
+  await expect(page.locator('.composer__permission')).toBeVisible()
   await openSheet(app)
   for (const control of [model, effort, yolo]) await control.click()
   await expect.poll(async () => (await read()).length).toBe(4)
@@ -144,13 +158,19 @@ test('missing ownership/status and every non-connected status fail closed, prese
     await expect(page.locator('.composer__permission-label')).toHaveText('Manual approval')
   }
   await connection(app, 'connected')
+  await expect(page.locator('.composer__permission-label')).toHaveCount(0)
+  await settings(app)
+  await expect(page.locator('.composer__permission')).toBeVisible()
   await event(app, { type: 'conversationsReceived', serverId: FIRST_SERVER_ID, conversations: [] })
   await expect(page.locator('.composer__permission')).toHaveCount(0)
+  await expect(page.locator('.composer__permission-label')).toHaveCount(0)
   await event(app, { type: 'conversationsReceived', serverId: 'missing-status', conversations: [SEEDED_ROW] })
   await expect(page.locator('.composer__permission')).toHaveCount(0)
   expect(await read()).toEqual([])
   await event(app, { type: 'conversationsReceived', serverId: 'missing-status', conversations: [] })
   await event(app, { type: 'conversationsReceived', serverId: FIRST_SERVER_ID, conversations: [SEEDED_ROW] })
+  await expect(page.locator('.composer__permission-label')).toHaveCount(0)
+  await settings(app)
   await expect(page.locator('.composer__permission')).toBeVisible()
   await settings(app, 'low', SEEDED_ROW.id, '')
   await expect(page.locator('.composer__permission')).toHaveCount(0)

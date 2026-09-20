@@ -7744,6 +7744,28 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     return { ...ctx, replyTo: lastRequestId(ctx) }
   }
 
+  it('drops superseded reads of the same conversation', async () => {
+    const ctx = await requested()
+    ctx.connection.requestSessionSettings(CONV)
+    const latest = lastRequestId(ctx)
+    ctx.drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, permission_mode: 'plan' }, latest) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG, ctx.replyTo) })
+    expect(emitted(ctx.sink).filter(e => e.type === 'runConfigReceived').map(e => e.permissionMode)).toEqual(['plan'])
+  })
+
+  it.each(['reset', 'replacement'])('invalidates outstanding reads at %s', async kind => {
+    const ctx = await requested()
+    const boundary = kind === 'reset'
+      ? resettingPlaintext({ conversation_id: CONV, active: true, phase: 'restarting', handoff: 'skipped' })
+      : sessionTransitionPlaintext({ conversation_id: CONV, previous_session_id: 'sess-a', new_session_id: 'sess-b', reason: 'clear', occurred_at: FIXED_TS, workspace_cwd: null })
+    ctx.drivers[0].emit({ type: 'message', plaintext: boundary })
+    ctx.drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG, ctx.replyTo) })
+    expect(emitted(ctx.sink).filter(e => e.type === 'runConfigReceived')).toEqual([])
+    ctx.connection.requestSessionSettings(CONV)
+    ctx.drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, session_id: 'sess-b' }, lastRequestId(ctx)) })
+    expect(emitted(ctx.sink).filter(e => e.type === 'runConfigReceived')).toHaveLength(1)
+  })
+
   it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin)', () => {
     const { connection, drivers } = build()
     expect(() => connection.requestSessionSettings()).not.toThrow()

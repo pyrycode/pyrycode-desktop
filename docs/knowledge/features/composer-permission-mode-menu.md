@@ -7,7 +7,7 @@ document's footer-row section for the row's geometry and no-placeholder rule.
 
 It assembles rather than invents: the panel is [#838/#839/#840's](conversation-shell-composer-options-panel.md),
 the inbound mode is #1020's ([Session settings — permission mode read](conversation-shell-workspace-and-run-config.md)),
-the outbound field is #1021's, and the overlay composition is #256's. This ticket adds the entries, the
+the outbound field is #1021's, and the model overlay composition is #256's. This ticket adds the entries, the
 trigger's label, and what picking one does — the same three things [the model](composer-model-menu.md) and
 [effort](composer-effort-menu.md) menus added on either side of it, `ComposerModelMenu.tsx`'s three-part
 shape (pure model function, pure view, thin store-bound container) reused a third time, in its own file
@@ -22,8 +22,9 @@ Measured from `pyrycode/internal/protocol/settings.go` and `internal/relay/v2ses
 the run-configuration sheet's toggle already owns.
 
 So this menu **renders six known labels and offers up to five entries**. A session sitting in bypass shows
-`Bypass approvals` on the button and is offered the settable modes; picking one moves it out of bypass,
-because the daemon clears the bit for any mode it accepts. **Nothing here can move a session into bypass**,
+`Bypass approvals` on the button and is offered the settable modes. A pick can leave the
+running child unchanged even after acknowledgement. The label changes only when a fresh
+settings report confirms the applied mode. **Nothing here can move a session into bypass**,
 and nothing here tries to — adding the sixth entry "for symmetry" would be a one-click privilege escalation
 in the input footer. The two counts are pinned by name in `ComposerPermissionModeMenu.test.tsx`.
 
@@ -40,7 +41,7 @@ The three footer menus look interchangeable but differ in two load-bearing ways:
   `publishedRowFor` lookup and a model-list store read — see § The `auto`-hiding join below — because the
   read only ever *subtracts* one named entry from the constant; it never grows or replaces the list. This
   gives the pure model function **two outcomes** — `permissionMode === ''` returns nothing (no snapshot
-  has arrived, or the session was never resolved), and any other string returns four or five entries,
+  has arrived, the session was never resolved, or running confirmation is unavailable), and any other string returns four or five entries,
   including the bypass reading,
   which gets no branch of its own. The view holds the label inert when selection is unavailable.
 - **Its label is looked up, not verbatim.** Claude publishes effort levels byte-identical to what it
@@ -82,8 +83,7 @@ const hidesAuto = row !== undefined && row.supports_auto_mode === false
   unconditional and cannot be hidden, and no row can *add* an entry, least of all `bypassPermissions`. A
   design that derived the entries from the row instead would have been exploitable. The hide is a UX
   affordance, never an authorization boundary: the daemon is the actual enforcement point, refusing a mode
-  it does not accept, and `selectEffectiveSettings` rolls the optimistic label back on that rejection
-  (#256).
+  it does not accept. A rejected permission pick leaves the confirmed label intact.
 - **Fails open, by construction, not by a fallback.** `auto` is offered wherever the client does not
   positively know otherwise — no `model_list` frame for the conversation, an empty published list, or the
   session's model matching no row (including a row whose `value` the daemon truncated mid-token, which
@@ -181,15 +181,17 @@ fresh closure each render would churn it; `conversationId === null` selects `() 
 path). It reads `sessionIdStore`, `runConfigStore.snapshot`, and the **raw** `runSettingsWriteStore` state
 (not the `selectEffectiveSettings` selector — that returns a fresh object every call and would re-render on
 every store tick), composing them with `selectEffectiveSettings` in the render body and passing
-`effective.model` into the view alongside the held model list. `onSelect` is an arrow so `window.pyry` is
+`effective.model` into the view alongside the held model list. The permission value comes directly
+from `runConfigStore.snapshot.permissionMode`. `onSelect` is an arrow so `window.pyry` is
 dereferenced at interaction time and never during render, and forwards to
 `changeConnectedSetting(conversationId, { field: 'permissionMode', value })` — the mode's own machine value, submitted with no
 reverse lookup.
 
 The container supplies the callback only with an addressable session ID and an
 unambiguous owning host reporting `connected`. Missing ownership/status and all
-non-connected statuses withhold it. The held label remains readable, but the
-chevron and open menu disappear. `changeConnectedSetting` checks current stores
+non-connected statuses withhold it. The held label remains readable until a context
+boundary invalidates confirmation. The chevron and open menu disappear while unavailable.
+`changeConnectedSetting` checks current stores
 again before any command or optimistic change. Reconnection restores the existing
 `auto` capability gate without replaying blocked choices; see
 [the shared settings availability contract](conversation-shell-run-configuration.md#run-configuration-modeleffortyolo-sections-188).
@@ -200,9 +202,32 @@ mounted view inert instead. `e2e/composer-permission-mode-auto.spec.ts` proves t
 live per-model capability filter, while `e2e/offline-session-settings.spec.ts`
 proves host availability through mouse/keyboard actions and outbound commands.
 
-Allowed selections and rejection rollback still use `selectEffectiveSettings`'s
-pending-over-confirmed-over-snapshot composition, shared with the model and effort
-triggers and this control's `auto`-hiding model join.
+## Permission mode
+
+The footer label and current selection use the latest applicable settings report.
+Stored intent, pending picks and acknowledged writes never override that report.
+Model and effort still use their existing write overlays.
+The model overlay also supplies this menu's Auto capability check.
+
+An empty reported mode hides the control, including on a resolved session with false yolo.
+Neither the boolean nor initialization facts supply a fallback.
+Operator bypass can coexist with stored default.
+A default-only pick can therefore acknowledge without changing the running child.
+The footer keeps Bypass approvals until the daemon reports a different mode.
+
+After acknowledgement, `subscribeConfirmedRunConfig` refreshes immediately.
+It checks again every 500ms for at most 15 seconds, waiting for each outstanding reply.
+An early reply with the old mode keeps that label and leaves confirmation pending.
+A rejection refreshes once while preserving any earlier acknowledged change's
+outstanding read and original deadline.
+Timeout retains the latest report and records only a static diagnostic code.
+
+Conversation or owning-host changes, owning-host reconnects, resets and session
+replacement invalidate permission confirmation.
+The control stays hidden until a report for the current context arrives.
+Reset suppresses reports until completion, even if replacement arrives first.
+The replacement session identity remains guarded after reset completion.
+Main also discards superseded requests and reads started before reset or replacement.
 
 ## CSS: a fourth footer-button consumer, and the fourth-glyph lift declined again
 
@@ -295,20 +320,22 @@ escaped markup from React for assertions that need it, rather than hand-rolling 
 six labels need no apostrophe escaping; unknown modes and future copy can still require it. Playwright
 reads DOM text, so its locators match the label verbatim.
 
-`e2e/composer-permission-mode-menu.spec.ts` drives a `bypassPermissions` snapshot first (before a later
-confirmed pick could mask it), then a `default` snapshot, then a pick with a correlated reply, then a pick
-whose reply is withheld so the store's `error` fallback proves the rollback, then the row-geometry check
-with four controls drawn, then confirms the footer's anchor count moves 1 → 2 with no `model_list` ever
-pushed — the proof this control needs no list frame. **This spec deliberately pins
-`.composer-options-anchor` and `aria-haspopup="menu"` at exactly two in the footer, as the structural proof
-this menu needs no list frame** — #1022's case seeds its `model_list` in its own file rather than here, so
-that claim stays intact. `e2e/real-claude-permission-mode.spec.ts` (#682's AC5) pairs against a real
-daemon, reads the baseline mode off the button rather than assuming one, picks a different settable mode,
-and drives a fresh turn-end edge to confirm a **re-read** snapshot still names the picked mode — carrying
-the same honest limit `real-daemon-session-settings.spec.ts` already records: the app-level `confirmed`
-override survives the reopen, so the post-change label is not *provably* snapshot-sourced. The real tier
-runs under `npm run e2e:real:gate`. Its `picked` can only ever resolve to `Manual approval` or
-`Auto-approve edits`, so it does not exercise the `auto` capability filter.
+`e2e/composer-permission-mode-menu.spec.ts` holds writes and settings replies to prove
+pending, acknowledged and rejected picks retain the last report.
+It covers delayed confirmation, rejection during an earlier confirmation wait,
+empty reports on resolved sessions, context changes and reset/replacement ordering.
+The store/bridge tests cover the same boundaries and the original retry deadline.
+
+`e2e/real-claude-permission-mode.spec.ts` starts an operator-bypass child with stored
+default and checks the correlated report and footer.
+An acknowledged default-only pick must leave Bypass approvals intact.
+Plan and Manual approval must then be confirmed within 15 seconds each, without another turn.
+The same session must request approval for an outside-workspace Read.
+The modal prompt carries the tool name; its title is the generic Permission required.
+The test checks conversation identity, Read-only tool activity and a fresh file witness
+returned after approval. The witness never appears in the message requesting the read.
+An executed result records the daemon revision and each completed proof.
+A skipped test is not acceptance.
 
 **`e2e/composer-permission-mode-auto.spec.ts` (new, #1022)** is the AC5 case for the `auto`-hiding join,
 and the only proof the container actually passes `conversationId` through — a static render cannot open

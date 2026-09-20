@@ -1,131 +1,128 @@
+import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { promisify } from 'node:util'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import type { DaemonEvent } from '../src/shared/ipc/events'
 import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
-import {
-  PERMISSION_MODE_LABELS,
-  SETTABLE_PERMISSION_MODES
-} from '../src/renderer/src/screens/conversation/ComposerPermissionModeMenu'
 
-// #682/AC5 — the LIVENESS NET for a permission-mode change over the real stack. The fake-tier twin
-// (e2e/composer-permission-mode-menu.spec.ts) proves the client wiring end to end against a daemon that
-// answers anything; this is the tier that catches the #949 shape, where the daemon defines a type and a
-// payload but registers no handler for the field, the real wire answers with an error, and the whole fake
-// suite stays green. `permission_mode` is a 2026 addition to `set_session_settings` (pyrycode#1687) whose
-// only client consumer is this control, so it has never been exercised against a real daemon at all.
-//
-// WHY THIS TIER SPAWNS CLAUDE, unlike real-daemon-session-settings.spec.ts's YOLO drive. The mode is read
-// off `session_settings.permission_mode`, and the daemon reports `''` — "no session was resolved" — until
-// a session actually exists. Claude-less there is no session, so the control never renders and there is
-// nothing to click. One real turn is the cheapest way to resolve one.
-//
-// REAL-CLAUDE DIVERGENCES from the fake twin (the only deltas — the real-daemon-workspace.spec.ts doc
-// discipline):
-//   - NO `daemon.pushFrame`: the real daemon owns the turn lifecycle and answers every request itself. The
-//     snapshot arrives because a real turn really ended, not because a frame was scripted.
-//   - NO outbound frame capture: the daemon is a SEPARATE process behind the content-blind relay, so the
-//     twin's in-process capture (`settingsFramesMatching`, the deep equal on the payload) is unavailable.
-//     Every assertion here reads DOM text and counts only.
-//   - THE BASELINE IS READ, NEVER ASSUMED. The daemon's default posture is its own, and the seeded session
-//     carries no settings object, so the mode to pick is derived from what the button actually says.
-//
-// ACCEPTED LIMITATION, stated rather than papered over, and it is the same one
-// real-daemon-session-settings.spec.ts records for its own re-read: `runSettingsWriteStore.confirmed` is
-// an app-level per-field override that outlives the re-read, so the post-change label is not PROVABLY
-// snapshot-sourced. What the drive does prove is the failure this tier exists to catch — a daemon that
-// refuses `permission_mode`, or has no handler for it, replies with an error, the store drops the pending
-// marker WITHOUT committing an override, and the label rolls back to the daemon-reported baseline, which
-// fails the final assertion. Do NOT try to strengthen this into a snapshot-provenance proof by asserting
-// the label alone; that needs a renderer state reset the harness does not have.
-//
-// SECRET HYGIENE: every assertion reads DOM text or counts. The pairing payload is built the same way as
-// the sibling specs and is never echoed into a message or a failure diagnostic. The mode values and their
-// display names are client-owned display literals.
+// Preserve the operator-owned stdio approval surface when launching in bypass.
+// Run with operator or dispatcher credentials; a prerequisite skip is not acceptance.
+test.use({ skipPermissions: true, stdioPermissionPrompt: true,
+  interactiveRunner: 'stream-json', allowRemotePermissions: true })
+const ROUNDTRIP = 15_000
+const TURN = 120_000
+type Reading = Pick<Extract<DaemonEvent, { type: 'runConfigReceived' }>, 'conversationId' | 'sessionId' | 'permissionMode'> & { ackCount: number }
+type Proof = { readings: Reading[]; acks: string[]; turns: string[];
+  modals: { conversationId: string; read: boolean; allow: string | null }[];
+  tools: { conversationId: string; read: boolean }[]; off: () => void }
+type DriveWindow = typeof window & { permissionProof: Proof }
 
-const HANDSHAKE_TIMEOUT_MS = 45_000
-// One turn = cold claude (spawn + model load + first reply), the sibling specs' per-turn budget.
-const TURN_TIMEOUT_MS = 120_000
-// Handshake + 2×turn + the settings round-trip + headroom.
-const SPEC_TIMEOUT_MS = 300_000
-// A settings write and its reply-gated re-render. No claude turn to absorb, so this is tight on purpose —
-// a timeout here means the daemon did not answer, which is the signal.
-const ROUNDTRIP_TIMEOUT_MS = 15_000
-
-// The streaming cursor is a child of the assistant bubble; its absence is the per-turn quiesce signal, and
-// a quiesced turn is what makes the app ask for a fresh session-settings snapshot (runConfigLive).
-const CURSOR_SELECTOR = '.bubble__cursor'
-
-test('real claude applies a permission-mode change picked from the input footer', async ({
-  relay,
-  daemon,
-  page
-}) => {
-  test.setTimeout(SPEC_TIMEOUT_MS)
-
-  // A per-run nonce so the two turns differ and reruns differ; never asserted on. The single-short-word
-  // phrasing (from #854) discourages tool calls, which this drive has no need of.
-  const runNonce = Date.now()
-  const message = (turn: number): string => `Reply with a single short word. run=${runNonce} turn=${turn}`
-
-  const payload = encodePairingPayload({
-    server: daemon.pairFields.server,
-    relay: `${relay.url}/v1/client`,
-    token: daemon.pairFields.token,
-    server_static_pubkey: daemon.pairFields.server_static_pubkey
+test('operator bypass stays confirmed through a no-op write, then Plan and Manual approval enforce Read', async ({ relay, daemon, page }, testInfo) => {
+  test.setTimeout(360_000)
+  const { stdout } = await promisify(execFile)(process.env.PYRY_BIN || 'pyry', ['version'], { timeout: 10_000 })
+  const revision = /^pyry (?:dev-)?([a-f0-9]{7,40})\s*$/.exec(stdout)?.[1]
+  expect(revision, 'tested daemon must identify its source revision').toBeTruthy()
+  testInfo.annotations.push({ type: 'daemon-revision', description: revision! })
+  await testInfo.attach('daemon-revision', { body: Buffer.from(revision!), contentType: 'text/plain' })
+  // sessions.settingsFromEntry normalizes absent permission_mode + false/absent yolo to default.
+  const registry = JSON.parse(await readFile(join(dirname(daemon.workdir), '.pyry/test/sessions.json'), 'utf8'))
+  expect(registry.sessions[0].yolo ?? false).toBe(false)
+  expect(registry.sessions[0].permission_mode || 'default').toBe('default')
+  const noteDir = join(dirname(daemon.workdir), '.pyry/test/handoff-notes')
+  await mkdir(noteDir, { recursive: true, mode: 0o700 })
+  const note = join(noteDir, 'permission-probe.txt')
+  const witness = randomUUID()
+  await writeFile(note, `${witness}\n`, { mode: 0o600 })
+  await page.evaluate(() => {
+    const proof: Proof = { readings: [], acks: [], turns: [], modals: [], tools: [], off: () => {} }
+    proof.off = window.pyry.onDaemonEvent(event => {
+      if (event.type === 'runConfigReceived') {
+        const { conversationId, sessionId, permissionMode } = event
+        proof.readings.push({ conversationId, sessionId, permissionMode, ackCount: proof.acks.length })
+      }
+      if (event.type === 'sessionSettingsUpdated') proof.acks.push(event.sessionId)
+      if (event.type === 'turnEnd') proof.turns.push(event.conversationId)
+      if (event.type === 'modalShown' && event.class === 'permission') proof.modals.push({
+        // The daemon's title is "Permission required"; its prompt carries the tool name.
+        conversationId: event.conversationId, read: event.prompt === 'Read',
+        allow: event.options.find(option => option.id === 'allow_once')?.label ?? null
+      })
+      if (event.type === 'toolUse') proof.tools.push({ conversationId: event.conversationId, read: event.name === 'Read' })
+    })
+    ;(window as DriveWindow).permissionProof = proof
   })
-
-  const conversation = page.locator('.conversation')
-  const sendButton = page.getByRole('button', { name: 'Send' })
-  const composer = page.getByPlaceholder('Message…')
+  const proof = () => page.evaluate(() => {
+    const { off: _off, ...value } = (window as DriveWindow).permissionProof
+    return value
+  })
   const label = page.locator('.composer__permission-label')
-  const panel = page.getByRole('menu', { name: 'Permission mode', exact: true })
-
-  await pairFromUnpairedLaunch(page, payload)
-
-  // --- Precondition: pair, then create the conversation THROUGH THE UI (#448) — the operator flow. The
-  // seeded row rendering is the connected gate; the `Create chat` plus must not be clicked before it. ---
-  await expect(page.locator('.channel-list__row-open')).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
-  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
-  await expect(conversation).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
-  await expect(sendButton).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
-
-  // --- Turn 1: resolve a real session. The control renders NOTHING until the daemon reports a mode, so
-  // its appearance is itself the proof that a session resolved and that `permission_mode` came back
-  // non-empty over the real wire — the read half (#1020) has never been exercised here either. ---
-  await composer.fill(message(1))
-  await sendButton.click()
-  await expect(page.locator(CURSOR_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
-  await expect(label).toBeVisible({ timeout: TURN_TIMEOUT_MS })
-
-  // The daemon's own posture, read rather than assumed. It must be one this client can name: an unmapped
-  // mode would render verbatim and would mean the daemon reports a mode outside the measured six, which is
-  // a finding in itself rather than something to work around.
-  const baseline = (await label.innerText()).trim()
-  const named = SETTABLE_PERMISSION_MODES.map((mode) => PERMISSION_MODE_LABELS[mode])
-  expect([...named, PERMISSION_MODE_LABELS.bypassPermissions]).toContain(baseline)
-
-  // Pick something the session is NOT already in, so the final assertion is falsifiable: a change to the
-  // mode already running would pass whether or not the daemon did anything at all.
-  const picked = named.find((name) => name !== baseline)
-  expect(picked).toBeDefined()
-
-  // --- The change. The label moves at once (the optimistic overlay, raised in the same dispatch as the
-  // pending marker), which is the client half and is already proven at the fake tier. ---
-  await page.getByRole('button', { name: baseline, exact: true }).click()
-  await expect(panel).toBeVisible()
-  await panel.getByRole('menuitem', { name: picked!, exact: true }).click()
-  await expect(panel).toBeHidden()
-  await expect(label).toHaveText(picked!, { timeout: ROUNDTRIP_TIMEOUT_MS })
-
-  // --- Turn 2: a second real turn ends, so the app asks the real daemon for a FRESH session-settings
-  // snapshot. This is the daemon-required half — a refusal has landed long before this point and would
-  // have rolled the label back to the baseline, so the two assertions below fail on a daemon that does not
-  // accept `permission_mode`. ---
-  await composer.fill(message(2))
-  await sendButton.click()
-  await expect(page.locator(CURSOR_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
-
-  await expect(label).toHaveText(picked!, { timeout: ROUNDTRIP_TIMEOUT_MS })
-  await expect(label).not.toHaveText(baseline)
-  // AC4's shape over the real wire: the rejection path raises no footer affordance, so a silently refused
-  // change would show up as the rollback above and nothing else.
-  await expect(page.locator('.composer__footer [role="alert"]')).toHaveCount(0)
+  const send = async (message: string) => {
+    await page.getByPlaceholder('Message…').fill(message)
+    await page.getByRole('button', { name: 'Send', exact: true }).click()
+  }
+  try {
+    await pairFromUnpairedLaunch(page, encodePairingPayload({ server: daemon.pairFields.server,
+      relay: `${relay.url}/v1/client`, token: daemon.pairFields.token,
+      server_static_pubkey: daemon.pairFields.server_static_pubkey }))
+    await expect(page.locator('.channel-list__row-open')).toBeVisible({ timeout: 45_000 })
+    await page.locator('.channel-list__row-open').click()
+    await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
+    await send('Reply with the single word ready. Do not use tools.')
+    await expect.poll(async () => (await proof()).turns.length, { timeout: TURN }).toBe(1)
+    await expect(label).toHaveText('Bypass approvals', { timeout: ROUNDTRIP })
+    const initial = (await proof()).readings.at(-1)!
+    expect(initial.permissionMode).toBe('bypassPermissions')
+    expect(initial.sessionId.length > 0).toBe(true)
+    const pick = async (name: string, confirmed: string) => {
+      const before = await proof()
+      const deadline = Date.now() + ROUNDTRIP
+      const timeout = () => Math.max(1, deadline - Date.now())
+      await page.locator('.composer__permission').click()
+      await page.getByRole('menu', { name: 'Permission mode', exact: true })
+        .getByRole('menuitem', { name, exact: true }).click()
+      await expect.poll(async () => (await proof()).acks.length, { timeout: timeout() }).toBe(before.acks.length + 1)
+      expect((await proof()).acks.at(-1) === initial.sessionId).toBe(true)
+      await expect.poll(async () => (await proof()).readings.slice(before.readings.length).some(r =>
+        r.ackCount === before.acks.length + 1 && r.conversationId === initial.conversationId &&
+        r.sessionId === initial.sessionId && r.permissionMode === confirmed
+      ), { timeout: timeout() }).toBe(true)
+      await expect(label).toHaveText(confirmed === 'bypassPermissions' ? 'Bypass approvals' : name, { timeout: timeout() })
+      expect((await proof()).turns.length).toBe(1)
+    }
+    // Stored default can acknowledge without applying. The footer must continue to tell the truth.
+    await pick('Manual approval', 'bypassPermissions')
+    await pick('Plan', 'plan')
+    await pick('Manual approval', 'default')
+    expect((await proof()).modals).toHaveLength(0)
+    expect((await proof()).tools).toHaveLength(0)
+    await send(`Use the Read tool once to read the file at ${note}, then reply with its exact contents and nothing else. ` +
+      'Do not use any other tool. If the read is denied or fails, do not retry it and reply with the single word blocked.')
+    const panel = page.locator('.permission-panel')
+    await expect(panel).toBeVisible({ timeout: TURN })
+    const modal = (await proof()).modals.at(-1)!
+    expect(modal.conversationId === initial.conversationId, 'approval belongs to the same conversation').toBe(true)
+    expect(modal.read, 'approval prompt identifies the Read tool').toBe(true)
+    expect(modal.allow !== null).toBe(true)
+    await panel.getByRole('radio', { name: modal.allow!, exact: true }).press('Space')
+    await panel.getByRole('button', { name: 'Continue', exact: true }).click()
+    await panel.getByRole('button', { name: 'Confirm', exact: true }).click()
+    await expect.poll(async () => (await proof()).turns.length, { timeout: TURN }).toBe(2)
+    const after = await proof()
+    expect(after.tools.length).toBeGreaterThan(0)
+    expect(after.tools.every(tool => tool.conversationId === initial.conversationId && tool.read)).toBe(true)
+    expect(after.readings.every(r => !r.sessionId || r.sessionId === initial.sessionId)).toBe(true)
+    // The witness is only in the file, never in the message asking Claude to read it.
+    await expect.poll(() => page.locator('[data-thread-role="assistant"]').evaluateAll(
+      (rows, marker) => rows.some(row => row.textContent?.includes(marker)), witness)).toBe(true)
+    await expect(label).toHaveText('Manual approval')
+    await testInfo.attach('permission-confirmation-result', {
+      body: Buffer.from(JSON.stringify({ executed: true, daemonRevision: revision, noOpRemainedBypass: true,
+        planConfirmed: true, manualConfirmed: true, sameSessionReadApproval: true,
+        readWitnessReturned: true })), contentType: 'application/json'
+    })
+  } finally {
+    await page.evaluate(() => { (window as DriveWindow).permissionProof.off(); delete (window as Partial<DriveWindow>).permissionProof })
+  }
 })

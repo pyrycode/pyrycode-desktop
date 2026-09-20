@@ -436,7 +436,10 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
               '--',
               '--model',
               claudeModel,
-              ...(skipPermissions ? ['--dangerously-skip-permissions'] : [])
+              ...(skipPermissions ? ['--dangerously-skip-permissions'] : []),
+              // Operator bypass otherwise suppresses the daemon's own prompt injection.
+              // Retain stdio so an in-band downgrade can ask for approval on the same child.
+              ...(skipPermissions && stdioPermissionPrompt ? ['--permission-prompt-tool', 'stdio'] : [])
             ]
           : [])
       ]

@@ -1,5 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { existsSync } from 'node:fs'
+import { readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { withIsolatedElectronApp } from './fixtures/realDaemon'
 
 // #517 — the leak regression. Before this ticket the `page` fixture in realDaemon.ts (and the
@@ -95,4 +97,35 @@ test('a setup failure after launch still reaps the app and its user-data dir', a
   // Booleans only — the pid and the dir path never reach an assertion message.
   expect.soft(await waitForDeath(record.pid)).toBe(true)
   expect.soft(existsSync(record.userDataDir)).toBe(false)
+})
+
+test('relaunch awaits process exit and retains owned data through two new processes', async () => {
+  test.setTimeout(TEST_TIMEOUT_MS)
+  const launched: Array<{ pid: number; userDataDir: string }> = []
+  const attempt = withIsolatedElectronApp(async (first) => {
+    let current = first
+    const marker = join(first.userDataDir, 'restart-fixture-marker')
+    await writeFile(marker, 'retained')
+    for (let launch = 0; launch < 3; launch++) {
+      const pid = current.app.process().pid
+      if (pid === undefined) throw new Error('restart fixture: missing process')
+      expect(launched.every(previous => previous.pid !== pid)).toBe(true)
+      expect(current.userDataDir === first.userDataDir).toBe(true)
+      expect(await readFile(marker, 'utf8')).toBe('retained')
+      launched.push({ pid, userDataDir: current.userDataDir })
+      if (launch < 2) {
+        const previous = current
+        current = await current.relaunch()
+        expect(isAlive(pid)).toBe(false)
+        await expect(previous.relaunch()).rejects.toThrow('stale app handle')
+      }
+    }
+    throw new Error(SETUP_FAILURE_SENTINEL)
+  })
+  await expect(attempt).rejects.toThrow(SETUP_FAILURE_SENTINEL)
+  expect(launched).toHaveLength(3)
+  for (const record of launched) {
+    expect.soft(await waitForDeath(record.pid)).toBe(true)
+    expect.soft(existsSync(record.userDataDir)).toBe(false)
+  }
 })

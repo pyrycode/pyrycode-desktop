@@ -511,40 +511,73 @@ export type IsolatedElectronApp = {
   page: Page
   app: ElectronApplication
   userDataDir: string
+  relaunch(): Promise<IsolatedElectronApp>
 }
 
 /**
  * Launch the BUILT app against a throwaway `--user-data-dir`, hand the handles to `run`, and reap both.
  *
- * Verbatim from #94: `args: ['.']` launches the built app, ELECTRON_RENDERER_URL is stripped to force the
- * built-renderer path, the two `app.isPackaged`-gated dev-affordance flags are set, and userData is
- * isolated for a guaranteed-unpaired start.
+ * `args: ['.']` launches the built app and ELECTRON_RENDERER_URL is stripped to force the built renderer.
+ * The default uses test encryption; `encryption: 'os'` removes that opt-in for production-persistence
+ * proofs. The loopback relay affordance stays enabled. The directory is minted once and retained by
+ * `relaunch`, which closes and awaits the current process before starting another against those bytes.
  *
  * Lifted out of the `page` fixture closure by #517 so the real setup path is reachable from a test (the
  * fixture above is now a one-line delegation). It takes NO path parameter — the `rm` target is always the
  * value `mkdtemp` just returned, so this never becomes an arbitrary recursive-delete primitive.
  *
  * Both resources are reaped on EVERY raised exit path — success, `run` failing, and a setup failure raised
- * after the resource came up (#517: `firstWindow()` rejecting used to strand both). Each `try` textually
- * follows its `const x = await create()`, so "no `await` between create and cleanup registration" is a
- * structural property, not a discipline a future edit can break. Nesting also gives AC2's app-close-then-
+ * after the resource came up (#517: `firstWindow()` rejecting used to strand both). The current child is
+ * registered before awaiting its window, including on relaunch. Nesting gives AC2's app-close-then-
  * `rm` order for free: the inner `finally` completes before the outer one begins. NOT covered: an `await`
  * that never settles (a hung `firstWindow()`) — Playwright kills the worker without unwinding the stack,
  * so no `finally` runs. Whatever `run` or setup threw is rethrown; teardown never replaces it.
  */
 export async function withIsolatedElectronApp(
-  run: (handles: IsolatedElectronApp) => Promise<void>
+  run: (handles: IsolatedElectronApp) => Promise<void>,
+  options: { encryption?: 'test' | 'os' } = {}
 ): Promise<void> {
-  const env = { ...process.env }
+  const env: Record<string, string> = {}
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) env[key] = value
+  }
   delete env.ELECTRON_RENDERER_URL
   env[LOOPBACK_RELAY_ENV_FLAG] = '1'
-  env[TEST_SECRET_BACKEND_ENV_FLAG] = '1'
+  if (options.encryption === 'os') delete env[TEST_SECRET_BACKEND_ENV_FLAG]
+  else env[TEST_SECRET_BACKEND_ENV_FLAG] = '1'
   const userDataDir = await mkdtemp(join(tmpdir(), 'pyry-e2e-realclaude-'))
-  try {
+  let current: ElectronApplication | null = null
+  let relaunching = false
+  const close = async (app: ElectronApplication): Promise<void> => {
+    const child = app.process()
+    await app.close()
+    await expect.poll(() => child.exitCode !== null || child.signalCode !== null, {
+      message: 'Electron process exited before relaunch', timeout: 15_000
+    }).toBe(true)
+  }
+  const launch = async (): Promise<IsolatedElectronApp> => {
     const app = await electron.launch({ args: ['.', `--user-data-dir=${userDataDir}`], env })
+    // Register cleanup before firstWindow can reject, including on later launches.
+    current = app
+    const page = await app.firstWindow()
+    return {
+      app, page, userDataDir,
+      async relaunch() {
+        if (current !== app || relaunching) throw new Error('restart fixture: stale app handle')
+        relaunching = true
+        try {
+          await close(app)
+          current = null
+          return await launch()
+        } finally {
+          relaunching = false
+        }
+      }
+    }
+  }
+  try {
     try {
-      const page = await app.firstWindow()
-      await run({ page, app, userDataDir })
+      await run(await launch())
     } finally {
       // Best-effort, like launchPairedApp.ts's drain: a throwing `finally` would REPLACE the causal error
       // the developer needs, and would abort the unwind before the outer `rm` — leaving the
@@ -552,7 +585,8 @@ export async function withIsolatedElectronApp(
       // a close error can carry the launch argv, which embeds `--user-data-dir=<path>`, and this file's
       // no-echo rule extends to teardown diagnostics.
       try {
-        await app.close()
+        if (current !== null) await close(current)
+        current = null
       } catch {
         // best-effort
       }

@@ -96,16 +96,31 @@ turning regardless, and the held height was what made that read as intentional r
 [**#967**](https://github.com/pyrycode/pyrycode-desktop/issues/967) **closed that state as a side effect
 of folding retry, compacting and stall into the label's own union** (see [Thinking / working
 indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)
-below) rather than by coupling the two gates: the icon still turns on the raw `isRunning`, and whenever
-that holds the label is now non-null in every case (resetting, retrying, compacting, stalled, or thinking/working),
-so the icon can no longer turn beside nothing. The converse is still reachable and still intended: a
-stall or a held retry at `idle` shows its label beside a still icon — the folded statuses are not gated
-on a running turn (see below).
+below) rather than by coupling the two gates: through #1517 the icon turned on the raw `isRunning`, and
+whenever that held the label was non-null in every case (resetting, retrying, compacting, stalled, or
+thinking/working), so the icon could no longer turn beside nothing.
+[**#1556**](https://github.com/pyrycode/pyrycode-desktop/issues/1556) widened the icon's own gate one step
+further — see "`isRunning: boolean`…" below — but leaves this paragraph's converse untouched: a stall or a
+held retry at `idle` still shows its label beside a still icon — the folded statuses are not gated on a
+running turn (see below).
 
 **`isRunning: boolean`, not `phase: TurnPhase` — the `ComposerSendButton` precedent, not a new one.** The
 view structurally cannot receive the store enum, so `'idle'` is not representable inside the spinning
-branch and no daemon string can reach this prop. The container supplies `isTurnRunning(phase)`, the same
-exported predicate the composer's stop-button variant already gates on — reused, not re-derived.
+branch and no daemon string can reach this prop. Through #1517 the container supplied `isTurnRunning(phase)`
+directly, the same exported predicate the composer's stop-button variant gates on.
+[**#1556**](https://github.com/pyrycode/pyrycode-desktop/issues/1556) widened the source one step: the
+container now supplies `isStatusIconTurning(phase, state)` — `isTurnRunning(phase) || state === 'thinking'`
+— where `state` is the very `workingIndicatorStateWithLocalSend` result the label already renders, hoisted
+once into a `const` beside the container's existing `openTool`, so the icon reads the label's own answer
+rather than re-deriving `localSendPending` a second time. `isTurnRunning(phase)` alone stays the stop
+affordance's sole gate (`ComposerSendButton`, and the Escape branch's `shouldInterruptOnKeyDown`) — only
+this mount's icon moved. Widening by `state === 'thinking'` adds no daemon-sourced render:
+`workingIndicatorState` reaches `'thinking'` only past `shouldShowThinking`, which already requires
+`isTurnRunning`, so the clause's only new inhabitant is #650's locally-opened window — the interval between
+the composer accepting a submit and the daemon's first `turn_state`, which previously left the label reading
+Thinking beside a still mark for one round trip. The four superseding labels (reset, retry, compaction,
+stall) are excluded on purpose and still show beside a still mark at `idle`, restating the converse two
+paragraphs up.
 
 **`children`, not a `label: string` prop — the `StatusSheet({ onClose, children })` precedent.** Keeps the
 row independent of where its text comes from. `children` is the activity group's slot (`<ThinkingIndicator/>`);
@@ -134,6 +149,10 @@ anything else) before asserting the icon's computed `animationName`. A control a
 to fail at all; without it, `'none'` on a stylesheet that never declared the keyframe would also pass.
 `page.emulateMedia` does reach an Electron window over CDP as shipped, so the `--force-prefers-reduced-motion`
 launch-arg fallback the architecture spec held in reserve was never needed.
+[**#1556**](https://github.com/pyrycode/pyrycode-desktop/issues/1556) widened *when* this class is emitted
+(see "`isRunning: boolean`…" above) but not what suppresses it: the media rule keys on
+`.composer-status__icon--spinning` itself, so the locally-opened window it now reaches is covered by the
+same rule with no CSS change.
 
 **The icon is `PyryMark`** (`theme/PyryMark.tsx`), the pyrycode snowflake mark **moved out of
 `WelcomeScreen.tsx`'s module-private `PyrycodeMark`** so the two screens share one 12 KB path instead of a

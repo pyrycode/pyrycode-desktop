@@ -123,3 +123,10 @@ can accompany a resolved session.
   preserving model, effort and usage behavior at reconnect/reset. Navigation retains
   its existing whole-snapshot clear. The subscriber receives the injected config store
   to keep this mutation tested with the real store implementation.
+- 2026-09-20 (verifier rework): `offline-session-settings.spec.ts` previously expected
+  reconnect and restored ownership to reuse an old permission reading, and its `settings`
+  helper stamped second-host reports with the first host. Preserve the confirmation contract:
+  assert the hidden interval, then deliver a fresh report with explicit host attribution,
+  including the return to the first host. Prove a wrong-host report cannot restore the label.
+  Keep the existing offline input, model/effort and capability assertions. No production
+  design or security boundary changes; this adds one test file to the affected scope.

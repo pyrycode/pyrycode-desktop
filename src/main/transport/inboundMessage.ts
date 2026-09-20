@@ -1276,13 +1276,13 @@ function parseDebugBundleDonePayload(payload: unknown): { total: number } {
 }
 
 /**
- * Narrow an opaque payload into a SessionSettingsPayload (#491). Fail-closed: every field is
+ * Narrow an opaque payload into a SessionSettingsPayload (#491). Fail-closed: each original field is
  * required-present, because every zero value here is a
  * real ANSWER rather than an absence. `session_id: ''` means "the daemon has no session to
  * address", `model`/`effort: ''` mean "inherited daemon default", `yolo: false` means permissions
  * enforced, and `window_tokens: 0` means the usage reader is unwired. Defaulting any of them would
  * make "the daemon said zero" indistinguishable from "the daemon did not say", which is the exact
- * ambiguity that let the inert-sheet defect hide. Returns only the seven known fields; unknown
+ * ambiguity that let the inert-sheet defect hide. Returns only the known fields; unknown
  * server-added keys are tolerated (forward-compat) but not copied through. Its messages name the
  * failure category only — no field value is interpolated.
  *
@@ -1292,6 +1292,10 @@ function parseDebugBundleDonePayload(payload: unknown): { total: number } {
  * the TYPE, not truthiness, so only a missing key or a non-string rejects. No allowlist: the value is
  * never checked against claude's six mode names, because the read half deliberately carries one mode
  * the write half refuses (#1021) and the daemon already normalises at every construction site.
+ *
+ * `effective_effort` is optional and independent of saved `effort`: absence stays undefined, null
+ * means no effort parameter, and strings (including empty/unknown values) pass through unchanged.
+ * Present malformed values reject the complete frame before logging, using requireStringOrNull.
  */
 function parseSessionSettingsPayload(payload: unknown): SessionSettingsPayload {
   if (!isRecord(payload)) {
@@ -1300,11 +1304,14 @@ function parseSessionSettingsPayload(payload: unknown): SessionSettingsPayload {
   const session_id = requireString(payload, 'session_id')
   const model = requireString(payload, 'model')
   const effort = requireString(payload, 'effort')
+  const effective_effort = payload.effective_effort === undefined
+    ? undefined
+    : requireStringOrNull(payload, 'effective_effort')
   const yolo = requireBoolean(payload, 'yolo')
   const permission_mode = requireString(payload, 'permission_mode')
   const used_tokens = requireNumber(payload, 'used_tokens')
   const window_tokens = requireNumber(payload, 'window_tokens')
-  return { session_id, model, effort, yolo, permission_mode, used_tokens, window_tokens }
+  return { session_id, model, effort, effective_effort, yolo, permission_mode, used_tokens, window_tokens }
 }
 
 /**

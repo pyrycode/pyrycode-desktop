@@ -9019,7 +9019,10 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     // mode name, so a leak through ANY field of the record fails this rather than reading as a mode.
     const { log, lines } = captureLog()
     const SECRET_MODE = 'secret-permission-mode-value'
-    const plaintext = encodeSessionSettings({ ...RUN_CONFIG, permission_mode: SECRET_MODE })
+    const SECRET_EFFORT = 'private-applied-effort-value'
+    const plaintext = encodeSessionSettings({
+      ...RUN_CONFIG, permission_mode: SECRET_MODE, effective_effort: SECRET_EFFORT
+    })
 
     parseInboundMessage(plaintext, log)
 
@@ -9032,6 +9035,7 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     // The exact content-free field set — no decoded field of the payload reaches the log.
     expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
     expect(lines[0]).not.toContain(SECRET_MODE)
+    expect(lines[0]).not.toContain(SECRET_EFFORT)
     expect(lines[0]).not.toContain(RUN_CONFIG.session_id)
     expect(lines[0]).not.toContain(RUN_CONFIG.model)
   })
@@ -9433,6 +9437,18 @@ describe('parseInboundMessage — secret-safety / log-free', () => {
 })
 
 describe('parseInboundMessage — session_settings recognition (#491)', () => {
+  it.each([undefined, null, 'low', '', '  future-effort <report>  '])(
+    'preserves effective_effort %j independently of saved effort', (effectiveEffort) => {
+      const decoded = parseInboundMessage(encodeSessionSettings({
+        ...RUN_CONFIG, effective_effort: effectiveEffort
+      }))
+      expect(decoded?.kind).toBe('session-settings')
+      if (decoded?.kind !== 'session-settings') throw new Error('expected session settings')
+      expect(decoded.sessionSettings.effective_effort).toBe(effectiveEffort)
+      expect(decoded.sessionSettings.effort).toBe('high')
+    }
+  )
+
   it('narrows a full session_settings into { kind: session-settings } with all seven fields', () => {
     expect(parseInboundMessage(encodeSessionSettings(RUN_CONFIG))).toEqual({
       kind: 'session-settings',
@@ -9518,6 +9534,31 @@ describe('parseInboundMessage — session_settings recognition (#491)', () => {
 })
 
 describe('parseInboundMessage — session_settings fail-closed (#491)', () => {
+  it.each([false, true, 0, 42, [], ['private-effort'], { value: 'private-effort' }]
+    .map((effectiveEffort) => ({ effectiveEffort })))(
+    'rejects malformed effective_effort $effectiveEffort without logging content', ({ effectiveEffort }) => {
+      const { log, lines } = captureLog()
+      const decode = (): unknown => parseInboundMessage(encodeSessionSettings({
+        ...RUN_CONFIG, effective_effort: effectiveEffort
+      }), log)
+      expect(decode).toThrow(WireDecodeError)
+      expect(decode).toThrow('missing required field: effective_effort')
+      expect(lines).toEqual([])
+    }
+  )
+
+  it('rejects an oversized effective_effort frame before logging', () => {
+    const { log, lines } = captureLog()
+    // Bypass the outbound encoder's bound to exercise the inbound guard itself.
+    const plaintext = Buffer.from(JSON.stringify({
+      id: 45, type: 'session_settings', ts: FIXED_TS,
+      payload: { ...RUN_CONFIG, effective_effort: 'x'.repeat(MAX_PLAINTEXT_BYTES) }
+    }))
+    expect(plaintext.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
+    expect(() => parseInboundMessage(plaintext, log)).toThrow('inbound plaintext exceeds max size')
+    expect(lines).toEqual([])
+  })
+
   it('throws when any of the three string fields is missing or non-string', () => {
     const bad: unknown[] = [
       { ...RUN_CONFIG, session_id: undefined },

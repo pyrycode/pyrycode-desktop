@@ -7700,6 +7700,7 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     session_id: 'sess-a',
     model: 'claude-opus-4-8',
     effort: 'high',
+    effective_effort: 'medium',
     yolo: true,
     // Agrees with `yolo: true` above, because the daemon stores the pair so they cannot disagree
     // (#1020). It is also the one mode the WRITE half refuses (#1021), which is why it is the
@@ -7712,8 +7713,8 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
   /** The conversation the request names, and therefore the one the reply describes (#1176). */
   const CONV = 'conv-alpha'
 
-  async function connected(): Promise<ReturnType<typeof build>> {
-    const ctx = build()
+  async function connected(diagnosticLog?: DiagnosticLog): Promise<ReturnType<typeof build>> {
+    const ctx = build({ serverId: 'server-config', diagnosticLog })
     ctx.connection.start()
     await tick()
     ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
@@ -7735,9 +7736,10 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
    * gate were being exercised.
    */
   async function requested(
-    conversationId: string = CONV
+    conversationId: string = CONV,
+    diagnosticLog?: DiagnosticLog
   ): Promise<ReturnType<typeof build> & { replyTo: number }> {
-    const ctx = await connected()
+    const ctx = await connected(diagnosticLog)
     ctx.connection.requestSessionSettings(conversationId)
     return { ...ctx, replyTo: lastRequestId(ctx) }
   }
@@ -7773,7 +7775,53 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     expect(request?.payload).toEqual({ conversation_id: 'conv-42' })
   })
 
-  it('decodes an inbound session_settings into runConfigReceived with all eight fields', async () => {
+  it.each([undefined, null, 'low', '', '  future-effort <report>  '])(
+    'maps effective_effort %j verbatim without sending settings', async (effectiveEffort) => {
+      const { log, records } = captureLog()
+      const { sink, drivers, replyTo } = await requested(CONV, log)
+      const before = drivers[0].sent.length
+      records.length = 0
+      drivers[0].emit({
+        type: 'message',
+        plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, effective_effort: effectiveEffort }, replyTo)
+      })
+      const events = stampedEvents(sink).filter((e) => e.type === 'runConfigReceived')
+      expect(events).toHaveLength(1)
+      const event = events[0]
+      expect(event.effectiveEffort).toBe(effectiveEffort)
+      expect(event).toMatchObject({ effort: 'high', conversationId: CONV, serverId: 'server-config' })
+      expect(event).not.toHaveProperty('effective_effort')
+      expect(drivers[0].sent).toHaveLength(before)
+      expect(records).toEqual([{
+        event: 'inbound-decoded', code: 'session_settings',
+        bytes: expect.any(Number), hash: expect.stringMatching(/^[0-9a-f]{64}$/)
+      }])
+    }
+  )
+
+  it.each([false, true, 0, 42, [], ['private-effort'], { value: 'private-effort' }]
+    .map((effectiveEffort) => ({ effectiveEffort })))(
+    'drops malformed effective_effort $effectiveEffort without consuming correlation or logging', async ({ effectiveEffort }) => {
+      const { log, records } = captureLog()
+      const { sink, drivers, replyTo } = await requested(CONV, log)
+      const beforeEvents = stampedEvents(sink).length
+      const beforeSends = drivers[0].sent.length
+      records.length = 0
+      drivers[0].emit({
+        type: 'message',
+        plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, effective_effort: effectiveEffort }, replyTo)
+      })
+      expect(stampedEvents(sink)).toHaveLength(beforeEvents)
+      expect(records).toEqual([])
+      expect(drivers[0].sent).toHaveLength(beforeSends)
+      drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG, replyTo) })
+      expect(stampedEvents(sink).filter((e) => e.type === 'runConfigReceived')).toEqual([
+        expect.objectContaining({ effectiveEffort: 'medium', conversationId: CONV, serverId: 'server-config' })
+      ])
+    }
+  )
+
+  it('decodes an inbound session_settings into runConfigReceived with the applied effort report', async () => {
     const { sink, drivers, replyTo } = await requested()
 
     drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG, replyTo) })
@@ -7785,6 +7833,7 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
         sessionId: 'sess-a',
         model: 'claude-opus-4-8',
         effort: 'high',
+        effectiveEffort: 'medium',
         yolo: true,
         permissionMode: 'bypassPermissions',
         used_tokens: 12480,
@@ -7931,14 +7980,22 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     const second = lastRequestId(ctx)
     expect(first).not.toBe(second)
 
-    ctx.drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG, second) })
+    ctx.drivers[0].emit({
+      type: 'message',
+      plaintext: sessionSettingsPlaintext({
+        ...RUN_CONFIG, effective_effort: null, serverId: 'forged-server', conversation_id: 'forged-conv'
+      }, second)
+    })
     ctx.drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG, first) })
 
     expect(
-      emitted(ctx.sink)
+      stampedEvents(ctx.sink)
         .filter((e) => e.type === 'runConfigReceived')
-        .map((e) => (e as { conversationId: string }).conversationId)
-    ).toEqual(['conv-second', 'conv-first'])
+        .map(({ conversationId, serverId, effectiveEffort }) => ({ conversationId, serverId, effectiveEffort }))
+    ).toEqual([
+      { conversationId: 'conv-second', serverId: 'server-config', effectiveEffort: null },
+      { conversationId: 'conv-first', serverId: 'server-config', effectiveEffort: 'medium' }
+    ])
   })
 
   it('records no pending entry when the send throws — a later matching reply emits nothing (#1176)', async () => {

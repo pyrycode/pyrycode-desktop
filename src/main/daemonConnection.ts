@@ -1324,6 +1324,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               sessionId: inbound.sessionSettings.session_id,
               model: inbound.sessionSettings.model,
               effort: inbound.sessionSettings.effort,
+              effectiveEffort: inbound.sessionSettings.effective_effort,
               yolo: inbound.sessionSettings.yolo,
               permissionMode: inbound.sessionSettings.permission_mode,
               used_tokens: inbound.sessionSettings.used_tokens,

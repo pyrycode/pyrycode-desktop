@@ -336,7 +336,14 @@ type BaseDaemonEvent =
       conversationId: string
       sessionId: string
       model: string
+      /** Saved choice, independent of the applied report. */
       effort: string
+      /**
+       * Applied report: undefined = unavailable, null = no effort parameter; strings stay verbatim.
+       * Untrusted display text only: never a control input, markup, attribute, URL, path, cache key
+       * or log value. Receiving it must not write settings or overwrite the remembered choice.
+       */
+      effectiveEffort?: string | null
       yolo: boolean
       permissionMode: string
       used_tokens: number

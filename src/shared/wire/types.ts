@@ -626,8 +626,9 @@ export interface RequestSessionSettingsPayload {
 /**
  * Inbound `session_settings` reply (daemon → client). Mirrors the daemon's
  * internal/protocol/settings.go SessionSettingsPayload field-for-field, wire order
- * `session_id, model, effort, yolo, permission_mode, used_tokens, window_tokens` — all always
- * present (no `omitempty`), so every zero value is a real answer rather than an absence.
+ * `session_id, model, effort, effective_effort, yolo, permission_mode, used_tokens, window_tokens`.
+ * The original fields are always present, so their zero values are real answers. The additive
+ * `effective_effort` report (pyrycode#2517) is omitted when the applied reading is unavailable.
  * `permission_mode` (pyrycode#1687) sits BETWEEN `yolo` and `used_tokens`, not at the end; requiring
  * it couples this client to a daemon carrying that change, which #1020's real-daemon gate is what
  * proves.
@@ -654,8 +655,10 @@ export interface SessionSettingsPayload {
   session_id: string
   /** Active model; '' = inherited daemon default (never treated as absent). */
   model: string
-  /** Reasoning effort; '' = inherited daemon default. */
+  /** Saved reasoning-effort choice; '' = inherited daemon default. */
   effort: string
+  /** Confirmed applied effort: absent = unavailable, null = no parameter, string = verbatim report. */
+  effective_effort?: string | null
   /** Permissions posture; `false` = permissions enforced. */
   yolo: boolean
   /**

@@ -35,6 +35,7 @@ import {
   ComposerErrorChip,
   ContextUsageReading,
   isTurnRunning,
+  isStatusIconTurning,
   ComposerSendButton,
   ChannelInfoSheetView,
   requestArchiveConversation,
@@ -3283,6 +3284,50 @@ describe('isTurnRunning — the stop-variant gate (broader than the thinking ind
 
   it('is not running while idle (AC1)', () => {
     expect(isTurnRunning('idle')).toBe(false)
+  })
+})
+
+// #1556: the status icon's own gate, which is `isTurnRunning` widened by the label's answer rather than a
+// second reading of #650's `localSendPending`. Both inputs are injected, so this is the same store-free
+// predicate test as its neighbour above.
+//
+// The AC2 arm is the load-bearing one and the reason every superseding state gets its own case: a held
+// retry, a compaction, a stall or a reset at `idle` shows its LABEL beside a STILL mark, the converse
+// render ComposerStatusArea's docblock records as intended. A gate written as `state !== null` would pass
+// every other test in this block and silently spin all four.
+describe('isStatusIconTurning — the status icon gate widened by the local window (#1556)', () => {
+  const IDLE = { phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null } as const
+
+  it('turns while the daemon reports a running turn, in both phases (AC1)', () => {
+    expect(isStatusIconTurning('thinking', 'thinking')).toBe(true)
+    expect(isStatusIconTurning('responding', 'working')).toBe(true)
+  })
+
+  it('turns at idle for the locally opened Thinking window, before any server phase (AC1)', () => {
+    // Composed through the label's own derivation, never a hand-written state: what this ticket claims is
+    // that the icon follows the LABEL, so the label's function is what has to produce the input.
+    expect(isStatusIconTurning('idle', workingIndicatorStateWithLocalSend(IDLE, true))).toBe(true)
+  })
+
+  it('is still at idle with no local send — the control arm (AC1)', () => {
+    expect(isStatusIconTurning('idle', workingIndicatorStateWithLocalSend(IDLE, false))).toBe(false)
+    expect(isStatusIconTurning('idle', null)).toBe(false)
+  })
+
+  it('leaves the four superseding labels beside a still mark at idle (AC2)', () => {
+    for (const state of ['retrying', 'compacting', 'stalled', 'resetting'] as const) {
+      expect(isStatusIconTurning('idle', state)).toBe(false)
+    }
+  })
+
+  it("keeps turning across the seam the daemon's first turn_state crosses (AC1)", () => {
+    // The local window (idle + pending) and the daemon's first thinking phase are consecutive renders of
+    // the same visible turn. Neither the gate nor the label changes value across them — that is the whole
+    // "the animation continues when the running phase arrives" half.
+    const local = workingIndicatorStateWithLocalSend(IDLE, true)
+    const daemon = workingIndicatorStateWithLocalSend({ ...IDLE, phase: 'thinking' }, false)
+    expect(local).toBe(daemon)
+    expect(isStatusIconTurning('idle', local)).toBe(isStatusIconTurning('thinking', daemon))
   })
 })
 

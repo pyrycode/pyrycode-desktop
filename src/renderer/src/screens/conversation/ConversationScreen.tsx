@@ -300,6 +300,14 @@ export function ConversationScreen({
   const { items, phase, stalled, apiRetry, compacting, localSendPending, thinkingTokens, resetting } =
     thread
   const openTool = openToolCall(items)
+  // #1556: hoisted out of the JSX — the `openTool` precedent one line up — because the status row now has
+  // TWO consumers of this one answer. The label has always read it; the icon's gate joins it, so deriving
+  // it once is what stops the two from ever disagreeing about the same render (they disagreed for a full
+  // round trip until this ticket, which is the bug). Cheap and pure: the same call the JSX made inline.
+  const indicatorState = workingIndicatorStateWithLocalSend(
+    { phase, apiRetry, compacting, stalled, resetting },
+    localSendPending
+  )
   // #1009: the open conversation's queued backlog, read HERE rather than one level down. #1009's own reason
   // was the scroll pin: the backlog was a REGION between the thread and the composer, so its appearance and
   // growth shrank `.conversation__thread`'s viewport, and the pin's re-assert below is a dep-free layout
@@ -482,11 +490,14 @@ export function ConversationScreen({
           superseding states outrank it (#967).
           #650: the window opens the moment the composer accepts the submit rather than a network
           round-trip later, closing the blank window in FRONT of a turn as #648 closed the one behind it.
-          The icon's gate is deliberately the RAW phase reading (`isTurnRunning`, the same predicate the
-          send button's stop variant uses) and is NOT narrowed by the supersede rules. Through #963 that
-          made a turning icon beside no text a legal render; #967 closed that state as a side effect of the
-          fold, since a running turn now always has a label. The reverse still happens by design: a stall
-          or a held retry at `idle` shows its label beside a still icon.
+          The icon's gate was the RAW phase reading through #1517 and is NOT narrowed by the supersede
+          rules. Through #963 that made a turning icon beside no text a legal render; #967 closed that
+          state as a side effect of the fold, since a running turn now always has a label. The reverse
+          still happens by design: a stall or a held retry at `idle` shows its label beside a still icon.
+          #1556: the icon's gate is now that same reading WIDENED by the window this mount already opens —
+          the label and the mark read one derivation (`indicatorState` above), so the send that opens the
+          label turns the mark with it instead of a round trip later. The send button's stop variant keeps
+          `isTurnRunning(phase)` alone; only this mount's icon moved.
           `stalled` and a second read of `apiRetry` are #967's only additions to this mount — the record
           gains the field the order needs, and the label takes the retry counter's two integers the way it
           already takes the one daemon tool name.
@@ -512,7 +523,7 @@ export function ConversationScreen({
         serverId={selectedHost}
         statusArea={(sendText) => (
           <ComposerStatusArea
-            isRunning={isTurnRunning(phase)}
+            isRunning={isStatusIconTurning(phase, indicatorState)}
             trailing={
               /* #1435: the slot's last reading is the open conversation's background-task count, and the
                  pill opens the SAME overlay the overflow menu's Background-tasks item does — this setter,
@@ -524,10 +535,7 @@ export function ConversationScreen({
             }
           >
             <ThinkingIndicator
-              state={workingIndicatorStateWithLocalSend(
-                { phase, apiRetry, compacting, stalled, resetting },
-                localSendPending
-              )}
+              state={indicatorState}
               toolName={openTool?.name ?? null}
               toolElapsedSeconds={openTool?.elapsedSeconds}
               retry={apiRetry}
@@ -2552,15 +2560,22 @@ export function ThinkingIndicator({
 // reduced-motion guard (AC4) rides on the same class in conversation.css and is only observable in the
 // Playwright fake tier, where e2e/composer-status-reduced-motion.spec.ts covers it.
 //
-// The two gates are still deliberately INDEPENDENT: `isRunning` is the raw phase reading, while the label
-// above is derived through `workingIndicatorState`'s four-way order. Through #963 that independence made a
+// The two gates were deliberately INDEPENDENT through #1517: `isRunning` was the raw phase reading, while
+// the label above is derived through `workingIndicatorState`'s order. Through #963 that independence made a
 // turning icon beside no text a legal, expected render, since a live api-retry or compaction blanked the
-// label (#493/#496). #967 CLOSES that state — not by coupling the gates, but as a consequence of the fold:
-// the icon turns on `isTurnRunning(phase)`, and whenever that holds the label is non-null (retrying,
-// compacting, stalled, or thinking/working), so the icon can no longer turn beside nothing. The paragraph
-// stays rather than being deleted because closing that render is a result worth recording. The CONVERSE is
-// still reachable and still intended: a stall or a held retry at `idle` shows its label beside a still
-// icon — which is exactly the ungated behaviour #967's AC2 preserves.
+// label (#493/#496). #967 CLOSED that state — not by coupling the gates, but as a consequence of the fold:
+// the icon turned on `isTurnRunning(phase)`, and whenever that holds the label is non-null (retrying,
+// compacting, stalled, or thinking/working), so the icon could no longer turn beside nothing. The paragraph
+// stays rather than being deleted because closing that render is a result worth recording.
+//
+// #1556 COUPLES THEM, in one direction and by exactly one state. The container's gate is now
+// `isStatusIconTurning(phase, state)` — `isTurnRunning` widened by `state === 'thinking'` — so #650's
+// locally opened window turns the mark the moment the label appears rather than a round trip later. Read
+// the predicate's own comment for why that widening adds no daemon-sourced render. What is unchanged here:
+// this view still receives a BOOLEAN it cannot re-derive, `isTurnRunning` is still the stop affordance's
+// sole gate, and the CONVERSE render is still reachable and still intended — a stall or a held retry at
+// `idle` shows its label beside a still icon, exactly the ungated behaviour #967's AC2 preserves and
+// #1556's own AC2 re-pins.
 export function ComposerStatusArea({
   isRunning,
   children,
@@ -2801,6 +2816,34 @@ function formatToolElapsed(seconds: number): string {
 // import in store/conversationActivityBridge.ts, and the tie documented at store/conversationActivityStore.ts.
 export function isTurnRunning(phase: TurnPhase): boolean {
   return phase === 'thinking' || phase === 'responding'
+}
+
+// #1556: the status ICON's gate, which is no longer `isTurnRunning` itself. #650 opened the label's window
+// on the composer's accept, but the mark beside it kept the raw phase reading, so a send from idle drew
+// `Thinking…` next to a STILL snowflake until the daemon's first `turn_state` crossed the wire — the one
+// round trip this ticket closes. ComposerStatusArea's docblock above calls the two gates "deliberately
+// INDEPENDENT"; that is still true of `isTurnRunning`, which stays the stop affordance's sole gate, and
+// what changes is only which derivation the icon reads.
+//
+// It takes the LABEL'S ANSWER, not `localSendPending`. That is the whole design: #650's window is decided
+// in exactly one place (`workingIndicatorStateWithLocalSend`), and re-reading the flag here would put the
+// rule in two, which is the drift that function's own comment exists to prevent. The icon now follows the
+// label rather than paralleling it.
+//
+// Widening by `'thinking'` alone is narrower than it looks, and that is deliberate:
+//  - `'thinking'` off the DAEMON path adds no render at all. `workingIndicatorState` reaches it only past
+//    `shouldShowThinking`, which requires `isTurnRunning` — so the first clause already held. The second
+//    clause's only new inhabitant is the locally opened window, and every daemon-sourced frame is
+//    byte-identical to what shipped.
+//  - `'working'` needs no clause either: it is `phase === 'responding'`, which is `isTurnRunning`.
+//  - the four superseding states are EXCLUDED on purpose (AC2). A held retry, a compaction, a stall or a
+//    reset at `idle` still shows its label beside a still mark — the converse render the row's docblock
+//    records as intended. A gate spelled `state !== null` would spin all four and quietly retire it.
+//
+// The animation stops on its own: any `turn_state`, `idle` included, clears `localSendPending`
+// (threadTimeline's turnState arm), so the local window closes with the turn and needs no second rule.
+export function isStatusIconTurning(phase: TurnPhase, state: WorkingIndicatorState | null): boolean {
+  return isTurnRunning(phase) || state === 'thinking'
 }
 
 // #1214 DELETED `QueuedBacklog` AND ITS `.conversation__queued` REGION. #294 drew the backlog as a

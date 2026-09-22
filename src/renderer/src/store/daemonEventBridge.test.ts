@@ -449,6 +449,8 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
         conversationId: 'conv-1',
         taskId: 'task_01ABC',
         patch: '{"is_backgrounded":tr',
+        status: '',
+        summary: '',
         truncatedFields: ['patch']
       })
     ).toBeNull()
@@ -458,6 +460,8 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
         conversationId: 'conv-1',
         taskId: 'task_02DEF',
         patch: '',
+        status: '',
+        summary: '',
         truncatedFields: null
       })
     ).toBeNull()

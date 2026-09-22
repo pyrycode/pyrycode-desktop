@@ -293,6 +293,8 @@ describe('translateQuestionEvent — every other arm returns null (the inverse f
         conversationId: 'conv-1',
         taskId: 'task_01ABC',
         patch: '{"is_backgrounded":tr',
+        status: '',
+        summary: '',
         truncatedFields: ['patch']
       },
       {

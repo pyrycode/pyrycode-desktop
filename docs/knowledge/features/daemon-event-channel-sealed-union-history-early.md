@@ -255,11 +255,17 @@ copy. Still no render — [#645](https://github.com/pyrycode/pyrycode-desktop/is
   `taskType: 'local_bash'`, `description` is the literal command line claude ran) — the render slice
   (#568) must treat both as plain text, never HTML, an attribute, or a URL sink. Ships dormant; first of
   three sibling frame members (#565 `background_task_updated`, #566 `background_task_roster` follow).
-- **`backgroundTaskUpdated{conversationId,taskId,patch,truncatedFields}`** ([#565](../codebase/565.md))
+- **`backgroundTaskUpdated{conversationId,taskId,patch,status,summary,truncatedFields}`** ([#565](../codebase/565.md))
   is the peer of `backgroundTaskStarted`, joined on `taskId`: that frame opens a task, this one reports
-  what **changed** about it afterwards. **Four fields, not six** — no `toolCallId`, no `description`, no
+  what happened to it afterwards. **Four fields, not six at ship time** — no `toolCallId`, no `description`, no
   `taskType`; it gains `patch`, claude's patch object carried whole and unparsed as an opaque string
-  (one key observed so far, `is_backgrounded`). Also **keeps** `conversationId`, the same in-family
+  (one key observed so far, `is_backgrounded`). [#1560](https://github.com/pyrycode/pyrycode-desktop/issues/1560)
+  later filled the remaining two: `status`/`summary`, the family's only finish signal (claude's
+  `system/task_notification` line fills them and leaves `patch` empty; `system/task_updated` is the
+  reverse). Both tolerate an omitted key as `''` — a pre-2026-09-10 daemon sends neither — but reject a
+  present non-string; `status` stays an open string, `summary` is untrusted free text that may be a
+  command line, and neither is logged. Ships dormant, awaiting #1561 (`status`) and #1246 (`summary`).
+  Also **keeps** `conversationId`, the same in-family
   precedent `backgroundTaskStarted` established (no `turn_id`, opens/closes no turn, the `queueState`
   #720 rule). `patch` is an **opaque display blob that is not guaranteed to parse** — the daemon
   truncates it at construction (its own golden fixture is cut mid-token), so nothing on this path runs

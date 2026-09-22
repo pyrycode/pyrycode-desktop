@@ -340,6 +340,8 @@ daemon → background_task_started frame → parseBackgroundTaskStartedPayload �
   → selectRosterFor(openId) / useBackgroundTaskRosterStore   (read by #568, not yet built)
 
 daemon → background_task_updated frame → parseBackgroundTaskUpdatedPayload → backgroundTaskUpdated DaemonEvent [#565]
+  (the DaemonEvent gained status/summary under #1560 — the family's only finish signal, both crossing
+   verbatim, '' included; this listener reads neither, so the snapshot below is unchanged)
   → DAEMON_EVENT_CHANNEL → subscribeBackgroundTaskRoster listener (roster + started translators return null first)
     → translateBackgroundTaskUpdated → { conversationId, taskId, patch, truncatedFields }
     → backgroundTaskRosterStore.setUpdatedTask(snapshot)

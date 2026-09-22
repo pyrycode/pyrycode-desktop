@@ -1,4 +1,5 @@
 import { useSessionFactsStore, selectSessionFactsFor } from '../../store/sessionFactsStore'
+import { McpServersSection } from './McpServersSection'
 import {
   useEffect,
   useLayoutEffect,
@@ -2974,6 +2975,7 @@ export function ChannelInfoSheetView({
   onDeleteConfirm,
   onDeleteCancel,
   systemPromptSection,
+  mcpServersSection,
   sessionFacts = null,
   sessionCostUsd = null
 }: {
@@ -3003,6 +3005,8 @@ export function ChannelInfoSheetView({
   // #1567: the latest positive running cost from `latestSessionCostUsd`, or null for no row.
   sessionCostUsd?: number | null
   systemPromptSection?: ReactNode
+  // #1490: the MCP servers section, a slot supplied only for a non-null conversation like the one above.
+  mcpServersSection?: ReactNode
 }): JSX.Element {
   // Title: the daemon name when present; the client-owned unnamed label when `name === null` (a distinct
   // "unnamed scratch conversation", not an empty string); the fallback when there is no conversation.
@@ -3090,6 +3094,7 @@ export function ChannelInfoSheetView({
               )}
             </>
           )}
+          {mcpServersSection}
           {systemPromptSection}
           <p className="status-sheet__section-header">{CHANNEL_INFO_ACTIONS_HEADER}</p>
           {/* The Actions slot #365 left for #366/#367/#368. Rename (#368) then Archive (#366) then
@@ -3286,6 +3291,9 @@ function ChannelInfoSheet({
           conversation === null ? undefined : (
             <SystemPromptSection conversationId={conversation.id} />
           )
+        }
+        mcpServersSection={
+          conversation === null ? undefined : <McpServersSection conversationId={conversation.id} />
         }
       />
       {/* #1431: the channel arm of the one pill. Split on the SAME `is_promoted` the label above reads,

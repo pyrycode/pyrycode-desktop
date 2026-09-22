@@ -381,6 +381,7 @@ export function translateTimelineEvent(
     case 'backgroundTaskUpdated':
     case 'backgroundTaskRoster':
     case 'sessionFacts': // Informational only; the session-facts bridge owns retention.
+    case 'mcpStatus': // Informational only; the MCP status bridge owns retention.
     case 'modelAnnounced':
     case 'questionShown':
     case 'questionDismissed':

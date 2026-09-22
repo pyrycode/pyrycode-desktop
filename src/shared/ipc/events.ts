@@ -34,6 +34,7 @@ import type {
   SessionPromptStatus,
   ContextUsageCategory,
   ContextUsageMCPTool,
+  MCPServerStatus,
   ContextUsageMemoryFile,
   WireResetPhase,
   WireResetHandoff
@@ -542,6 +543,15 @@ type BaseDaemonEvent =
       claudeCodeVersion: string
       permissionMode: string
       truncatedFields: string[] | null
+    }
+  | {
+      // Claude's MCP server list for one conversation (#1490). `servers: []` is claude's positive report
+      // of no servers, distinct from no event at all; `droppedServers` is the daemon's own count. Every
+      // row string is untrusted claude text: render only, never a key, attribute, URL or log field.
+      type: 'mcpStatus'
+      conversationId: string
+      servers: readonly MCPServerStatus[]
+      droppedServers: number
     }
   // The background-task open arm (#564) — claude started work that OUTLIVES the turn that spawned it
   // (pyrycode#1240), the frame that separates that case from a genuine finish.

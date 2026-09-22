@@ -1,0 +1,385 @@
+# Background-task roster store — internals
+
+Split from [Background-task roster store](background-task-roster-store.md) on 2026-09-23, once #1561's
+finished-task-count work pushed the shared doc over the size cap. Part of the same store; see
+[What it does](background-task-roster-store-model.md) for the model this implements,
+[Edge cases](background-task-roster-store-edge-cases.md), and
+[Related](background-task-roster-store-related.md) for cross-references.
+
+## How it works
+
+### The store (`src/renderer/src/store/backgroundTaskRosterStore.ts`)
+
+```ts
+export interface HeldBackgroundTaskUpdate {                    // the latest patch + its OWN cut report (#577)
+  patch: string                                                 // opaque text, held verbatim, never parsed
+  truncatedFields: readonly string[] | null
+}
+export interface HeldBackgroundTask {                          // per-task, renderer-side camelCase (#576)
+  taskId: string
+  toolCallId: string | null       // null = roster-sourced; only a started frame ever reports one
+  taskType: string
+  description: string
+  truncatedFields: readonly string[] | null
+  latestUpdate: HeldBackgroundTaskUpdate | null   // null = no update has ever matched this task (#577)
+}
+export interface BackgroundTaskRosterEntry {
+  tasks: ReadonlyMap<string, HeldBackgroundTask>   // keyed by taskId, built at WRITE time; insertion order = roster order
+  droppedTasks: number                             // roster's ONLY truncation report; true size = tasks.size + droppedTasks
+}
+export interface BackgroundTaskRosterSnapshot {                // roster write unit — wire rows, unchanged shape
+  conversationId: string
+  tasks: readonly BackgroundTask[]
+  droppedTasks: number
+}
+export interface BackgroundTaskStartedSnapshot {               // started write unit (#576) — toolCallId non-nullable, the frame always reports one
+  conversationId: string
+  taskId: string
+  toolCallId: string
+  taskType: string
+  description: string
+  truncatedFields: readonly string[] | null
+}
+export interface BackgroundTaskUpdatedSnapshot {               // update write unit (#577) — FIVE fields since #1561
+  conversationId: string
+  taskId: string
+  patch: string
+  status: string                                                // open string (#1560); '' on every patch-bearing frame; only isTerminalTaskStatus reads it (#1561)
+  truncatedFields: readonly string[] | null
+}
+export interface BackgroundTaskRosterState {
+  rosters: ReadonlyMap<string, BackgroundTaskRosterEntry>          // key absent = no roster has arrived (#1563)
+  unlistedStarts: ReadonlyMap<string, ReadonlyMap<string, HeldBackgroundTask>>   // conv -> taskId -> started-sourced hold no roster has listed yet (#1563); no surface reads it
+  finishedTasks: ReadonlyMap<string, ReadonlySet<string>>          // conv -> taskId claude reported terminal (#1561); read only by selectLiveTaskCountFor
+}
+export type BackgroundTaskRosterStore = BackgroundTaskRosterState & {
+  setRoster: (snapshot: BackgroundTaskRosterSnapshot) => void
+  setStartedTask: (snapshot: BackgroundTaskStartedSnapshot) => void   // #576
+  setUpdatedTask: (snapshot: BackgroundTaskUpdatedSnapshot) => void   // #577; also files finishedTasks since #1561
+  resetRostersFor: (conversationIds: ReadonlySet<string>) => void   // connected edge, scoped (#1139)
+  clearAllRosters: () => void                                       // pairing-boundary drop, nullary (#1139)
+}
+
+createBackgroundTaskRosterStore(init?)     // vanilla createStore — one isolated instance per test (DI seam)
+backgroundTaskRosterStore                  // app-wide singleton
+useBackgroundTaskRosterStore(selector)     // narrow-slice React binding: useStore(store, selector)
+selectRosterFor(conversationId)(state)          // selector FACTORY — the panel's read surface (#568), returns `?? null`
+selectLiveTaskCountFor(conversationId)(state)   // selector FACTORY — the pill's read surface (#1561), returns a primitive count
+```
+
+Keyed by `conversationId`, not a flat slot, for the same reason [`queueStore`](queue-store.md) is: the
+daemon fans these frames out to every interactive connection and each carries `conversation_id`, so
+frames for *different* conversations can arrive back-to-back and a flat "hold the latest" slot would let
+one clobber another. **Five named setters** (`setRoster`, `setStartedTask`, `setUpdatedTask`,
+`resetRostersFor`, `clearAllRosters`), not a reducer — five operations still don't justify a
+discriminated-union action set; #1561 added no sixth setter, only a third state field (`finishedTasks`)
+three of the five setters also maintain. Mirrors `queueStore`'s DI-factory → singleton → hook → selector structure
+and its `ReadonlyMap` copy-on-write idiom throughout: clone the outer map, clone the inner map, replace;
+never mutate `s.rosters`, an entry, or an entry's `tasks` in place — and, since #1563, never mutate
+`s.unlistedStarts` or one of its per-conversation inner maps in place either, a rule #1561 extends to
+`s.finishedTasks`; it is the same conversation-keyed-map shape one level further in, copy-on-write
+throughout. Also mirrors `queueStore`'s setter
+PAIR for the pairing-lifecycle problem ([#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138) /
+[#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139)): a scoped `…For` reset beside a
+nullary whole-map clear, both iterating the HELD keys rather than the input set, so the work is bounded
+by what this store holds rather than by a server's conversation count.
+
+`setRoster` (#576 reshape, #577 carry-over fix) rebuilds the conversation's task map from the snapshot's
+rows **in row order**: for each row, if a task is already held under that `task_id` **and is
+started-sourced** (`toolCallId !== null`), the held record is kept unchanged — the started frame's label
+is authoritative and never repeats, so refreshing from the row would throw away the fuller copy
+permanently (AC2). Otherwise a fresh `HeldBackgroundTask` is built from the row with `toolCallId: null`,
+and that fresh literal carries `latestUpdate: held?.latestUpdate ?? null` — a recorded patch rides across
+the rebuild **individually**, deliberately *not* folded into the `toolCallId !== null` provenance
+predicate that gates keeping the whole record. Folding it in would freeze a patched roster-sourced task's
+label/type/own cut report at whatever they were when the patch arrived, since the rebuild branch would
+then never run again for that task; leaving it out of the fresh literal entirely would drop the patch at
+the very next roster. Both mistakes compile clean and break no other test — see [#577's codebase
+notes](../codebase/577.md) § "The trap" for the full reasoning and the one test that discriminates all
+three ways this branch can go wrong. `droppedTasks` is taken from the snapshot unconditionally. The write
+stays **unconditional**: an empty `tasks: []` still writes an entry holding no tasks ("nothing is alive"),
+it does not delete the key.
+
+Since #1561, `setRoster` also prunes the conversation's `finishedTasks` set to the ids the new roster
+still lists — a finish outlives a roster that lists the task again (including a hold that finished before
+any roster did, see `setUpdatedTask` below), and dies with a roster that omits it, the same lifetime the
+task's own record has. `finishedTasks` (the outer map) is handed back **by reference** when the
+conversation held no finished ids to begin with; otherwise a fresh outer map is built and the
+conversation's key is deleted, never set to an empty `Set`, whenever nothing survives the prune —
+matching the map's own no-key-for-nothing convention elsewhere in this store.
+
+Since #1563 the candidate a row's held record is read from is `tasks.get(id) ?? unlistedStarts[conv]?.get(id)`
+— a start no earlier roster had listed moves into `tasks` whole, the same way a previously-listed
+started-sourced task does, the instant a roster names it. Every roster for a conversation then also drops
+that conversation's remaining `unlistedStarts` entry outright (copy-on-write, and skipped when there was
+none to drop in the first place): the rows the roster just listed have already moved into `tasks` above,
+and whatever is left in the hold is foreground work claude's own background set does not include. A
+foreground call a timeout later moves to the background comes back the ordinary way, through a bare
+roster row with no matching `unlistedStarts` entry, roster-sourced with `toolCallId: null`.
+
+`setStartedTask` (#576, new; #577 gained the same carry-over; #1563 narrowed what it can create) now only
+**upgrades** a task its conversation's roster has already listed, in place — `Map.set` keeps an existing
+key's position, so the upgrade preserves roster display order. Claude orders these frames, not the
+daemon, so a started frame can precede any roster for its conversation, *and* can arrive after an update
+for the task it is about to open; on claude 2.1.280 the roster listing a `run_in_background` task arrives
+just *before* that task's own start, so the upgrade path is the common one. A start for a task no roster
+has listed goes into `unlistedStarts[conv][taskId]` instead — carrying forward any `latestUpdate` already
+held there — and `rosters` is handed back **by reference**: no entry is created for a conversation with
+no roster, so neither surface changes (AC1) — before #1563 this branch created the entry unconditionally.
+The snapshot's `description`/`taskType`/`truncatedFields`
+**replace** whatever the task held, in either place; the three frames' `truncatedFields` lists name
+different vocabularies, so a started frame's list replaces rather than unions with a roster row's.
+`droppedTasks` is **preserved** from the existing listed entry — a started frame reports nothing about
+roster truncation and must not reset the count; an unlisted hold has no `droppedTasks` to preserve in the
+first place. A held `latestUpdate` is likewise **preserved**, in either place — a started frame reports no
+patch, so it must not silently erase one recorded before it arrived.
+
+`setUpdatedTask` (#577, new; #1563 widened where it looks) records **one task's latest patch and its own
+cut report**, joined on `conversationId` + `taskId` and never on arrival order — an update can arrive
+before the roster or started frame that first names its task, including while that task is still an
+unlisted hold. It checks the listed `tasks` first, then `unlistedStarts`, and writes the patch into
+whichever place holds the task — an update must not be lost just because its task's roster has not
+arrived yet. It is the only setter that can **miss**: an update naming an unknown conversation, or a
+`taskId` held in **neither** place, returns the state object **itself** unchanged — `Object.is`-provable,
+so "creates no partial entry" (AC2) needs no enumeration of what didn't appear. An update never opens a
+task and never creates a conversation entry, because a patch is a change report about something already
+alive, not an announcement. On a hit, `latestUpdate` is replaced wholesale (latest-wins — never an
+accumulating list) and nothing else on the held record is touched: an update frame reports no
+`description`, `taskType`, `toolCallId`, or task-level `truncatedFields`. Both miss branches are silent,
+deliberately — a "dropped an unmatched update" log line is exactly where patch text could leak into a
+file (the content-free diagnostics rule, #126). Since #1561, a HIT whose `status` is exactly `completed`,
+`failed` or `stopped` (`isTerminalTaskStatus`, an unexported exact-match helper against a hoisted
+`TERMINAL_TASK_STATUSES` set — never a narrowed union, since `status` is an open string by design) also
+records `taskId` into the conversation's `finishedTasks`. A miss records nothing, terminal or not: on
+claude 2.1.280 the emptier roster usually lands one line before the terminal update, so the miss is the
+*common* case and must stay the same silent no-op it already was, not a special case that needs its own
+branch.
+
+**Why `finishedTasks` is a set held beside the task records, never a field on `HeldBackgroundTask`
+itself.** A field would need a carry-over at every site that rebuilds a record — `setRoster`'s
+started-sourced-keep vs. fresh-row branches, `setStartedTask`'s upgrade, and a hold moving from
+`unlistedStarts` into `tasks` — mirroring the exact `latestUpdate`-carry-over trap [#577's codebase
+notes](../codebase/577.md) already names once for that field. Missing the carry-over at any one of those
+sites compiles clean and breaks no other test: a finished task would silently re-enter the count the next
+time its record happened to be rebuilt. Held in a separate, conversation-keyed set instead, no rebuild of
+`HeldBackgroundTask` can lose it, and `setStartedTask` needed no change at all to keep a start from
+reviving a finished id — it simply never writes to the set.
+
+Provenance — "was this task's fuller label ever reported?" — is **derived, never stored**: exactly
+`toolCallId !== null`. This must be tested with `!== null`, never truthiness: `requireString` (the
+main-side decode helper) admits `''` as a valid `tool_call_id`, so a truthiness check would silently
+demote a task whose id happens to be `''` back to roster-sourced and let the next roster overwrite its
+fuller label. `latestUpdate`'s presence is *not* a second provenance signal — a roster-sourced task can be
+patched too, and still refreshes from later roster rows exactly as an unpatched one would.
+
+**The one place the `queueStore` precedent is deliberately *not* cloned.** `queueStore.selectBacklogFor`
+returns `s.backlogs.get(id) ?? EMPTY_BACKLOG`, collapsing "never observed" and "observed, empty" into the
+same bare `[]` — correct for `queue_state`, but this store needs the two distinguishable (AC5, ex-AC4).
+The fix is `selectRosterFor`'s `?? null` instead of `?? EMPTY_BACKLOG`, typed
+`BackgroundTaskRosterEntry | null`:
+
+| store contents for `c1` | `selectRosterFor('c1')` | meaning |
+| --- | --- | --- |
+| key absent from `rosters` | `null` | no roster has ever arrived for this conversation — `unlistedStarts` may still hold an unseen start (#1563) |
+| `{ tasks: Map{}, droppedTasks: 0 }` | that entry | observed, nothing alive |
+| `{ tasks: Map{t}, droppedTasks: 2 }` | that entry | 1 task carried, 3 truly alive |
+
+`null` is a stable reference by construction, so — unlike `queueStore`'s hoisted `EMPTY_BACKLOG` — this
+store needs **no `EMPTY_*` constant at all**: one fewer export, one fewer thing to get wrong. The
+nullable return type also forces #568 to branch, so the distinction can't be ignored accidentally. There
+is deliberately no whole-map analogue of `queueStore`'s `selectBacklogs`: the reset here clears the map
+wholesale and nothing else reads the map, so shipping an unread read surface would repeat the exact
+dead-export `queueStore` already carries (see [queue store § Edge cases](queue-store.md)).
+
+### The pill's count, `selectLiveTaskCountFor` (#1561)
+
+`selectRosterFor` is the panel's read; the composer status row's count pill needs a number, not an entry,
+and needs the *live* number — the roster's raw size stayed lit for a task claude had already reported
+finished whenever the emptier roster that usually precedes the terminal update did not arrive first (the
+defect this ticket fixes). `selectLiveTaskCountFor(conversationId)(state)` is a second selector factory,
+returning a **primitive**:
+
+```ts
+export const selectLiveTaskCountFor =
+  (conversationId: string) => (s: BackgroundTaskRosterState): number => {
+    const entry = s.rosters.get(conversationId)
+    if (entry === undefined) return 0
+    const finished = s.finishedTasks.get(conversationId)
+    let live = 0
+    for (const taskId of entry.tasks.keys()) if (finished?.has(taskId) !== true) live++
+    return live + entry.droppedTasks
+  }
+```
+
+`0` on a missing roster collapses "never observed" and "observed, nothing alive" into one reading — the
+exact collapse `selectRosterFor`'s `?? null` refuses to make for the panel, and a collapse the pill is
+entitled to make since both readings render no pill either way. `droppedTasks` always adds unconditionally
+— a dropped row carries no id, so it can never be matched against `finishedTasks`. Being a primitive
+(rather than the held entry itself), it is reference-stable for `useSyncExternalStore` with no memo, the
+same property `selectRosterFor`'s stable-reference return already had. This is now the **one** definition
+of "alive" for anything that counts live background tasks — the composer pill reads it in place of its old
+inline `roster.tasks.size + roster.droppedTasks` arithmetic (see [Conversation shell — composer status row
+§ Background-task count pill](conversation-shell-composer-status.md#background-task-count-pill-the-slots-last-occupant-1435)) — so a later surface counting the same thing cannot silently disagree with the pill about
+what counts as finished. The panel itself is unchanged: it still reads `selectRosterFor` and still lists a
+finished task until a roster omits it, `finishedTasks` is invisible to it.
+
+`resetRostersFor(conversationIds)` ([#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139),
+the `connected`-edge reset) iterates the **held** map's own keys, not the id set, and deletes the ones
+that are members — work bounded by what this store holds, not by the server's conversation count.
+Membership is tested with `Set.has`, never a bare object lookup, which is also what keeps `__proto__`,
+`constructor` and `''` unremarkable conversation keys. Deleting the map key drops a conversation **whole**
+— a started frame's `toolCallId` and an update frame's `latestUpdate` go with the roster row they joined,
+so the reset can never half-drop an entry. Every surviving entry comes back **by reference**. Since #1563
+it independently deletes the same conversation ids from `unlistedStarts`, so a start no roster ever
+listed does not outlive its server's reconnect either — the two maps are filtered separately (a
+conversation can be a member of one, the other, both, or neither), and both drops are copy-on-write.
+Since #1561 it filters `finishedTasks` the same third way, so a departed server's finished ids do not
+latch past its own reconnect either. When no held key **in any of the three maps** is listed — a first
+connect, a reconnect of a server holding nothing here, or a map holding only conversations outside the id
+set — the state object is handed straight back, generalising the original `resetRosters`' `size === 0`
+short-circuit so zustand's `Object.is` fires and no listener wakes. A
+conversation this store holds a roster for that appears in **no** server's list survives every scoped
+reset — the accepted consequence of scoping by the list (a background task can start for a conversation
+whose list has not arrived), pinned by a test rather than left to drift wider later.
+
+`clearAllRosters` ([#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139), the
+**pairing-boundary** drop) is nullary — the `clearAllBacklogs`/`clearAllConversations` shape — so no
+daemon-supplied conversation id or server origin can steer which command lines and patches survive a
+boundary the operator crossed deliberately. It returns `initialBackgroundTaskRosterState` by reference and
+carries the same short-circuit, widened since #1563 to both maps and since #1561 to all three: it returns
+`s` only when `rosters`, `unlistedStarts` and `finishedTasks` are all already empty, since a store holding
+only unlisted holds or only finished ids is not an empty store and the same `local_bash` command text they
+carry must not survive the boundary either — a departed pairing's finished task ids must not latch onto a
+later pairing's roster either. It is invoked only from
+[`clearPairingScopedState`](paired-shell.md#related), never from a bridge arm or a component, and it is
+the only setter that reaches a roster held under a conversation no server's list ever carried.
+
+### The data path (`src/renderer/src/store/backgroundTaskRosterBridge.ts`)
+
+```ts
+translateBackgroundTaskRoster(event: DaemonEvent): BackgroundTaskRosterSnapshot | null
+// switch (event.type) { case 'backgroundTaskRoster': return { conversationId, tasks, droppedTasks }; default: return null }
+
+translateBackgroundTaskStarted(event: DaemonEvent): BackgroundTaskStartedSnapshot | null   // #576, sibling translator
+// switch (event.type) { case 'backgroundTaskStarted': return { conversationId, taskId, toolCallId, taskType, description, truncatedFields }; default: return null }
+
+translateBackgroundTaskUpdated(event: DaemonEvent): BackgroundTaskUpdatedSnapshot | null   // #577, third sibling translator
+// switch (event.type) { case 'backgroundTaskUpdated': return { conversationId, taskId, patch, status, truncatedFields }; default: return null }   // status added #1561
+
+originOf(event: DaemonEvent): ConversationListOrigin   // since #1139 — reads #1068's stamp, never event.ack
+
+subscribeBackgroundTaskRoster(onDaemonEvent, setRoster, resetRostersForServer, setStartedTask, setUpdatedTask): () => void   // fifth param, #577; third param re-typed by #1139
+// onDaemonEvent(event => {
+//   if (event.type === 'connected') { resetRostersForServer(originOf(event)); return }
+//   const roster = translateBackgroundTaskRoster(event); if (roster !== null) { setRoster(roster); return }
+//   const started = translateBackgroundTaskStarted(event); if (started !== null) { setStartedTask(started); return }
+//   const updated = translateBackgroundTaskUpdated(event); if (updated !== null) setUpdatedTask(updated)
+// })
+
+BackgroundTaskRosterData(): null
+// headless component, one subscribe effect (deps []), mounted app-level in App.tsx as the SEVENTH leaf
+// the composition root (#1139): resolves origin -> conversation ids via conversationListStore, THEN
+// calls backgroundTaskRosterStore.getState().resetRostersFor(ids) — see below
+```
+
+Reactive-only — like `queueBridge` and `sessionIdBridge`, the daemon pushes all three frames unsolicited,
+so there is no request half. Each translator is a pure single-arm filter, unconditional: there is
+deliberately no `if (event.tasks.length === 0) return null` on the roster side, since an empty roster is
+the frame's payoff signal (AC5, ex-AC4), not "no news"; there is likewise no `if (event.patch)` on the
+update side, since `patch: ''` always arrives on the wire (no `omitempty`) and is a value meaning "claude
+sent no change". The guards downstream are all `!== null`, which pin *filtering*, not *truthiness* (a
+snapshot object is truthy even when its `tasks` are empty or its `patch` is `''`). `default: null` on all
+three, not `assertNever`: this is an independent subscriber in the `queueBridge`/`sessionIdBridge`
+posture, not one of the three typecheck-gating exhaustive bridges — which already no-op all three arms
+from #564/#565/#566. `translateBackgroundTaskRoster` is behaviourally unchanged by the #576/#577 reshapes
+— the row → `HeldBackgroundTask` mapping happens inside `setRoster`, not the translator, because that is
+where the prior state the join needs lives. The three arms are mutually exclusive, so the subscriber's
+branches short-circuit in order (`connected` → roster → started → updated) and each matched branch
+returns; order is a readability choice, not a correctness one.
+
+**The `connected` reset enforces half of a security requirement (#573's AC5); the other half moved to
+`clearAllRosters` ([#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139)).** Until #1139 this
+branch was the SOLE enforcement, wholesale: the relay re-emits `connected` on every (re)handshake and a
+new pairing always re-handshakes, so a nullary reset here stopped a previous pairing's literal command
+lines (`description`, for `local_bash`-typed tasks, and `patch`, whose keys may carry the same class of
+text under a structured-looking shape — #577) from surviving into a new one. Since #1117 the app holds one
+connection per paired server, so `connected` means "*this* server's connection came back", and #1139
+scoped the reset to that server's own listed conversations (via `originOf`, reading #1068's client-bound
+stamp, never `event.ack`). Scoping keeps the *reconnect* half of AC5 — the reconnecting server's own
+previous connection never leaks forward — but retires the *previous-pairing* half: a new pairing's first
+`connected` resolves an empty conversation list, matches no held roster, and would otherwise drop nothing
+at all. That half now lives in `clearAllRosters`, in [`clearPairingScopedState`](paired-shell.md#related)'s
+dep set — this store is no longer excluded from it (see
+[Related](background-task-roster-store-related.md)).
+
+The reset is still a leading branch in `subscribeBackgroundTaskRoster` *before* any translator runs — the
+`queueBridge` posture, not `modalBridge`'s `reconnected`-as-translator-action posture — because each
+translator returns a **value** (a snapshot), and folding the reset into any of them would force its return
+type to widen into an action union, destroying the property that a translator is a pure arm→snapshot
+filter. That property is also why #576 and #577 each added a **sibling** translator (for
+`backgroundTaskStarted`, then `backgroundTaskUpdated`) rather than widening
+`translateBackgroundTaskRoster`'s return type into a tagged union. Turning the origin into conversation
+ids is the *caller's* job (`BackgroundTaskRosterData`, via #1086's `selectConversationIdsFor`), so the
+bridge itself stays store-free and drivable with a plain spy — `originOf` is a module-private copy of the
+`queueBridge`/`relayLinkBridge`/`conversationListBridge`/`daemonEventBridge` idiom, not an import, for the
+reason each of those states.
+
+`BackgroundTaskRosterData` derefs `window.pyry` only inside its effect, never during render, so it
+server-renders to `''` without a bridge mock — the `QueueData`/`SessionIdData` invariant `App.test.tsx`'s
+no-window-stub `<App/>` render depends on. Its name and props are unchanged by the #576 join, so
+`App.tsx` itself is untouched.
+
+### Data flow
+
+```
+App mount → <BackgroundTaskRosterData/> (app-level, seventh headless leaf)
+  → subscribe effect: window.pyry.onDaemonEvent → subscribeBackgroundTaskRoster (live immediately, no request)
+
+daemon → background_task_roster frame → parseBackgroundTaskRosterPayload → backgroundTaskRoster DaemonEvent [#566]
+  → DAEMON_EVENT_CHANNEL → subscribeBackgroundTaskRoster listener
+    → translateBackgroundTaskRoster → { conversationId, tasks, droppedTasks } (or null → skip)
+    → backgroundTaskRosterStore.setRoster(snapshot)
+      [rebuilds the task map in row order; keeps a started-sourced record unchanged, rebuilds every other
+       row fresh with toolCallId: null — membership stays replacement truth regardless of provenance]
+  → selectRosterFor(openId) / useBackgroundTaskRosterStore   (read by #568, not yet built)
+
+daemon → background_task_started frame → parseBackgroundTaskStartedPayload → backgroundTaskStarted DaemonEvent [#564]
+  → DAEMON_EVENT_CHANNEL → subscribeBackgroundTaskRoster listener (roster translator returns null first)
+    → translateBackgroundTaskStarted → { conversationId, taskId, toolCallId, taskType, description, truncatedFields }
+    → backgroundTaskRosterStore.setStartedTask(snapshot)
+      [upserts in place — creates the conversation's entry if none exists; preserves droppedTasks
+       AND a held latestUpdate; description/taskType/truncatedFields replace whatever the task held]
+  → selectRosterFor(openId) / useBackgroundTaskRosterStore   (read by #568, not yet built)
+
+daemon → background_task_updated frame → parseBackgroundTaskUpdatedPayload → backgroundTaskUpdated DaemonEvent [#565]
+  (the DaemonEvent gained status/summary under #1560, both crossing verbatim, '' included; #1561 carries
+   status — the family's only finish signal — into the snapshot below; summary stays uncopied)
+  → DAEMON_EVENT_CHANNEL → subscribeBackgroundTaskRoster listener (roster + started translators return null first)
+    → translateBackgroundTaskUpdated → { conversationId, taskId, patch, status, truncatedFields }   [#1561]
+    → backgroundTaskRosterStore.setUpdatedTask(snapshot)
+      [joins on conversationId + taskId, never on order; miss on unknown conversation OR unknown taskId
+       returns state unchanged, silently, terminal status or not; on a hit replaces latestUpdate wholesale
+       and, when status is exactly completed/failed/stopped, also files taskId into finishedTasks (#1561)]
+  → selectRosterFor(openId) / useBackgroundTaskRosterStore   (the panel's read, #568)
+  → selectLiveTaskCountFor(openId) / useBackgroundTaskRosterStore   (the pill's read, #1561 — excludes a
+    finished id from the count; the panel's list is untouched)
+
+relay (re)handshake → daemonConnection.ts emits connected DaemonEvent, stamped with its origin (#1068)
+  → DAEMON_EVENT_CHANNEL (in-order) → subscribeBackgroundTaskRoster listener
+    → originOf(event) → ConversationListOrigin (#1068's stamp, never event.ack)   [#1139]
+    → selectConversationIdsFor(origin)(conversationListStore.getState())   [#1086, this server's ids]
+    → backgroundTaskRosterStore.resetRostersFor(ids)   [only the listed keys dropped — started-sourced
+                                                         tasks and recorded patches go with them — or
+                                                         same-ref no-op if none match]
+  → then the daemon's reconcile burst arrives on the SAME channel, one background_task_roster per
+    conversation whose bound session has reported one (pyrycode#2077-#2080, #569): each lands through
+    the ordinary setRoster(snapshot) path above, correlated by conversationId and not by burst position
+  → a conversation ABSENT from the burst stays dropped → selectRosterFor reads null ("No background-task
+    report yet"); one re-asserted with tasks: [] reads observed-empty ("No background tasks")
+  → backgroundTaskStarted/backgroundTaskUpdated are NOT in the reconcile set, so a started-sourced task's
+    toolCallId and fuller label do not survive — it comes back roster-sourced only
+
+pairing ends (unpair only, since #1141 — pairing another server adds a server rather than ending one) → clearPairingScopedState()   [#1139]
+  → backgroundTaskRosterStore.clearAllRosters()   [every conversation's roster dropped, or same-ref
+                                                    no-op if already empty]
+```

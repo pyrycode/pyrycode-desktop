@@ -191,13 +191,24 @@ This ticket adds the count as the trailing slot's **last** reading, appended to 
 `status.type === 'connected'` arm. Every occupant documented above outranks it; it is visible only when
 nothing else in the chain is.
 
-**The count is the true roster size**, `roster.tasks.size + roster.droppedTasks` from
-[`backgroundTaskRosterStore`](background-task-roster-store.md), read via `selectRosterFor(open.id)` the
-same shape as the usage-limit read beside it — a fresh selector identity per render costs a
-re-subscribe and never a loop, since `selectRosterFor` returns the held entry itself or `null`, both
-stable references. `roster === null` ("no frame has ever arrived") and an entry holding nothing alive
-are distinct store readings kept apart by the store, but both collapse to `count === 0` here, which is
-the reading this surface is entitled to make and the panel is not.
+**The count was originally the raw roster size**, `roster.tasks.size + roster.droppedTasks`, read via
+`selectRosterFor(open.id)` the same shape as the usage-limit read beside it. **Since
+[#1561](https://github.com/pyrycode/pyrycode-desktop/issues/1561) the count is the LIVE count**,
+[`backgroundTaskRosterStore`](background-task-roster-store.md)'s `selectLiveTaskCountFor(open.id)` — the
+listed tasks claude has not reported terminal on a `background_task_updated` (`status` exactly
+`completed`/`failed`/`stopped`), plus `droppedTasks`. The raw roster size kept the pill lit for a task
+that had already finished whenever the emptier roster that usually precedes the terminal update did not
+arrive first — observed live for 30+ minutes. The selector swap kept the read's shape: a fresh selector
+identity per render still costs a re-subscribe and never a loop, since `selectLiveTaskCountFor` returns a
+plain `number`, a stable primitive for `useSyncExternalStore` with no memo needed — the same property the
+old `selectRosterFor` read had via its stable held-entry-or-`null` reference. "No roster has ever arrived"
+and "observed, nothing alive" are distinct store readings the store itself keeps apart (for the panel),
+but both collapse to `count === 0` here, which is the reading this surface is entitled to make and the
+panel is not. The store, not this component, owns the arithmetic — see [Background-task roster store —
+internals § The pill's
+count](background-task-roster-store-internals.md#the-pills-count-selectlivetaskcountfor-1561) — so a later
+surface counting live background tasks cannot silently disagree with this pill about what counts as
+finished.
 
 **`ComposerTaskCount({ count, onOpen })`** is a new pure, exported view in `ConversationScreen.tsx`,
 `ComposerUsageLimitNotice`'s shape verbatim: a prop, not a store read, because zustand v5's `useStore`
@@ -241,6 +252,12 @@ the row yields to the window, the way the unshrinkable usage-limit notice did no
   servers issuing the same conversation id would share an entry — pre-existing, not this ticket's to fix.
   `BackgroundTaskPanel` has the identical exposure and shows task *descriptions* where this pill shows only
   a number, so this ticket strictly reduces what's reachable rather than widening it.
+- **A pill still reading the same count after an ineffective frame does not prove the frame was applied
+  (#1561).** A `status: ''` frame sent to check that the store leaves the count alone reads identically to
+  the frame never having arrived, since the assertion is "count unchanged" either way. The #1561 e2e spec
+  proves the frame was applied by relying on a later, effective `stopped` frame for the *same* task: frames
+  arrive on one ordered channel, so the pill reaching zero afterward proves the earlier no-op frame was
+  processed and not merely unsent or dropped.
 
 Tested in `ConversationScreen.test.tsx` (vitest only — nothing under `e2e/` sends roster frames): the
 count copy and its singular/plural split, the exact-empty absence at zero and at "never observed", the

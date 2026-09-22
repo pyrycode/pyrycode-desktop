@@ -127,9 +127,14 @@ description/task-type markers, compiles and type-checks (both are `readonly stri
 matches — the crossover both directions guard against. Neither list ever reaches the markup; names are
 matched, never displayed. No history: `latestUpdate` is latest-wins, one record per task — the panel
 does not accumulate patches into a list, a ref, or component state. Nothing here is read as a terminal
-signal: this frame family reports no finish event by design, so a task simply stops appearing in the
-roster rather than being shown as done, and no copy or class in this slice names completion, failure, or
-success. No prop, type, store, bridge or wire change; same `entry` prop #581 shipped. Architect
+signal: `patch` itself carries no finish state, and this slice's `entry` prop never reads
+`background_task_updated`'s `status` field. (The frame family does carry one, since #1560/#1561 — it
+drives the composer's count pill's second removal path, see [Background-task roster store — internals §
+The pill's
+count](background-task-roster-store-internals.md#the-pills-count-selectlivetaskcountfor-1561) — but this
+panel is not that reader: a finished task simply stops appearing here once a roster omits it, and no copy
+or class in this slice names completion, failure, or success.) No prop, type, store, bridge or wire
+change; same `entry` prop #581 shipped. Architect
 self-review PASS (security-sensitive label); code review PASS with two non-blocking SHOULD FIX
 (both test-coverage gaps, not production defects — see [#583 codebase notes](../codebase/583.md)).
 

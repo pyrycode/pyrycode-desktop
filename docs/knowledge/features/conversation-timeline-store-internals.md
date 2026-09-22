@@ -51,25 +51,27 @@ translateTimelineEvent(event: DaemonEvent | HistoryTimelineEvent): ThreadEvent |
 
 timelineTargetFor(event: DaemonEvent): string | null   // #756
 // switch (event.type) { case 'assistantDelta': ... case 'unrecognizedMessage': case 'thinkingProgress':
+//   case 'sessionTransition':
 //   return event.conversationId
-//   case 'sessionTransition': case 'connected': return null
+//   case 'connected': return null
 //   default: return null }
-// The ten id-carrying owned arms (#784 moved `unrecognizedMessage` into this group, #1314 moved
-// `thinkingProgress` in beside it) share one `return event.conversationId` (non-nullable: a missing or
-// non-string conversation_id already fails the decode without emitting) — #1314's arm resolves from this
-// group with no cast and no probe, since the field is required on it, and it routes by the frame's own
-// conversation rather than through `timelineWriteTarget`'s open-conversation fallback. The two id-less
-// owned arms — `sessionTransition` and `connected`, and
-// neither will ever gain a wire conversation id — share one `return null`: not dormant, just nothing to
-// attribute. `default` is unreachable in production: subscribeTimeline only calls this on
-// translateTimelineEvent's non-null path. Unchanged in signature, body, and both design-oracle tests
-// since #756 — #785 resolves the open-conversation fallback downstream, in `timelineWriteTarget`, never
-// here.
+// The eleven id-carrying owned arms (#784 moved `unrecognizedMessage` into this group, #1314 moved
+// `thinkingProgress` in beside it, #1559 moved `sessionTransition` in last) share one
+// `return event.conversationId` (non-nullable: a missing or non-string conversation_id already fails
+// the decode without emitting) — each resolves from this group with no cast and no probe, since the
+// field is required on it, and it routes by the frame's own conversation rather than through
+// `timelineWriteTarget`'s open-conversation fallback. The one id-less owned arm — `connected`, which
+// will never gain a wire conversation id — returns `null`: not dormant, just nothing to attribute.
+// `default` is unreachable in production: subscribeTimeline only calls this on translateTimelineEvent's
+// non-null path. `sessionTransition` sat beside `connected` from #756 through #1559: the wire has
+// carried its `conversation_id` since #1192, but this function didn't read it until #1559 routed the
+// session-reset separator by it instead of by the open conversation (issue #1559 — a reset in one chat
+// drew its divider in whichever chat the operator had switched to).
 
-timelineWriteTarget(event: ThreadEvent, conversationId: string | null, getOpenConversationId): string | null   // #785
+timelineWriteTarget(event: ThreadEvent, conversationId: string | null, getOpenConversationId): string | null   // #785, narrowed #1559
 // if (conversationId !== null) return conversationId                       // the event's own attribution always wins
 // switch (event.type) {
-//   case 'sessionBoundary': case 'reconnected': return getOpenConversationId()  // the two arms with no key of their own
+//   case 'reconnected': return getOpenConversationId()  // the one arm with no key of its own
 //   default: return null                                                   // enumerated fallback, never a blanket `??`
 // }
 // The write-key half of the routing contract, a second pure function beside `timelineTargetFor`:
@@ -77,8 +79,11 @@ timelineWriteTarget(event: ThreadEvent, conversationId: string | null, getOpenCo
 // `getOpenConversationId` is a GETTER — read at dispatch time, not captured at subscribe time, since one
 // app-lifetime listener outlives any number of chat switches. Called AT MOST ONCE per event and never
 // for an id-carrying arm, pinned by a spy assertion — the strongest available statement of
-// "no misattribution". A future wire widening of `sessionTransition` is safe with no edit here: step 1
-// (the event's own id) is checked first, so it would win over the switch rather than being overridden by it.
+// "no misattribution". `sessionBoundary` sat in this switch from #785 through #1559, when its
+// unattributed fallback to the open conversation was the live defect: `timelineTargetFor` now always
+// attributes it, so a `conversationId` of `null` reaching this function for a `sessionBoundary` is
+// unreachable in production, and `default` gives it the same safe-drop `null` any other unattributed
+// owned arm gets.
 
 subscribeTimeline(onDaemonEvent, dispatch): () => void
 // onDaemonEvent(event => { const te = translateTimelineEvent(event); if (te) dispatch(te, timelineTargetFor(event)) })
@@ -277,14 +282,18 @@ function joinKeyToRecord(event: DaemonEvent, conversationId: string | null): str
 }
 ```
 
-`timelineTargetFor` (above) returns `null` for `sessionTransition` and `connected` — the two owned arms
-with no wire id of their own — and `timelineWriteTarget` then routes those into whichever conversation is
-ON SCREEN. A live `session_transition` belonging to conversation B would, absent this guard, mint a key on
-conversation A's slice purely because A happened to be open; a same-millisecond same-type collision could
-then suppress A's OWN page entry — a dropped row, the one direction this whole design refuses. So the key
-is passed only when the event's own `conversationId` resolved non-null; an inferred write target never
-mints one. The cost, stated rather than hidden: `sessionTransition` contributes no live key at all, so its
-page twin always draws — a duplicate `Session reset` divider, the fail-open side. (This guard was planned
+`timelineTargetFor` (above) returns `null` for `connected` — the one owned arm with no wire id of its
+own — and `timelineWriteTarget` then routes it into whichever conversation is ON SCREEN. A live event
+inferred onto conversation A purely because A happened to be open would, absent this guard, mint a key on
+A's slice; a same-millisecond same-type collision could then suppress A's OWN page entry — a dropped row,
+the one direction this whole design refuses. So the key is passed only when the event's own
+`conversationId` resolved non-null; an inferred write target never mints one. `sessionTransition` was
+this guard's working case from #1225 through #1559: `timelineTargetFor` returned `null` for it too, so it
+contributed no live key at all and its page twin always drew — a duplicate `Session reset` divider, the
+fail-open side. #1559 routes it by the frame's own `conversation_id` instead, so it is now attributed like
+any id-carrying arm and this guard passes its key through with no edit here: the key records against the
+chat the frame named, and that chat's own served page — holding the same `session_transition` entry —
+draws no second divider. (This guard was planned
 as a conditional inside `useTimelineBridge`'s callback and implemented one layer down, in
 `subscribeTimeline`, instead — see `docs/specs/architecture/1225-history-live-join.md`'s Revisions for why:
 `useTimelineBridge` mounts as a React effect and nothing in this repo can exercise one under
@@ -416,11 +425,13 @@ fresh handshake ─(daemonConnection.ts:483, handshake-complete)→ DaemonEvent{
 
 session boundary ─(sessionTransition, #286)→ translateTimelineEvent → { type: 'sessionBoundary', ... }
    → timelineStore.dispatch → reduceTimeline → a fresh sessionBoundary row tail-appended
-   → timelineWriteTarget(event, null, getOpenConversationId) → same resolution as reconnected above
-   → if non-null: conversationTimelineStore.dispatchFor(id, event) → the same row tail-appended into
-                                                 that conversation's retained slice (#785)
-   (the wire carries no conversation_id for this arm and never will — types.ts:664 — so this is the
-    OTHER arm `timelineWriteTarget`'s fallback names, alongside reconnected)
+   → timelineTargetFor(event) → event.conversationId (since #1559 — the frame's own id, never the screen)
+   → conversationTimelineStore.dispatchFor(event.conversationId, event) → the same row tail-appended into
+                                                 THAT conversation's retained slice, whether or not it is
+                                                 open (#785 for the fan-out shape, #1559 for the key)
+   (#1559: the wire has carried this arm's conversation_id since #1192; before #1559 this function
+    returned null for it here and timelineWriteTarget filed the row into whichever chat was ON SCREEN —
+    reset chat A, switch to chat B while the wrap-up turn ran, and the divider drew in B, never in A)
 
 operator presses Enter ─(composerSend.ts, submitMessage, guard passed)→ optimistic echo
    → timelineStore.dispatch({ type: 'userText', text }) → reduceTimeline → localSendPending: true

@@ -329,3 +329,16 @@ bearing: without it the closing read would pass against a fake seeded with the n
 no relaunch and no reconnect anywhere in the drive, proving the daemon's unsolicited `workspace_updated`
 frame reaches a live sidebar. See [Channel List § Fixture note](channel-list.md) and [conversation list
 store](conversation-list-store.md) for the production-side re-list trigger this spec exercises.
+
+**[#1559](https://github.com/pyrycode/pyrycode-desktop/issues/1559) added a second test to
+`e2e/session-transition-cross-conversation.spec.ts`** (issue #1192 added the first): reset
+chat A from the Actions menu, open chat B while A's `resetting` phase runs, push A's `session_transition`
+while B is on screen, and assert B draws zero `.session-delimiter` while A, on return, draws exactly one.
+The ordering barrier this spec needs is a frame pushed AFTER the marker whose effect did not exist before
+the push — an `assistant_delta` naming B, asserted by its new bubble text. A barrier built by re-pushing
+something already visible does not work: #1192's own barrier re-pushed a model list whose visible effect
+was already on screen, so waiting for it could pass before the marker it was meant to gate had actually
+been consumed. The Noise transport's ordered per-direction counter is what makes a barrier valid at all —
+a frame arriving after the marker is guaranteed processed after it — but only a *new* visible effect proves
+consumption; a repeated one proves nothing. This spec's own negative was checked against the pre-fix
+`timelineBridge.ts` and failed at the B-count assertion, so the barrier and the negative are not vacuous.

@@ -51,8 +51,7 @@ import { useReportedContextStore, selectReportedContextFor } from '../../store/r
 import { contextTokenSource } from './contextTokenSource'
 import {
   useBackgroundTaskRosterStore,
-  selectRosterFor,
-  type BackgroundTaskRosterEntry
+  selectLiveTaskCountFor
 } from '../../store/backgroundTaskRosterStore'
 import { usageLimitNotice } from './usageLimitNotice'
 import {
@@ -4428,22 +4427,21 @@ function ComposerErrorSlotControl({
   const usageLimit = useUsageLimitStore(
     open === null ? NO_USAGE_LIMIT_READING : selectUsageLimitFor(open.id, nowSeconds)
   )
-  // #1435: the open conversation's background-task roster. The `usageLimit` read above's shape verbatim,
+  // #1435: the open conversation's background-task count. The `usageLimit` read above's shape verbatim,
   // and for the same reasons — a fresh selector identity per render costs a re-subscribe and never a
-  // loop, because `selectRosterFor` returns the HELD ENTRY ITSELF or `null`, both stable references, so
-  // useSyncExternalStore's Object.is check short-circuits even when another conversation's write produces
-  // a new outer map. Deliberately this shape and not BackgroundTaskPanel's useMemo'd selector: consistency
-  // with the sibling read three lines up beats consistency with a different component's.
-  const roster = useBackgroundTaskRosterStore(
-    open === null ? NO_TASK_ROSTER : selectRosterFor(open.id)
+  // loop, because the selector returns a PRIMITIVE, so useSyncExternalStore's Object.is check
+  // short-circuits even when another conversation's write produces a new outer map.
+  //
+  // #1561: the number is the LIVE count, `selectLiveTaskCountFor`, not the roster's size. The listed
+  // tasks claude has not reported `completed` / `failed` / `stopped`, plus `droppedTasks` (the daemon
+  // caps a roster at 8 rows and a dropped entry has no id to match a status against). A roster's size
+  // alone kept the pill lit for a finished task whenever the emptier roster never came. The store owns
+  // the arithmetic so any other surface counting live tasks cannot disagree with this one. Both "no
+  // roster yet" and "nothing alive" read 0 and render no pill, a collapse this surface is entitled to
+  // make where the panel is not.
+  const taskCount = useBackgroundTaskRosterStore(
+    open === null ? NO_TASK_COUNT : selectLiveTaskCountFor(open.id)
   )
-  // THE TRUE ROSTER SIZE, which is `tasks.size + droppedTasks` and not `tasks.size` — the daemon caps a
-  // roster at 8 rows and reports the remainder in `droppedTasks`, so carrying only the held tasks would
-  // present a capped roster as the whole one (the store's own docblock states this at the field). A null
-  // entry means NO FRAME HAS EVER ARRIVED, which the store keeps distinct from "observed, nothing alive";
-  // both are 0 here and both are absent, a collapse this surface is entitled to make where the panel is
-  // not. A derived PRIMITIVE, so it is reference-stable with no memo.
-  const taskCount = roster === null ? 0 : roster.tasks.size + roster.droppedTasks
   const latest = useConversationTimelineStore((s) =>
     open === null ? undefined : s.timelines.get(open.id)?.timeline.latestTurnEnd
   )
@@ -4574,11 +4572,10 @@ function ComposerErrorSlotControl({
 // interface, exactly as `selectUsageLimitFor`'s return is.
 const NO_USAGE_LIMIT_READING = (): UsageLimitReading | null => null
 
-// #1435: the same constant for the roster read beside it, hoisted for the same reason — built inline it
-// would be a fresh function every render on the no-conversation-open arm, which useSyncExternalStore
-// answers with a re-subscribe per render for a value that is always the same `null`. Typed against
-// `selectRosterFor`'s return exactly, so the two arms of that read agree without a cast.
-const NO_TASK_ROSTER = (): BackgroundTaskRosterEntry | null => null
+// #1435: the same constant for the task-count read beside it, hoisted for the same reason — built inline
+// it would be a fresh function every render on the no-conversation-open arm, which useSyncExternalStore
+// answers with a re-subscribe per render for a value that is always the same `0` (#1561).
+const NO_TASK_COUNT = (): number => 0
 
 // #811: the context-window reading, first occupant of the composer footer row (Figma 110:3497,
 // "Context: 84%"). The percentage USED, not remaining. Its arithmetic is contextUsagePercent —

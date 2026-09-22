@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   createBackgroundTaskRosterStore,
   initialBackgroundTaskRosterState,
+  selectLiveTaskCountFor,
   selectRosterFor,
   type BackgroundTaskRosterEntry,
   type BackgroundTaskStartedSnapshot,
@@ -85,6 +86,7 @@ function updated(
     conversationId: 'c1',
     taskId: 't1',
     patch: '{"is_backgrounded":true}',
+    status: '',
     truncatedFields: null,
     ...overrides
   }
@@ -948,15 +950,23 @@ describe('backgroundTaskRosterStore', () => {
     const seed = new Map<string, BackgroundTaskRosterEntry>([
       ['c1', { tasks: new Map([['t1', heldNoCut]]), droppedTasks: 4 }]
     ])
-    const store = createBackgroundTaskRosterStore({ rosters: seed, unlistedStarts: new Map() })
+    const store = createBackgroundTaskRosterStore({
+      rosters: seed,
+      unlistedStarts: new Map(),
+      finishedTasks: new Map()
+    })
     expect(heldFor(store, 'c1')).toEqual({
       tasks: new Map([['t1', heldNoCut]]),
       droppedTasks: 4
     })
   })
 
-  it('initialBackgroundTaskRosterState holds two empty maps', () => {
-    expect(initialBackgroundTaskRosterState).toEqual({ rosters: new Map(), unlistedStarts: new Map() })
+  it('initialBackgroundTaskRosterState holds three empty maps', () => {
+    expect(initialBackgroundTaskRosterState).toEqual({
+      rosters: new Map(),
+      unlistedStarts: new Map(),
+      finishedTasks: new Map()
+    })
   })
 
   it('keeps the setter references stable across updates', () => {
@@ -975,5 +985,147 @@ describe('backgroundTaskRosterStore', () => {
     expect(store.getState().setUpdatedTask).toBe(setUpdatedTask)
     expect(store.getState().resetRostersFor).toBe(resetRostersFor)
     expect(store.getState().clearAllRosters).toBe(clearAllRosters)
+  })
+})
+
+// #1561: an update's `status` is the count's second removal path. The roster still decides what the
+// panel LISTS; a terminal status only takes a listed task out of the pill's count, so a lost or late
+// empty roster no longer leaves the pill lit for the rest of the session.
+describe('selectLiveTaskCountFor — terminal status leaves the count (#1561)', () => {
+  const count = (store: Store, conversationId = 'c1'): number =>
+    selectLiveTaskCountFor(conversationId)(store.getState())
+  const listBoth = (store: Store, droppedTasks = 0): void =>
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut, cutDescription], droppedTasks })
+
+  it('reads 0 while no roster has arrived', () => {
+    expect(count(createBackgroundTaskRosterStore())).toBe(0)
+  })
+
+  it('drops the only listed task on completed, leaving 0 (AC1)', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    expect(count(store)).toBe(1)
+    store.getState().setUpdatedTask(updated({ status: 'completed' }))
+    expect(count(store)).toBe(0)
+  })
+
+  it.each(['completed', 'failed', 'stopped'])('treats %s as terminal: two listed read 1 (AC1)', (status) => {
+    const store = createBackgroundTaskRosterStore()
+    listBoth(store)
+    store.getState().setUpdatedTask(updated({ taskId: 't2', status }))
+    expect(count(store)).toBe(1)
+  })
+
+  it('leaves a finished task LISTED — only the count changes', () => {
+    const store = createBackgroundTaskRosterStore()
+    listBoth(store)
+    store.getState().setUpdatedTask(updated({ status: 'completed' }))
+    expect([...(selectRosterFor('c1')(store.getState())?.tasks.keys() ?? [])]).toEqual(['t1', 't2'])
+  })
+
+  // Exact match only: a case variant or a token the daemon has not emitted keeps the pill lit rather
+  // than hiding live work.
+  it.each(['', 'running', 'Completed', 'completed '])('does not remove on status %j (AC2)', (status) => {
+    const store = createBackgroundTaskRosterStore()
+    listBoth(store)
+    store.getState().setUpdatedTask(updated({ status }))
+    expect(count(store)).toBe(2)
+  })
+
+  it('does not restore a finished task on a later empty or unknown status (AC2)', () => {
+    const store = createBackgroundTaskRosterStore()
+    listBoth(store)
+    store.getState().setUpdatedTask(updated({ status: 'failed' }))
+    store.getState().setUpdatedTask(updated({ status: '' }))
+    store.getState().setUpdatedTask(updated({ status: 'running' }))
+    expect(count(store)).toBe(1)
+  })
+
+  it('does not return a finished task on a later roster that lists it again (AC3)', () => {
+    const store = createBackgroundTaskRosterStore()
+    listBoth(store)
+    store.getState().setUpdatedTask(updated({ status: 'completed' }))
+    listBoth(store)
+    expect(count(store)).toBe(1)
+  })
+
+  it('does not return a finished task on a later started frame naming it (AC3)', () => {
+    const store = createBackgroundTaskRosterStore()
+    listBoth(store)
+    store.getState().setUpdatedTask(updated({ status: 'completed' }))
+    store.getState().setStartedTask(started())
+    expect(count(store)).toBe(1)
+    listBoth(store)
+    expect(count(store)).toBe(1)
+  })
+
+  it('keeps a finish recorded while the start waited unlisted, once a roster lists it (AC3)', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setStartedTask(started())
+    store.getState().setUpdatedTask(updated({ status: 'stopped' }))
+    listBoth(store)
+    expect(count(store)).toBe(1)
+  })
+
+  it('still adds droppedTasks, which carry no id to match a status against (AC4)', () => {
+    const store = createBackgroundTaskRosterStore()
+    listBoth(store, 3)
+    store.getState().setUpdatedTask(updated({ status: 'completed' }))
+    expect(count(store)).toBe(4)
+  })
+
+  it('returns the state itself for a terminal update naming a task held nowhere', () => {
+    const store = createBackgroundTaskRosterStore()
+    listBoth(store)
+    const before = store.getState()
+    store.getState().setUpdatedTask(updated({ taskId: 'gone', status: 'completed' }))
+    store.getState().setUpdatedTask(updated({ conversationId: 'c9', status: 'completed' }))
+    expect(store.getState()).toBe(before)
+    expect(before.finishedTasks.size).toBe(0)
+  })
+
+  it('prunes a finished id once a roster omits the task, so the set stays bounded by the roster', () => {
+    const store = createBackgroundTaskRosterStore()
+    listBoth(store)
+    store.getState().setUpdatedTask(updated({ status: 'completed' }))
+    store.getState().setRoster({ conversationId: 'c1', tasks: [cutDescription], droppedTasks: 0 })
+    expect(store.getState().finishedTasks.has('c1')).toBe(false)
+    expect(count(store)).toBe(1)
+  })
+
+  it('leaves another conversation\'s finished set by reference on a roster write', () => {
+    const store = createBackgroundTaskRosterStore()
+    listBoth(store)
+    store.getState().setUpdatedTask(updated({ status: 'completed' }))
+    const finished = store.getState().finishedTasks
+    store.getState().setRoster({ conversationId: 'c2', tasks: [noCut], droppedTasks: 0 })
+    expect(store.getState().finishedTasks).toBe(finished)
+  })
+
+  it('drops finished ids on the reconnecting server\'s reset and on the pairing clear', () => {
+    const store = createBackgroundTaskRosterStore()
+    listBoth(store)
+    store.getState().setUpdatedTask(updated({ status: 'completed' }))
+    store.getState().resetRostersFor(new Set(['c1']))
+    expect(store.getState().finishedTasks.size).toBe(0)
+
+    const paired = createBackgroundTaskRosterStore()
+    listBoth(paired)
+    paired.getState().setUpdatedTask(updated({ status: 'completed' }))
+    paired.getState().clearAllRosters()
+    expect(paired.getState().finishedTasks).toBe(initialBackgroundTaskRosterState.finishedTasks)
+  })
+
+  it('clears a store holding only a finished hold rather than short-circuiting', () => {
+    const store = createBackgroundTaskRosterStore({
+      rosters: new Map(),
+      unlistedStarts: new Map(),
+      finishedTasks: new Map([['c1', new Set(['t1'])]])
+    })
+    store.getState().clearAllRosters()
+    expect(store.getState().finishedTasks.size).toBe(0)
+    store.setState({ finishedTasks: new Map([['c1', new Set(['t1'])]]) })
+    store.getState().resetRostersFor(new Set(['c1']))
+    expect(store.getState().finishedTasks.size).toBe(0)
   })
 })

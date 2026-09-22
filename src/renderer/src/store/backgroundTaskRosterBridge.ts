@@ -123,8 +123,11 @@ export function translateBackgroundTaskStarted(
 
 /**
  * The updated filter — the third sibling, same posture again: one owned arm, a fresh named-field
- * literal, `default: null`, React-free. FOUR fields, not six: the arm carries no `toolCallId`, no
- * `description` and no `taskType`, and it gains `patch`.
+ * literal, `default: null`, React-free. FIVE fields: the arm carries no `toolCallId`, no `description`
+ * and no `taskType`, and it gains `patch` and `status`. `status` is copied verbatim as the open string
+ * #1560 carries (`''` included) and is interpreted only by the store (#1561). `summary` is deliberately
+ * NOT copied: it is untrusted model-authored text, observed carrying a literal command line, and stays
+ * unread until #1246 renders it.
  *
  * `patch` is copied VERBATIM and never parsed, key-enumerated, or inspected here — it is opaque text
  * that is not guaranteed to be valid JSON (the daemon truncates it at construction). `patch: ''` is a
@@ -141,6 +144,7 @@ export function translateBackgroundTaskUpdated(
         conversationId: event.conversationId,
         taskId: event.taskId,
         patch: event.patch,
+        status: event.status,
         truncatedFields: event.truncatedFields
       }
     default:

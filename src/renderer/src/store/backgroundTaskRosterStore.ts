@@ -6,11 +6,14 @@
 // a turn is claude's, not the daemon's, so a roster can arrive either side of the started frame for a
 // task it lists, and an update can arrive for a task neither has named yet.
 //
-// The ROSTER decides what is shown (#1563). claude sends a start for foreground work too — a Bash call
+// The ROSTER decides what is LISTED (#1563); an update's terminal `status` decides what is COUNTED (#1561). claude sends a start for foreground work too — a Bash call
 // past about three seconds, `is_backgrounded: false`, a flag the daemon drops — and no roster ever lists
 // it; claude's roster line is the background set. So `rosters` holds only what a roster has listed, and a
 // start for a task no roster has listed waits in `unlistedStarts`, which no surface reads, until a
 // roster either lists it (it moves in whole) or speaks for the conversation without it (it is dropped).
+// A task claude reports `completed` / `failed` / `stopped` stays listed until a roster omits it, but
+// leaves the pill's count at once (#1561): the empty roster that usually precedes that frame on claude
+// 2.1.280 is not guaranteed, and without it the pill stayed lit for the rest of the session.
 //
 // A dedicated store in the queueStore posture: these frames are daemon STATE, not part of claude's
 // turn stream (they carry no turn_id and open and close no turn — the queue_state rule, SSOT
@@ -96,8 +99,9 @@ import type { BackgroundTask } from '@shared/wire/types'
  *  Deliberately NOT a history: latest-wins, one record per task. An append-only list keyed by a
  *  `task_id` the model influences and fed by the daemon's push stream would be unbounded growth on
  *  attacker-influenceable input — the daemon's own cap (`maxTaskPatch`, 4 KiB) is per FRAME, not per
- *  task. And a patch is never a finish signal: this family reports no terminal event, so nothing here
- *  may be read as `completed` / `failed`.
+ *  task. And a PATCH is never a finish signal, so nothing here may be read as `completed` / `failed`. The
+ *  finish signal is the update's own `status` (#1561), which is not held on this record at all: it is
+ *  recorded as a finished id in `BackgroundTaskRosterState.finishedTasks`.
  *
  *  SECURITY: `patch` is UNTRUSTED, model-influenced daemon-relayed text whose keys may carry command
  *  text exactly as `description` does. #568 must render it as INERT PLAIN TEXT — never HTML (no
@@ -156,9 +160,11 @@ export interface HeldBackgroundTaskUpdate {
  *  `taskId` is carried in the value as well as being the map key — redundant by one field so that #568
  *  can iterate values without threading entry keys alongside them.
  *
- *  Deliberately carries NO terminal / finished / failed state: the daemon reports no finish, so absence
- *  from a LATER roster is the only removal path this family has, and modelling anything more would be a
- *  claim the wire cannot support. */
+ *  Deliberately carries NO terminal state, although the family now reports one (#1561): an update's
+ *  terminal `status` is recorded as an id in `BackgroundTaskRosterState.finishedTasks`, BESIDE this
+ *  record, so no rebuild of the record — a roster row, a start upgrading it, a hold moving in — can drop
+ *  it. Absence from a later roster is still the only thing that removes a task from the LIST; a terminal
+ *  status only removes it from the COUNT (`selectLiveTaskCountFor`). */
 export interface HeldBackgroundTask {
   taskId: string
   toolCallId: string | null
@@ -207,14 +213,18 @@ export interface BackgroundTaskStartedSnapshot {
   truncatedFields: readonly string[] | null
 }
 
-/** The update write unit — the `backgroundTaskUpdated` daemon-event arm minus its `type` tag. FOUR
- *  fields, not six: no `toolCallId`, no `description`, no `taskType`, and it gains `patch`. Flat, like
+/** The update write unit — the `backgroundTaskUpdated` daemon-event arm minus its `type` tag and its
+ *  `summary`. FIVE fields: no `toolCallId`, no `description`, no `taskType`, and it gains `patch` and
+ *  `status`. `status` is an OPEN string (#1560), `''` on every patch-bearing frame; only
+ *  `isTerminalTaskStatus` reads it, and it is never narrowed to a union (#1561). `summary` is untrusted
+ *  model-authored text and stays unread until #1246 renders it. Flat, like
  *  its sibling above and like the arm itself, so the translator stays a copy-the-named-fields filter;
  *  `setUpdatedTask` is what assembles the nested `HeldBackgroundTaskUpdate` from the pair. */
 export interface BackgroundTaskUpdatedSnapshot {
   conversationId: string
   taskId: string
   patch: string
+  status: string
   truncatedFields: readonly string[] | null
 }
 
@@ -230,10 +240,18 @@ export interface BackgroundTaskUpdatedSnapshot {
  *  background tasks", the collapse the TWO SILENCES paragraph forbids; outside it, `tasks` keeps
  *  meaning "listed", so the pill's arithmetic and `selectRosterFor` are untouched. Nothing reads it but
  *  the setters. It carries the same untrusted command-line text as `tasks`, so the same no-persistence
- *  rule and both clears apply to it. */
+ *  rule and both clears apply to it.
+ *
+ *  `finishedTasks` (#1561) holds, per conversation, the ids of tasks claude has reported terminal on a
+ *  `background_task_updated`. Beside the records rather than on them, so no setter that rebuilds a
+ *  record can lose it, and a start or a roster naming the task again cannot restore it to the count.
+ *  Every id in it is an id held in `rosters` or `unlistedStarts` of the same conversation: it is written
+ *  only on an update that HITS, pruned to the rows of each roster, and dropped by both clears. Only
+ *  `selectLiveTaskCountFor` reads it. */
 export interface BackgroundTaskRosterState {
   rosters: ReadonlyMap<string, BackgroundTaskRosterEntry>
   unlistedStarts: ReadonlyMap<string, ReadonlyMap<string, HeldBackgroundTask>>
+  finishedTasks: ReadonlyMap<string, ReadonlySet<string>>
 }
 
 /** Store shape = state + the five mutation entry points: record one conversation's roster, record one
@@ -251,7 +269,30 @@ export type BackgroundTaskRosterStore = BackgroundTaskRosterState & {
 
 export const initialBackgroundTaskRosterState: BackgroundTaskRosterState = {
   rosters: new Map(),
-  unlistedStarts: new Map()
+  unlistedStarts: new Map(),
+  finishedTasks: new Map()
+}
+
+/** The three tokens claude reports for a finished task, matched EXACTLY (#1561). Everything else is
+ *  alive — `''`, which every patch-bearing frame carries, and any token the daemon has not emitted yet —
+ *  so an unknown status keeps the pill lit rather than hiding live work. */
+const TERMINAL_TASK_STATUSES: ReadonlySet<string> = new Set(['completed', 'failed', 'stopped'])
+
+function isTerminalTaskStatus(status: string): boolean {
+  return TERMINAL_TASK_STATUSES.has(status)
+}
+
+/** `finishedTasks` with `taskId` recorded for `conversationId`, copy-on-write. */
+function withFinished(
+  finishedTasks: ReadonlyMap<string, ReadonlySet<string>>,
+  conversationId: string,
+  taskId: string
+): ReadonlyMap<string, ReadonlySet<string>> {
+  const ids = new Set(finishedTasks.get(conversationId))
+  ids.add(taskId)
+  const next = new Map(finishedTasks)
+  next.set(conversationId, ids)
+  return next
 }
 
 /**
@@ -278,8 +319,10 @@ export const initialBackgroundTaskRosterState: BackgroundTaskRosterState = {
  *
  * MEMBERSHIP is replacement truth regardless of provenance (AC5): a held task whose id is absent from
  * the new roster is simply not carried over, whether a roster or a started frame first reported it.
- * That absence is this family's only removal path — the daemon reports no finish. `droppedTasks` is
- * taken from the snapshot unconditionally.
+ * That absence is the only removal path from the LIST; a terminal status removes a task only from the
+ * COUNT (#1561, see `setUpdatedTask`). `droppedTasks` is taken from the snapshot unconditionally. The
+ * conversation's `finishedTasks` are pruned to the new rows, so a finish outlives a roster that lists
+ * the task again (or lists a hold that finished before any roster did) and dies with one that omits it.
  *
  * The roster write is UNCONDITIONAL, and that is the point of this store: an empty `tasks: []` sets
  * that key to an entry holding no tasks ("the daemon says nothing is alive for this conversation" — the
@@ -315,6 +358,10 @@ export const initialBackgroundTaskRosterState: BackgroundTaskRosterState = {
  * replaces `latestUpdate` wholesale (latest-wins, never an accumulating list) and touches NOTHING else:
  * an update frame reports no `description`, `taskType`, `toolCallId`, or task-level `truncatedFields`.
  * The two cut reports stay distinct fields rather than merging, since they name different vocabularies.
+ * A hit whose `status` is terminal also records the task id in `finishedTasks` (#1561), which takes it
+ * out of the count and keeps it out — a later `''` or unknown status never removes that id, and
+ * `setStartedTask` never touches the set. A miss records nothing, terminal or not: the empty roster
+ * usually lands first on claude 2.1.280, so the miss is the common case and must stay a no-op.
  * Both miss branches are SILENT — a "dropped an unmatched update" log line is exactly where patch text
  * would leak into a file (the content-free diagnostics rule, #126).
  *
@@ -399,7 +446,8 @@ export const initialBackgroundTaskRosterState: BackgroundTaskRosterState = {
  * change, including a roster held under a conversation no server's list ever carried.
  *
  * It drops `unlistedStarts` too (#1563): those holds carry the same command lines, and a store holding
- * only them is NOT an empty store for the short-circuit below.
+ * only them is NOT an empty store for the short-circuit below. `finishedTasks` (#1561) is dropped and
+ * checked the same way, on both clears, so a departed pairing's task ids do not latch.
  *
  * NULLARY BY DESIGN, the `clearAllBacklogs` / `clearAllConversations` shape: it takes no conversation id
  * and no server origin, so no daemon-supplied field can steer which command lines and patches survive a
@@ -446,12 +494,22 @@ export function createBackgroundTaskRosterStore(
         }
         const next = new Map(s.rosters)
         next.set(snapshot.conversationId, { tasks, droppedTasks: snapshot.droppedTasks })
+        // A finish survives a roster that lists the task and dies with one that omits it (#1561).
+        const finished = s.finishedTasks.get(snapshot.conversationId)
+        let finishedTasks = s.finishedTasks
+        if (finished !== undefined) {
+          const kept = new Set([...finished].filter((id) => tasks.has(id)))
+          const nextFinished = new Map(s.finishedTasks)
+          if (kept.size === 0) nextFinished.delete(snapshot.conversationId)
+          else nextFinished.set(snapshot.conversationId, kept)
+          finishedTasks = nextFinished
+        }
         // Every roster empties the conversation's holds: the listed ones moved in above, the rest were
         // foreground work no roster will ever name (#1563).
-        if (holds === undefined) return { rosters: next }
+        if (holds === undefined) return { rosters: next, finishedTasks }
         const unlistedStarts = new Map(s.unlistedStarts)
         unlistedStarts.delete(snapshot.conversationId)
-        return { rosters: next, unlistedStarts }
+        return { rosters: next, unlistedStarts, finishedTasks }
       }),
     setStartedTask: (snapshot) =>
       set((s) => {
@@ -488,6 +546,10 @@ export function createBackgroundTaskRosterStore(
         const existing = s.rosters.get(snapshot.conversationId)
         const held = existing?.tasks.get(snapshot.taskId)
         const latestUpdate = { patch: snapshot.patch, truncatedFields: snapshot.truncatedFields }
+        // Written only on a hit, below: a finished id is always an id this store already holds.
+        const finishedTasks = isTerminalTaskStatus(snapshot.status)
+          ? withFinished(s.finishedTasks, snapshot.conversationId, snapshot.taskId)
+          : s.finishedTasks
         if (existing === undefined || held === undefined) {
           // Not listed: a start may be waiting for its roster, and its update must not be lost (#1563).
           const holds = s.unlistedStarts.get(snapshot.conversationId)
@@ -501,7 +563,7 @@ export function createBackgroundTaskRosterStore(
           nextHolds.set(snapshot.taskId, { ...pending, latestUpdate })
           const unlistedStarts = new Map(s.unlistedStarts)
           unlistedStarts.set(snapshot.conversationId, nextHolds)
-          return { unlistedStarts }
+          return { unlistedStarts, finishedTasks }
         }
         const tasks = new Map(existing.tasks)
         // A spread is right here and not in the translators: this is a same-type held → held write
@@ -512,22 +574,27 @@ export function createBackgroundTaskRosterStore(
         const next = new Map(s.rosters)
         // `droppedTasks` PRESERVED: an update reports nothing about roster truncation.
         next.set(snapshot.conversationId, { tasks, droppedTasks: existing.droppedTasks })
-        return { rosters: next }
+        return { rosters: next, finishedTasks }
       }),
     resetRostersFor: (conversationIds) =>
       set((s) => {
         const doomed = [...s.rosters.keys()].filter((id) => conversationIds.has(id))
         const doomedHolds = [...s.unlistedStarts.keys()].filter((id) => conversationIds.has(id))
-        if (doomed.length === 0 && doomedHolds.length === 0) return s
+        const doomedFinished = [...s.finishedTasks.keys()].filter((id) => conversationIds.has(id))
+        if (doomed.length === 0 && doomedHolds.length === 0 && doomedFinished.length === 0) return s
         const next = new Map(s.rosters)
         for (const id of doomed) next.delete(id)
         const unlistedStarts = new Map(s.unlistedStarts)
         for (const id of doomedHolds) unlistedStarts.delete(id)
-        return { rosters: next, unlistedStarts }
+        const finishedTasks = new Map(s.finishedTasks)
+        for (const id of doomedFinished) finishedTasks.delete(id)
+        return { rosters: next, unlistedStarts, finishedTasks }
       }),
     clearAllRosters: () =>
       set((s) =>
-        s.rosters.size === 0 && s.unlistedStarts.size === 0 ? s : initialBackgroundTaskRosterState
+        s.rosters.size === 0 && s.unlistedStarts.size === 0 && s.finishedTasks.size === 0
+          ? s
+          : initialBackgroundTaskRosterState
       )
   }))
 }
@@ -574,3 +641,24 @@ export const selectRosterFor =
   (conversationId: string) =>
   (s: BackgroundTaskRosterState): BackgroundTaskRosterEntry | null =>
     s.rosters.get(conversationId) ?? null
+
+/**
+ * The pill's count (#1561) — a selector FACTORY bound to one `conversationId`, and the one definition of
+ * "alive" the composer pill and any later panel reading share: the listed tasks claude has not reported
+ * terminal, plus `droppedTasks`. `droppedTasks` always adds, because a dropped entry carries no id to
+ * match a status against, and the daemon caps a roster at 8 rows.
+ *
+ * `0` when no roster has arrived. That collapses "never observed" into "nothing alive", which the pill
+ * is entitled to do (both render no pill) and `selectRosterFor` deliberately does not. A PRIMITIVE, so
+ * it is reference-stable for `useSyncExternalStore` without a memo.
+ */
+export const selectLiveTaskCountFor =
+  (conversationId: string) =>
+  (s: BackgroundTaskRosterState): number => {
+    const entry = s.rosters.get(conversationId)
+    if (entry === undefined) return 0
+    const finished = s.finishedTasks.get(conversationId)
+    let live = 0
+    for (const taskId of entry.tasks.keys()) if (finished?.has(taskId) !== true) live++
+    return live + entry.droppedTasks
+  }

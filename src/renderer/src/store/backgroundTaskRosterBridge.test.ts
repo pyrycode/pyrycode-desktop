@@ -190,25 +190,28 @@ describe('translateBackgroundTaskStarted', () => {
 })
 
 describe('translateBackgroundTaskUpdated', () => {
-  it('maps a backgroundTaskUpdated event to its four-field snapshot (the owned arm)', () => {
+  it('maps a backgroundTaskUpdated event to its five-field snapshot (the owned arm)', () => {
     const event: DaemonEvent = {
       type: 'backgroundTaskUpdated',
       conversationId: 'c1',
       taskId: 't1',
       patch: '{"is_backgrounded":true}',
-      status: '',
-      summary: '',
+      status: 'completed',
+      summary: 'SENTINELSUMMARY',
       truncatedFields: ['patch']
     }
     const snapshot = translateBackgroundTaskUpdated(event)
 
-    // FOUR fields, not six: no toolCallId, no description, no taskType, and it gains `patch`.
+    // FIVE fields: no toolCallId, no description, no taskType; it gains `patch` and `status` (#1561).
+    // `summary` is deliberately NOT copied — untrusted model-authored text, unread until #1246.
     expect(snapshot).toEqual({
       conversationId: 'c1',
       taskId: 't1',
       patch: '{"is_backgrounded":true}',
+      status: 'completed',
       truncatedFields: ['patch']
     })
+    expect(JSON.stringify(snapshot)).not.toContain('SENTINELSUMMARY')
     // Same posture as both neighbours: a fresh named-field literal, never `return event`, never a
     // spread — a spread would carry the `type` tag into a write unit that never agreed to hold it.
     expect(snapshot).not.toBe(event)
@@ -229,6 +232,8 @@ describe('translateBackgroundTaskUpdated', () => {
     expect(snapshot?.truncatedFields).toBeNull()
     // And `patch: ''` survives as the value it is — the arm always carries one (no `omitempty`).
     expect(snapshot?.patch).toBe('')
+    // `status: ''` too: an open string copied verbatim, never filtered on truthiness (#1561).
+    expect(snapshot?.status).toBe('')
   })
 
   it('returns null for a sample of unrelated daemon events, roster and started included', () => {
@@ -431,6 +436,7 @@ describe('subscribeBackgroundTaskRoster', () => {
       conversationId: 'c1',
       taskId: 't1',
       patch: 'p',
+      status: '',
       truncatedFields: ['patch']
     })
     expect(setRoster).not.toHaveBeenCalled()

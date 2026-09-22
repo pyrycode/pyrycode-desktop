@@ -89,3 +89,7 @@ Pending for the documentation stage. The ticket names no doc, but these overview
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-22
+
+## Revisions
+
+- **2026-09-22, build:** open question resolved without a design change. A bare `assistant_delta` naming B draws its bubble in B with no preceding `turn_state`, so it serves as the ordering barrier. The e2e was also run against the pre-fix `timelineBridge.ts`. It fails at the B-shows-zero assertion (received 1), so the barrier and the negative are not vacuous.

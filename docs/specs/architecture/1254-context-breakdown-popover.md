@@ -72,3 +72,9 @@ No failure modes of its own: the reading is already decoded and narrowed upstrea
 ## Documentation handoff
 
 None named by the ticket. Pending for the documentation stage: fold the popover into the conversation composer footer overview (`docs/knowledge/features/`, the owning context-reading topic).
+
+## Revisions
+
+**2026-09-23 — placement is right-aligned, and the clamp hook is not used.** The visual check found that the footer menus' placement fails for this panel at the 800px minimum. The window-width bound squeezed the fixed-width panel to about 130px. Without that bound, the right-edge shift moves the panel to the window's edge, 20px past `.paired-shell__pane`, whose `overflow: hidden` clipped the panel's right side. `.context-breakdown` now sets `right: 0; left: auto` against `.context-breakdown-anchor`, which is the `--bottom-end` precedent. The reading's right edge is always inside the pane, and 280px to its left clears the sidebar at every allowed width. `ContextBreakdownPopover` therefore does not call `useComposerOptionsClamp`, and `ContextBreakdownPanel` takes no `panelRef`. The fixed 280px width remains the bound for untrusted text.
+
+**Open question resolved.** An outside click closes the panel and leaves focus where the user clicked, as the shared menu does. The e2e checks that Escape and a second click on the reading return focus to it, and checks only that an outside click (at the window's corner) closes the panel.

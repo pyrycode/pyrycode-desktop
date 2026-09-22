@@ -79,3 +79,25 @@ Pending for the documentation stage: fold the new `turnBoundary` metrics and the
 ## Open questions
 
 - Can a non-finite number reach `parseTurnEndPayload` at all? `JSON.parse` never yields one. The guard stays as defence and is tested directly if the parse is reachable with a constructed payload.
+
+## Security review
+
+**Verdict:** PASS
+
+Process note: the plan above was committed before this pass ran. This section is committed separately, and still before any implementation code.
+
+**Findings:**
+
+- [Trust boundaries] No findings. The only new untrusted input is six optional numbers in the daemon's `turn_end` payload. They cross at one function, `parseTurnEndPayload`, which accepts only `typeof === 'number' && Number.isFinite`. Everything else becomes `undefined`, so a string, object, `null`, `NaN` or `Infinity` never reaches a typed field. The frame's required fields keep their existing fail-closed checks. Keys are read by name off an `isRecord`-narrowed `JSON.parse` result. A `__proto__` key there is an own property and is never read, and a missing key falls through to `Object.prototype`, which has none of these names.
+- [Trust boundaries] No findings on the IPC direction. The numbers flow main → renderer on the existing `turnEnd` event only. No new channel and no renderer → main input. Every hop copies named fields (`turnEndMetricsOf` in main, inline in `translateTimelineEvent` and `reduceTimeline`), so a later wire field cannot be smuggled across by a spread.
+- [Hostile daemon response] OUT OF SCOPE, for the display tickets #1566 and #1567. Values are carried as received, per AC3: negatives, `0`, and huge finite values such as `1e308`. Whoever renders them must bound the formatted output, treat `0` or absent as "not reported" per the contract, and show them only as escaped text, never in an attribute, URL or log. This slice renders nothing.
+- [Tokens, secrets, credentials] No findings. Token counts, a duration and a cost estimate are not secrets and not message content. No key, token or plaintext is touched.
+- [File / storage] No findings. Nothing new is written to disk. `threadItem` in `src/shared/chatHistory.ts` rebuilds `turnBoundary` rows from named fields, so the metrics are stripped at the persistence boundary. `DurableThreadItem` is unchanged, as the ticket requires.
+- [Electron attack surface] No findings. No `webPreferences`, bridge, protocol handler or navigation change.
+- [Cryptographic primitives] No findings. No crypto is touched.
+- [Network & I/O] No findings. The existing `MAX_PLAINTEXT_BYTES` frame bound still applies. Six numbers add no unbounded structure.
+- [Errors, logs, telemetry] No findings. No log line is added, and parse failures stay category-only because the lenient guard throws nothing.
+- [Concurrency] No findings. The change is pure data shape, with no new async work, timers or listeners.
+
+**Reviewer:** builder (self-review per `builder/security-review.md`)
+**Date:** 2026-09-22

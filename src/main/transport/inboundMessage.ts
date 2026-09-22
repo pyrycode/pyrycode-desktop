@@ -588,11 +588,14 @@ interface FrameTimestamp {
  *
  * The `background-task-updated` kind (#565) carries the decoded BackgroundTaskUpdatedPayload — the PEER of
  * the kind above, joined on `task_id`: that frame opens a task, this one reports what CHANGED about it
- * afterwards. FOUR fields, not six (no `tool_call_id` / `description` / `task_type`; it gains `patch`).
- * Same non-turn character, so the consumer likewise carries ALL FOUR fields onward, `conversation_id`
- * INCLUDED. The fail-closed defence is three required strings plus the same REQUIRED-PRESENT NULLABLE
- * ARRAY, and neither the `truncated_fields` elements (`task_id` / `patch` here — a DIFFERENT pair from the
- * sibling's, which is why the vocabulary is never narrowed) nor `patch` itself is validated further:
+ * afterwards. A DIFFERENT six fields (no `tool_call_id` / `description` / `task_type`; it gains `patch`,
+ * `status` and `summary`). Same non-turn character, so the consumer likewise carries ALL SIX fields
+ * onward, `conversation_id` INCLUDED. The fail-closed defence is three required strings, two strings that
+ * read an omitted key as `''` (`status` / `summary`, #1560 — a pre-2026-09-10 daemon sends neither) but
+ * reject a present non-string, plus the same REQUIRED-PRESENT NULLABLE ARRAY. A non-empty `status` is the
+ * family's only finish signal; it is an open string, never narrowed. Neither the `truncated_fields`
+ * elements (`task_id` / `patch` / `status` / `summary` here — a DIFFERENT set from the sibling's, which is
+ * why the vocabulary is never narrowed) nor `patch` itself is validated further:
  * `patch` is claude's patch object carried WHOLE AND UNPARSED as a string, which the daemon truncates at
  * construction, so it PROVABLY MAY NOT PARSE and is never fed to a JSON parser here. An EMPTY `patch` is a
  * value ("claude sent no change"), an omitted key an absence that fails closed. Untrusted display text
@@ -2001,10 +2004,22 @@ function parseBackgroundTaskStartedPayload(payload: unknown): BackgroundTaskStar
 }
 
 /**
- * Narrow an opaque payload into a BackgroundTaskUpdatedPayload (#565). The subset twin of the narrower
- * above — FOUR fields, not six: three required strings plus `truncated_fields` through the same
- * requireStringArrayOrNull (whose docstring names this ticket; there is deliberately no second narrower
- * and no variant of it). There is no `tool_call_id`, no `description` and no `task_type` here.
+ * Narrow an opaque payload into a BackgroundTaskUpdatedPayload (#565). The twin of the narrower above,
+ * with a DIFFERENT six fields: three required strings, two TOLERANT strings (`status` / `summary`, #1560),
+ * and `truncated_fields` through the same requireStringArrayOrNull (whose docstring names this ticket;
+ * there is deliberately no second narrower and no variant of it). There is no `tool_call_id`, no
+ * `description` and no `task_type` here.
+ *
+ * `status` AND `summary` READ AN OMITTED KEY AS `''`, a deliberate departure from `patch`'s fail-closed
+ * posture below. A current daemon always sends both, but a binary predating 2026-09-10 (pyrycode#2245)
+ * sends neither, and an older daemon is an observed condition on this pipeline. Failing closed would drop
+ * `patch` with the frame — a regression on today's behaviour. Reading `''` is safe because `''` is already
+ * the in-domain value every mid-life frame carries on both fields, so absence and emptiness mean the same
+ * thing here, and an absence can never forge a finish (a finish is a NON-EMPTY `status`). A PRESENT
+ * non-string — `null` included — still throws through optionalString and rejects the whole frame.
+ * Neither is narrowed to a closed set: `status` is an open token (only `completed` observed), and
+ * `summary` is model-authored free text that may be the task's command line. No per-field length check:
+ * the daemon caps `summary` (`maxTaskSummary`) and names a cut in `truncated_fields`.
  *
  * TWO PROPERTIES FALL OUT OF THE SHAPE rather than needing their own checks, and both are invisible in
  * the code below, which is why each has its own test:
@@ -2021,20 +2036,20 @@ function parseBackgroundTaskStartedPayload(payload: unknown): BackgroundTaskStar
  * truncates it at construction (`maxTaskPatch`), so a truncated object is no longer valid JSON and its
  * own golden fixture is cut mid-token: parsing would turn a VALID frame into a dropped one. It is an
  * opaque display blob whose validity is never assessed. Likewise NO closed-set narrowing of the
- * `truncated_fields` element names: they name this frame's own wire fields today (`task_id` / `patch` —
- * a different pair from the sibling's), and a client-side allowlist would fail-close a valid future
- * frame (the parseQueuedItem no-cross-validate posture). And NO reconciliation between the two: the
+ * `truncated_fields` element names: they name this frame's own wire fields today (`task_id` / `patch` /
+ * `status` / `summary` — a different set from the sibling's), and a client-side allowlist would
+ * fail-close a valid future frame (the parseQueuedItem no-cross-validate posture). And NO reconciliation between the two: the
  * daemon scrubs invalid UTF-8 out of `patch` by deletion while `truncated_fields` reports the cap cut
  * only, so a mismatch is expected upstream behaviour, not a defect to detect. No per-field length check
  * either — every string is bounded by the daemon at construction and the frame-level MAX_PLAINTEXT_BYTES
  * guard in parseInboundMessage covers the oversized case.
  *
- * Any missing / mistyped field throws WireDecodeError (never a partial value). Returns a fresh four-field
- * literal, so unknown server-added keys — pointedly including the sibling's `tool_call_id` /
+ * Any missing required / mistyped field throws WireDecodeError (never a partial value). Returns a fresh
+ * six-field literal, so unknown server-added keys — pointedly including the sibling's `tool_call_id` /
  * `description` / `task_type`, which this frame must never have — are tolerated (forward-compat) but NOT
  * copied through, which also makes it prototype-pollution-safe. Its messages name the failure CATEGORY
- * only, never interpolating a value: a `patch` key may carry command text, and the two ids are
- * correlating identifiers.
+ * only, never interpolating a value: a `patch` key or the `summary` may carry command text, and the two
+ * ids are correlating identifiers.
  */
 function parseBackgroundTaskUpdatedPayload(payload: unknown): BackgroundTaskUpdatedPayload {
   if (!isRecord(payload)) {
@@ -2043,8 +2058,10 @@ function parseBackgroundTaskUpdatedPayload(payload: unknown): BackgroundTaskUpda
   const conversation_id = requireString(payload, 'conversation_id')
   const task_id = requireString(payload, 'task_id')
   const patch = requireString(payload, 'patch')
+  const status = optionalString(payload, 'status') ?? ''
+  const summary = optionalString(payload, 'summary') ?? ''
   const truncated_fields = requireStringArrayOrNull(payload, 'truncated_fields')
-  return { conversation_id, task_id, patch, truncated_fields }
+  return { conversation_id, task_id, patch, status, summary, truncated_fields }
 }
 
 /**
@@ -4086,9 +4103,9 @@ export function parseInboundMessage(
     }
     case 'background_task_updated': {
       // Narrow BEFORE logging so a malformed frame (an omitted `patch` or `truncated_fields` key, a
-      // non-string element in the latter, an absent id) throws first and leaves no record. NOTHING
-      // decoded is logged — least of all `patch`, whose keys may carry command text exactly as the
-      // sibling's `description` does. Only the frame's byte length + one-way hash, reusing the existing
+      // non-string element in the latter, a present non-string `status` / `summary`, an absent id)
+      // throws first and leaves no record. NOTHING decoded is logged — least of all `patch` and
+      // `summary`, which may carry command text exactly as the sibling's `description` does. Only the frame's byte length + one-way hash, reusing the existing
       // content-free field set (no new DiagnosticEvent field, so #131's renderer pin is untouched).
       const backgroundTaskUpdated = parseBackgroundTaskUpdatedPayload(envelope.payload)
       diagnosticLog?.event({

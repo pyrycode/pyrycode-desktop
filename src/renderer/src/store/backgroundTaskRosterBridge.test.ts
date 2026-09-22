@@ -121,6 +121,8 @@ describe('translateBackgroundTaskRoster', () => {
         conversationId: 'c1',
         taskId: 't1',
         patch: 'p',
+        status: '',
+        summary: '',
         truncatedFields: null
       }
     ]
@@ -178,6 +180,8 @@ describe('translateBackgroundTaskStarted', () => {
         conversationId: 'c1',
         taskId: 't1',
         patch: 'p',
+        status: '',
+        summary: '',
         truncatedFields: null
       }
     ]
@@ -192,6 +196,8 @@ describe('translateBackgroundTaskUpdated', () => {
       conversationId: 'c1',
       taskId: 't1',
       patch: '{"is_backgrounded":true}',
+      status: '',
+      summary: '',
       truncatedFields: ['patch']
     }
     const snapshot = translateBackgroundTaskUpdated(event)
@@ -214,6 +220,8 @@ describe('translateBackgroundTaskUpdated', () => {
       conversationId: 'c1',
       taskId: 't1',
       patch: '',
+      status: '',
+      summary: '',
       truncatedFields: null
     }
     const snapshot = translateBackgroundTaskUpdated(event)
@@ -297,7 +305,15 @@ describe('subscribeBackgroundTaskRoster', () => {
     patch = '{"is_backgrounded":true}',
     truncatedFields: readonly string[] | null = null
   ): DaemonEvent {
-    return { type: 'backgroundTaskUpdated', conversationId, taskId, patch, truncatedFields }
+    return {
+      type: 'backgroundTaskUpdated',
+      conversationId,
+      taskId,
+      patch,
+      status: '',
+      summary: '',
+      truncatedFields
+    }
   }
 
   // #1068's stamp rides BESIDE the union, so it arrives structurally at a bare-DaemonEvent-typed hole

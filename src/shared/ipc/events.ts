@@ -561,8 +561,16 @@ type BaseDaemonEvent =
       truncatedFields: readonly string[] | null
     }
   // The background-task update arm (#565) — the PEER of the arm above, joined on `taskId`: that frame
-  // opens a task, this one reports what CHANGED about it afterwards. FOUR fields, not six: no
-  // `toolCallId`, no `description`, no `taskType`, and it gains `patch`.
+  // opens a task, this one reports what happened to it afterwards. Six fields, but not the arm above's
+  // six: no `toolCallId`, no `description`, no `taskType`, and it gains `patch`, `status` and `summary`.
+  //
+  // `status` and `summary` (#1560) are the TERMINAL half of the frame; `patch` is the mid-life half, and
+  // claude never fills both. `status: ''` means the task has not reported an end (a mid-life frame, or a
+  // daemon predating the field); a NON-EMPTY `status` is the family's only finish signal. It is an OPEN
+  // string — only `completed` has been captured, `failed` / `stopped` never have — so a consumer must
+  // handle a token it has not seen rather than switch exhaustively. `summary` is model-authored free
+  // text that can be the task's command line: the same render-never-execute rule as `patch` below
+  // applies, and neither field is ever logged.
   //
   // Carries `conversationId` for the sibling's reason, which is settled in-family rather than argued
   // fresh: the test is "turn-stream item, or daemon state?", and this frame carries NO turn_id and opens
@@ -579,20 +587,24 @@ type BaseDaemonEvent =
   // without appearing there (the daemon also scrubs invalid UTF-8 by deletion) — record it, never
   // cross-check it.
   //
-  // SECURITY: `patch` is UNTRUSTED, model-influenced daemon-relayed text whose keys may carry command
-  // text exactly as the sibling's `description` does. The panel slice (#568) must render it as PLAIN
-  // TEXT, NEVER HTML (no innerHTML / dangerouslySetInnerHTML), never into an attribute or a URL, and
-  // must never execute or re-shell it — the daemon doc states this rule in THIS frame's section rather
-  // than delegating it to the sibling, because a patch's structured shape makes it the more tempting
-  // thing to feed somewhere that runs it. This slice has no DOM sink and runs no JSON.parse; the
-  // constraint is inherited here. No token, key, or raw frame can ride the arm (three bounded opaque
-  // strings and a list of wire field names is the whole payload). Ships dormant: all three exhaustive
-  // bridges no-op it until #567 — the apiRetry-was-a-no-op-until-#493 precedent.
+  // SECURITY: `patch` and `summary` are UNTRUSTED, model-influenced daemon-relayed text that may carry
+  // command text exactly as the sibling's `description` does. A consumer must render them as PLAIN
+  // TEXT, NEVER HTML (no innerHTML / dangerouslySetInnerHTML), never into an attribute, a URL, a
+  // filename, a cache key or a log, and must never execute or re-shell them — the daemon doc states
+  // this rule in THIS frame's section rather than delegating it to the sibling, because a patch's
+  // structured shape makes it the more tempting thing to feed somewhere that runs it, and `summary` is
+  // prose a client will actually render. This slice has no DOM sink and runs no JSON.parse; the
+  // constraint is inherited here. No token, key, or raw frame can ride the arm (five bounded strings
+  // and a list of wire field names is the whole payload). `status` / `summary` ship dormant: no bridge
+  // reads them until #1561 (`status`) and #1246 (`summary`) — the precedent is this arm's own, which
+  // every exhaustive bridge no-opped until #567.
   | {
       type: 'backgroundTaskUpdated'
       conversationId: string
       taskId: string
       patch: string
+      status: string
+      summary: string
       truncatedFields: readonly string[] | null
     }
   // The background-task roster arm (#566) — the AGGREGATE PEER of the two arms above: they report what

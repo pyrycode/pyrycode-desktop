@@ -293,6 +293,8 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
         conversationId: 'conv-1',
         taskId: 'task_01ABC',
         patch: '{"is_backgrounded":tr',
+        status: '',
+        summary: '',
         truncatedFields: ['patch']
       },
       // background-task roster ships dormant (#566); its consumer is the #567 background-task store,

@@ -651,19 +651,23 @@ describe('background-task-updated wire vocabulary (#565)', () => {
     expect(updated).toBe('background_task_updated')
   })
 
-  it('shapes BackgroundTaskUpdatedPayload as its FOUR fields — the sibling minus three', () => {
-    // The daemon's canonical fixture verbatim: `patch` is cut mid-token and is therefore not valid
-    // JSON, which is exactly why it is typed as a plain string here and never as nested JSON.
+  it('shapes BackgroundTaskUpdatedPayload as its SIX fields — not the sibling\'s six', () => {
+    // The daemon's canonical mid-life fixture verbatim: `patch` is cut mid-token and is therefore not
+    // valid JSON, which is exactly why it is typed as a plain string here and never as nested JSON.
     const payload: BackgroundTaskUpdatedPayload = {
       conversation_id: 'c1',
       task_id: 'task_01ABC',
       patch: '{"is_backgrounded":tr',
+      status: '',
+      summary: '',
       truncated_fields: ['patch']
     }
     expect(payload).toEqual({
       conversation_id: 'c1',
       task_id: 'task_01ABC',
       patch: '{"is_backgrounded":tr',
+      status: '',
+      summary: '',
       truncated_fields: ['patch']
     })
     // No turn_id: like its sibling, the frame opens and closes no turn.
@@ -680,11 +684,35 @@ describe('background-task-updated wire vocabulary (#565)', () => {
       conversation_id: 'c1',
       task_id: 'task_01ABC',
       patch: '',
+      status: '',
+      summary: '',
       truncated_fields: null
     }
     expect(noChange.patch).toBe('')
     // `null` means NOTHING WAS CUT, distinct from [].
     expect(noChange.truncated_fields).toBeNull()
+  })
+
+  it('admits the terminal half — status and summary set, patch empty — as open strings (#1560)', () => {
+    // The daemon's terminal golden fixture verbatim: claude's `task_notification` line fills the half
+    // the mid-life frame leaves empty. `summary` is the task's own command line here.
+    const finished: BackgroundTaskUpdatedPayload = {
+      conversation_id: 'c1',
+      task_id: 'task_01ABC',
+      patch: '',
+      status: 'completed',
+      summary: 'cat /tmp/pyry-fifo',
+      truncated_fields: null
+    }
+    // `status` is a plain string, not a union: a token the daemon has never emitted still assigns,
+    // so the first real `failed` cannot fail closed at the type.
+    const unseen: BackgroundTaskUpdatedPayload['status'] = 'some-future-state'
+    expect(finished.status).toBe('completed')
+    expect(finished.summary).toBe('cat /tmp/pyry-fifo')
+    expect(unseen).toBe('some-future-state')
+    // `truncated_fields` may now name the two new fields as well.
+    const cut: BackgroundTaskUpdatedPayload = { ...finished, truncated_fields: ['status', 'summary'] }
+    expect(cut.truncated_fields).toEqual(['status', 'summary'])
   })
 })
 

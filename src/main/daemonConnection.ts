@@ -1854,14 +1854,16 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             })
             return
           case 'background-task-updated':
-            // The background-task change data path (#565) — the subset twin of the arm above. A fresh
-            // literal carrying all FOUR fields (no toolCallId / description / taskType on this frame),
-            // copied BY NAME from the already-decoded, already-validated payload — never a spread of
-            // inbound.backgroundTaskUpdated, so a decoder that later grows a field cannot smuggle it
-            // across IPC. snake→camel throughout; `truncatedFields` passes the narrowed array by
-            // reference and its `null` is preserved, never coerced to []. `patch` crosses byte-for-byte:
-            // it is an opaque blob the daemon may have truncated mid-token, so nothing here parses,
-            // normalizes, or re-serializes it.
+            // The background-task change data path (#565) — the twin of the arm above. A fresh literal
+            // carrying all SIX fields (no toolCallId / description / taskType on this frame; `status` /
+            // `summary` added by #1560), copied BY NAME from the already-decoded, already-validated
+            // payload — never a spread of inbound.backgroundTaskUpdated, so a decoder that later grows a
+            // field cannot smuggle it across IPC. snake→camel throughout; `truncatedFields` passes the
+            // narrowed array by reference and its `null` is preserved, never coerced to []. `patch`
+            // crosses byte-for-byte: it is an opaque blob the daemon may have truncated mid-token, so
+            // nothing here parses, normalizes, or re-serializes it. `status` and `summary` cross verbatim
+            // too, `''` included (a mid-life frame, or a daemon predating them): nothing here branches on
+            // `status` — deciding what a finish means is the renderer consumer's (#1561).
             //
             // `conversation_id` is KEPT for the sibling's reason — daemon STATE keyed by id (the
             // queue-state rule, #720), not a turn-stream item; #567 attributes tasks by id.
@@ -1879,6 +1881,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               conversationId: inbound.backgroundTaskUpdated.conversation_id,
               taskId: inbound.backgroundTaskUpdated.task_id,
               patch: inbound.backgroundTaskUpdated.patch,
+              status: inbound.backgroundTaskUpdated.status,
+              summary: inbound.backgroundTaskUpdated.summary,
               truncatedFields: inbound.backgroundTaskUpdated.truncated_fields
             })
             return

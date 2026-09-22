@@ -1397,12 +1397,27 @@ export interface BackgroundTaskStartedPayload {
  * Inbound `background_task_updated` event (daemon → client). Mirrors the daemon's
  * BackgroundTaskUpdatedPayload field-for-field (SSOT pyrycode#1394, internal/protocol/interactive.go:215,
  * docs/protocol-mobile.md § background_task_updated), wire order `conversation_id, task_id, patch,
- * truncated_fields` — all always present (no `omitempty`). Fanned out ONLY to `interactive`-capable
- * clients.
+ * status, summary, truncated_fields` — none with `omitempty` on a current daemon. Fanned out ONLY to
+ * `interactive`-capable clients.
  *
  * THE PEER of BackgroundTaskStartedPayload above, joined on `task_id`: that frame OPENS a task, this one
- * reports what CHANGED about it afterwards. FOUR fields, not six — this frame has no `tool_call_id`, no
- * `description` and no `task_type`, and gains `patch`.
+ * reports what happened to it afterwards. Six fields, but NOT the sibling's six — this frame has no
+ * `tool_call_id`, no `description` and no `task_type`, and gains `patch`, `status` and `summary`.
+ *
+ * TWO OF CLAUDE'S LINES FILL DISJOINT HALVES of this one frame (pyrycode#2245). A MID-LIFE frame (claude's
+ * `system/task_updated`) fills `patch` and leaves `status` / `summary` as `''`; a TERMINAL frame
+ * (`system/task_notification`) fills `status` / `summary` and leaves `patch` as `''`. A NON-EMPTY `status`
+ * is the family's only finish signal: the daemon synthesises no finish event and never diffs rosters.
+ *
+ * `status` IS AN OPEN STRING — claude's claim that the task ended, not the daemon's detection. Only
+ * `completed` has ever been captured; the documented `failed` / `stopped` never have. Never narrow it to a
+ * client-side union: that would fail-close the first real `failed` (the drift risk CLAUDE.md / ADR 0002
+ * rank above cosmetic robustness). A consumer must handle a token it has not seen.
+ *
+ * `status` and `summary` ARE TOLERATED WHEN OMITTED, unlike every other field here (#1560). A daemon
+ * predating 2026-09-10 sends neither key, and `''` is already the in-domain value every mid-life frame
+ * carries, so the narrower reads an absence as `''` rather than dropping the frame (and its `patch`). The
+ * decoded type is therefore always a plain `string`, never optional.
  *
  * NOT A TURN-STREAM ITEM, exactly like its sibling: no `turn_id`, and it opens, closes and alters no
  * turn — a background task's lifecycle is orthogonal to its turn's, which is the whole #1240 point. Hence
@@ -1428,8 +1443,8 @@ export interface BackgroundTaskStartedPayload {
  * and the field has no `omitempty`, so `''` is carried as `''` while an omitted key fails closed.
  *
  * `truncated_fields` names the fields the daemon cut to fit their caps — for THIS frame `task_id` /
- * `patch`, a DIFFERENT pair from the sibling's, which is itself the argument against ever narrowing the
- * element vocabulary to a client-side union (a closed set would fail-close a valid future frame — the
+ * `patch` / `status` / `summary`, a DIFFERENT set from the sibling's, which is itself the argument against
+ * ever narrowing the element vocabulary to a client-side union (a closed set would fail-close a valid future frame — the
  * drift risk CLAUDE.md / ADR 0002 rank above cosmetic robustness). `null` means NOTHING WAS CUT and is a
  * distinct value from `[]`, never to be collapsed into it.
  *
@@ -1445,11 +1460,23 @@ export interface BackgroundTaskStartedPayload {
  * The daemon doc states this rule in THIS frame's section rather than delegating it to the sibling,
  * because a patch's structured shape makes it the more tempting thing to feed somewhere that runs it.
  * See #565 (this decode), #567 (the task store) and #568 (the panel).
+ *
+ * SECURITY: `summary` is MODEL-AUTHORED FREE TEXT and, in the one captured terminal frame, it IS the
+ * task's command line — the family's second field of that class after the sibling's `description`. Unlike
+ * `patch` it is prose a client will actually render, so it reaches a template by the normal path. The
+ * daemon caps it at construction (`maxTaskSummary`) and names a cut in `truncated_fields`; the frame-level
+ * MAX_PLAINTEXT_BYTES guard is the only client bound. Render `summary` and `status` as INERT PLAIN TEXT
+ * only: never execute or re-shell them, never feed them to an HTML sink, an attribute, a URL, a filename,
+ * a cache key or a log. The decode logs neither (#1560).
  */
 export interface BackgroundTaskUpdatedPayload {
   conversation_id: string
   task_id: string
   patch: string
+  /** Terminal state claude reported; '' on a mid-life frame (or from a pre-#2245 daemon). Open string. */
+  status: string
+  /** claude's account of the finished task; '' on a mid-life frame. Untrusted free text, never logged. */
+  summary: string
   truncated_fields: string[] | null
 }
 

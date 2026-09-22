@@ -3160,13 +3160,27 @@ describe('createDaemonConnection — background_task_started stream (#564)', () 
 })
 
 describe('createDaemonConnection — background_task_updated stream (#565)', () => {
-  /** The daemon's canonical fixture — four distinct, non-empty values, `patch` cut mid-token by the
-   *  daemon and therefore NOT valid JSON (#565). */
+  /** The daemon's canonical MID-LIFE fixture — `patch` cut mid-token by the daemon and therefore NOT
+   *  valid JSON (#565), `status` / `summary` empty because claude's `task_updated` line fills neither
+   *  (#1560). */
   const UPDATED = {
     conversation_id: 'conv-1',
     task_id: 'task_01ABC',
     patch: '{"is_backgrounded":tr',
+    status: '',
+    summary: '',
     truncated_fields: ['patch']
+  }
+
+  /** The daemon's TERMINAL golden fixture (#1560) — the other half: `status` and `summary` set, `patch`
+   *  empty. The `summary` is the task's own command line. */
+  const TERMINAL = {
+    conversation_id: 'conv-1',
+    task_id: 'task_01ABC',
+    patch: '',
+    status: 'completed',
+    summary: 'cat /tmp/pyry-fifo',
+    truncated_fields: null
   }
 
   /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
@@ -3178,7 +3192,7 @@ describe('createDaemonConnection — background_task_updated stream (#565)', () 
     return ctx
   }
 
-  it('emits exactly one backgroundTaskUpdated carrying all four fields, conversationId KEPT', async () => {
+  it('emits exactly one backgroundTaskUpdated carrying all six fields, conversationId KEPT', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
@@ -3186,16 +3200,81 @@ describe('createDaemonConnection — background_task_updated stream (#565)', () 
 
     // A whole-object assertion, which is what makes a swapped or dropped field fail (AC1) — and what
     // catches a `description` / `taskType` left over from cloning the sibling, since an extra emitted
-    // property fails toEqual.
+    // property fails toEqual. A mid-life frame carries `status` / `summary` across as '' (#1560).
     expect(emitted(sink).slice(before)).toEqual([
       {
         type: 'backgroundTaskUpdated',
         conversationId: 'conv-1',
         taskId: 'task_01ABC',
         patch: '{"is_backgrounded":tr',
+        status: '',
+        summary: '',
         truncatedFields: ['patch']
       }
     ])
+  })
+
+  it('carries a terminal frame\'s status and summary across IPC verbatim, patch "" included (#1560)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: backgroundTaskUpdatedPlaintext(TERMINAL) })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      {
+        type: 'backgroundTaskUpdated',
+        conversationId: 'conv-1',
+        taskId: 'task_01ABC',
+        patch: '',
+        status: 'completed',
+        summary: 'cat /tmp/pyry-fifo',
+        truncatedFields: null
+      }
+    ])
+  })
+
+  it.each(['failed', 'stopped', '  future-state <x>  '])(
+    'carries a status token %j the daemon has never emitted unchanged (#1560)', async (status) => {
+      const { sink, drivers } = await connected()
+      const before = emitted(sink).length
+
+      drivers[0].emit({
+        type: 'message',
+        plaintext: backgroundTaskUpdatedPlaintext({ ...TERMINAL, status })
+      })
+
+      const events = emitted(sink).slice(before) as Array<{ status?: unknown; summary?: unknown }>
+      expect(events).toHaveLength(1)
+      expect(events[0].status).toBe(status)
+      expect(events[0].summary).toBe('cat /tmp/pyry-fifo')
+    }
+  )
+
+  it('still emits a frame from a daemon predating status / summary, reading each as "" (#1560)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+    const oldDaemon: Record<string, unknown> = { ...UPDATED }
+    delete oldDaemon.status
+    delete oldDaemon.summary
+
+    drivers[0].emit({ type: 'message', plaintext: backgroundTaskUpdatedPlaintext(oldDaemon) })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      expect.objectContaining({ patch: '{"is_backgrounded":tr', status: '', summary: '' })
+    ])
+  })
+
+  it('drops a frame whose status is present but not a string, without emitting or throwing (#1560)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: backgroundTaskUpdatedPlaintext({ ...TERMINAL, status: null })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
   })
 
   it('KEEPS conversation_id — daemon state keyed by id, not a turn-stream item (the queueState rule)', async () => {
@@ -3267,7 +3346,7 @@ describe('createDaemonConnection — background_task_updated stream (#565)', () 
     expect(events[0].truncatedFields).toEqual(['task_id', 'patch'])
   })
 
-  it('emits exactly the five modeled properties, never a spread of the decoded payload', async () => {
+  it('emits exactly the seven modeled properties, never a spread of the decoded payload', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
@@ -3280,6 +3359,8 @@ describe('createDaemonConnection — background_task_updated stream (#565)', () 
     expect(Object.keys(events[0]).sort()).toEqual([
       'conversationId',
       'patch',
+      'status',
+      'summary',
       'taskId',
       'truncatedFields',
       'type'

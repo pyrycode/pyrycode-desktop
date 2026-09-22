@@ -443,6 +443,9 @@ alongside the sections that describe what each spec proves.
 - [#1566 architecture spec](../../specs/architecture/1566-turn-stats-hover.md) — the hover-stats design,
   and [thread timeline internals](thread-timeline-internals.md#types) for `TurnEndMetrics`'s fields on
   `turnBoundary` (#1565), which this ticket reads and never writes.
+- [Channel info — session running cost](conversation-shell-session-and-channel-info.md#session-running-cost-as-claudes-estimate-1567) —
+  the other consumer of `turnBoundary.costUsdTotal`, showing the session's latest running total rather
+  than this section's per-turn figures.
 - [#1113 architecture spec](../../specs/architecture/1113-bubble-body-medium-type.md) — the body-medium
   retune, the Figma variable read confirming title-small was withdrawn from the message nodes, and the
   comment sweep that found the three premise-comments naming the token plus the one that only names the

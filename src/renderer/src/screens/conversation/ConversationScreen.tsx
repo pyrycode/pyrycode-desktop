@@ -146,6 +146,7 @@ import {
 } from '../../store/questionPicksStore'
 import { sessionBoundaryTitle } from './sessionBoundaryViewModel'
 import { compactionBoundaryTitle } from './compactionBoundaryViewModel'
+import { formatSessionCost, latestSessionCostUsd } from './sessionCost'
 import { formatLastActivity, titleFor } from '../channels/channelListViewModel'
 // #1440 renamed this module for its new title. `requestRenameConversation` KEEPS its name: it owns the
 // `renameConversation` wire literal, and renaming the helper would drift it from the verb it sends.
@@ -575,6 +576,8 @@ export function ConversationScreen({
         <ChannelInfoSheet
           conversation={activeConversation}
           now={now}
+          // #1567: scanned only while the sheet is mounted; `items` is the open conversation's thread.
+          sessionCostUsd={latestSessionCostUsd(items)}
           onClose={() => setChannelInfoOpen(false)}
         />
       )}
@@ -2938,6 +2941,8 @@ const CHANNEL_INFO_ACTIONS_HEADER = 'Actions'
 const CHANNEL_INFO_WORKSPACE_LABEL = 'Workspace'
 const CHANNEL_INFO_LAST_ACTIVITY_LABEL = 'Last activity'
 const CHANNEL_INFO_EMPTY_COPY = 'No conversation details yet'
+// #1567: the one label here with an apostrophe, so the static-markup tests match `&#x27;`.
+const CHANNEL_INFO_COST_LABEL = "Cost (Claude's estimate)"
 const CHANNEL_ID_PREFIX = 'Channel ID: '
 // Distinct from STATUS_SHEET_TITLE_ID so both sheets can coexist without duplicate ids.
 const CHANNEL_INFO_SHEET_TITLE_ID = 'channel-info-sheet-title'
@@ -2969,7 +2974,8 @@ export function ChannelInfoSheetView({
   onDeleteConfirm,
   onDeleteCancel,
   systemPromptSection,
-  sessionFacts = null
+  sessionFacts = null,
+  sessionCostUsd = null
 }: {
   conversation: ConversationCreatedPayload | null
   now?: number
@@ -2994,6 +3000,8 @@ export function ChannelInfoSheetView({
   // The container supplies it ONLY in the `conversation !== null` branch, exactly like the three action
   // callbacks above, so the list-opened graceful-empty case grows no editor.
   sessionFacts?: ReturnType<ReturnType<typeof selectSessionFactsFor>>
+  // #1567: the latest positive running cost from `latestSessionCostUsd`, or null for no row.
+  sessionCostUsd?: number | null
   systemPromptSection?: ReactNode
 }): JSX.Element {
   // Title: the daemon name when present; the client-owned unnamed label when `name === null` (a distinct
@@ -3073,6 +3081,13 @@ export function ChannelInfoSheetView({
                   </div>
                 )
               })}
+              {/* #1567: claude's unverified estimate, so the label attributes it to Claude. */}
+              {sessionCostUsd !== null && (
+                <div className="channel-info__row">
+                  <span className="channel-info__row-label">{CHANNEL_INFO_COST_LABEL}</span>
+                  <span className="channel-info__row-value">{formatSessionCost(sessionCostUsd)}</span>
+                </div>
+              )}
             </>
           )}
           {systemPromptSection}
@@ -3180,10 +3195,12 @@ export function requestDeleteConversation(
 function ChannelInfoSheet({
   conversation,
   now,
+  sessionCostUsd,
   onClose
 }: {
   conversation: ConversationCreatedPayload | null
   now: number
+  sessionCostUsd: number | null
   onClose: () => void
 }): JSX.Element {
   // #368: the Rename dialog's per-interaction state — a screen-local copy of the ChannelList shape
@@ -3223,6 +3240,7 @@ function ChannelInfoSheet({
       <ChannelInfoSheetView
         conversation={conversation}
         sessionFacts={sessionFacts}
+        sessionCostUsd={sessionCostUsd}
         now={now}
         onClose={onClose}
         // Supply onRename ONLY for a non-null conversation — a null active conversation yields no button

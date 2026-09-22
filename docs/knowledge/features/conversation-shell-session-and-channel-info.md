@@ -229,6 +229,44 @@ The fake-transport test also observes updates while open and switches both ways 
 conversations. Store and cleanup tests cover complete replacement, isolation, hostile Map keys and
 pairing reset. See [verification boundaries](development-verification.md#what-each-test-tier-proves).
 
+### Session running cost, as Claude's estimate ([#1567](https://github.com/pyrycode/pyrycode-desktop/issues/1567))
+
+A third Session row, after Claude version and Reported permission mode: **Cost (Claude's estimate)**,
+`$0.42 est.`. Unlike the two facts rows above (a `session_facts` frame retained in a store), this reads
+`costUsdTotal` off `turnBoundary` items already in the open conversation's timeline — [thread timeline
+internals](thread-timeline-internals.md#types) has that field's shape, landed by #1565 and first read by
+[#1566's turn-stats hover](conversation-shell-message-bubble.md#turn-stats-on-hover-1566), a sibling
+consumer of the same field. `costUsdTotal` is claude's own running total for the *whole session*, an
+estimate the daemon does not verify — pyrycode's `docs/protocol-mobile.md` (§ `turn_end`) forbids
+presenting it as the app's own accounting, hence the label attributing it to Claude rather than a plain
+"Cost".
+
+**`latestSessionCostUsd(items)`, in the new `sessionCost.ts`,** scans the timeline backwards and returns
+the first `turnBoundary`'s `costUsdTotal` that is present, finite and above zero; `null` with none.
+Never summed — each reported value already includes every turn before it — so a later boundary whose
+value is absent, `0`, negative or non-finite is skipped rather than replacing the earlier positive one.
+`formatSessionCost(usd)` rounds to cents with `toFixed(2)`. `ConversationScreen` calls
+`latestSessionCostUsd(items)` only inside the `channelInfoOpen` branch, so the backward scan runs while
+the sheet is mounted, not on every timeline update; the verifier flagged the resulting per-render
+recompute as a NIT and left it, since the scan is cheap and the sheet's re-render rate is already low.
+`ChannelInfoSheetView` takes the result as `sessionCostUsd?: number | null` (default `null`) and renders
+the row only when it is non-null, after the two facts rows and inside the same `conversation !== null`
+block — no cost row for the graceful-empty, no-active-conversation case either, and none until a turn has
+actually reported a positive figure.
+
+**A `/clear` or new session is not a reset.** The ticket's rule is the most recent positive value *in the
+open conversation's timeline*, applied literally: the previous session's total keeps showing across a
+`sessionBoundary` until the new session's own first turn ends and reports its own `costUsdTotal`. Flagged
+in the PR as a possible follow-up if that reads as misleading to an operator, not fixed here.
+
+**Testing.** `sessionCost.test.ts` pins the latest-not-summed rule, that a later absent/zero/negative/NaN/
+infinite value never overwrites an earlier positive one, the `null` cases, and the three formatting
+examples. `SessionFacts.test.tsx` adds the row's presence with a cost and absence without one, plus its
+position between the Session header and Actions. `e2e/channel-info-session-cost.spec.ts` (fake transport)
+opens the sheet before any turn (no row), sends three messages whose `turn_end` frames report 0.10, then
+0.42, then none, and confirms the sheet shows exactly `$0.42 est.` — never a summed `$0.52` — under the
+Claude-attributed label.
+
 **Rename action ([#368](../codebase/368.md)), retitled Edit chat ([#1440](rename-conversation-dialog.md)),
 split into Edit channel / Edit chat by conversation kind ([#1431](edit-channel-dialog.md)).**
 The Actions slot's first filler: a Material 3 tonal pill (Figma 20:89, `.channel-info__action`)

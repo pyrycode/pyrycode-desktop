@@ -9,7 +9,10 @@ import type {
   SetSessionSettingsPayload,
   SessionSettingsUpdatedPayload,
   WireModelOption,
-  ModelListPayload
+  ModelListPayload,
+  NewSessionPayload,
+  ResettingPayload,
+  AssistantDeltaPayload
 } from '../src/shared/wire/types'
 
 // Fake-stack UI e2e for #1192 — an unsolicited `session_transition` describing conversation A, arriving
@@ -255,4 +258,143 @@ test('an idle-eviction marker for another chat never steers this chat’s settin
       .filter((e) => e.type === 'set_session_settings')
       .map((e) => (e.payload as SetSessionSettingsPayload).session_id)
   ).not.toContain(SESSION_A_ROTATED)
+})
+
+// #1559 — the SEPARATOR half of the same cross-chat marker. The test above proves a marker naming A never
+// steers B's settings write; this one proves it never draws B's Session reset separator either. The drive
+// is the live reproduction: reset A from the Actions menu, open B while A's wrap-up turn runs, and let
+// A's reset finish while B is on screen. Before #1559 the separator was filed into the chat on screen,
+// so it drew in B and never in A, and nothing backfilled A later.
+//
+// Every pushed frame is one the daemon produces for this sequence: `resetting` and `session_transition`
+// naming the chat that was reset, and an `assistant_delta` naming B, the text of a turn running there.
+// Only the timing is the test's, and the timing is the defect.
+
+// Client-owned labels, duplicated as literals — composer-new-session.spec.ts's load-bearing locators.
+const ACTIONS_LABEL = 'Actions'
+const RESET_SESSION_ROW = 'Reset session'
+const WRAPPING_UP_COPY = 'Resetting: writing the handoff note…'
+const BARRIER_TEXT = 'bravo-turn-after-alpha-reset'
+
+function resettingFrame(conversationId: string): Uint8Array {
+  return encodeEnvelope({
+    id: REPLY_ENVELOPE_ID,
+    type: 'resetting',
+    ts: FIXED_TS,
+    payload: {
+      conversation_id: conversationId,
+      active: true,
+      phase: 'wrapping_up',
+      handoff: 'pending'
+    } satisfies ResettingPayload
+  })
+}
+
+/** The marker a finished Reset session produces — `clear`, the reason the live defect's log entry held. */
+function resetFinishedFrame(conversationId: string): Uint8Array {
+  return encodeEnvelope({
+    id: REPLY_ENVELOPE_ID,
+    type: 'session_transition',
+    ts: FIXED_TS,
+    payload: {
+      conversation_id: conversationId,
+      previous_session_id: SESSION_A,
+      new_session_id: SESSION_A_ROTATED,
+      reason: 'clear',
+      occurred_at: FIXED_TS,
+      workspace_cwd: null
+    } satisfies SessionTransitionPayload
+  })
+}
+
+function assistantDeltaFrame(conversationId: string, text: string): Uint8Array {
+  return encodeEnvelope({
+    id: REPLY_ENVELOPE_ID,
+    type: 'assistant_delta',
+    ts: FIXED_TS,
+    payload: {
+      conversation_id: conversationId,
+      turn_id: 'turn-bravo',
+      seq: 0,
+      text
+    } satisfies AssistantDeltaPayload
+  })
+}
+
+test('a reset that finishes while another chat is open draws its separator in the chat that was reset', async ({
+  launchPairedApp
+}) => {
+  const newSessions: NewSessionPayload[] = []
+  const requests: CapturedRequest[] = []
+  const stateFake = conversationStateFake({ conversations: [SEED] })
+  const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
+    const envelope = decodeEnvelope(inbound)
+    // `new_session` is answered with nothing, the real daemon's behaviour: the reset's progress arrives
+    // as unsolicited pushes, which this drive times itself.
+    if (envelope.type === 'new_session') {
+      newSessions.push(envelope.payload as NewSessionPayload)
+      return []
+    }
+    // Captured only as the positive signal that a chat has opened; the run configuration is not what
+    // this test reads, so the ask stays unanswered.
+    if (envelope.type === 'request_session_settings') {
+      requests.push({
+        conversationId: (envelope.payload as { conversation_id: string }).conversation_id,
+        envelopeId: envelope.id
+      })
+      return []
+    }
+    return stateFake(inbound)
+  }
+
+  const { page, daemon } = await launchPairedApp({ buildReplyFrames })
+  const delimiters = page.locator('.session-delimiter')
+  const statusLabel = page.locator('.composer-status .conversation__thinking')
+
+  // --- 1. Reset A from the Actions menu. The captured frame names A, so the marker pushed later is the
+  // answer to this drive's own reset. ---
+  await page.getByRole('button', { name: ACTIONS_LABEL, exact: true }).click()
+  await page
+    .getByRole('menu', { name: ACTIONS_LABEL, exact: true })
+    .getByRole('menuitem', { name: RESET_SESSION_ROW })
+    .click()
+  await expect.poll(() => newSessions.length, { timeout: ROUNDTRIP_TIMEOUT_MS }).toBe(1)
+  expect(newSessions[0]).toEqual({ conversation_id: SEED.id })
+
+  // A's wrap-up turn starts, and A's composer says so.
+  daemon.pushFrame(resettingFrame(SEED.id))
+  await expect(statusLabel).toHaveText(WRAPPING_UP_COPY, { timeout: ROUNDTRIP_TIMEOUT_MS })
+
+  // --- 2. Open B while A's `resetting` phase runs. The create round trip drives the nav, and B's own
+  // run-configuration ask is the positive proof that B is the chat on screen. ---
+  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
+  await expect
+    .poll(() => requests.find((r) => r.conversationId !== SEED.id)?.conversationId, {
+      timeout: ROUNDTRIP_TIMEOUT_MS
+    })
+    .toBeDefined()
+  const bravoId = requests.find((r) => r.conversationId !== SEED.id)?.conversationId ?? ''
+  // The reset label belongs to A's thread, so B's composer shows none.
+  await expect(statusLabel).toHaveCount(0)
+
+  // --- 3. A's reset finishes while B is on screen. ---
+  daemon.pushFrame(resetFinishedFrame(SEED.id))
+
+  // --- 4. THE BARRIER. The Noise transport is an ordered per-direction counter, so a frame pushed AFTER
+  // the marker whose effect is visible proves the marker has already been consumed. Unlike a re-pushed
+  // snapshot, this bubble did not exist before the push, so waiting for it cannot pass early. ---
+  daemon.pushFrame(assistantDeltaFrame(bravoId, BARRIER_TEXT))
+  await expect(
+    page.locator('.bubble[data-thread-role="assistant"]').filter({ hasText: BARRIER_TEXT })
+  ).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
+
+  // --- 5. B, the chat on screen when A's marker arrived, shows no separator. Before #1559 it showed one. ---
+  await expect(delimiters).toHaveCount(0)
+
+  // --- 6. Back in A: exactly one separator, and the reset label is gone. The label is cleared by the
+  // same boundary the separator is drawn from, so a boundary misfiled into B would leave A's composer
+  // stuck on the wrap-up copy as well as missing its separator. ---
+  await page.locator('.channel-list__row-open').filter({ hasText: SEED.name }).click()
+  await expect(delimiters).toHaveCount(1, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(statusLabel).toHaveCount(0)
 })

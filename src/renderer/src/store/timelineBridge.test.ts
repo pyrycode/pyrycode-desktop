@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import type { DaemonEvent } from '@shared/ipc/events'
+import type { DaemonEvent, HistoryTimelineEntry } from '@shared/ipc/events'
 import type { HelloAckPayload, MessagePayload, ErrorPayload } from '@shared/wire/types'
 import {
   translateTimelineEvent,
@@ -19,8 +19,10 @@ import {
 } from './timelineStore'
 import {
   createConversationTimelineStore,
-  selectTimelineFor
+  selectTimelineFor,
+  selectLiveJoinKeysFor
 } from './conversationTimelineStore'
+import { reduceHistoryPage } from './historyPageBridge'
 import type { ThreadEvent, ThreadItem, TimelineState } from './threadTimeline'
 
 // Fixtures — plain wire-shaped data, mirroring daemonEventBridge.test.ts. No transport involved.
@@ -774,9 +776,10 @@ describe('timelineTargetFor', () => {
     }
   })
 
-  // The two owned arms that carry no routing key. They are NOT dormant — each still reaches the
-  // flat store — but there is nothing to attribute them to, and inventing one is what AC3 bans.
-  it('returns null for sessionTransition — it carries newSessionId, not a conversation id', () => {
+  // #1559: the marker is routed by the conversation the FRAME names, never by the chat on screen. It
+  // pinned `null` until then, which is what let a reset in A draw its separator in whatever chat B the
+  // operator had switched to during the wrap-up turn.
+  it("returns sessionTransition its OWN conversation id, not newSessionId", () => {
     const event: DaemonEvent = {
       type: 'sessionTransition',
       conversationId: 'conv-transition',
@@ -785,9 +788,11 @@ describe('timelineTargetFor', () => {
       occurredAt: '2026-07-10T00:00:00.000000000Z',
       workspaceCwd: '/home/user/next'
     }
-    expect(timelineTargetFor(event)).toBeNull()
+    expect(timelineTargetFor(event)).toBe('conv-transition')
   })
 
+  // The one owned arm that carries no routing key. It is NOT dormant — it still reaches the flat
+  // store — but there is nothing to attribute it to, and inventing one is what AC3 bans.
   it('returns null for connected — a connection edge has no conversation by nature', () => {
     expect(timelineTargetFor({ type: 'connected', ack })).toBeNull()
   })
@@ -807,7 +812,9 @@ describe('timelineWriteTarget (#785)', () => {
     expect(getOpen).not.toHaveBeenCalled()
   })
 
-  it('files a sessionBoundary into the conversation on screen', () => {
+  // #1559: a boundary never reads the screen. Its own attribution is the only route in production;
+  // without one it is dropped from the keyed path rather than filed into whatever chat is open.
+  it('never files a sessionBoundary into the conversation on screen, getter untouched', () => {
     const getOpen = vi.fn((): string | null => 'conv-open')
     const event: ThreadEvent = {
       type: 'sessionBoundary',
@@ -816,8 +823,8 @@ describe('timelineWriteTarget (#785)', () => {
       occurredAt: '2026-07-10T00:00:00.000000000Z'
     }
 
-    expect(timelineWriteTarget(event, null, getOpen)).toBe('conv-open')
-    expect(getOpen).toHaveBeenCalledTimes(1)
+    expect(timelineWriteTarget(event, null, getOpen)).toBeNull()
+    expect(getOpen).not.toHaveBeenCalled()
   })
 
   it('files a reconnect into the conversation on screen', () => {
@@ -828,13 +835,11 @@ describe('timelineWriteTarget (#785)', () => {
     expect(timelineWriteTarget({ type: 'reconnected' }, null, () => null)).toBeNull()
   })
 
-  // Still unreachable in production, but for a different reason since #1192. The wire widening this
-  // pin was written against has HAPPENED — `sessionTransition` carries a `conversationId` now — and
-  // `conversationIdOf` deliberately goes on returning `null` for that arm, because routing the
-  // delimiter by it is its own deliverable. So the pin's value is unchanged and its premise is
-  // narrower: the event's own attribution wins, so the switch can never silently override a real id
-  // on the day that arm starts reporting one.
-  it('the precedence pin: an id on an id-less arm still wins over the open conversation', () => {
+  // The PRODUCTION path since #1559. #1192 gave `sessionTransition` its `conversationId`, and #1559 made
+  // `timelineTargetFor` return it, so every boundary now arrives here attributed. The event's own id
+  // wins and the open conversation is never read — the precedence this pin was written to hold open
+  // for the day that arm started reporting one.
+  it('the precedence pin: a sessionBoundary keeps its own id over the open conversation', () => {
     const getOpen = vi.fn((): string | null => 'conv-open')
     const event: ThreadEvent = {
       type: 'sessionBoundary',
@@ -1601,11 +1606,11 @@ describe('subscribeTimeline', () => {
       flat: ReturnType<typeof createTimelineStore>,
       keyed: ReturnType<typeof createConversationTimelineStore>,
       getOpenConversationId: () => string | null
-    ): (event: ThreadEvent, conversationId: string | null) => void {
-      return (event, conversationId) => {
+    ): (event: ThreadEvent, conversationId: string | null, joinKey?: string) => void {
+      return (event, conversationId, joinKey) => {
         flat.getState().dispatch(event)
         const target = timelineWriteTarget(event, conversationId, getOpenConversationId)
-        if (target !== null) keyed.getState().dispatchFor(target, event)
+        if (target !== null) keyed.getState().dispatchFor(target, event, joinKey)
       }
     }
 
@@ -1709,53 +1714,12 @@ describe('subscribeTimeline', () => {
       expect(sliceOf(keyed, 'conv-open')).toBe(openBefore)
     })
 
-    // #785 made this test's AC3 half CONDITIONAL — with a conversation open both arms now file into it
-    // — so the name has to say which case it pins. Its AC4 half was always unconditional and is
-    // unchanged: the flat store receives both arms exactly as it does today.
-    it('AC3/AC4: with NO conversation open, the two id-less arms reach flat and create NO slice', () => {
+    // #1559 split this test's two arms apart: `sessionTransition` is attributed now, so with nothing
+    // open it creates ITS OWN slice, while `connected` is still the arm with no conversation and still
+    // creates none. The AC4 half is unchanged: the flat store receives both arms exactly as before.
+    it('AC3/AC4: with NO conversation open, a boundary creates its own slice and connected none', () => {
       const { bridge, flat, keyed } = wired()
 
-      const idLess: DaemonEvent[] = [
-        {
-          type: 'sessionTransition',
-          conversationId: 'conv-transition',
-          newSessionId: 'sess-2',
-          reason: 'workspace_change',
-          occurredAt: '2026-07-10T00:00:00.000000000Z',
-          workspaceCwd: '/home/user/next'
-        },
-        { type: 'connected', ack }
-      ]
-      for (const event of idLess) bridge.emit(event)
-
-      // AC4: exactly the flat rows these arms produce today — sessionBoundary tail-appends;
-      // `connected` → `reconnected` reconciles chrome and adds no row.
-      expect(selectItems(flat.getState()).map((i) => i.kind)).toEqual(['sessionBoundary'])
-      // AC3: nothing was attributed, so no slice was invented for the open conversation or any other.
-      expect(keyed.getState().timelines.size).toBe(0)
-    })
-
-    // The probe stays `sessionTransition` (#784 chose it, #785 keeps it) because it tail-appends a real
-    // row: a write landing on the wrong slice is visible in that slice's items, not merely in a fresh
-    // reference. Asserting against an EMPTY map would pass for the wrong reason — misfiling needs
-    // somewhere to misfile into — so both tests below hold a slice for a conversation that is NOT the
-    // one on screen.
-    it('AC1: a session boundary lands in the conversation ON SCREEN, not in another held slice', () => {
-      const { bridge, keyed, setOpen } = wired()
-
-      setOpen('conv-a')
-      bridge.emit({
-        type: 'assistantDelta',
-        turnId: 'A',
-        seq: 0,
-        text: 'held',
-        conversationId: 'conv-a'
-      })
-      const aBefore = sliceOf(keyed, 'conv-a')
-      expect(aBefore).not.toBeNull()
-
-      // The operator switches chats between the two events — the write follows the SCREEN, per event.
-      setOpen('conv-b')
       bridge.emit({
         type: 'sessionTransition',
         conversationId: 'conv-transition',
@@ -1764,13 +1728,64 @@ describe('subscribeTimeline', () => {
         occurredAt: '2026-07-10T00:00:00.000000000Z',
         workspaceCwd: '/home/user/next'
       })
+      bridge.emit({ type: 'connected', ack })
 
-      expect(sliceOf(keyed, 'conv-b')?.items.map((i) => i.kind)).toEqual(['sessionBoundary'])
-      // conv-a is untouched BY REFERENCE — not merely equal.
-      expect(sliceOf(keyed, 'conv-a')).toBe(aBefore)
+      // AC4: exactly the flat rows these arms produce — sessionBoundary tail-appends;
+      // `connected` → `reconnected` reconciles chrome and adds no row.
+      expect(selectItems(flat.getState()).map((i) => i.kind)).toEqual(['sessionBoundary'])
+      // The boundary's slice is created from the frame's own id; nothing is invented for `connected`.
+      expect([...keyed.getState().timelines.keys()]).toEqual(['conv-transition'])
+      expect(sliceOf(keyed, 'conv-transition')?.items.map((i) => i.kind)).toEqual(['sessionBoundary'])
     })
 
-    it('AC1: a session boundary tail-appends into the thread being read, in arrival order', () => {
+    // The probe stays `sessionTransition` (#784 chose it, #785 keeps it) because it tail-appends a real
+    // row: a write landing on the wrong slice is visible in that slice's items, not merely in a fresh
+    // reference. Asserting against an EMPTY map would pass for the wrong reason — misfiling needs
+    // somewhere to misfile into — so the test below holds a slice for BOTH conversations.
+    //
+    // #1559 — this is the live defect: reset A, switch to B during the wrap-up turn, and the separator
+    // drew in B. It lands in the chat the frame NAMES now, whichever chat is on screen.
+    it('AC1: a session boundary lands in the conversation it NAMES, not the one ON SCREEN', () => {
+      const { bridge, keyed, setOpen } = wired()
+
+      setOpen('conv-a')
+      bridge.emit({
+        type: 'assistantDelta',
+        turnId: 'A',
+        seq: 0,
+        text: 'held-a',
+        conversationId: 'conv-a'
+      })
+      // The operator switches chats before the marker arrives — B is on screen and holds a slice too.
+      setOpen('conv-b')
+      bridge.emit({
+        type: 'assistantDelta',
+        turnId: 'B',
+        seq: 0,
+        text: 'held-b',
+        conversationId: 'conv-b'
+      })
+      const bBefore = sliceOf(keyed, 'conv-b')
+      expect(bBefore).not.toBeNull()
+
+      bridge.emit({
+        type: 'sessionTransition',
+        conversationId: 'conv-a',
+        newSessionId: 'sess-2',
+        reason: 'clear',
+        occurredAt: '2026-07-10T00:00:00.000000000Z',
+        workspaceCwd: null
+      })
+
+      expect(sliceOf(keyed, 'conv-a')?.items.map((i) => i.kind)).toEqual([
+        'assistantText',
+        'sessionBoundary'
+      ])
+      // conv-b — the chat on screen — is untouched BY REFERENCE, not merely equal.
+      expect(sliceOf(keyed, 'conv-b')).toBe(bBefore)
+    })
+
+    it('AC1: a boundary naming the open conversation still tail-appends there, in arrival order', () => {
       const { bridge, keyed, setOpen } = wired()
 
       setOpen('conv-a')
@@ -1783,7 +1798,7 @@ describe('subscribeTimeline', () => {
       })
       bridge.emit({
         type: 'sessionTransition',
-        conversationId: 'conv-transition',
+        conversationId: 'conv-a',
         newSessionId: 'sess-2',
         reason: 'workspace_change',
         occurredAt: '2026-07-10T00:00:00.000000000Z',
@@ -1794,6 +1809,47 @@ describe('subscribeTimeline', () => {
         'assistantText',
         'sessionBoundary'
       ])
+    })
+
+    // #1559 AC2 — the boundary's live join key is recorded against the slice the frame NAMES, so a
+    // served page of A holding the same `session_transition` entry draws no second separator. Before
+    // #1559 the key was withheld (the slice was inferred from the screen) and the page's copy always drew.
+    it('AC2: a boundary records its join key on ITS slice, and A’s page copy draws no second row', () => {
+      const { bridge, keyed, setOpen } = wired()
+      const ts = '2026-09-22T12:05:53.000000000Z'
+
+      setOpen('conv-b')
+      bridge.emit({
+        type: 'sessionTransition',
+        conversationId: 'conv-a',
+        newSessionId: 'sess-2',
+        reason: 'clear',
+        occurredAt: ts,
+        workspaceCwd: null,
+        daemonTs: ts
+      })
+
+      const liveKeysA = selectLiveJoinKeysFor('conv-a')(keyed.getState())
+      expect([...liveKeysA]).toEqual([joinKeyFor('sessionTransition', ts)])
+      expect(selectLiveJoinKeysFor('conv-b')(keyed.getState()).size).toBe(0)
+
+      const page: HistoryTimelineEntry[] = [
+        {
+          id: 41,
+          ts,
+          event: {
+            type: 'sessionTransition',
+            newSessionId: 'sess-2',
+            reason: 'clear',
+            occurredAt: ts,
+            workspaceCwd: null
+          }
+        }
+      ]
+      // The control: without the live key the page's copy DOES draw, so the empty result below is the
+      // join's doing rather than an entry the reducer would have dropped anyway.
+      expect(reduceHistoryPage(page).map((i) => i.kind)).toEqual(['sessionBoundary'])
+      expect(reduceHistoryPage(page, liveKeysA)).toEqual([])
     })
 
     // AC2, through both halves of the reducer's Mode A / Mode B split: the chrome scalars reset while
@@ -1978,11 +2034,23 @@ describe('subscribeTimeline — the join key reaches the dispatch (#1225)', () =
   })
 
   it('⭐ mints NO key for an arm the event did not attribute, however it is stamped', () => {
-    // `timelineTargetFor` returns null for `sessionTransition`, and the fan-out then files it into the
-    // conversation ON SCREEN (#785). That slice may not be the one the event belongs to, so a key
-    // recorded against it could suppress THAT conversation's own page entry — a dropped row, the one
-    // direction this join refuses. A key whose conversation was inferred rather than asserted is never
-    // minted; the cost is a duplicate `Session reset` divider, which is the fail-open side.
+    // `timelineTargetFor` returns null for `connected`, and the fan-out then files its reconcile into
+    // the conversation ON SCREEN (#785). That slice is not one the event named, so a key recorded
+    // against it could suppress THAT conversation's own page entry — a dropped row, the one direction
+    // this join refuses. A key whose conversation was inferred rather than asserted is never minted.
+    // The emit never stamps `connected`; the stamp is forced here so the guard, not the missing
+    // stamp, is what the assertion reads.
+    const bridge = fakeBridge()
+    const dispatch = vi.fn()
+    subscribeTimeline(bridge.onDaemonEvent, dispatch)
+
+    bridge.emit({ type: 'connected', ack, daemonTs: '2026-09-07T10:00:00Z' })
+    expect(dispatch).toHaveBeenCalledWith({ type: 'reconnected' }, null, undefined)
+  })
+
+  // #1559: `sessionTransition` was this guard's example until the marker was routed by its own
+  // `conversationId`. It is attributed now, so it contributes its key like any stamped arm.
+  it('passes a stamped sessionTransition its own conversation id and its join key', () => {
     const bridge = fakeBridge()
     const dispatch = vi.fn()
     subscribeTimeline(bridge.onDaemonEvent, dispatch)
@@ -1996,6 +2064,10 @@ describe('subscribeTimeline — the join key reaches the dispatch (#1225)', () =
       workspaceCwd: null,
       daemonTs: '2026-09-07T10:00:00Z'
     })
-    expect(dispatch).toHaveBeenCalledWith(expect.anything(), null, undefined)
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.anything(),
+      'conv-1',
+      joinKeyFor('sessionTransition', '2026-09-07T10:00:00Z')
+    )
   })
 })

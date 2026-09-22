@@ -407,13 +407,22 @@ This proves Desktop dispatch and UI behavior, without requiring a live Claude re
   and the `useTimelineBridge` fan-out: implementation summary, code review, and lessons learned.
 - [#784 codebase notes](../codebase/784.md) — widens `DaemonEvent.unrecognizedMessage` with
   `conversationId`, moving it into `timelineTargetFor`'s id-carrying group and leaving
-  `sessionTransition`/`connected` as the only two id-less owned arms — the group [#785](https://github.com/pyrycode/pyrycode-desktop/issues/785)
-  goes on to attribute.
+  `sessionTransition`/`connected` as the only two id-less owned arms at the time — the group
+  [#785](https://github.com/pyrycode/pyrycode-desktop/issues/785) goes on to attribute, until
+  [#1559](https://github.com/pyrycode/pyrycode-desktop/issues/1559) narrows it to `connected` alone.
 - [#785](https://github.com/pyrycode/pyrycode-desktop/issues/785) — `timelineWriteTarget`, the write-key
-  resolution downstream of `timelineTargetFor`: files `sessionBoundary`/`reconnected` into the retained
-  slice of the conversation on screen (or drops them, inventing no key, when none is open) via an
-  injected `getOpenConversationId` getter from `App.tsx`, keeping `timelineTargetFor` and
+  resolution downstream of `timelineTargetFor`: at the time, filed `sessionBoundary`/`reconnected` into
+  the retained slice of the conversation on screen (or dropped them, inventing no key, when none was
+  open) via an injected `getOpenConversationId` getter from `App.tsx`, keeping `timelineTargetFor` and
   `subscribeTimeline` byte-identical. Spec: `docs/specs/architecture/785-open-conversation-timeline-arms.md`.
+- [#1559](https://github.com/pyrycode/pyrycode-desktop/issues/1559) — routes the session-reset
+  separator by the frame's own `conversationId` instead of the conversation on screen. Moves
+  `sessionTransition` into `timelineTargetFor`'s id-carrying group (`connected` is now the only arm
+  left there) and drops `sessionBoundary` from `timelineWriteTarget`'s open-conversation fallback
+  (`reconnected` is now the only arm that reads it). Fixes both the cross-conversation misfile (reset
+  channel A, switch to channel B mid wrap-up, and the divider used to draw in B) and the #1225 duplicate
+  divider this arm caused by contributing no live join key. Spec:
+  `docs/specs/architecture/1559-session-boundary-routing.md`.
 - [#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013) — the `now?: () => number` clock
   parameter on `translateTimelineEvent`/`subscribeTimeline`, and `useTimelineBridge`'s `Date.now` wiring:
   implementation summary above. See [Thread timeline § Types](thread-timeline-internals.md#types) for the full

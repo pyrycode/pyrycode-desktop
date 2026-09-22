@@ -171,13 +171,14 @@ path in the same ticket, since it is the timeline's other row-adding writer.
 [#784](../codebase/784.md) widened `DaemonEvent.unrecognizedMessage` with `conversationId`, moving its
 `timelineTargetFor` case out of the id-less group — the arms `timelineTargetFor` returns `null` for and
 (since #785, below) `timelineWriteTarget` reads the open-conversation fallback for is `sessionTransition`
-and `connected` **only**, from #784 onward. `ThreadEvent.unrecognizedMessage` stays four-field; the id
-still stops at the bridge.
+and `connected` **only**, from #784 through #1559 (below). `ThreadEvent.unrecognizedMessage` stays
+four-field; the id still stops at the bridge.
 
 [#785](https://github.com/pyrycode/pyrycode-desktop/issues/785) gives the keyed holder its first write for those remaining two id-less arms —
-`sessionTransition`→`sessionBoundary` and `connected`→`reconnected` — which `timelineTargetFor` still
-maps to `null` and always will (neither's wire payload carries a conversation id; widening either is a
-daemon protocol change, out of scope here). A new sibling pure function, `timelineWriteTarget(event,
+`sessionTransition`→`sessionBoundary` and `connected`→`reconnected` — which `timelineTargetFor` at the
+time mapped to `null` for both (widening either's wire payload with a conversation id looked like a
+daemon protocol change, out of scope here; #1192 did widen `sessionTransition`'s the following cycle, and
+\#1559, below, is where this store started reading it). A new sibling pure function, `timelineWriteTarget(event,
 conversationId, getOpenConversationId)`, resolves the actual write key: the event's own attribution wins
 if present, and only for these two named `ThreadEvent` arms does it fall back to
 `getOpenConversationId()` — an injected getter, never an import, so `timelineBridge.ts`'s import list
@@ -354,3 +355,26 @@ conversation on screen rather than the event's own id, an overlap shaped like a 
 evicted key past `MAX_LIVE_JOIN_KEYS` (512), or two page entries sharing one ambiguous key. Spec, including
 the full security review and both MUST FIX Revisions:
 `docs/specs/architecture/1225-history-live-join.md`.
+
+[#1559](https://github.com/pyrycode/pyrycode-desktop/issues/1559) is the second deliverable #1192 left
+open: `sessionTransition` moves out of `timelineTargetFor`'s id-less group and into the id-carrying one,
+`connected` remains the only arm left there, and `timelineWriteTarget` drops `sessionBoundary` from its
+enumerated open-conversation fallback (`reconnected` is now the only arm that reads it). Observed live
+2026-09-22: reset session in channel A, switch to channel B while the wrap-up turn is still running, and
+the separator drew in B and never in A — `timelineTargetFor` returned `null` for the arm by choice, so
+the fan-out filed it into whichever chat was on screen when the frame arrived. Nothing downstream
+repaired the miss: `historyPageBridge` only backfills a page older than the oldest row a slice already
+holds, so a chat that never received the live boundary never gets it. Mobile already routes this arm
+strictly by the frame's `conversation_id` (mobile #336); this ticket brings the desktop store to the same
+rule. `joinKeyToRecord` needed no code change — its guard was already "mint a key only for an attributed
+arm", and `sessionTransition` is attributed now — so the `Session reset` duplicate divider #1225 named as
+this arm's fail-open cost (above) stops happening as a side effect: the live write and the page's copy of
+the same entry now join under the same key, in the chat the frame actually named. Four tests in
+`timelineBridge.test.ts` were named in the ticket as pinning the pre-#1559 shape and updated in place
+rather than duplicated; three more in the dual-write describe (`fanOut`/`wired`, #756) turned out to pin
+it too — "lands in the conversation ON SCREEN", "tail-appends into the thread being read", and "the two
+id-less arms … create NO slice" — so a screen-routing pin can hide anywhere `wired()` emits a
+`sessionTransition`, not only under a describe block named for this arm. That helper, `fanOut`, had also
+drifted from a faithful copy of `useTimelineBridge`: it dropped the join-key argument, so no test built on
+it could exercise the AC2 join at all until it was added back. Spec:
+`docs/specs/architecture/1559-session-boundary-routing.md`.

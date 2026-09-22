@@ -139,10 +139,10 @@ Ships dormant — [the background-task-roster store (#573, shipped)](../codebase
 
 [#565](../codebase/565.md) added a seventeenth kind, `background_task_updated` → `background-task-updated`
 — the second sibling frame, the peer of `background_task_started` joined on `task_id`: that frame opens a
-task, this one reports what **changed** about it afterwards. `BackgroundTaskUpdatedPayload` is a strict
-subset of `BackgroundTaskStartedPayload` — **four fields, not six**: no `tool_call_id`, no `description`,
-no `task_type`, and it gains `patch`, claude's patch object carried whole and unparsed as an opaque
-string. `parseBackgroundTaskUpdatedPayload` scales `parseBackgroundTaskStartedPayload` down to three
+task, this one reports what **changed** about it afterwards. `BackgroundTaskUpdatedPayload` was, at ship
+time, a strict subset of `BackgroundTaskStartedPayload` — **four fields, not six**: no `tool_call_id`, no
+`description`, no `task_type`, and it gains `patch`, claude's patch object carried whole and unparsed as an
+opaque string. `parseBackgroundTaskUpdatedPayload` scales `parseBackgroundTaskStartedPayload` down to three
 `requireString` calls plus one `requireStringArrayOrNull` call — **no new field narrower**: #564's
 `requireStringArrayOrNull` already encodes this frame's exact `truncated_fields` contract (its docstring
 names this ticket verbatim), so it is called, not re-derived or forked. `patch` needs no new helper
@@ -156,6 +156,17 @@ sibling, the consumer emit **keeps** `conversation_id`, and performs **no join**
 seen opened is a legal frame that emits, not something to buffer. Ships dormant — [the
 background-task-roster store (#573, shipped)](../codebase/573.md) consumes only the `background_task_roster`
 sibling below, not this arm, which stays dormant awaiting #574.
+[#1560](https://github.com/pyrycode/pyrycode-desktop/issues/1560) later widened the payload to the
+daemon's full **six** fields, adding `status` and `summary` — the family's only finish signal (claude's
+`system/task_notification` fills them and leaves `patch` empty; `system/task_updated` is the reverse). Both
+depart from every other field on this frame by tolerating omission: `optionalString(...) ?? ''` reads a
+missing key as `''` rather than failing closed, because a daemon predating 2026-09-10 sends neither key and
+`''` is already the in-domain value every mid-life frame carries on both — a present non-string still
+throws. `status` stays an open string (only `completed` observed; the drift risk of narrowing it ranks
+above cosmetic robustness, same as `truncated_fields`'s element vocabulary). `summary` joins `patch` and
+`description` as this file's third field class of untrusted, model-authored free text — inert display only,
+never logged, never an HTML sink, attribute, URL, filename or cache key. Ships dormant still: no bridge
+reads either field until #1561 (`status`) and #1246 (`summary`).
 
 [#566](../codebase/566.md) added an eighteenth kind, `background_task_roster` → `background-task-roster` —
 the third and last sibling frame, the **aggregate peer** of the two above: they report what happened to

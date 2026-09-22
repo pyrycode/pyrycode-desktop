@@ -583,10 +583,15 @@ describe('subscribeBackgroundTaskRoster', () => {
       })
     })
 
-    it('drives a real store from never-observed → held on one started emit', () => {
+    it('a started emit alone reaches no surface — the conversation stays never-observed (#1563)', () => {
       const { bridge, store } = seam()
       bridge.emit(taskStarted('c1', 't1'))
 
+      // A foreground call gets a start too and no roster ever lists it, so a start alone is not a
+      // background task. It waits outside `rosters`, where the pill and the panel never read.
+      expect(selectRosterFor('c1')(store.getState())).toBeNull()
+
+      bridge.emit(roster('c1', [noCut]))
       expect(heldTask(store, 'c1', 't1')).toEqual({
         taskId: 't1',
         toolCallId: 'tc-1',
@@ -668,6 +673,7 @@ describe('subscribeBackgroundTaskRoster', () => {
     it('a second write for a different conversation does not clobber the first (AC1)', () => {
       const { bridge, store } = seam()
       bridge.emit(roster('c1', [noCut]))
+      bridge.emit(roster('c2', [cutDescription]))
       bridge.emit(taskStarted('c2', 't2'))
 
       // Replacement truth is per key, not a single last-frame slot.
@@ -678,7 +684,10 @@ describe('subscribeBackgroundTaskRoster', () => {
     it('a connected edge returns the reconnecting server’s conversations to null, both kinds (#573 AC5 end-to-end)', () => {
       const { bridge, store } = oneServer(['c1', 'c2'])
       bridge.emit(roster('c1', [noCut]))
+      bridge.emit(roster('c2', [cutDescription]))
       bridge.emit(taskStarted('c2', 't2'))
+      // And a start no roster listed, which must not outlive the edge either (#1563).
+      bridge.emit(taskStarted('c1', 't7'))
       bridge.emit(connectedFrom('srv-a'))
 
       // The reconnect half of #573's AC5: the reconnecting server's literal command lines never
@@ -686,6 +695,7 @@ describe('subscribeBackgroundTaskRoster', () => {
       // deleted as redundant with the store's own test.
       expect(selectRosterFor('c1')(store.getState())).toBeNull()
       expect(selectRosterFor('c2')(store.getState())).toBeNull()
+      expect(store.getState().unlistedStarts.size).toBe(0)
     })
 
     it('keeps observed-empty and never-observed distinct end-to-end, then clears both (#573 AC5)', () => {
@@ -733,6 +743,9 @@ describe('subscribeBackgroundTaskRoster', () => {
         // own end-to-end coverage per join: the `toolCallId` only a started frame reports and the
         // `latestUpdate` only an update frame reports must go with the conversation, not survive it.
         const { bridge, store } = twoServers()
+        const t9 = { ...noCut, task_id: 't9' }
+        bridge.emit(roster('b1', [t9]))
+        bridge.emit(roster('a1', [t9]))
         bridge.emit(taskStarted('b1', 't9'))
         bridge.emit(taskUpdated('b1', 't9'))
         bridge.emit(taskStarted('a1', 't9'))
@@ -781,6 +794,7 @@ describe('subscribeBackgroundTaskRoster', () => {
         // later widening is a deliberate change rather than drift — `clearAllRosters` is the only
         // thing that ever collects such an entry.
         const { bridge, store } = twoServers()
+        bridge.emit(roster('orphan', [{ ...noCut, task_id: 't9' }]))
         bridge.emit(taskStarted('orphan', 't9'))
         bridge.emit(connectedFrom('srv-a'))
         bridge.emit(connectedFrom('srv-b'))

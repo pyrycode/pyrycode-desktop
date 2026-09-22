@@ -818,6 +818,9 @@ describe('clearPairingScopedState', () => {
     expect(rosters.getState().rosters.size).toBe(0)
     expect(selectRosterFor('c-listed')(rosters.getState())).toBeNull()
     expect(selectRosterFor('c-unlisted')(rosters.getState())).toBeNull()
+    // No roster ever listed bt-2, so since #1563 its command line sat outside `rosters` — the
+    // pairing clear must reach it there too.
+    expect(rosters.getState().unlistedStarts.size).toBe(0)
   })
 
   it('real stores: no prompt, suppression entry or rejection from the ended pairing is readable, and the connected edge alone would NOT evict them (#1140 AC4)', () => {

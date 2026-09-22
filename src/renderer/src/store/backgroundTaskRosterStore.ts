@@ -6,6 +6,12 @@
 // a turn is claude's, not the daemon's, so a roster can arrive either side of the started frame for a
 // task it lists, and an update can arrive for a task neither has named yet.
 //
+// The ROSTER decides what is shown (#1563). claude sends a start for foreground work too — a Bash call
+// past about three seconds, `is_backgrounded: false`, a flag the daemon drops — and no roster ever lists
+// it; claude's roster line is the background set. So `rosters` holds only what a roster has listed, and a
+// start for a task no roster has listed waits in `unlistedStarts`, which no surface reads, until a
+// roster either lists it (it moves in whole) or speaks for the conversation without it (it is dropped).
+//
 // A dedicated store in the queueStore posture: these frames are daemon STATE, not part of claude's
 // turn stream (they carry no turn_id and open and close no turn — the queue_state rule, SSOT
 // pyrycode #720), so they get their own store and are never folded into the thread-timeline reducer.
@@ -212,13 +218,22 @@ export interface BackgroundTaskUpdatedSnapshot {
   truncatedFields: readonly string[] | null
 }
 
-/** The whole state: each conversation's held task set, keyed by `conversationId`. A key ABSENT from the
- *  map means "NO frame has ever arrived for that conversation" and is a DISTINCT state from a present
+/** The whole state: each conversation's held task set, keyed by `conversationId`. A key ABSENT from
+ *  `rosters` means "NO roster has arrived for that conversation" and is a DISTINCT state from a present
  *  entry holding an empty `tasks` map ("observed, nothing alive") — see `selectRosterFor`, which
  *  preserves that distinction rather than collapsing it. `ReadonlyMap` signals the setters REPLACE the
- *  map, never mutate it in place. */
+ *  map, never mutate it in place.
+ *
+ *  `unlistedStarts` (#1563) holds, per conversation and then per `taskId`, the started-sourced records
+ *  no roster has listed yet. It sits OUTSIDE `rosters` on purpose: held on the entry, a start for a
+ *  conversation with no roster would create one and flip the panel from "no report yet" to "no
+ *  background tasks", the collapse the TWO SILENCES paragraph forbids; outside it, `tasks` keeps
+ *  meaning "listed", so the pill's arithmetic and `selectRosterFor` are untouched. Nothing reads it but
+ *  the setters. It carries the same untrusted command-line text as `tasks`, so the same no-persistence
+ *  rule and both clears apply to it. */
 export interface BackgroundTaskRosterState {
   rosters: ReadonlyMap<string, BackgroundTaskRosterEntry>
+  unlistedStarts: ReadonlyMap<string, ReadonlyMap<string, HeldBackgroundTask>>
 }
 
 /** Store shape = state + the five mutation entry points: record one conversation's roster, record one
@@ -234,7 +249,10 @@ export type BackgroundTaskRosterStore = BackgroundTaskRosterState & {
   clearAllRosters: () => void
 }
 
-export const initialBackgroundTaskRosterState: BackgroundTaskRosterState = { rosters: new Map() }
+export const initialBackgroundTaskRosterState: BackgroundTaskRosterState = {
+  rosters: new Map(),
+  unlistedStarts: new Map()
+}
 
 /**
  * DI-friendly, React-free store — one isolated instance per test. Copy-on-write throughout (the
@@ -269,20 +287,28 @@ export const initialBackgroundTaskRosterState: BackgroundTaskRosterState = { ros
  * coalesced as "no news". Because a present-but-empty entry and an absent key are different map
  * states, `selectRosterFor` can hand back `null` for the latter and keep the two apart.
  *
- * `setStartedTask` upserts one task into its conversation's entry, CREATING the entry when no frame has
- * arrived for that conversation yet — claude orders these, not the daemon, so a started frame may
- * precede the roster that lists it, or arrive for a conversation no roster ever follows for. `Map.set`
- * keeps an existing key's position, so upgrading a roster-held task in place preserves roster order
- * while a genuinely new task appends. The snapshot's `description` / `taskType` / `truncatedFields`
- * REPLACE whatever the task held (AC2), and `truncatedFields` in particular replaces rather than
- * unions — the frames' lists name different vocabularies. `droppedTasks` is PRESERVED from the
- * existing entry (or `0` when creating one): a started frame reports nothing about roster truncation and
- * must not reset the count. A held `latestUpdate` is PRESERVED for the same reason — a started frame
- * reports no patch, and claude may emit it after the update for the task it opened.
+ * `setRoster` also reads the conversation's `unlistedStarts` when it looks up a row's held record, so a
+ * start that arrived before the roster listing it moves in whole. It then deletes that conversation's
+ * holds outright: the listed ones have moved, and the rest are work the roster, claude's background set,
+ * does not count. A foreground call that a timeout later moves to the background comes back through a
+ * roster alone, roster-sourced, with `toolCallId: null`.
+ *
+ * `setStartedTask` UPGRADES a task a roster already listed, in place in its conversation's entry — on
+ * claude 2.1.280 the roster listing a `run_in_background` task arrives just BEFORE its start, so this is
+ * the common order. A start for a task no roster has listed goes into `unlistedStarts` instead, and
+ * `rosters` is handed back by reference, so no entry is created and no surface changes (#1563). `Map.set`
+ * keeps an existing key's position, so an in-place upgrade preserves roster order. The snapshot's
+ * `description` / `taskType` / `truncatedFields` REPLACE whatever the task held (AC2), and
+ * `truncatedFields` in particular replaces rather than unions — the frames' lists name different
+ * vocabularies. `droppedTasks` is PRESERVED from the existing entry: a started frame reports nothing
+ * about roster truncation and must not reset the count. A held `latestUpdate` is PRESERVED for the same
+ * reason — a started frame reports no patch, and claude may emit it after the update for the task it
+ * opened. That holds in either place: a hold carries its patch across a repeated start too.
  *
  * `setUpdatedTask` records ONE task's latest patch and its own cut report, joined on `conversationId` +
- * `taskId`. It is the only setter that can MISS: an update naming a conversation no frame has arrived
- * for, or a task the conversation does not hold, returns the state object ITSELF unchanged (AC2). It
+ * `taskId`, in whichever place holds the task — the listed `tasks` first, else `unlistedStarts`, since
+ * an update can arrive for a start no roster has listed yet (#1563). It is the only setter that can
+ * MISS: an update naming a task held in neither place returns the state object ITSELF unchanged. It
  * never opens a task and never creates a conversation entry, because a patch is a change report about
  * something already alive, not an announcement — and the same-reference return is what makes "creates
  * no partial entry" provable by `Object.is` rather than by enumerating what did not appear. On a hit it
@@ -293,14 +319,13 @@ export const initialBackgroundTaskRosterState: BackgroundTaskRosterState = { ros
  * would leak into a file (the content-free diagnostics rule, #126).
  *
  * GROWTH BOUND, stated rather than defended: the daemon caps a roster at 8 rows and every frame at the
- * 65519-byte envelope, but it emits a roster only when claude emits one — it synthesises none. So a
- * started task for a conversation that never receives a subsequent roster is held until the `connected`
- * edge clears it, and the count of such tasks is bounded only by how many started frames claude emits
- * between rosters, times the conversations seen since connect. At ~5 KB per held task that is not a
- * plausible exhaustion vector from a bounded-frame stream, and no speculative eviction policy is built
- * for a failure nobody has observed. The one user-visible consequence: a started-only task stays listed
- * until a roster contradicts it — already true of every task in this family, because the wire reports
- * no finish.
+ * 65519-byte envelope, but it emits a roster only when claude emits one — it synthesises none. Every
+ * roster for a conversation empties that conversation's `unlistedStarts`, so the holds are bounded by
+ * activity: only a conversation that never receives a roster keeps its holds, until a reset or the
+ * pairing clear drops them, and their count is bounded only by how many started frames claude emits
+ * there. At ~5 KB per held task that is not a plausible exhaustion vector from a bounded-frame stream,
+ * and no speculative eviction policy is built for a failure nobody has observed. None of it is visible:
+ * no surface reads a hold (#1563).
  *
  * `resetRostersFor` (#573's AC5) is the `connected` edge: the relay re-emits `connected` on every
  * (re)handshake, so the reconnecting server's held rosters are dropped and every task it reported
@@ -348,11 +373,13 @@ export const initialBackgroundTaskRosterState: BackgroundTaskRosterState = { ros
  * bare object keyed by id, per `ServerOrigin`'s docblock, so a `__proto__` conversation id cannot write
  * through `Object.prototype`. Deleting the map key drops a conversation WHOLE, so the reset can never
  * half-drop an entry: a started frame's `toolCallId` and an update frame's `latestUpdate` go with the
- * roster rows they joined. Copy-on-write like the setters, and every surviving entry comes back BY
- * REFERENCE, so a component watching another conversation sees `Object.is` true and does not re-render.
- * #573's `size === 0` short-circuit generalises: when NO held key is listed the state object is handed
- * straight back, so a first connect, a reconnect of a server holding nothing here, and a map holding
- * only unlisted conversations all wake no listener at all.
+ * roster rows they joined. The same keys are deleted from `unlistedStarts` (#1563), so a start no
+ * roster listed does not outlive its server's reconnect either. Copy-on-write like the setters, and
+ * every surviving entry comes back BY REFERENCE, so a component watching another conversation sees
+ * `Object.is` true and does not re-render. #573's `size === 0` short-circuit generalises: when NO held
+ * key in either map is listed the state object is handed straight back, so a first connect, a
+ * reconnect of a server holding nothing here, and a map holding only unlisted conversations all wake no
+ * listener at all.
  *
  * `clearAllRosters` (#1139) is the PAIRING-boundary drop, and it exists because scoping the reconnect
  * reset above removed the self-heal that kept this store out of `clearPairingScopedState`'s dep set —
@@ -371,6 +398,9 @@ export const initialBackgroundTaskRosterState: BackgroundTaskRosterState = { ros
  * the edge covers the reconnecting server's listed conversations, this covers everything at a pairing
  * change, including a roster held under a conversation no server's list ever carried.
  *
+ * It drops `unlistedStarts` too (#1563): those holds carry the same command lines, and a store holding
+ * only them is NOT an empty store for the short-circuit below.
+ *
  * NULLARY BY DESIGN, the `clearAllBacklogs` / `clearAllConversations` shape: it takes no conversation id
  * and no server origin, so no daemon-supplied field can steer which command lines and patches survive a
  * boundary the operator crossed deliberately. It returns `initialBackgroundTaskRosterState` BY REFERENCE
@@ -386,9 +416,11 @@ export function createBackgroundTaskRosterStore(
     setRoster: (snapshot) =>
       set((s) => {
         const previous = s.rosters.get(snapshot.conversationId)?.tasks
+        const holds = s.unlistedStarts.get(snapshot.conversationId)
         const tasks = new Map<string, HeldBackgroundTask>()
         for (const row of snapshot.tasks) {
-          const held = previous?.get(row.task_id)
+          // A held start is always started-sourced, so a listing moves it in WHOLE (#1563).
+          const held = previous?.get(row.task_id) ?? holds?.get(row.task_id)
           // `!== null`, never truthiness: `''` is a valid `tool_call_id` and still proves the started
           // frame was seen, so a truthy check would demote such a task and lose its fuller label.
           tasks.set(
@@ -414,13 +446,19 @@ export function createBackgroundTaskRosterStore(
         }
         const next = new Map(s.rosters)
         next.set(snapshot.conversationId, { tasks, droppedTasks: snapshot.droppedTasks })
-        return { rosters: next }
+        // Every roster empties the conversation's holds: the listed ones moved in above, the rest were
+        // foreground work no roster will ever name (#1563).
+        if (holds === undefined) return { rosters: next }
+        const unlistedStarts = new Map(s.unlistedStarts)
+        unlistedStarts.delete(snapshot.conversationId)
+        return { rosters: next, unlistedStarts }
       }),
     setStartedTask: (snapshot) =>
       set((s) => {
         const existing = s.rosters.get(snapshot.conversationId)
-        const tasks = new Map<string, HeldBackgroundTask>(existing?.tasks)
-        tasks.set(snapshot.taskId, {
+        const listed = existing?.tasks.get(snapshot.taskId)
+        const holds = s.unlistedStarts.get(snapshot.conversationId)
+        const record: HeldBackgroundTask = {
           taskId: snapshot.taskId,
           toolCallId: snapshot.toolCallId,
           taskType: snapshot.taskType,
@@ -428,29 +466,49 @@ export function createBackgroundTaskRosterStore(
           truncatedFields: snapshot.truncatedFields,
           // Same carry-over as the roster path: a started frame reports no patch, so an update that
           // arrived before it (claude's ordering, not the daemon's) is not thrown away.
-          latestUpdate: existing?.tasks.get(snapshot.taskId)?.latestUpdate ?? null
-        })
+          latestUpdate: (listed ?? holds?.get(snapshot.taskId))?.latestUpdate ?? null
+        }
+        if (existing === undefined || listed === undefined) {
+          // No roster lists this task, so it is held where no surface reads it (#1563): `rosters` is
+          // handed back by reference and no entry is created for a never-observed conversation.
+          const nextHolds = new Map(holds)
+          nextHolds.set(snapshot.taskId, record)
+          const unlistedStarts = new Map(s.unlistedStarts)
+          unlistedStarts.set(snapshot.conversationId, nextHolds)
+          return { unlistedStarts }
+        }
+        const tasks = new Map(existing.tasks)
+        tasks.set(snapshot.taskId, record)
         const next = new Map(s.rosters)
-        next.set(snapshot.conversationId, { tasks, droppedTasks: existing?.droppedTasks ?? 0 })
+        next.set(snapshot.conversationId, { tasks, droppedTasks: existing.droppedTasks })
         return { rosters: next }
       }),
     setUpdatedTask: (snapshot) =>
       set((s) => {
         const existing = s.rosters.get(snapshot.conversationId)
         const held = existing?.tasks.get(snapshot.taskId)
-        // Both misses return the state object ITSELF, so zustand's `Object.is` short-circuits and no
-        // listener churns: an update never OPENS a task and never creates a conversation entry (AC2).
-        // Silently, too — a "dropped an unmatched update" log line would put patch text in a file.
-        if (existing === undefined || held === undefined) return s
+        const latestUpdate = { patch: snapshot.patch, truncatedFields: snapshot.truncatedFields }
+        if (existing === undefined || held === undefined) {
+          // Not listed: a start may be waiting for its roster, and its update must not be lost (#1563).
+          const holds = s.unlistedStarts.get(snapshot.conversationId)
+          const pending = holds?.get(snapshot.taskId)
+          // A miss in both places returns the state object ITSELF, so zustand's `Object.is`
+          // short-circuits and no listener churns: an update never OPENS a task and never creates a
+          // conversation entry. Silently, too — a "dropped an unmatched update" log line would put
+          // patch text in a file.
+          if (holds === undefined || pending === undefined) return s
+          const nextHolds = new Map(holds)
+          nextHolds.set(snapshot.taskId, { ...pending, latestUpdate })
+          const unlistedStarts = new Map(s.unlistedStarts)
+          unlistedStarts.set(snapshot.conversationId, nextHolds)
+          return { unlistedStarts }
+        }
         const tasks = new Map(existing.tasks)
         // A spread is right here and not in the translators: this is a same-type held → held write
         // whose whole meaning is "every other field is untouched", and an update reports none of them.
         // `truncatedFields` straight across — no `??`, no `|| []` (AC3). `Map.set` on an existing key
         // keeps its position, so display order is untouched.
-        tasks.set(snapshot.taskId, {
-          ...held,
-          latestUpdate: { patch: snapshot.patch, truncatedFields: snapshot.truncatedFields }
-        })
+        tasks.set(snapshot.taskId, { ...held, latestUpdate })
         const next = new Map(s.rosters)
         // `droppedTasks` PRESERVED: an update reports nothing about roster truncation.
         next.set(snapshot.conversationId, { tasks, droppedTasks: existing.droppedTasks })
@@ -459,13 +517,18 @@ export function createBackgroundTaskRosterStore(
     resetRostersFor: (conversationIds) =>
       set((s) => {
         const doomed = [...s.rosters.keys()].filter((id) => conversationIds.has(id))
-        if (doomed.length === 0) return s
+        const doomedHolds = [...s.unlistedStarts.keys()].filter((id) => conversationIds.has(id))
+        if (doomed.length === 0 && doomedHolds.length === 0) return s
         const next = new Map(s.rosters)
         for (const id of doomed) next.delete(id)
-        return { rosters: next }
+        const unlistedStarts = new Map(s.unlistedStarts)
+        for (const id of doomedHolds) unlistedStarts.delete(id)
+        return { rosters: next, unlistedStarts }
       }),
     clearAllRosters: () =>
-      set((s) => (s.rosters.size === 0 ? s : initialBackgroundTaskRosterState))
+      set((s) =>
+        s.rosters.size === 0 && s.unlistedStarts.size === 0 ? s : initialBackgroundTaskRosterState
+      )
   }))
 }
 
@@ -482,11 +545,11 @@ export function useBackgroundTaskRosterStore<T>(selector: (s: BackgroundTaskRost
  * The primary read surface (#568) — a selector FACTORY bound to one `conversationId`.
  *
  * `?? null`, and NOT the queueStore precedent's `?? EMPTY_BACKLOG`: that collapse is correct for
- * `queue_state` but would silently violate AC5 here, because "no frame has ever arrived" and
+ * `queue_state` but would silently violate AC5 here, because "no roster has ever arrived" and
  * "observed, nothing alive" would then both read as a bare empty collection — with no type error and no
  * failing test unless one is written for it. The three readings are distinct:
  *
- *   key absent                            → `null`         no frame has ever arrived
+ *   key absent                            → `null`         no roster has ever arrived
  *   `{ tasks: Map{}, droppedTasks: 0 }`   → that entry     observed, nothing alive
  *   `{ tasks: Map{t}, droppedTasks: 2 }`  → that entry     1 task carried, 3 truly alive
  *

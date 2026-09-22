@@ -89,3 +89,25 @@ Playwright, new `e2e/background-task-finished-count.spec.ts` (fake transport): r
 ## Documentation handoff
 
 Pending for the documentation stage: the background-task package overview under `docs/knowledge/features/` should record that the pill's count is `selectLiveTaskCountFor` (listed tasks without a terminal status, plus `droppedTasks`), that the update's `status` is the count's second removal path, and that list membership remains roster-only.
+
+## Security review
+
+**Verdict:** PASS
+
+**Findings:**
+
+- [Trust boundaries] No findings. `status` is daemon-relayed and may be model-influenced. It crosses into the renderer already typed on the `backgroundTaskUpdated` arm (#1560), and this slice only compares it by exact equality against three client-owned constants in `isTerminalTaskStatus`. The string itself is never stored, rendered or logged; only the task id already held in the store is recorded. `summary`, which has carried a literal command line, is not copied by `translateBackgroundTaskUpdated`.
+- [Hostile daemon response] Accepted, stated: a daemon (or claude) that sends a terminal status for live work hides it from the pill, an under-report of the same kind a premature empty roster already produces. The panel still lists the task, so the work stays visible there. An unknown token keeps the pill lit, as today, rather than hiding live work.
+- [Growth / exhaustion] No findings. `setUpdatedTask` writes to `finishedTasks` only on a HIT, so every finished id is an id already held in `tasks` or `unlistedStarts`; `setRoster` prunes the set to the roster's rows, and the reset and pairing clear drop it. The set is therefore bounded by what the store already holds, with no append-only growth keyed by a model-influenced id. Map/Set only, never a plain object keyed by id, so a `__proto__` id cannot write through `Object.prototype`.
+- [Pairing boundary / storage] SHOULD FIX (implement in Phase B, verifier to check): `clearAllRosters` must return `initialBackgroundTaskRosterState` with an empty `finishedTasks`, and its short-circuit must consider `finishedTasks`, so a departed pairing's task ids do not latch. Nothing is persisted; no web storage is added.
+- [Logs] No findings. No log line is added; the miss path stays silent.
+- [Tokens, files, crypto, network, Electron surface] Not applicable: this slice adds no IPC channel, no preload API, no file, no socket and no key handling. Nothing new crosses IPC.
+- [Concurrency] No findings. All writes stay on the single synchronous daemon-event listener in `BackgroundTaskRosterData`; no await is introduced.
+- [Reconnect re-listing a finished task] OUT OF SCOPE per the ticket: `resetRostersFor` drops the finished set with the rosters, so a reconcile burst re-listing a finished task counts it again. Not observed; no follow-up ticket filed.
+
+**Reviewer:** builder (self-review per `builder/security-review.md`)
+**Date:** 2026-09-23
+
+## Revisions
+
+- 2026-09-23: the Security review section above was added after the first plan commit, which went in before the `security-sensitive` label was checked. The design is unchanged by it; it was run before any implementation code.

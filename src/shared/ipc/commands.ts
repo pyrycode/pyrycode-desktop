@@ -33,6 +33,7 @@ import type {
   RequestSessionSettingsPayload,
   RequestModelListPayload,
   RequestContextUsagePayload,
+  MCPStatusRequestPayload,
   RequestSystemPromptPayload,
   RequestHistoryPayload,
   InterruptPayload,
@@ -295,6 +296,7 @@ export type RendererCommand =
   | { type: 'requestSessionSettings'; payload: RequestSessionSettingsPayload }
   | { type: 'requestModelList'; payload: RequestModelListPayload }
   | { type: 'requestContextUsage'; payload: RequestContextUsagePayload }
+  | { type: 'requestMcpStatus'; payload: MCPStatusRequestPayload }
   | { type: 'requestHistory'; payload: RequestHistoryPayload }
   | { type: 'requestSystemPrompt'; payload: RequestSystemPromptPayload }
   | { type: 'requestConversations'; serverId?: string }
@@ -459,6 +461,8 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return 'payload' in value && isRequestModelListPayload(value.payload)
     case 'requestContextUsage':
       return 'payload' in value && isRequestContextUsagePayload(value.payload)
+    case 'requestMcpStatus':
+      return 'payload' in value && isMCPStatusRequestPayload(value.payload)
     case 'requestHistory':
       // Payload-required (#1222) — the neighbour's idiom verbatim, including why the
       // explicitly-`undefined` case is refused by the payload guard and not by the `in` check.
@@ -931,6 +935,13 @@ function isRequestModelListPayload(value: unknown): value is RequestModelListPay
 /** Structural string check, including ''. Routing decides whether the id names a host;
  * buildRequestContextUsage discards extra fields before encoding. */
 function isRequestContextUsagePayload(value: unknown): value is RequestContextUsagePayload {
+  if (typeof value !== 'object' || value === null) return false
+  return 'conversation_id' in value && typeof value.conversation_id === 'string'
+}
+
+/** The same structural string check for the MCP status ask (#1578). Routing decides whether the id
+ * names a host; buildRequestMcpStatus discards extra fields before encoding. */
+function isMCPStatusRequestPayload(value: unknown): value is MCPStatusRequestPayload {
   if (typeof value !== 'object' || value === null) return false
   return 'conversation_id' in value && typeof value.conversation_id === 'string'
 }

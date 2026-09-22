@@ -257,6 +257,19 @@ export type SystemPromptWriteFailure =
   | 'unclassified'
 
 /**
+ * Why the daemon did not answer an `mcp_status_request` (#1578). Mirrors `MCPStatusRejectReason` by
+ * hand, as `SystemPromptWriteFailure` mirrors its decode-side twin, and the single emit in
+ * `daemonConnection` keeps the two in agreement.
+ */
+export type MCPStatusRequestFailure =
+  /** The conversation is hosted but has no bound session, no live eligible child, or the child's reply
+   *  was unusable. The daemon marks it retryable after a backoff; nothing on this side retries. */
+  | 'mcp-status-unavailable'
+  /** Any other correlated refusal: `protocol.malformed` and `conversation.not_found` (both a bug on this
+   *  side), an unknown code, or an unreadable payload. */
+  | 'unclassified'
+
+/**
  * The relay-socket leg's state category (#328), mirroring mobile's RelayLinkStatus where it maps
  * cleanly: 'connected' = socket up; 'offline' = socket dropped (an ordinary retryable close);
  * 'daemon-absent' = relay reachable but no daemon registered behind it (the relay's 4404 close). No
@@ -552,6 +565,14 @@ type BaseDaemonEvent =
       conversationId: string
       servers: readonly MCPServerStatus[]
       droppedServers: number
+    }
+  | {
+      // The daemon refused this app's `mcp_status_request` (#1578). `conversationId` is the one this app
+      // asked about, never read from the error. No daemon code, message or in_reply_to crosses, and a
+      // refusal neither clears nor replaces a stored report. A routing key, never markup or a log field.
+      type: 'mcpStatusRequestRejected'
+      conversationId: string
+      reason: MCPStatusRequestFailure
     }
   // The background-task open arm (#564) — claude started work that OUTLIVES the turn that spawned it
   // (pyrycode#1240), the frame that separates that case from a genuine finish.

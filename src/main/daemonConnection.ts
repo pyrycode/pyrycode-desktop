@@ -33,6 +33,7 @@ import { buildRequestDebugBundle } from './transport/requestDebugBundleEnvelope'
 import { buildRequestSessionSettings } from './transport/requestSessionSettingsEnvelope'
 import { buildRequestModelList } from './transport/requestModelListEnvelope'
 import { buildRequestContextUsage } from './transport/requestContextUsageEnvelope'
+import { buildRequestMcpStatus } from './transport/requestMcpStatusEnvelope'
 import { buildRequestSystemPrompt } from './transport/requestSystemPromptEnvelope'
 import { buildSetSystemPrompt } from './transport/setSystemPromptEnvelope'
 import { buildRequestHistory } from './transport/requestHistoryEnvelope'
@@ -136,6 +137,10 @@ const RELAY_NO_DAEMON_CLOSE_CODE = 4404
  * already catch. A stream silent for 30 s is dead either way.
  */
 const RETRIEVAL_IDLE_TIMEOUT_MS = 30_000
+
+/** Outstanding MCP status asks kept for refusal correlation (#1578). A success reply cannot consume an
+ *  entry, so the map is bounded here; the 33rd ask evicts the oldest. */
+const MAX_PENDING_MCP_STATUS_REQUESTS = 32
 
 /**
  * Injected dependencies. The stores + sink are constructed at the composition root; `deviceName`
@@ -275,6 +280,9 @@ export interface DaemonConnection {
   /** Ask once for context_usage; the existing inbound path delivers the reading.
    * Unavailable connections and send failures are inert. No retry or pending state. */
   requestContextUsage(conversationId: string): void
+  /** Ask once for mcp_status (#1578); the existing inbound path delivers the report. A correlated
+   * refusal emits mcpStatusRequestRejected. Unavailable connections and send failures are inert. No retry. */
+  requestMcpStatus(conversationId: string): void
   /**
    * Ask the daemon for one backward step of a scroll-back walk over a conversation's on-disk history
    * (#1222). Takes the whole PAYLOAD rather than a scalar — unlike its two neighbours above, this verb
@@ -884,6 +892,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // mutation runs to completion inside a synchronous setSystemPrompt / onDriverEvent body, no await
   // between a read and a write.
   const pendingSystemPromptWrites = new Map<number, string>()
+  // MCP status ask correlation (#1578): envelope id → the conversation this app asked about. The success
+  // reply is an ordinary `mcp_status` carrying no in_reply_to, so it cannot consume an entry; only a
+  // correlated refusal or the next dial removes one. Capped, oldest evicted first, so a renderer that asks
+  // in a loop cannot grow it without bound.
+  const pendingMcpStatusRequests = new Map<number, string>()
   // Wire envelope id to the optional renderer attempt; reset with each connection generation.
   const pendingWorkspaceRenames = new Map<number, string>()
   // Attachment transfers currently on the wire (#861). A SET, not the debug bundle's single slot: two
@@ -1228,6 +1241,17 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
                   conversationId: failedWrite,
                   reason: inbound.systemPromptReject ?? 'unclassified'
                 })
+                return
+              }
+              // MCP status ask refusal (#1578), in the same unique-envelope-id tier. The event names the
+              // conversation recorded at send time, never one from the error, and carries only the
+              // client-owned reason. The stored report is left alone: a refusal clears nothing.
+              const refusedMcpStatus = pendingMcpStatusRequests.get(inReplyTo)
+              if (refusedMcpStatus !== undefined) {
+                pendingMcpStatusRequests.delete(inReplyTo)
+                const reason = inbound.mcpStatusReject ?? 'unclassified'
+                deps.diagnosticLog?.event({ event: 'mcp-status-request-rejected', code: reason })
+                emitDaemonEvent(sink, { type: 'mcpStatusRequestRejected', conversationId: refusedMcpStatus, reason })
                 return
               }
               const failedRename = pendingWorkspaceRenames.get(inReplyTo)
@@ -2801,6 +2825,29 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function requestMcpStatus(conversationId: string): void {
+    if (driver === null || !authenticated) {
+      deps.diagnosticLog?.event({ event: 'mcp-status-request-refused', code: 'unavailable' })
+      return
+    }
+    try {
+      const envelopeId = nextEnvelopeId
+      const bytes = buildRequestMcpStatus({ id: envelopeId, ts: now(), conversationId })
+      nextEnvelopeId += 1
+      driver.sendMessage(bytes)
+      // Record after the send, so a throwing build or send leaves no entry to correlate.
+      if (pendingMcpStatusRequests.size >= MAX_PENDING_MCP_STATUS_REQUESTS) {
+        const oldest = pendingMcpStatusRequests.keys().next()
+        if (oldest.done !== true) pendingMcpStatusRequests.delete(oldest.value)
+      }
+      pendingMcpStatusRequests.set(envelopeId, conversationId)
+      deps.diagnosticLog?.event({ event: 'mcp-status-request-sent' })
+    } catch {
+      // Drop the exception and never retry: a withheld or refused reply must not induce more requests.
+      deps.diagnosticLog?.event({ event: 'mcp-status-request-failed', code: 'build-or-send-failed' })
+    }
+  }
+
   function failHistoryRequest(conversationId: string, code: string): void {
     deps.diagnosticLog?.event({ event: 'history-request-failed', code })
     emitDaemonEvent(sink, { type: 'historyRequestFailed', conversationId,
@@ -3673,6 +3720,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // here a surviving entry would settle a NEW connection's write against a dead one's conversation —
     // reporting a prompt as stored on a conversation that was never written to.
     pendingSystemPromptWrites.clear()
+    // The same rationale for the MCP status ask (#1578): a recycled id must not settle a new connection's
+    // refusal against a dead one's conversation.
+    pendingMcpStatusRequests.clear()
     pendingWorkspaceRenames.clear()
     // Abandon any in-flight bundle stream (#505), the fourth per-connection reset: its daemon-side
     // request does not survive the fresh Noise session, so the consumer is failed HERE rather than
@@ -3719,6 +3769,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     requestSessionSettings,
     requestModelList,
     requestContextUsage,
+    requestMcpStatus,
     requestSystemPrompt,
     requestHistory,
     requestConversations,

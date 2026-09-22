@@ -11268,6 +11268,37 @@ describe('parseInboundMessage — set_system_prompt correlation + reject narrowi
   })
 })
 
+describe('parseInboundMessage — the mcp_status_request refusal (#1578)', () => {
+  function encodeErrorCode(code: unknown): Uint8Array {
+    return encodeEnvelope({
+      id: 902, type: 'error', ts: FIXED_TS, in_reply_to: 77,
+      payload: { code, message: 'static daemon text that must never cross', retryable: true }
+    })
+  }
+
+  it('narrows mcp_status.unavailable onto its client-owned reason and leaves the outcome table alone', () => {
+    const result = parseInboundMessage(encodeErrorCode('mcp_status.unavailable'))
+    expect(result?.kind === 'daemon-error' && result.mcpStatusReject).toBe('mcp-status-unavailable')
+    expect(result?.kind === 'daemon-error' && result.outcome).toBe('unclassified')
+  })
+
+  it.each(['protocol.malformed', 'conversation.not_found', 'context_usage.unavailable', 'mcp_status.later',
+    undefined, null, 42, {}, []])('leaves mcpStatusReject undefined for code %j', (code) => {
+    const result = parseInboundMessage(encodeErrorCode(code))
+    expect(result?.kind === 'daemon-error' && result.mcpStatusReject).toBeUndefined()
+  })
+
+  it('never throws on an unreadable error payload', () => {
+    for (const payload of [null, 42, 'mcp_status.unavailable', [], {}]) {
+      const result = parseInboundMessage(
+        encodeEnvelope({ id: 903, type: 'error', ts: FIXED_TS, payload, in_reply_to: 77 })
+      )
+      expect(result?.kind).toBe('daemon-error')
+      expect(result?.kind === 'daemon-error' && result.mcpStatusReject).toBeUndefined()
+    }
+  })
+})
+
 // #1225 — the envelope's `ts` reaches the decode result on the timeline-bearing arms, so the window can
 // join a served history page to what the live stream already drew. The value is per-FRAME, which is why
 // it cannot ride #1068's bind-time `serverId` stamp and has to come from the decode.

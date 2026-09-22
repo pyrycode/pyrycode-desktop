@@ -170,6 +170,7 @@ export function translateModalEvent(
     case 'backgroundTaskRoster':
     case 'sessionFacts': // Informational only; the session-facts bridge owns retention.
     case 'mcpStatus': // Informational only; the MCP status bridge owns retention.
+    case 'mcpStatusRequestRejected': // The channel info sheet's notice owns this (#1579).
     case 'modelAnnounced':
     case 'questionShown':
     case 'questionDismissed':

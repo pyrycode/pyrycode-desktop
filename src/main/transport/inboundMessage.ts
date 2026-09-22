@@ -285,6 +285,14 @@ export type SystemPromptRejectReason =
   | 'conversation-not-found'
 
 /**
+ * Which `mcp_status_request` refusal a correlated `error` frame carries (#1578), the client-owned form of
+ * the daemon's `code`. `SystemPromptRejectReason`'s twin with ONE member: `mcp_status.unavailable` is the
+ * only refusal the window treats differently. `protocol.malformed` and `conversation.not_found` are both
+ * a bug on this side and fall to the absence, which the single consumer maps to `'unclassified'`.
+ */
+export type MCPStatusRejectReason = 'mcp-status-unavailable'
+
+/**
  * One decoded `attachment_chunk` frame from the RETRIEVAL leg (#998) — the client-owned form of
  * AttachmentChunkPayload, differing in exactly one field: `data` is raw bytes here, base64 on the wire.
  *
@@ -834,10 +842,13 @@ export type InboundDaemonMessage =
       // the published set for this verb" — read at ONE emit, which maps it to the `'unclassified'`
       // member of the IPC-side failure so that a correlated refusal always settles the write.
       //
-      // THREE PER-VERB NARROWED FIELDS IS THE CEILING OF THIS SHAPE. A fourth correlated verb should
-      // prompt a rethink — one narrowed field carrying a verb tag, say — rather than a fourth field;
-      // merging them now would be a refactor of two shipped verbs for no behaviour.
       systemPromptReject?: SystemPromptRejectReason
+      // The MCP status ask's refusal (#1578), a fourth per-verb field on `systemPromptReject`'s terms:
+      // absence means "outside this verb's narrowed set" and the one emit maps it to `'unclassified'`.
+      //
+      // FOUR PER-VERB NARROWED FIELDS IS PAST THE CEILING THIS SHAPE WAS GIVEN. The next correlated verb
+      // should collapse them into one narrowed field carrying a verb tag rather than add a fifth.
+      mcpStatusReject?: MCPStatusRejectReason
     }
   // The ten arms carrying FrameTimestamp start here (#1225) — see that type for why the mix-in is
   // named at each site rather than distributed over the union.
@@ -3816,6 +3827,16 @@ function narrowSystemPromptRejectReason(payload: unknown): SystemPromptRejectRea
   }
 }
 
+/**
+ * Map a daemon `error` frame's payload onto the client-owned MCPStatusRejectReason (#1578), or
+ * `undefined` outside it. narrowSystemPromptRejectReason's twin in every property: total, never throws,
+ * the untrusted `code` is a comparand against one client-owned literal and is then dropped.
+ */
+function narrowMCPStatusRejectReason(payload: unknown): MCPStatusRejectReason | undefined {
+  if (!isRecord(payload)) return undefined
+  return payload.code === 'mcp_status.unavailable' ? 'mcp-status-unavailable' : undefined
+}
+
 function parseBannerPayload(payload: unknown): BannerPayload {
   if (!isRecord(payload)) throw new WireDecodeError('malformed banner payload')
   return {
@@ -4743,6 +4764,9 @@ export function parseInboundMessage(
       // frame still fires however mangled its payload; and like them the daemon's string is dropped,
       // so the logged `code` below stays the client-owned literal it must be.
       const systemPromptReject = narrowSystemPromptRejectReason(envelope.payload)
+      // The MCP status ask's refusal (#1578), a fourth narrowing by the same idiom and with the same
+      // guarantees: it cannot throw, and the daemon's string is dropped.
+      const mcpStatusReject = narrowMCPStatusRejectReason(envelope.payload)
       diagnosticLog?.event({
         event: 'inbound-decoded',
         code: 'error',
@@ -4762,7 +4786,8 @@ export function parseInboundMessage(
         pairingReject: isRecord(envelope.payload) && envelope.payload.code === 'auth.invalid_token'
           ? 'pairing-rejected' : undefined,
         historyReject,
-        systemPromptReject
+        systemPromptReject,
+        mcpStatusReject
       }
     }
     default:

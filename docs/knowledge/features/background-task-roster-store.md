@@ -25,15 +25,21 @@ either source held verbatim:
   or from a `backgroundTaskStarted` frame. There is no terminal/finish event by design — absence from a
   later roster is this family's only removal path. An empty roster (`tasks: []`) still writes an entry —
   the daemon's positive statement "nothing is alive for this conversation" — never dropped, filtered, or
-  coalesced as "no news".
-- A `backgroundTaskStarted` frame **upserts one task**, carrying a `toolCallId` and a fuller,
-  higher-cap `description` that no roster row can report. Once a task is started-sourced, a later roster
-  naming the same `taskId` leaves its held record untouched rather than overwriting it — the daemon's own
-  roster-cap comment states the roster label is the same text under a tighter cap and that the
-  authoritative full copy already crossed the wire on the started frame, so refreshing from the row would
-  throw the better copy away permanently (the started frame never repeats). A task the app only ever
-  learns about from a roster has `toolCallId: null` — never a placeholder, since `''` is a real,
-  colliding `tool_call_id` value the wire can send.
+  coalesced as "no news". Since #1563, a roster is also the only thing that settles a start it did not
+  list: every roster for a conversation drops whatever that conversation is still holding from an
+  earlier, unlisted start, since claude's roster line is its own statement of the background set and a
+  row it never lists is not in it.
+- A `backgroundTaskStarted` frame **upgrades a task its conversation's roster has already listed**,
+  carrying in a `toolCallId` and a fuller, higher-cap `description` that no roster row can report. A
+  start for a task no roster has listed does not reach either surface — since #1563 it waits, unseen, in
+  a separate hold (`unlistedStarts`, see § How it works) until a roster either lists it or speaks for the
+  conversation without it. Once a task is started-sourced, a later roster naming the same `taskId` leaves
+  its held record untouched rather than overwriting it — the daemon's own roster-cap comment states the
+  roster label is the same text under a tighter cap and that the authoritative full copy already crossed
+  the wire on the started frame, so refreshing from the row would throw the better copy away permanently
+  (the started frame never repeats). A task the app only ever learns about from a roster has
+  `toolCallId: null` — never a placeholder, since `''` is a real, colliding `tool_call_id` value the wire
+  can send.
 - A `backgroundTaskUpdated` frame **records the latest patch onto an already-held task** — never opens
   one. `patch` (opaque text, held verbatim) and its own cut report are latest-wins, one nested record
   ([#577](../codebase/577.md)): `null` means no update has ever matched the task, `{ patch: '', … }` is a
@@ -126,7 +132,8 @@ export interface BackgroundTaskUpdatedSnapshot {               // update write u
   truncatedFields: readonly string[] | null
 }
 export interface BackgroundTaskRosterState {
-  rosters: ReadonlyMap<string, BackgroundTaskRosterEntry>   // key absent = no frame has ever arrived
+  rosters: ReadonlyMap<string, BackgroundTaskRosterEntry>          // key absent = no roster has arrived (#1563)
+  unlistedStarts: ReadonlyMap<string, ReadonlyMap<string, HeldBackgroundTask>>   // conv -> taskId -> started-sourced hold no roster has listed yet (#1563); no surface reads it
 }
 export type BackgroundTaskRosterStore = BackgroundTaskRosterState & {
   setRoster: (snapshot: BackgroundTaskRosterSnapshot) => void
@@ -149,7 +156,9 @@ one clobber another. **Five named setters** (`setRoster`, `setStartedTask`, `set
 `resetRostersFor`, `clearAllRosters`), not a reducer — five operations still don't justify a
 discriminated-union action set. Mirrors `queueStore`'s DI-factory → singleton → hook → selector structure
 and its `ReadonlyMap` copy-on-write idiom throughout: clone the outer map, clone the inner map, replace;
-never mutate `s.rosters`, an entry, or an entry's `tasks` in place. Also mirrors `queueStore`'s setter
+never mutate `s.rosters`, an entry, or an entry's `tasks` in place — and, since #1563, never mutate
+`s.unlistedStarts` or one of its per-conversation inner maps in place either; it is the same
+conversation-keyed-map-of-maps shape one level further in, copy-on-write throughout. Also mirrors `queueStore`'s setter
 PAIR for the pairing-lifecycle problem ([#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138) /
 [#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139)): a scoped `…For` reset beside a
 nullary whole-map clear, both iterating the HELD keys rather than the input set, so the work is bounded
@@ -171,29 +180,46 @@ three ways this branch can go wrong. `droppedTasks` is taken from the snapshot u
 stays **unconditional**: an empty `tasks: []` still writes an entry holding no tasks ("nothing is alive"),
 it does not delete the key.
 
-`setStartedTask` (#576, new; #577 gained the same carry-over) upserts one task into its conversation's
-entry, **creating** the entry if no frame has arrived for that conversation yet — claude orders these
-frames, not the daemon, so a started frame can precede any roster for its conversation, *and* can arrive
-after an update for the task it is about to open. `Map.set` keeps an existing key's position, so
-upgrading a roster-held task in place preserves roster display order while a genuinely new task appends.
-The snapshot's `description`/`taskType`/`truncatedFields` **replace** whatever the task held; the three
-frames' `truncatedFields` lists name different vocabularies, so a started frame's list replaces rather
-than unions with a roster row's. `droppedTasks` is **preserved** from the existing entry (or `0` on
-create) — a started frame reports nothing about roster truncation and must not reset the count. A held
-`latestUpdate` is likewise **preserved** — a started frame reports no patch, so it must not silently erase
-one recorded before it arrived.
+Since #1563 the candidate a row's held record is read from is `tasks.get(id) ?? unlistedStarts[conv]?.get(id)`
+— a start no earlier roster had listed moves into `tasks` whole, the same way a previously-listed
+started-sourced task does, the instant a roster names it. Every roster for a conversation then also drops
+that conversation's remaining `unlistedStarts` entry outright (copy-on-write, and skipped when there was
+none to drop in the first place): the rows the roster just listed have already moved into `tasks` above,
+and whatever is left in the hold is foreground work claude's own background set does not include. A
+foreground call a timeout later moves to the background comes back the ordinary way, through a bare
+roster row with no matching `unlistedStarts` entry, roster-sourced with `toolCallId: null`.
 
-`setUpdatedTask` (#577, new) records **one task's latest patch and its own cut report**, joined on
-`conversationId` + `taskId` and never on arrival order — an update can arrive before the roster or started
-frame that first names its task. It is the only setter that can **miss**: an update naming an unknown
-conversation, or a `taskId` the conversation does not (yet) hold, returns the state object **itself**
-unchanged — `Object.is`-provable, so "creates no partial entry" (AC2) needs no enumeration of what didn't
-appear. An update never opens a task and never creates a conversation entry, because a patch is a change
-report about something already alive, not an announcement. On a hit, `latestUpdate` is replaced wholesale
-(latest-wins — never an accumulating list) and nothing else on the held record is touched: an update frame
-reports no `description`, `taskType`, `toolCallId`, or task-level `truncatedFields`. Both miss branches are
-silent, deliberately — a "dropped an unmatched update" log line is exactly where patch text could leak
-into a file (the content-free diagnostics rule, #126).
+`setStartedTask` (#576, new; #577 gained the same carry-over; #1563 narrowed what it can create) now only
+**upgrades** a task its conversation's roster has already listed, in place — `Map.set` keeps an existing
+key's position, so the upgrade preserves roster display order. Claude orders these frames, not the
+daemon, so a started frame can precede any roster for its conversation, *and* can arrive after an update
+for the task it is about to open; on claude 2.1.280 the roster listing a `run_in_background` task arrives
+just *before* that task's own start, so the upgrade path is the common one. A start for a task no roster
+has listed goes into `unlistedStarts[conv][taskId]` instead — carrying forward any `latestUpdate` already
+held there — and `rosters` is handed back **by reference**: no entry is created for a conversation with
+no roster, so neither surface changes (AC1) — before #1563 this branch created the entry unconditionally.
+The snapshot's `description`/`taskType`/`truncatedFields`
+**replace** whatever the task held, in either place; the three frames' `truncatedFields` lists name
+different vocabularies, so a started frame's list replaces rather than unions with a roster row's.
+`droppedTasks` is **preserved** from the existing listed entry — a started frame reports nothing about
+roster truncation and must not reset the count; an unlisted hold has no `droppedTasks` to preserve in the
+first place. A held `latestUpdate` is likewise **preserved**, in either place — a started frame reports no
+patch, so it must not silently erase one recorded before it arrived.
+
+`setUpdatedTask` (#577, new; #1563 widened where it looks) records **one task's latest patch and its own
+cut report**, joined on `conversationId` + `taskId` and never on arrival order — an update can arrive
+before the roster or started frame that first names its task, including while that task is still an
+unlisted hold. It checks the listed `tasks` first, then `unlistedStarts`, and writes the patch into
+whichever place holds the task — an update must not be lost just because its task's roster has not
+arrived yet. It is the only setter that can **miss**: an update naming an unknown conversation, or a
+`taskId` held in **neither** place, returns the state object **itself** unchanged — `Object.is`-provable,
+so "creates no partial entry" (AC2) needs no enumeration of what didn't appear. An update never opens a
+task and never creates a conversation entry, because a patch is a change report about something already
+alive, not an announcement. On a hit, `latestUpdate` is replaced wholesale (latest-wins — never an
+accumulating list) and nothing else on the held record is touched: an update frame reports no
+`description`, `taskType`, `toolCallId`, or task-level `truncatedFields`. Both miss branches are silent,
+deliberately — a "dropped an unmatched update" log line is exactly where patch text could leak into a
+file (the content-free diagnostics rule, #126).
 
 Provenance — "was this task's fuller label ever reported?" — is **derived, never stored**: exactly
 `toolCallId !== null`. This must be tested with `!== null`, never truthiness: `requireString` (the
@@ -210,7 +236,7 @@ The fix is `selectRosterFor`'s `?? null` instead of `?? EMPTY_BACKLOG`, typed
 
 | store contents for `c1` | `selectRosterFor('c1')` | meaning |
 | --- | --- | --- |
-| key absent | `null` | no frame has ever arrived for this conversation |
+| key absent from `rosters` | `null` | no roster has ever arrived for this conversation — `unlistedStarts` may still hold an unseen start (#1563) |
 | `{ tasks: Map{}, droppedTasks: 0 }` | that entry | observed, nothing alive |
 | `{ tasks: Map{t}, droppedTasks: 2 }` | that entry | 1 task carried, 3 truly alive |
 
@@ -227,10 +253,14 @@ that are members — work bounded by what this store holds, not by the server's 
 Membership is tested with `Set.has`, never a bare object lookup, which is also what keeps `__proto__`,
 `constructor` and `''` unremarkable conversation keys. Deleting the map key drops a conversation **whole**
 — a started frame's `toolCallId` and an update frame's `latestUpdate` go with the roster row they joined,
-so the reset can never half-drop an entry. Every surviving entry comes back **by reference**. When no held
-key is listed — a first connect, a reconnect of a server holding nothing here, or a map holding only
-conversations outside the id set — the state object is handed straight back, generalising the original
-`resetRosters`' `size === 0` short-circuit so zustand's `Object.is` fires and no listener wakes. A
+so the reset can never half-drop an entry. Every surviving entry comes back **by reference**. Since #1563
+it independently deletes the same conversation ids from `unlistedStarts`, so a start no roster ever
+listed does not outlive its server's reconnect either — the two maps are filtered separately (a
+conversation can be a member of one, the other, both, or neither), and both drops are copy-on-write.
+When no held key **in either map** is listed — a first connect, a reconnect of a server holding nothing
+here, or a map holding only conversations outside the id set — the state object is handed straight back,
+generalising the original `resetRosters`' `size === 0` short-circuit so zustand's `Object.is` fires and no
+listener wakes. A
 conversation this store holds a roster for that appears in **no** server's list survives every scoped
 reset — the accepted consequence of scoping by the list (a background task can start for a conversation
 whose list has not arrived), pinned by a test rather than left to drift wider later.
@@ -239,7 +269,9 @@ whose list has not arrived), pinned by a test rather than left to drift wider la
 **pairing-boundary** drop) is nullary — the `clearAllBacklogs`/`clearAllConversations` shape — so no
 daemon-supplied conversation id or server origin can steer which command lines and patches survive a
 boundary the operator crossed deliberately. It returns `initialBackgroundTaskRosterState` by reference and
-carries the same `size === 0` subscriber short-circuit. It is invoked only from
+carries the same short-circuit, widened since #1563 to both maps: it returns `s` only when `rosters` and
+`unlistedStarts` are both already empty, since a store holding only unlisted holds is not an empty store
+and the same `local_bash` command text they carry must not survive the boundary either. It is invoked only from
 [`clearPairingScopedState`](paired-shell.md#related), never from a bridge arm or a component, and it is
 the only setter that reaches a roster held under a conversation no server's list ever carried.
 
@@ -444,15 +476,21 @@ pairing ends (unpair only, since #1141 — pairing another server adds a server 
   finish; a task's disappearance from a later roster is the only removal path this family has, whether it
   was roster-sourced or started-sourced or has a recorded patch, and any "finished" conclusion is left to
   #568 to draw and own, not invented here.
-- **A started-only task can outlive its usefulness until the next eviction it is reachable by.** The
-  daemon emits a roster only when claude emits one — it synthesises none — so a `backgroundTaskStarted`
-  for a conversation that never receives a subsequent roster is held until something clears it. Since
-  [#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139) that is "its server's next `connected`
-  edge, if its conversation is listed" — narrower than the pre-#1139 whole-map reset, since the reset now
-  reaches only its own server's own listed conversations — or, for a conversation no server's list ever
-  named, "the next pairing boundary" (`clearAllRosters`). Bounded per task (~5 KB, by the daemon's
-  per-frame caps) but not bounded in count; named and accepted in #576's spec rather than defended with a
-  speculative eviction policy, since the failure has not been observed.
+- **An unlisted start is invisible, not merely stale — and evicted three ways, not two.** Before #1563
+  (see § Related), a started-only task was shown, and stayed shown, until a roster contradicted it or a
+  reset/clear ran — the stuck "N tasks running" pill of #1558. Since #1563 such a start is held in
+  `unlistedStarts`, which no surface reads, so it never lights the pill or the panel in the first place. A
+  start for a conversation that never gets a subsequent roster is still held until something clears it:
+  the same reset/clear pair as before (its server's next `connected` edge, if its conversation is
+  listed — #1139; or, for a conversation no server's list ever named, the next pairing boundary,
+  `clearAllRosters`) **plus a third, tighter path** — any later roster for that same conversation, since
+  #1563 makes every roster drop its conversation's remaining `unlistedStarts` regardless of what it lists.
+  #1558's two foreground calls sat in a conversation whose rosters kept flowing normally, so that third
+  path now clears their kind of hold within one roster round-trip rather than waiting for a reconnect or a
+  pairing change. Bounded per task (~5 KB, by the daemon's per-frame caps) but not bounded in count while a
+  conversation genuinely never gets a roster; named and accepted in #576's spec, then narrowed further in
+  #1563's, rather than defended with a speculative eviction policy, since sustained exhaustion has not
+  been observed.
 - **`latestUpdate` is latest-wins, deliberately not a history.** An append-only list keyed by a
   model-influenced `task_id`, fed by the daemon's push stream, would be unbounded growth on
   attacker-influenceable input; the daemon's own per-frame cap (`maxTaskPatch`, 4 KiB) is per frame, not
@@ -514,6 +552,18 @@ pairing ends (unpair only, since #1141 — pairing another server adds a server 
   findings deferred to #1089 (a hostile daemon's own conversation-list contents narrowing a reset's scope,
   and the store's pre-existing conversation-id-only keying letting a daemon cross-attribute a roster to
   the wrong server's view — neither introduced nor fixed by this ticket).
+- [#1563](https://github.com/pyrycode/pyrycode-desktop/issues/1563) · Spec:
+  `docs/specs/architecture/1563-background-tasks-listed-only.md` — fixed the stuck "N tasks running" pill
+  of [#1558](https://github.com/pyrycode/pyrycode-desktop/issues/1558): claude sends
+  `system/task_started` for foreground Bash calls too (`is_backgrounded: false`, a flag the daemon's
+  `BackgroundTaskStarted` never carries), and no roster ever lists such a call, so `setStartedTask`'s old
+  unconditional upsert lit the pill for good. The roster is claude's own statement of the background set,
+  so a start for a task no roster has listed now waits in a new `unlistedStarts` hold that neither surface
+  reads, and moves into `tasks` whole — `toolCallId`, description, any recorded patch — the moment a
+  roster lists it. `resetRostersFor` and `clearAllRosters` were widened to drop the same conversation's
+  `unlistedStarts` alongside its `rosters` entry, so the same `local_bash` command-line content the
+  pre-#1139 gap was about does not reappear through the new hold. Security review PASS (self-review); no
+  MUST FIX, since the design already routed both existing clears through the new map.
 - [Slash-command-list store](slash-command-list-store.md) — the shape this store lent onward: keyed
   `ReadonlyMap`, copy-on-write, `?? null` selector. That store deliberately did **not** copy this
   store's `connected` reset branch — which, at the time, was the sole enforcement of this store's own

@@ -114,8 +114,11 @@ loaded state advances durable coverage. A live-only timeline stays `unknown`,
 and a successfully received empty page still establishes coverage.
 
 `DurableThreadItem` retains the display fields of every current
-[`ThreadItem`](../../../src/renderer/src/store/threadTimeline.ts) variant. In this
-table, `?` marks an optional field:
+[`ThreadItem`](../../../src/renderer/src/store/threadTimeline.ts) variant, with one
+exception: `turnBoundary`'s six `TurnEndMetrics` fields (duration, token counts, the
+session's running cost —
+[#1565](https://github.com/pyrycode/pyrycode-desktop/issues/1565)) are live-only and never
+persisted, so a reload never restores them. In this table, `?` marks an optional field:
 
 | Row kind | Retained fields beyond `kind` |
 | --- | --- |
@@ -664,3 +667,12 @@ production layering. Exact equality catches added optional fields that mutual
 assignability can miss. This proof depends on the web project's TypeScript check
 in `npm run build`; running Vitest alone does not establish it. Runtime parser
 fixtures still need to cover newly added fields.
+
+**The guard compares against `ThreadItem` minus a named exclusion, not against
+`ThreadItem` itself, since [#1565](https://github.com/pyrycode/pyrycode-desktop/issues/1565).**
+`turnBoundary`'s six `TurnEndMetrics` fields are deliberately live-only (above), so the old
+`expectTypeOf<DurableThreadItem>().toEqualTypeOf<ThreadItem>()` no longer typechecks once they
+exist on `ThreadItem`. A local `PersistedThreadItem` type omits `keyof TurnEndMetrics` from the
+`turnBoundary` arm and leaves every other arm untouched, and the assertion compares against that
+instead. The fix for a live-only field belongs here, narrowing the guard's comparison type —
+never widening `DurableThreadItem` to carry a field the persistence layer must keep stripping.

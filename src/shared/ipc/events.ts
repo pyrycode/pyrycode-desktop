@@ -39,6 +39,23 @@ import type {
   WireResetHandoff
 } from '../wire/types'
 
+/**
+ * A `turn_end`'s claude `result` numbers (#1565), each optional and carried as received from the
+ * daemon: no summing, differencing or clamping, so `0` and negatives arrive unchanged. What "not
+ * reported" means (absent, `0`) is the display's call, not this carrier's. All are this turn's except
+ * `costUsdTotal`, which is the SESSION's running total in US dollars, claude's estimate. Rides the live
+ * and history `turnEnd` arms here and the renderer's `turnEnd` / `turnBoundary`. Not persisted:
+ * `DurableThreadItem` does not carry it.
+ */
+export interface TurnEndMetrics {
+  durationMs?: number
+  inputTokens?: number
+  cacheReadTokens?: number
+  cacheCreationTokens?: number
+  outputTokens?: number
+  costUsdTotal?: number
+}
+
 /** Validated shape, untrusted content: render only as bounded text, never attributes or logs. */
 export type ModelRefusalEvent = {
   originalModel: string
@@ -96,7 +113,7 @@ export type ModelRefusalEvent = {
 export type HistoryTimelineEvent =
   | ModelRefusalEvent
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
-  | { type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string }
+  | ({ type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string } & TurnEndMetrics)
   | { type: 'turnState'; state: WireTurnState }
   | {
       type: 'toolUse'
@@ -385,7 +402,7 @@ type BaseDaemonEvent =
   // renderer timeline bridge, which rebuilds a fresh ThreadEvent from named fields and omits it;
   // ThreadEvent does not carry it, and the consumers that route by conversation are #756. No token,
   // key, or raw frame.
-  | { type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string; conversationId: string }
+  | ({ type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string; conversationId: string } & TurnEndMetrics)
   // The coarse turn-lifecycle arm (#214, widened by #724). Carries `state` (a closed 3-value wire enum)
   // and `conversationId` — the frame's `conversation_id`, copied BY NAME at the emit from an
   // already-validated payload (the decode stays fail-closed: a missing or non-string id fails the whole

@@ -89,6 +89,7 @@ import type {
   WireSessionTransitionReason,
   WireUnrecognizedSite
 } from '../../shared/wire/types'
+import type { TurnEndMetrics } from '../../shared/ipc/events'
 import type { DiagnosticLog } from '../diagnosticLog'
 
 /**
@@ -1532,7 +1533,7 @@ type DecodedModelRefusalEvent = {
 export type DecodedHistoryEvent =
   | DecodedModelRefusalEvent
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
-  | { type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string }
+  | ({ type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string } & TurnEndMetrics)
   | { type: 'turnState'; state: WireTurnState }
   | {
       type: 'toolUse'
@@ -1641,7 +1642,8 @@ function decodeHistoryEvent(
     case 'turn_end': {
       const p = parseTurnEndPayload(payload)
       return { type: 'turnEnd', turnId: p.turn_id, stopReason: p.stop_reason,
-        outcome: p.outcome, isError: p.is_error, terminalReason: p.terminal_reason, errorCategory: p.error_category }
+        outcome: p.outcome, isError: p.is_error, terminalReason: p.terminal_reason, errorCategory: p.error_category,
+        ...turnEndMetricsOf(p) }
     }
     case 'turn_state': {
       const p = parseTurnStatePayload(payload)
@@ -1823,11 +1825,38 @@ function parseTurnEndPayload(payload: unknown): TurnEndPayload {
   const stop_reason = requireString(payload, 'stop_reason')
   const boundedReport = (value: unknown): string | undefined =>
     typeof value === 'string' && Buffer.byteLength(value, 'utf8') <= 256 ? value : undefined
+  // #1565: lenient like the reports above: a non-number or non-finite value (`1e400` parses to
+  // Infinity) is dropped, never a reject. No clamping, so `0` and negatives are carried as received.
+  const finiteNumber = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value) ? value : undefined
   return { conversation_id, turn_id, stop_reason,
     outcome: boundedReport(payload.outcome),
     is_error: typeof payload.is_error === 'boolean' ? payload.is_error : undefined,
     terminal_reason: boundedReport(payload.terminal_reason),
-    error_category: boundedReport(payload.error_category)
+    error_category: boundedReport(payload.error_category),
+    duration_ms: finiteNumber(payload.duration_ms),
+    input_tokens: finiteNumber(payload.input_tokens),
+    cache_read_tokens: finiteNumber(payload.cache_read_tokens),
+    cache_creation_tokens: finiteNumber(payload.cache_creation_tokens),
+    output_tokens: finiteNumber(payload.output_tokens),
+    cost_usd_total: finiteNumber(payload.cost_usd_total)
+  }
+}
+
+/**
+ * The six turn-end numbers of a decoded TurnEndPayload, snake→camel, as a fresh literal of named
+ * fields (#1565). Shared by the history translation in decodeHistoryEvent and the live emit in
+ * daemonConnection.ts, so both paths carry the same set; spreading its result never smuggles a
+ * later decoder field across IPC.
+ */
+export function turnEndMetricsOf(p: TurnEndPayload): TurnEndMetrics {
+  return {
+    durationMs: p.duration_ms,
+    inputTokens: p.input_tokens,
+    cacheReadTokens: p.cache_read_tokens,
+    cacheCreationTokens: p.cache_creation_tokens,
+    outputTokens: p.output_tokens,
+    costUsdTotal: p.cost_usd_total
   }
 }
 

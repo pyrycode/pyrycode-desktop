@@ -123,6 +123,30 @@ carries these fields to the [stopped-record formatter](conversation-shell-timeli
 which owns control removal and escaped text rendering. Decode diagnostics retain
 only their existing static type, byte count and hash, never report values.
 
+**`TurnEndPayload` gained six optional numbers alongside these reports**
+(`duration_ms`, `input_tokens`, `cache_read_tokens`, `cache_creation_tokens`,
+`output_tokens`, `cost_usd_total` — claude's `result` numbers, pyrycode #2260/#2261,
+carried by [#1565](https://github.com/pyrycode/pyrycode-desktop/issues/1565)),
+widening the payload by a field, not a new kind — the #965 pattern. `parseTurnEndPayload`
+reads each through a local `finiteNumber` guard (`typeof === 'number' && Number.isFinite`);
+a non-number, `null` or non-finite value becomes `undefined`, never a reject, and nothing
+is clamped — `0` and negatives are carried as received. `duration_api_ms` and `num_turns`
+are deliberately not read: the former is a session running total routinely larger than the
+per-turn `duration_ms`, and carrying it would invite showing a session figure as this turn's
+own. All six are this turn's except `cost_usd_total`, the **session's** running total in US
+dollars. `Number.isFinite` is load-bearing, not defensive: `JSON.parse('1e400')` returns
+`Infinity`, so an out-of-range literal from the daemon reaches this guard as a real `number`
+that fails `isFinite`, even though `JSON.stringify` can never produce one — a fixture built
+through `encodeEnvelope` cannot exercise this path, so `src/main/transport/turnEndMetrics.test.ts`
+hand-builds the frame bytes instead, the same fixture-construction trap the size-guard tests
+under § Testing below already avoid. The six fields are re-mapped snake→camel as a fresh
+named-field literal by the exported `turnEndMetricsOf`, shared by both the live emit in
+[daemon connection](daemon-connection.md) and the `turn_end` arm of `decodeHistoryEvent`
+above — never a spread of the parsed payload, so a later decoder field cannot cross into the
+shared `TurnEndMetrics` IPC shape by accident. See [Thread timeline §
+Types](thread-timeline-internals.md#types) for where they land on `turnBoundary`/`turnEnd`
+and [Protected local chat history § API](chat-history.md#api) for why they never reach disk.
+
 ### Required model-refusal reports
 
 `parseModelRefusalNoFallbackPayload` validates the common fields of both refusal
@@ -394,3 +418,7 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
   neighbour in both files, is the wrong half of the family to copy on that point. Ships dormant: the
   IPC carry is #1515, whose consumer also owns the case this decode cannot cover — a daemon that never
   sends the falling edge. Full account in [Extension history](inbound-message-decode-history.md).
+- [#1565](https://github.com/pyrycode/pyrycode-desktop/issues/1565) widened `TurnEndPayload` by
+  six fields, not a new kind — the #965 pattern: claude's `result` numbers (duration, four token
+  counts, the session's running cost) alongside the existing stopped-turn reports. Full account in
+  [Optional stopped-turn reports](#optional-stopped-turn-reports) above.

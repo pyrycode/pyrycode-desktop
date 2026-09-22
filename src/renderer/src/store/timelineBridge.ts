@@ -154,7 +154,9 @@ export function translateTimelineEvent(
       }
     case 'turnEnd':
       return { type: 'turnEnd', turnId: event.turnId, stopReason: event.stopReason,
-        outcome: event.outcome, isError: event.isError, terminalReason: event.terminalReason, errorCategory: event.errorCategory }
+        outcome: event.outcome, isError: event.isError, terminalReason: event.terminalReason, errorCategory: event.errorCategory,
+        durationMs: event.durationMs, inputTokens: event.inputTokens, cacheReadTokens: event.cacheReadTokens,
+        cacheCreationTokens: event.cacheCreationTokens, outputTokens: event.outputTokens, costUsdTotal: event.costUsdTotal }
     case 'turnState':
       // `event.state` is WireTurnState; the ThreadEvent arm expects TurnPhase — the same literal union,
       // so this assigns with no cast and no import of TurnPhase (a rename, not a re-validation).

@@ -1,4 +1,4 @@
-import type { ModelRefusalEvent } from '@shared/ipc/events'
+import type { ModelRefusalEvent, TurnEndMetrics } from '@shared/ipc/events'
 import type { WireResetPhase, WireResetHandoff } from '@shared/wire/types'
 
 // The conversation timeline: a heterogeneous, ordered list of turn content (streamed
@@ -125,7 +125,7 @@ export type ThreadItem =
       denial?: ToolDenial
       elapsedSeconds?: number
     }
-  | { kind: 'turnBoundary'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string }
+  | ({ kind: 'turnBoundary'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string } & TurnEndMetrics)
   // The user's own message — a renderer-sourced echo, not daemon content, so it carries no `turnId`
   // (the daemon assigns those) and no `seq` (wire fidelity for daemon deltas): just the text. Ships
   // dormant; #179 wires the producer (the composer echo) and the render row.
@@ -257,7 +257,7 @@ export type ThreadEvent =
       resultDetail?: string
     }
   | { type: 'turnState'; state: TurnPhase }
-  | { type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string }
+  | ({ type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string } & TurnEndMetrics)
   // The user's own message. A whole message, never a stream of deltas — folded by a plain fresh
   // tail-append (like `toolUse`/`turnEnd`), not coalesced via `appendDelta`.
   //
@@ -823,7 +823,9 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
         items: [
           ...state.items,
           { kind: 'turnBoundary', turnId: event.turnId, stopReason: event.stopReason,
-            outcome: event.outcome, isError: event.isError, terminalReason: event.terminalReason, errorCategory: event.errorCategory }
+            outcome: event.outcome, isError: event.isError, terminalReason: event.terminalReason, errorCategory: event.errorCategory,
+            durationMs: event.durationMs, inputTokens: event.inputTokens, cacheReadTokens: event.cacheReadTokens,
+            cacheCreationTokens: event.cacheCreationTokens, outputTokens: event.outputTokens, costUsdTotal: event.costUsdTotal }
         ],
         phase: state.phase,
         stalled: state.stalled,

@@ -718,6 +718,17 @@ export interface TurnEndPayload {
   is_error?: boolean
   terminal_reason?: string
   error_category?: string
+  /**
+   * Claude's `result` numbers (pyrycode #2260 / #2261, #1565), each optional and carried as received:
+   * no clamping, so `0` and negatives pass through. All are this turn's except `cost_usd_total`, the
+   * SESSION's running total in US dollars. `duration_api_ms` and `num_turns` are deliberately not read.
+   */
+  duration_ms?: number
+  input_tokens?: number
+  cache_read_tokens?: number
+  cache_creation_tokens?: number
+  output_tokens?: number
+  cost_usd_total?: number
 }
 
 /**

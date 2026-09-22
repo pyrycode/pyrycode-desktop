@@ -125,7 +125,20 @@ fresh copy, no field mapping. [#751](../codebase/751.md) widened `DaemonEvent.as
 `conversationId`, and [#752](../codebase/752.md) did the same for `DaemonEvent.turnEnd` next, the
 same routing-key widening the four status arms below already had; both bridge cases are now
 filters (drop the id), and `ThreadEvent.assistantDelta`/`ThreadEvent.turnEnd` are the sides that
-stay three-field and two-field respectively. `turnState` is the same shape of
+stay three-field and two-field respectively.
+
+[#1565](https://github.com/pyrycode/pyrycode-desktop/issues/1565) widened `turnEnd` a second
+time, but not as a routing-key filter like `conversationId` above — the six `TurnEndMetrics`
+fields it added (`durationMs`, `inputTokens`, `cacheReadTokens`, `cacheCreationTokens`,
+`outputTokens`, `costUsdTotal`) are declared once in `src/shared/ipc/events.ts` and
+intersected onto **both** `DaemonEvent.turnEnd` and `ThreadEvent.turnEnd`, so the bridge case
+copies them by name rather than dropping them — the same discipline `outcome`/`isError`/
+`terminalReason`/`errorCategory` already had, restated rather than replaced. `decodeHistoryEvent`'s
+`turnEnd` arm and the live emit in [daemon connection](daemon-connection.md) share one helper,
+`turnEndMetricsOf`, exported from `inboundMessage.ts`, so both paths build the same fresh
+named-field literal and neither can smuggle a later decoder field across IPC by spreading the
+parsed payload. See [Thread timeline § Types](thread-timeline-internals.md#types) for the
+reducer side and why the fields never reach disk. `turnState` is the same shape of
 filter-not-rename: `event.state` (`WireTurnState`) assigns to the `ThreadEvent` arm's `state`
 (`TurnPhase`) with no cast, because the two are the same literal union declared on either side of the
 shared/renderer boundary (see [#214](../codebase/214.md)). `toolUse` ([#217](../codebase/217.md)) and

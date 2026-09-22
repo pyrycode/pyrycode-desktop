@@ -24,7 +24,8 @@ type ThreadItem =
   | { kind: 'assistantText'; turnId: string; text: string; createdAt?: number }
   | { kind: 'toolCall'; turnId: string; toolUseId: string; parentToolUseId?: string; name: string; inputSummary: string; input?: Readonly<Record<string, string>>; result: ToolResult | null; denial?: ToolDenial; elapsedSeconds?: number }
   | { kind: 'turnBoundary'; turnId: string; stopReason: string
-      ; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string }
+      ; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string
+      ; durationMs?: number; inputTokens?: number; cacheReadTokens?: number; cacheCreationTokens?: number; outputTokens?: number; costUsdTotal?: number }
   | { kind: 'userText'; text: string; createdAt?: number; messageId?: string; attachments?: readonly MessageAttachment[] }
   | { kind: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
   | { kind: 'compactionBoundary'; failed: boolean; manual: boolean; preTokens?: number | null; postTokens?: number | null }
@@ -37,7 +38,8 @@ type ThreadEvent =
   | { type: 'toolResult'; turnId: string; toolUseId: string; parentToolUseId?: string; isError: boolean; resultSummary: string; resultDetail?: string }
   | { type: 'turnState'; state: TurnPhase }
   | { type: 'turnEnd'; turnId: string; stopReason: string
-      ; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string }
+      ; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string
+      ; durationMs?: number; inputTokens?: number; cacheReadTokens?: number; cacheCreationTokens?: number; outputTokens?: number; costUsdTotal?: number }
   | { type: 'userText'; text: string; createdAt?: number; messageId?: string; attachments?: readonly MessageAttachment[] }
   | { type: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
   | { type: 'stallDetected' }
@@ -193,6 +195,24 @@ key or a React key — rather than restating it. See [Conversation shell — con
 modals § Queued rows folded into the
 thread](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213).
 
+**`TurnEndMetrics` ([#1565](https://github.com/pyrycode/pyrycode-desktop/issues/1565)) is a
+sixth field-pair widen, on `turnBoundary`/`turnEnd` only** — six optional numbers
+(`durationMs`, `inputTokens`, `cacheReadTokens`, `cacheCreationTokens`, `outputTokens`,
+`costUsdTotal`) declared once as `TurnEndMetrics` in `src/shared/ipc/events.ts` and
+intersected onto both arms (`& TurnEndMetrics`), rather than repeated inline the way
+`outcome`/`isError`/`terminalReason`/`errorCategory` are. All six are that turn's own except
+`costUsdTotal`, which is the **session's** running total in US dollars — claude's own
+estimate, never recomputed here. Carried as received: no summing, differencing or clamping,
+so `0` and a negative both survive; what "not reported" means (absent or `0`) is left to the
+display tickets that read the field, not this reducer. **Live-only by design**:
+`TurnEndMetrics` is not part of `DurableThreadItem`
+([Protected local chat history § API](chat-history.md#api)), so a reload never restores
+these six fields, and `chatHistoryContract.test.ts`'s exact-equality guard is narrowed to
+compare against `ThreadItem` with them omitted from `turnBoundary`, rather than widened to
+include them. See [Inbound message decode § Optional stopped-turn
+reports](inbound-message-decode.md#optional-stopped-turn-reports) for the wire-side parse
+and the `Number.isFinite` guard's load-bearing role.
+
 Parent attribution and result precedence are documented in
 [Tool parent attribution](conversation-timeline-store.md#tool-parent-attribution).
 Grouping changes display order only.
@@ -257,7 +277,7 @@ identity on reconnect.
 | `toolDenied` | attach the first denial to the exact turn/tool match; empty keys, unmatched calls and duplicates return the same state reference. Clear `elapsedSeconds`; preserve the result and every scalar. |
 | `toolResult` | find the `toolCall` with matching `toolUseId` **and** `result === null`, fill it in place, clearing `elapsedSeconds` and preserving any denial. No match (orphan or already-resolved duplicate) → **same `state` reference**, a deterministic non-throwing no-op. |
 | `turnState` | set `phase`; same reference if unchanged (no-churn); clears `thinkingTokens` to `null` when `event.state !== 'thinking'` (the widened guard below lets a repeat `turn_state{idle}` through when a reading is still held, rather than early-outing and leaving it stale) — [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) |
-| `turnEnd` | append a `turnBoundary`; does **not** touch `phase`; clears `thinkingTokens` to `null` — the think this reading measured is over even though `phase` itself resets separately on the daemon's own `turn_state: idle` — [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) |
+| `turnEnd` | append a `turnBoundary`, copying the event's six `TurnEndMetrics` fields onto it by name ([#1565](https://github.com/pyrycode/pyrycode-desktop/issues/1565)); does **not** touch `phase`; clears `thinkingTokens` to `null` — the think this reading measured is over even though `phase` itself resets separately on the daemon's own `turn_state: idle` — [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) |
 | `thinkingProgress` | assign `thinkingTokens: event.estimatedTokens` verbatim (same reference on a verbatim repeat — the wire has no dedup and re-fires as the count climbs); `items`/`phase`/every other scalar untouched — [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) |
 | `userText` | append a fresh `userText` item, carrying the event's `createdAt`, `messageId` and `attachments` unconditionally and by reference (never coalesced, so unlike `assistantDelta` there is no earlier stamp or set to preserve — [#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013), [#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039), [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213)); does **not** touch `phase` — the user's own message, sourced from the composer echo since [#179](../codebase/179.md) |
 | `sessionBoundary` | append a fresh `sessionBoundary` item (never coalesced); does **not** touch `phase` — the `/clear`/idle-eviction/workspace-change marker, sourced from the daemon's `sessionTransition` event via the bridge since [#286](../codebase/286.md) |

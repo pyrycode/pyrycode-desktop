@@ -1516,6 +1516,22 @@ describe('createDaemonConnection — structured stream (assistant_delta / turn_e
     expect(JSON.stringify(events)).toContain('conv-1')
   })
 
+  it('carries a turn_end\'s token counts, duration and session cost onto the turnEnd event (#1565)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: turnEndPlaintext({ ...TURN_END, duration_ms: 1234,
+      input_tokens: 0, cache_read_tokens: 500, cache_creation_tokens: -1, output_tokens: 88,
+      cost_usd_total: 0.4213, duration_api_ms: 999, num_turns: 3 }) })
+
+    // duration_api_ms and num_turns are deliberately not carried: `toEqual` reddens on either one.
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'turnEnd', turnId: 'turn-1', stopReason: 'end_turn', conversationId: 'conv-1', daemonTs: FIXED_TS,
+        durationMs: 1234, inputTokens: 0, cacheReadTokens: 500, cacheCreationTokens: -1, outputTokens: 88,
+        costUsdTotal: 0.4213 }
+    ])
+  })
+
   it('drops a malformed assistant_delta without emitting or throwing (fail-closed)', async () => {
     const { sink, drivers } = await connected()
     const before = sink.webContents.send.mock.calls.length

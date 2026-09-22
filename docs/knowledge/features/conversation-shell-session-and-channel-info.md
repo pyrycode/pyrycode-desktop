@@ -109,9 +109,10 @@ no live Claude run.
 Makes the thread overflow menu's **Channel info** item (#276, previously a live no-op) open a new
 bottom sheet (Figma node 20-48), reusing the Run-configuration `StatusSheet`'s `.status-sheet__*`
 chrome verbatim — the second sheet to do so. Renders the active conversation's **About** detail
-(Workspace `cwd` + Last activity), read-only **Session** facts (#1241), a **System prompt** section
-(#1078), **Actions**, and a monospace **Channel ID** footer. The Session report arrives through the
-validated daemon event path; the sheet owns only its display.
+(Workspace `cwd` + Last activity), read-only **Session** facts (#1241), a read-only **MCP servers**
+list (#1490), a **System prompt** section (#1078), **Actions**, and a monospace **Channel ID** footer.
+The Session report and the MCP report both arrive through the validated daemon event path; the sheet
+owns only their display.
 
 ```
 .conversation
@@ -127,6 +128,7 @@ validated daemon event path; the sheet owns only its display.
                 ├── .channel-info__row × 2          Workspace (mono, cwd) / Last activity  — or —
                 ├── .channel-info__empty            "No conversation details yet" (conversation === null)
                 ├── "Session" + two detail rows     Claude version / Reported permission mode (conversation !== null)
+                ├── McpServersSection                #1490, conversation !== null only — see below
                 ├── SystemPromptSection              #1078, conversation !== null only — see below
                 ├── "Actions" section-header
                 ├── .channel-info__actions          mount point for #366/#367/#368 (Rename+Archive built, Delete #367 open)
@@ -266,6 +268,60 @@ position between the Session header and Actions. `e2e/channel-info-session-cost.
 opens the sheet before any turn (no row), sends three messages whose `turn_end` frames report 0.10, then
 0.42, then none, and confirms the sheet shows exactly `$0.42 est.` — never a summed `$0.52` — under the
 Claude-attributed label.
+
+### MCP servers section ([#1490](https://github.com/pyrycode/pyrycode-desktop/issues/1490))
+
+A read-only list of claude's MCP servers, sitting after the Session facts rows and before the System
+prompt section — #1489's decoded `mcp_status` report carried the rest of the way, slice for slice on
+[#1241 session facts](#session-reports)'s path: one `DaemonEvent` member (`mcpStatus`), an ignore arm
+on each of the four exhaustive renderer bridges, a `Map`-keyed store (`mcpStatusStore.ts`) retaining one
+report per conversation id, an always-mounted `McpStatusData` bridge (`App.tsx`, beside
+`SessionFactsData`) so a report lands while the sheet is closed, and an unconditional `clearMcpStatus()`
+in `clearPairingScopedState`. `selectMcpStatusFor(id)` returns `null` for "no report has arrived" and a
+`{ servers: [], droppedServers }` report for claude's own positive "no servers" — the two states the wire
+doc requires apart stay apart end to end.
+
+**Wording.** `McpServersSectionView` (pure, `report | null` plus `showBuiltIn` in → markup out) picks
+one of four lines: `report === null` → *No MCP report has arrived yet.* (no toggle, no rows); an empty
+`servers` → *Claude reported no MCP servers.*; a non-empty `servers` fully hidden by the built-in filter
+→ *Only built-in servers are reported.*; and, independently, `droppedServers > 0` → *Partial list: N more
+servers were left out by the daemon.* stacked beneath whichever of the first three applies. The review
+that shipped this (PR #1576) flagged as a non-blocking SHOULD FIX that the third case can still read as
+self-contradictory when the daemon drops every row (`servers: [], droppedServers > 0` shows both "Claude
+reported no MCP servers." and the partial line back to back) — left unfixed as a deliberately unlikely
+edge case, along with a NIT that the partial line never pluralizes ("1 more servers"). Fix both together
+if this section changes again.
+
+**Show built-in** is a `useState(false)` owned by the container (`McpServersSection`), not persisted and
+not read from the store — every sheet open starts hidden, matching "off by default". It filters rows
+whose `name` is exactly `pyry_approve` or `pyry_files`, the daemon's own servers on every non-bypass
+spawn, matched against a client-owned constant list — display-only, never a behavior gate. Rows keep
+claude's order (never sorted) and are `key`ed by array position, since a claude-authored `name` must
+never become a React key, a `Map` key or any other identity. Each row shows the name, a 6px
+`--radius-full` dot styled on the sidebar `ConversationStatusDot` (`--color-success` for exactly
+`connected`, `--color-error` for exactly `failed`, `--color-outline` for every other word — a closed
+three-way client set, `status` itself is never parsed or mapped), and the status word verbatim. A
+non-empty `error` renders as its own `<p class="channel-info__mcp-error">` beneath the row with
+`white-space: pre-wrap`, so an embedded newline stays inside that one text block; an empty `error` adds
+nothing. Name, status and error are each bounded to 256 Unicode code points with a trailing `…` on cut,
+the same bound `SessionFacts` uses for reported fields — every string reaches the DOM only as an escaped
+React child, never an attribute, a URL, a filename or a log line.
+
+`MCPServerStatus` also carries `scope` and `version` (both copied into the store's retained rows), but
+neither is rendered here — this ticket draws only what #1490's acceptance criteria named. A later ticket
+adding either should read `mcpStatusStore.ts`'s row-copy first: the fields are already flowing.
+
+**Testing.** `McpServersSection.test.tsx` (static render) pins the four wording states, claude's row
+order, the tone-by-exact-word mapping, the error line's escaping and newline, the built-in filter both
+ways, the 256-code-point bound, and that no daemon string reaches an attribute. `daemonConnection.test.ts`
+asserts the `mcp-status` arm emits exactly one named-field event and drops a malformed frame — added
+because, per the PR's Lessons learned, a test asserting only "no event emitted" would have passed both
+before and after this ticket, since #1489 already decoded the frame but nothing downstream consumed it.
+`e2e/channel-mcp-servers.spec.ts` (fake transport) pushes reports for two conversations before opening
+the sheet (the closed-sheet retention proof), toggles built-in visibility, and confirms a report survives
+closing the sheet and switching conversations; reconnect survival is structural, proven by
+`clearPairingScopedState.test.ts` rather than driven live. Not `needs-real-claude`: the acceptance is a
+daemon frame rendering, which the fake transport already covers end to end.
 
 **Rename action ([#368](../codebase/368.md)), retitled Edit chat ([#1440](rename-conversation-dialog.md)),
 split into Edit channel / Edit chat by conversation kind ([#1431](edit-channel-dialog.md)).**

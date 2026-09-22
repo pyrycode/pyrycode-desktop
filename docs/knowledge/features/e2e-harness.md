@@ -190,6 +190,28 @@ retains the successful attempt ID for the foreign/stale-result assertions, avoid
 a second unguarded read. A one-shot injected context-loss error must recover through
 a real Electron read; listener installation, clicks and pushed events are never replayed.
 
+**The one sanctioned exception: a control action confirmed not-delivered.** "Never replayed"
+above is the default, not an absolute — a mutation can be resent, but only after the renderer
+has been watched long enough to show it does not have the effect yet.
+[#1569](https://github.com/pyrycode/pyrycode-desktop/issues/1569) hit this in
+`attachment-image-open.spec.ts`'s `pushCompleted`: the push is `app.evaluate` around
+`webContents.send` of an `AttachmentUploadEvent`, and a blind retry is wrong because
+`reducePendingAttachments` (`ComposerAttach.tsx`) appends every `completed` event with no
+dedup by id — a replayed event is a second pending tile and the message carries the
+attachment twice. `e2e/fixtures/confirmedPush.ts` exports `pushConfirmingDelivery(push,
+delivered, options?)`: on a clean `push()` it returns without ever calling `delivered`; on
+the transient context loss (`isTransientContextLoss`, lifted out of `mainProcessRead.ts` so
+both modules share one recogniser and one message constant) it polls `delivered()` every
+100ms for `confirmWithinMs` (default 2s) and only resends — once — if nothing showed. A
+second loss with still nothing seen throws, bounding a dead or permanently context-less app
+at about two confirmation windows rather than the test timeout. Any other error, from either
+`push` or `delivered`, rethrows unchanged and at once. `delivered` must be phrased as an
+absolute expectation — "the strip now holds *n* tiles" — never a before/after difference: a
+before-count taken inside the helper could credit a previous push's late-rendering tile to
+the current one and skip a resend that was actually needed. `e2e/fixtures/confirmedPush.test.ts`
+covers this the way `mainProcessRead.test.ts` covers reads: stubbed `push`/`delivered`, no
+Electron, since the race itself does not reproduce on demand.
+
 `readAuthentication` keeps its own private copy of the same tolerance.
 
 ## Configuration and usage

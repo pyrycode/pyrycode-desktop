@@ -723,8 +723,10 @@ type BaseDaemonEvent =
   // It is a ROUTING KEY, not rendered text — the untrusted-text warning above attaches to `workspaceCwd`
   // and not to this. It is never markup, an attribute, a URL, a filename, a cache key or a lookup path,
   // and it reaches no log sink (the decoder's messages name the failure CATEGORY only, and
-  // emitDaemonEvent is log-free by construction). Its one renderer consumer (`subscribeSessionId`)
-  // COMPARES it against the open conversation and discards it — it is never stored or rendered.
+  // emitDaemonEvent is log-free by construction). It is never rendered. It has two renderer consumers.
+  // `subscribeSessionId` COMPARES it against the open conversation and discards it. Since #1559,
+  // `timelineTargetFor` routes the session-boundary row by it, so it is also a key into the keyed
+  // timeline store's `Map`, as every id-carrying arm's routing key already is.
   | {
       type: 'sessionTransition'
       conversationId: string

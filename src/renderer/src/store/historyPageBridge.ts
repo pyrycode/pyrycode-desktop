@@ -93,9 +93,12 @@ import {
  * `prependHistoryFor` already decides about operator rows by that id, and one owner for that decision is
  * the point. A message with no held echo — one sent from another client — survives both and draws.
  *
- * `sessionTransition` also ends the run and is NOT stepped over, for a different reason: `joinKeyToRecord`
- * declines a key whose conversation was inferred rather than asserted, so its live twin may have drawn
- * while recording nothing. #1192's second deliverable is what changes that.
+ * `sessionTransition` is NOT stepped over, and since #1559 it needs no reason of its own: it joins like
+ * any stamped arm. Until then `timelineTargetFor` returned `null` for it, the fan-out filed the marker
+ * into the chat on screen, and `joinKeyToRecord` declined its key, so its entry always ended the run and
+ * the page's copy drew a second divider beside the live one. #1559 routes the marker by its own `conversation_id`, so
+ * the live key is recorded against the chat the frame named and the page's copy drops here like any
+ * other keyed entry. No code in this function ever special-cased the type, so the change needed none.
  *
  * IT DROPS ON THE PAGE SIDE, NEVER THE LIVE SIDE, and that is AC3 rather than an implementation
  * convenience: the live row stays exactly where the live stream put it, and the page's copy — which

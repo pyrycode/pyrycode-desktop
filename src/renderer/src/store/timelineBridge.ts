@@ -230,6 +230,9 @@ export function translateTimelineEvent(
       // nullability is preserved verbatim. reduceTimeline folds it into a fresh `sessionBoundary` item in
       // arrival order (#121). The #259 holder is a SEPARATE subscriber on the same channel and still sees
       // this event unchanged — moving it out of the no-op group here does not affect it.
+      //
+      // `conversationId` (#1192) STOPS here too, the id-carrying arms' discipline. It reaches the keyed
+      // store through `timelineTargetFor` below, which routes the boundary by it since #1559.
       return {
         type: 'sessionBoundary',
         reason: event.reason,
@@ -573,13 +576,14 @@ export function translateTimelineEvent(
  *   - only at the FAN-OUT (`timelineWriteTarget` / `useTimelineBridge`), never in this function, which
  *     stays a pure function OF THE EVENT — the open conversation is not a property of an event, and
  *     making it one is the misattribution the whole #675 family exists to remove;
- *   - only for the two `ThreadEvent` arms ENUMERATED there — `sessionBoundary` and `reconnected`, the
- *     two this bridge does not attribute from the event itself (one reason each below);
+ *   - only for the one `ThreadEvent` arm ENUMERATED there — `reconnected`, the arm this bridge does not
+ *     attribute from the event itself (see the `connected` group below). `sessionBoundary` was the
+ *     second until #1559 routed it by the frame's own `conversationId`;
  *   - and only AFTER the event's own attribution has been found absent, so an attributed arm never
  *     consults it at all.
  *
  * Two functions, two sentences: attribution (here) reads the event and nothing else; write-key
- * resolution (below) reads attribution first and the screen only for those two arms.
+ * resolution (below) reads attribution first and the screen only for that one arm.
  *
  * `translateTimelineEvent`'s companion, deliberately a SECOND pure function rather than a widening of
  * that translator's return type to `{ event, conversationId } | null`: the translator is called at 19
@@ -624,27 +628,28 @@ export function timelineTargetFor(event: DaemonEvent): string | null {
     case 'unrecognizedMessage':
     case 'thinkingProgress':
     case 'resetting':
-      // Eleven of the thirteen owned arms carry the frame's `conversation_id` (#751 / #752 / #724 / #763 /
-      // #766 / #732 / #737 / #742 / #784 / #1313 / #1514, the #675 family). It is REQUIRED on every one of them — a
+    case 'sessionTransition':
+      // Twelve of the thirteen owned arms carry the frame's `conversation_id` (#751 / #752 / #724 / #763 /
+      // #766 / #732 / #737 / #742 / #784 / #1313 / #1514 / #1192, the #675 family). It is REQUIRED on every one of them — a
       // missing or non-string `conversation_id` fails the whole line at the decode without emitting — so
       // the routing key is non-nullable here by construction. TypeScript narrows across grouped cases,
       // so the field resolves with no cast and no probe.
-      return event.conversationId
-    case 'sessionTransition':
-    case 'connected':
-      // The other two owned arms are not attributed from the event here. A connection edge has no
-      // conversation by nature and never will. `sessionTransition` is the changed one: since #1192 it
-      // DOES carry a `conversationId` — the routing key the daemon has always stamped, which this
-      // repo's port was simply missing — and `subscribeSessionId` reads it to scope the session-id
-      // write. THIS function deliberately does not. Routing the delimiter by it is a second
-      // deliverable with its own detector (the marker would then draw in a chat that is not on
-      // screen), so the behaviour is unchanged and only the reason for it is: `null` here is a choice
-      // now, not an absence. Returning it is still what keeps the resolution OUT of this pure function.
       //
-      // They are NOT dormant. Each still reaches the flat store, which is what AC4 keeps true, and since
-      // #785 the fan-out (`timelineWriteTarget`) files each into the conversation ON SCREEN — the
-      // conversation the flat store has always meant — or drops it from the keyed path when none is
-      // open. Inventing a key is still what AC3 bans; reading the screen for exactly these two is not
+      // `sessionTransition` joined this group in #1559. #1192 ported its `conversationId` and left
+      // routing the delimiter by it as a second deliverable, so until then this returned `null` and the
+      // fan-out filed the marker into the chat ON SCREEN — reset A, switch to B during the wrap-up turn,
+      // and the separator drew in B and never in A. Nothing repaired that later: a history page only
+      // backfills rows OLDER than the oldest held one. Mobile routes the boundary strictly by this key
+      // (mobile #336), and so does this now, whether or not the chat it names is open.
+      return event.conversationId
+    case 'connected':
+      // The one owned arm not attributed from the event: a connection edge has no conversation by
+      // nature and never will. Returning `null` is what keeps the resolution OUT of this pure function.
+      //
+      // It is NOT dormant. It still reaches the flat store, which is what AC4 keeps true, and since
+      // #785 the fan-out (`timelineWriteTarget`) files its reconcile into the conversation ON SCREEN —
+      // the conversation the flat store has always meant — or drops it from the keyed path when none is
+      // open. Inventing a key is still what AC3 bans; reading the screen for this one arm is not
       // inventing one.
       return null
     default:
@@ -658,26 +663,25 @@ export function timelineTargetFor(event: DaemonEvent): string | null {
  * that one answers "what did the event say", this one answers "where does the fan-out put it".
  *
  * The event's OWN attribution always wins, and it is checked FIRST. Two consequences, both load-bearing:
- * the nine id-carrying arms never consult the open conversation at all (the strongest available
- * statement of "no misattribution", and directly assertable on a spy), and a future wire widening is
- * safe by construction — if `session_transition` ever gained a `conversation_id` (a daemon + mobile
- * change, out of scope for this repo), `timelineTargetFor` would return the real id and this function
- * would honour it with no edit here. Ordering the switch first would silently override it. That branch
- * is unreachable in production today and is pinned by a direct unit test anyway; being able to pin it is
- * the point of this being pure.
+ * the id-carrying arms never consult the open conversation at all (the strongest available statement
+ * of "no misattribution", and directly assertable on a spy), and a wire widening is safe by
+ * construction. That second consequence is no longer hypothetical: `session_transition` gained its
+ * `conversation_id` (#1192), `timelineTargetFor` returns it since #1559, and this function honoured it
+ * with no edit to this check. Ordering the switch first would have silently overridden it.
  *
  * THE FALLBACK IS ENUMERATED, NEVER BLANKET. `conversationId ?? getOpenConversationId()` is the obvious
  * one-liner and it is banned here: it would file ANY unattributed owned event onto the thread on screen,
  * including a future arm whose author added a case to `translateTimelineEvent` and forgot one in
  * `timelineTargetFor` — that arm would land silently on the wrong thread. With the enumeration it falls
  * to `default` instead and is dropped from the keyed path, reaching the flat store only, which is the
- * same safe failure direction `timelineTargetFor`'s own `default` has. The two named arms are the two
- * this bridge does not attribute from the event itself (see that function's second group — since #1192
- * one of them CAN be, and deliberately still is not).
+ * same safe failure direction `timelineTargetFor`'s own `default` has. The one named arm is the one
+ * this bridge does not attribute from the event itself (see that function's `connected` group).
+ * `sessionBoundary` was named here too until #1559, and that fallback was the live defect: a reset in
+ * one chat drew its separator in whichever chat the operator had switched to.
  *
  * `getOpenConversationId` is a GETTER, not a value, for two reasons. It must be read at DISPATCH time:
  * one app-lifetime listener outlives any number of chat switches, so a value captured at subscribe time
- * would file a boundary into the conversation the operator has already left — the staleness argument
+ * would file a reconnect into the conversation the operator has already left — the staleness argument
  * `activateConversation.ts:16-23` makes for its own `getActiveConversation`. And it kills the positional
  * cross-wire: `string | null` and `() => string | null` are not interchangeable, so swapping arguments
  * two and three is a compile error rather than a test-only failure (the hazard
@@ -693,11 +697,14 @@ export function timelineWriteTarget(
 ): string | null {
   if (conversationId !== null) return conversationId
   switch (event.type) {
-    case 'sessionBoundary':
     case 'reconnected':
-      // The conversation on screen IS what the flat store has always meant for these two, so filing
-      // them here preserves what the operator sees bit for bit (#785 AC1/AC2). `null` — nothing open —
-      // drops them from the keyed path without inventing a key (AC3).
+      // The conversation on screen IS what the flat store has always meant for a reconnect, so filing
+      // it here preserves what the operator sees bit for bit (#785 AC2). `null` — nothing open — drops
+      // it from the keyed path without inventing a key (AC3).
+      //
+      // `sessionBoundary` sat beside it until #1559 and must never return: every boundary now arrives
+      // attributed, and an unattributed one falling back to the screen is exactly the defect #1559
+      // removed — the separator drawn in the chat being read instead of the chat that was reset.
       return getOpenConversationId()
     default:
       return null
@@ -747,17 +754,19 @@ export function subscribeTimeline(
  * The join key this event may contribute TO THE SLICE IT WILL BE FILED INTO, or `undefined` (#1225).
  *
  * ⭐ ONLY AN EVENT'S OWN ATTRIBUTION MAY MINT A KEY, and this guard is the reason the key is computed
- * here rather than at the fan-out. `timelineTargetFor` returns `null` for `sessionTransition` and
- * `connected`, and `timelineWriteTarget` then files those into the conversation ON SCREEN (#785) — which
- * need not be the conversation the event belongs to. A key recorded against that slice could suppress
- * THAT conversation's own page entry whenever the daemon minted the two the same instant with the same
- * type, and a dropped row is the one direction this join refuses. So a key whose conversation was
- * inferred rather than asserted is never minted at all.
+ * here rather than at the fan-out. `timelineTargetFor` returns `null` for `connected`, and
+ * `timelineWriteTarget` then files its reconcile into the conversation ON SCREEN (#785) — which the
+ * event never named. A key recorded against that slice could suppress THAT conversation's own page
+ * entry whenever the daemon minted the two the same instant with the same type, and a dropped row is the
+ * one direction this join refuses. So a key whose conversation was inferred rather than asserted is
+ * never minted at all. The emit stamps no `daemonTs` on `connected` today, so the guard is a second
+ * line behind that; it stays because the type admits a stamp on every arm.
  *
- * The cost is that `sessionTransition` contributes no live key and its page twin always draws: a
- * duplicate `Session reset` divider, which is the fail-open side. Routing the delimiter by the
- * `conversation_id` #1192 added to that frame is that ticket's stated second deliverable; when it lands,
- * `timelineTargetFor` returns a real id and this function starts keying it with no edit here.
+ * `sessionTransition` was this guard's working case until #1559. Its slice was inferred from the
+ * screen, so it contributed no live key and its page twin always drew a duplicate `Session reset`
+ * divider. #1559 routes the marker by the `conversation_id` #1192 ported, so `timelineTargetFor`
+ * returns a real id and this function keys it with no edit here: the key is recorded against the chat
+ * the frame named, and a served page of that chat holding the same entry draws no second divider.
  */
 function joinKeyToRecord(event: DaemonEvent, conversationId: string | null): string | undefined {
   return conversationId === null ? undefined : liveJoinKeyFor(event)
@@ -785,8 +794,9 @@ function joinKeyToRecord(event: DaemonEvent, conversationId: string | null): str
  * `(conversationId, event)`. Not a hazard worth restructuring for: `ThreadEvent` and `string` are not
  * interchangeable, so a swap is a compile error.
  *
- * #785 makes the keyed write's guard the RESOLVED target rather than the event's own id, so the two
- * arms that carry none reach the conversation on screen. `getOpenConversationId` MUST be a stable
+ * #785 makes the keyed write's guard the RESOLVED target rather than the event's own id, so an arm
+ * that carries none can reach the conversation on screen. Since #1559 that is `reconnected` alone: a
+ * session boundary is filed into the chat its frame names, never the one on screen. `getOpenConversationId` MUST be a stable
  * module-level constant: it is the effect's only dependency, so an inline arrow would resubscribe on
  * every `App` render instead of holding one listener for the app's lifetime. The dependency array names
  * it rather than staying `[]`, which is honest about that requirement rather than hiding it.

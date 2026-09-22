@@ -6,6 +6,17 @@ const conversation = { id: 'a', name: 'A', cwd: '/fake', is_promoted: false, las
 const report = { claudeCodeVersion: '<script>preview</script>', permissionMode: 'futureMode', truncatedFields: ['permission_mode'] }
 
 describe('Channel info Session', () => {
+  it("shows the running cost as Claude's estimate only when one is held", () => {
+    const withCost = renderToStaticMarkup(<ChannelInfoSheetView conversation={conversation} onClose={() => {}} sessionCostUsd={0.4213} />)
+    expect(withCost).toContain('Cost (Claude&#x27;s estimate)')
+    expect(withCost).toContain('$0.42 est.')
+    expect(withCost.indexOf('>Session<')).toBeLessThan(withCost.indexOf('$0.42 est.'))
+    expect(withCost.indexOf('$0.42 est.')).toBeLessThan(withCost.indexOf('>Actions<'))
+    const without = renderToStaticMarkup(<ChannelInfoSheetView conversation={conversation} onClose={() => {}} />)
+    expect(without).not.toContain('Cost (')
+    expect(without).not.toContain('est.')
+  })
+
   it('shows missing fields and keeps section ordering', () => {
     const markup = renderToStaticMarkup(<ChannelInfoSheetView conversation={conversation} onClose={() => {}} systemPromptSection={<p>System prompt</p>} />)
     expect(markup.match(/Not reported/g)).toHaveLength(2)

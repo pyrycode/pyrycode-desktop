@@ -422,3 +422,45 @@ principle settle before the post-`setSize` relayout. The spec's launch-width rhy
 detector and is what reddens on `main`; the narrow-width AC1 assertion is the one to harden, on the
 `e2e/composer-options-clamp.spec.ts` precedent of polling a value that changes across the resize (e.g.
 `window.innerWidth`, which `setSize` moves, rather than one that is already satisfied at launch width).
+
+## Context breakdown popover (#1254)
+
+The reading became clickable: `ContextUsageControl` (above) now wraps the unchanged
+`<ContextUsageReading/>` span in `ContextBreakdownPopover` (new module,
+`src/renderer/src/screens/conversation/ContextBreakdownPopover.tsx`), a button that opens a read-only
+panel over the held [reported-context-store](reported-context-store.md) record. Nothing renders when
+`contextUsagePercent` is `null`, exactly as the bare reading rendered nothing before — the popover adds
+no new empty state. The container mirrors `ComposerOptionsMenu`'s open/close/focus-return/Escape/outside-
+click lifecycle minus rows to rove; `open` is component-local so it resets on remount (ADR 0006). The
+panel's content is `reported` alone, never the settings-snapshot fallback pair — when the footer is
+showing the fallback figure, `reported` is `null` and the panel shows one client-owned pending line rather
+than recomputing a breakdown the daemon never sent.
+
+**Right-aligned in CSS, not clamped.** The shared `useComposerOptionsClamp` (window-width bound plus a
+measured left shift) is the footer menus' placement, but both its parts failed at the 800px minimum for a
+panel anchored at the row's *far right* edge: the width bound squeezed the fixed 280px panel to about
+130px, and without it the shift moved the panel to the *window's* edge — 20px past
+`.paired-shell__pane`'s own edge, whose `overflow: hidden` clipped the panel's right side. `.context-
+breakdown` instead sets `right: 0; left: auto` against its own anchor (the `--bottom-end` precedent), which
+needs no measurement: the reading's right edge is always inside the pane, and 280px to its left clears the
+sidebar at every allowed width. A trigger anchored at a row's trailing edge is the case where the fixed
+placement beats the shared clamp — reach for it first rather than re-deriving the failure.
+
+**The new anchor deliberately does not wear `.composer-options-anchor`.** That class carries
+`min-width: 0`, which is exactly what lets a footer menu give width under the #1107 shrink policy — and
+the context reading is the one control the policy names as never giving. `.context-breakdown-anchor` is
+its own class with `flex: 0 0 auto` instead, so `e2e/composer-footer-overflow.spec.ts`'s anchor count
+(pinned at 4) stays correct and the reading's width guarantee survives the new wrapper.
+
+Every daemon string the held reading carries (`model`, category/tool/server names, memory-file paths,
+the last `shortenPath`-ed) reaches the panel as a JSX text child only, per the store's own inert-text
+mandate; the one data-derived attribute is a category's bar width, a share already clamped to `[0, 100]`.
+MCP tools are grouped by `server_name` through a `Map` (`groupMcpToolsByServer`), never a plain object, so
+a hostile `__proto__` server name is an ordinary group. See
+[`ContextBreakdownPopover.tsx`](https://github.com/pyrycode/pyrycode-desktop/blob/main/src/renderer/src/screens/conversation/ContextBreakdownPopover.tsx)
+for the row-by-row rationale; the security review at
+[`docs/specs/architecture/1254-context-breakdown-popover.md`](../../specs/architecture/1254-context-breakdown-popover.md)
+walks the full checklist (PASS, no findings).
+
+Covered by `e2e/composer-context-breakdown.spec.ts`: no reading held, a frame carrying all three
+inventories, and a categories-only frame (no MCP or memory group renders).

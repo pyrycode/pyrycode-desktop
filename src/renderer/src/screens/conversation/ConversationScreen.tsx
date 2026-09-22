@@ -116,6 +116,7 @@ import { foldQueuedRows, type QueuedRowHandle } from './foldQueuedRows'
 import { groupToolRows } from './groupToolRows'
 import { copyMessageText } from './copyMessageText'
 import { formatMessageTime } from './messageTime'
+import { turnStatsByItemIndex } from './turnStats'
 import { AttachmentFileIcon } from './AttachmentFileIcon'
 import { isImageAttachmentName } from './attachmentIsImage'
 import { BubbleAttachmentImage } from './BubbleAttachmentImage'
@@ -1019,6 +1020,8 @@ export function Timeline({
   saved?: boolean
 }): JSX.Element {
   const rows = foldQueuedRows(items, queued ?? EMPTY_QUEUED)
+  // #1566: keyed by item index, which is the row index below items.length (foldQueuedRows).
+  const turnStats = turnStatsByItemIndex(items)
   const [expandedTools, setExpandedTools] = useState<ReadonlySet<number>>(() => new Set())
   const projection = groupToolRows(rows.map((row) => row.item))
   const hiddenRows = new Set(projection.filter((group) =>
@@ -1054,7 +1057,7 @@ export function Timeline({
         const hidden = hiddenRows.has(group.index)
         if (row.item.kind !== 'toolCall') return (
           <TimelineRow key={group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
-            item={row.item} queued={row.queued} onDropQueued={onDropQueued}
+            item={row.item} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(group.index)}
             inProgress={!saved && group.index === items.length - 1 && row.item.kind === 'assistantText'} />
         )
         const content = (
@@ -1126,14 +1129,21 @@ const COPY_MESSAGE_LABEL = 'Copy message'
 // Timeline's prop surface, which is what kept the ~30 existing `<Timeline` render sites untouched — the
 // same optionality argument #1214's two props had to make when they DID need to reach the container. The
 // promise is explicitly voided — never floating — and copyMessageText handles its own rejection.
+//
+// #1566: `turnStats` is the formatted turn numbers, passed only to a turn's last assistant bubble. It is
+// appended after the copy control as React text only (never an attribute or `title`: the numbers are
+// daemon-supplied), and `.bubble__turn-stats` keeps it `display: none` until the row is hovered, so an
+// unhovered row draws and measures exactly as before. Absent → byte-identical markup to #1014's.
 function BubbleMeta({
   text,
   side,
-  createdAt
+  createdAt,
+  turnStats
 }: {
   text: string
   side: 'user' | 'daemon'
   createdAt?: number
+  turnStats?: string
 }): JSX.Element {
   return (
     <div className={side === 'user' ? 'bubble__meta bubble__meta--user' : 'bubble__meta'}>
@@ -1161,6 +1171,7 @@ function BubbleMeta({
           <path d="M4.71429 0C3.84754 0 3.14286 0.672656 3.14286 1.5V7.5C3.14286 8.32734 3.84754 9 4.71429 9H9.42857C10.2953 9 11 8.32734 11 7.5V2.79844C11 2.39062 10.8257 1.99922 10.5163 1.71562L9.09955 0.417188C8.80737 0.15 8.41696 0 8.01183 0H4.71429ZM1.57143 3C0.704688 3 0 3.67266 0 4.5V10.5C0 11.3273 0.704688 12 1.57143 12H6.28571C7.15246 12 7.85714 11.3273 7.85714 10.5V10.125H6.28571V10.5H1.57143V4.5H1.96429V3H1.57143Z" />
         </svg>
       </button>
+      {turnStats !== undefined && <span className="bubble__turn-stats">{turnStats}</span>}
     </div>
   )
 }
@@ -1347,12 +1358,15 @@ function TimelineRow({
   item,
   inProgress,
   queued = null,
-  onDropQueued
+  onDropQueued,
+  turnStats
 }: {
   item: ThreadItem
   inProgress: boolean
   queued?: QueuedRowHandle | null
   onDropQueued?: (queuedMsgId: number, messageId: string | undefined) => void
+  /** #1566: set only on a closed turn's last assistant bubble; read only by the `assistantText` arm. */
+  turnStats?: string
 }): JSX.Element | null {
   switch (item.kind) {
     case 'assistantText': {
@@ -1406,7 +1420,7 @@ function TimelineRow({
                 settles, and a partial reply is as copyable as a finished one. #607's pre-wrap reaches
                 this subtree on that branch and is inert there: the JSX transform emits no whitespace
                 text nodes between elements on separate lines. */}
-            <BubbleMeta text={item.text} side="daemon" createdAt={item.createdAt} />
+            <BubbleMeta text={item.text} side="daemon" createdAt={item.createdAt} turnStats={turnStats} />
           </div>
         </div>
       )

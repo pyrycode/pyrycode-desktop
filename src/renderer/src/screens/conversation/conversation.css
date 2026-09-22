@@ -688,6 +688,19 @@
   display: block;
 }
 
+/* #1566 — a turn's tokens and time, on the meta row of its last assistant bubble. The drawing gives the
+   hover content no state of its own, so it takes the row's type and ink by inheritance and adds nothing
+   until hovered. display: none rather than visibility: hidden, which would reserve its width and could
+   widen a short bubble while nothing is hovered. nowrap keeps the revealed row on its one 16px line. */
+.bubble__turn-stats {
+  display: none;
+  white-space: nowrap;
+}
+
+.bubble__meta:hover .bubble__turn-stats {
+  display: inline;
+}
+
 /* #607 — the IN-PROGRESS assistant tail's whitespace treatment. .bubble declares no white-space, so the
    initial `normal` collapsed every newline and every run of spaces into a single space and a
    multi-paragraph reply arrived as one run-on block. pre-wrap is the one value the criteria leave:

@@ -157,22 +157,145 @@ describe('backgroundTaskRosterStore', () => {
     expect(heldTask(store, 'c1', 't1')?.toolCallId).not.toBe('')
   })
 
-  it('holds a started task under its conversationId and taskId, for a never-observed conversation (AC1)', () => {
-    const store = createBackgroundTaskRosterStore()
-    store.getState().setStartedTask(started({ conversationId: 'c9' }))
+  // #1563 — claude sends `task_started` for FOREGROUND work too (a Bash call past ~3 s, with
+  // `is_backgrounded: false` the daemon drops), and no roster ever lists it. The roster line is the
+  // background set, so a start reaches the read surface only once a roster lists its task; until then
+  // it waits in `unlistedStarts`, which neither the pill nor the panel reads.
+  describe('listed-only surfaces (#1563)', () => {
+    it('a start no roster has listed reaches no surface — never-observed stays null (AC1)', () => {
+      const store = createBackgroundTaskRosterStore()
+      const before = store.getState().rosters
+      store.getState().setStartedTask(started({ conversationId: 'c9' }))
 
-    // No roster has named this task; the entry is created anyway, so the started frame is never lost
-    // waiting for one (claude orders these, not the daemon — a roster may never follow).
-    expect(heldFor(store, 'c9')).not.toBeNull()
-    expect(heldTask(store, 'c9', 't1')).toEqual({
-      taskId: 't1',
-      toolCallId: 'tc-1',
-      taskType: 'local_bash',
-      description: 'grep -rn "a<b&c" . --include="*.ts" --color=never',
-      truncatedFields: null,
-      latestUpdate: null
+      // Still "No background-task report yet", not "No background tasks": creating an entry here
+      // would collapse the two silences.
+      expect(heldFor(store, 'c9')).toBeNull()
+      expect(store.getState().rosters).toBe(before)
+      expect(store.getState().unlistedStarts.get('c9')?.get('t1')).toEqual({
+        taskId: 't1',
+        toolCallId: 'tc-1',
+        taskType: 'local_bash',
+        description: 'grep -rn "a<b&c" . --include="*.ts" --color=never',
+        truncatedFields: null,
+        latestUpdate: null
+      })
     })
-    expect(heldFor(store, 'c9')?.droppedTasks).toBe(0)
+
+    it('a start after an empty roster leaves the observed-empty entry by reference (AC1)', () => {
+      const store = createBackgroundTaskRosterStore()
+      store.getState().setRoster({ conversationId: 'c1', tasks: [], droppedTasks: 0 })
+      const before = heldFor(store, 'c1')
+      store.getState().setStartedTask(started())
+
+      expect(heldFor(store, 'c1')).toBe(before)
+      expect(heldFor(store, 'c1')?.tasks.size).toBe(0)
+    })
+
+    it('a roster listing a held start moves it in whole — toolCallId, label and patch (AC2)', () => {
+      const store = createBackgroundTaskRosterStore()
+      store.getState().setStartedTask(started())
+      // Arrives before any roster: it must hit the hold, not miss on the absent entry.
+      store.getState().setUpdatedTask(updated({ truncatedFields: ['patch'] }))
+      store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 1 })
+
+      expect(heldTask(store, 'c1', 't1')).toEqual({
+        taskId: 't1',
+        toolCallId: 'tc-1',
+        taskType: 'local_bash',
+        description: 'grep -rn "a<b&c" . --include="*.ts" --color=never',
+        truncatedFields: null,
+        latestUpdate: { patch: '{"is_backgrounded":true}', truncatedFields: ['patch'] }
+      })
+      expect(heldFor(store, 'c1')?.droppedTasks).toBe(1)
+      // Moved, not copied: the hold is gone once a roster has spoken for the conversation.
+      expect(store.getState().unlistedStarts.has('c1')).toBe(false)
+    })
+
+    it('a roster that does not list a held start drops it; a later listing is roster-sourced (AC3)', () => {
+      const store = createBackgroundTaskRosterStore()
+      store.getState().setStartedTask(started())
+      store.getState().setRoster({ conversationId: 'c1', tasks: [], droppedTasks: 0 })
+
+      // The foreground call of #1558: an empty roster, no pill, and the hold is not kept for later.
+      expect(heldFor(store, 'c1')?.tasks.size).toBe(0)
+      expect(store.getState().unlistedStarts.has('c1')).toBe(false)
+
+      // A timeout later moves the same call to the background: it comes back through the roster alone.
+      store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+      expect(heldTask(store, 'c1', 't1')).toEqual(heldNoCut)
+    })
+
+    it('empties only the rostered conversation’s holds — another’s survive by reference', () => {
+      const store = createBackgroundTaskRosterStore()
+      store.getState().setStartedTask(started({ conversationId: 'c1' }))
+      store.getState().setStartedTask(started({ conversationId: 'c2' }))
+      const c2Holds = store.getState().unlistedStarts.get('c2')
+      store.getState().setRoster({ conversationId: 'c1', tasks: [], droppedTasks: 0 })
+
+      expect(store.getState().unlistedStarts.get('c2')).toBe(c2Holds)
+    })
+
+    it('a start or update for a task a roster listed leaves it shown (AC4)', () => {
+      const store = createBackgroundTaskRosterStore()
+      store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+      store.getState().setStartedTask(started())
+      store.getState().setUpdatedTask(updated())
+
+      expect(heldIds(store, 'c1')).toEqual(['t1'])
+      expect(heldTask(store, 'c1', 't1')?.toolCallId).toBe('tc-1')
+      expect(heldTask(store, 'c1', 't1')?.latestUpdate?.patch).toBe('{"is_backgrounded":true}')
+      // The upgrade went into the listed row, never into a hold.
+      expect(store.getState().unlistedStarts.size).toBe(0)
+    })
+
+    it('an update for a task held nowhere still opens nothing (AC2 of #577)', () => {
+      const store = createBackgroundTaskRosterStore()
+      store.getState().setStartedTask(started())
+      const before = store.getState()
+      store.getState().setUpdatedTask(updated({ taskId: 'nope' }))
+
+      expect(store.getState()).toBe(before)
+    })
+
+    it('resetRostersFor drops the listed conversations’ holds, and leaves others by reference (AC5)', () => {
+      const store = createBackgroundTaskRosterStore()
+      store.getState().setStartedTask(started({ conversationId: 'b1' }))
+      store.getState().setStartedTask(started({ conversationId: 'a1' }))
+      const a1Holds = store.getState().unlistedStarts.get('a1')
+      store.getState().resetRostersFor(new Set(['b1']))
+
+      expect(store.getState().unlistedStarts.has('b1')).toBe(false)
+      expect(store.getState().unlistedStarts.get('a1')).toBe(a1Holds)
+    })
+
+    it('resetRostersFor hands the state back when neither map holds a listed key', () => {
+      const store = createBackgroundTaskRosterStore()
+      store.getState().setStartedTask(started({ conversationId: 'a1' }))
+      const before = store.getState()
+      store.getState().resetRostersFor(new Set(['b1']))
+
+      expect(store.getState()).toBe(before)
+    })
+
+    it('treats __proto__ as an ordinary conversation key in the holds too', () => {
+      const store = createBackgroundTaskRosterStore()
+      store.getState().setStartedTask(started({ conversationId: '__proto__' }))
+      expect(store.getState().unlistedStarts.get('__proto__')?.has('t1')).toBe(true)
+
+      store.getState().resetRostersFor(new Set(['__proto__']))
+      expect(store.getState().unlistedStarts.size).toBe(0)
+    })
+
+    it('clearAllRosters drops a store holding only unlisted starts — never a no-op (AC5)', () => {
+      const store = createBackgroundTaskRosterStore()
+      store.getState().setStartedTask(started({ conversationId: 'c-gone' }))
+      store.getState().clearAllRosters()
+
+      // The pairing boundary guarantee (#1139): a departed pairing's command lines survive nowhere,
+      // including a place no surface reads.
+      expect(store.getState().unlistedStarts.size).toBe(0)
+      expect(store.getState()).toMatchObject(initialBackgroundTaskRosterState)
+    })
   })
 
   it("a started event replaces a roster-held task's label and adds the toolCallId (AC2)", () => {
@@ -267,6 +390,13 @@ describe('backgroundTaskRosterStore', () => {
     store.getState().setStartedTask(started({ taskId: 'a', truncatedFields: null }))
     store.getState().setStartedTask(started({ taskId: 'b', truncatedFields: [] }))
     store.getState().setStartedTask(started({ taskId: 'c', truncatedFields: ['description'] }))
+    // Listed after the starts (#1563), and the rows' own lists are ['task_type'] so a collapse onto
+    // the ROW's list cannot pass for the started frame's.
+    store.getState().setRoster({
+      conversationId: 'c1',
+      tasks: ['a', 'b', 'c'].map((id) => ({ ...noCut, task_id: id, truncated_fields: ['task_type'] })),
+      droppedTasks: 0
+    })
 
     expect(heldTask(store, 'c1', 'a')?.truncatedFields).toBeNull()
     expect(heldTask(store, 'c1', 'b')?.truncatedFields).toEqual([])
@@ -294,6 +424,7 @@ describe('backgroundTaskRosterStore', () => {
 
   it('records an update as the latest patch on a STARTED-sourced task (AC1)', () => {
     const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
     store.getState().setStartedTask(started())
     expect(heldTask(store, 'c1', 't1')?.latestUpdate).toBeNull()
 
@@ -481,6 +612,8 @@ describe('backgroundTaskRosterStore', () => {
     store.getState().setUpdatedTask(updated({ conversationId: 'c1', taskId: 't1' }))
     store.getState().setUpdatedTask(updated({ conversationId: 'c2', taskId: 't9' }))
     store.getState().resetRostersFor(new Set(['c1', 'c2']))
+    // c2's start and patch were never listed, so they sat in the hold (#1563) — it goes too.
+    expect(store.getState().unlistedStarts.size).toBe(0)
 
     // A patch key may carry command text, so the connected edge clearing it is what keeps the
     // RECONNECTING server's previous connection out of the next one. Nothing here is persisted, so
@@ -496,6 +629,7 @@ describe('backgroundTaskRosterStore', () => {
     store.getState().setUpdatedTask(updated({ conversationId: 'c1', taskId: 't1' }))
     store.getState().setUpdatedTask(updated({ conversationId: 'c2', taskId: 't9' }))
     store.getState().clearAllRosters()
+    expect(store.getState().unlistedStarts.size).toBe(0)
 
     // The pairing-boundary half, and the one that takes NO id at all: a departed pairing's patch text
     // and command lines go whether or not any server's conversation list ever named the conversation.
@@ -573,6 +707,7 @@ describe('backgroundTaskRosterStore', () => {
     const store = createBackgroundTaskRosterStore()
     store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
     store.getState().setStartedTask(started({ conversationId: 'c2', taskId: 't2' }))
+    store.getState().setRoster({ conversationId: 'c2', tasks: [cutDescription], droppedTasks: 0 })
 
     expect(heldIds(store, 'c1')).toEqual(['t1'])
     expect(heldIds(store, 'c2')).toEqual(['t2'])
@@ -627,6 +762,7 @@ describe('backgroundTaskRosterStore', () => {
     store.getState().resetRostersFor(new Set(['c1', 'c2']))
 
     expect(store.getState().rosters.size).toBe(0)
+    expect(store.getState().unlistedStarts.size).toBe(0)
     // Back to null, NOT to an observed-empty entry — the reconnecting server's previous connection is
     // gone whichever frame reported each task, and the reader cannot mistake the cleared state for
     // "the daemon says nothing is running".
@@ -724,6 +860,9 @@ describe('backgroundTaskRosterStore', () => {
 
     it('drops a conversation whole — started-sourced tasks and recorded patches go with it (#573 AC5)', () => {
       const store = createBackgroundTaskRosterStore()
+      const t9: BackgroundTask = { ...noCut, task_id: 't9' }
+      store.getState().setRoster({ conversationId: 'b1', tasks: [t9], droppedTasks: 0 })
+      store.getState().setRoster({ conversationId: 'a1', tasks: [t9], droppedTasks: 0 })
       store.getState().setStartedTask(started({ conversationId: 'b1', taskId: 't9' }))
       store.getState().setUpdatedTask(updated({ conversationId: 'b1', taskId: 't9' }))
       store.getState().setStartedTask(started({ conversationId: 'a1', taskId: 't9' }))
@@ -770,6 +909,7 @@ describe('backgroundTaskRosterStore', () => {
       store.getState().clearAllRosters()
 
       expect(store.getState().rosters.size).toBe(0)
+      expect(store.getState().unlistedStarts.size).toBe(0)
       // Including the entry every scoped reset leaves alone: this clear is the only thing that ever
       // collects a roster held for a conversation no server's list carried.
       expect(selectRosterFor('a1')(store.getState())).toBeNull()
@@ -808,15 +948,15 @@ describe('backgroundTaskRosterStore', () => {
     const seed = new Map<string, BackgroundTaskRosterEntry>([
       ['c1', { tasks: new Map([['t1', heldNoCut]]), droppedTasks: 4 }]
     ])
-    const store = createBackgroundTaskRosterStore({ rosters: seed })
+    const store = createBackgroundTaskRosterStore({ rosters: seed, unlistedStarts: new Map() })
     expect(heldFor(store, 'c1')).toEqual({
       tasks: new Map([['t1', heldNoCut]]),
       droppedTasks: 4
     })
   })
 
-  it('initialBackgroundTaskRosterState is an empty map', () => {
-    expect(initialBackgroundTaskRosterState).toEqual({ rosters: new Map() })
+  it('initialBackgroundTaskRosterState holds two empty maps', () => {
+    expect(initialBackgroundTaskRosterState).toEqual({ rosters: new Map(), unlistedStarts: new Map() })
   })
 
   it('keeps the setter references stable across updates', () => {

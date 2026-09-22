@@ -3344,6 +3344,32 @@
   color: var(--color-error);
 }
 
+/* #1254 — the reading is the breakdown popover's trigger. A bare button reset around the unchanged
+   .composer__context span, so the reading draws exactly as before: font: inherit is what stops the UA's
+   form-control font reaching the span, which sets size and weight but not family. No outline: none —
+   Escape and a second click return focus here, so the ring is load-bearing.
+
+   The anchor is its own block rather than .composer-options-anchor. That one wears min-width: 0 so a
+   footer menu gives width under #1107's shrink policy, and the reading is the control that never gives:
+   flex: 0 0 auto keeps that guarantee through the new wrapper. position: relative is what the panel's
+   bottom/left resolve against. */
+.context-breakdown-anchor {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.composer__context-trigger {
+  display: flex;
+  align-items: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
 /* #988 — the shared footer-button treatment, extracted on its SECOND consumer exactly as the comment
    this rule replaced called for: "One consumer is not a pattern: #682 landing as the SECOND button is
    the moment to lift the common declarations out of these two rules." #682 is sequenced behind the model
@@ -5782,6 +5808,123 @@
   right: 0;
   bottom: auto;
   left: auto;
+}
+
+/* #1254 — the context breakdown, worn with .composer-options for its placement, fill and radius (Figma
+   121:3879; there is no dedicated drawing). Everything below is read-only content, not option rows.
+
+   A FIXED width, because a bar has no content width to shrink-wrap to, and it is the SECURITY bound as
+   well: every name and path here is untrusted text, and each ellipsizes inside this width rather than
+   widening the panel.
+
+   RIGHT-ALIGNED to the reading, the --bottom-end precedent, rather than the footer menus' left: -12px
+   plus measured shift. Both measured alternatives failed at the 800px minimum: the window-width bound
+   squeezed the panel to ~130px, and the shift moves it to the WINDOW's edge, 20px past
+   .paired-shell__pane's, whose overflow: hidden then clipped the panel's right side. The reading's right
+   edge is always inside the pane (only attach follows it), and 280px to its left clears the sidebar at
+   every width the app allows, so no measurement is needed at all.
+
+   A grid rather than the base flex column: flex items shrink by default, so a capped scrolling panel
+   would squash its rows instead of scrolling them (the type-ahead's measured trap). minmax(0, 1fr) on
+   every grid here lets a nowrap name ellipsize instead of flooring its track at the name's full width.
+   The horizontal padding is the options rows' --space-3 inset, so text lines up with the reading. */
+.context-breakdown {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: var(--space-2);
+  right: 0;
+  left: auto;
+  box-sizing: border-box;
+  width: 280px;
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+.context-breakdown__pending,
+.context-breakdown__header {
+  margin: 0;
+}
+
+.context-breakdown__header,
+.context-breakdown__list,
+.context-breakdown__row,
+.context-breakdown__server {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.context-breakdown__list {
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.context-breakdown__server > .context-breakdown__list {
+  padding-left: var(--space-2);
+}
+
+.context-breakdown__row {
+  gap: 2px;
+}
+
+.context-breakdown__line {
+  display: flex;
+  min-width: 0;
+}
+
+/* Each untrusted string ellipsizes on one line; the figure after a name never shrinks, and keeps the
+   spaces around its separator (pre), so the row reads "name · 12.4k". */
+.context-breakdown__name,
+.context-breakdown__model,
+.context-breakdown__server-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-breakdown__figure {
+  flex: 0 0 auto;
+  white-space: pre;
+}
+
+.context-breakdown__model,
+.context-breakdown__server-name,
+.context-breakdown__more {
+  color: var(--color-on-surface-variant);
+}
+
+/* The bar: the options panel's current-row fill as its track, the reading's primary as its fill. The
+   width is set inline from a share already clamped to [0, 100]. */
+.context-breakdown__bar {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-on-primary);
+  overflow: hidden;
+}
+
+.context-breakdown__bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--color-primary);
+}
+
+.context-breakdown__summary {
+  cursor: pointer;
+}
+
+.context-breakdown__group > .context-breakdown__list {
+  margin-top: var(--space-1);
 }
 
 /* #906 — the question panel (Figma node 347:6913, the single-question instance), drawn in the composer's

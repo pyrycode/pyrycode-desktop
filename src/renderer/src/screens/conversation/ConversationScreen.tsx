@@ -89,6 +89,7 @@ import {
 import { ComposerPermissionModeMenu } from './ComposerPermissionModeMenu'
 import { ComposerModelMenu } from './ComposerModelMenu'
 import { ComposerEffortMenu } from './ComposerEffortMenu'
+import { ContextBreakdownPopover } from './ContextBreakdownPopover'
 import { EffortDefaultData } from './EffortDefaultData'
 import {
   ComposerAttachButton,
@@ -4653,6 +4654,11 @@ export function ContextUsageReading({
 // guard and the severity ladder stay the one computation across both surfaces. The wire contract says the
 // opposite — that a client recomputing disagrees with the figure claude reported — and #1421 recomputes
 // anyway, on purpose. Do not flip this on reading ContextUsagePayload's docblock; raise it on the issue.
+//
+// #1254 — the reading is the trigger of a breakdown popover. The span above stays inert and byte-identical;
+// ContextBreakdownPopover wraps it in the button. The popover gets `reported` alone, never the settings
+// snapshot: on the fallback arm it is `null` and the panel says a reading arrives after the next turn. No
+// trigger renders when there is no percentage to show, exactly as the reading rendered nothing before.
 function ContextUsageControl({ conversationId }: { conversationId: string | null }): JSX.Element | null {
   const snapshot = useRunConfigStore(selectSnapshot)
   const selectReported = useMemo(
@@ -4661,7 +4667,12 @@ function ContextUsageControl({ conversationId }: { conversationId: string | null
   )
   const reported = useReportedContextStore(selectReported)
   const tokens = contextTokenSource(reported, snapshot)
-  return <ContextUsageReading usedTokens={tokens.usedTokens} windowTokens={tokens.windowTokens} />
+  if (contextUsagePercent(tokens.usedTokens, tokens.windowTokens) === null) return null
+  return (
+    <ContextBreakdownPopover reading={reported}>
+      <ContextUsageReading usedTokens={tokens.usedTokens} windowTokens={tokens.windowTokens} />
+    </ContextBreakdownPopover>
+  )
 }
 
 // #330: the two-dot Relay/Pyrycode connection-status indicator — the persistent at-a-glance state that

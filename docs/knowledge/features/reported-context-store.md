@@ -10,8 +10,9 @@ Introduced in [#1420](../../specs/architecture/1420-reported-context-store.md), 
 decode off the daemon's `context_usage` frame and its three inventories — into a per-conversation store
 plus its own bridge. [#1421](https://github.com/pyrycode/pyrycode-desktop/issues/1421) uses the held
 reading in the footer and the run-configuration gauge, with settings-derived totals as the fallback
-only when no reading exists. [#1254](https://github.com/pyrycode/pyrycode-desktop/issues/1254) owns the
-breakdown popover.
+only when no reading exists.
+[#1254](conversation-shell-composer-message-box.md#context-breakdown-popover-1254) turns the footer
+reading into a button that opens a read-only breakdown of the held record.
 
 **Named `reportedContextStore`, not `contextUsageStore` — a forced break with the family convention, for a
 concrete collision rather than a stylistic one.** Every sibling here takes its name from its event arm
@@ -286,3 +287,5 @@ The sender unit tests cover null/empty ids, repeated explicit asks and no schedu
   settings pair the fallback on an absent reading only — see
   [`contextTokenSource`](conversation-shell-run-configuration.md#run-configuration-context-window-section-192)
   and [Composer footer row](conversation-shell-composer-message-box.md#composer-footer-row-811).
+  [#1254](conversation-shell-composer-message-box.md#context-breakdown-popover-1254) is the reading's own
+  breakdown popover, reading this store's record directly and never the settings pair.

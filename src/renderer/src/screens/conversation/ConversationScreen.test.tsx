@@ -283,6 +283,20 @@ describe('Timeline — the streamed assistant text', () => {
     expect(markup.indexOf(CURSOR)).toBeGreaterThan(markup.indexOf('second turn'))
   })
 
+  // #1566: the turn's numbers ride the meta row of its LAST assistant bubble only, as text children.
+  it("puts the turn's stats in the last assistant bubble's meta row and nowhere else", () => {
+    const items: ThreadItem[] = [
+      { kind: 'userText', text: 'ask' },
+      { kind: 'assistantText', turnId: 't1', text: 'early' },
+      { kind: 'assistantText', turnId: 't1', text: 'late' },
+      { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn', outputTokens: 800, durationMs: 41000 }
+    ]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    expect(markup.match(/bubble__turn-stats/g)?.length ?? 0).toBe(1)
+    expect(markup).toContain('<span class="bubble__turn-stats">800 out · 41s</span>')
+    expect(markup.indexOf('bubble__turn-stats')).toBeGreaterThan(markup.indexOf('late'))
+  })
+
   // #218: the pending tool row (Figma node 16-28) — the compact chip carrying the tool name and its
   // one-line input summary, distinct from the daemon message bubble. Supersedes the deferred no-op
   // that #217's transport slice fed but #203 could not yet draw. `result: null` is the pending state;

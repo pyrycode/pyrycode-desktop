@@ -330,6 +330,50 @@ serialisation, so a swapped token or an un-doubled blur reddens. Proved red firs
 build (`none` on the user bubble). Nothing in the unit tier can observe a computed shadow, and the markup
 is byte-identical, so no unit test changed.
 
+## Turn stats on hover (#1566)
+
+Hovering the meta row of a turn's *last* assistant bubble reveals that turn's tokens and wall time —
+`12.4k in · 800 out · 41s` — as one more `.bubble__meta` child, never inline in the bubble body. The
+numbers ride on `turnBoundary`'s `TurnEndMetrics` (#1565), which a saved offline thread never carries
+(`DurableThreadItem` has no such field), so a saved thread's turns show nothing on hover — expected, not
+a gap.
+
+**Formatting — `turnStats.ts` (new, beside `messageTime.ts`).** `formatTurnStats(metrics)` builds up to
+three segments joined by ` · `, each independently omitted when its value is non-positive or absent (a
+duration under one second counts as non-positive too); all three omitted returns `null`. `in` is the
+turn's *whole* input — `inputTokens + cacheReadTokens + cacheCreationTokens`, each part counted as 0
+unless it is a finite number above 0 — never `inputTokens` alone, which measured between 2 and 18 on
+every captured turn and would badly understate the turn by itself. Counts under 1000 print as a rounded
+whole number; from 1000 up, `(Math.round(n / 100) / 10).toFixed(1)} + 'k'` — rounding to the nearest
+hundred before dividing, so `999` stays `999` and `1000` becomes `1.0k`. Duration is `Math.floor(ms /
+1000)` seconds; under 60 it's `Ns`, from 60 up `Mm Ss` with minutes uncapped (`4503000` → `75m 3s`).
+
+**Selection — `turnStatsByItemIndex(items)`, a single forward pass that tracks the index of the last
+`assistantText` item seen and resets that tracker on `turnBoundary` only.** The obvious-looking
+alternative — reset on `userText` too, since a new user message reads like "the previous turn is over" —
+is wrong: a message sent while a turn is still running echoes into `items` *before* that turn's own
+boundary arrives, so resetting there would silently drop the running turn's stats out from under it
+(recorded as a Lesson learned on the PR). Tool rows between the bubble and the boundary touch neither the
+tracker nor the reset, so they never change which bubble the stats attach to. A turn still open when the
+timeline renders has no boundary yet and never maps; a boundary following a turn with no assistant text
+maps nothing either.
+
+**Render and reveal.** `Timeline` computes the map once per render and threads
+`turnStats={map.get(group.index)}` through `TimelineRow` to `BubbleMeta`, which appends it as
+`<span className="bubble__turn-stats">` after the copy button — a React text child only, never an
+attribute (not even `title`) and never logged, per CLAUDE.md's daemon-text rule. `.bubble__turn-stats {
+display: none }`, flipped to `inline` by `.bubble__meta:hover` — `display: none` rather than
+`visibility: hidden` because the latter would still reserve the span's width and could widen a short
+bubble's meta row while nothing is hovered. When `turnStats` is absent the markup is byte-identical to
+\#1014's, so no earlier exact-markup assertion moved.
+
+**Testing.** `turnStats.test.ts` covers the format's count and duration boundaries and the selection's
+tracker behaviour directly; `ConversationScreen.test.tsx` adds one static-render case for a two-bubble
+turn. `e2e/turn-stats-hover.spec.ts` is the only place that can prove the hover transition itself (the
+unit tier is `renderToStaticMarkup` and cannot hover): it pushes one turn whose `turn_end` carries every
+number and one whose carries none, and asserts the meta row's `boundingBox()` height is identical hovered
+and not — proving the reveal adds no layout, not just that the text appears.
+
 ## What stays untouched
 
 - **The queued row** (a `userText` `TimelineRow` while `queued !== null`, folded off the deleted
@@ -396,6 +440,9 @@ alongside the sections that describe what each spec proves.
 
 ## Related
 
+- [#1566 architecture spec](../../specs/architecture/1566-turn-stats-hover.md) — the hover-stats design,
+  and [thread timeline internals](thread-timeline-internals.md#types) for `TurnEndMetrics`'s fields on
+  `turnBoundary` (#1565), which this ticket reads and never writes.
 - [#1113 architecture spec](../../specs/architecture/1113-bubble-body-medium-type.md) — the body-medium
   retune, the Figma variable read confirming title-small was withdrawn from the message nodes, and the
   comment sweep that found the three premise-comments naming the token plus the one that only names the

@@ -1578,6 +1578,16 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               truncatedFields: inbound.sessionFacts.truncated_fields
             })
             return
+          case 'mcp-status':
+            // Named fields only, so a later decoder field cannot cross IPC. The rows are the decoder's
+            // fresh literals. Stateless: no dedup and no memo keyed by a daemon-supplied id.
+            emitDaemonEvent(sink, {
+              type: 'mcpStatus',
+              conversationId: inbound.mcpStatus.conversation_id,
+              servers: inbound.mcpStatus.servers,
+              droppedServers: inbound.mcpStatus.dropped_servers
+            })
+            return
           case 'model-announced':
             // The announced-model data path (#587, #714). Emit a fresh literal carrying the identifier, the
             // cut report and the routing key, copied BY NAME from the already-decoded, already-validated

@@ -178,6 +178,8 @@ export interface ClearPairingScopedStateDeps {
   clearSessionId: () => void
   clearAnnouncedModel: () => void
   clearSessionFacts: () => void
+  // #1490: every conversation's MCP server report, dropped as one; nullary like its neighbours.
+  clearMcpStatus: () => void
   clearAllSlashCommandLists: () => void
   clearAllModelLists: () => void
   clearAllConversations: () => void
@@ -433,6 +435,7 @@ export function clearPairingScopedState(deps: ClearPairingScopedStateDeps): void
   deps.clearSessionId()
   deps.clearAnnouncedModel()
   deps.clearSessionFacts()
+  deps.clearMcpStatus()
   // Beside the announced model, the other clear of untrusted daemon-relayed text, and the only one that
   // reaches WORKSPACE-authored strings. Nullary like the two whole-map clears around it, so no
   // daemon-supplied conversation id can steer which workspace's verbs survive the boundary. Position is

@@ -1,3 +1,4 @@
+import { createMcpStatusStore } from './store/mcpStatusStore'
 import { createSessionFactsStore } from './store/sessionFactsStore'
 import { describe, it, expect, vi } from 'vitest'
 import {
@@ -104,6 +105,7 @@ function spyDeps(): {
   clearActiveConversation: ReturnType<typeof vi.fn>
   clearSessionId: ReturnType<typeof vi.fn>
   clearSessionFacts: ReturnType<typeof vi.fn>
+  clearMcpStatus: ReturnType<typeof vi.fn>
   clearAnnouncedModel: ReturnType<typeof vi.fn>
   clearAllSlashCommandLists: ReturnType<typeof vi.fn>
   clearAllModelLists: ReturnType<typeof vi.fn>
@@ -122,6 +124,7 @@ function spyDeps(): {
   const clearActiveConversation = vi.fn()
   const clearSessionId = vi.fn()
   const clearSessionFacts = vi.fn()
+  const clearMcpStatus = vi.fn()
   const clearAnnouncedModel = vi.fn()
   const clearAllSlashCommandLists = vi.fn()
   const clearAllModelLists = vi.fn()
@@ -142,6 +145,7 @@ function spyDeps(): {
       clearSessionId,
       clearAnnouncedModel,
       clearSessionFacts,
+      clearMcpStatus,
       clearAllSlashCommandLists,
       clearAllModelLists,
       clearAllConversations,
@@ -160,6 +164,7 @@ function spyDeps(): {
     clearSessionId,
     clearAnnouncedModel,
     clearSessionFacts,
+    clearMcpStatus,
     clearAllSlashCommandLists,
     clearAllModelLists,
     clearAllConversations,
@@ -204,6 +209,7 @@ describe('clearPairingScopedState', () => {
       clearSessionId,
       clearAnnouncedModel,
       clearSessionFacts,
+      clearMcpStatus,
       clearAllSlashCommandLists,
       clearAllModelLists,
       clearAllConversations,
@@ -230,6 +236,8 @@ describe('clearPairingScopedState', () => {
     expect(clearSessionId).toHaveBeenCalledTimes(1)
     expect(clearSessionFacts).toHaveBeenCalledTimes(1)
     expect(clearSessionFacts).toHaveBeenCalledWith()
+    expect(clearMcpStatus).toHaveBeenCalledTimes(1)
+    expect(clearMcpStatus).toHaveBeenCalledWith()
     expect(clearAnnouncedModel).toHaveBeenCalledTimes(1)
     expect(clearAllSlashCommandLists).toHaveBeenCalledTimes(1)
     // #955, the same nullary property as the two whole-map clears around it: the published menus are
@@ -325,6 +333,7 @@ describe('clearPairingScopedState', () => {
       'clearAllTimelines',
       'clearAllUsageLimits',
       'clearAnnouncedModel',
+      'clearMcpStatus',
       'clearSessionFacts',
       'clearSessionId',
       'dispatchModal',
@@ -1119,6 +1128,7 @@ function realDeps(
     clearSessionId: () => sessionId.getState().clearSessionId(),
     clearAnnouncedModel: () => announcedModel.getState().clearAnnouncedModel(),
     clearSessionFacts: () => {},
+    clearMcpStatus: () => {},
     clearAllSlashCommandLists: () => slashCommands.getState().clearAllSlashCommandLists(),
     clearAllModelLists: () => modelLists.getState().clearAllModelLists(),
     clearAllConversations: () => conversations.getState().clearAllConversations(),
@@ -1139,4 +1149,12 @@ it('pairing cleanup clears retained session facts through its dependency', () =>
   const { deps } = spyDeps()
   clearPairingScopedState({ ...deps, clearSessionFacts: store.getState().clearSessionFacts })
   expect(store.getState().facts.size).toBe(0)
+})
+
+it('pairing cleanup clears retained MCP reports through its dependency', () => {
+  const store = createMcpStatusStore()
+  store.getState().setMcpStatus({ conversationId: 'a', servers: [], droppedServers: 0 })
+  const { deps } = spyDeps()
+  clearPairingScopedState({ ...deps, clearMcpStatus: store.getState().clearMcpStatus })
+  expect(store.getState().reports.size).toBe(0)
 })

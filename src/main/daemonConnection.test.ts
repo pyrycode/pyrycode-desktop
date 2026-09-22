@@ -1997,6 +1997,17 @@ describe('createDaemonConnection — model_announced stream (#587)', () => {
     expect(emitted(sink).slice(before)).toHaveLength(1)
   })
 
+  it('delivers an mcp_status report once with named fields and drops malformed reports', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+    const servers = [{ name: 'docs', status: 'failed', error: 'died\nat spawn', scope: 'user', version: '2.0-beta' }]
+    const payload = { conversation_id: 'a', servers, dropped_servers: 2 }
+    drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 5, type: 'mcp_status', ts: FIXED_TS, payload: { ...payload, extra: 'discard' } }) })
+    expect(emitted(sink).slice(before)).toEqual([{ type: 'mcpStatus', conversationId: 'a', servers, droppedServers: 2 }])
+    drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 6, type: 'mcp_status', ts: FIXED_TS, payload: { ...payload, servers: null } }) })
+    expect(emitted(sink).slice(before)).toHaveLength(1)
+  })
+
   it('decodes a model_announced into exactly one modelAnnounced event (conversation_id carried)', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length

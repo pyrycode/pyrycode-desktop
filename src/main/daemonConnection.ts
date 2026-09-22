@@ -69,7 +69,7 @@ import {
   buildQuestionAnswer,
   buildQuestionRefused
 } from './transport/questionResolutionEnvelope'
-import { parseInboundMessage, type InboundDaemonMessage } from './transport/inboundMessage'
+import { parseInboundMessage, turnEndMetricsOf, type InboundDaemonMessage } from './transport/inboundMessage'
 import {
   createBundleReassembler,
   type BundleConsumer,
@@ -1476,7 +1476,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               terminalReason: inbound.turnEnd.terminal_reason,
               errorCategory: inbound.turnEnd.error_category,
               conversationId: inbound.turnEnd.conversation_id,
-              daemonTs: inbound.ts
+              daemonTs: inbound.ts,
+              ...turnEndMetricsOf(inbound.turnEnd)
             })
             return
           case 'turn-state':

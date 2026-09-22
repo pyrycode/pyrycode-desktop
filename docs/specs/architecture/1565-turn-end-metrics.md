@@ -101,3 +101,9 @@ Process note: the plan above was committed before this pass ran. This section is
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-22
+
+## Revisions
+
+**2026-09-22, during implementation.**
+- Open question resolved: a non-finite number *can* reach `parseTurnEndPayload`. `JSON.parse` reads an out-of-range literal such as `1e400` as `Infinity`. The `Number.isFinite` guard is therefore load-bearing, not only defence. `src/main/transport/turnEndMetrics.test.ts` drives it through hand-built frame bytes, because `JSON.stringify` cannot emit one.
+- Test placement: the decode tests for both paths live in a new `src/main/transport/turnEndMetrics.test.ts`, which mirrors the existing `stoppedTurn.test.ts` harness, rather than in `inboundMessage.test.ts`. The bridge, reducer and history-replay chain lives in a new `src/renderer/src/store/turnEndMetrics.test.ts`, rather than being split across `timelineBridge.test.ts` and `threadTimeline.test.ts`. The live-emit test is in `daemonConnection.test.ts` as planned. The scenarios are unchanged.

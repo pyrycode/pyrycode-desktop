@@ -10,7 +10,9 @@
 // wrapper, and re-running a click or a pushed frame would double the thing under test. Nothing in
 // the type system enforces that — the rule is the enforcement, exactly as in `readAuthentication`
 // (#1380, e2e/pairing-authentication.spec.ts), the first site to hit this and the reason this
-// module exists rather than a third private copy.
+// module exists rather than a third private copy. The one sanctioned resend of a pushed event is
+// `pushConfirmingDelivery` in confirmedPush.ts (#1569), which sends again only after the renderer
+// has been seen NOT to have received it — never blindly.
 //
 // Bounding the retry stays the CALLER's job, and visible at the call site: pass
 // `{ timeout: 5_000 }` to the `expect.poll` that consumes this, so a genuinely dead app fails
@@ -53,9 +55,12 @@ export async function readMainProcess<T>(
   try {
     return await app.evaluate(read)
   } catch (error) {
-    if (error instanceof Error && error.message.includes(TRANSIENT_CONTEXT_LOSS)) {
-      return NOT_YET_AVAILABLE
-    }
+    if (isTransientContextLoss(error)) return NOT_YET_AVAILABLE
     throw error
   }
+}
+
+/** Whether `error` is Playwright's transient inspection-context loss. A thrown non-`Error` never is. */
+export function isTransientContextLoss(error: unknown): boolean {
+  return error instanceof Error && error.message.includes(TRANSIENT_CONTEXT_LOSS)
 }

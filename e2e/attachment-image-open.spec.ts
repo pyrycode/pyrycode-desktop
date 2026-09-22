@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { test, expect, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { pushConfirmingDelivery } from './fixtures/confirmedPush'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import { ATTACHMENT_UPLOAD_EVENT_CHANNEL } from '../src/shared/ipc/attachmentUpload'
 import type { AttachmentUploadEvent } from '../src/shared/ipc/attachmentUpload'
@@ -147,13 +148,23 @@ test('the drawn thumbnail opens its picture in the OS viewer, by click and by ke
 }) => {
   const { page, app } = await launchPairedApp({ buildReplyFrames })
 
-  const pushCompleted = (event: AttachmentUploadEvent): Promise<void> =>
-    app.evaluate(
-      ({ BrowserWindow }, payload) => {
-        const [window] = BrowserWindow.getAllWindows()
-        window.webContents.send(payload.channel, payload.event)
-      },
-      { channel: ATTACHMENT_UPLOAD_EVENT_CHANNEL, event }
+  // #1569 — a push that raised the transient context loss is sent again only if its pending tile has
+  // not shown. Never blindly: `reducePendingAttachments` appends every `completed` with no dedup by id,
+  // so a replayed one would carry the attachment twice. `tilesAfter` is the strip's count after this
+  // push — the nth push since the last send leaves n tiles — stated absolutely, so a previous push's
+  // late tile cannot pass for this one's.
+  const pendingTiles = page.locator('.composer__attachment-slot')
+  const pushCompleted = (event: AttachmentUploadEvent, tilesAfter: number): Promise<void> =>
+    pushConfirmingDelivery(
+      () =>
+        app.evaluate(
+          ({ BrowserWindow }, payload) => {
+            const [window] = BrowserWindow.getAllWindows()
+            window.webContents.send(payload.channel, payload.event)
+          },
+          { channel: ATTACHMENT_UPLOAD_EVENT_CHANNEL, event }
+        ),
+      async () => (await pendingTiles.count()) >= tilesAfter
     )
 
   const send = async (text: string): Promise<void> => {
@@ -181,8 +192,8 @@ test('the drawn thumbnail opens its picture in the OS viewer, by click and by ke
 
   // --- 1. A message carrying a real picture AND a document, so the bubble holds both controls: the one
   // this ticket adds and the file row whose focus treatment AC3 says it must match. ---
-  await pushCompleted(upload(ID_PICTURE, 'portrait.png'))
-  await pushCompleted(upload(ID_DOCUMENT, 'quarterly-report.pdf'))
+  await pushCompleted(upload(ID_PICTURE, 'portrait.png'), 1)
+  await pushCompleted(upload(ID_DOCUMENT, 'quarterly-report.pdf'), 2)
   await send('a picture and a document')
 
   const first = bubble(0)
@@ -334,7 +345,7 @@ test('the drawn thumbnail opens its picture in the OS viewer, by click and by ke
   // all. What a reader wants there is a re-fetch — a different leg — so the state gains no tab stop. The
   // in-flight state draws nothing whatsoever, which BubbleAttachmentImage.test.tsx owns as an empty
   // render, so there is nothing here for it to be. ---
-  await pushCompleted(upload(ID_LIAR, 'pretend-picture.png'))
+  await pushCompleted(upload(ID_LIAR, 'pretend-picture.png'), 1)
   await send('this one lies')
 
   const second = bubble(1)

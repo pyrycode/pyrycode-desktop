@@ -49,6 +49,8 @@ import type {
   ContextUsageMCPTool,
   ContextUsageMemoryFile,
   ContextUsagePayload,
+  MCPServerStatus,
+  MCPStatusPayload,
   UnrecognizedMessagePayload,
   SessionTransitionPayload,
   SessionSettingsPayload,
@@ -575,6 +577,21 @@ interface FrameTimestamp {
  * inert text and feeds it to no HTML sink, attribute, URL, Map key, icon lookup or path. Ships dormant —
  * daemonConnection's inbound switch has no catch-all, so the reading stops here until #1419 claims it.
  *
+ * The `mcp-status` kind (#1489) carries the decoded MCPStatusPayload — claude's MCP server list for one
+ * conversation, published live and as the answer to `mcp_status_request`. Conversation-scoped like the
+ * kinds above, and like them it takes NO FrameTimestamp, because this type gains no `decodeHistoryEvent`
+ * arm. The fail-closed defence is one required string, a list-shape guard and one required number, plus
+ * a per-row narrowing of FIVE plain `requireString`s where ONE BAD ROW DROPS THE WHOLE FRAME rather than
+ * yielding a partial list. `servers: []` is a POSITIVE report of no servers and `dropped_servers` is
+ * copied, never reconciled with the list's length. `status` and `scope` are open-set CLAIMS and `version`
+ * is opaque, so none is narrowed against a client vocabulary. A row's `name` is the server's identity in
+ * the list, which a later slice may carry into an MCP actuation verb the daemon gates, but on this side it
+ * is never a lookup key, a React key, a Map index, a path, a filename or a cache key. The strings cross
+ * byte-for-byte: escaping is owed at the render sink. NOTHING DECODED REACHES THE LOG — every row string
+ * is claude-authored and may carry a newline that would forge a record in the line-delimited stream, and
+ * `conversation_id` is a correlating identifier. See MCPStatusPayload and MCPServerStatus. Ships dormant
+ * until #1490 claims it.
+ *
  * The `background-task-started` kind (#564) carries the decoded BackgroundTaskStartedPayload — the daemon's
  * announcement that claude started work OUTLIVING the turn that spawned it (pyrycode#1240), fanned out to
  * interactive clients. Unlike its `stall` / `api-retry` / `compacting` neighbours it is not a claude
@@ -838,6 +855,7 @@ export type InboundDaemonMessage =
   | { kind: 'tool-progress'; toolProgress: ToolProgressPayload }
   | { kind: 'rate-limited'; rateLimited: RateLimitedPayload }
   | { kind: 'context-usage'; contextUsage: ContextUsagePayload }
+  | { kind: 'mcp-status'; mcpStatus: MCPStatusPayload }
   | { kind: 'background-task-started'; backgroundTaskStarted: BackgroundTaskStartedPayload }
   | { kind: 'background-task-updated'; backgroundTaskUpdated: BackgroundTaskUpdatedPayload }
   | { kind: 'background-task-roster'; backgroundTaskRoster: BackgroundTaskRosterPayload }
@@ -2647,6 +2665,70 @@ function parseContextUsagePayload(payload: unknown): ContextUsagePayload {
 }
 
 /**
+ * Narrow one row of an `mcp_status` frame's server list into an MCPServerStatus (#1489).
+ * parseContextUsageMCPTool's STRUCTURE scaled to five strings: an isRecord gate, five plain
+ * requireStrings in wire order, and a fresh five-field literal. No helper is invented here. Its
+ * inertness doctrine does NOT carry over: this `name` is the server list's own identity, which a later
+ * slice may carry into an MCP actuation verb — see MCPServerStatus.
+ *
+ * WHAT IS DELIBERATELY NOT CHECKED, each of which would fail-close valid traffic:
+ *
+ *   - NO emptiness check, and requireString rather than requireNonEmptyString ON PURPOSE. The daemon
+ *     encodes a missing or zero-valued source string as `''` and keeps all five keys present, so `''` is
+ *     a value the contract states — an empty `error` is the ordinary healthy row — not a failed lookup.
+ *   - NO closed set on `status` or `scope`, and NO parse of `version`. Both are claude's open-set text,
+ *     reports rather than authority, and `version` is opaque. An unrecognised word crosses as written.
+ *   - NO trim, normalise, escape, re-encode or length cap. The producer caps `error` at 256 bytes (a size
+ *     bound, not sanitisation) and parseInboundMessage's MAX_PLAINTEXT_BYTES guard backstops the frame.
+ *     The fixture's `remote<&>` and its embedded newline cross byte-for-byte: escaping belongs at the
+ *     render sink (CLAUDE.md's 2026-08-20 operator ruling).
+ *
+ * Its message names the failure CATEGORY only, never a value and never the row index: every string here
+ * is untrusted claude-authored text, daemonConnection catches WireDecodeError into a caller that may log
+ * it, and the fixture's newline would forge a record in a line-delimited log.
+ */
+function parseMCPServerStatus(payload: unknown): MCPServerStatus {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed mcp server status')
+  }
+  const name = requireString(payload, 'name')
+  const status = requireString(payload, 'status')
+  const error = requireString(payload, 'error')
+  const scope = requireString(payload, 'scope')
+  const version = requireString(payload, 'version')
+  return { name, status, error, scope, version }
+}
+
+/**
+ * Narrow an opaque payload into an MCPStatusPayload (#1489) — parseContextUsagePayload's list shape over
+ * a single inventory. An isRecord gate, a requireString for the daemon-authored `conversation_id`, an
+ * `Array.isArray` guard then a `.map` over the rows, and a plain requireNumber for `dropped_servers`,
+ * returning a fresh three-field literal.
+ *
+ * `servers` MUST BE AN ARRAY: the daemon normalises nil to `[]`, so `[]` is a positive report of no
+ * servers and a `null` or an absent key is a defect that drops the frame. One malformed row drops the
+ * whole frame rather than yielding a partial list. `dropped_servers` is copied, NOT RECONCILED against
+ * the list's length and not range-checked, and NOTHING CAPS THE ENTRY COUNT: the producer's cap is not a
+ * wire constant. The `.map` allocates from the array that actually arrived, never from the claimed count,
+ * and that array is already bounded by the MAX_PLAINTEXT_BYTES check ahead of the JSON.parse.
+ *
+ * Any missing / mistyped field throws WireDecodeError naming the failure category only, never a value.
+ */
+function parseMCPStatusPayload(payload: unknown): MCPStatusPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed mcp_status payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const rawServers = payload.servers
+  if (!Array.isArray(rawServers)) {
+    throw new WireDecodeError('malformed mcp status servers list')
+  }
+  const servers = rawServers.map(parseMCPServerStatus)
+  const dropped_servers = requireNumber(payload, 'dropped_servers')
+  return { conversation_id, servers, dropped_servers }
+}
+
+/**
  * Narrow an opaque payload into a SessionTransitionPayload (#254). Fail-closed like parseTurnStatePayload,
  * scaled to six fields: four required strings (`conversation_id` / `previous_session_id` /
  * `new_session_id` / `occurred_at`),
@@ -4113,6 +4195,24 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'context-usage', contextUsage }
+    }
+    case 'mcp_status': {
+      // Narrow BEFORE logging so a malformed frame (a `null` server list, a row missing a field, an
+      // absent `dropped_servers`) throws first and leaves no record. NOTHING decoded is logged — no row
+      // string, each of which is claude-authored and may carry a newline that would forge a record in
+      // this line-delimited stream, no list length, and not the `conversation_id`. Only the frame's byte
+      // length + one-way hash under a static code literal, reusing the existing content-free field set.
+      //
+      // NO `ts` on the returned arm: this type gains no decodeHistoryEvent arm. Nothing consumes this
+      // arm yet — daemonConnection's inbound switch has no catch-all, so the list stops here until #1490.
+      const mcpStatus = parseMCPStatusPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'mcp_status',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'mcp-status', mcpStatus }
     }
     case 'background_task_started': {
       // Narrow BEFORE logging so a malformed frame (an omitted `truncated_fields` key, a non-string

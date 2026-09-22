@@ -520,6 +520,48 @@ const CONTEXT_USAGE_EMPTY = {
   dropped_memory_files: 0
 }
 
+/** An `mcp_status` envelope's plaintext bytes, wrapping an arbitrary payload (#1489). */
+function encodeMCPStatus(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 816, type: 'mcp_status', ts: FIXED_TS, payload })
+}
+
+/** The daemon's committed `internal/protocol/testdata/mcp_status.json` payload, transcribed whole
+ *  (#1489). `remote<&>`, the embedded newline in `dial refused\nretry?`, the empty `error` and the
+ *  non-semver `2.0-beta` are adversarial upstream on purpose, and all of them CROSS byte-for-byte:
+ *  escaping is owed at the render sink, not at this decoder. `dropped_servers: 3` beside two retained
+ *  rows is the case proving nothing reconciles the count against the list's length. */
+const MCP_STATUS_FRAME = {
+  conversation_id: 'conversation-mcp',
+  servers: [
+    { name: 'filesystem', status: 'connected', error: '', scope: 'local', version: '1.4.2' },
+    {
+      name: 'remote<&>',
+      status: 'failed',
+      error: 'dial refused\nretry?',
+      scope: 'project',
+      version: '2.0-beta'
+    }
+  ],
+  dropped_servers: 3
+}
+
+/** What that fixture narrows to — identical, because every key on it is read and nothing is
+ *  normalised. Kept as its own constant so a decoder that mutates its input cannot pass by aliasing. */
+const MCP_STATUS = {
+  conversation_id: 'conversation-mcp',
+  servers: [
+    { name: 'filesystem', status: 'connected', error: '', scope: 'local', version: '1.4.2' },
+    {
+      name: 'remote<&>',
+      status: 'failed',
+      error: 'dial refused\nretry?',
+      scope: 'project',
+      version: '2.0-beta'
+    }
+  ],
+  dropped_servers: 3
+}
+
 /** A well-formed background_task_started payload — the daemon's canonical fixture (#564). Every field
  *  carries a DISTINCT non-empty value, so a field swap or a dropped field fails the round-trip (AC1),
  *  and the `description` is deliberately adversarial: HTML metacharacters, a quote, a shell redirect
@@ -4188,6 +4230,280 @@ describe('parseInboundMessage — context_usage dropped_memory_files (#1460, AC4
     }))
     const frame = { ...CONTEXT_USAGE_FRAME, memory_files: files, dropped_memory_files: 9_000_000 }
     expect(memoryFilesOf(frame)).toHaveLength(200)
+  })
+})
+
+/** Read one decoded frame's servers, or fail the test if the arm did not narrow (#1489). */
+function serversOf(
+  payload: unknown
+): { name: string; status: string; error: string; scope: string; version: string }[] {
+  const decoded = parseInboundMessage(encodeMCPStatus(payload))
+  if (decoded?.kind !== 'mcp-status') {
+    throw new Error('expected an mcp-status decode')
+  }
+  return decoded.mcpStatus.servers
+}
+
+/** One well-formed row, for the cases that vary a single field or pair it with a bad sibling. */
+const MCP_ROW = { name: 'filesystem', status: 'connected', error: '', scope: 'local', version: '1.4.2' }
+
+describe('parseInboundMessage — mcp_status recognition (#1489, AC1)', () => {
+  it("narrows the daemon's fixture into { kind: mcp-status } carrying the three fields", () => {
+    expect(parseInboundMessage(encodeMCPStatus(MCP_STATUS_FRAME))).toEqual({
+      kind: 'mcp-status',
+      mcpStatus: MCP_STATUS
+    })
+  })
+
+  it('no longer reaches the unmodeled default — the frame is recognised, not dropped', () => {
+    // The behaviour this slice exists to change, asserted as the transition: before the arm the type
+    // fell through `default:` and the decode returned null.
+    expect(parseInboundMessage(encodeMCPStatus(MCP_STATUS_FRAME))).not.toBeNull()
+  })
+
+  it('carries NO ts — the arm is not timeline-bearing, so there is no history half to join', () => {
+    // FrameTimestamp marks exactly the arms decodeHistoryEvent draws, and this type gains none there.
+    expect(parseInboundMessage(encodeMCPStatus(MCP_STATUS_FRAME))).not.toHaveProperty('ts')
+  })
+
+  it('returns exactly THREE top-level keys, dropping a planted turn_id and unknown keys', () => {
+    // A fresh literal rather than a spread: forward-compatible with a key a later daemon adds, and it
+    // carries nothing the daemon did not declare. `turn_id` is the realistic planted key — the frame is
+    // conversation-scoped and must never carry one.
+    const planted = { ...MCP_STATUS_FRAME, turn_id: 'turn-1', config: { command: 'rm -rf /' } }
+    const decoded = parseInboundMessage(encodeMCPStatus(planted))
+    expect(decoded).toEqual({ kind: 'mcp-status', mcpStatus: MCP_STATUS })
+    expect(decoded?.kind === 'mcp-status' && Object.keys(decoded.mcpStatus)).toEqual([
+      'conversation_id',
+      'servers',
+      'dropped_servers'
+    ])
+  })
+
+  it("drops a row's unknown keys — including a planted __proto__ — returning exactly FIVE", () => {
+    // Each row is its own FRESH five-key literal. A server list keyed by name is the obvious downstream
+    // view model, so a planted `__proto__` must not survive into a value a consumer might index.
+    //
+    // The row is built through JSON.parse ON PURPOSE: a `__proto__:` key in an object literal sets the
+    // prototype rather than an own property, so JSON.stringify would drop it before it reached the wire
+    // and this test would pass without proving anything.
+    const row: unknown = JSON.parse(
+      '{"name":"filesystem","status":"connected","error":"","scope":"local","version":"1.4.2",' +
+        '"tools":["read_file"],"__proto__":{"polluted":1}}'
+    )
+    expect(Object.keys(row as object)).toContain('__proto__')
+    const decoded = serversOf({ ...MCP_STATUS_FRAME, servers: [row] })
+    expect(decoded).toEqual([MCP_ROW])
+    expect(Object.keys(decoded[0])).toEqual(['name', 'status', 'error', 'scope', 'version'])
+    expect({}).not.toHaveProperty('polluted')
+    expect(Object.prototype).not.toHaveProperty('polluted')
+  })
+})
+
+describe('parseInboundMessage — mcp_status empty report and fail-closed frame (#1489, AC2)', () => {
+  it('decodes servers: [] with dropped_servers: 0 as a POSITIVE empty report', () => {
+    // MarshalJSON normalises a nil slice to `[]` precisely so a client never has to tell the two apart.
+    // `[]` says claude reported no servers, and `0` is a value — neither is an absence.
+    expect(
+      parseInboundMessage(
+        encodeMCPStatus({ conversation_id: 'conversation-mcp', servers: [], dropped_servers: 0 })
+      )
+    ).toEqual({
+      kind: 'mcp-status',
+      mcpStatus: { conversation_id: 'conversation-mcp', servers: [], dropped_servers: 0 }
+    })
+  })
+
+  it.each([
+    ['null — the daemon never sends one, so it is a real defect', null],
+    ['a string', 'filesystem'],
+    ['a number', 2],
+    ['an object keyed by server name', { filesystem: MCP_ROW }],
+    ['a boolean', false]
+  ])('fails the WHOLE frame closed when servers is %s', (_label, servers) => {
+    expect(() => parseInboundMessage(encodeMCPStatus({ ...MCP_STATUS_FRAME, servers }))).toThrow(
+      WireDecodeError
+    )
+  })
+
+  it.each(['servers', 'dropped_servers', 'conversation_id'])(
+    'fails closed when %s is ABSENT — the key is always written, so a missing one is a defect',
+    (field) => {
+      const absent: Record<string, unknown> = { ...MCP_STATUS_FRAME }
+      delete absent[field]
+      expect(() => parseInboundMessage(encodeMCPStatus(absent))).toThrow(WireDecodeError)
+    }
+  )
+
+  it.each([
+    ['dropped_servers mistyped', { dropped_servers: '3' }],
+    ['dropped_servers null', { dropped_servers: null }],
+    ['conversation_id mistyped', { conversation_id: 42 }],
+    ['conversation_id null', { conversation_id: null }]
+  ])('fails the whole frame closed when %s', (_label, override) => {
+    expect(() =>
+      parseInboundMessage(encodeMCPStatus({ ...MCP_STATUS_FRAME, ...override }))
+    ).toThrow(WireDecodeError)
+  })
+
+  it('throws when an mcp_status payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeMCPStatus('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeMCPStatus([MCP_ROW]))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeMCPStatus(null))).toThrow(WireDecodeError)
+  })
+})
+
+describe('parseInboundMessage — mcp_status malformed server row (#1489, AC2)', () => {
+  const FIELDS = ['name', 'status', 'error', 'scope', 'version'] as const
+  const cases: [string, unknown][] = [
+    ['a non-record row', 'filesystem'],
+    ['a null row', null],
+    ['an array row', ['filesystem', 'connected', '', 'local', '1.4.2']]
+  ]
+  for (const field of FIELDS) {
+    const row: Record<string, unknown> = { ...MCP_ROW }
+    delete row[field]
+    cases.push([`a row missing ${field}`, row])
+    cases.push([`a row whose ${field} is a number`, { ...MCP_ROW, [field]: 42 }])
+    cases.push([`a row whose ${field} is null`, { ...MCP_ROW, [field]: null }])
+  }
+
+  it.each(cases)('throws on %s rather than yielding a partial list', (_label, row) => {
+    // ONE bad row drops the WHOLE frame, a well-formed sibling ahead of it included. A half-populated
+    // server list presented as complete is worse than none: `dropped_servers` would no longer account
+    // for the loss, and a consumer could not tell the two apart.
+    const frame = { ...MCP_STATUS_FRAME, servers: [MCP_ROW, row] }
+    expect(() => parseInboundMessage(encodeMCPStatus(frame))).toThrow(WireDecodeError)
+  })
+})
+
+describe('parseInboundMessage — mcp_status rows cross byte-for-byte (#1489, AC3)', () => {
+  it("carries the daemon's two fixture rows in WIRE ORDER — claude's order, never re-sorted", () => {
+    expect(serversOf(MCP_STATUS_FRAME)).toEqual(MCP_STATUS.servers)
+  })
+
+  it("crosses the FIXTURE's metacharacters, newline, empty error and non-semver version verbatim", () => {
+    // Asserted against the committed fixture's literal strings rather than a paraphrase: a decoder that
+    // escapes, trims, normalises or semver-parses any of these reddens here.
+    const rows = serversOf(MCP_STATUS_FRAME)
+    expect(rows[1].name).toBe('remote<&>')
+    // The embedded newline is why no row string may reach the line-delimited diagnostic stream: a
+    // logged `error` would forge a record.
+    expect(rows[1].error).toBe('dial refused\nretry?')
+    expect(rows[1].error).toContain('\n')
+    // `''` is a value the contract keeps present — plain requireString, not the non-empty sibling.
+    expect(rows[0].error).toBe('')
+    expect(rows[1].version).toBe('2.0-beta')
+  })
+
+  it('decodes an UNRECOGNISED status word and an EMPTY scope and version — open-set, not rejected', () => {
+    // What the daemon's fixture does not carry: its statuses are `connected` / `failed` and neither
+    // version is empty. `status` and `scope` are claude's open-set text, reports rather than authority,
+    // and `version` is opaque — a client-side vocabulary would fail-close a valid future frame.
+    const row = { name: 'docs', status: 'needs-reauth-v9', error: '', scope: '', version: '' }
+    expect(serversOf({ ...MCP_STATUS_FRAME, servers: [row] })).toEqual([row])
+  })
+
+  it('does NOT map a status onto a client vocabulary — the word crosses as claude wrote it', () => {
+    const rows = ['Connected', 'needs-auth', 'pending', 'disabled', ' failed '].map((status) => ({
+      ...MCP_ROW,
+      status
+    }))
+    expect(serversOf({ ...MCP_STATUS_FRAME, servers: rows }).map((r) => r.status)).toEqual([
+      'Connected',
+      'needs-auth',
+      'pending',
+      'disabled',
+      ' failed '
+    ])
+  })
+
+  it('decodes a row whose FIVE strings are all empty — every one is a value', () => {
+    const row = { name: '', status: '', error: '', scope: '', version: '' }
+    expect(serversOf({ ...MCP_STATUS_FRAME, servers: [row] })).toEqual([row])
+  })
+
+  it('crosses an adversarial row unescaped, untrimmed and un-normalised', () => {
+    // Escaping HERE would corrupt the value for every non-HTML sink and buy false safety at the real
+    // one; the operator ruling (CLAUDE.md, 2026-08-20) puts it at the render sink.
+    const row = {
+      name: '  __proto__\r\n{"event":"forged"}  ',
+      status: '<img src=x onerror="alert(1)">',
+      error: '&amp; ../../../etc/passwd',
+      scope: 'javascript:alert(1)',
+      version: '\u0000v1'
+    }
+    expect(serversOf({ ...MCP_STATUS_FRAME, servers: [row] })).toEqual([row])
+  })
+})
+
+describe('parseInboundMessage — mcp_status dropped_servers (#1489, AC2)', () => {
+  it('carries 3 beside TWO retained rows — the count is copied, never reconciled with the length', () => {
+    const decoded = parseInboundMessage(encodeMCPStatus(MCP_STATUS_FRAME))
+    expect(decoded?.kind === 'mcp-status' && decoded.mcpStatus.dropped_servers).toBe(3)
+  })
+
+  it.each([
+    ['0 beside a populated list', 0],
+    ['a count far exceeding the retained rows', 900],
+    ['a negative count — no client-invented range check', -1]
+  ])('decodes %s untouched', (_label, dropped_servers) => {
+    expect(parseInboundMessage(encodeMCPStatus({ ...MCP_STATUS_FRAME, dropped_servers }))).toEqual({
+      kind: 'mcp-status',
+      mcpStatus: { ...MCP_STATUS, dropped_servers }
+    })
+  })
+
+  it('caps nothing and allocates nothing from the CLAIMED count', () => {
+    // The producer's entry cap is not a wire constant, so a long list decodes whole, and the decoder
+    // sizes from the array that actually arrived, never from the number the daemon asserts.
+    const servers = Array.from({ length: 200 }, (_unused, i) => ({ ...MCP_ROW, name: `s${i}` }))
+    expect(serversOf({ ...MCP_STATUS_FRAME, servers, dropped_servers: 9_000_000 })).toHaveLength(200)
+  })
+})
+
+describe('parseInboundMessage — mcp_status failure messages (#1489, AC4)', () => {
+  it('throws a message naming the failure CATEGORY only — no row string, no id, no INDEX', () => {
+    // daemonConnection catches WireDecodeError into a caller that may log it, so a value echoed here
+    // rides into that log. The row index is excluded too: a weak oracle for no diagnostic gain.
+    const SECRET = {
+      name: 'secret-server-name',
+      status: 'secret-status-word',
+      error: 'secret-error-text',
+      scope: 'secret-scope',
+      version: 'secret-version'
+    }
+    const SECRET_CONV = 'secret-conversation-id'
+    try {
+      parseInboundMessage(
+        encodeMCPStatus({
+          ...MCP_STATUS_FRAME,
+          conversation_id: SECRET_CONV,
+          servers: [SECRET, { ...SECRET, version: 7 }]
+        })
+      )
+      expect.unreachable('a mistyped version must throw')
+    } catch (error) {
+      expect(error).toBeInstanceOf(WireDecodeError)
+      const message = (error as WireDecodeError).message
+      expect(message).toContain('version')
+      for (const value of [...Object.values(SECRET), SECRET_CONV]) {
+        expect(message).not.toContain(value)
+      }
+      expect(message).not.toMatch(/\b(index|row 1|\[1\])\b/i)
+    }
+  })
+
+  it('names no value when the row is not a record or the list is not an array', () => {
+    for (const servers of [['secret-row-string'], 'secret-list-string']) {
+      try {
+        parseInboundMessage(encodeMCPStatus({ ...MCP_STATUS_FRAME, servers }))
+        expect.unreachable('a malformed servers value must throw')
+      } catch (error) {
+        expect(error).toBeInstanceOf(WireDecodeError)
+        expect((error as WireDecodeError).message).not.toContain('secret-')
+      }
+    }
   })
 })
 
@@ -8074,6 +8390,69 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(lines).toHaveLength(0)
   })
 
+  it('logs an mcp_status content-free, never the conversation_id or any row string (#1489, AC4)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONV = 'secret-conversation-id'
+    const SECRETS = {
+      name: 'secret-server-name',
+      status: 'secret-status-word',
+      error: 'secret-error\n{"event":"forged"}',
+      scope: 'secret-scope',
+      version: 'secret-version'
+    }
+    const plaintext = encodeMCPStatus({
+      conversation_id: SECRET_CONV,
+      servers: [SECRETS],
+      dropped_servers: 4747
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    // The client-owned type LITERAL, never the wire-supplied envelope.type the `default:` arm used to log.
+    expect(record.code).toBe('mcp_status')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set: no decoded field and no list length reaches the log, and no new
+    // DiagnosticEvent field is introduced.
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_CONV)
+    // Every row string is claude-authored text; a server name also discloses what the operator wired
+    // up. The `error` probe carries a newline and a forged record on purpose: the stream is
+    // line-delimited JSON, so a logged value could forge one.
+    for (const value of Object.values(SECRETS)) {
+      expect(lines[0]).not.toContain(value)
+    }
+    expect(lines[0]).not.toContain('secret-')
+    expect(lines[0]).not.toContain('forged')
+    expect(lines[0]).not.toContain('4747')
+  })
+
+  it('writes NO inbound-unmodeled record for an mcp_status any more (#1489)', () => {
+    const { log, lines } = captureLog()
+    parseInboundMessage(encodeMCPStatus(MCP_STATUS_FRAME), log)
+    expect(lines).toHaveLength(1)
+    expect(JSON.parse(lines[0]).event).not.toBe('inbound-unmodeled')
+  })
+
+  it('does NOT log on a malformed mcp_status ROW throw path (#1489, AC4)', () => {
+    // Narrowing runs BEFORE the log call, so a malformed frame leaves no record at all — including the
+    // bad row's own untrusted strings.
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(
+        encodeMCPStatus({
+          ...MCP_STATUS_FRAME,
+          servers: [{ ...MCP_ROW, name: 'secret-server-name', version: 2 }]
+        }),
+        log
+      )
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
   it('logs a model_announced content-free, never the conversation_id, the model or the cut flag (#587)', () => {
     const { log, lines } = captureLog()
     const SECRET_CONV = 'secret-conversation-id'
@@ -10080,10 +10459,10 @@ describe('parseInboundMessage — history entry payload decode (#1227)', () => {
     expect(JSON.stringify(decoded)).not.toContain('SHOULD-NOT-CROSS')
   })
 
-  // AC3: a stored type the timeline does not draw is skipped rather than crossing. The first ten
+  // AC3: a stored type the timeline does not draw is skipped rather than crossing. The first eleven
   // this client DOES decode on the live lane and never draws in the thread — `thinking_progress`
-  // joined them at #1312, `rate_limited` at #1318, `context_usage` at #1454 and `resetting` at #1514,
-  // each given a live-lane parser and deliberately no arm here; the last is a type it has never seen.
+  // joined them at #1312, `rate_limited` at #1318, `context_usage` at #1454, `resetting` at #1514 and
+  // `mcp_status` at #1489, each given a live-lane parser and deliberately no arm here; the last is a type it has never seen.
   it.each([
     'background_task_started',
     'background_task_updated',
@@ -10095,6 +10474,7 @@ describe('parseInboundMessage — history entry payload decode (#1227)', () => {
     'rate_limited',
     'context_usage',
     'resetting',
+    'mcp_status',
     'a_frame_type_from_a_later_daemon'
   ])('skips a stored %s — undrawn, and not an error', (type) => {
     expect(decodedEntries([historyEntry(type, { conversation_id: 'c1' })])).toEqual([])
@@ -10130,6 +10510,12 @@ describe('parseInboundMessage — history entry payload decode (#1227)', () => {
     // own it cannot tell "skipped because decodeHistoryEvent has no arm" from "skipped because the
     // payload failed" — the distinction the neighbouring skips-by-stored-TYPE test draws.
     expect(decodedEntries([historyEntry('context_usage', CONTEXT_USAGE_FRAME)])).toEqual([])
+  })
+
+  it('skips a WELL-FORMED stored mcp_status — armless dispatch, not a payload failure (#1489)', () => {
+    // The discriminating version of the row above: that row's payload would fail
+    // `parseMCPStatusPayload` anyway, so only a well-formed payload proves the skip is the missing arm.
+    expect(decodedEntries([historyEntry('mcp_status', MCP_STATUS_FRAME)])).toEqual([])
   })
 
   it('skips a WELL-FORMED stored resetting — armless dispatch, not a payload failure (#1514)', () => {

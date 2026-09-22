@@ -433,6 +433,15 @@ describe('rate-limited wire vocabulary (#1318)', () => {
   })
 })
 
+describe('mcp-status wire vocabulary (#1489)', () => {
+  it('admits the mcp_status inbound envelope type', () => {
+    // Compile-time membership, pinned for context_usage's reason below: `Envelope.type` is
+    // `EnvelopeType | string`, so an arm on an unadmitted literal would typecheck anyway.
+    const status: EnvelopeType = 'mcp_status'
+    expect(status).toBe('mcp_status')
+  })
+})
+
 describe('context-usage wire vocabulary (#1454, #1455, #1459)', () => {
   it('admits the context_usage inbound envelope type', () => {
     // Compile-time membership: this assigns only if the member is part of EnvelopeType. Admission is

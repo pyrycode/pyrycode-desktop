@@ -385,8 +385,10 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
   the rows arrive as a prefix in descending-token order and `dropped_mcp_tools` is never cross-checked
   against the retained length, nor against `dropped_categories`. `server_name` is decoded as **inert**:
   its name collides with the actuation-crossing `ServerName` on the daemon's MCP reconnect payload, so it
-  is never an actuation target, never an authorization input, and never joined against `mcp_status`, the
-  same constraint `name` already carries. `memory_files` and its dropped count followed in #1460, the
+  is never an actuation target, never an authorization input, and never joined against `mcp_status`
+  (#1489 has since decoded that frame into a typed `MCPStatusPayload`/`MCPServerStatus` table on this
+  side, which sharpens the prohibition rather than retiring it), the same constraint `name` already
+  carries. `memory_files` and its dropped count followed in #1460, the
   frame's last inventory, `../../../etc/passwd` included. Full account in [Extension
   history](inbound-message-decode-history.md).
 - [#1460](https://github.com/pyrycode/pyrycode-desktop/issues/1460) extended it once more, additively —
@@ -422,3 +424,15 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
   six fields, not a new kind — the #965 pattern: claude's `result` numbers (duration, four token
   counts, the session's running cost) alongside the existing stopped-turn reports. Full account in
   [Optional stopped-turn reports](#optional-stopped-turn-reports) above.
+- [#1489](https://github.com/pyrycode/pyrycode-desktop/issues/1489) extended it once more, additively:
+  the `mcp_status` kind, `parseMCPStatusPayload` + the new row narrower `parseMCPServerStatus` —
+  claude's MCP server list for one conversation, published live and as the answer to
+  `mcp_status_request` (not yet declared on this side). `servers` is never `null`, an empty array is
+  the positive report of no servers, and `dropped_servers` is copied from the producer and never
+  reconciled against the retained length. Each row is five always-present plain strings
+  (`name`/`status`/`error`/`scope`/`version`); one malformed row drops the whole frame. Unlike
+  `ContextUsageMCPTool.server_name`, a row's `name` is **not** inert — it is the server list's own
+  identity, and a later slice may legitimately carry it into `mcp_reconnect`/`mcp_toggle`, where the
+  daemon gates per device. `status`/`scope` stay open-set claims and `version` stays opaque. Takes no
+  `FrameTimestamp` and gains no arm in `decodeHistoryEvent`. Ships dormant: the IPC carry is #1490.
+  Full account in [Extension history](inbound-message-decode-history.md).

@@ -484,3 +484,51 @@ and nothing at this decode boundary can supply the independent clearing path (di
 exit, turn activity) that a stuck indicator would need. Architect (builder) self-review PASS, no MUST
 FIX findings; one SHOULD FIX recorded for #1515 — handle all sixteen combinations rather than only the
 three the producer emits, since a narrowed value is still a claim by a peer.
+
+[#1489](https://github.com/pyrycode/pyrycode-desktop/issues/1489) added a new kind, `mcp_status` →
+`mcp-status` — claude's MCP server list for one conversation, published live and as the answer to
+`mcp_status_request` (correlated by `in_reply_to`, not yet declared on this side). Two new parsers:
+`parseMCPServerStatus` (the row) is `parseContextUsageMCPTool`'s structure scaled to five plain
+`requireString` fields in wire order (`name`/`status`/`error`/`scope`/`version`), and
+`parseMCPStatusPayload` (the frame) is `parseContextUsagePayload`'s list shape over a single
+inventory — an `isRecord` gate, `requireString` for `conversation_id`, an `Array.isArray`-then-`.map`
+guard on `servers`, a plain `requireNumber` for `dropped_servers` — returning a fresh three-field
+literal. `servers` is never `null`: the daemon's `MarshalJSON` normalises a nil slice to `[]`, so an
+empty array is the positive report that claude has no servers, while `null`/absent/non-array fails the
+whole frame closed. `dropped_servers` is copied from the producer and never reconciled against the
+retained length — `servers.length + dropped_servers` is the original size, and the daemon's entry cap
+is not a wire constant, so no client-side cap is added. One malformed row drops the whole frame rather
+than yielding a partial list.
+
+**All five row fields are always present, and `''` is a value on every one of them** — a missing or
+zero-valued source string encodes as `''` daemon-side, so `requireString` is used throughout, never
+`requireNonEmptyString`: nothing here is a lookup whose emptiness would signal a failure. `status` and
+`scope` are claude's open-set claims, never closed enums — the daemon states the value set is
+unmeasured beyond the handful the fixture and the ticket forecast, so narrowing either would fail-close
+a future release's new word, the `rate_limited`/`status` precedent applied a second time. `version` is
+opaque and never semver-parsed (the fixture's `2.0-beta` exists to prove exactly that). `error` carries
+a 256-byte producer cap, a size bound and not sanitisation.
+
+**`name`'s provenance inverts `ContextUsageMCPTool.server_name`'s, and the row parser's docblock says so
+rather than copying that field's inertness doctrine across.** `server_name` names a contributor to a
+*reading* and is never an actuation target; here `name` **is** the server list's own identity, and a
+later slice may legitimately carry it into an MCP actuation verb (`mcp_reconnect`/`mcp_toggle`), where
+the daemon gates per device and the actuation seam is its sole validator. What still binds on this side
+is the client-side rule only: a `name` is never a lookup key, a React key, a `Map` index or a
+plain-object key (`__proto__` is an ordinary server name here), a path, a filename or a cache key. Every
+row string crossed the subprocess trust boundary and is neither validated nor sanitised upstream —
+inert text, escaped at the render sink, never fed to an HTML sink, an attribute or a URL. The fixture's
+`remote<&>` name and the embedded newline in `dial refused\nretry?` cross byte-for-byte, which is also
+why no row string may reach a log field: the diagnostic stream is line-delimited JSON, and a logged
+value could forge a record.
+
+Content-free-logged as `inbound-decoded(code: 'mcp_status')` before the `default` branch, narrowed
+before the log call so a malformed frame leaves no record; neither a row string nor `conversation_id`
+ever reaches a log line. Takes no `FrameTimestamp` and gains no arm in `decodeHistoryEvent` — the
+`context_usage`/`rate_limited` precedent, since this type has no replay ring or durable history
+upstream. Ships dormant, the same two-step already taken for `question_shown`/`modal_shown`/
+`rate_limited`/`context_usage`/`resetting`: `daemonConnection.ts`'s inbound switch has no catch-all, so
+the list stops at this boundary until the carry slice (#1490) claims it. Architect (builder) self-review
+PASS, no MUST FIX findings. A lesson from the build: the row parser's docblock must state the inverted
+provenance explicitly, since copying `parseContextUsageMCPTool`'s structure without also copying its
+prohibition-on-actuation clause would otherwise read as though it had been copied too.

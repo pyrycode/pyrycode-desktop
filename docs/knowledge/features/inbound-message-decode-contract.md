@@ -30,6 +30,7 @@ export type InboundDaemonMessage =
   | { kind: 'thinking-progress'; thinkingProgress: ThinkingProgressPayload }  // #1312, additive — a periodic reading, no rising/falling edge, no FrameTimestamp, ships dormant
   | { kind: 'rate-limited'; rateLimited: RateLimitedPayload }    // #1318, additive — a usage-limit window report, `status`/`limit_type` OPEN strings, `resets_at` unvalidated, no FrameTimestamp, ships dormant
   | { kind: 'context-usage'; contextUsage: ContextUsagePayload }  // #1454, additive — the reading (conversation_id/model/total_tokens/max_tokens/percentage); #1455 adds the category breakdown (categories/dropped_categories); mixed provenance, informational (no range/cross-field check), no FrameTimestamp, ships dormant
+  | { kind: 'mcp-status'; mcpStatus: MCPStatusPayload }          // #1489, additive — claude's MCP server list for one conversation; servers never null, dropped_servers copied not reconciled, one bad row drops the frame; name is NOT inert (a later slice may carry it into mcp_reconnect/mcp_toggle); no FrameTimestamp, ships dormant
   | { kind: 'tool-use'; toolUse: ToolUsePayload }               // #217, additive
   | { kind: 'modal-shown'; modalShown: ModalShownPayload }      // #201, additive
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }  // #201, additive
@@ -425,7 +426,8 @@ is no evidence about `dropped_mcp_tools` and neither list's length says anything
 **What is new is `server_name`, and it is decoded as INERT.** Its name collides with the
 actuation-crossing `ServerName` on the daemon's `MCPReconnectPayload`, which crosses an actuation seam
 verbatim and is validated by nothing; this one names a contributor to a reading, never an actuation
-target, an authorization input, or a value to join against `mcp_status`. `name` carries the same
+target, an authorization input, or a value to join against `mcp_status` (#1489 has since decoded that
+frame into a typed table, sharpening the prohibition rather than retiring it). `name` carries the same
 constraint — a tool definition's label, never a selector. Both strings are narrowed with plain
 `requireString`, never `requireNonEmptyString`: that helper exists for a field whose `''` is a *failed
 lookup*, and nothing looks either of these strings up, so `''` is a display value the daemon's contract

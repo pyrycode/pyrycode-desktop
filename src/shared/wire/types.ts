@@ -169,6 +169,14 @@ export type EnvelopeType =
   // the two. SSOT pyrycode#2370 (shape) / #2371 (producer) / internal/protocol/codes.go
   // TypeContextUsage.
   | 'context_usage'
+  // Claude's MCP SERVER LIST for one conversation (#1489) — which servers claude has and what it says
+  // about each. Same provenance and shape as the frames above: conversation-scoped, no `turn_id`, and
+  // receiving one neither opens nor closes a turn. Published live and as the answer to
+  // `mcp_status_request` (correlated by `in_reply_to`), which is the separate client → daemon ASK and is
+  // not declared on this side yet. A SNAPSHOT that replaces a reader's view rather than a delta.
+  // Binary → phone only. SSOT pyrycode#2373 (shape) / #2375 (live producer) / #2381 (on-demand reply) /
+  // internal/protocol/codes.go TypeMCPStatus.
+  | 'mcp_status'
   | 'dequeue_message'
   // v2-only phone→binary control frame — stops the running turn in the conversation it names, which
   // the daemon maps to the neutral turnevent.Cancel and routes to that conversation's bound runner as
@@ -1355,6 +1363,80 @@ export interface ContextUsagePayload {
   dropped_mcp_tools: number
   memory_files: ContextUsageMemoryFile[]
   dropped_memory_files: number
+}
+
+/**
+ * ONE ROW of an `mcp_status` frame's server list (daemon → client, #1489). Mirrors the daemon's
+ * `MCPServerStatus` field-for-field (SSOT pyrycode#2373, internal/protocol/interactive.go), wire order
+ * `name, status, error, scope, version`. Named without the `Wire` prefix and with the acronym
+ * capitalised, for ContextUsageCategory's stated reason.
+ *
+ * ALL FIVE KEYS ARE ALWAYS PRESENT, and a missing or zero-valued source string encodes as `''`. So `''`
+ * is a VALUE on every one of them — an empty `error` is the ordinary healthy row — and an absent key is
+ * a real defect rather than an empty field.
+ *
+ * `status` AND `scope` ARE OPEN-SET CLAIMS, NOT ENUMS AND NOT AUTHORITY. The daemon calls `status`
+ * claude's open-set status text, a report rather than a state a client may treat as authority, and
+ * `scope` is open the same way. A client-side closed set fail-closes a valid future frame the moment a
+ * claude release adds a word, so nothing narrows either, and nothing may branch security-relevant
+ * behaviour on them. `version` is OPAQUE: never semver-parsed, compared or ordered (the daemon's fixture
+ * carries `2.0-beta` to stop exactly that). `error` carries a 256-byte producer cap, which is a SIZE
+ * BOUND AND NOT SANITISATION.
+ *
+ * `name` IS THE SERVER'S IDENTITY IN THIS LIST, which is the inverse of ContextUsageMCPTool's
+ * `server_name` — that one names a contributor to a reading and is inert, and its prohibition on
+ * actuation does NOT carry over here. A later slice legitimately carries a `name` into `mcp_reconnect` /
+ * `mcp_toggle`, where the daemon gates per device and the actuation seam is its sole validator. What
+ * binds on THIS side is the client-side rule: a `name` is never a lookup key, a React `key`, a `Map`
+ * index or a plain-object key (`__proto__` is an ordinary server name here), a path, a filename, a
+ * cache key or a log field.
+ *
+ * Every string crossed the SUBPROCESS TRUST BOUNDARY and is neither validated nor sanitised upstream:
+ * render it as INERT TEXT, never into an HTML sink (`innerHTML` / `dangerouslySetInnerHTML`), an
+ * attribute or a URL. The daemon's fixture carries `remote<&>` and an embedded newline in `error` on
+ * purpose, and both cross this decoder byte-for-byte — escaping is owed at the render sink (CLAUDE.md's
+ * 2026-08-20 operator ruling). That newline is also why NO ROW STRING MAY REACH A LOG FIELD for an
+ * integrity reason and not only a privacy one: the diagnostic stream is line-delimited JSON, so a
+ * logged value could forge a record.
+ *
+ * See #1489 (this decode); the carry is #1490.
+ */
+export interface MCPServerStatus {
+  name: string
+  status: string
+  error: string
+  scope: string
+  version: string
+}
+
+/**
+ * Inbound `mcp_status` event (daemon → client, #1489): claude's MCP server list for one conversation.
+ * Mirrors the daemon's MCPStatusPayload field-for-field (SSOT pyrycode#2373 shape / #2375 live producer /
+ * #2381 on-demand reply, internal/protocol/interactive.go), wire order `conversation_id, servers,
+ * dropped_servers`, all three ALWAYS PRESENT. `parseMCPStatusPayload` returns a FRESH three-field literal,
+ * which keeps it forward-compatible with a key a later daemon adds and prototype-pollution-safe.
+ *
+ * `servers` IS A PLAIN ARRAY AND NEVER `null`: the daemon's `MarshalJSON` normalises a nil slice to `[]`
+ * so a client never has to tell the two apart. AN EMPTY `[]` IS THE POSITIVE REPORT THAT CLAUDE HAS NO
+ * SERVERS, which a consumer must keep distinguishable from the absence a frame that never arrived
+ * yields; a `null` or an absent key is a real defect. The rows keep CLAUDE'S ORDER — never re-sort them.
+ *
+ * `dropped_servers` IS COPIED FROM THE PRODUCER, NOT INFERRED, and is never reconciled against the list:
+ * `servers.length + dropped_servers` is the original size, and the retained length is no evidence of
+ * completeness in either direction. `0` is a value, never consulted for truthiness. The producer's entry
+ * cap is DAEMON-SIDE and not a wire constant, so a client must never hardcode one or treat a particular
+ * length as a signal.
+ *
+ * PROVENANCE IS MIXED: `conversation_id` is DAEMON-authored — a routing key, never an authorization
+ * signal — and every row string is CLAUDE-authored. See MCPServerStatus for what a row's strings may and
+ * may not become. NOTHING DECODED REACHES A LOG: the row strings for MCPServerStatus's reasons, and the
+ * `conversation_id` as a correlating identifier.
+ */
+export interface MCPStatusPayload {
+  conversation_id: string
+  servers: MCPServerStatus[]
+  // Go `int`; a plain `number` like every other integer on this wire.
+  dropped_servers: number
 }
 
 /**

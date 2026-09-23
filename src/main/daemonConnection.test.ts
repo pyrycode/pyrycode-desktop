@@ -8097,6 +8097,203 @@ describe('createDaemonConnection — reconnectMcpServer (#1582)', () => {
   })
 })
 
+describe('createDaemonConnection — toggleMcpServer (#1586)', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  const SERVER = 'docs <private-server>'
+
+  function refusal(code: unknown, inReplyTo: number): Uint8Array {
+    return encodeEnvelope({ id: 90, type: 'error', ts: FIXED_TS, in_reply_to: inReplyTo, payload: {
+      code, message: 'private daemon detail', retryable: false,
+      conversation_id: 'daemon-named-conversation', server_name: 'daemon-named-server', enabled: true
+    } })
+  }
+  const mcpRejections = (sink: ReturnType<typeof build>['sink']): DaemonEvent[] =>
+    emitted(sink).filter((e) => e.type === 'mcpToggleRejected' || e.type === 'mcpReconnectRejected')
+  const lastSentId = (ctx: ReturnType<typeof build>): number =>
+    decodeEnvelope(ctx.drivers[0].sent[ctx.drivers[0].sent.length - 1]).id
+
+  it('sends exactly one three-field frame per toggle, enabled present for both values, and never re-sends', async () => {
+    const { connection, drivers } = await reachConnected()
+    vi.useFakeTimers()
+    connection.send({ conversation_id: 'other', message_id: 'm1', text: 'hello' })
+    connection.toggleMcpServer('conv-42', SERVER, false)
+    connection.toggleMcpServer('conv-42', SERVER, true)
+    connection.requestMcpStatus('other')
+    expect(drivers[0].sent.map(decodeEnvelope).map((frame) => frame.id)).toEqual([2, 3, 4, 5])
+    expect(drivers[0].sent.slice(1, 3).map(decodeEnvelope)).toEqual([
+      { id: 3, type: 'mcp_toggle', ts: FIXED_TS,
+        payload: { conversation_id: 'conv-42', server_name: SERVER, enabled: false } },
+      { id: 4, type: 'mcp_toggle', ts: FIXED_TS,
+        payload: { conversation_id: 'conv-42', server_name: SERVER, enabled: true } }
+    ])
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(drivers[0].sent).toHaveLength(4)
+    connection.stop()
+  })
+
+  it('is inert before startup, before authentication and after stop, and logs no id or name', async () => {
+    const { log, records } = captureLog()
+    const { connection, drivers } = build({ diagnosticLog: log })
+    expect(() => connection.toggleMcpServer('private-id', SERVER, true)).not.toThrow()
+    connection.start()
+    await tick()
+    connection.toggleMcpServer('private-id', SERVER, true)
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    connection.stop()
+    expect(() => connection.toggleMcpServer('private-id', SERVER, false)).not.toThrow()
+    expect(drivers[0].sent).toEqual([])
+    expect(records.filter((entry) => entry.event === 'mcp-toggle-refused')).toEqual(
+      Array.from({ length: 3 }, () => ({ event: 'mcp-toggle-refused', code: 'unavailable' }))
+    )
+    expect(JSON.stringify(records)).not.toMatch(/private-id|private-server/)
+  })
+
+  it('catches a send failure, records nothing and never retries', async () => {
+    const { log, records } = captureLog()
+    const { connection, sink, drivers } = build({ diagnosticLog: log, throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    vi.useFakeTimers()
+    expect(() => connection.toggleMcpServer('private-id', SERVER, true)).not.toThrow()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(records.at(-1)).toEqual({ event: 'mcp-toggle-failed', code: 'build-or-send-failed' })
+    for (const id of [2, 3]) drivers[0].emit({ type: 'message', plaintext: refusal('mcp_actuation.refused', id) })
+    expect(mcpRejections(sink)).toEqual([])
+    expect(JSON.stringify(records)).not.toMatch(/private-id|private-server|driver send boom/)
+    connection.stop()
+  })
+
+  it.each([
+    'mcp_actuation.refused', 'protocol.malformed', 'conversation.not_found', 'mcp_actuation.something_later', 42
+  ])('settles a correlated %j refusal as the one permanent toggle rejection', async (code) => {
+    const { log, records } = captureLog()
+    const ctx = build({ diagnosticLog: log })
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    vi.useFakeTimers()
+    ctx.connection.toggleMcpServer('conv-42', SERVER, true)
+    const before = emitted(ctx.sink).length
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal(code, lastSentId(ctx)) })
+    await vi.advanceTimersByTimeAsync(60_000)
+    const events = emitted(ctx.sink).slice(before)
+    expect(events).toEqual([{ type: 'mcpToggleRejected', conversationId: 'conv-42' }])
+    expect(JSON.stringify(events)).not.toMatch(/private|daemon-named|in_reply_to|enabled|refused|malformed|not_found/)
+    expect(records.at(-1)).toEqual({ event: 'mcp-toggle-rejected' })
+    expect(JSON.stringify(records)).not.toMatch(/conv-42|private|daemon-named|enabled/)
+    expect(ctx.drivers[0].sent).toHaveLength(1)
+    ctx.connection.stop()
+  })
+
+  it('settles a toggle refusal and a reconnect refusal as their own events', async () => {
+    const ctx = await reachConnected()
+    ctx.connection.toggleMcpServer('conv-toggle', SERVER, false)
+    const toggleId = lastSentId(ctx)
+    ctx.connection.reconnectMcpServer('conv-reconnect', SERVER)
+    const reconnectId = lastSentId(ctx)
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('mcp_actuation.refused', reconnectId) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('mcp_actuation.refused', toggleId) })
+    expect(mcpRejections(ctx.sink)).toEqual([
+      { type: 'mcpReconnectRejected', conversationId: 'conv-reconnect' },
+      { type: 'mcpToggleRejected', conversationId: 'conv-toggle' }
+    ])
+    ctx.connection.stop()
+  })
+
+  it('keeps the entry through the mcp_status answer and consumes it on the first correlated refusal', async () => {
+    const ctx = await reachConnected()
+    ctx.connection.toggleMcpServer('conv-42', SERVER, true)
+    const id = lastSentId(ctx)
+    const before = emitted(ctx.sink).length
+    ctx.drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 50, type: 'mcp_status', ts: FIXED_TS,
+      in_reply_to: id, payload: { conversation_id: 'conv-42', servers: [], dropped_servers: 0 } }) })
+    expect(emitted(ctx.sink).slice(before)).toEqual([
+      { type: 'mcpStatus', conversationId: 'conv-42', servers: [], droppedServers: 0 }
+    ])
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('mcp_actuation.refused', id + 1) })
+    expect(mcpRejections(ctx.sink)).toEqual([])
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('mcp_actuation.refused', id) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('mcp_actuation.refused', id) })
+    expect(mcpRejections(ctx.sink)).toEqual([{ type: 'mcpToggleRejected', conversationId: 'conv-42' }])
+    ctx.connection.stop()
+  })
+
+  it('bounds the outstanding toggles, evicting the oldest', async () => {
+    const ctx = await reachConnected()
+    for (let i = 0; i < 33; i += 1) ctx.connection.toggleMcpServer(`conv-${i}`, SERVER, i % 2 === 0)
+    const ids = ctx.drivers[0].sent.map(decodeEnvelope).map((frame) => frame.id)
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('mcp_actuation.refused', ids[0]) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('mcp_actuation.refused', ids[1]) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('mcp_actuation.refused', ids[32]) })
+    expect(mcpRejections(ctx.sink).map((e) => e.type === 'mcpToggleRejected' && e.conversationId))
+      .toEqual(['conv-1', 'conv-32'])
+    ctx.connection.stop()
+  })
+
+  it('clears outstanding toggles on a new dial, so a recycled id settles nothing', async () => {
+    const ctx = await reachConnected()
+    ctx.connection.toggleMcpServer('conv-42', SERVER, true)
+    const staleId = lastSentId(ctx)
+    ctx.connection.reconnect()
+    await tick()
+    ctx.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    ctx.drivers[1].emit({ type: 'message', plaintext: refusal('mcp_actuation.refused', staleId) })
+    expect(mcpRejections(ctx.sink)).toEqual([])
+    ctx.connection.stop()
+  })
+
+  it('routes a validated command to its host, strips extra fields and refuses unknown or absent hosts', async () => {
+    const connections = new Map<string, DaemonConnection>()
+    const router = createConversationRouter({ connectionFor: (id) => connections.get(id) ?? null })
+    const host = build({ serverId: 'host-A', wrapSink: router.observe })
+    const other = build({ serverId: 'host-B', wrapSink: router.observe })
+    connections.set('host-A', host.connection)
+    connections.set('host-B', other.connection)
+    host.connection.start()
+    other.connection.start()
+    await tick()
+    for (const ctx of [host, other]) ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    host.drivers[0].emit({ type: 'message', plaintext: conversationCreatedPlaintext({
+      id: 'conv-42', is_promoted: false, cwd: '/workspace', name: null, last_used_at: '', workspace_label: null
+    }) })
+    const source = { on: vi.fn(), removeListener: vi.fn() } satisfies CommandSource
+    const off = onCommand(source, (command) => {
+      if (command.type === 'toggleMcpServer') {
+        const conversationId = command.payload.conversation_id
+        router.route(conversationId)?.toggleMcpServer(conversationId, command.payload.server_name,
+          command.payload.enabled)
+      }
+    })
+    const receive = source.on.mock.calls[0][1]
+    receive({}, { type: 'toggleMcpServer', serverId: 'host-B', payload: {
+      conversation_id: 'conv-42', server_name: 'docs', enabled: false, serverId: 'host-B', token: 'smuggled'
+    } })
+    expect(host.drivers[0].sent.map(decodeEnvelope)).toEqual([{ id: 2, ts: FIXED_TS, type: 'mcp_toggle',
+      payload: { conversation_id: 'conv-42', server_name: 'docs', enabled: false } }])
+    for (const id of ['unknown', '']) {
+      expect(() => receive({}, { type: 'toggleMcpServer', payload: {
+        conversation_id: id, server_name: 'docs', enabled: true
+      } })).not.toThrow()
+    }
+    receive({}, { type: 'toggleMcpServer', payload: { conversation_id: 'conv-42', server_name: 'docs' } })
+    receive({}, { type: 'toggleMcpServer', payload: { conversation_id: 'conv-42', server_name: 'docs', enabled: 1 } })
+    receive({}, { type: 'toggleMcpServer', payload: { conversation_id: 'conv-42', server_name: 42, enabled: true } })
+    connections.delete('host-A')
+    expect(() => receive({}, { type: 'toggleMcpServer', payload: {
+      conversation_id: 'conv-42', server_name: 'docs', enabled: true
+    } })).not.toThrow()
+    expect(host.drivers[0].sent).toHaveLength(1)
+    expect(other.drivers[0].sent).toEqual([])
+    off()
+    host.connection.stop()
+    other.connection.stop()
+  })
+})
+
 describe('createDaemonConnection — requestModelList (on-demand model vocabulary, #1165)', () => {
   it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin)', () => {
     const { connection, drivers } = build()

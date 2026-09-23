@@ -582,6 +582,13 @@ type BaseDaemonEvent =
       type: 'mcpReconnectRejected'
       conversationId: string
     }
+  | {
+      // The daemon refused this app's `mcp_toggle` (#1586), distinct from the reconnect refusal above so the
+      // sheet can say which action was refused. Same rules: one permanent outcome for every code, the
+      // conversation recorded at send time, and no daemon code, message, server name or requested state.
+      type: 'mcpToggleRejected'
+      conversationId: string
+    }
   // The background-task open arm (#564) — claude started work that OUTLIVES the turn that spawned it
   // (pyrycode#1240), the frame that separates that case from a genuine finish.
   //

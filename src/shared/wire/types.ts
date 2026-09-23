@@ -260,6 +260,10 @@ export type EnvelopeType =
   // correlated by in_reply_to. Refused: mcp_actuation.refused / protocol.malformed /
   // conversation.not_found, all non-retryable; the client does not retry any of them (#1582).
   | 'mcp_reconnect'
+  // Client → daemon, same gates, answer and refusal codes as mcp_reconnect above (pyrycode#2419 / #2420).
+  // Asks the daemon to move one named MCP server to the requested enabled state. The client sends
+  // `enabled` explicitly for both values and never retries a refusal (#1586).
+  | 'mcp_toggle'
   // The conversation's MODEL inventory (#971) — the identities claude will run as, with the
   // reasoning-effort levels each one supports. Same shape of frame as its sibling below and drawn from
   // the same `initialize` control reply: v2 outbound (binary → phone), interactive-capability-gated,
@@ -2702,6 +2706,16 @@ export interface MCPStatusRequestPayload {
 export interface MCPReconnectPayload {
   conversation_id: string
   server_name: string
+}
+
+/** Ask the daemon to turn one MCP server on or off (#1586), field-for-field with the daemon's
+ *  `MCPTogglePayload`. `enabled` is required here even though the daemon decodes an omitted key as
+ *  `false`: the operator's requested state always rides the wire. `server_name` carries the same
+ *  untrusted-name rules as `MCPReconnectPayload`. */
+export interface MCPTogglePayload {
+  conversation_id: string
+  server_name: string
+  enabled: boolean
 }
 
 /**

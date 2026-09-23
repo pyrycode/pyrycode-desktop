@@ -35,6 +35,7 @@ import { buildRequestModelList } from './transport/requestModelListEnvelope'
 import { buildRequestContextUsage } from './transport/requestContextUsageEnvelope'
 import { buildRequestMcpStatus } from './transport/requestMcpStatusEnvelope'
 import { buildMcpReconnect } from './transport/mcpReconnectEnvelope'
+import { buildMcpToggle } from './transport/mcpToggleEnvelope'
 import { buildRequestSystemPrompt } from './transport/requestSystemPromptEnvelope'
 import { buildSetSystemPrompt } from './transport/setSystemPromptEnvelope'
 import { buildRequestHistory } from './transport/requestHistoryEnvelope'
@@ -146,6 +147,9 @@ const MAX_PENDING_MCP_STATUS_REQUESTS = 32
 /** Outstanding MCP reconnects kept for refusal correlation (#1582), bounded for the same reason: the
  *  accepted answer is an mcp_status that cannot consume an entry. The 33rd evicts the oldest. */
 const MAX_PENDING_MCP_RECONNECTS = 32
+
+/** Outstanding MCP toggles kept for refusal correlation (#1586), bounded like the reconnects above. */
+const MAX_PENDING_MCP_TOGGLES = 32
 
 /**
  * Injected dependencies. The stores + sink are constructed at the composition root; `deviceName`
@@ -293,6 +297,10 @@ export interface DaemonConnection {
    * name is only put on the wire, never logged or stored. Unavailable connections and send failures are
    * inert. No retry. */
   reconnectMcpServer(conversationId: string, serverName: string): void
+  /** Ask once for an mcp_toggle of one named server to the operator's requested state (#1586). Accepted
+   * toggles answer with an mcp_status; any correlated refusal emits mcpToggleRejected. The server name and
+   * the requested state are only put on the wire, never logged or stored. Inert when unavailable. No retry. */
+  toggleMcpServer(conversationId: string, serverName: string, enabled: boolean): void
   /**
    * Ask the daemon for one backward step of a scroll-back walk over a conversation's on-disk history
    * (#1222). Takes the whole PAYLOAD rather than a scalar — unlike its two neighbours above, this verb
@@ -910,6 +918,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // MCP reconnect correlation (#1582): envelope id → the conversation this app acted on, and never the
   // server name. Same lifecycle and cap as the map above.
   const pendingMcpReconnects = new Map<number, string>()
+  // MCP toggle correlation (#1586): envelope id → conversation, never the server name or requested state.
+  // Its own map, so a toggle refusal can never settle as a reconnect one; ids share one sequence.
+  const pendingMcpToggles = new Map<number, string>()
   // Wire envelope id to the optional renderer attempt; reset with each connection generation.
   const pendingWorkspaceRenames = new Map<number, string>()
   // Attachment transfers currently on the wire (#861). A SET, not the debug bundle's single slot: two
@@ -1275,6 +1286,14 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
                 pendingMcpReconnects.delete(inReplyTo)
                 deps.diagnosticLog?.event({ event: 'mcp-reconnect-rejected' })
                 emitDaemonEvent(sink, { type: 'mcpReconnectRejected', conversationId: refusedMcpReconnect })
+                return
+              }
+              // MCP toggle refusal (#1586): the reconnect rule above, settled as its own event.
+              const refusedMcpToggle = pendingMcpToggles.get(inReplyTo)
+              if (refusedMcpToggle !== undefined) {
+                pendingMcpToggles.delete(inReplyTo)
+                deps.diagnosticLog?.event({ event: 'mcp-toggle-rejected' })
+                emitDaemonEvent(sink, { type: 'mcpToggleRejected', conversationId: refusedMcpToggle })
                 return
               }
               const failedRename = pendingWorkspaceRenames.get(inReplyTo)
@@ -2894,6 +2913,29 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function toggleMcpServer(conversationId: string, serverName: string, enabled: boolean): void {
+    if (driver === null || !authenticated) {
+      deps.diagnosticLog?.event({ event: 'mcp-toggle-refused', code: 'unavailable' })
+      return
+    }
+    try {
+      const envelopeId = nextEnvelopeId
+      const bytes = buildMcpToggle({ id: envelopeId, ts: now(), conversationId, serverName, enabled })
+      nextEnvelopeId += 1
+      driver.sendMessage(bytes)
+      // Record after the send, so a throwing build or send leaves no entry to correlate.
+      if (pendingMcpToggles.size >= MAX_PENDING_MCP_TOGGLES) {
+        const oldest = pendingMcpToggles.keys().next()
+        if (oldest.done !== true) pendingMcpToggles.delete(oldest.value)
+      }
+      pendingMcpToggles.set(envelopeId, conversationId)
+      deps.diagnosticLog?.event({ event: 'mcp-toggle-sent' })
+    } catch {
+      // Drop the exception and never retry: every refusal is final, and a failed send must not become a loop.
+      deps.diagnosticLog?.event({ event: 'mcp-toggle-failed', code: 'build-or-send-failed' })
+    }
+  }
+
   function failHistoryRequest(conversationId: string, code: string): void {
     deps.diagnosticLog?.event({ event: 'history-request-failed', code })
     emitDaemonEvent(sink, { type: 'historyRequestFailed', conversationId,
@@ -3770,6 +3812,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // refusal against a dead one's conversation.
     pendingMcpStatusRequests.clear()
     pendingMcpReconnects.clear()
+    pendingMcpToggles.clear()
     pendingWorkspaceRenames.clear()
     // Abandon any in-flight bundle stream (#505), the fourth per-connection reset: its daemon-side
     // request does not survive the fresh Noise session, so the consumer is failed HERE rather than
@@ -3818,6 +3861,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     requestContextUsage,
     requestMcpStatus,
     reconnectMcpServer,
+    toggleMcpServer,
     requestSystemPrompt,
     requestHistory,
     requestConversations,

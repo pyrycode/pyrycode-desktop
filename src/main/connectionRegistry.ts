@@ -249,6 +249,8 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
     requestContextUsage: (conversationId) => resolve().requestContextUsage(conversationId),
     requestMcpStatus: (conversationId) => resolve().requestMcpStatus(conversationId),
     reconnectMcpServer: (conversationId, serverName) => resolve().reconnectMcpServer(conversationId, serverName),
+    toggleMcpServer: (conversationId, serverName, enabled) =>
+      resolve().toggleMcpServer(conversationId, serverName, enabled),
     requestHistory: (payload) => resolve().requestHistory(payload),
     requestSystemPrompt: (conversationId) => resolve().requestSystemPrompt(conversationId),
     requestConversations: () => resolve().requestConversations(),

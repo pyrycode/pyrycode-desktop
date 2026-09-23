@@ -190,6 +190,7 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
     case 'mcpStatus': // Informational only; the MCP status bridge owns retention.
     case 'mcpStatusRequestRejected': // The channel info sheet's notice owns this (#1579).
     case 'mcpReconnectRejected': // The channel info sheet's Reconnect control owns this (#1582).
+    case 'mcpToggleRejected': // The channel info sheet's on/off switch owns this (#1586).
     case 'modelAnnounced':
       // No session-store action: the announced-model store (#588, not yet built) holds the identifier
       // claude named for the turn, not the session store — which holds no model state at all (its

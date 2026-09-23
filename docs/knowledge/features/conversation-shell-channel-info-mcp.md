@@ -52,6 +52,17 @@ React child, never an attribute, a URL, a filename or a log line.
 neither is rendered here — #1490's acceptance criteria named only what is drawn. A later ticket
 adding either should read `mcpStatusStore.ts`'s row-copy first: the fields are already flowing.
 
+**The failed classification is shared, not duplicated ([#1494](https://github.com/pyrycode/pyrycode-desktop/issues/1494)).**
+`toneOf`'s `failed` arm now calls `isMcpServerFailed(status)` (`mcpStatusStore.ts`, exact `=== 'failed'`),
+the same predicate the composer status row's MCP failure notice reads, so the sheet and that notice cannot
+disagree about which servers are down. The sheet stays purely read-only for this state — the notice, its
+per-conversation acknowledgement (`acknowledgedFailures`, held for equality only and cleared with
+`clearMcpStatus` like every other set here) and its own tests live in [Conversation shell — composer status
+row and error slot § MCP server failure
+notice](conversation-shell-composer-status.md#mcp-server-failure-notice-1494). The name bound this section
+already applied is shared too: `bounded` was exported as `boundMcpText` so the notice cuts a name
+identically.
+
 **Testing.** `McpServersSection.test.tsx` (static render) pins the four wording states, claude's row
 order, the tone-by-exact-word mapping, the error line's escaping and newline, the built-in filter both
 ways, the 256-code-point bound, and that no daemon string reaches an attribute; since #1579 it also pins

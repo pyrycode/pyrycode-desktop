@@ -61,10 +61,11 @@ live region and no hidden prefix, unlike the chip: both leads already say what t
 the visible text is already the accessible name.
 
 **`ComposerErrorSlot`** selects repair, then connection error; while connected it
-returns `recovery ?? refusal ?? notice ?? history ?? taskCount ?? null` (the
+returns `recovery ?? refusal ?? notice ?? history ?? mcpFailure ?? taskCount ?? null` (the
 background-task count joined the end of this chain in
-[#1435](conversation-shell-composer-status.md#background-task-count-pill-the-slots-last-occupant-1435)).
-Otherwise it returns null. The container chooses model rejection, stopping report, then usage for
+[#1435](conversation-shell-composer-status.md#background-task-count-pill-the-slots-last-occupant-1435);
+the [MCP server failure notice](conversation-shell-composer-status.md#mcp-server-failure-notice-1494)
+was inserted ahead of it in #1494). Otherwise it returns null. The container chooses model rejection, stopping report, then usage for
 `notice`. Each absent occupant must be actual `null`: a non-null React element
 whose component renders null still wins `??` and hides the next occupant.
 `ComposerErrorSlotControl` therefore checks `usageLimit === null` before creating

@@ -86,6 +86,7 @@ interface BuiltConnection {
   contextRequests: string[]
   mcpStatusRequests: string[]
   mcpReconnects: Array<[string, string]>
+  mcpToggles: Array<[string, string, boolean]>
   /**
    * The conversation ids this connection's `interrupt` was handed (#1092), recorded beside `calls` for
    * the reason `newSessions` is: `calls.interrupt` survives as this file's lifecycle-delegation probe
@@ -107,6 +108,7 @@ function createFactoryFake() {
     const contextRequests: string[] = []
     const mcpStatusRequests: string[] = []
     const mcpReconnects: Array<[string, string]> = []
+    const mcpToggles: Array<[string, string, boolean]> = []
     const interrupts: string[] = []
     built.push({
       serverId: spec.serverId,
@@ -116,6 +118,7 @@ function createFactoryFake() {
       contextRequests,
       mcpStatusRequests,
       mcpReconnects,
+      mcpToggles,
       interrupts
     })
     const noop = (): void => {}
@@ -142,6 +145,9 @@ function createFactoryFake() {
       requestContextUsage: (conversationId) => { contextRequests.push(conversationId) },
       requestMcpStatus: (conversationId) => { mcpStatusRequests.push(conversationId) },
       reconnectMcpServer: (conversationId, serverName) => { mcpReconnects.push([conversationId, serverName]) },
+      toggleMcpServer: (conversationId, serverName, enabled) => {
+        mcpToggles.push([conversationId, serverName, enabled])
+      },
       requestHistory: noop,
       requestSystemPrompt: noop,
       requestConversations: noop,
@@ -532,6 +538,15 @@ describe('createConnectionRegistry', () => {
       registry.connectionFor('beta')?.reconnectMcpServer('conv-42', 'docs')
       expect(factory.for('beta').mcpReconnects).toEqual([['conv-42', 'docs']])
       expect(factory.for('alpha').mcpReconnects).toEqual([])
+    })
+
+    it('forwards MCP toggles with all three arguments only to the named host (#1586)', async () => {
+      const { factory, registry } = harness([record('alpha'), record('beta')])
+      await settle()
+      registry.connectionFor('beta')?.toggleMcpServer('conv-42', 'docs', false)
+      registry.connectionFor('beta')?.toggleMcpServer('conv-42', 'docs', true)
+      expect(factory.for('beta').mcpToggles).toEqual([['conv-42', 'docs', false], ['conv-42', 'docs', true]])
+      expect(factory.for('alpha').mcpToggles).toEqual([])
     })
 
     it('reaches the named server, not the most recently paired one', async () => {

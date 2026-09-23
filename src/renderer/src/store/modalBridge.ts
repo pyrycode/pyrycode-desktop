@@ -172,6 +172,7 @@ export function translateModalEvent(
     case 'mcpStatus': // Informational only; the MCP status bridge owns retention.
     case 'mcpStatusRequestRejected': // The channel info sheet's notice owns this (#1579).
     case 'mcpReconnectRejected': // The channel info sheet's Reconnect control owns this (#1582).
+    case 'mcpToggleRejected': // The channel info sheet's on/off switch owns this (#1586).
     case 'modelAnnounced':
     case 'questionShown':
     case 'questionDismissed':

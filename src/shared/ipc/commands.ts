@@ -35,6 +35,7 @@ import type {
   RequestContextUsagePayload,
   MCPStatusRequestPayload,
   MCPReconnectPayload,
+  MCPTogglePayload,
   RequestSystemPromptPayload,
   RequestHistoryPayload,
   InterruptPayload,
@@ -299,6 +300,7 @@ export type RendererCommand =
   | { type: 'requestContextUsage'; payload: RequestContextUsagePayload }
   | { type: 'requestMcpStatus'; payload: MCPStatusRequestPayload }
   | { type: 'reconnectMcpServer'; payload: MCPReconnectPayload }
+  | { type: 'toggleMcpServer'; payload: MCPTogglePayload }
   | { type: 'requestHistory'; payload: RequestHistoryPayload }
   | { type: 'requestSystemPrompt'; payload: RequestSystemPromptPayload }
   | { type: 'requestConversations'; serverId?: string }
@@ -467,6 +469,8 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return 'payload' in value && isMCPStatusRequestPayload(value.payload)
     case 'reconnectMcpServer':
       return 'payload' in value && isMCPReconnectPayload(value.payload)
+    case 'toggleMcpServer':
+      return 'payload' in value && isMCPTogglePayload(value.payload)
     case 'requestHistory':
       // Payload-required (#1222) — the neighbour's idiom verbatim, including why the
       // explicitly-`undefined` case is refused by the payload guard and not by the `in` check.
@@ -956,6 +960,12 @@ function isMCPReconnectPayload(value: unknown): value is MCPReconnectPayload {
   if (typeof value !== 'object' || value === null) return false
   return 'conversation_id' in value && typeof value.conversation_id === 'string' &&
     'server_name' in value && typeof value.server_name === 'string'
+}
+
+/** The MCP toggle guard (#1586): the reconnect guard's two strings plus a present, genuinely boolean
+ * `enabled`, so a truthy stand-in such as `'false'` or `1` never becomes a requested state. */
+function isMCPTogglePayload(value: unknown): value is MCPTogglePayload {
+  return isMCPReconnectPayload(value) && 'enabled' in value && typeof value.enabled === 'boolean'
 }
 
 /** The untrusted renderer→main boundary guard for the requestSystemPrompt payload (#1230). The guard

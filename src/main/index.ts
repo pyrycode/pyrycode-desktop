@@ -802,6 +802,14 @@ app.whenReady().then(() => {
         router.route(conversationId)?.reconnectMcpServer(conversationId, command.payload.server_name)
         return
       }
+      case 'toggleMcpServer': {
+        // Routed like the reconnect above (#1586). The requested state is the operator's, passed straight
+        // through; nothing here derives it from or checks it against a status report.
+        const conversationId = command.payload.conversation_id
+        router.route(conversationId)?.toggleMcpServer(conversationId, command.payload.server_name,
+          command.payload.enabled)
+        return
+      }
       case 'requestHistory':
         // ROUTED BY CONVERSATION, mirroring the two cases above — a conversation's history belongs to
         // the server that hosts it, so the frame goes there or to no wire at all (#1222). The WHOLE

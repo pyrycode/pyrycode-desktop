@@ -504,6 +504,55 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand(valid)).toBe(true)
   })
 
+  it.each([
+    ['conv-42', 'docs', true], ['conv-42', 'docs', false], ['', '', false], ['__proto__', 'constructor', true]
+  ])('accepts an MCP toggle with string conversation %j, server %j and enabled %j (#1586)', (id, name, enabled) => {
+    expect(isRendererCommand({ type: 'toggleMcpServer', payload: {
+      conversation_id: id, server_name: name, enabled, extra: 'ignored'
+    } })).toBe(true)
+  })
+
+  it.each([
+    {}, { payload: undefined }, { payload: null }, { payload: {} }, { payload: 'conv-42' },
+    { payload: { conversation_id: 'conv-42', server_name: 'docs' } },
+    { payload: { conversation_id: 'conv-42', server_name: 'docs', enabled: undefined } },
+    { payload: { conversation_id: 'conv-42', server_name: 'docs', enabled: null } },
+    { payload: { conversation_id: 'conv-42', server_name: 'docs', enabled: 0 } },
+    { payload: { conversation_id: 'conv-42', server_name: 'docs', enabled: 1 } },
+    { payload: { conversation_id: 'conv-42', server_name: 'docs', enabled: 'true' } },
+    { payload: { conversation_id: 'conv-42', server_name: 'docs', enabled: 'false' } },
+    { payload: { conversation_id: 'conv-42', enabled: true } },
+    { payload: { server_name: 'docs', enabled: true } },
+    { payload: { conversation_id: 'conv-42', server_name: null, enabled: true } },
+    { payload: { conversation_id: 'conv-42', server_name: 42, enabled: true } },
+    { payload: { conversation_id: null, server_name: 'docs', enabled: false } },
+    { payload: { conversation_id: 42, server_name: 'docs', enabled: false } }
+  ])('rejects malformed MCP toggle %j (#1586)', (fields) => {
+    expect(isRendererCommand({ type: 'toggleMcpServer', ...fields })).toBe(false)
+  })
+
+  it('requires the MCP toggle payload, both strings and a boolean enabled at compile time (#1586)', () => {
+    // @ts-expect-error an MCP toggle requires a payload
+    const bare: RendererCommand = { type: 'toggleMcpServer' }
+    const missingEnabled: RendererCommand = {
+      type: 'toggleMcpServer',
+      // @ts-expect-error the requested state must be present
+      payload: { conversation_id: 'conv-42', server_name: 'docs' }
+    }
+    const stringEnabled: RendererCommand = {
+      type: 'toggleMcpServer',
+      // @ts-expect-error the requested state must be a boolean
+      payload: { conversation_id: 'conv-42', server_name: 'docs', enabled: 'true' }
+    }
+    const valid: RendererCommand = {
+      type: 'toggleMcpServer', payload: { conversation_id: 'conv-42', server_name: 'docs', enabled: false }
+    }
+    for (const invalid of [bare, missingEnabled, stringEnabled]) {
+      expect(isRendererCommand(invalid)).toBe(false)
+    }
+    expect(isRendererCommand(valid)).toBe(true)
+  })
+
   it('types requestModelList as payload-REQUIRED — a bare send does not compile (#1165)', () => {
     // Compile-time half of AC2, and the half the runtime guard above cannot prove: `src/shared/**/*`
     // is inside tsconfig.node.json's include, so `npm run typecheck` reads this file, and an unused

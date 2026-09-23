@@ -245,3 +245,45 @@ exhaustive renderer bridges (`questionBridge`, `daemonEventBridge`, `timelineBri
 gained a one-line ignored `case 'mcpReconnectRejected':` arm; nothing in the window consumes the event
 yet, the same UI-comes-later shape as the MCP-status ask before #1579. The live device-gate drive is
 \#1583.
+
+# MCP toggle correlation (#1586)
+
+An eleventh correlation store, `pendingMcpToggles: Map<number, string>`, the reconnect map's shape and
+lifecycle with a third wire field. `toggleMcpServer(conversationId, serverName, enabled)` builds a fresh
+three-field payload (`{ conversation_id, server_name, enabled }`) through `buildMcpToggle`; the guard
+`isMCPTogglePayload` is the reconnect guard plus a present, genuinely-boolean `enabled` check, so a truthy
+stand-in such as `'false'` or `1` can never become a requested state. **`enabled` is always written, for
+`false` as well as `true`** — the daemon decodes an omitted key as `false`, the non-escalating direction,
+and this client never relies on that default. The requested state is the operator's, passed straight from
+the command to the builder; nothing on this side reads `mcpStatusStore` or checks the request against a
+prior report.
+
+This store shares its two siblings' asymmetry: **a successful reply can never consume it.** An accepted
+toggle answers with an ordinary `mcp_status`, delivered by the existing informational path with no
+correlation at all. So `pendingMcpToggles` is bounded at `MAX_PENDING_MCP_TOGGLES` (32), oldest evicted
+first, for the same reason as `pendingMcpReconnects` and `pendingMcpStatusRequests`.
+
+- **Reject match — an eighth precedence-tier member, checked directly after the reconnect match above.**
+  A hit `delete`s the entry, logs `mcp-toggle-rejected` with no code, and emits
+  `mcpToggleRejected { conversationId }` — a distinct event from `mcpReconnectRejected`, so the channel
+  info sheet can say which action was refused. Like the reconnect match, it reads no narrowed field at
+  all: `mcp_actuation.refused`, `protocol.malformed`, `conversation.not_found` and an unknown code all
+  land on the same event.
+- **Reset — `dial()` clears the map next to its siblings.**
+- **The server name and the requested state never cross into a log, a map key, or the event.** The map's
+  value is always the conversation id; `buildMcpToggle` is the only place `serverName` and `enabled` are
+  read, and both go straight into the wire payload and nowhere else.
+
+**Why a fourth per-verb map rather than one shared map with a kind tag:** envelope ids come from one
+sequence, so an id is in at most one of the four pending maps and the matches cannot collide regardless.
+Separate maps also keep each verb's correlation code an exact copy of its precedent — the code review
+flagged `toggleMcpServer`'s body as a near-duplicate of `reconnectMcpServer`'s and let it stand on that
+basis, deferring a shared "send and record" helper until a third verb needs one.
+
+`security-sensitive`, builder self-review **PASS**, no findings beyond what the design already addressed
+(the same bounded-map shape as its two precedents); the design and its security review are recorded in
+full in `docs/specs/architecture/1586-mcp-toggle.md`. The four exhaustive renderer bridges
+(`questionBridge`, `daemonEventBridge`, `timelineBridge`, `modalBridge`) each gained a one-line ignored
+`case 'mcpToggleRejected':` arm; nothing in the window consumes the event yet — presenting the refusal and
+the on/off switch itself are [#1587](https://github.com/pyrycode/pyrycode-desktop/issues/1587), which this
+ticket blocks.

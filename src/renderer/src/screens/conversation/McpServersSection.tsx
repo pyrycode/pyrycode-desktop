@@ -1,6 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { RendererCommand } from '@shared/ipc/commands'
 import {
+  mcpStatusStore,
+  selectMcpReconnectRefusedFor,
+  selectMcpReconnectingFor,
   selectMcpStatusFor,
   selectMcpStatusUnavailableFor,
   useMcpStatusStore,
@@ -13,6 +16,9 @@ const MCP_BUILT_IN_SERVER_NAMES: readonly string[] = ['pyry_approve', 'pyry_file
 const DISPLAY_BOUND = 256
 // Client-owned: the refusal carries only a reason literal, so no daemon text can reach this line.
 const MCP_STATUS_UNAVAILABLE = 'The daemon could not report MCP status right now.'
+// Client-owned: every refusal is one merged outcome (not authorized, unknown server, no live child, failed
+// actuation), and the event carries no cause or daemon text, so this line names none.
+const MCP_RECONNECT_REFUSED = 'The daemon refused to reconnect the MCP server.'
 
 /** Ask once, on the sheet opening; main owns routing and diagnostics, and the store bridge receives the
  *  answer or the refusal. No retry: the next open asks again. */
@@ -22,6 +28,18 @@ export function requestMcpStatus(
 ): void {
   if (!conversationId) return
   sendCommand({ type: 'requestMcpStatus', payload: { conversation_id: conversationId } })
+}
+
+/** One press: begin the wait, then send one reconnect. `serverName` is the row's untrusted claude text and
+ *  crosses unchanged, which is the daemon's contract; it is never a key, an attribute or a log field. */
+export function reconnectMcpServer(
+  sendCommand: (command: RendererCommand) => void,
+  beginWait: (conversationId: string) => void,
+  conversationId: string,
+  serverName: string
+): void {
+  beginWait(conversationId)
+  sendCommand({ type: 'reconnectMcpServer', payload: { conversation_id: conversationId, server_name: serverName } })
 }
 
 // Bound in code points so a surrogate pair is never split; `…` marks a display cut.
@@ -40,21 +58,33 @@ function toneOf(status: string): 'connected' | 'failed' | 'other' {
 
 /**
  * The MCP servers section of the Channel info sheet: a pure function of the held report (or its absence),
- * the unavailable mark and the Show built-in state. The mark only appends a notice; held rows stay. Every row string is untrusted claude text rendered as React children only;
+ * the unavailable mark, the reconnect wait and refusal marks, and the Show built-in state. The marks only append
+ * notices; held rows stay. Every row string is untrusted claude text rendered as React children only;
  * rows are keyed by position because a `name` is never a key.
  */
 export function McpServersSectionView({
   report,
   showBuiltIn,
   unavailable,
-  onShowBuiltInChange
+  reconnecting,
+  reconnectRefused,
+  onShowBuiltInChange,
+  onReconnect
 }: {
   report: McpStatusReport | null
   showBuiltIn: boolean
   unavailable: boolean
+  reconnecting: boolean
+  reconnectRefused: boolean
   onShowBuiltInChange: (next: boolean) => void
+  onReconnect: (serverName: string) => void
 }): JSX.Element {
-  const notice = unavailable && <p className="channel-info__empty">{MCP_STATUS_UNAVAILABLE}</p>
+  const notice = (
+    <>
+      {unavailable && <p className="channel-info__empty">{MCP_STATUS_UNAVAILABLE}</p>}
+      {reconnectRefused && <p className="channel-info__empty">{MCP_RECONNECT_REFUSED}</p>}
+    </>
+  )
   if (report === null) {
     return (
       <>
@@ -86,6 +116,18 @@ export function McpServersSectionView({
             <span className="channel-info__row-value channel-info__mcp-status">
               <span className={`mcp-server-dot mcp-server-dot--${toneOf(server.status)}`} aria-hidden="true" />
               <span>{bounded(server.status)}</span>
+              {/* The tone's split: anything but exactly `connected` offers the control. While one reconnect
+                  is outstanding every control in this section is disabled, so a press cannot send twice. */}
+              {toneOf(server.status) !== 'connected' && (
+                <button
+                  type="button"
+                  className="button-small channel-info__mcp-reconnect"
+                  disabled={reconnecting}
+                  onClick={() => onReconnect(server.name)}
+                >
+                  Reconnect
+                </button>
+              )}
             </span>
           </div>
           {server.error !== '' && <p className="channel-info__mcp-error">{bounded(server.error)}</p>}
@@ -106,17 +148,30 @@ export function McpServersSectionView({
   )
 }
 
-/** Store-bound container; Show built-in is UI-local and off each time the sheet opens. */
+/** Store-bound container; Show built-in is UI-local and off each time the sheet opens. The sheet unmounts
+ *  this on close, so the cleanup ends an outstanding reconnect wait: a daemon that never answers (or a send
+ *  main dropped as inert) cannot leave the control stuck past a reopen. */
 export function McpServersSection({ conversationId }: { conversationId: string }): JSX.Element {
   const report = useMcpStatusStore(selectMcpStatusFor(conversationId))
   const unavailable = useMcpStatusStore(selectMcpStatusUnavailableFor(conversationId))
+  const reconnecting = useMcpStatusStore(selectMcpReconnectingFor(conversationId))
+  const reconnectRefused = useMcpStatusStore(selectMcpReconnectRefusedFor(conversationId))
   const [showBuiltIn, setShowBuiltIn] = useState(false)
+  useEffect(() => () => mcpStatusStore.getState().endMcpReconnectWait(conversationId), [conversationId])
   return (
     <McpServersSectionView
       report={report}
       showBuiltIn={showBuiltIn}
       unavailable={unavailable}
+      reconnecting={reconnecting}
+      reconnectRefused={reconnectRefused}
       onShowBuiltInChange={setShowBuiltIn}
+      onReconnect={(serverName) => reconnectMcpServer(
+        window.pyry.sendCommand,
+        mcpStatusStore.getState().beginMcpReconnect,
+        conversationId,
+        serverName
+      )}
     />
   )
 }

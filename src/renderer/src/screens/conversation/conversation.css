@@ -6513,6 +6513,23 @@
   accent-color: var(--color-primary);
 }
 
+/* #1583 — Reconnect, the design's Button small at State=Default, Type=Secondary (347:6686): outlined, 1px
+   Schemes/Primary border and ink on Surface, hence 7px vertical against the filled variants' 8px. The same
+   treatment as .question-panel__cancel, including its muted disabled state; the design draws no disabled
+   frame, so that convention is reused rather than invented. */
+.channel-info__mcp-reconnect {
+  padding: 7px var(--space-4);
+  border: 1px solid var(--color-primary);
+  background: var(--color-surface);
+  color: var(--color-primary);
+}
+
+.channel-info__mcp-reconnect:disabled {
+  border-color: var(--color-on-surface-variant);
+  color: var(--color-on-surface-variant);
+  cursor: not-allowed;
+}
+
 /* pre-wrap keeps an embedded newline inside this one text block. */
 .channel-info__mcp-error {
   margin: 0;

@@ -18,7 +18,8 @@ import type {
   RenameWorkspacePayload,
   ErrorPayload,
   MCPStatusPayload,
-  MCPStatusRequestPayload
+  MCPStatusRequestPayload,
+  MCPReconnectPayload
 } from '../../src/shared/wire/types'
 
 // The stateful `conversationStateFake` reply factory (#434) — TEST-ONLY e2e infrastructure. The fake
@@ -110,7 +111,20 @@ export interface ConversationStateFake {
   setMcpStatusAnswer(conversationId: string, answer: McpStatusAnswer | null): void
   /** The conversation ids every `mcp_status_request` named, in arrival order. A fresh copy. */
   mcpStatusRequests(): readonly string[]
+  /**
+   * Set (or with `null`, remove) how the fake answers the next `mcp_reconnect` naming `conversationId`
+   * (#1583). The answer holds until changed.
+   */
+  setMcpReconnectAnswer(conversationId: string, answer: McpReconnectAnswer | null): void
+  /** Every `mcp_reconnect` payload received, in arrival order. A fresh copy. */
+  mcpReconnectRequests(): readonly MCPReconnectPayload[]
 }
+
+/**
+ * The fake's answer to `mcp_reconnect` (#1583): an accepted reconnect's fresh `mcp_status`, correlated by
+ * `in_reply_to` like the daemon's, or `'refused'` for the daemon's one merged `mcp_actuation.refused`.
+ */
+export type McpReconnectAnswer = MCPStatusPayload | 'refused'
 
 /**
  * The fake's answer to `mcp_status_request` (#1579): a report, correlated like the daemon's
@@ -147,6 +161,9 @@ export interface ConversationStateFakeOptions {
    * `setMcpStatusAnswer`.
    */
   mcpStatusAnswers?: Record<string, McpStatusAnswer>
+  /** Answers to `mcp_reconnect`, by conversation id (#1583). No answer is SILENCE, the daemon that never
+   *  replies. Change it mid-test with `setMcpReconnectAnswer`. */
+  mcpReconnectAnswers?: Record<string, McpReconnectAnswer>
 }
 
 /**
@@ -200,6 +217,8 @@ export function conversationStateFake(
   // A `Map` for the same reason as `labels`: the keys are conversation ids the app under test supplied.
   const mcpStatusAnswers = new Map<string, McpStatusAnswer>(Object.entries(options.mcpStatusAnswers ?? {}))
   const mcpStatusRequests: string[] = []
+  const mcpReconnectAnswers = new Map<string, McpReconnectAnswer>(Object.entries(options.mcpReconnectAnswers ?? {}))
+  const mcpReconnectRequests: MCPReconnectPayload[] = []
 
   // The workspace-rename mutation, written once and reached two ways: the `rename_workspace` arm below
   // calls it with the request's envelope id (the daemon's CORRELATED answer to a client that asked,
@@ -331,6 +350,15 @@ export function conversationStateFake(
         return [mcpStatusFrame(answer, env.id)]
       }
 
+      case 'mcp_reconnect': {
+        const payload = env.payload as MCPReconnectPayload
+        mcpReconnectRequests.push({ conversation_id: payload.conversation_id, server_name: payload.server_name })
+        const answer = mcpReconnectAnswers.get(payload.conversation_id)
+        if (answer === undefined) return []
+        if (answer === 'refused') return [mcpStatusErrorFrame('mcp_actuation.refused', false, env.id)]
+        return [mcpStatusFrame(answer, env.id)]
+      }
+
       default:
         // A genuinely-other verb (e.g. a snapshot request on thread entry) needs no reply for these flows;
         // returning [] sends nothing, which the fake daemon settles ok.
@@ -348,7 +376,12 @@ export function conversationStateFake(
       if (answer === null) mcpStatusAnswers.delete(conversationId)
       else mcpStatusAnswers.set(conversationId, answer)
     },
-    mcpStatusRequests: (): readonly string[] => [...mcpStatusRequests]
+    mcpStatusRequests: (): readonly string[] => [...mcpStatusRequests],
+    setMcpReconnectAnswer: (conversationId: string, answer: McpReconnectAnswer | null): void => {
+      if (answer === null) mcpReconnectAnswers.delete(conversationId)
+      else mcpReconnectAnswers.set(conversationId, answer)
+    },
+    mcpReconnectRequests: (): readonly MCPReconnectPayload[] => mcpReconnectRequests.map((request) => ({ ...request }))
   })
 }
 
@@ -456,7 +489,7 @@ function mcpStatusFrame(payload: MCPStatusPayload, inReplyTo: number): Uint8Arra
   return encodeEnvelope({ id: REPLY_ENVELOPE_ID, type: 'mcp_status', ts: FIXED_TS, in_reply_to: inReplyTo, payload })
 }
 
-/** A correlated `mcp_status_request` refusal (#1579). The message is static and never reaches the window,
+/** A correlated `mcp_status_request` (#1579) or `mcp_reconnect` (#1583) refusal. The message is static and never reaches the window,
  *  which receives only main's client-owned reason. */
 function mcpStatusErrorFrame(code: string, retryable: boolean, inReplyTo: number): Uint8Array {
   return encodeEnvelope({

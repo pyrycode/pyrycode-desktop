@@ -368,6 +368,52 @@ claude's open-set text. See § Current real-claude gate state in [the live e2e
 runbook](live-e2e-runbook.md#current-real-claude-gate-state) for this spec's execution status against the
 dispatcher's gate.
 
+**Reconnect a failed server ([#1583](https://github.com/pyrycode/pyrycode-desktop/issues/1583)).** A row
+whose `toneOf(status)` is anything but `connected` grows a `Reconnect` control — the shipped `button-small`
+shape's neutral Secondary variant (`.channel-info__mcp-reconnect`, the same outlined-on-surface treatment
+`.question-panel__cancel` already carries, disabled state included), in the row's value slot after the dot
+and status word. A press calls the exported `reconnectMcpServer(sendCommand, beginWait, conversationId,
+serverName)`: it marks the conversation's wait first, then sends one `reconnectMcpServer` command with the
+row's `name` unchanged — same untrusted-text discipline as everywhere else here, never a key or a log field.
+
+An accepted reconnect answers with a fresh `mcp_status` report, not an acknowledgement, so the wait cannot
+be told apart from any other report in flight. `mcpStatusStore` therefore tracks two more conversation-keyed
+sets, `reconnecting` and `reconnectRefused` (never keyed by server name), alongside `unavailable`:
+`beginMcpReconnect` adds to `reconnecting`; `setMcpStatus` clears a conversation out of all three sets on
+*any* report, `pending` included, since the daemon's own docs call that normal post-reconnect behaviour, not
+a failure the client may second-guess; `markMcpReconnectRefused` (routed by `subscribeMcpStatus`'s fourth
+parameter off `mcpReconnectRejected`) moves it from `reconnecting` to `reconnectRefused` and leaves `reports`
+untouched — the refusal is one merged outcome with no cause, so `MCP_RECONNECT_REFUSED` names none and reads
+until the next report. While `reconnecting` is true, every Reconnect control in that conversation's section
+is disabled, so a second press cannot send. `McpServersSection`'s `useEffect` cleanup calls
+`endMcpReconnectWait(conversationId)` on unmount — the sheet unmounts its body on close, so closing (or
+switching conversations under an open sheet) is what stops a daemon that never answers from leaving the
+control stuck past a reopen; `clearMcpStatus` also empties both sets at pairing teardown.
+
+**Testing.** `mcpStatusStore.test.ts` and `McpServersSection.test.tsx` cover the four transitions per
+conversation (begin/end/refuse/report), that a report lifts the wait and the refusal notice regardless of
+the status word, that `reconnectMcpServer` calls `beginWait` before sending, and that the served name never
+reaches an attribute. One store-testing trap: Zustand's `set({})` still replaces the state object, so a
+no-op action (e.g. ending a wait that was never begun) cannot be asserted via `getState()` identity on the
+whole state — compare the identity of the slice (`reconnecting`/`reconnectRefused`) instead, or the
+assertion goes red on a correctly-no-op action. `e2e/channel-mcp-reconnect.spec.ts` (fake tier) drives the
+press, a `pending`-answer re-render, a `'refused'` answer and its notice, and close-then-reopen re-enabling
+a silently-waiting control, via the fake's `mcpReconnectAnswers`/`setMcpReconnectAnswer`/`mcpReconnectRequests`.
+
+The real drive extends `e2e/real-claude-mcp.spec.ts` rather than adding a file — the two daemon servers
+normally read `connected` and offer no button, so it sends `reconnectMcpServer` for `pyry_files` through
+`window.pyry`, as the other `real-claude-*` specs already call the bridge. It cannot tell the reconnect's
+report apart from the sheet-open ask's own answer (same ambiguity as the store's wait), so it first waits for
+that ask's answer before sending. It tells outcome apart from a DOM read: `watchMcp` installs a page-side
+`window.pyry.onDaemonEvent` observer right after pairing that records only conversation ids off `mcpStatus`
+and `mcpReconnectRejected`, never a row string — chosen over tagging the DOM before the send because React
+reuses the position-keyed row elements across a re-render, so a DOM tag would depend on an implementation
+detail the event does not. The drive records whichever arrives next as the `mcp-reconnect-outcome` test
+annotation (`'report'` or `'refused'`) — that annotation is what answers whether this app's paired device is
+authorized to actuate at all, since the daemon checks the asking device before anything else and a fake
+transport cannot stand in for that check. See § Current real-claude gate state in [the live e2e
+runbook](live-e2e-runbook.md#current-real-claude-gate-state) once a gate run records the annotation's result.
+
 **Rename action ([#368](../codebase/368.md)), retitled Edit chat ([#1440](rename-conversation-dialog.md)),
 split into Edit channel / Edit chat by conversation kind ([#1431](edit-channel-dialog.md)).**
 The Actions slot's first filler: a Material 3 tonal pill (Figma 20:89, `.channel-info__action`)

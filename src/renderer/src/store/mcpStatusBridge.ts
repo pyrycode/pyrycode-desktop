@@ -5,7 +5,8 @@ import { mcpStatusStore } from './mcpStatusStore'
 export function subscribeMcpStatus(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
   record: (snapshot: Omit<Extract<DaemonEvent, { type: 'mcpStatus' }>, 'type'>) => void,
-  markUnavailable: (conversationId: string) => void
+  markUnavailable: (conversationId: string) => void,
+  markReconnectRefused: (conversationId: string) => void
 ): () => void {
   return onDaemonEvent((event) => {
     if (event.type === 'mcpStatus') {
@@ -14,6 +15,9 @@ export function subscribeMcpStatus(
       // `conversationId` is the id this app asked about (main's correlation). An unclassified refusal
       // is a client or daemon fault with nothing for the operator to read, so it changes nothing.
       markUnavailable(event.conversationId)
+    } else if (event.type === 'mcpReconnectRejected') {
+      // Main's recorded id for its own send. The refusal names no cause, so neither does the mark.
+      markReconnectRefused(event.conversationId)
     }
   })
 }
@@ -23,7 +27,8 @@ export function McpStatusData(): null {
   useEffect(() => subscribeMcpStatus(
     window.pyry.onDaemonEvent,
     mcpStatusStore.getState().setMcpStatus,
-    mcpStatusStore.getState().markMcpStatusUnavailable
+    mcpStatusStore.getState().markMcpStatusUnavailable,
+    mcpStatusStore.getState().markMcpReconnectRefused
   ), [])
   return null
 }

@@ -201,3 +201,47 @@ keep the one-line ignored arm beside their existing informational `case 'mcpStat
 `// The channel info sheet's notice owns this (#1579).`. See [Conversation shell — session and channel
 info § MCP servers section](conversation-shell-session-and-channel-info.md#mcp-servers-section-1490) for
 the mark, the notice and the fake-tier proof.
+
+# MCP reconnect correlation (#1582)
+
+A tenth correlation store, `pendingMcpReconnects: Map<number, string>`, the exact shape and lifecycle
+of `pendingMcpStatusRequests` above: envelope id → the conversation this app acted on, never the server
+name. `reconnectMcpServer(conversationId, serverName)` builds a fresh two-field payload
+(`{ conversation_id, server_name }`) through `buildMcpReconnect`, so extra renderer fields never reach
+the wire; the payload guard at `isRendererCommand`'s `reconnectMcpServer` arm accepts any string
+including `''` for either field — routing decides the conversation, the daemon decides the server. Not
+connected/authenticated is a refused log and nothing sent; a build/send throw is caught, logged
+content-free, and leaves no entry under an unspent id.
+
+This store shares its sibling's asymmetry: **a successful reply can never consume it.** An accepted
+reconnect answers with an ordinary `mcp_status`, delivered by the existing `case 'mcp-status':` path with
+no correlation at all — the request and the reply are connected only by the requester eventually seeing
+a report. So the cap is not deferred pending evidence, for the same reason as `pendingMcpStatusRequests`:
+`pendingMcpReconnects` is bounded at `MAX_PENDING_MCP_RECONNECTS` (32), oldest evicted first.
+
+- **Reject match — the seventh member of the `daemon-error` precedence tier**, checked alongside
+  `pendingMcpStatusRequests` and its five other siblings. A hit `delete`s the entry, logs
+  `mcp-reconnect-rejected` with no code, and emits `mcpReconnectRejected { conversationId }` —
+  `conversationId` read from the map's value, never from the error payload. Unlike every sibling in this
+  tier, this match reads **no narrowed field at all**: the ticket forbids re-splitting what the daemon
+  merges on purpose (`mcp_actuation.refused`, `protocol.malformed`, `conversation.not_found`, and an
+  unknown code all land on the same event), so there is no `reason` field and no addition to the
+  `daemon-error` arm's narrowed-field set — the comment there warns that a fifth such field should
+  prompt a restructure, and this slice deliberately stays at four by adding none.
+- **Reset — `dial()` clears the map next to its siblings.**
+- **The server name never crosses into a log, a map key, or the event.** The map's value is always the
+  conversation id; `buildMcpReconnect` is the only place `serverName` is read, and it goes straight into
+  the wire payload and nowhere else.
+
+**Sourcing the server name is deferred, on purpose.** The upstream protocol doc warns against filling
+`mcp_reconnect.server_name` from a `context_usage` response's `mcp_tools[].server_name` — that field
+reports a contributor to the context reading, not an actuation input. The Reconnect control (a later
+slice of #1492) must take the name from an `mcp_status` row instead.
+
+`security-sensitive`, builder self-review **PASS**, one SHOULD FIX addressed in the design itself (the
+same uncapped-map-growth shape as #1578's finding) — see the cap above. No other findings; the design and
+its security review are recorded in full in `docs/specs/architecture/1582-mcp-reconnect.md`. The four
+exhaustive renderer bridges (`questionBridge`, `daemonEventBridge`, `timelineBridge`, `modalBridge`) each
+gained a one-line ignored `case 'mcpReconnectRejected':` arm; nothing in the window consumes the event
+yet, the same UI-comes-later shape as the MCP-status ask before #1579. The live device-gate drive is
+\#1583.

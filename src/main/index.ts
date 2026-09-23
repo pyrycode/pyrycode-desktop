@@ -795,6 +795,13 @@ app.whenReady().then(() => {
         router.route(conversationId)?.requestMcpStatus(conversationId)
         return
       }
+      case 'reconnectMcpServer': {
+        // Same id for host lookup and sending; an unknown host sends nothing (#1582). The server name is
+        // passed through to the frame and nowhere else.
+        const conversationId = command.payload.conversation_id
+        router.route(conversationId)?.reconnectMcpServer(conversationId, command.payload.server_name)
+        return
+      }
       case 'requestHistory':
         // ROUTED BY CONVERSATION, mirroring the two cases above — a conversation's history belongs to
         // the server that hosts it, so the frame goes there or to no wire at all (#1222). The WHOLE

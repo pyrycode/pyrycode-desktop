@@ -574,6 +574,14 @@ type BaseDaemonEvent =
       conversationId: string
       reason: MCPStatusRequestFailure
     }
+  | {
+      // The daemon refused this app's `mcp_reconnect` (#1582). One permanent outcome for every code: the
+      // daemon merges its causes on purpose and this side must not split them again, so there is no
+      // reason field. `conversationId` is the one recorded at send time, never read from the error; no
+      // daemon code, message, server name or in_reply_to crosses. A routing key, never markup or a log field.
+      type: 'mcpReconnectRejected'
+      conversationId: string
+    }
   // The background-task open arm (#564) — claude started work that OUTLIVES the turn that spawned it
   // (pyrycode#1240), the frame that separates that case from a genuine finish.
   //

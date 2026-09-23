@@ -464,6 +464,46 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand(valid)).toBe(true)
   })
 
+  it.each([['conv-42', 'docs'], ['', ''], ['__proto__', 'constructor']])(
+    'accepts an MCP reconnect with string conversation %j and server %j (#1582)', (id, name) => {
+      expect(isRendererCommand({ type: 'reconnectMcpServer', payload: {
+        conversation_id: id, server_name: name, extra: 'ignored'
+      } })).toBe(true)
+    })
+
+  it.each([
+    {}, { payload: undefined }, { payload: null }, { payload: {} }, { payload: 'conv-42' },
+    { payload: { conversation_id: 'conv-42' } }, { payload: { server_name: 'docs' } },
+    { payload: { conversation_id: 'conv-42', server_name: undefined } },
+    { payload: { conversation_id: 'conv-42', server_name: null } },
+    { payload: { conversation_id: 'conv-42', server_name: 42 } },
+    { payload: { conversation_id: 'conv-42', server_name: ['docs'] } },
+    { payload: { conversation_id: null, server_name: 'docs' } },
+    { payload: { conversation_id: 42, server_name: 'docs' } },
+    { payload: { conversation_id: true, server_name: 'docs' } }
+  ])('rejects malformed MCP reconnect %j (#1582)', (fields) => {
+    expect(isRendererCommand({ type: 'reconnectMcpServer', ...fields })).toBe(false)
+  })
+
+  it('requires the MCP reconnect payload and both string fields at compile time (#1582)', () => {
+    // @ts-expect-error an MCP reconnect requires a payload
+    const bare: RendererCommand = { type: 'reconnectMcpServer' }
+    // @ts-expect-error the server name must be present
+    const missingName: RendererCommand = { type: 'reconnectMcpServer', payload: { conversation_id: 'conv-42' } }
+    const numericName: RendererCommand = {
+      type: 'reconnectMcpServer',
+      // @ts-expect-error the server name must be a string
+      payload: { conversation_id: 'conv-42', server_name: 42 }
+    }
+    const valid: RendererCommand = {
+      type: 'reconnectMcpServer', payload: { conversation_id: 'conv-42', server_name: 'docs' }
+    }
+    for (const invalid of [bare, missingName, numericName]) {
+      expect(isRendererCommand(invalid)).toBe(false)
+    }
+    expect(isRendererCommand(valid)).toBe(true)
+  })
+
   it('types requestModelList as payload-REQUIRED — a bare send does not compile (#1165)', () => {
     // Compile-time half of AC2, and the half the runtime guard above cannot prove: `src/shared/**/*`
     // is inside tsconfig.node.json's include, so `npm run typecheck` reads this file, and an unused

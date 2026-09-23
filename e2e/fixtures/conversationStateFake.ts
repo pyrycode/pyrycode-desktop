@@ -19,7 +19,8 @@ import type {
   ErrorPayload,
   MCPStatusPayload,
   MCPStatusRequestPayload,
-  MCPReconnectPayload
+  MCPReconnectPayload,
+  MCPTogglePayload
 } from '../../src/shared/wire/types'
 
 // The stateful `conversationStateFake` reply factory (#434) — TEST-ONLY e2e infrastructure. The fake
@@ -118,6 +119,11 @@ export interface ConversationStateFake {
   setMcpReconnectAnswer(conversationId: string, answer: McpReconnectAnswer | null): void
   /** Every `mcp_reconnect` payload received, in arrival order. A fresh copy. */
   mcpReconnectRequests(): readonly MCPReconnectPayload[]
+  /** Set (or with `null`, remove) how the fake answers the next `mcp_toggle` naming `conversationId`
+   *  (#1587). The answer holds until changed. */
+  setMcpToggleAnswer(conversationId: string, answer: McpReconnectAnswer | null): void
+  /** Every `mcp_toggle` payload received, in arrival order. A fresh copy. */
+  mcpToggleRequests(): readonly MCPTogglePayload[]
 }
 
 /**
@@ -164,6 +170,9 @@ export interface ConversationStateFakeOptions {
   /** Answers to `mcp_reconnect`, by conversation id (#1583). No answer is SILENCE, the daemon that never
    *  replies. Change it mid-test with `setMcpReconnectAnswer`. */
   mcpReconnectAnswers?: Record<string, McpReconnectAnswer>
+  /** Answers to `mcp_toggle`, by conversation id (#1587), shaped like a reconnect's: the daemon answers an
+   *  accepted toggle with a fresh report and refuses with the same merged code. No answer is SILENCE. */
+  mcpToggleAnswers?: Record<string, McpReconnectAnswer>
 }
 
 /**
@@ -219,6 +228,8 @@ export function conversationStateFake(
   const mcpStatusRequests: string[] = []
   const mcpReconnectAnswers = new Map<string, McpReconnectAnswer>(Object.entries(options.mcpReconnectAnswers ?? {}))
   const mcpReconnectRequests: MCPReconnectPayload[] = []
+  const mcpToggleAnswers = new Map<string, McpReconnectAnswer>(Object.entries(options.mcpToggleAnswers ?? {}))
+  const mcpToggleRequests: MCPTogglePayload[] = []
 
   // The workspace-rename mutation, written once and reached two ways: the `rename_workspace` arm below
   // calls it with the request's envelope id (the daemon's CORRELATED answer to a client that asked,
@@ -359,6 +370,15 @@ export function conversationStateFake(
         return [mcpStatusFrame(answer, env.id)]
       }
 
+      case 'mcp_toggle': {
+        const payload = env.payload as MCPTogglePayload
+        mcpToggleRequests.push({ conversation_id: payload.conversation_id, server_name: payload.server_name, enabled: payload.enabled })
+        const answer = mcpToggleAnswers.get(payload.conversation_id)
+        if (answer === undefined) return []
+        if (answer === 'refused') return [mcpStatusErrorFrame('mcp_actuation.refused', false, env.id)]
+        return [mcpStatusFrame(answer, env.id)]
+      }
+
       default:
         // A genuinely-other verb (e.g. a snapshot request on thread entry) needs no reply for these flows;
         // returning [] sends nothing, which the fake daemon settles ok.
@@ -381,7 +401,12 @@ export function conversationStateFake(
       if (answer === null) mcpReconnectAnswers.delete(conversationId)
       else mcpReconnectAnswers.set(conversationId, answer)
     },
-    mcpReconnectRequests: (): readonly MCPReconnectPayload[] => mcpReconnectRequests.map((request) => ({ ...request }))
+    mcpReconnectRequests: (): readonly MCPReconnectPayload[] => mcpReconnectRequests.map((request) => ({ ...request })),
+    setMcpToggleAnswer: (conversationId: string, answer: McpReconnectAnswer | null): void => {
+      if (answer === null) mcpToggleAnswers.delete(conversationId)
+      else mcpToggleAnswers.set(conversationId, answer)
+    },
+    mcpToggleRequests: (): readonly MCPTogglePayload[] => mcpToggleRequests.map((request) => ({ ...request }))
   })
 }
 

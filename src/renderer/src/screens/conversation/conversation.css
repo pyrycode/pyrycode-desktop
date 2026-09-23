@@ -6530,6 +6530,61 @@
   cursor: not-allowed;
 }
 
+/* #1587 — the on/off switch, the Settings notifications switch (Figma 17:67 track / 17:68 knob) cloned by
+   token so this screen owns its CSS (.settings__switch's own convention). Off: a 52×32 track,
+   --color-surface-container-highest fill, 2px --color-outline border, a 16px --color-outline knob at the
+   left. On: a --color-primary track and a 24px --color-surface knob at the right. Disabled while any MCP
+   actuation is outstanding, with the M3 disabled emphasis this file already uses. */
+.channel-info__mcp-switch {
+  box-sizing: border-box;
+  position: relative;
+  flex: 0 0 auto;
+  width: 52px;
+  height: 32px;
+  padding: 0;
+  margin: 0;
+  appearance: none;
+  border: 2px solid var(--color-outline);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-container-highest);
+  font: inherit;
+  cursor: pointer;
+}
+
+.channel-info__mcp-switch:focus-visible {
+  outline: 1px solid var(--color-outline);
+  outline-offset: 2px;
+}
+
+.channel-info__mcp-switch:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.channel-info__mcp-switch-knob {
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  width: 16px;
+  height: 16px;
+  transform: translateY(-50%);
+  border-radius: var(--radius-full);
+  background: var(--color-outline);
+}
+
+.channel-info__mcp-switch--on {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+}
+
+.channel-info__mcp-switch--on .channel-info__mcp-switch-knob {
+  left: auto;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  background: var(--color-surface);
+}
+
 /* pre-wrap keeps an embedded newline inside this one text block. */
 .channel-info__mcp-error {
   margin: 0;

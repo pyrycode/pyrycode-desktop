@@ -13,12 +13,18 @@ type State = {
   // accepted reconnect answers with a report, not an acknowledgement, so a report ends both.
   reconnecting: ReadonlySet<string>
   reconnectRefused: ReadonlySet<string>
+  // The same pair for an on/off toggle, kept apart so the sheet can say which action was refused.
+  toggling: ReadonlySet<string>
+  toggleRefused: ReadonlySet<string>
   setMcpStatus: (snapshot: Omit<Snapshot, 'type'>) => void
   markMcpStatusUnavailable: (conversationId: string) => void
   beginMcpReconnect: (conversationId: string) => void
   // The section's unmount: a daemon that never answers cannot leave the control stuck past a reopen.
   endMcpReconnectWait: (conversationId: string) => void
   markMcpReconnectRefused: (conversationId: string) => void
+  beginMcpToggle: (conversationId: string) => void
+  endMcpToggleWait: (conversationId: string) => void
+  markMcpToggleRefused: (conversationId: string) => void
   clearMcpStatus: () => void
 }
 
@@ -42,6 +48,8 @@ export function createMcpStatusStore() {
     unavailable: new Set(),
     reconnecting: new Set(),
     reconnectRefused: new Set(),
+    toggling: new Set(),
+    toggleRefused: new Set(),
     // Any report, published or answered, is current again, so it lifts that conversation's marks and ends
     // its reconnect wait, whatever the rows read (a just-reconnected server often reads `pending`).
     setMcpStatus: (snapshot) => set((state) => {
@@ -54,7 +62,9 @@ export function createMcpStatusStore() {
         reports,
         unavailable: without(state.unavailable, snapshot.conversationId),
         reconnecting: without(state.reconnecting, snapshot.conversationId),
-        reconnectRefused: without(state.reconnectRefused, snapshot.conversationId)
+        reconnectRefused: without(state.reconnectRefused, snapshot.conversationId),
+        toggling: without(state.toggling, snapshot.conversationId),
+        toggleRefused: without(state.toggleRefused, snapshot.conversationId)
       }
     }),
     markMcpStatusUnavailable: (conversationId) => set((state) =>
@@ -71,7 +81,24 @@ export function createMcpStatusStore() {
       reconnecting: without(state.reconnecting, conversationId),
       reconnectRefused: adding(state.reconnectRefused, conversationId)
     })),
-    clearMcpStatus: () => set({ reports: new Map(), unavailable: new Set(), reconnecting: new Set(), reconnectRefused: new Set() })
+    beginMcpToggle: (conversationId) => set((state) =>
+      state.toggling.has(conversationId) ? {} : { toggling: adding(state.toggling, conversationId) }
+    ),
+    endMcpToggleWait: (conversationId) => set((state) =>
+      state.toggling.has(conversationId) ? { toggling: without(state.toggling, conversationId) } : {}
+    ),
+    markMcpToggleRefused: (conversationId) => set((state) => ({
+      toggling: without(state.toggling, conversationId),
+      toggleRefused: adding(state.toggleRefused, conversationId)
+    })),
+    clearMcpStatus: () => set({
+      reports: new Map(),
+      unavailable: new Set(),
+      reconnecting: new Set(),
+      reconnectRefused: new Set(),
+      toggling: new Set(),
+      toggleRefused: new Set()
+    })
   }))
 }
 
@@ -85,6 +112,10 @@ export const selectMcpReconnectingFor = (conversationId: string | null) => (stat
   conversationId !== null && state.reconnecting.has(conversationId)
 export const selectMcpReconnectRefusedFor = (conversationId: string | null) => (state: State): boolean =>
   conversationId !== null && state.reconnectRefused.has(conversationId)
+export const selectMcpTogglingFor = (conversationId: string | null) => (state: State): boolean =>
+  conversationId !== null && state.toggling.has(conversationId)
+export const selectMcpToggleRefusedFor = (conversationId: string | null) => (state: State): boolean =>
+  conversationId !== null && state.toggleRefused.has(conversationId)
 
 export function useMcpStatusStore<T>(selector: (state: State) => T): T {
   return useStore(mcpStatusStore, selector)

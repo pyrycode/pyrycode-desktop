@@ -8,7 +8,9 @@ import {
   selectMcpReconnectRefusedFor,
   selectMcpReconnectingFor,
   selectMcpStatusFor,
-  selectMcpStatusUnavailableFor
+  selectMcpStatusUnavailableFor,
+  selectMcpToggleRefusedFor,
+  selectMcpTogglingFor
 } from './mcpStatusStore'
 import { subscribeMcpStatus } from './mcpStatusBridge'
 import type { DaemonEvent } from '@shared/ipc/events'
@@ -50,7 +52,7 @@ describe('MCP status retention', () => {
     const off = subscribeMcpStatus((listener) => {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
-    }, store.getState().setMcpStatus, store.getState().markMcpStatusUnavailable, store.getState().markMcpReconnectRefused)
+    }, store.getState().setMcpStatus, store.getState().markMcpStatusUnavailable, store.getState().markMcpReconnectRefused, store.getState().markMcpToggleRefused)
     const emit = (event: DaemonEvent) => listeners.forEach((listener) => listener(event))
     emit({ type: 'mcpStatus', conversationId: 'a', ...report })
     expect(selectMcpStatusFor('a')(store.getState())).toEqual(report)
@@ -92,7 +94,7 @@ describe('MCP status unavailable mark', () => {
     subscribeMcpStatus((next) => {
       listener = next
       return () => {}
-    }, store.getState().setMcpStatus, store.getState().markMcpStatusUnavailable, store.getState().markMcpReconnectRefused)
+    }, store.getState().setMcpStatus, store.getState().markMcpStatusUnavailable, store.getState().markMcpReconnectRefused, store.getState().markMcpToggleRefused)
     store.getState().setMcpStatus({ conversationId: 'a', ...report })
     const before = store.getState()
     listener({ type: 'mcpStatusRequestRejected', conversationId: 'a', reason: 'unclassified' })
@@ -166,13 +168,78 @@ describe('MCP reconnect wait and refusal', () => {
     subscribeMcpStatus((next) => {
       listener = next
       return () => {}
-    }, store.getState().setMcpStatus, store.getState().markMcpStatusUnavailable, store.getState().markMcpReconnectRefused)
+    }, store.getState().setMcpStatus, store.getState().markMcpStatusUnavailable, store.getState().markMcpReconnectRefused, store.getState().markMcpToggleRefused)
     store.getState().setMcpStatus({ conversationId: 'a', ...report })
     store.getState().beginMcpReconnect('a')
     listener({ type: 'mcpReconnectRejected', conversationId: 'a' })
     expect(read(store, 'a')).toEqual({ reconnecting: false, refused: true })
     expect(selectMcpStatusUnavailableFor('a')(store.getState())).toBe(false)
     expect(selectMcpStatusFor('a')(store.getState())).toEqual(report)
+  })
+})
+
+describe('MCP toggle wait and refusal', () => {
+  const read = (store: ReturnType<typeof createMcpStatusStore>, id: string | null) => ({
+    toggling: selectMcpTogglingFor(id)(store.getState()),
+    refused: selectMcpToggleRefusedFor(id)(store.getState())
+  })
+
+  it('waits per conversation, ends on close, and keeps the reconnect sets apart', () => {
+    const store = createMcpStatusStore()
+    store.getState().beginMcpToggle('a')
+    store.getState().beginMcpToggle('__proto__')
+    expect(read(store, 'a')).toEqual({ toggling: true, refused: false })
+    expect(read(store, '__proto__')).toEqual({ toggling: true, refused: false })
+    expect(read(store, 'constructor')).toEqual({ toggling: false, refused: false })
+    expect(read(store, null)).toEqual({ toggling: false, refused: false })
+    expect(selectMcpReconnectingFor('a')(store.getState())).toBe(false)
+    const before = store.getState().toggling
+    store.getState().beginMcpToggle('a')
+    store.getState().endMcpToggleWait('b')
+    expect(store.getState().toggling).toBe(before)
+    store.getState().endMcpToggleWait('a')
+    expect(read(store, 'a')).toEqual({ toggling: false, refused: false })
+    expect(read(store, '__proto__')).toEqual({ toggling: true, refused: false })
+  })
+
+  it('a refusal ends the wait and marks it, the held report stays, and only a report lifts the mark', () => {
+    const store = createMcpStatusStore()
+    store.getState().setMcpStatus({ conversationId: 'a', ...report })
+    const held = selectMcpStatusFor('a')(store.getState())
+    store.getState().beginMcpToggle('a')
+    store.getState().beginMcpToggle('b')
+    store.getState().markMcpToggleRefused('a')
+    expect(read(store, 'a')).toEqual({ toggling: false, refused: true })
+    expect(read(store, 'b')).toEqual({ toggling: true, refused: false })
+    expect(selectMcpReconnectRefusedFor('a')(store.getState())).toBe(false)
+    expect(selectMcpStatusFor('a')(store.getState())).toBe(held)
+    store.getState().beginMcpToggle('a')
+    expect(read(store, 'a')).toEqual({ toggling: true, refused: true })
+    store.getState().setMcpStatus({ conversationId: 'a', servers: [{ ...row, status: 'disabled' }], droppedServers: 0 })
+    expect(read(store, 'a')).toEqual({ toggling: false, refused: false })
+    expect(read(store, 'b')).toEqual({ toggling: true, refused: false })
+    store.getState().markMcpToggleRefused('c')
+    store.getState().clearMcpStatus()
+    expect(read(store, 'b')).toEqual({ toggling: false, refused: false })
+    expect(read(store, 'c')).toEqual({ toggling: false, refused: false })
+  })
+
+  it('the bridge routes each refusal to its own mark', () => {
+    const store = createMcpStatusStore()
+    let listener: (event: DaemonEvent) => void = () => {}
+    subscribeMcpStatus((next) => {
+      listener = next
+      return () => {}
+    }, store.getState().setMcpStatus, store.getState().markMcpStatusUnavailable, store.getState().markMcpReconnectRefused, store.getState().markMcpToggleRefused)
+    store.getState().setMcpStatus({ conversationId: 'a', ...report })
+    store.getState().beginMcpToggle('a')
+    listener({ type: 'mcpToggleRejected', conversationId: 'a' })
+    expect(read(store, 'a')).toEqual({ toggling: false, refused: true })
+    expect(selectMcpReconnectRefusedFor('a')(store.getState())).toBe(false)
+    expect(selectMcpStatusFor('a')(store.getState())).toEqual(report)
+    listener({ type: 'mcpReconnectRejected', conversationId: 'b' })
+    expect(read(store, 'b')).toEqual({ toggling: false, refused: false })
+    expect(selectMcpReconnectRefusedFor('b')(store.getState())).toBe(true)
   })
 })
 

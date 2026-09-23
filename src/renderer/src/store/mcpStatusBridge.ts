@@ -6,7 +6,8 @@ export function subscribeMcpStatus(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
   record: (snapshot: Omit<Extract<DaemonEvent, { type: 'mcpStatus' }>, 'type'>) => void,
   markUnavailable: (conversationId: string) => void,
-  markReconnectRefused: (conversationId: string) => void
+  markReconnectRefused: (conversationId: string) => void,
+  markToggleRefused: (conversationId: string) => void
 ): () => void {
   return onDaemonEvent((event) => {
     if (event.type === 'mcpStatus') {
@@ -18,6 +19,9 @@ export function subscribeMcpStatus(
     } else if (event.type === 'mcpReconnectRejected') {
       // Main's recorded id for its own send. The refusal names no cause, so neither does the mark.
       markReconnectRefused(event.conversationId)
+    } else if (event.type === 'mcpToggleRejected') {
+      // The same rules for the toggle's refusal, kept on its own mark.
+      markToggleRefused(event.conversationId)
     }
   })
 }
@@ -28,7 +32,8 @@ export function McpStatusData(): null {
     window.pyry.onDaemonEvent,
     mcpStatusStore.getState().setMcpStatus,
     mcpStatusStore.getState().markMcpStatusUnavailable,
-    mcpStatusStore.getState().markMcpReconnectRefused
+    mcpStatusStore.getState().markMcpReconnectRefused,
+    mcpStatusStore.getState().markMcpToggleRefused
   ), [])
   return null
 }

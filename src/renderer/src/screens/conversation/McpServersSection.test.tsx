@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { McpServersSectionView, reconnectMcpServer, requestMcpStatus } from './McpServersSection'
+import { McpServersSectionView, reconnectMcpServer, requestMcpStatus, toggleMcpServer } from './McpServersSection'
 import type { MCPServerStatus } from '@shared/wire/types'
 
 const server = (name: string, status: string, error = ''): MCPServerStatus =>
@@ -9,7 +9,12 @@ const render = (
   report: { servers: MCPServerStatus[]; droppedServers: number } | null,
   showBuiltIn = false,
   unavailable = false,
-  { reconnecting = false, reconnectRefused = false }: { reconnecting?: boolean; reconnectRefused?: boolean } = {}
+  {
+    reconnecting = false,
+    reconnectRefused = false,
+    toggling = false,
+    toggleRefused = false
+  }: { reconnecting?: boolean; reconnectRefused?: boolean; toggling?: boolean; toggleRefused?: boolean } = {}
 ) => renderToStaticMarkup(
   <McpServersSectionView
     report={report}
@@ -17,8 +22,11 @@ const render = (
     unavailable={unavailable}
     reconnecting={reconnecting}
     reconnectRefused={reconnectRefused}
+    toggling={toggling}
+    toggleRefused={toggleRefused}
     onShowBuiltInChange={() => {}}
     onReconnect={() => {}}
+    onToggle={() => {}}
   />
 )
 
@@ -164,6 +172,74 @@ describe('McpServersSectionView reconnect', () => {
     const both = render(mixed, false, true, { reconnectRefused: true })
     expect(both).toContain(UNAVAILABLE)
     expect(both).toContain(REFUSED)
+  })
+})
+
+describe('McpServersSectionView toggle switch', () => {
+  const TOGGLE_REFUSED = 'The daemon refused to change the MCP server.'
+  const switches = (markup: string) => (markup.match(/<button type="button" role="switch"[^>]*>/g) ?? []).map((tag) => ({
+    checked: /aria-checked="(\w+)"/.exec(tag)?.[1],
+    labelledBy: /aria-labelledby="([^"]*)"/.exec(tag)?.[1],
+    on: tag.includes('channel-info__mcp-switch--on'),
+    disabled: tag.includes('disabled=""')
+  }))
+  const mixed = {
+    servers: [server('up', 'connected'), server('off', 'disabled'), server('down', 'failed'), server('odd', 'Disabled')],
+    droppedServers: 0
+  }
+
+  it('puts a switch on every row, connected included, reading off exactly for the word disabled', () => {
+    const shown = switches(render(mixed))
+    expect(shown.map((entry) => entry.checked)).toEqual(['true', 'false', 'true', 'true'])
+    expect(shown.map((entry) => entry.on)).toEqual([true, false, true, true])
+    expect(shown.every((entry) => !entry.disabled)).toBe(true)
+    const rows = render(mixed).split('channel-info__mcp-server"').slice(1)
+    expect(rows.every((chunk) => chunk.includes('role="switch"'))).toBe(true)
+  })
+
+  it('names each switch by reference to its rendered name, with an id that is not the name', () => {
+    const markup = render({ servers: [server('attr-a', 'connected'), server('attr-b', 'disabled')], droppedServers: 0 })
+    const ids = switches(markup).map((entry) => entry.labelledBy ?? '')
+    expect(ids).toHaveLength(2)
+    expect(new Set(ids).size).toBe(2)
+    expect(markup).toContain(`id="${ids[0]}">attr-a<`)
+    expect(markup).toContain(`id="${ids[1]}">attr-b<`)
+    for (const tag of markup.match(/<[^>]*>/g) ?? []) expect(tag).not.toMatch(/attr-/)
+  })
+
+  it('disables every switch and Reconnect while a toggle or a reconnect is outstanding', () => {
+    for (const busy of [{ toggling: true }, { reconnecting: true }]) {
+      const markup = render(mixed, false, false, busy)
+      expect(switches(markup).every((entry) => entry.disabled)).toBe(true)
+      const reconnects = [...markup.matchAll(RECONNECT)]
+      expect(reconnects).toHaveLength(3)
+      expect(reconnects.every((match) => match[1] === ' disabled=""')).toBe(true)
+    }
+  })
+
+  it('appends the toggle refusal notice, switches as reported, and shows it without a report too', () => {
+    const markup = render(mixed, false, false, { toggleRefused: true })
+    expect(markup.endsWith(`<p class="channel-info__empty">${TOGGLE_REFUSED}</p>`)).toBe(true)
+    expect(switches(markup).map((entry) => entry.checked)).toEqual(['true', 'false', 'true', 'true'])
+    expect(switches(markup).every((entry) => !entry.disabled)).toBe(true)
+    expect(markup).not.toContain(REFUSED)
+    expect(render(null, false, false, { toggleRefused: true })).toContain(TOGGLE_REFUSED)
+    expect(render(mixed, false, false, { reconnectRefused: true })).not.toContain(TOGGLE_REFUSED)
+  })
+})
+
+describe('toggleMcpServer', () => {
+  it('begins the wait, then sends one command with the name unchanged and the requested state', () => {
+    const calls: string[] = []
+    const send = vi.fn(() => { calls.push('send') })
+    const begin = vi.fn(() => { calls.push('begin') })
+    toggleMcpServer(send, begin, 'chat-a', ' docs<&> ', false)
+    expect(calls).toEqual(['begin', 'send'])
+    expect(begin).toHaveBeenCalledWith('chat-a')
+    expect(send).toHaveBeenCalledWith({
+      type: 'toggleMcpServer',
+      payload: { conversation_id: 'chat-a', server_name: ' docs<&> ', enabled: false }
+    })
   })
 })
 

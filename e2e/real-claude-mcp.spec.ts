@@ -27,6 +27,13 @@ test.use({ skipPermissions: false, interactiveRunner: 'stream-json' })
 // `mcp-reconnect-outcome` annotation. Both are passes: the annotation, not the verdict, is the answer.
 // To tell the reconnect's report from the sheet-open ask's, the drive waits for that ask's answer first.
 //
+// THE TOGGLE DRIVE (#1587) then flips `pyry_files` off through its own switch, which every row carries.
+// It ends the same way, in a fresh report or the toggle refusal notice, recorded as `mcp-toggle-outcome`.
+// On a report the switch must read off, and the status word the report gave `pyry_files` is recorded as
+// `mcp-toggle-status-word` first: the client reads exactly `disabled` as off, a word the daemon does not
+// document, so a differing word is visible in the report even when the assertion fails. `pyry_approve` is
+// never toggled, because the permission path needs it.
+//
 // WHAT IS DELIBERATELY NOT ASSERTED:
 //   - A server's status word or error prose. Both are claude's open-set text, and whether an MCP server
 //     reads `connected` or `pending` at a given moment is claude's timing, not this client's contract.
@@ -70,26 +77,37 @@ const SPEC_TIMEOUT_MS = 300_000
 const RECONNECT_TIMEOUT_MS = 60_000
 const RECONNECT_TARGET = 'pyry_files'
 const RECONNECT_REFUSED = 'The daemon refused to reconnect the MCP server.'
+const TOGGLE_TARGET = 'pyry_files'
+const TOGGLE_REFUSED = 'The daemon refused to change the MCP server.'
+// The status word is claude's text; the annotation keeps a bounded prefix of it and nothing else.
+const STATUS_WORD_BOUND = 64
 
-// Counts and routing ids only; no row string is copied out of the page.
-type McpProof = { reports: string[]; refusals: string[]; off: () => void }
+// Counts and routing ids, plus the one status word the toggle drive records: the one `TOGGLE_TARGET`
+// had in each report (null when absent). No other row string is copied out of the page.
+type McpSeen = { reports: string[]; refusals: string[]; toggleRefusals: string[]; targetStatus: (string | null)[] }
+type McpProof = McpSeen & { off: () => void }
 type DriveWindow = typeof window & { mcpProof: McpProof }
 
 async function watchMcp(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    const proof: McpProof = { reports: [], refusals: [], off: () => {} }
+  await page.evaluate(({ target, bound }) => {
+    const proof: McpProof = { reports: [], refusals: [], toggleRefusals: [], targetStatus: [], off: () => {} }
     proof.off = window.pyry.onDaemonEvent((event) => {
-      if (event.type === 'mcpStatus') proof.reports.push(event.conversationId)
+      if (event.type === 'mcpStatus') {
+        proof.reports.push(event.conversationId)
+        const status = event.servers.find((server) => server.name === target)?.status
+        proof.targetStatus.push(status === undefined ? null : Array.from(status).slice(0, bound).join(''))
+      }
       if (event.type === 'mcpReconnectRejected') proof.refusals.push(event.conversationId)
+      if (event.type === 'mcpToggleRejected') proof.toggleRefusals.push(event.conversationId)
     })
     ;(window as DriveWindow).mcpProof = proof
-  })
+  }, { target: TOGGLE_TARGET, bound: STATUS_WORD_BOUND })
 }
 
-function readMcp(page: Page): Promise<{ reports: string[]; refusals: string[] }> {
+function readMcp(page: Page): Promise<McpSeen> {
   return page.evaluate(() => {
-    const { reports, refusals } = (window as DriveWindow).mcpProof
-    return { reports: [...reports], refusals: [...refusals] }
+    const { reports, refusals, toggleRefusals, targetStatus } = (window as DriveWindow).mcpProof
+    return { reports: [...reports], refusals: [...refusals], toggleRefusals: [...toggleRefusals], targetStatus: [...targetStatus] }
   })
 }
 
@@ -214,5 +232,39 @@ test('real claude: the Channel info sheet shows the daemon’s own MCP servers',
     await expect(notice).toHaveCount(0)
   }
   for (const name of BUILT_IN_SERVERS) await expect(sheet.getByText(name, { exact: true })).toBeVisible()
+
+  // #1587's drive: flip `pyry_files` off through its switch, the operator's own control.
+  const beforeToggle = await readMcp(page)
+  expect(beforeToggle.toggleRefusals).toEqual([])
+  const filesSwitch = sheet.getByRole('switch', { name: TOGGLE_TARGET, exact: true })
+  await expect(filesSwitch, `the ${TOGGLE_TARGET} switch should read on before the flip`).toBeChecked()
+  await expect(filesSwitch).toBeEnabled()
+  await filesSwitch.click()
+  let toggleOutcome: 'report' | 'refused' | null = null
+  await expect
+    .poll(async () => {
+      const now = await readMcp(page)
+      const refused = now.toggleRefusals.includes(conversationId)
+      const answered = now.reports.length > beforeToggle.reports.length
+      toggleOutcome = refused && !answered ? 'refused' : answered && !refused ? 'report' : null
+      return refused || answered
+    }, { timeout: RECONNECT_TIMEOUT_MS, message: 'the daemon neither answered nor refused the mcp_toggle' })
+    .toBe(true)
+  expect(toggleOutcome, 'the toggle drew both a report and a refusal').not.toBeNull()
+  test.info().annotations.push({ type: 'mcp-toggle-outcome', description: toggleOutcome ?? 'both' })
+
+  const toggleNotice = sheet.getByText(TOGGLE_REFUSED, { exact: true })
+  if (toggleOutcome === 'report') {
+    const answered = await readMcp(page)
+    const word = answered.targetStatus[beforeToggle.reports.length] ?? null
+    // Recorded before the assertion, so a word other than `disabled` is on the report either way.
+    test.info().annotations.push({ type: 'mcp-toggle-status-word', description: word ?? `${TOGGLE_TARGET} absent from the report` })
+    await expect(filesSwitch, `the report gave ${TOGGLE_TARGET} a status the client does not read as off`).not.toBeChecked()
+    await expect(toggleNotice).toHaveCount(0)
+  } else {
+    // The refusal keeps the switch as the last report described and shows the notice.
+    await expect(toggleNotice).toBeVisible()
+    await expect(filesSwitch).toBeChecked()
+  }
   await page.evaluate(() => { (window as DriveWindow).mcpProof.off() })
 })

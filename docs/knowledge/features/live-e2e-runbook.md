@@ -123,8 +123,8 @@ it does not establish behavior through the production relay. The
 It opens Channel info against a real daemon and a real non-bypass child (`skipPermissions: false`, so
 the daemon spawns the child with its strict `--mcp-config` and the on-demand `mcp_status_request` this
 ticket's Channel-info trigger sends has something to answer), ticks Show built-in, and asserts the
-daemon's own `pyry_approve`/`pyry_files` rows by exact name — see [Conversation shell — session and
-channel info § MCP servers section](conversation-shell-session-and-channel-info.md#mcp-servers-section-1490).
+daemon's own `pyry_approve`/`pyry_files` rows by exact name — see [Channel info § MCP servers
+section](conversation-shell-channel-info-mcp.md#mcp-servers-section-1490).
 It carries `needs-real-claude` and has not executed on the dispatcher's gate as of this writing; the
 \#1522 run above is still the latest confirmed execution, at 22 runnable tests against a configured floor
 of 10. Once this spec executes, the runnable count becomes 23, and `PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED`

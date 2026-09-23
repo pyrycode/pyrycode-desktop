@@ -306,6 +306,12 @@ describe('MCP failure acknowledgement', () => {
     expect(failure(store, 'a')).toBeNull()
     expect(failure(store, '__proto__')).toBe('same')
     expect(failure(store, 'constructor')).toBe('same')
+    // A name is a value compared for equality, never a key: acknowledging a prototype-shaped name
+    // silences only that exact name.
+    push(store, 'b', at('__proto__', 'failed'), at('constructor', 'failed'))
+    store.getState().acknowledgeMcpFailures('b')
+    push(store, 'b', at('__proto__', 'failed'), at('toString', 'failed'))
+    expect(failure(store, 'b')).toBe('toString')
     store.getState().clearMcpStatus()
     push(store, 'a', at('same', 'failed'))
     expect(failure(store, 'a')).toBe('same')

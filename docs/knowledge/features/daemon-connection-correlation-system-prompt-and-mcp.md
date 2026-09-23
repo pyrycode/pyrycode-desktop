@@ -198,8 +198,8 @@ put this verb to use: the channel info sheet's on-open trigger and the `mcpStatu
 landed in a fifth, dedicated bridge, `mcpStatusBridge.ts` — not in the four exhaustive renderer bridges
 this section names. Those four (`questionBridge`, `daemonEventBridge`, `timelineBridge`, `modalBridge`)
 keep the one-line ignored arm beside their existing informational `case 'mcpStatus':`, now commented
-`// The channel info sheet's notice owns this (#1579).`. See [Conversation shell — session and channel
-info § MCP servers section](conversation-shell-session-and-channel-info.md#mcp-servers-section-1490) for
+`// The channel info sheet's notice owns this (#1579).`. See [Channel info § MCP servers
+section](conversation-shell-channel-info-mcp.md#mcp-servers-section-1490) for
 the mark, the notice and the fake-tier proof.
 
 # MCP reconnect correlation (#1582)

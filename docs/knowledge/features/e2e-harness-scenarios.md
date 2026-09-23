@@ -353,6 +353,6 @@ ambiguous locator — the fake-tier spec needed a second conversation to prove p
 needed `skipPermissions: false`: the fixture's default passes `--dangerously-skip-permissions`, and a
 bypass child gets no `--mcp-config`, so the daemon neither publishes nor answers `mcp_status_request`
 for it — a spec left on the default would time out waiting for a report that structurally cannot arrive,
-reading as a client bug rather than the fixture default it actually was. See [Conversation shell —
-session and channel info § MCP servers section](conversation-shell-session-and-channel-info.md#mcp-servers-section-1490)
+reading as a client bug rather than the fixture default it actually was. See [Channel info § MCP servers
+section](conversation-shell-channel-info-mcp.md#mcp-servers-section-1490)
 for the on-open trigger and notice these specs drive.

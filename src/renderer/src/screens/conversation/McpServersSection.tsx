@@ -1,6 +1,7 @@
 import { useEffect, useId, useState } from 'react'
 import type { RendererCommand } from '@shared/ipc/commands'
 import {
+  isMcpServerFailed,
   mcpStatusStore,
   selectMcpReconnectRefusedFor,
   selectMcpReconnectingFor,
@@ -59,8 +60,9 @@ export function toggleMcpServer(
   sendCommand({ type: 'toggleMcpServer', payload: { conversation_id: conversationId, server_name: serverName, enabled } })
 }
 
-// Bound in code points so a surrogate pair is never split; `…` marks a display cut.
-function bounded(text: string): string {
+// Bound in code points so a surrogate pair is never split; `…` marks a display cut. Exported so the status
+// row's MCP failure notice bounds a server name exactly as this section does.
+export function boundMcpText(text: string): string {
   const characters = Array.from(text)
   return characters.length > DISPLAY_BOUND ? `${characters.slice(0, DISPLAY_BOUND).join('')}…` : text
 }
@@ -69,7 +71,7 @@ function bounded(text: string): string {
 // set, never from the word itself, and the word is shown verbatim beside the dot.
 function toneOf(status: string): 'connected' | 'failed' | 'other' {
   if (status === 'connected') return 'connected'
-  if (status === 'failed') return 'failed'
+  if (isMcpServerFailed(status)) return 'failed'
   return 'other'
 }
 
@@ -147,11 +149,11 @@ export function McpServersSectionView({
         <div className="channel-info__mcp-server" key={index}>
           <div className="channel-info__row">
             <span className="channel-info__row-label channel-info__mcp-name" id={`${idBase}-mcp-name-${index}`}>
-              {bounded(server.name)}
+              {boundMcpText(server.name)}
             </span>
             <span className="channel-info__row-value channel-info__mcp-status">
               <span className={`mcp-server-dot mcp-server-dot--${toneOf(server.status)}`} aria-hidden="true" />
-              <span>{bounded(server.status)}</span>
+              <span>{boundMcpText(server.status)}</span>
               {/* The tone's split: anything but exactly `connected` offers the control. While one reconnect
                   is outstanding every control in this section is disabled, so a press cannot send twice. */}
               {toneOf(server.status) !== 'connected' && (
@@ -178,7 +180,7 @@ export function McpServersSectionView({
               </button>
             </span>
           </div>
-          {server.error !== '' && <p className="channel-info__mcp-error">{bounded(server.error)}</p>}
+          {server.error !== '' && <p className="channel-info__mcp-error">{boundMcpText(server.error)}</p>}
         </div>
       ))}
       {shown.length === 0 && (

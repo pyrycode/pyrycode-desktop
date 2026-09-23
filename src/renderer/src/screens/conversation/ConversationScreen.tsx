@@ -1,5 +1,6 @@
 import { useSessionFactsStore, selectSessionFactsFor } from '../../store/sessionFactsStore'
-import { McpServersSection, requestMcpStatus } from './McpServersSection'
+import { McpServersSection, boundMcpText, requestMcpStatus } from './McpServersSection'
+import { mcpStatusStore, selectUnacknowledgedMcpFailureFor, useMcpStatusStore } from '../../store/mcpStatusStore'
 import {
   useEffect,
   useLayoutEffect,
@@ -400,6 +401,13 @@ export function ConversationScreen({
   )
   const prependedRows = useConversationTimelineStore(selectOpenPrependedRows)
   const { scrollPin, followBottom } = useThreadScrollPin(openConversationId, prependedRows)
+  // #1579: every open asks for fresh MCP status, from the handler rather than a mount effect so one open
+  // is one request. The sheet shows this same `activeConversation`. #1494: the overflow menu's item and the
+  // status row's MCP failure notice both call this one closure, so they open the sheet identically.
+  const openChannelInfo = (): void => {
+    setChannelInfoOpen(true)
+    requestMcpStatus(window.pyry.sendCommand, activeConversation?.id ?? null)
+  }
   return (
     <div className="conversation">
       {/* #276: the trailing overflow menu (Figma 16-16) — the single entry point to per-conversation
@@ -416,12 +424,7 @@ export function ConversationScreen({
       {onBack && (
         <ThreadOverflowMenu
           name={activeConversation?.name ?? UNNAMED_CONVERSATION_LABEL}
-          // #1579: every open asks for fresh MCP status, from the handler rather than a mount effect so
-          // one open is one request. The sheet shows this same `activeConversation`.
-          onChannelInfo={() => {
-            setChannelInfoOpen(true)
-            requestMcpStatus(window.pyry.sendCommand, activeConversation?.id ?? null)
-          }}
+          onChannelInfo={openChannelInfo}
           onRunConfiguration={() => setSheetOpen(true)}
           onBackgroundTasks={() => setPanelOpen(true)}
         />
@@ -539,6 +542,7 @@ export function ConversationScreen({
               <ComposerErrorSlotControl
                 onRepairHost={onRepairHost} onCommand={sendText}
                 onOpenBackgroundTasks={() => setPanelOpen(true)}
+                onOpenChannelInfo={openChannelInfo}
               />
             }
           >
@@ -2191,6 +2195,13 @@ export const WORKING_COPY = 'Working…'
 // escaping AC pins against.
 export function toolWorkingCopy(name: string): string {
   return `Running ${name}…`
+}
+
+// #1494: the status row's notice for a failed MCP server — `toolWorkingCopy`'s shape. Both fixed runs are
+// client-owned and apostrophe-free; the one hole holds the server name, untrusted claude text that the
+// caller bounds and React escapes. Never pre-escaped here.
+export function mcpFailedCopy(name: string): string {
+  return `MCP server ${name} failed`
 }
 
 // #493: the api-retry copy — a module-level, client-owned constant (the STALL_COPY / 'Thinking…' idiom).
@@ -4290,6 +4301,21 @@ export function ComposerTaskCount({ count, onOpen }: {
   )
 }
 
+// #1494: a failed MCP server the operator has not yet seen, in the #963 Error-type small button. The name
+// reaches the DOM only as the escaped text run below, bounded as the Channel info sheet bounds it, and
+// never in an attribute; the modifier class caps the width so a long name truncates rather than growing
+// the row. The visible text says what it is, so it is the accessible name.
+export function ComposerMcpFailure({ name, onOpen }: {
+  name: string
+  onOpen: () => void
+}): JSX.Element {
+  return (
+    <button type="button" className="button-small button-small--error composer-status__mcp-failure" onClick={onOpen}>
+      {mcpFailedCopy(boundMcpText(name))}
+    </button>
+  )
+}
+
 // #963: the status row's right-hand slot, resolved. An error the operator can ACT on becomes a button in
 // the slot the chip otherwise holds (operator ruling 2026-09-02), which is what retires #167's separate
 // `.composer__repair` block beneath the composer — one control, in the place the operator already looks.
@@ -4305,6 +4331,7 @@ export function ComposerErrorSlot({
   recovery,
   refusal,
   history,
+  mcpFailure,
   taskCount
 }: {
   status: ConnectionStatus
@@ -4314,6 +4341,7 @@ export function ComposerErrorSlot({
   recovery?: JSX.Element | null
   refusal?: JSX.Element | null
   history?: JSX.Element | null
+  mcpFailure?: JSX.Element | null
   taskCount?: JSX.Element | null
 }): JSX.Element | null {
   if (shouldOfferRepair(status)) {
@@ -4365,7 +4393,13 @@ export function ComposerErrorSlot({
   // constrains. At the chain's LAST position nothing is below to hide, so it is not yet load-bearing for
   // precedence — it is kept because it is the rule the day a sixth occupant is appended, and because
   // creating the element unconditionally would put an empty node in the slot AC2 requires be empty.
-  return status.type === 'connected' ? recovery ?? refusal ?? notice ?? history ?? taskCount ?? null : null
+  //
+  // #1494 inserts the MCP failure notice after the history failure and ahead of the task count: every
+  // error above outranks it, and it outranks a count that is not a failure. It is that sixth occupant,
+  // so the null rule above is now load-bearing for it — the container passes actual null when absent.
+  return status.type === 'connected'
+    ? recovery ?? refusal ?? notice ?? history ?? mcpFailure ?? taskCount ?? null
+    : null
 }
 
 export function ComposerHistoryFailure({ retryable, onRetry }: {
@@ -4395,11 +4429,13 @@ export function ComposerHistoryFailure({ retryable, onRetry }: {
 function ComposerErrorSlotControl({
   onRepairHost,
   onCommand,
-  onOpenBackgroundTasks
+  onOpenBackgroundTasks,
+  onOpenChannelInfo
 }: {
   onRepairHost?: (serverId: string) => void
   onCommand: (command: string) => boolean
   onOpenBackgroundTasks: () => void
+  onOpenChannelInfo: () => void
 }): JSX.Element | null {
   const status = useOpenConnectionStatus()
   // #1321: the usage-limit reading for the conversation ON SCREEN, plus the instant it is read at. Two
@@ -4447,6 +4483,17 @@ function ComposerErrorSlotControl({
   const taskCount = useBackgroundTaskRosterStore(
     open === null ? NO_TASK_COUNT : selectLiveTaskCountFor(open.id)
   )
+  // #1494: the open conversation's first failed MCP server not yet acknowledged, as a primitive — the
+  // task-count read's shape, with the same hoisted constant for the no-conversation arm.
+  const mcpFailure = useMcpStatusStore(
+    open === null ? NO_MCP_FAILURE : selectUnacknowledgedMcpFailureFor(open.id)
+  )
+  // Acknowledge every server the current report shows as failed, then open the sheet the way the
+  // overflow menu does, status refresh included.
+  const openMcpFailure = (): void => {
+    if (open !== null) mcpStatusStore.getState().acknowledgeMcpFailures(open.id)
+    onOpenChannelInfo()
+  }
   const latest = useConversationTimelineStore((s) =>
     open === null ? undefined : s.timelines.get(open.id)?.timeline.latestTurnEnd
   )
@@ -4561,6 +4608,7 @@ function ComposerErrorSlotControl({
       }
       history={historyFailure === null ? null :
         <ComposerHistoryFailure retryable={historyFailure.retryable} onRetry={retryHistory} />}
+      mcpFailure={mcpFailure === null ? null : <ComposerMcpFailure name={mcpFailure} onOpen={openMcpFailure} />}
       /* The count is checked HERE and not left to the view's own guard: `??` tests the element, not what
          it renders, so an unconditionally constructed pill would occupy the slot at a zero count — the
          `historyFailure === null` line above exists for exactly this reason. The view guards too, which
@@ -4581,6 +4629,9 @@ const NO_USAGE_LIMIT_READING = (): UsageLimitReading | null => null
 // it would be a fresh function every render on the no-conversation-open arm, which useSyncExternalStore
 // answers with a re-subscribe per render for a value that is always the same `0` (#1561).
 const NO_TASK_COUNT = (): number => 0
+
+// #1494: the same constant for the MCP failure read, hoisted for the same reason.
+const NO_MCP_FAILURE = (): string | null => null
 
 // #811: the context-window reading, first occupant of the composer footer row (Figma 110:3497,
 // "Context: 84%"). The percentage USED, not remaining. Its arithmetic is contextUsagePercent —

@@ -5,6 +5,8 @@ import { translateQuestionEvent } from './questionBridge'
 import { describe, expect, it } from 'vitest'
 import {
   createMcpStatusStore,
+  isMcpServerFailed,
+  selectUnacknowledgedMcpFailureFor,
   selectMcpReconnectRefusedFor,
   selectMcpReconnectingFor,
   selectMcpStatusFor,
@@ -249,4 +251,69 @@ it('a report has no timeline, turn, modal or question action', () => {
   expect(translateTimelineEvent(event)).toBeNull()
   expect(translateModalEvent(event, () => new Set())).toBeNull()
   expect(translateQuestionEvent(event)).toBeNull()
+})
+
+describe('MCP failure acknowledgement', () => {
+  const at = (name: string, status: string) => ({ ...row, name, status })
+  const failure = (store: ReturnType<typeof createMcpStatusStore>, id: string | null) =>
+    selectUnacknowledgedMcpFailureFor(id)(store.getState())
+  const push = (store: ReturnType<typeof createMcpStatusStore>, conversationId: string, ...servers: typeof row[]) =>
+    store.getState().setMcpStatus({ conversationId, servers, droppedServers: 0 })
+
+  it('classifies exactly `failed` as failed', () => {
+    expect(isMcpServerFailed('failed')).toBe(true)
+    for (const word of ['pending', 'needs-auth', 'disabled', 'connected', 'Failed', 'failed ', '', 'unknown']) {
+      expect(isMcpServerFailed(word)).toBe(false)
+    }
+  })
+
+  it('names the first unacknowledged failure in report order, built-ins included', () => {
+    const store = createMcpStatusStore()
+    expect(failure(store, null)).toBeNull()
+    expect(failure(store, 'a')).toBeNull()
+    push(store, 'a', at('docs', 'connected'), at('late', 'pending'), at('pyry_files', 'failed'), at('broken', 'failed'))
+    expect(failure(store, 'a')).toBe('pyry_files')
+    push(store, 'a', at('docs', 'needs-auth'), at('off', 'disabled'))
+    expect(failure(store, 'a')).toBeNull()
+  })
+
+  it('acknowledges every current failure once, and raises only a new one', () => {
+    const store = createMcpStatusStore()
+    push(store, 'a', at('one', 'failed'), at('two', 'failed'), at('ok', 'connected'))
+    store.getState().acknowledgeMcpFailures('a')
+    expect(failure(store, 'a')).toBeNull()
+    push(store, 'a', at('two', 'failed'), at('one', 'failed'))
+    expect(failure(store, 'a')).toBeNull()
+    push(store, 'a', at('one', 'failed'), at('ok', 'failed'))
+    expect(failure(store, 'a')).toBe('ok')
+  })
+
+  it('drops an unacknowledged failure once the report no longer reads failed', () => {
+    const store = createMcpStatusStore()
+    push(store, 'a', at('flaky', 'failed'))
+    expect(failure(store, 'a')).toBe('flaky')
+    push(store, 'a', at('flaky', 'connected'))
+    expect(failure(store, 'a')).toBeNull()
+  })
+
+  it('isolates conversations, ignores an absent report, and clears with the reset', () => {
+    const store = createMcpStatusStore()
+    const before = store.getState().acknowledgedFailures
+    store.getState().acknowledgeMcpFailures('a')
+    expect(store.getState().acknowledgedFailures).toBe(before)
+    for (const id of ['a', '__proto__', 'constructor']) push(store, id, at('same', 'failed'))
+    store.getState().acknowledgeMcpFailures('a')
+    expect(failure(store, 'a')).toBeNull()
+    expect(failure(store, '__proto__')).toBe('same')
+    expect(failure(store, 'constructor')).toBe('same')
+    // A name is a value compared for equality, never a key: acknowledging a prototype-shaped name
+    // silences only that exact name.
+    push(store, 'b', at('__proto__', 'failed'), at('constructor', 'failed'))
+    store.getState().acknowledgeMcpFailures('b')
+    push(store, 'b', at('__proto__', 'failed'), at('toString', 'failed'))
+    expect(failure(store, 'b')).toBe('toString')
+    store.getState().clearMcpStatus()
+    push(store, 'a', at('same', 'failed'))
+    expect(failure(store, 'a')).toBe('same')
+  })
 })

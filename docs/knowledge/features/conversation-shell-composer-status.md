@@ -104,8 +104,8 @@ is visible; rejection leaves the question answerable and rolls back the optimist
 
 The single-occupant priority is repair button → reconnect button → connection-error chip → stopped-turn
 recovery → refusal Switch back (with any rejection feedback) → model rejection → Claude
-stopping report → usage notice → history failure → task count. Recovery and notices require `connected`;
-disconnected and connecting states hide them without clearing held reports.
+stopping report → usage notice → history failure → MCP server failure → task count. Recovery and notices
+require `connected`; disconnected and connecting states hide them without clearing held reports.
 `.composer-status__error--settings` retains the error treatment but uses
 `flex: 0 1 auto`, `min-width: 0` and `white-space: normal` so the sentence can wrap at the
 800px minimum window width.
@@ -182,14 +182,91 @@ the per-conversation [usage-limit store](usage-limit-store.md) reading drawn in 
 hazard the first review cleared, wrongly, when a client-owned string (not a daemon one) blew the row
 past the pane.
 
+## MCP server failure notice (#1494)
+
+A server that dies at spawn was invisible for the rest of the session unless the operator happened to
+open Channel info — reports reach `mcpStatusStore` for the app's lifetime, sheet open or not (see [Channel
+info — MCP servers section](conversation-shell-channel-info-mcp.md)), but only the sheet read them. This
+ticket surfaces the first unacknowledged `failed` server in the trailing slot, between history failure and
+the task count: `recovery ?? refusal ?? notice ?? history ?? mcpFailure ?? taskCount ?? null`. Every
+occupant above it outranks it, and it outranks the task count in turn. Visible only while `connected`.
+
+`isMcpServerFailed(status)` (`mcpStatusStore.ts`) is the exact `=== 'failed'` comparison, shared with the
+sheet's `toneOf` so the row and the sheet cannot classify a server differently. `selectUnacknowledgedMcpFailureFor(conversationId)`
+returns the first server in report order that reads failed and is not acknowledged for that conversation,
+or `null` — a primitive, so a fresh selector per render never loops, the same shape as `taskCount`'s
+`selectLiveTaskCountFor` above.
+
+**Raised once per server, per app run.** `acknowledgedFailures: ReadonlyMap<string, ReadonlySet<string>>`
+holds server names per conversation, for equality only (`Set.has`), never as a key, an attribute, a log
+field or a lookup path — the same discipline every other MCP surface applies to a server `name`. Pressing
+the notice calls `acknowledgeMcpFailures(conversationId)`, which adds *every* server the currently held
+report shows as failed, not only the one named in the button — one press silences the whole current set. A
+later report repeating an acknowledged name stays silent; a server that stops reading `failed` drops out on
+its own, simply because the selector only reads the latest report; a server failing for the first time (or
+failing again after having recovered) raises its own notice. `setMcpStatus` never touches this map —
+acknowledgements last for the app run per conversation and clear only with `clearMcpStatus`, the same
+pairing-scoped reset that already empties every other MCP-scoped set here. Because
+acknowledgement compares the full raw name while display uses the bounded one, two names that share their
+first 256 code points read identically in the row but are acknowledged separately — that can only raise an
+extra notice, never hide one. A prototype-shaped name (`__proto__`, `constructor`, `toString`) is compared
+as a value like any other; acknowledging one silences only that exact name (added during the ticket's
+security-sensitive rework, below).
+
+**Copy and view.** `mcpFailedCopy(name)` → `` `MCP server ${name} failed` ``, beside `toolWorkingCopy`,
+client-owned and apostrophe-free with one hole. `ComposerMcpFailure({ name, onOpen })` renders the one
+`button-small button-small--error` shape #963 already established, its only child the escaped
+`mcpFailedCopy(boundMcpText(name))` text run — `boundMcpText` is the sheet's own 256-code-point bound,
+exported from `McpServersSection.tsx` so both surfaces cut a name identically. `.composer-status__mcp-failure`
+is `flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis` — the `.composer-status__tasks`
+treatment, not the two fixed-width error occupants' `flex: 0 0 auto`, because this is the one Error-type
+button whose label holds untrusted text of unbounded (pre-cut) length: letting it shrink and ellipsize is
+what keeps the row from growing past the window, while `.button-small`'s `nowrap` keeps it to one line so
+the row's height stays fixed at 32px even at the 800px minimum width.
+
+**Opening the sheet reuses one closure.** `ConversationScreen` now hoists `openChannelInfo` (set the sheet
+open, then `requestMcpStatus` for the on-screen conversation) as a single function passed to both
+`ThreadOverflowMenu.onChannelInfo` and `ComposerErrorSlotControl`'s new `onOpenChannelInfo` prop — the
+overflow-menu item and this notice open Channel info identically, status refresh included. The control's own
+press handler acknowledges first, then calls `onOpenChannelInfo`, synchronously and with nothing async
+between the two.
+
+**Testing.** `mcpStatusStore.test.ts`'s `MCP failure acknowledgement` describe covers the exact-word
+classification, first-unacknowledged-in-order (built-in names included), acknowledging the full current
+set at once, a later repeat staying silent, a newly-failed name raising, a recovered server dropping out,
+per-conversation isolation including `__proto__`/`constructor` conversation ids, and (added in the
+security-sensitive rework below) that a prototype-shaped *server name* is itself compared as a value.
+`mcpFailureNotice.test.tsx` (static render) pins the copy and its lack of an apostrophe, that a
+markup-shaped name comes out escaped, the 256-code-point bound, the full `ComposerErrorSlot` precedence
+matrix (outranked by every occupant above it, outranking the task count), and that it never shows on any
+disconnected/connecting/error status. `e2e/composer-mcp-failure.spec.ts` (fake tier) drives raise-once end
+to end: a report naming two failed servers raises the first by name; pressing opens the sheet, sends
+exactly one `requestMcpStatus`, and shows the second failed server already in the sheet; closing and
+repeating the same report raises nothing; a newly-failed server raises on its own; a recovered server
+clears the notice; and a 300-character name at the 800px minimum keeps the row at 32px tall and its width
+unchanged, with the button staying inside it. **Lesson from the PR:** a spec that forwards to
+`conversationStateFake` without answering `request_history` lets the history failure fill the slot first,
+which outranks this notice (and the task count) — the spec must answer history itself before pushing an
+MCP report, since the fake is the reply function itself and has no separate method to prime.
+
+**Security.** Reviewed against the shipped code as a retroactive `## Security review` (the ticket is
+`security-sensitive` and the plan initially shipped without one) — PASS, no MUST FIX. The one untrusted
+input is the server `name`/`status` pair already validated and typed before it reaches the renderer; the
+only new decision on it is the exact-word `isMcpServerFailed` comparison. The name reaches the DOM only as
+escaped text, never an attribute, key, log field or IPC payload; pressing the button sends only the
+existing `request_mcp_status` command carrying the conversation id, no server name. Out of scope, by the
+same reasoning the sheet already accepts: a hostile server name using bidi controls or confusables to
+mislead the operator display-only, unchanged by this ticket. See the ticket's [architecture
+spec](../../specs/architecture/1494-mcp-failure-status-row.md) for the full review.
+
 ## Background-task count pill, the slot's last occupant (#1435)
 
 The daemon's live background tasks were readable in exactly one place — the `BackgroundTaskPanel`
 behind the More actions menu — so a turn that ended with several tasks still running looked finished.
 This ticket adds the count as the trailing slot's **last** reading, appended to the end of the existing
 `??` chain: `recovery ?? refusal ?? notice ?? history ?? taskCount ?? null`, still gated inside the
-`status.type === 'connected'` arm. Every occupant documented above outranks it; it is visible only when
-nothing else in the chain is.
+`status.type === 'connected'` arm. Every occupant documented above outranks it — since [#1494](#mcp-server-failure-notice-1494),
+that includes the MCP failure notice — and it is visible only when nothing else in the chain is.
 
 **The count was originally the raw roster size**, `roster.tasks.size + roster.droppedTasks`, read via
 `selectRosterFor(open.id)` the same shape as the usage-limit read beside it. **Since

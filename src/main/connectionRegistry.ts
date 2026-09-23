@@ -247,6 +247,7 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
     requestSessionSettings: (conversationId) => resolve().requestSessionSettings(conversationId),
     requestModelList: (conversationId) => resolve().requestModelList(conversationId),
     requestContextUsage: (conversationId) => resolve().requestContextUsage(conversationId),
+    requestMcpStatus: (conversationId) => resolve().requestMcpStatus(conversationId),
     requestHistory: (payload) => resolve().requestHistory(payload),
     requestSystemPrompt: (conversationId) => resolve().requestSystemPrompt(conversationId),
     requestConversations: () => resolve().requestConversations(),

@@ -7735,6 +7735,192 @@ describe('createDaemonConnection — requestContextUsage', () => {
   })
 })
 
+describe('createDaemonConnection — requestMcpStatus (#1578)', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  const SERVERS = [{ name: 'docs', status: 'connected', error: '', scope: 'user', version: '1.0' }]
+
+  function refusal(code: unknown, inReplyTo: number): Uint8Array {
+    return encodeEnvelope({ id: 90, type: 'error', ts: FIXED_TS, in_reply_to: inReplyTo, payload: {
+      code, message: 'private daemon detail', retryable: code === 'mcp_status.unavailable',
+      conversation_id: 'daemon-named-conversation'
+    } })
+  }
+  const rejections = (sink: ReturnType<typeof build>['sink']): DaemonEvent[] =>
+    emitted(sink).filter((e) => e.type === 'mcpStatusRequestRejected')
+  const lastSentId = (ctx: ReturnType<typeof build>): number =>
+    decodeEnvelope(ctx.drivers[0].sent[ctx.drivers[0].sent.length - 1]).id
+
+  it('sends exactly one one-field frame on the shared id sequence and never re-sends', async () => {
+    const { connection, drivers } = await reachConnected()
+    vi.useFakeTimers()
+    connection.send({ conversation_id: 'other', message_id: 'm1', text: 'hello' })
+    connection.requestMcpStatus('conv-42')
+    connection.requestContextUsage('other')
+    expect(drivers[0].sent.map(decodeEnvelope).map((frame) => frame.id)).toEqual([2, 3, 4])
+    expect(decodeEnvelope(drivers[0].sent[1])).toEqual({
+      id: 3, type: 'mcp_status_request', ts: FIXED_TS, payload: { conversation_id: 'conv-42' }
+    })
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(drivers[0].sent).toHaveLength(3)
+    connection.stop()
+  })
+
+  it('is inert before startup, before authentication and after stop, and logs no id', async () => {
+    const { log, records } = captureLog()
+    const { connection, drivers } = build({ diagnosticLog: log })
+    expect(() => connection.requestMcpStatus('private-id')).not.toThrow()
+    connection.start()
+    await tick()
+    connection.requestMcpStatus('private-id')
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    connection.stop()
+    expect(() => connection.requestMcpStatus('private-id')).not.toThrow()
+    expect(drivers[0].sent).toEqual([])
+    expect(records.filter((entry) => entry.event === 'mcp-status-request-refused')).toEqual(
+      Array.from({ length: 3 }, () => ({ event: 'mcp-status-request-refused', code: 'unavailable' }))
+    )
+    expect(JSON.stringify(records)).not.toContain('private-id')
+  })
+
+  it('catches a send failure, records nothing and never retries', async () => {
+    const { log, records } = captureLog()
+    const { connection, sink, drivers } = build({ diagnosticLog: log, throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    vi.useFakeTimers()
+    expect(() => connection.requestMcpStatus('private-id')).not.toThrow()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(records.at(-1)).toEqual({ event: 'mcp-status-request-failed', code: 'build-or-send-failed' })
+    for (const id of [2, 3]) drivers[0].emit({ type: 'message', plaintext: refusal('mcp_status.unavailable', id) })
+    expect(rejections(sink)).toEqual([])
+    expect(JSON.stringify(records)).not.toMatch(/private-id|driver send boom/)
+    connection.stop()
+  })
+
+  it('delivers a correlated mcp_status under its payload id, like a live publication', async () => {
+    const ctx = await reachConnected()
+    ctx.connection.requestMcpStatus('conv-42')
+    const before = emitted(ctx.sink).length
+    ctx.drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 50, type: 'mcp_status', ts: FIXED_TS,
+      in_reply_to: lastSentId(ctx), payload: { conversation_id: 'conv-42', servers: SERVERS, dropped_servers: 0 } }) })
+    expect(emitted(ctx.sink).slice(before)).toEqual([
+      { type: 'mcpStatus', conversationId: 'conv-42', servers: SERVERS, droppedServers: 0 }
+    ])
+    ctx.connection.stop()
+  })
+
+  it.each([
+    ['mcp_status.unavailable', 'mcp-status-unavailable'],
+    ['protocol.malformed', 'unclassified'],
+    ['conversation.not_found', 'unclassified'],
+    ['mcp_status.something_later', 'unclassified'],
+    [42, 'unclassified']
+  ])('settles a correlated %j refusal as one rejection carrying %s', async (code, reason) => {
+    const { log, records } = captureLog()
+    const ctx = build({ diagnosticLog: log })
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    vi.useFakeTimers()
+    ctx.connection.requestMcpStatus('conv-42')
+    const before = emitted(ctx.sink).length
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal(code, lastSentId(ctx)) })
+    await vi.advanceTimersByTimeAsync(60_000)
+    const events = emitted(ctx.sink).slice(before)
+    expect(events).toEqual([{ type: 'mcpStatusRequestRejected', conversationId: 'conv-42', reason }])
+    expect(JSON.stringify(events)).not.toMatch(/private daemon detail|daemon-named-conversation|in_reply_to/)
+    expect(records.at(-1)).toEqual({ event: 'mcp-status-request-rejected', code: reason })
+    expect(JSON.stringify(records)).not.toMatch(/conv-42|private daemon detail/)
+    expect(ctx.drivers[0].sent).toHaveLength(1)
+    ctx.connection.stop()
+  })
+
+  it('keeps the entry through a success reply and consumes it on the first correlated refusal', async () => {
+    const ctx = await reachConnected()
+    ctx.connection.requestMcpStatus('conv-42')
+    const id = lastSentId(ctx)
+    ctx.drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 50, type: 'mcp_status', ts: FIXED_TS,
+      in_reply_to: id, payload: { conversation_id: 'conv-42', servers: [], dropped_servers: 0 } }) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('mcp_status.unavailable', id + 1) })
+    expect(rejections(ctx.sink)).toEqual([])
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('mcp_status.unavailable', id) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('mcp_status.unavailable', id) })
+    expect(rejections(ctx.sink)).toEqual([
+      { type: 'mcpStatusRequestRejected', conversationId: 'conv-42', reason: 'mcp-status-unavailable' }
+    ])
+    ctx.connection.stop()
+  })
+
+  it('bounds the outstanding asks, evicting the oldest', async () => {
+    const ctx = await reachConnected()
+    for (let i = 0; i < 33; i += 1) ctx.connection.requestMcpStatus(`conv-${i}`)
+    const ids = ctx.drivers[0].sent.map(decodeEnvelope).map((frame) => frame.id)
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('mcp_status.unavailable', ids[0]) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('mcp_status.unavailable', ids[1]) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('mcp_status.unavailable', ids[32]) })
+    expect(rejections(ctx.sink).map((e) => e.type === 'mcpStatusRequestRejected' && e.conversationId))
+      .toEqual(['conv-1', 'conv-32'])
+    ctx.connection.stop()
+  })
+
+  it('clears outstanding asks on reconnect, so a recycled id settles nothing', async () => {
+    const ctx = await reachConnected()
+    ctx.connection.requestMcpStatus('conv-42')
+    const staleId = lastSentId(ctx)
+    ctx.connection.reconnect()
+    await tick()
+    ctx.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    ctx.drivers[1].emit({ type: 'message', plaintext: refusal('mcp_status.unavailable', staleId) })
+    expect(rejections(ctx.sink)).toEqual([])
+    ctx.connection.stop()
+  })
+
+  it('routes a validated request to its host, strips extra fields and refuses unknown or absent hosts', async () => {
+    const connections = new Map<string, DaemonConnection>()
+    const router = createConversationRouter({ connectionFor: (id) => connections.get(id) ?? null })
+    const host = build({ serverId: 'host-A', wrapSink: router.observe })
+    const other = build({ serverId: 'host-B', wrapSink: router.observe })
+    connections.set('host-A', host.connection)
+    connections.set('host-B', other.connection)
+    host.connection.start()
+    other.connection.start()
+    await tick()
+    for (const ctx of [host, other]) ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    host.drivers[0].emit({ type: 'message', plaintext: conversationCreatedPlaintext({
+      id: 'conv-42', is_promoted: false, cwd: '/workspace', name: null, last_used_at: '', workspace_label: null
+    }) })
+    const source = { on: vi.fn(), removeListener: vi.fn() } satisfies CommandSource
+    const off = onCommand(source, (command) => {
+      if (command.type === 'requestMcpStatus') {
+        const conversationId = command.payload.conversation_id
+        router.route(conversationId)?.requestMcpStatus(conversationId)
+      }
+    })
+    const receive = source.on.mock.calls[0][1]
+    receive({}, { type: 'requestMcpStatus', serverId: 'host-B', payload: {
+      conversation_id: 'conv-42', serverId: 'host-B', token: 'smuggled'
+    } })
+    expect(host.drivers[0].sent.map(decodeEnvelope)).toEqual([
+      { id: 2, ts: FIXED_TS, type: 'mcp_status_request', payload: { conversation_id: 'conv-42' } }
+    ])
+    for (const id of ['unknown', '']) {
+      expect(() => receive({}, { type: 'requestMcpStatus', payload: { conversation_id: id } })).not.toThrow()
+    }
+    receive({}, { type: 'requestMcpStatus', payload: { conversation_id: 42 } })
+    connections.delete('host-A')
+    expect(() => receive({}, { type: 'requestMcpStatus', payload: { conversation_id: 'conv-42' } })).not.toThrow()
+    expect(host.drivers[0].sent).toHaveLength(1)
+    expect(other.drivers[0].sent).toEqual([])
+    off()
+    host.connection.stop()
+    other.connection.stop()
+  })
+})
+
 describe('createDaemonConnection — requestModelList (on-demand model vocabulary, #1165)', () => {
   it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin)', () => {
     const { connection, drivers } = build()

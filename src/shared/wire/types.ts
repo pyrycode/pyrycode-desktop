@@ -172,8 +172,8 @@ export type EnvelopeType =
   // Claude's MCP SERVER LIST for one conversation (#1489) — which servers claude has and what it says
   // about each. Same provenance and shape as the frames above: conversation-scoped, no `turn_id`, and
   // receiving one neither opens nor closes a turn. Published live and as the answer to
-  // `mcp_status_request` (correlated by `in_reply_to`), which is the separate client → daemon ASK and is
-  // not declared on this side yet. A SNAPSHOT that replaces a reader's view rather than a delta.
+  // `mcp_status_request` (correlated by `in_reply_to`), which is the separate client → daemon ASK
+  // declared below (#1578). A SNAPSHOT that replaces a reader's view rather than a delta.
   // Binary → phone only. SSOT pyrycode#2373 (shape) / #2375 (live producer) / #2381 (on-demand reply) /
   // internal/protocol/codes.go TypeMCPStatus.
   | 'mcp_status'
@@ -251,6 +251,10 @@ export type EnvelopeType =
   // reply correlated by in_reply_to, or conversation.not_found/context_usage.unavailable.
   // The client does not retry either error or a missing reply.
   | 'request_context_usage'
+  // Client → daemon, interactive-capability-gated (pyrycode#2276 / #2381). One mcp_status reply
+  // correlated by in_reply_to, or protocol.malformed / conversation.not_found / mcp_status.unavailable.
+  // The client does not retry any of them or a missing reply (#1578).
+  | 'mcp_status_request'
   // The conversation's MODEL inventory (#971) — the identities claude will run as, with the
   // reasoning-effort levels each one supports. Same shape of frame as its sibling below and drawn from
   // the same `initialize` control reply: v2 outbound (binary → phone), interactive-capability-gated,
@@ -2678,6 +2682,12 @@ export interface RequestModelListPayload {
 
 /** Request one conversation's context reading. Mirrors the daemon's required field. */
 export interface RequestContextUsagePayload {
+  conversation_id: string
+}
+
+/** Request one conversation's MCP status (#1578). The daemon's payload has exactly this field and no
+ *  request id; the reply correlates by the envelope's `in_reply_to`. */
+export interface MCPStatusRequestPayload {
   conversation_id: string
 }
 

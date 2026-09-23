@@ -513,3 +513,59 @@ with `local-send` or `unavailable-host`. They omit identifiers, paths, names and
 caught/daemon error text. The connection tests pin additive broadcasts, single-use
 results, redial cleanup, local rejection and omission of attempt IDs from the wire;
 mounted dialog tests prove host/attempt isolation and naming-only retry.
+
+# MCP-status request correlation (#1578)
+
+A correlation store on the `pendingConfigRequests` shape, `pendingMcpStatusRequests: Map<number,
+string>`, mapping a sent `mcp_status_request`'s `envelopeId` to the conversation id that ask named.
+`requestMcpStatus(conversationId)` builds a fresh one-field payload (`{ conversation_id }`) through
+`buildRequestMcpStatus`, so extra renderer fields never reach the wire; the payload guard at
+`isRendererCommand`'s `requestMcpStatus` arm accepts any string including `''` and lets routing decide.
+Not connected/authenticated is a refused log and nothing sent; a build/send throw is caught, logged
+content-free, and leaves no entry under an unspent id, the same reasoning as every sibling store in
+this file.
+
+This store breaks with every sibling above it in one way: **a successful reply can never consume it.**
+The daemon answers `mcp_status_request` with the same `mcp_status` kind it uses for unsolicited live
+publication ([Inbound message decode](inbound-message-decode.md) § Related, #1489), and that kind carries
+no `in_reply_to` once decoded — by design, per the ticket, so as not to special-case the live path for a
+correlated one. `case 'mcp-status':` therefore has no map to check and emits `mcpStatus` exactly as it
+always has; the request and the reply are connected only by the requester eventually seeing a report.
+Where every prior store in this file could say "no cap, the same evidence-based, no-observed-failure
+posture" because a matched success always deletes the entry, that reasoning does not transfer here: an
+unbounded `pendingMcpStatusRequests` is not a hypothetical failure mode to wait and observe, it is the
+guaranteed outcome of any answered request, every time. So the cap is not deferred pending evidence —
+`pendingMcpStatusRequests` is bounded at `MAX_PENDING_MCP_STATUS_REQUESTS` (32) entries, and recording a
+33rd evicts the oldest by `Map` insertion order. The daemon answers promptly, so a rejection for an
+evicted ask can only arrive after 32 newer asks have already been sent, and dropping it is harmless: no
+stored report is touched and nothing retries.
+
+- **Reject match — the sixth member of the `daemon-error` precedence tier**, checked alongside
+  `pendingSettings`/`pendingCreateFolders`/`transferForEnvelope`/`pendingHistoryRequests`/
+  `pendingSystemPromptWrites`. A hit `delete`s the entry, logs `mcp-status-request-rejected` with
+  `code: reason`, and emits `mcpStatusRequestRejected { conversationId, reason }` — `conversationId`
+  read from the map's value (the conversation *this app* asked about), never from the error payload, so
+  a hostile daemon cannot make a refusal name a conversation this app never queried. `reason` is
+  `inbound.mcpStatusReject ?? 'unclassified'` off the fourth sibling narrower documented in [Daemon
+  error outcome § The fourth verb landed](daemon-error-outcome.md#the-fourth-verb-landed--the-fifth-verb-warning).
+  The frame is consumed and the handler returns, on the established `daemon-error` precedent.
+- **Reset — `dial()` clears the map next to its siblings.**
+- **The `mcpStatusStore` is never touched by a rejection.** No refusal clears or fabricates a report;
+  a stale-but-present report from an earlier successful answer is left standing.
+
+**A test-fixture trap specific to this verb's success path:** the `mcp_status` payload's row shape
+(`parseMCPServerStatus`, [Inbound message decode](inbound-message-decode.md) § Related, #1489) requires
+`error` to be a plain string on every row, never `null`. A fixture built for "does a correlated
+`mcp_status` reach the store" with `error: null` on a server row fails `parseMCPServerStatus` and drops
+the *entire* frame — the test then reads as "the correlated reply was never delivered," which points at
+routing and correlation code that is actually fine. Use `error: ''` for a clean row.
+
+`security-sensitive`, builder self-review **PASS**, one SHOULD FIX addressed in the design itself (the
+uncapped map growth from a success that can never clear its entry) — see the cap above. No other
+findings; the design and its security review are recorded in full in
+`docs/specs/architecture/1578-request-mcp-status.md`. The renderer command and the outbound builder are
+not yet exercised end to end: this ticket ships dormant, and [#1579](https://github.com/pyrycode/pyrycode-desktop/issues/1579),
+blocked on this one, adds the channel info sheet's on-open trigger and consumes `mcpStatusRequestRejected`
+in the four renderer bridges (`questionBridge`, `daemonEventBridge`, `timelineBridge`, `modalBridge`),
+which for now each carry only a one-line ignored arm beside their existing informational `case
+'mcpStatus':`.

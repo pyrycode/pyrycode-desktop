@@ -84,6 +84,7 @@ interface BuiltConnection {
    */
   newSessions: string[]
   contextRequests: string[]
+  mcpStatusRequests: string[]
   /**
    * The conversation ids this connection's `interrupt` was handed (#1092), recorded beside `calls` for
    * the reason `newSessions` is: `calls.interrupt` survives as this file's lifecycle-delegation probe
@@ -103,6 +104,7 @@ function createFactoryFake() {
     const calls = { start: 0, stop: 0, reconnect: 0, interrupt: 0 }
     const newSessions: string[] = []
     const contextRequests: string[] = []
+    const mcpStatusRequests: string[] = []
     const interrupts: string[] = []
     built.push({
       serverId: spec.serverId,
@@ -110,6 +112,7 @@ function createFactoryFake() {
       calls,
       newSessions,
       contextRequests,
+      mcpStatusRequests,
       interrupts
     })
     const noop = (): void => {}
@@ -134,6 +137,7 @@ function createFactoryFake() {
       requestSessionSettings: noop,
       requestModelList: noop,
       requestContextUsage: (conversationId) => { contextRequests.push(conversationId) },
+      requestMcpStatus: (conversationId) => { mcpStatusRequests.push(conversationId) },
       requestHistory: noop,
       requestSystemPrompt: noop,
       requestConversations: noop,
@@ -508,6 +512,14 @@ describe('createConnectionRegistry', () => {
       registry.connectionFor('alpha')?.requestContextUsage('conv-42')
       expect(factory.for('alpha').contextRequests).toEqual(['conv-42'])
       expect(factory.for('beta').contextRequests).toEqual([])
+    })
+
+    it('forwards MCP status requests only to the named host', async () => {
+      const { factory, registry } = harness([record('alpha'), record('beta')])
+      await settle()
+      registry.connectionFor('beta')?.requestMcpStatus('conv-42')
+      expect(factory.for('beta').mcpStatusRequests).toEqual(['conv-42'])
+      expect(factory.for('alpha').mcpStatusRequests).toEqual([])
     })
 
     it('reaches the named server, not the most recently paired one', async () => {

@@ -435,6 +435,35 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand(valid)).toBe(true)
   })
 
+  it.each(['conv-42', '', '__proto__'])('accepts an MCP status request with string id %j', (id) => {
+    expect(isRendererCommand({ type: 'requestMcpStatus', payload: {
+      conversation_id: id, extra: 'ignored'
+    } })).toBe(true)
+  })
+
+  it.each([
+    {}, { payload: undefined }, { payload: null }, { payload: {} },
+    { payload: 'conv-42' }, { payload: { conversation_id: undefined } },
+    { payload: { conversation_id: null } }, { payload: { conversation_id: 42 } },
+    { payload: { conversation_id: true } }, { payload: { conversation_id: [] } }
+  ])('rejects malformed MCP status request %j', (fields) => {
+    expect(isRendererCommand({ type: 'requestMcpStatus', ...fields })).toBe(false)
+  })
+
+  it('requires the MCP status request payload and its string id at compile time', () => {
+    // @ts-expect-error an MCP status request requires a payload
+    const bare: RendererCommand = { type: 'requestMcpStatus' }
+    // @ts-expect-error the conversation id must be present
+    const missingId: RendererCommand = { type: 'requestMcpStatus', payload: {} }
+    // @ts-expect-error the conversation id must be a string
+    const numericId: RendererCommand = { type: 'requestMcpStatus', payload: { conversation_id: 42 } }
+    const valid: RendererCommand = { type: 'requestMcpStatus', payload: { conversation_id: 'conv-42' } }
+    for (const invalid of [bare, missingId, numericId]) {
+      expect(isRendererCommand(invalid)).toBe(false)
+    }
+    expect(isRendererCommand(valid)).toBe(true)
+  })
+
   it('types requestModelList as payload-REQUIRED — a bare send does not compile (#1165)', () => {
     // Compile-time half of AC2, and the half the runtime guard above cannot prove: `src/shared/**/*`
     // is inside tsconfig.node.json's include, so `npm run typecheck` reads this file, and an unused

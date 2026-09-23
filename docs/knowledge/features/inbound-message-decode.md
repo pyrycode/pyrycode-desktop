@@ -427,7 +427,8 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 - [#1489](https://github.com/pyrycode/pyrycode-desktop/issues/1489) extended it once more, additively:
   the `mcp_status` kind, `parseMCPStatusPayload` + the new row narrower `parseMCPServerStatus` —
   claude's MCP server list for one conversation, published live and as the answer to
-  `mcp_status_request` (not yet declared on this side). `servers` is never `null`, an empty array is
+  `mcp_status_request` (the outbound ask itself declared by #1578, dormant until #1579 sends it).
+  `servers` is never `null`, an empty array is
   the positive report of no servers, and `dropped_servers` is copied from the producer and never
   reconciled against the retained length. Each row is five always-present plain strings
   (`name`/`status`/`error`/`scope`/`version`); one malformed row drops the whole frame. Unlike

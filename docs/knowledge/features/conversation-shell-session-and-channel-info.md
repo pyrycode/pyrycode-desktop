@@ -323,6 +323,16 @@ closing the sheet and switching conversations; reconnect survival is structural,
 `clearPairingScopedState.test.ts` rather than driven live. Not `needs-real-claude`: the acceptance is a
 daemon frame rendering, which the fake transport already covers end to end.
 
+**On-demand refresh, landing dormant ([#1578](https://github.com/pyrycode/pyrycode-desktop/issues/1578)).**
+This section's report today is only ever whatever arrived when the session spawned or the last live
+publication — there is no way yet to ask the daemon again. #1578 adds the outbound `mcp_status_request`
+verb and a correlated `mcpStatusRequestRejected` refusal event end to end in the transport and IPC layers,
+but ships nothing that calls it: no button here sends it, and the four renderer bridges carry only an
+ignored arm for the new event. The section's on-open trigger and an "unavailable" notice for the refusal
+are [#1579](https://github.com/pyrycode/pyrycode-desktop/issues/1579), blocked on #1578. See [Daemon
+connection — MCP-status request correlation](daemon-connection-correlation.md#mcp-status-request-correlation-1578)
+for the ask/refusal design; a refusal never clears or replaces the report this section already has.
+
 **Rename action ([#368](../codebase/368.md)), retitled Edit chat ([#1440](rename-conversation-dialog.md)),
 split into Edit channel / Edit chat by conversation kind ([#1431](edit-channel-dialog.md)).**
 The Actions slot's first filler: a Material 3 tonal pill (Figma 20:89, `.channel-info__action`)

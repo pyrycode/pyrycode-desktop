@@ -333,23 +333,36 @@ unreachability as an invariant to build on.
 - **No length bound on `code`.** Deliberate — a cap would imply the value is retained somewhere, which is
   the impression to avoid; nothing is copied, concatenated, or kept past the `switch`.
 
-### The fourth-verb caution
+### The fourth verb landed — the fifth-verb warning
 
 [System prompt write](system-prompt-write.md) (#1249) added a **third** sibling narrower beside
 `HistoryRejectReason` — `SystemPromptRejectReason` (`'protocol-malformed' | 'conversation-not-found'`),
 carried on `daemon-error` as `systemPromptReject?: SystemPromptRejectReason`. Same shape, same
 reasoning as `historyReject`'s § Related entry below: kept off `DaemonErrorOutcome` because that union
 is inherited whole by `AttachmentTransferFailure`/`AttachmentUploadFailure`, and neither of this verb's
-two codes has any attachment-leg producer. `daemon-error` now carries three per-verb narrowed sibling
-fields (`historyReject`, `systemPromptReject`, plus `outcome` itself for the attachment legs). That is
-recorded here as an honest cost, not a pattern to keep stacking: **a fourth correlated verb needing its
-own reject codes should prompt a rethink of the shape** — one `Record<string, unknown>`-free
+two codes has any attachment-leg producer. This doc used to say a fourth correlated verb needing its
+own reject codes should prompt a rethink of the shape — one `Record<string, unknown>`-free
 discriminated sub-union, or a per-verb correlation result type entirely, rather than a fourth optional
-field bolted onto the same kind. No such rethink was warranted at three; note it here so the next
-verb's planner reads this before adding a fourth.
+field bolted onto the same kind.
+
+[MCP-status request](daemon-connection-correlation.md#mcp-status-request-correlation-1578) (#1578) is
+that fourth verb. `MCPStatusRejectReason` (one literal, `'mcp-status-unavailable'`) landed as
+`daemon-error`'s `mcpStatusReject?: MCPStatusRejectReason`, on the same template, and the rethink was
+**deferred again rather than done** — the ticket amended this doc's warning to say four instead of
+forcing the refactor, on the reasoning that the pattern still reads clearly at four and refactoring
+three already-shipped verbs was out of scope for a ticket that only needed to add a fourth. `daemon-error`
+now carries four per-verb narrowed sibling fields (`historyReject`, `systemPromptReject`,
+`mcpStatusReject`, plus `outcome` itself for the attachment legs). That is recorded here as an honest,
+now-twice-deferred cost, not a pattern to keep stacking indefinitely: **a fifth correlated verb needing
+its own reject codes should do the rethink, not defer it a third time.** ADR candidate, still open:
+collapse the per-verb reject fields into one `{ verb, reason }` field before that fifth verb lands.
 
 ## Related
 
+- [MCP-status request correlation](daemon-connection-correlation.md#mcp-status-request-correlation-1578)
+  — [#1578](https://github.com/pyrycode/pyrycode-desktop/issues/1578) adds a **fourth** sibling narrower,
+  `MCPStatusRejectReason`, on `SystemPromptRejectReason`'s exact template. See § The fourth verb landed
+  above for the standing concern this addition confirms.
 - [Attachment-stored wire types](attachment-stored-wire-types.md) — the positive-terminal sibling on the
   same upload leg (#964); together they are the whole `attachment_chunk` reply space.
 - [Attachment chunk envelope](attachment-chunk-envelope.md) — the producer half both replies answer.

@@ -85,6 +85,7 @@ interface BuiltConnection {
   newSessions: string[]
   contextRequests: string[]
   mcpStatusRequests: string[]
+  mcpReconnects: Array<[string, string]>
   /**
    * The conversation ids this connection's `interrupt` was handed (#1092), recorded beside `calls` for
    * the reason `newSessions` is: `calls.interrupt` survives as this file's lifecycle-delegation probe
@@ -105,6 +106,7 @@ function createFactoryFake() {
     const newSessions: string[] = []
     const contextRequests: string[] = []
     const mcpStatusRequests: string[] = []
+    const mcpReconnects: Array<[string, string]> = []
     const interrupts: string[] = []
     built.push({
       serverId: spec.serverId,
@@ -113,6 +115,7 @@ function createFactoryFake() {
       newSessions,
       contextRequests,
       mcpStatusRequests,
+      mcpReconnects,
       interrupts
     })
     const noop = (): void => {}
@@ -138,6 +141,7 @@ function createFactoryFake() {
       requestModelList: noop,
       requestContextUsage: (conversationId) => { contextRequests.push(conversationId) },
       requestMcpStatus: (conversationId) => { mcpStatusRequests.push(conversationId) },
+      reconnectMcpServer: (conversationId, serverName) => { mcpReconnects.push([conversationId, serverName]) },
       requestHistory: noop,
       requestSystemPrompt: noop,
       requestConversations: noop,
@@ -520,6 +524,14 @@ describe('createConnectionRegistry', () => {
       registry.connectionFor('beta')?.requestMcpStatus('conv-42')
       expect(factory.for('beta').mcpStatusRequests).toEqual(['conv-42'])
       expect(factory.for('alpha').mcpStatusRequests).toEqual([])
+    })
+
+    it('forwards MCP reconnects with both arguments only to the named host (#1582)', async () => {
+      const { factory, registry } = harness([record('alpha'), record('beta')])
+      await settle()
+      registry.connectionFor('beta')?.reconnectMcpServer('conv-42', 'docs')
+      expect(factory.for('beta').mcpReconnects).toEqual([['conv-42', 'docs']])
+      expect(factory.for('alpha').mcpReconnects).toEqual([])
     })
 
     it('reaches the named server, not the most recently paired one', async () => {

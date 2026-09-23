@@ -255,6 +255,11 @@ export type EnvelopeType =
   // correlated by in_reply_to, or protocol.malformed / conversation.not_found / mcp_status.unavailable.
   // The client does not retry any of them or a missing reply (#1578).
   | 'mcp_status_request'
+  // Client → daemon, interactive-capability-gated and gated per device (pyrycode#2419 / #2420). Asks the
+  // daemon to reconnect one named MCP server on the conversation's live child. Accepted: one mcp_status
+  // correlated by in_reply_to. Refused: mcp_actuation.refused / protocol.malformed /
+  // conversation.not_found, all non-retryable; the client does not retry any of them (#1582).
+  | 'mcp_reconnect'
   // The conversation's MODEL inventory (#971) — the identities claude will run as, with the
   // reasoning-effort levels each one supports. Same shape of frame as its sibling below and drawn from
   // the same `initialize` control reply: v2 outbound (binary → phone), interactive-capability-gated,
@@ -2689,6 +2694,14 @@ export interface RequestContextUsagePayload {
  *  request id; the reply correlates by the envelope's `in_reply_to`. */
 export interface MCPStatusRequestPayload {
   conversation_id: string
+}
+
+/** Ask the daemon to reconnect one MCP server (#1582). Exactly these two fields, field-for-field with the
+ *  daemon's `MCPReconnectPayload`. `server_name` is the status row's untrusted claude-authored name, sent
+ *  back unchanged; on this side it is never a log field, a map key, a path or an authorization input. */
+export interface MCPReconnectPayload {
+  conversation_id: string
+  server_name: string
 }
 
 /**

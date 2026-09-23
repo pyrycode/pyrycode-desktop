@@ -34,6 +34,7 @@ import { buildRequestSessionSettings } from './transport/requestSessionSettingsE
 import { buildRequestModelList } from './transport/requestModelListEnvelope'
 import { buildRequestContextUsage } from './transport/requestContextUsageEnvelope'
 import { buildRequestMcpStatus } from './transport/requestMcpStatusEnvelope'
+import { buildMcpReconnect } from './transport/mcpReconnectEnvelope'
 import { buildRequestSystemPrompt } from './transport/requestSystemPromptEnvelope'
 import { buildSetSystemPrompt } from './transport/setSystemPromptEnvelope'
 import { buildRequestHistory } from './transport/requestHistoryEnvelope'
@@ -141,6 +142,10 @@ const RETRIEVAL_IDLE_TIMEOUT_MS = 30_000
 /** Outstanding MCP status asks kept for refusal correlation (#1578). A success reply cannot consume an
  *  entry, so the map is bounded here; the 33rd ask evicts the oldest. */
 const MAX_PENDING_MCP_STATUS_REQUESTS = 32
+
+/** Outstanding MCP reconnects kept for refusal correlation (#1582), bounded for the same reason: the
+ *  accepted answer is an mcp_status that cannot consume an entry. The 33rd evicts the oldest. */
+const MAX_PENDING_MCP_RECONNECTS = 32
 
 /**
  * Injected dependencies. The stores + sink are constructed at the composition root; `deviceName`
@@ -283,6 +288,11 @@ export interface DaemonConnection {
   /** Ask once for mcp_status (#1578); the existing inbound path delivers the report. A correlated
    * refusal emits mcpStatusRequestRejected. Unavailable connections and send failures are inert. No retry. */
   requestMcpStatus(conversationId: string): void
+  /** Ask once for an mcp_reconnect of one named server (#1582). An accepted reconnect answers with an
+   * mcp_status on the existing inbound path; any correlated refusal emits mcpReconnectRejected. The server
+   * name is only put on the wire, never logged or stored. Unavailable connections and send failures are
+   * inert. No retry. */
+  reconnectMcpServer(conversationId: string, serverName: string): void
   /**
    * Ask the daemon for one backward step of a scroll-back walk over a conversation's on-disk history
    * (#1222). Takes the whole PAYLOAD rather than a scalar — unlike its two neighbours above, this verb
@@ -897,6 +907,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // correlated refusal or the next dial removes one. Capped, oldest evicted first, so a renderer that asks
   // in a loop cannot grow it without bound.
   const pendingMcpStatusRequests = new Map<number, string>()
+  // MCP reconnect correlation (#1582): envelope id → the conversation this app acted on, and never the
+  // server name. Same lifecycle and cap as the map above.
+  const pendingMcpReconnects = new Map<number, string>()
   // Wire envelope id to the optional renderer attempt; reset with each connection generation.
   const pendingWorkspaceRenames = new Map<number, string>()
   // Attachment transfers currently on the wire (#861). A SET, not the debug bundle's single slot: two
@@ -1252,6 +1265,16 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
                 const reason = inbound.mcpStatusReject ?? 'unclassified'
                 deps.diagnosticLog?.event({ event: 'mcp-status-request-rejected', code: reason })
                 emitDaemonEvent(sink, { type: 'mcpStatusRequestRejected', conversationId: refusedMcpStatus, reason })
+                return
+              }
+              // MCP reconnect refusal (#1582), in the same tier. Every code settles as the ONE permanent
+              // outcome: the daemon merges the causes on purpose, so neither `code` nor any narrowed
+              // field is read here, and nothing but the recorded conversation crosses.
+              const refusedMcpReconnect = pendingMcpReconnects.get(inReplyTo)
+              if (refusedMcpReconnect !== undefined) {
+                pendingMcpReconnects.delete(inReplyTo)
+                deps.diagnosticLog?.event({ event: 'mcp-reconnect-rejected' })
+                emitDaemonEvent(sink, { type: 'mcpReconnectRejected', conversationId: refusedMcpReconnect })
                 return
               }
               const failedRename = pendingWorkspaceRenames.get(inReplyTo)
@@ -2848,6 +2871,29 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function reconnectMcpServer(conversationId: string, serverName: string): void {
+    if (driver === null || !authenticated) {
+      deps.diagnosticLog?.event({ event: 'mcp-reconnect-refused', code: 'unavailable' })
+      return
+    }
+    try {
+      const envelopeId = nextEnvelopeId
+      const bytes = buildMcpReconnect({ id: envelopeId, ts: now(), conversationId, serverName })
+      nextEnvelopeId += 1
+      driver.sendMessage(bytes)
+      // Record after the send, so a throwing build or send leaves no entry to correlate.
+      if (pendingMcpReconnects.size >= MAX_PENDING_MCP_RECONNECTS) {
+        const oldest = pendingMcpReconnects.keys().next()
+        if (oldest.done !== true) pendingMcpReconnects.delete(oldest.value)
+      }
+      pendingMcpReconnects.set(envelopeId, conversationId)
+      deps.diagnosticLog?.event({ event: 'mcp-reconnect-sent' })
+    } catch {
+      // Drop the exception and never retry: every refusal is final, and a failed send must not become a loop.
+      deps.diagnosticLog?.event({ event: 'mcp-reconnect-failed', code: 'build-or-send-failed' })
+    }
+  }
+
   function failHistoryRequest(conversationId: string, code: string): void {
     deps.diagnosticLog?.event({ event: 'history-request-failed', code })
     emitDaemonEvent(sink, { type: 'historyRequestFailed', conversationId,
@@ -3723,6 +3769,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // The same rationale for the MCP status ask (#1578): a recycled id must not settle a new connection's
     // refusal against a dead one's conversation.
     pendingMcpStatusRequests.clear()
+    pendingMcpReconnects.clear()
     pendingWorkspaceRenames.clear()
     // Abandon any in-flight bundle stream (#505), the fourth per-connection reset: its daemon-side
     // request does not survive the fresh Noise session, so the consumer is failed HERE rather than
@@ -3770,6 +3817,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     requestModelList,
     requestContextUsage,
     requestMcpStatus,
+    reconnectMcpServer,
     requestSystemPrompt,
     requestHistory,
     requestConversations,

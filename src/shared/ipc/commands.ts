@@ -34,6 +34,7 @@ import type {
   RequestModelListPayload,
   RequestContextUsagePayload,
   MCPStatusRequestPayload,
+  MCPReconnectPayload,
   RequestSystemPromptPayload,
   RequestHistoryPayload,
   InterruptPayload,
@@ -297,6 +298,7 @@ export type RendererCommand =
   | { type: 'requestModelList'; payload: RequestModelListPayload }
   | { type: 'requestContextUsage'; payload: RequestContextUsagePayload }
   | { type: 'requestMcpStatus'; payload: MCPStatusRequestPayload }
+  | { type: 'reconnectMcpServer'; payload: MCPReconnectPayload }
   | { type: 'requestHistory'; payload: RequestHistoryPayload }
   | { type: 'requestSystemPrompt'; payload: RequestSystemPromptPayload }
   | { type: 'requestConversations'; serverId?: string }
@@ -463,6 +465,8 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return 'payload' in value && isRequestContextUsagePayload(value.payload)
     case 'requestMcpStatus':
       return 'payload' in value && isMCPStatusRequestPayload(value.payload)
+    case 'reconnectMcpServer':
+      return 'payload' in value && isMCPReconnectPayload(value.payload)
     case 'requestHistory':
       // Payload-required (#1222) — the neighbour's idiom verbatim, including why the
       // explicitly-`undefined` case is refused by the payload guard and not by the `in` check.
@@ -944,6 +948,14 @@ function isRequestContextUsagePayload(value: unknown): value is RequestContextUs
 function isMCPStatusRequestPayload(value: unknown): value is MCPStatusRequestPayload {
   if (typeof value !== 'object' || value === null) return false
   return 'conversation_id' in value && typeof value.conversation_id === 'string'
+}
+
+/** The MCP reconnect guard (#1582): both fields present and strings, either may be empty. Routing decides
+ * the conversation, the daemon decides the server; buildMcpReconnect discards extra fields. */
+function isMCPReconnectPayload(value: unknown): value is MCPReconnectPayload {
+  if (typeof value !== 'object' || value === null) return false
+  return 'conversation_id' in value && typeof value.conversation_id === 'string' &&
+    'server_name' in value && typeof value.server_name === 'string'
 }
 
 /** The untrusted renderer→main boundary guard for the requestSystemPrompt payload (#1230). The guard

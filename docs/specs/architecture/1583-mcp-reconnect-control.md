@@ -86,3 +86,24 @@ The only failure is the merged refusal; it re-enables the controls, keeps the ro
 ## Documentation handoff
 
 None named by the ticket. Pending for the documentation stage: fold the reconnect control into `docs/knowledge/features/` MCP section coverage as it sees fit.
+
+## Security review
+
+Run after the plan's first commit rather than before it. The ticket carries `security-sensitive` and the pass was missed on that commit. It is added here, in its own commit, before any implementation code. The plan body did not change.
+
+**Verdict:** PASS
+
+**Findings:**
+
+- [Trust boundaries] No findings. The row `name` is untrusted claude text and is handed through the `onReconnect` closure into the command unchanged, which is the daemon's contract. It is never a React key (rows stay position-keyed), a store key (the sets are keyed by the daemon's conversation routing id only), an attribute or a log field. The button's accessible name is the constant "Reconnect". The renderer→main boundary is #1582's `isMCPReconnectPayload` guard in `isRendererCommand`, unchanged. The `status` word only picks the closed tone through `toneOf`. A hostile claude can make any row offer Reconnect. The worst that follows is one operator-initiated `mcp_reconnect` naming a server claude chose, which the daemon authorizes before acting.
+- [Tokens] No findings. No token, key or credential is touched. The renderer holds only a conversation id and a server name.
+- [File / storage] No findings. Nothing is persisted. The store is in-memory, and unpair clears it through the existing `clearMcpStatus`, which also empties the two new sets.
+- [Electron attack surface] No findings. No new IPC channel, bridge method or window. The press uses the existing `window.pyry.sendCommand` and the existing validated `reconnectMcpServer` arm. The real spec calls the same bridge from the page, as the other `real-claude-*` specs already do.
+- [Crypto] Not applicable. There is no cryptographic work in this slice. The transport is main's and unchanged.
+- [Network & I/O] SHOULD FIX, satisfied by the design. `reconnectMcpServer` in `DaemonConnection` is inert on an unavailable connection or a failed send, so no answer and no refusal may ever come. The wait must therefore not depend on either of them. Closing the sheet (the section's unmount cleanup calling `endMcpReconnectWait`) and switching conversation both end it. The verifier should check that the cleanup exists and that the fake spec proves close and reopen re-enable the control against a silent fake.
+- [Errors / logs] No findings. The refusal notice is a client-owned constant, and `mcpReconnectRejected` carries no daemon text to leak. The renderer logs nothing. Main's send and refusal logging is #1582's and content-free.
+- [Concurrency] OUT OF SCOPE, benign. After a wait ends by close, a second press can overlap a late answer to the first. That answer, whether a report or a refusal, ends the second wait early. Every send is operator-initiated and the daemon stays the authority, so the only effect is an early re-enable. Per-request correlation in the renderer is not built. Main already correlates each refusal to its conversation, and nothing here needs finer grain.
+- [Threat model] No findings. A hostile or buggy daemon can send `mcp_status` at any time, which ends a wait and lifts the notice. The AC requires that behaviour for any report. It cannot forge a refusal for a conversation this app did not ask about, because main emits `mcpReconnectRejected` only for its recorded send.
+
+**Reviewer:** builder (self-review per `builder/security-review.md`)
+**Date:** 2026-09-23

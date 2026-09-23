@@ -1,5 +1,5 @@
 import { useSessionFactsStore, selectSessionFactsFor } from '../../store/sessionFactsStore'
-import { McpServersSection } from './McpServersSection'
+import { McpServersSection, requestMcpStatus } from './McpServersSection'
 import {
   useEffect,
   useLayoutEffect,
@@ -416,7 +416,12 @@ export function ConversationScreen({
       {onBack && (
         <ThreadOverflowMenu
           name={activeConversation?.name ?? UNNAMED_CONVERSATION_LABEL}
-          onChannelInfo={() => setChannelInfoOpen(true)}
+          // #1579: every open asks for fresh MCP status, from the handler rather than a mount effect so
+          // one open is one request. The sheet shows this same `activeConversation`.
+          onChannelInfo={() => {
+            setChannelInfoOpen(true)
+            requestMcpStatus(window.pyry.sendCommand, activeConversation?.id ?? null)
+          }}
           onRunConfiguration={() => setSheetOpen(true)}
           onBackgroundTasks={() => setPanelOpen(true)}
         />

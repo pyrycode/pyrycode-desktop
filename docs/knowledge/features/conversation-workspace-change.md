@@ -132,7 +132,7 @@ surface, and an alias would couple an outbound request to an inbound record free
 **Reply is `workspace_updated`, correlated to the requester** (`in_reply_to` echoing this request's
 envelope id) rather than the unsolicited broadcast #1288 also produces from that same frame shape.
 The inbound path always emits the list-refresh broadcast. Callers may also request an
-[attempt-correlated result](daemon-connection-correlation.md#workspace-renaming), as Add workspace
+[attempt-correlated result](daemon-connection-correlation-system-prompt-and-mcp.md#workspace-renaming), as Add workspace
 does after creation; Edit workspace still sends without an attempt identifier. The
 authoritative re-list is what lands the new label.
 

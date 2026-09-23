@@ -119,6 +119,19 @@ built desktop, local routing relay, real daemon and real Claude at the recorded 
 it does not establish behavior through the production relay. The
 [liveness overview](real-claude-liveness-e2e.md#what-it-does) explains the correlated proof.
 
+**#1579 adds `e2e/real-claude-mcp.spec.ts`, one more executed spec, not yet counted by a gate run.**
+It opens Channel info against a real daemon and a real non-bypass child (`skipPermissions: false`, so
+the daemon spawns the child with its strict `--mcp-config` and the on-demand `mcp_status_request` this
+ticket's Channel-info trigger sends has something to answer), ticks Show built-in, and asserts the
+daemon's own `pyry_approve`/`pyry_files` rows by exact name — see [Conversation shell — session and
+channel info § MCP servers section](conversation-shell-session-and-channel-info.md#mcp-servers-section-1490).
+It carries `needs-real-claude` and has not executed on the dispatcher's gate as of this writing; the
+\#1522 run above is still the latest confirmed execution, at 22 runnable tests against a configured floor
+of 10. Once this spec executes, the runnable count becomes 23, and `PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED`
+is owed a matching bump — the same debt #1433 recorded when the tier grew from 10 to 20 and that has
+gone unpaid across every run since (the floor was still 10 at #1522). The floor lives in the fork's
+dispatcher configuration, not this repo.
+
 ### Earlier recorded runs
 
 **#1433 (2026-09-15) — the tier grows to 20 executed specs in 20 files (21 declared); the stored-prompt family gets its first live proof, and the live gate found a real daemon bug.**

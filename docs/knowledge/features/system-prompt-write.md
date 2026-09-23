@@ -159,7 +159,7 @@ recycles envelope ids from 2, so a surviving entry would settle a new connection
 one's conversation. A `Map`, not a bare object, for the reason its siblings state (the key is
 client-minted, and the shape must stay hostile-key-proof if it is ever widened). No cap, on
 `pendingHistoryRequests`' evidence-based argument. See [Daemon connection — correlation § System-prompt
-write correlation (#1249)](daemon-connection-correlation.md#system-prompt-write-correlation-1249) for
+write correlation (#1249)](daemon-connection-correlation-system-prompt-and-mcp.md#system-prompt-write-correlation-1249) for
 the full walk-through.
 
 ## Inbound decode (`src/main/transport/inboundMessage.ts`)
@@ -452,7 +452,7 @@ for the gate run detail.
   prompt reads as today. This slice reports whether a write landed, not what the conversation now
   holds — that is the read path's job.
 - [Daemon connection — correlation § System-prompt write correlation
-  (#1249)](daemon-connection-correlation.md#system-prompt-write-correlation-1249) — the
+  (#1249)](daemon-connection-correlation-system-prompt-and-mcp.md#system-prompt-write-correlation-1249) — the
   `pendingSystemPromptWrites` walk-through in full, and the ninth store in that document's chronological
   catalogue.
 - [Daemon error outcome](daemon-error-outcome.md) — `systemPromptReject`'s place as a third per-verb

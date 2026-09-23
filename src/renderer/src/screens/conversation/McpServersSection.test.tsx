@@ -1,20 +1,27 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { McpServersSectionView } from './McpServersSection'
+import { McpServersSectionView, requestMcpStatus } from './McpServersSection'
 import type { MCPServerStatus } from '@shared/wire/types'
 
 const server = (name: string, status: string, error = ''): MCPServerStatus =>
   ({ name, status, error, scope: 'user', version: '1' })
 const render = (
   report: { servers: MCPServerStatus[]; droppedServers: number } | null,
-  showBuiltIn = false
+  showBuiltIn = false,
+  unavailable = false
 ) => renderToStaticMarkup(
-  <McpServersSectionView report={report} showBuiltIn={showBuiltIn} onShowBuiltInChange={() => {}} />
+  <McpServersSectionView
+    report={report}
+    showBuiltIn={showBuiltIn}
+    unavailable={unavailable}
+    onShowBuiltInChange={() => {}}
+  />
 )
 
 const NO_REPORT = 'No MCP report has arrived yet.'
 const NO_SERVERS = 'Claude reported no MCP servers.'
 const ONLY_BUILT_IN = 'Only built-in servers are reported.'
+const UNAVAILABLE = 'The daemon could not report MCP status right now.'
 
 describe('McpServersSectionView', () => {
   it('says no report has arrived before any frame, with no rows, toggle or no-servers claim', () => {
@@ -94,5 +101,33 @@ describe('McpServersSectionView', () => {
     expect(markup).toContain(`>${'n'.repeat(256)}…<`)
     expect(markup).toContain(`>${'s'.repeat(256)}…<`)
     expect(markup).toContain(`>${'e'.repeat(256)}<`)
+  })
+
+  it('appends the unavailable notice after the rows it leaves in place', () => {
+    const markup = render({ servers: [server('docs', 'connected')], droppedServers: 2 }, false, true)
+    expect(markup).toContain('>docs<')
+    expect(markup).toContain('Partial list: 2')
+    expect(markup).toContain('Show built-in')
+    expect(markup.endsWith(`<p class="channel-info__empty">${UNAVAILABLE}</p>`)).toBe(true)
+  })
+
+  it('shows the notice beside the no-report line and never without the mark', () => {
+    const markup = render(null, false, true)
+    expect(markup).toContain(NO_REPORT)
+    expect(markup).toContain(UNAVAILABLE)
+    expect(render(null)).not.toContain(UNAVAILABLE)
+    expect(render({ servers: [server('docs', 'connected')], droppedServers: 0 })).not.toContain(UNAVAILABLE)
+  })
+})
+
+describe('requestMcpStatus', () => {
+  it('asks once for the named conversation and never for a missing one', () => {
+    const send = vi.fn()
+    requestMcpStatus(send, null)
+    requestMcpStatus(send, '')
+    expect(send).not.toHaveBeenCalled()
+    requestMcpStatus(send, 'chat-a')
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(send).toHaveBeenCalledWith({ type: 'requestMcpStatus', payload: { conversation_id: 'chat-a' } })
   })
 })

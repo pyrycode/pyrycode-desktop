@@ -168,7 +168,7 @@ unavailable as `undefined`, explicit `null` as no effort parameter, and every st
 verbatim. The named-field projection always assigns `effectiveEffort`, so check
 `=== undefined`, not property presence or truthiness. Empty strings remain values.
 
-The report passes the existing [request-correlation gate](daemon-connection-correlation.md#run-configuration-read-attribution-correlation-1176):
+The report passes the existing [request-correlation gate](daemon-connection-correlation-requests.md#run-configuration-read-attribution-correlation-1176):
 `conversationId` comes from the pending request and `serverId` from the connection's
 origin stamp, never payload keys. Out-of-order replies retain those identities;
 missing/unmatched correlations, duplicates and abandoned replies after reconnect
@@ -257,7 +257,7 @@ escapes it, category remains inert, and no refusal frame changes model-label aut
   field, keeping a hostile-or-confused daemon from misattributing the confirmation to the wrong
   conversation. See [System prompt write](system-prompt-write.md) for the full design and [Daemon
   connection — correlation § System-prompt write correlation
-  (#1249)](daemon-connection-correlation.md#system-prompt-write-correlation-1249) for the correlation
+  (#1249)](daemon-connection-correlation-system-prompt-and-mcp.md#system-prompt-write-correlation-1249) for the correlation
   store. Ships dormant across all four exhaustive bridges (two arms each, eight total); the real
   consumer is #1250. **Not reflected in [the sealed union reference](daemon-event-channel-sealed-union.md)**
   — that file is at its 50000-byte cap with no heading structure to split at; `src/shared/ipc/events.ts`

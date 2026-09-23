@@ -105,7 +105,7 @@ navigation subscription and [host-addressed list refresh](conversation-list-stor
 show the created chat through the existing request-driven list reply. Results after
 success or Cancel cannot reopen the dialog or its error.
 
-Naming uses the [workspace rename result contract](daemon-connection-correlation.md#workspace-renaming).
+Naming uses the [workspace rename result contract](daemon-connection-correlation-system-prompt-and-mcp.md#workspace-renaming).
 Only `workspaceRenameResult` matching the selected host, current UUID and active
 `naming` phase can settle the wait. Unsolicited `workspaceUpdated` broadcasts,
 foreign-host results and results from earlier saves cannot confirm naming. A late
@@ -117,7 +117,7 @@ but the renderer receives no create-request id. Concurrent creates or retries on
 same host remain indistinguishable; either result may belong to another same-host
 attempt. This does not establish exactly-once creation. Matching `cwd` would not solve
 correlation because the daemon may normalise the folder string. See
-[create rejection correlation](daemon-connection-correlation.md#create-conversation-rejected-correlation-1307).
+[create rejection correlation](daemon-connection-correlation-requests.md#create-conversation-rejected-correlation-1307).
 
 ## Rendering and testing
 
@@ -181,5 +181,5 @@ creation. Execution evidence is in the [live gate state](live-e2e-runbook.md#cur
 - [Edit host dialog](edit-host-dialog.md) — the host row's other trailing control's dialog,
   sharing the frozen field, client-owned failure line and always-available Cancel.
 - [Conversation create](conversation-create.md) / [Daemon connection correlation § Create-conversation
-  rejected correlation](daemon-connection-correlation.md#create-conversation-rejected-correlation-1307) —
+  rejected correlation](daemon-connection-correlation-requests.md#create-conversation-rejected-correlation-1307) —
   the transport `requestNewWorkspaceChat` sends over and the round trip described above consumes.

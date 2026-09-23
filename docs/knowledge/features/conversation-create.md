@@ -272,7 +272,7 @@ A different host cannot settle its wait, but a same-host concurrent create or ea
 retry remains indistinguishable from its current attempt. Per-request correlation is
 unchanged by #1367: neither the numeric rejection correlation key nor a new create token
 crosses IPC. See [Daemon connection correlation § Create-conversation rejected
-correlation](daemon-connection-correlation.md#create-conversation-rejected-correlation-1307)
+correlation](daemon-connection-correlation-requests.md#create-conversation-rejected-correlation-1307)
 for pending-entry lifetime and the accepted concurrent-caller limitation.
 
 ## Out of scope
@@ -286,7 +286,7 @@ for pending-entry lifetime and the accepted concurrent-caller limitation.
 
 ## Related
 
-- [Daemon connection correlation § Create-conversation rejected correlation](daemon-connection-correlation.md#create-conversation-rejected-correlation-1307)
+- [Daemon connection correlation § Create-conversation rejected correlation](daemon-connection-correlation-requests.md#create-conversation-rejected-correlation-1307)
   (#1307) — the `pendingCreateConversations` store, the bare `conversationCreateRejected` arm, and the
   request-attribution limit (a host stamp does not identify the calling surface or attempt).
 - [Channel List — the host row § The Add workspace dialog](channel-list-host-row.md#the-add-workspace-dialog-1308)

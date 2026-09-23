@@ -171,7 +171,7 @@ and it changes this module twice — both additive, no new kind and no new paylo
 wrong as of this ticket and was corrected in the same edit: the daemon replies to the requester with
 `in_reply_to` on all six conversation write verbs, this one included, though the emit stays
 unconditional and first regardless of correlation — see [Daemon connection — correlation § System-prompt
-write correlation (#1249)](daemon-connection-correlation.md#system-prompt-write-correlation-1249) for
+write correlation (#1249)](daemon-connection-correlation-system-prompt-and-mcp.md#system-prompt-write-correlation-1249) for
 why the ack must not consume the frame the way a `daemon-error` match does. Second, **`daemon-error`
 gains a *third* per-verb narrowed sibling field**, `systemPromptReject?: SystemPromptRejectReason`
 (`'protocol-malformed' | 'conversation-not-found'`), set beside `historyReject` off the same untrusted

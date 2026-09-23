@@ -345,7 +345,7 @@ own reject codes should prompt a rethink of the shape — one `Record<string, un
 discriminated sub-union, or a per-verb correlation result type entirely, rather than a fourth optional
 field bolted onto the same kind.
 
-[MCP-status request](daemon-connection-correlation.md#mcp-status-request-correlation-1578) (#1578) is
+[MCP-status request](daemon-connection-correlation-system-prompt-and-mcp.md#mcp-status-request-correlation-1578) (#1578) is
 that fourth verb. `MCPStatusRejectReason` (one literal, `'mcp-status-unavailable'`) landed as
 `daemon-error`'s `mcpStatusReject?: MCPStatusRejectReason`, on the same template, and the rethink was
 **deferred again rather than done** — the ticket amended this doc's warning to say four instead of
@@ -359,7 +359,7 @@ collapse the per-verb reject fields into one `{ verb, reason }` field before tha
 
 ## Related
 
-- [MCP-status request correlation](daemon-connection-correlation.md#mcp-status-request-correlation-1578)
+- [MCP-status request correlation](daemon-connection-correlation-system-prompt-and-mcp.md#mcp-status-request-correlation-1578)
   — [#1578](https://github.com/pyrycode/pyrycode-desktop/issues/1578) adds a **fourth** sibling narrower,
   `MCPStatusRejectReason`, on `SystemPromptRejectReason`'s exact template. See § The fourth verb landed
   above for the standing concern this addition confirms.

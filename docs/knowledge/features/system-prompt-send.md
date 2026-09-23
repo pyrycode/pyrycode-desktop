@@ -203,7 +203,7 @@ belongs one layer up.
 An eighth correlation store, the `pendingConfigRequests`/`pendingHistoryRequests` shape exactly:
 `pendingSystemPromptRequests: Map<number, string>` — envelope id → the conversation id the request
 named. See [Daemon connection — correlation § System-prompt read correlation
-(#1230)](daemon-connection-correlation.md#system-prompt-read-correlation-1230) for the full
+(#1230)](daemon-connection-correlation-system-prompt-and-mcp.md#system-prompt-read-correlation-1230) for the full
 walk-through; in outline:
 
 - **Set only after a successful send.** `requestSystemPrompt(conversationId)` captures `envelopeId =
@@ -377,7 +377,7 @@ Fakes over mocks throughout: the existing `daemonConnection.test.ts` driver fake
 - [System-prompt store](system-prompt-store.md) — the renderer read half (#1231): the store, the
   fifth-subscriber bridge, the activation ask, and the drop joining `runConfigStore`'s clear seam.
 - [Daemon connection — correlation § System-prompt read correlation
-  (#1230)](daemon-connection-correlation.md#system-prompt-read-correlation-1230) — the
+  (#1230)](daemon-connection-correlation-system-prompt-and-mcp.md#system-prompt-read-correlation-1230) — the
   `pendingSystemPromptRequests` walk-through in full.
 - [Daemon connection — methods](daemon-connection-methods.md) — the `requestSystemPrompt(conversationId)`
   entry in the public surface.

@@ -137,7 +137,9 @@ owns only their display.
 
 **Open-state ownership stays local, not threaded through `PairedShell`.** `channelInfoOpen` is a new
 `useState(false)` in `ConversationScreen` — the `sheetOpen` precedent (ADR 0006) — flipped by the
-overflow menu's `onChannelInfo={() => setChannelInfoOpen(true)}`. This is a deliberate divergence from
+overflow menu's `onChannelInfo` handler. Since [#1579](https://github.com/pyrycode/pyrycode-desktop/issues/1579)
+that same handler also sends one MCP-status request naming the conversation the sheet is about to show
+— see § MCP servers section below. This is a deliberate divergence from
 \#276's original design: #276 shipped a speculative `ConversationScreenProps.onChannelInfo?` seam
 assuming the sheet would live *above* `ConversationScreen` (opened by `PairedShell`). #365 retired that
 prop instead (removed from the interface and the destructure) because the sheet's trigger, data
@@ -281,11 +283,13 @@ in `clearPairingScopedState`. `selectMcpStatusFor(id)` returns `null` for "no re
 `{ servers: [], droppedServers }` report for claude's own positive "no servers" — the two states the wire
 doc requires apart stay apart end to end.
 
-**Wording.** `McpServersSectionView` (pure, `report | null` plus `showBuiltIn` in → markup out) picks
-one of four lines: `report === null` → *No MCP report has arrived yet.* (no toggle, no rows); an empty
-`servers` → *Claude reported no MCP servers.*; a non-empty `servers` fully hidden by the built-in filter
-→ *Only built-in servers are reported.*; and, independently, `droppedServers > 0` → *Partial list: N more
-servers were left out by the daemon.* stacked beneath whichever of the first three applies. The review
+**Wording.** `McpServersSectionView` (pure, `report | null` plus `showBuiltIn` and, since #1579,
+`unavailable` in → markup out) picks one of four lines: `report === null` → *No MCP report has arrived
+yet.* (no toggle, no rows); an empty `servers` → *Claude reported no MCP servers.*; a non-empty
+`servers` fully hidden by the built-in filter → *Only built-in servers are reported.*; and,
+independently, `droppedServers > 0` → *Partial list: N more servers were left out by the daemon.*
+stacked beneath whichever of the first three applies. Since #1579, `unavailable` stacks a fifth,
+independent line beneath all of that — see § On-demand refresh below. The review
 that shipped this (PR #1576) flagged as a non-blocking SHOULD FIX that the third case can still read as
 self-contradictory when the daemon drops every row (`servers: [], droppedServers > 0` shows both "Claude
 reported no MCP servers." and the partial line back to back) — left unfixed as a deliberately unlikely
@@ -313,7 +317,10 @@ adding either should read `mcpStatusStore.ts`'s row-copy first: the fields are a
 
 **Testing.** `McpServersSection.test.tsx` (static render) pins the four wording states, claude's row
 order, the tone-by-exact-word mapping, the error line's escaping and newline, the built-in filter both
-ways, the 256-code-point bound, and that no daemon string reaches an attribute. `daemonConnection.test.ts`
+ways, the 256-code-point bound, and that no daemon string reaches an attribute; since #1579 it also pins
+the unavailable notice both with rows still present and beside the no-report line, that there is no
+notice when `unavailable` is false, and that `requestMcpStatus` sends exactly one command naming the
+conversation and nothing for `null` or `''`. `daemonConnection.test.ts`
 asserts the `mcp-status` arm emits exactly one named-field event and drops a malformed frame — added
 because, per the PR's Lessons learned, a test asserting only "no event emitted" would have passed both
 before and after this ticket, since #1489 already decoded the frame but nothing downstream consumed it.
@@ -323,15 +330,43 @@ closing the sheet and switching conversations; reconnect survival is structural,
 `clearPairingScopedState.test.ts` rather than driven live. Not `needs-real-claude`: the acceptance is a
 daemon frame rendering, which the fake transport already covers end to end.
 
-**On-demand refresh, landing dormant ([#1578](https://github.com/pyrycode/pyrycode-desktop/issues/1578)).**
-This section's report today is only ever whatever arrived when the session spawned or the last live
-publication — there is no way yet to ask the daemon again. #1578 adds the outbound `mcp_status_request`
-verb and a correlated `mcpStatusRequestRejected` refusal event end to end in the transport and IPC layers,
-but ships nothing that calls it: no button here sends it, and the four renderer bridges carry only an
-ignored arm for the new event. The section's on-open trigger and an "unavailable" notice for the refusal
-are [#1579](https://github.com/pyrycode/pyrycode-desktop/issues/1579), blocked on #1578. See [Daemon
-connection — MCP-status request correlation](daemon-connection-correlation.md#mcp-status-request-correlation-1578)
-for the ask/refusal design; a refusal never clears or replaces the report this section already has.
+**On-demand refresh ([#1578](https://github.com/pyrycode/pyrycode-desktop/issues/1578) +
+[#1579](https://github.com/pyrycode/pyrycode-desktop/issues/1579)).** Before #1579 this section's report
+was only ever whatever arrived when the session spawned or the last live publication — #1578 added the
+outbound `mcp_status_request` verb and a correlated `mcpStatusRequestRejected` refusal event end to end
+in the transport and IPC layers, but shipped nothing that called it. #1579 put it to use: the Channel
+info overflow-menu handler (§ Channel Info sheet above) sends `requestMcpStatus(sendCommand,
+activeConversation?.id ?? null)` every time the sheet opens — from the click handler, not a mount
+`useEffect`, so one open is exactly one request even under `React.StrictMode`'s double-invoke, and a
+`null` id (no active conversation) sends nothing. `mcpStatusStore` gained `unavailable:
+ReadonlySet<string>` and `markMcpStatusUnavailable(conversationId)`; the mark never touches `reports`,
+so rows already on screen stay. `subscribeMcpStatus` (`mcpStatusBridge.ts`) gained a third parameter and
+marks a conversation only on `mcpStatusRequestRejected` with `reason === 'mcp-status-unavailable'`; an
+`unclassified` refusal is ignored outright. Any `mcp_status` for that conversation, live or answered,
+clears its mark — "a later report replaces it" is `setMcpStatus` deleting the id from `unavailable` when
+present. `clearMcpStatus` empties both the reports map and the mark set together, so a pairing-scoped
+clear cannot leave a stale mark behind. The four other exhaustive renderer bridges (`questionBridge`,
+`daemonEventBridge`, `timelineBridge`, `modalBridge`) still just carry a one-line ignored arm for
+`mcpStatusRequestRejected` — the consumer is `mcpStatusBridge.ts`, a fifth, dedicated bridge, not any of
+those four. See [Daemon connection — system-prompt and MCP-status correlation §
+MCP-status request correlation](daemon-connection-correlation-system-prompt-and-mcp.md#mcp-status-request-correlation-1578)
+for the ask/refusal transport design.
+
+`e2e/channel-mcp-status-request.spec.ts` (fake transport, new in #1579) drives: an open sends exactly one
+request naming the seed conversation and renders the answered rows; changing the fake's configured answer
+and reopening sends a second request and replaces the rows; an `unclassified` answer changes nothing
+behind a delivery barrier; an `unavailable` answer shows the notice while keeping existing rows; switching
+to a silent second conversation shows no notice there; and reopening on the original conversation while an
+unsolicited report arrives clears the notice and shows the new rows. `conversationStateFake` gained
+`mcpStatusAnswers`/`setMcpStatusAnswer`/`mcpStatusRequests()`; with no configured answer for a
+conversation the fake records the request and replies nothing, which is what keeps
+`e2e/channel-mcp-servers.spec.ts`'s unsolicited-report pushes byte-for-byte unaffected.
+`e2e/real-claude-mcp.spec.ts` (new, `needs-real-claude`, `skipPermissions: false` so the child is
+non-bypass) pairs, takes one turn, opens Channel info, ticks Show built-in, and asserts the daemon's own
+`pyry_approve`/`pyry_files` rows by exact name — it asserts names only, since statuses and errors are
+claude's open-set text. See § Current real-claude gate state in [the live e2e
+runbook](live-e2e-runbook.md#current-real-claude-gate-state) for this spec's execution status against the
+dispatcher's gate.
 
 **Rename action ([#368](../codebase/368.md)), retitled Edit chat ([#1440](rename-conversation-dialog.md)),
 split into Edit channel / Edit chat by conversation kind ([#1431](edit-channel-dialog.md)).**

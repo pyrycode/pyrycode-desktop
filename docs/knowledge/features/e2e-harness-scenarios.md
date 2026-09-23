@@ -342,3 +342,17 @@ been consumed. The Noise transport's ordered per-direction counter is what makes
 a frame arriving after the marker is guaranteed processed after it — but only a *new* visible effect proves
 consumption; a repeated one proves nothing. This spec's own negative was checked against the pre-fix
 `timelineBridge.ts` and failed at the B-count assertion, so the barrier and the negative are not vacuous.
+
+**[#1579](https://github.com/pyrycode/pyrycode-desktop/issues/1579) added
+`e2e/channel-mcp-status-request.spec.ts` and `e2e/real-claude-mcp.spec.ts`.** A fixture trap specific to
+`launchPairedApp`: it clicks the single `.channel-list__row-open` during its own drive, so a
+`conversationStateFake` seeded with **two** rows from the start fails at launch on a strict-mode-
+ambiguous locator — the fake-tier spec needed a second conversation to prove per-conversation isolation
+(a notice on one must not appear on another) but had to seed only one row and push the second as a
+`conversations` frame after launch, not at seed time. On the real-daemon side, `real-claude-mcp.spec.ts`
+needed `skipPermissions: false`: the fixture's default passes `--dangerously-skip-permissions`, and a
+bypass child gets no `--mcp-config`, so the daemon neither publishes nor answers `mcp_status_request`
+for it — a spec left on the default would time out waiting for a report that structurally cannot arrive,
+reading as a client bug rather than the fixture default it actually was. See [Conversation shell —
+session and channel info § MCP servers section](conversation-shell-session-and-channel-info.md#mcp-servers-section-1490)
+for the on-open trigger and notice these specs drive.

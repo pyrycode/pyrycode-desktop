@@ -329,7 +329,7 @@ conversation id the request named — sited beside `pendingConfigRequests`. Each
 connection admits at most one outstanding request per conversation, giving
 host/conversation isolation across connection instances.
 See [Daemon connection — correlation § Conversation-history correlation
-(#1222)](daemon-connection-correlation.md#conversation-history-correlation-1222) for the full
+(#1222)](daemon-connection-correlation-requests.md#conversation-history-correlation-1222) for the full
 walk-through; in outline:
 
 - **Set only after a successful send.** `requestHistory(payload)` captures `envelopeId =
@@ -600,7 +600,7 @@ Fakes over mocks throughout: the existing driver fake drives the frames, exactly
   analogue this ticket copies: the `send`-twin connection method, the correlation-map shape, and the
   fail-closed `daemon-error` precedence tier.
 - [Daemon connection — correlation § Conversation-history correlation
-  (#1222)](daemon-connection-correlation.md#conversation-history-correlation-1222) — the
+  (#1222)](daemon-connection-correlation-requests.md#conversation-history-correlation-1222) — the
   `pendingHistoryRequests` walk-through in full.
 - [Daemon connection — methods](daemon-connection-methods.md) — the `requestHistory(payload)` entry in
   the public surface.

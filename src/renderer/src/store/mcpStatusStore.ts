@@ -16,6 +16,10 @@ type State = {
   // The same pair for an on/off toggle, kept apart so the sheet can say which action was refused.
   toggling: ReadonlySet<string>
   toggleRefused: ReadonlySet<string>
+  // Per conversation, the server names whose failure the status row has already raised and the operator
+  // pressed. Names are held for equality only, never as a key; they last for the app run and clear with
+  // the pairing-scoped reset.
+  acknowledgedFailures: ReadonlyMap<string, ReadonlySet<string>>
   setMcpStatus: (snapshot: Omit<Snapshot, 'type'>) => void
   markMcpStatusUnavailable: (conversationId: string) => void
   beginMcpReconnect: (conversationId: string) => void
@@ -25,6 +29,7 @@ type State = {
   beginMcpToggle: (conversationId: string) => void
   endMcpToggleWait: (conversationId: string) => void
   markMcpToggleRefused: (conversationId: string) => void
+  acknowledgeMcpFailures: (conversationId: string) => void
   clearMcpStatus: () => void
 }
 
@@ -42,6 +47,12 @@ function adding(set: ReadonlySet<string>, conversationId: string): ReadonlySet<s
   return set.has(conversationId) ? set : new Set(set).add(conversationId)
 }
 
+/** `status` is claude's open-set word; exactly `failed` is a failure. The sheet's tone and the status
+ *  row's notice both read this, so the two cannot disagree. */
+export function isMcpServerFailed(status: string): boolean {
+  return status === 'failed'
+}
+
 export function createMcpStatusStore() {
   return createStore<State>((set) => ({
     reports: new Map(),
@@ -50,6 +61,7 @@ export function createMcpStatusStore() {
     reconnectRefused: new Set(),
     toggling: new Set(),
     toggleRefused: new Set(),
+    acknowledgedFailures: new Map(),
     // Any report, published or answered, is current again, so it lifts that conversation's marks and ends
     // its reconnect wait, whatever the rows read (a just-reconnected server often reads `pending`).
     setMcpStatus: (snapshot) => set((state) => {
@@ -91,13 +103,23 @@ export function createMcpStatusStore() {
       toggling: without(state.toggling, conversationId),
       toggleRefused: adding(state.toggleRefused, conversationId)
     })),
+    // Every server the held report shows as failed, not only the one the row names, so pressing once
+    // silences the whole current set. Acknowledgements survive later reports on purpose.
+    acknowledgeMcpFailures: (conversationId) => set((state) => {
+      const failed = (state.reports.get(conversationId)?.servers ?? []).filter((server) => isMcpServerFailed(server.status))
+      if (failed.length === 0) return {}
+      const names = new Set(state.acknowledgedFailures.get(conversationId))
+      for (const server of failed) names.add(server.name)
+      return { acknowledgedFailures: new Map(state.acknowledgedFailures).set(conversationId, names) }
+    }),
     clearMcpStatus: () => set({
       reports: new Map(),
       unavailable: new Set(),
       reconnecting: new Set(),
       reconnectRefused: new Set(),
       toggling: new Set(),
-      toggleRefused: new Set()
+      toggleRefused: new Set(),
+      acknowledgedFailures: new Map()
     })
   }))
 }
@@ -116,6 +138,16 @@ export const selectMcpTogglingFor = (conversationId: string | null) => (state: S
   conversationId !== null && state.toggling.has(conversationId)
 export const selectMcpToggleRefusedFor = (conversationId: string | null) => (state: State): boolean =>
   conversationId !== null && state.toggleRefused.has(conversationId)
+
+/** The first server in report order that the latest report shows as failed and that has not been
+ *  acknowledged for this conversation, or null. A primitive, so a fresh selector per render never loops. */
+export const selectUnacknowledgedMcpFailureFor = (conversationId: string | null) => (state: State): string | null => {
+  if (conversationId === null) return null
+  const acknowledged = state.acknowledgedFailures.get(conversationId)
+  const server = state.reports.get(conversationId)?.servers
+    .find((row) => isMcpServerFailed(row.status) && acknowledged?.has(row.name) !== true)
+  return server?.name ?? null
+}
 
 export function useMcpStatusStore<T>(selector: (state: State) => T): T {
   return useStore(mcpStatusStore, selector)

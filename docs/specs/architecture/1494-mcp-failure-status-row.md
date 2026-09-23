@@ -56,3 +56,8 @@ No new failure modes. A missing report or conversation yields `null` (no notice)
 ## Documentation handoff
 
 Pending for the documentation stage: fold the MCP failure occupant into the status row's precedence chain in `docs/knowledge/features/conversation-shell.md` (the trailing-slot chain) and note the acknowledgement state in the MCP section of the channel-info overview.
+
+## Revisions
+
+- 2026-09-23, during build: the Playwright spec also asserts the long-name geometry at the 800px minimum window (row stays 32px tall and its width unchanged, the button stays inside it), because "a long name does not grow the row" is a layout claim static markup cannot prove. At that width the ellipsis cuts the trailing "failed" of a 300-character name; the escaped, bounded name is still the only daemon text shown.
+- 2026-09-23, during build: Design §8's rule is `flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis`, the `.composer-status__tasks` treatment, instead of `max-width: 100%`. The occupant is a direct flex child of `.composer-status`, and `.button-small`'s `flex: 0 0 auto` would refuse to shrink regardless of a max-width; letting it shrink is what keeps the row's width.

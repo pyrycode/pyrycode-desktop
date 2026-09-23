@@ -1901,6 +1901,18 @@
   background: var(--color-error-container);
 }
 
+/* #1494: the MCP failure notice is the one Error-type button whose label holds untrusted text of any
+   length (a server name, bounded at 256 code points). .button-small's `flex: 0 0 auto` plus `nowrap`
+   would let that label push the row wider than the window, so this occupant alone may shrink and clips
+   to one ellipsized line — the .composer-status__tasks treatment. The row's height is unchanged: the
+   label never wraps, so the box stays the 32px .button-small--error records. */
+.composer-status__mcp-failure {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* #294, relocated by #1214 — the "waiting / not yet run" treatment on a message the daemon has queued.
    The mobile Figma file draws only the delivered thread (no queued/pending component — the documented
    #148 gap), so the treatment is within-token: 50% opacity, the .tool-row pending-dimming precedent

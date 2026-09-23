@@ -3,7 +3,13 @@ import { translateTimelineEvent } from './timelineBridge'
 import { translateModalEvent } from './modalBridge'
 import { translateQuestionEvent } from './questionBridge'
 import { describe, expect, it } from 'vitest'
-import { createMcpStatusStore, selectMcpStatusFor, selectMcpStatusUnavailableFor } from './mcpStatusStore'
+import {
+  createMcpStatusStore,
+  selectMcpReconnectRefusedFor,
+  selectMcpReconnectingFor,
+  selectMcpStatusFor,
+  selectMcpStatusUnavailableFor
+} from './mcpStatusStore'
 import { subscribeMcpStatus } from './mcpStatusBridge'
 import type { DaemonEvent } from '@shared/ipc/events'
 
@@ -44,7 +50,7 @@ describe('MCP status retention', () => {
     const off = subscribeMcpStatus((listener) => {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
-    }, store.getState().setMcpStatus, store.getState().markMcpStatusUnavailable)
+    }, store.getState().setMcpStatus, store.getState().markMcpStatusUnavailable, store.getState().markMcpReconnectRefused)
     const emit = (event: DaemonEvent) => listeners.forEach((listener) => listener(event))
     emit({ type: 'mcpStatus', conversationId: 'a', ...report })
     expect(selectMcpStatusFor('a')(store.getState())).toEqual(report)
@@ -86,7 +92,7 @@ describe('MCP status unavailable mark', () => {
     subscribeMcpStatus((next) => {
       listener = next
       return () => {}
-    }, store.getState().setMcpStatus, store.getState().markMcpStatusUnavailable)
+    }, store.getState().setMcpStatus, store.getState().markMcpStatusUnavailable, store.getState().markMcpReconnectRefused)
     store.getState().setMcpStatus({ conversationId: 'a', ...report })
     const before = store.getState()
     listener({ type: 'mcpStatusRequestRejected', conversationId: 'a', reason: 'unclassified' })
@@ -94,6 +100,78 @@ describe('MCP status unavailable mark', () => {
     listener({ type: 'mcpStatusRequestRejected', conversationId: 'a', reason: 'mcp-status-unavailable' })
     expect(unavailable(store, 'a')).toBe(true)
     expect(unavailable(store, 'b')).toBe(false)
+    expect(selectMcpStatusFor('a')(store.getState())).toEqual(report)
+  })
+})
+
+describe('MCP reconnect wait and refusal', () => {
+  const read = (store: ReturnType<typeof createMcpStatusStore>, id: string | null) => ({
+    reconnecting: selectMcpReconnectingFor(id)(store.getState()),
+    refused: selectMcpReconnectRefusedFor(id)(store.getState())
+  })
+
+  it('waits per conversation and ends the wait on close without touching other conversations', () => {
+    const store = createMcpStatusStore()
+    store.getState().beginMcpReconnect('a')
+    store.getState().beginMcpReconnect('__proto__')
+    expect(read(store, 'a')).toEqual({ reconnecting: true, refused: false })
+    expect(read(store, '__proto__')).toEqual({ reconnecting: true, refused: false })
+    expect(read(store, 'b')).toEqual({ reconnecting: false, refused: false })
+    expect(read(store, 'constructor')).toEqual({ reconnecting: false, refused: false })
+    expect(read(store, null)).toEqual({ reconnecting: false, refused: false })
+    const before = store.getState().reconnecting
+    store.getState().beginMcpReconnect('a')
+    store.getState().endMcpReconnectWait('b')
+    expect(store.getState().reconnecting).toBe(before)
+    store.getState().endMcpReconnectWait('a')
+    expect(read(store, 'a')).toEqual({ reconnecting: false, refused: false })
+    expect(read(store, '__proto__')).toEqual({ reconnecting: true, refused: false })
+  })
+
+  it('a refusal ends the wait, marks the conversation and keeps the held report', () => {
+    const store = createMcpStatusStore()
+    store.getState().setMcpStatus({ conversationId: 'a', ...report })
+    const held = selectMcpStatusFor('a')(store.getState())
+    store.getState().beginMcpReconnect('a')
+    store.getState().beginMcpReconnect('b')
+    store.getState().markMcpReconnectRefused('a')
+    expect(read(store, 'a')).toEqual({ reconnecting: false, refused: true })
+    expect(read(store, 'b')).toEqual({ reconnecting: true, refused: false })
+    expect(selectMcpStatusFor('a')(store.getState())).toBe(held)
+    // A later press keeps the notice: only a report lifts it.
+    store.getState().beginMcpReconnect('a')
+    expect(read(store, 'a')).toEqual({ reconnecting: true, refused: true })
+  })
+
+  it('any report for the conversation ends the wait and lifts the notice, pending rows included', () => {
+    const store = createMcpStatusStore()
+    store.getState().beginMcpReconnect('a')
+    store.getState().markMcpReconnectRefused('b')
+    store.getState().beginMcpReconnect('b')
+    store.getState().setMcpStatus({ conversationId: 'a', servers: [{ ...row, status: 'pending' }], droppedServers: 0 })
+    expect(read(store, 'a')).toEqual({ reconnecting: false, refused: false })
+    expect(read(store, 'b')).toEqual({ reconnecting: true, refused: true })
+    store.getState().setMcpStatus({ conversationId: 'b', ...report })
+    expect(read(store, 'b')).toEqual({ reconnecting: false, refused: false })
+    store.getState().beginMcpReconnect('a')
+    store.getState().markMcpReconnectRefused('c')
+    store.getState().clearMcpStatus()
+    expect(read(store, 'a')).toEqual({ reconnecting: false, refused: false })
+    expect(read(store, 'c')).toEqual({ reconnecting: false, refused: false })
+  })
+
+  it('the bridge routes a reconnect refusal to the mark and nothing else', () => {
+    const store = createMcpStatusStore()
+    let listener: (event: DaemonEvent) => void = () => {}
+    subscribeMcpStatus((next) => {
+      listener = next
+      return () => {}
+    }, store.getState().setMcpStatus, store.getState().markMcpStatusUnavailable, store.getState().markMcpReconnectRefused)
+    store.getState().setMcpStatus({ conversationId: 'a', ...report })
+    store.getState().beginMcpReconnect('a')
+    listener({ type: 'mcpReconnectRejected', conversationId: 'a' })
+    expect(read(store, 'a')).toEqual({ reconnecting: false, refused: true })
+    expect(selectMcpStatusUnavailableFor('a')(store.getState())).toBe(false)
     expect(selectMcpStatusFor('a')(store.getState())).toEqual(report)
   })
 })

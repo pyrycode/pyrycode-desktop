@@ -19,6 +19,14 @@ test.use({ skipPermissions: false, interactiveRunner: 'stream-json' })
 // producer. Opening the sheet also sends this ticket's `mcp_status_request`; the report on screen is that
 // answer or the child's spawn-time publication, and the two share one payload.
 //
+// THE RECONNECT DRIVE (#1583) then sends one `reconnectMcpServer` for `pyry_files` through `window.pyry`,
+// because both daemon servers normally read `connected` and so offer no button (the fake tier,
+// channel-mcp-reconnect.spec.ts, owns the press). The daemon checks the asking device before anything
+// else, and only a live run can say whether this app's paired device may actuate. The drive ends in
+// exactly one of two outcomes, a fresh report or the refusal notice, and records which as the
+// `mcp-reconnect-outcome` annotation. Both are passes: the annotation, not the verdict, is the answer.
+// To tell the reconnect's report from the sheet-open ask's, the drive waits for that ask's answer first.
+//
 // WHAT IS DELIBERATELY NOT ASSERTED:
 //   - A server's status word or error prose. Both are claude's open-set text, and whether an MCP server
 //     reads `connected` or `pending` at a given moment is claude's timing, not this client's contract.
@@ -58,6 +66,32 @@ const TURN_TIMEOUT_MS = 120_000
 // The report must follow the child's MCP initialize; generous, because it is a spawn-time handshake.
 const REPORT_TIMEOUT_MS = 60_000
 const SPEC_TIMEOUT_MS = 300_000
+// The daemon's answer to one mcp_reconnect: a refusal is immediate, an accepted one waits on claude.
+const RECONNECT_TIMEOUT_MS = 60_000
+const RECONNECT_TARGET = 'pyry_files'
+const RECONNECT_REFUSED = 'The daemon refused to reconnect the MCP server.'
+
+// Counts and routing ids only; no row string is copied out of the page.
+type McpProof = { reports: string[]; refusals: string[]; off: () => void }
+type DriveWindow = typeof window & { mcpProof: McpProof }
+
+async function watchMcp(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const proof: McpProof = { reports: [], refusals: [], off: () => {} }
+    proof.off = window.pyry.onDaemonEvent((event) => {
+      if (event.type === 'mcpStatus') proof.reports.push(event.conversationId)
+      if (event.type === 'mcpReconnectRejected') proof.refusals.push(event.conversationId)
+    })
+    ;(window as DriveWindow).mcpProof = proof
+  })
+}
+
+function readMcp(page: Page): Promise<{ reports: string[]; refusals: string[] }> {
+  return page.evaluate(() => {
+    const { reports, refusals } = (window as DriveWindow).mcpProof
+    return { reports: [...reports], refusals: [...refusals] }
+  })
+}
 
 /** Non-empty assistant replies, counted and never read out. */
 function nonEmptyAssistantCount(page: Page): Promise<number> {
@@ -114,10 +148,12 @@ test('real claude: the Channel info sheet shows the daemon’s own MCP servers',
   test.setTimeout(SPEC_TIMEOUT_MS)
 
   await pairAndConnect(page, relay, daemon.pairFields)
+  await watchMcp(page)
   await createChat(page)
   await spawnChild(page, `What is 2 plus 2? run=${Date.now()}`)
 
   // The operator's own route to the sheet. Opening it is what sends `mcp_status_request`.
+  const beforeOpen = (await readMcp(page)).reports.length
   await page.locator('.conversation__overflow-trigger').click()
   await page.getByRole('menuitem', { name: CHANNEL_INFO_ROW }).click()
   const sheet = page.getByRole('dialog')
@@ -140,4 +176,43 @@ test('real claude: the Channel info sheet shows the daemon’s own MCP servers',
       `the daemon's report did not list its own ${name} server`
     ).toBeVisible()
   }
+
+  // #1583's drive. Wait for the sheet-open ask's answer so it cannot be read as the reconnect's.
+  await expect
+    .poll(async () => (await readMcp(page)).reports.length, {
+      timeout: REPORT_TIMEOUT_MS,
+      message: 'the daemon never answered the sheet-open mcp_status_request'
+    })
+    .toBeGreaterThan(beforeOpen)
+  const held = await readMcp(page)
+  const conversationId = held.reports[held.reports.length - 1]
+  expect(held.reports.every((id) => id === conversationId), 'every report names the one chat').toBe(true)
+  expect(held.refusals).toEqual([])
+
+  await page.evaluate(
+    ({ id, name }) => window.pyry.sendCommand({ type: 'reconnectMcpServer', payload: { conversation_id: id, server_name: name } }),
+    { id: conversationId, name: RECONNECT_TARGET }
+  )
+  let outcome: 'report' | 'refused' | null = null
+  await expect
+    .poll(async () => {
+      const now = await readMcp(page)
+      const refused = now.refusals.includes(conversationId)
+      const answered = now.reports.length > held.reports.length
+      outcome = refused && !answered ? 'refused' : answered && !refused ? 'report' : null
+      return refused || answered
+    }, { timeout: RECONNECT_TIMEOUT_MS, message: 'the daemon neither answered nor refused the mcp_reconnect' })
+    .toBe(true)
+  expect(outcome, 'the reconnect drew both a report and a refusal').not.toBeNull()
+  test.info().annotations.push({ type: 'mcp-reconnect-outcome', description: outcome ?? 'both' })
+
+  const notice = sheet.getByText(RECONNECT_REFUSED, { exact: true })
+  if (outcome === 'refused') {
+    // The refusal keeps the held rows and shows the notice.
+    await expect(notice).toBeVisible()
+  } else {
+    await expect(notice).toHaveCount(0)
+  }
+  for (const name of BUILT_IN_SERVERS) await expect(sheet.getByText(name, { exact: true })).toBeVisible()
+  await page.evaluate(() => { (window as DriveWindow).mcpProof.off() })
 })

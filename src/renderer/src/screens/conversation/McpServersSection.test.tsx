@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { McpServersSectionView, requestMcpStatus } from './McpServersSection'
+import { McpServersSectionView, reconnectMcpServer, requestMcpStatus } from './McpServersSection'
 import type { MCPServerStatus } from '@shared/wire/types'
 
 const server = (name: string, status: string, error = ''): MCPServerStatus =>
@@ -8,13 +8,17 @@ const server = (name: string, status: string, error = ''): MCPServerStatus =>
 const render = (
   report: { servers: MCPServerStatus[]; droppedServers: number } | null,
   showBuiltIn = false,
-  unavailable = false
+  unavailable = false,
+  { reconnecting = false, reconnectRefused = false }: { reconnecting?: boolean; reconnectRefused?: boolean } = {}
 ) => renderToStaticMarkup(
   <McpServersSectionView
     report={report}
     showBuiltIn={showBuiltIn}
     unavailable={unavailable}
+    reconnecting={reconnecting}
+    reconnectRefused={reconnectRefused}
     onShowBuiltInChange={() => {}}
+    onReconnect={() => {}}
   />
 )
 
@@ -22,6 +26,8 @@ const NO_REPORT = 'No MCP report has arrived yet.'
 const NO_SERVERS = 'Claude reported no MCP servers.'
 const ONLY_BUILT_IN = 'Only built-in servers are reported.'
 const UNAVAILABLE = 'The daemon could not report MCP status right now.'
+const REFUSED = 'The daemon refused to reconnect the MCP server.'
+const RECONNECT = /<button type="button" class="button-small channel-info__mcp-reconnect"( disabled="")?>Reconnect<\/button>/g
 
 describe('McpServersSectionView', () => {
   it('says no report has arrived before any frame, with no rows, toggle or no-servers claim', () => {
@@ -117,6 +123,62 @@ describe('McpServersSectionView', () => {
     expect(markup).toContain(UNAVAILABLE)
     expect(render(null)).not.toContain(UNAVAILABLE)
     expect(render({ servers: [server('docs', 'connected')], droppedServers: 0 })).not.toContain(UNAVAILABLE)
+  })
+})
+
+describe('McpServersSectionView reconnect', () => {
+  const mixed = {
+    servers: [server('up', 'connected'), server('down', 'failed'), server('waiting', 'pending'), server('odd', 'Connected')],
+    droppedServers: 0
+  }
+
+  it('offers Reconnect on every row that is not exactly connected, and none on a connected row', () => {
+    const markup = render(mixed)
+    const buttons = [...markup.matchAll(RECONNECT)]
+    expect(buttons).toHaveLength(3)
+    expect(buttons.every((match) => match[1] === undefined)).toBe(true)
+    const rows = markup.split('channel-info__mcp-server"').slice(1)
+    expect(rows.map((chunk) => chunk.includes('channel-info__mcp-reconnect'))).toEqual([false, true, true, true])
+    expect(render({ servers: [server('up', 'connected')], droppedServers: 0 })).not.toContain('Reconnect')
+  })
+
+  it('disables every Reconnect in the section while a reconnect is outstanding', () => {
+    const buttons = [...render(mixed, false, false, { reconnecting: true }).matchAll(RECONNECT)]
+    expect(buttons).toHaveLength(3)
+    expect(buttons.every((match) => match[1] === ' disabled=""')).toBe(true)
+  })
+
+  it('keeps the server name out of the control\'s attributes', () => {
+    const markup = render({ servers: [server('attr-name', 'failed')], droppedServers: 0 })
+    expect(markup).toContain('>Reconnect<')
+    for (const tag of markup.match(/<[^>]*>/g) ?? []) expect(tag).not.toMatch(/attr-/)
+  })
+
+  it('appends the refusal notice, rows held, and shows it without a report too', () => {
+    const markup = render(mixed, false, false, { reconnectRefused: true })
+    expect(markup).toContain('>down<')
+    expect(markup.endsWith(`<p class="channel-info__empty">${REFUSED}</p>`)).toBe(true)
+    expect(render(null, false, false, { reconnectRefused: true })).toContain(REFUSED)
+    expect(render(mixed)).not.toContain(REFUSED)
+    expect(render(mixed, false, true)).not.toContain(REFUSED)
+    const both = render(mixed, false, true, { reconnectRefused: true })
+    expect(both).toContain(UNAVAILABLE)
+    expect(both).toContain(REFUSED)
+  })
+})
+
+describe('reconnectMcpServer', () => {
+  it('begins the wait, then sends one command naming the conversation and the name unchanged', () => {
+    const calls: string[] = []
+    const send = vi.fn(() => { calls.push('send') })
+    const begin = vi.fn(() => { calls.push('begin') })
+    reconnectMcpServer(send, begin, 'chat-a', ' docs<&> ')
+    expect(calls).toEqual(['begin', 'send'])
+    expect(begin).toHaveBeenCalledWith('chat-a')
+    expect(send).toHaveBeenCalledWith({
+      type: 'reconnectMcpServer',
+      payload: { conversation_id: 'chat-a', server_name: ' docs<&> ' }
+    })
   })
 })
 

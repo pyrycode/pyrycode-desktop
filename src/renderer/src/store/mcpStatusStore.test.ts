@@ -3,7 +3,7 @@ import { translateTimelineEvent } from './timelineBridge'
 import { translateModalEvent } from './modalBridge'
 import { translateQuestionEvent } from './questionBridge'
 import { describe, expect, it } from 'vitest'
-import { createMcpStatusStore, selectMcpStatusFor } from './mcpStatusStore'
+import { createMcpStatusStore, selectMcpStatusFor, selectMcpStatusUnavailableFor } from './mcpStatusStore'
 import { subscribeMcpStatus } from './mcpStatusBridge'
 import type { DaemonEvent } from '@shared/ipc/events'
 
@@ -44,7 +44,7 @@ describe('MCP status retention', () => {
     const off = subscribeMcpStatus((listener) => {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
-    }, store.getState().setMcpStatus)
+    }, store.getState().setMcpStatus, store.getState().markMcpStatusUnavailable)
     const emit = (event: DaemonEvent) => listeners.forEach((listener) => listener(event))
     emit({ type: 'mcpStatus', conversationId: 'a', ...report })
     expect(selectMcpStatusFor('a')(store.getState())).toEqual(report)
@@ -52,6 +52,49 @@ describe('MCP status retention', () => {
     expect(selectMcpStatusFor('a')(store.getState())).toEqual(report)
     off()
     expect(listeners.size).toBe(0)
+  })
+})
+
+describe('MCP status unavailable mark', () => {
+  const unavailable = (store: ReturnType<typeof createMcpStatusStore>, id: string | null) =>
+    selectMcpStatusUnavailableFor(id)(store.getState())
+
+  it('keeps the held report, isolates conversations and clears on that conversation\'s next report', () => {
+    const store = createMcpStatusStore()
+    store.getState().setMcpStatus({ conversationId: 'a', ...report })
+    const held = selectMcpStatusFor('a')(store.getState())
+    store.getState().markMcpStatusUnavailable('a')
+    store.getState().markMcpStatusUnavailable('__proto__')
+    expect(unavailable(store, 'a')).toBe(true)
+    expect(unavailable(store, '__proto__')).toBe(true)
+    expect(unavailable(store, 'b')).toBe(false)
+    expect(unavailable(store, 'constructor')).toBe(false)
+    expect(unavailable(store, null)).toBe(false)
+    expect(selectMcpStatusFor('a')(store.getState())).toBe(held)
+    store.getState().setMcpStatus({ conversationId: 'b', servers: [], droppedServers: 0 })
+    expect(unavailable(store, 'a')).toBe(true)
+    store.getState().setMcpStatus({ conversationId: 'a', servers: [], droppedServers: 0 })
+    expect(unavailable(store, 'a')).toBe(false)
+    expect(unavailable(store, '__proto__')).toBe(true)
+    store.getState().clearMcpStatus()
+    expect(unavailable(store, '__proto__')).toBe(false)
+  })
+
+  it('marks only on an unavailable refusal', () => {
+    const store = createMcpStatusStore()
+    let listener: (event: DaemonEvent) => void = () => {}
+    subscribeMcpStatus((next) => {
+      listener = next
+      return () => {}
+    }, store.getState().setMcpStatus, store.getState().markMcpStatusUnavailable)
+    store.getState().setMcpStatus({ conversationId: 'a', ...report })
+    const before = store.getState()
+    listener({ type: 'mcpStatusRequestRejected', conversationId: 'a', reason: 'unclassified' })
+    expect(store.getState()).toBe(before)
+    listener({ type: 'mcpStatusRequestRejected', conversationId: 'a', reason: 'mcp-status-unavailable' })
+    expect(unavailable(store, 'a')).toBe(true)
+    expect(unavailable(store, 'b')).toBe(false)
+    expect(selectMcpStatusFor('a')(store.getState())).toEqual(report)
   })
 })
 

@@ -16,7 +16,9 @@ import type {
   RecentWorkspacesPayload,
   WorkspaceUpdatedPayload,
   RenameWorkspacePayload,
-  ErrorPayload
+  ErrorPayload,
+  MCPStatusPayload,
+  MCPStatusRequestPayload
 } from '../../src/shared/wire/types'
 
 // The stateful `conversationStateFake` reply factory (#434) — TEST-ONLY e2e infrastructure. The fake
@@ -101,7 +103,21 @@ export interface ConversationStateFake {
    * fake does not hold, which is a state the daemon cannot produce and which would prove nothing.
    */
   renameWorkspace(cwd: string, label: string | null): Uint8Array
+  /**
+   * Set (or with `null`, remove) how the fake answers the next `mcp_status_request` naming
+   * `conversationId` (#1579). The answer holds until changed, so every open meets the same one.
+   */
+  setMcpStatusAnswer(conversationId: string, answer: McpStatusAnswer | null): void
+  /** The conversation ids every `mcp_status_request` named, in arrival order. A fresh copy. */
+  mcpStatusRequests(): readonly string[]
 }
+
+/**
+ * The fake's answer to `mcp_status_request` (#1579): a report, correlated like the daemon's
+ * requester-only reply, or a correlated refusal. `'unavailable'` is `mcp_status.unavailable`, and
+ * `'unclassified'` stands for any other code (`conversation.not_found`), which the client does not show.
+ */
+export type McpStatusAnswer = MCPStatusPayload | 'unavailable' | 'unclassified'
 
 export interface ConversationStateFakeOptions {
   /** Initial held list, in wire order. Default: a single promoted, named row (DEFAULT_SEED). */
@@ -124,6 +140,13 @@ export interface ConversationStateFakeOptions {
    *  plain const, unlike the mutable `list`. Reused by the split sibling #457, which is why it lives here
    *  in the shared fixture rather than spec-local. */
   recentWorkspaces?: RecentWorkspace[]
+  /**
+   * Answers to `mcp_status_request`, by conversation id (#1579). A conversation with no answer gets
+   * SILENCE, which is what keeps specs that push unsolicited reports (channel-mcp-servers.spec.ts) from
+   * having them overwritten by an answer they never asked for. Change it mid-test with
+   * `setMcpStatusAnswer`.
+   */
+  mcpStatusAnswers?: Record<string, McpStatusAnswer>
 }
 
 /**
@@ -174,6 +197,9 @@ export function conversationStateFake(
   const createOutcome = options.createOutcome ?? 'created'
   // Monotonic id source for minted rows — deterministic, no clock/random.
   let nextCreatedId = 1
+  // A `Map` for the same reason as `labels`: the keys are conversation ids the app under test supplied.
+  const mcpStatusAnswers = new Map<string, McpStatusAnswer>(Object.entries(options.mcpStatusAnswers ?? {}))
+  const mcpStatusRequests: string[] = []
 
   // The workspace-rename mutation, written once and reached two ways: the `rename_workspace` arm below
   // calls it with the request's envelope id (the daemon's CORRELATED answer to a client that asked,
@@ -295,6 +321,16 @@ export function conversationStateFake(
         return [renameWorkspace(payload.path, payload.label, env.id)]
       }
 
+      case 'mcp_status_request': {
+        const payload = env.payload as MCPStatusRequestPayload
+        mcpStatusRequests.push(payload.conversation_id)
+        const answer = mcpStatusAnswers.get(payload.conversation_id)
+        if (answer === undefined) return []
+        if (answer === 'unavailable') return [mcpStatusErrorFrame('mcp_status.unavailable', true, env.id)]
+        if (answer === 'unclassified') return [mcpStatusErrorFrame('conversation.not_found', false, env.id)]
+        return [mcpStatusFrame(answer, env.id)]
+      }
+
       default:
         // A genuinely-other verb (e.g. a snapshot request on thread entry) needs no reply for these flows;
         // returning [] sends nothing, which the fake daemon settles ok.
@@ -307,7 +343,12 @@ export function conversationStateFake(
   return Object.assign(buildReplyFrames, {
     // Deliberately drops the third argument: the seam models the UNSOLICITED push a client that asked
     // for nothing receives, so the frame it hands back carries no `in_reply_to` to echo.
-    renameWorkspace: (cwd: string, label: string | null): Uint8Array => renameWorkspace(cwd, label)
+    renameWorkspace: (cwd: string, label: string | null): Uint8Array => renameWorkspace(cwd, label),
+    setMcpStatusAnswer: (conversationId: string, answer: McpStatusAnswer | null): void => {
+      if (answer === null) mcpStatusAnswers.delete(conversationId)
+      else mcpStatusAnswers.set(conversationId, answer)
+    },
+    mcpStatusRequests: (): readonly string[] => [...mcpStatusRequests]
   })
 }
 
@@ -407,6 +448,23 @@ function errorFrame(inReplyTo: number): Uint8Array {
       message: 'workspace not found',
       retryable: false
     } satisfies ErrorPayload
+  })
+}
+
+/** The requester-only `mcp_status` answer (#1579): correlated by `in_reply_to`, no `event_id`. */
+function mcpStatusFrame(payload: MCPStatusPayload, inReplyTo: number): Uint8Array {
+  return encodeEnvelope({ id: REPLY_ENVELOPE_ID, type: 'mcp_status', ts: FIXED_TS, in_reply_to: inReplyTo, payload })
+}
+
+/** A correlated `mcp_status_request` refusal (#1579). The message is static and never reaches the window,
+ *  which receives only main's client-owned reason. */
+function mcpStatusErrorFrame(code: string, retryable: boolean, inReplyTo: number): Uint8Array {
+  return encodeEnvelope({
+    id: REPLY_ENVELOPE_ID,
+    type: 'error',
+    ts: FIXED_TS,
+    in_reply_to: inReplyTo,
+    payload: { code, message: 'mcp status refused', retryable } satisfies ErrorPayload
   })
 }
 

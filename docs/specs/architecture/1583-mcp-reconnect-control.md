@@ -107,3 +107,9 @@ Run after the plan's first commit rather than before it. The ticket carries `sec
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-23
+
+## Revisions
+
+### 2026-09-23 — Open question 1 resolved: the real drive observes daemon events
+
+The real drive uses the plan's fallback. It does not use the DOM tag. A page-side `window.pyry.onDaemonEvent` observer (`watchMcp`) records only the conversation id of each `mcpStatus` and `mcpReconnectRejected`, and never a row string. It is installed right after pairing. Before sending, the drive waits for one report beyond the count taken before the sheet opened, so the sheet-open ask's answer cannot be read as the reconnect's. The outcome is whichever arrives next: a further report or a refusal naming the conversation. It is then checked on screen (the notice is shown or absent, and the built-in rows are still visible) and recorded as the `mcp-reconnect-outcome` annotation. A DOM tag would have depended on React reusing row elements across a re-render, which is an implementation detail, while the event is the contract. The design is otherwise unchanged.

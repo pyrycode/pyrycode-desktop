@@ -120,3 +120,7 @@ The ticket names no documentation requirement. It is pending for the documentati
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-25
+
+## Revisions
+
+- 2026-09-25, during implementation: `e2e/markdown-reader-menu.spec.ts` (#1630) pinned the menu at four rows, so it now expects five. It checks that Open in another app is disabled while the first fetch is withheld and enabled once the note has loaded. It never chooses the item, so the no-external-app rule holds. The testing strategy's "no Playwright spec" still means no new spec.

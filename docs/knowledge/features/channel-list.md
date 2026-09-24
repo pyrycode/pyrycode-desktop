@@ -116,7 +116,12 @@ the host has muted this conversation's notifications. No row in this screen read
 mute checkbox and the notification gate are later consumers); the field is optional in the TS type but
 the decoder (`parseConversationSummary`) always emits a boolean, normalising an absent key to `false`
 so a daemon predating the field keeps notifying — a future consumer reads it as `row.is_muted ===
-true`, never on the key's presence. See [Inbound message decode —
+true`, never on the key's presence. [#1595](https://github.com/pyrycode/pyrycode-desktop/issues/1595)
+shipped the write side, `setConversationMuted` — no row here sends it either; see [Daemon connection —
+system-prompt and MCP-status correlation § Conversation-mute write
+correlation](daemon-connection-correlation-system-prompt-and-mcp.md#conversation-mute-write-correlation-1595)
+for the transport, and [Edit channel dialog](edit-channel-dialog.md) for the checkbox that will call it
+(#1596). See [Inbound message decode —
 internals](inbound-message-decode-internals.md) for the decode. The Figma design's "Recent discussions" rows show a 2-line message-body preview and
 message-derived titles for unnamed discussions — neither is buildable from this wire shape. Adding the
 preview needs a daemon-side wire change first (a field on `conversations_read.go`'s

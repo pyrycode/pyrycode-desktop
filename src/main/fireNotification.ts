@@ -33,24 +33,57 @@ export interface OsNotificationConstructor {
 }
 
 /**
- * The main-owned copy table (AC5): the notification title/body live HERE, keyed by `kind`, never in
- * the command. `Record<NotifyKind, …>` makes it exhaustive by construction — a future kind won't
+ * The main-owned copy table (AC5): the notification BODY lives HERE, keyed by `kind`, never in the
+ * command. `Record<NotifyKind, …>` makes it exhaustive by construction — a future kind won't
  * type-check until it has copy. Copy wording is provisional (no Figma, no daemon source); the
- * load-bearing invariant is that the strings are static and main-owned, never sourced from the wire.
+ * load-bearing invariant is that the body is static and main-owned, never sourced from the wire. The
+ * title is the one place host text may appear (#1593): see notificationTitle.
  */
-const NOTIFICATION_COPY: Record<NotifyKind, { title: string; body: string }> = {
-  'turn-complete': { title: 'Pyrycode', body: 'Your turn is complete.' },
-  prompt: { title: 'Pyrycode', body: 'Waiting for your response.' }
+const NOTIFICATION_COPY: Record<NotifyKind, string> = {
+  'turn-complete': 'Your turn is complete.',
+  prompt: 'Waiting for your response.'
+}
+
+/** The title when no usable conversation name came with the command (#1593). */
+const DEFAULT_TITLE = 'Pyrycode'
+
+/** The most characters of a conversation name a title keeps (#1593). */
+const MAX_TITLE_CHARS = 80
+
+/** Any control character: C0, DEL and C1 (#1593). */
+const CONTROL_CHAR = /\p{Cc}/u
+
+/**
+ * The notification title for a conversation name (#1593). The name is untrusted host text that crossed
+ * the renderer→main boundary, and isNotifyPayload only proved it is a string, so it is cleaned here:
+ * every control character is dropped, at most MAX_TITLE_CHARS characters are kept (counted by code
+ * point, so a surrogate pair is never split), and surrounding whitespace is trimmed. An absent name, or
+ * one with nothing left once cleaned, falls back to DEFAULT_TITLE. The walk stops at the limit, so an
+ * oversized name costs no more than the characters it keeps. Plain text only, and never logged.
+ */
+export function notificationTitle(name: string | undefined): string {
+  if (name === undefined) return DEFAULT_TITLE
+  let title = ''
+  let kept = 0
+  for (const char of name) {
+    if (kept === MAX_TITLE_CHARS) break
+    if (CONTROL_CHAR.test(char)) continue
+    title += char
+    kept += 1
+  }
+  title = title.trim()
+  return title === '' ? DEFAULT_TITLE : title
 }
 
 /**
  * Raise the OS notification for `kind` — but only when the window is unfocused. Synchronous, no
  * return value: if `deps.isWindowFocused()` is true, return without firing; otherwise construct a
- * Notification with the kind's copy, register `deps.onClick` as its `'click'` listener BEFORE showing
- * (a click could arrive the instant the notification is shown), and `show()` it. The text comes solely
- * from the closed enum via NOTIFICATION_COPY, so no command field can supply notification content;
- * `onClick` is opaque to this module (the composition root supplies window activation + the nav
- * signal), keeping this unit free of any window/IPC knowledge (#393).
+ * Notification, register `deps.onClick` as its `'click'` listener BEFORE showing (a click could arrive
+ * the instant the notification is shown), and `show()` it. The body comes solely from the closed enum
+ * via NOTIFICATION_COPY, so no command field can supply body text; the title is the conversation
+ * `name` cleaned by notificationTitle (#1593), or DEFAULT_TITLE without one. `onClick` is opaque to
+ * this module (the composition root supplies window activation + the nav signal), keeping this unit
+ * free of any window/IPC knowledge (#393).
  */
 export function fireNotification(
   kind: NotifyKind,
@@ -58,10 +91,11 @@ export function fireNotification(
     isWindowFocused: () => boolean
     Notification: OsNotificationConstructor
     onClick: () => void
-  }
+  },
+  name?: string
 ): void {
   if (deps.isWindowFocused()) return
-  const notification = new deps.Notification(NOTIFICATION_COPY[kind])
+  const notification = new deps.Notification({ title: notificationTitle(name), body: NOTIFICATION_COPY[kind] })
   notification.on('click', deps.onClick)
   notification.show()
 }

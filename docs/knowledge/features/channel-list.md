@@ -109,8 +109,15 @@ the host, separate from connection dots and repair; see [local read failures](ch
 
 The wire `ConversationSummary` (`src/shared/wire/types.ts`) carries **no message text** — only
 `last_message_ts` (RFC3339), `id`, `name: string | null`, `is_promoted`, `is_archived`, `cwd`,
-`last_used_at`, and since [#1287](https://github.com/pyrycode/pyrycode-desktop/issues/1287)
-`workspace_label: string | null` (see [workspace grouping](channel-list-workspace-grouping.md)). The Figma design's "Recent discussions" rows show a 2-line message-body preview and
+`last_used_at`, since [#1287](https://github.com/pyrycode/pyrycode-desktop/issues/1287)
+`workspace_label: string | null` (see [workspace grouping](channel-list-workspace-grouping.md)), and
+since [#1594](https://github.com/pyrycode/pyrycode-desktop/issues/1594) `is_muted?: boolean` — whether
+the host has muted this conversation's notifications. No row in this screen reads `is_muted` yet (the
+mute checkbox and the notification gate are later consumers); the field is optional in the TS type but
+the decoder (`parseConversationSummary`) always emits a boolean, normalising an absent key to `false`
+so a daemon predating the field keeps notifying — a future consumer reads it as `row.is_muted ===
+true`, never on the key's presence. See [Inbound message decode —
+internals](inbound-message-decode-internals.md) for the decode. The Figma design's "Recent discussions" rows show a 2-line message-body preview and
 message-derived titles for unnamed discussions — neither is buildable from this wire shape. Adding the
 preview needs a daemon-side wire change first (a field on `conversations_read.go`'s
 `ConversationSummary`), then a desktop decode ([#139](conversation-list-fetch.md)) and store

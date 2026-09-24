@@ -43,6 +43,13 @@ describe('chat history records and requests', () => {
     ] })
     expect(list).toEqual({ version: 1, kind: 'list', serverId: 'host', conversations: [summary, { ...summary, id: 'second', name: 'named' }] })
   })
+  it('carries a list row muted flag through, restores a pre-flag row as not muted, and rejects a non-boolean', () => {
+    const list = (rows: unknown[]) => ({ version: 1, kind: 'list', serverId: 'host', conversations: rows })
+    const muted = parseChatHistorySnapshot(list([{ ...summary, is_muted: true }, { ...summary, id: 'b', is_muted: false }, { ...summary, id: 'c' }]))
+    const rows = muted.kind === 'list' ? muted.conversations : []
+    expect(rows.map((row) => row.is_muted)).toEqual([true, false, undefined])
+    for (const is_muted of ['true', 1, null]) expect(() => parseChatHistorySnapshot(list([{ ...summary, is_muted }]))).toThrow()
+  })
   it.each([null, [], {}, { ...timeline, version: 2 }, { ...timeline, prependedRows: -1 },
     { ...timeline, items: [{ kind: 'assistantText', text: 2 }] }, { ...timeline, coverage: { status: 'requested' } },
     { ...timeline, coverage: { status: 'received', cursor: '', atStart: 'yes' } },

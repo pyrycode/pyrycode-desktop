@@ -99,3 +99,24 @@ The ticket names no documentation requirement. It is pending for the documentati
 ## Open questions
 
 - None blocking. `.MD` (uppercase) is not treated as `.md`, per the AC's literal "ends in `.md`".
+
+## Security review
+
+**Verdict:** PASS
+
+**Findings:**
+
+- [Trust boundaries] No findings. There is one explicit boundary: `isMarkdownOpenRequest` (shape and size), then `markdownOpenFileName` (the name gate, which is `sanitizeAttachmentFilename`, the repo's one sanctioned crossing from daemon-derived text to a path component). The directory is a trusted value joined at the composition root. The window supplies no path, directory or extension.
+- [Tokens] No findings. No secret is involved. The temp name comes from `crypto.randomUUID`. That is not a security property, because exclusive create carries the safety.
+- [File / storage] No findings on traversal. The sanitiser's allowlist admits no separator. The final name is always `<stem>.md`, so the OS is always told `.md`, and a name like `x.command.md` still ends in `.md`. Containment is proven by tests for `../../x`, an absolute path and `''`. There is no TOCTOU and no symlink write-through. The temp file is created with `wx` (`O_EXCL` fails on any existing entry, a symlink included), and `rename` replaces the target entry rather than following it. A pre-placed symlink is tested. The write is atomic: temp plus rename, so a killed write never leaves a torn `<name>.md`. Scope: under `userData`, directory `0700`, files `0600`. Accepted by design: the note's text persists in plaintext in that directory after the reader closes, because the external app must be able to read it. It is workspace text, not a credential.
+- [File / storage] OUT OF SCOPE. A process killed between the temp write and the rename leaves one hidden `.<uuid>.tmp` behind. That is bounded by kills, not by use. No ticket is filed. A retention pass over the app's derived directories (`attachment-views` has the same shape) would own it.
+- [Electron attack surface] No findings. The bridge adds one method on a fixed invoke channel, and it never exposes `ipcRenderer`. The guard runs before any filesystem or OS call. `setWindowOpenHandler`'s `file:` and custom-protocol denies are untouched: the OS hand-off runs in main, on a path main computed. A compromised renderer gains one capability: writing a bounded `.md` file into one app-owned directory and asking the user's `.md` handler to open it.
+- [Electron attack surface] OUT OF SCOPE. A compromised renderer can vary the display name to create many distinct files, each up to the text bound, which grows the directory on disk. A conforming renderer sends only names of notes the operator opens, and the same name overwrites. The renderer-compromise threat already includes stronger capabilities (driving the daemon). An eviction cap is deferred until growth is observed, and no ticket is filed.
+- [Crypto] No findings. No cryptographic primitive is used.
+- [Network & I/O] No findings. No socket is involved. The request is size-bounded at the guard (text ≤ 32 Mi code units, name ≤ 255).
+- [Logs] No findings. Records carry only the static codes `started`, `opened`, `write-failed` and `open-failed`. Caught errors are never inspected, since a node:fs error message carries the path. `shell.openPath`'s path-bearing message is narrowed to a boolean at the root. The renderer notice is static client-owned text. The renderer diagnostics are the static codes `open-in-app` and `open-in-app-failed`.
+- [Concurrency] No findings. Each ask is one awaited invoke with no long-lived work. Concurrent opens of one name use distinct temp files and atomic renames, so the last one wins and neither file is torn. The renderer's `alive` ref stops a late answer from setting state after unmount.
+- [Threat model] No findings. Hostile daemon text is written as bytes and never interpreted by this app. The name is sanitised. What the user's own `.md` app does with the content is outside this app, the same as opening any downloaded note.
+
+**Reviewer:** builder (self-review per `builder/security-review.md`)
+**Date:** 2026-09-25

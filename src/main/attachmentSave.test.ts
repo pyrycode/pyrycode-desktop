@@ -1,9 +1,10 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
-import { createAttachmentSave } from './attachmentSave'
+import { createAttachmentSave, createMarkdownSave } from './attachmentSave'
+import type { MarkdownSaveOutcome } from '../shared/ipc/markdownSave'
 import type { DiagnosticEvent } from './diagnosticLog'
 
 // Exercises the real filesystem against throwaway temp dirs — saveDebugBundle.test.ts's harness with
@@ -250,6 +251,8 @@ describe('createAttachmentSave', () => {
 
     expect([...new Set(specifiers)].sort()).toEqual([
       '../shared/ipc/attachmentSave',
+      '../shared/ipc/markdownOpen',
+      '../shared/ipc/markdownSave',
       './attachmentFilename',
       './attachmentPath',
       './diagnosticLog',
@@ -258,5 +261,124 @@ describe('createAttachmentSave', () => {
       'node:path'
     ])
     expect(source).not.toContain('console.')
+  })
+})
+
+// #1632 — the markdown reader's note, written into Downloads through the same collision loop.
+describe('createMarkdownSave (#1632)', () => {
+  interface NoteHarness {
+    saveNote: (request: { text: string; displayName: string }) => Promise<MarkdownSaveOutcome>
+    revealed: string[]
+    records: DiagnosticEvent[]
+    downloadsDir: string
+    root: string
+  }
+
+  async function noteHarness(options: { reveal?: () => void } = {}): Promise<NoteHarness> {
+    const root = await mkdtemp(join(tmpdir(), 'pyry-md-save-'))
+    roots.push(root)
+    const downloadsDir = join(root, 'downloads')
+    await mkdir(downloadsDir, { recursive: true })
+    const revealed: string[] = []
+    const records: DiagnosticEvent[] = []
+    const saveNote = createMarkdownSave({
+      downloadsDir,
+      reveal: (path: string) => {
+        revealed.push(path)
+        options.reveal?.()
+      },
+      diagnosticLog: { event: (fields) => records.push(fields) }
+    })
+    return { saveNote, revealed, records, downloadsDir, root }
+  }
+
+  it('writes the text into Downloads under the sanitised name and reveals that file', async () => {
+    const h = await noteHarness()
+
+    const outcome = await h.saveNote({ text: '# Plan\n\nBody ä', displayName: 'Plan.md' })
+
+    expect(outcome).toEqual({ type: 'saved' })
+    const saved = join(h.downloadsDir, 'Plan.md')
+    expect(await readFile(saved, 'utf-8')).toBe('# Plan\n\nBody ä')
+    expect(h.revealed).toEqual([saved])
+  })
+
+  it('lands a traversal, an absolute path and an empty name as one file inside Downloads', async () => {
+    const h = await noteHarness()
+
+    for (const displayName of ['../../x', '/etc/passwd', '']) {
+      expect(await h.saveNote({ text: 'n', displayName })).toEqual({ type: 'saved' })
+    }
+
+    expect((await readdir(h.downloadsDir)).sort()).toEqual(['_.._.._x', '_etc_passwd', 'attachment'])
+    for (const path of h.revealed) expect(dirname(path)).toBe(h.downloadsDir)
+    // Nothing escaped upward: the harness root holds only the Downloads stand-in.
+    expect(await readdir(h.root)).toEqual(['downloads'])
+  })
+
+  it('never overwrites: a repeat save and a pre-existing file both advance the suffix', async () => {
+    const h = await noteHarness()
+    await writeFile(join(h.downloadsDir, 'notes.md'), 'someone else’s file')
+
+    await h.saveNote({ text: 'first', displayName: 'notes.md' })
+    await h.saveNote({ text: 'second', displayName: 'notes.md' })
+
+    expect(await readFile(join(h.downloadsDir, 'notes.md'), 'utf-8')).toBe('someone else’s file')
+    expect(await readFile(join(h.downloadsDir, 'notes (1).md'), 'utf-8')).toBe('first')
+    expect(await readFile(join(h.downloadsDir, 'notes (2).md'), 'utf-8')).toBe('second')
+  })
+
+  it.runIf(process.platform !== 'win32')('never writes through a symlink planted at the target name', async () => {
+    const h = await noteHarness()
+    const outside = join(h.root, 'outside.md')
+    await writeFile(outside, 'untouched')
+    await symlink(outside, join(h.downloadsDir, 'notes.md'))
+
+    expect(await h.saveNote({ text: 'note', displayName: 'notes.md' })).toEqual({ type: 'saved' })
+
+    expect(await readFile(outside, 'utf-8')).toBe('untouched')
+    expect((await lstat(join(h.downloadsDir, 'notes.md'))).isSymbolicLink()).toBe(true)
+    expect(await readFile(join(h.downloadsDir, 'notes (1).md'), 'utf-8')).toBe('note')
+  })
+
+  it('answers save-failed on an over-long name and on a missing Downloads, leaving nothing behind', async () => {
+    const h = await noteHarness()
+
+    expect(await h.saveNote({ text: 'n', displayName: `${'a'.repeat(300)}.md` })).toEqual({
+      type: 'failed',
+      reason: 'save-failed'
+    })
+    expect(await readdir(h.downloadsDir)).toEqual([])
+
+    await rm(h.downloadsDir, { recursive: true })
+    expect(await h.saveNote({ text: 'n', displayName: 'notes.md' })).toEqual({
+      type: 'failed',
+      reason: 'save-failed'
+    })
+    await expect(stat(h.downloadsDir)).rejects.toThrow()
+    expect(h.revealed).toEqual([])
+  })
+
+  it('still answers saved when the reveal throws — the note is on disk by then', async () => {
+    const h = await noteHarness({
+      reveal: () => {
+        throw new Error('no file manager')
+      }
+    })
+    expect(await h.saveNote({ text: 'n', displayName: 'notes.md' })).toEqual({ type: 'saved' })
+    expect(await readFile(join(h.downloadsDir, 'notes.md'), 'utf-8')).toBe('n')
+  })
+
+  it('logs static codes only — never the text, the name or a path', async () => {
+    const h = await noteHarness()
+    await h.saveNote({ text: 'private body', displayName: 'secret-plan.md' })
+    await h.saveNote({ text: 'private body', displayName: `${'a'.repeat(300)}.md` })
+
+    expect(h.records.map((record) => record.code)).toEqual(['started', 'saved', 'started', 'save-failed'])
+    expect(new Set(h.records.map((record) => record.event))).toEqual(new Set(['markdown-save']))
+    const serialized = JSON.stringify(h.records)
+    for (const forbidden of ['private', 'secret-plan', '.md', 'aaaa', h.downloadsDir, '/']) {
+      expect(serialized).not.toContain(forbidden)
+    }
   })
 })

@@ -117,16 +117,18 @@ test('the reader menu copies the note three ways and refreshes it (#1630)', asyn
   await planLink.click()
   await expect(reader.locator('.markdown-reader__body[aria-busy="true"]')).toBeVisible({ timeout: TIMEOUT_MS })
   await trigger.click()
-  await expect(items).toHaveCount(5)
+  await expect(items).toHaveCount(6)
   expect(await items.evaluateAll((rows) => rows.map((row) => row.firstChild?.textContent))).toEqual([
     'Copy as markdown',
     'Copy as plain text',
     'Copy as HTML',
     'Refresh',
     // #1631: listed and gated here, never chosen — an e2e run must not launch a real external app.
-    'Open in another app'
+    'Open in another app',
+    // #1632: likewise never chosen — an e2e run must not write into the real Downloads or open Finder.
+    'Save to device'
   ])
-  for (const name of ['Copy as markdown', 'Copy as plain text', 'Copy as HTML', 'Open in another app']) {
+  for (const name of ['Copy as markdown', 'Copy as plain text', 'Copy as HTML', 'Open in another app', 'Save to device']) {
     await expect(item(name)).toHaveAttribute('aria-disabled', 'true')
   }
   await expect(item('Refresh')).not.toHaveAttribute('aria-disabled', 'true')
@@ -167,8 +169,9 @@ test('the reader menu copies the note three ways and refreshes it (#1630)', asyn
 
   // --- 6. A click outside the menu closes it. ---
   await trigger.click()
-  await expect(items).toHaveCount(5)
+  await expect(items).toHaveCount(6)
   await expect(item('Open in another app')).not.toHaveAttribute('aria-disabled', 'true')
+  await expect(item('Save to device')).not.toHaveAttribute('aria-disabled', 'true')
   await reader.locator('h1').click()
   await expect(items).toHaveCount(0)
 

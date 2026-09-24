@@ -81,11 +81,12 @@ import {
   WORKSPACE_FILE_READ_EVENT_CHANNEL,
   isWorkspaceFileReadRequest
 } from '../shared/ipc/workspaceFileRead'
-import { createAttachmentSave } from './attachmentSave'
+import { createAttachmentSave, createMarkdownSave } from './attachmentSave'
 import { createAttachmentBytes } from './attachmentBytes'
 import { ATTACHMENT_OPEN_DIR_NAME, createAttachmentOpen } from './attachmentOpen'
 import { MARKDOWN_OPEN_DIR_NAME, createMarkdownOpen } from './markdownOpen'
 import { MARKDOWN_OPEN_CHANNEL, isMarkdownOpenRequest } from '../shared/ipc/markdownOpen'
+import { MARKDOWN_SAVE_CHANNEL } from '../shared/ipc/markdownSave'
 import { createLocalAttachments } from './localAttachments'
 import {
   ATTACHMENT_SAVE_CHANNEL,
@@ -1586,6 +1587,22 @@ app.whenReady().then(() => {
       : Promise.resolve({ type: 'failed', reason: 'refused' } as const)
   )
   app.on('will-quit', () => ipcMain.removeHandler(MARKDOWN_OPEN_CHANNEL))
+
+  // The markdown reader's save-to-device edge (#1632). The open's request and guard, the attachment
+  // save's Downloads folder and reveal: `downloadsDir` is the one already read above, and the reveal is
+  // `shell.showItemInFolder`, which selects the file. An invoke for the open's reason. A malformed ask
+  // makes no filesystem call and answers `refused`; the driver never rejects.
+  const saveMarkdown = createMarkdownSave({
+    downloadsDir,
+    reveal: (path) => shell.showItemInFolder(path),
+    diagnosticLog
+  })
+  ipcMain.handle(MARKDOWN_SAVE_CHANNEL, (_event, request: unknown) =>
+    isMarkdownOpenRequest(request)
+      ? saveMarkdown(request)
+      : Promise.resolve({ type: 'failed', reason: 'refused' } as const)
+  )
+  app.on('will-quit', () => ipcMain.removeHandler(MARKDOWN_SAVE_CHANNEL))
 
   // macOS reopens the app from the dock without relaunching the process, so the replacement window
   // goes through openWindow() (#519) rather than a bare createWindow() whose result was discarded.

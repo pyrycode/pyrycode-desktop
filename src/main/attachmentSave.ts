@@ -10,7 +10,7 @@
 // (#819), which REWRITES rather than refuses, and is re-run HERE, main-side, on the value the path is
 // actually built from: a component that arrived over the bridge is an untrusted string like any other,
 // and that re-run is the only thing that makes it safe. The raw name is never joined to anything — it
-// does not even reach `copyIntoDownloads`, which takes an already-sanitised component.
+// does not even reach `writeIntoDownloads`, which takes an already-sanitised component.
 //
 // BOTH ELECTRON TOUCHES ARE INJECTED, so this module carries no `electron` import and unit-tests against
 // a temp directory — saveDebugBundle's and attachmentStore's composition-root seam. `app.getPath('downloads')`
@@ -33,14 +33,19 @@
 // remember. Note in particular that saveDebugBundle's exhaustion `Error`, which interpolates its `dir`
 // into the message, is NOT copied: no string carrying a path is built here at all.
 //
+// THE MARKDOWN READER'S NOTE SAVE LIVES HERE TOO (#1632), `createMarkdownSave` below, so the collision
+// loop has one home: both drivers hand `writeIntoDownloads` an exclusive create, and nothing else does.
+//
 // Imported by relative path: src/main has no @shared alias (tsconfig.node.json).
 import { constants } from 'node:fs'
-import { copyFile, unlink } from 'node:fs/promises'
+import { copyFile, unlink, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { sanitizeAttachmentFilename } from './attachmentFilename'
 import { resolveAttachmentPath } from './attachmentPath'
 import type { DiagnosticLog } from './diagnosticLog'
 import type { AttachmentSaveEvent, AttachmentSaveRequest } from '../shared/ipc/attachmentSave'
+import type { MarkdownOpenRequest } from '../shared/ipc/markdownOpen'
+import type { MarkdownSaveOutcome } from '../shared/ipc/markdownSave'
 
 /**
  * Loop-termination insurance against a pathological all-names-taken Downloads folder; not a defence
@@ -117,14 +122,16 @@ export function createAttachmentSave(
       return settle({ type: 'failed', attachmentId, reason: 'source-unavailable' })
     }
 
-    // The name gate. From here on the raw name is out of scope — `copyIntoDownloads` is given the
+    // The name gate. From here on the raw name is out of scope — `writeIntoDownloads` is given the
     // component and never the request, so building a path from the raw field would take editing two
     // functions rather than one line.
     const component = sanitizeAttachmentFilename(request.filename)
 
     let saved: string
     try {
-      saved = await copyIntoDownloads(source.path, downloadsDir, component)
+      saved = await writeIntoDownloads(downloadsDir, component, (target) =>
+        copyFile(source.path, target, constants.COPYFILE_EXCL)
+      )
     } catch (error) {
       // The caught object is DROPPED, never inspected beyond its errno: a node:fs ErrnoException
       // carries the offending path in its own message. ENOENT is also what copyFile reports for an
@@ -151,10 +158,55 @@ export function createAttachmentSave(
   }
 }
 
+/** The dependencies of the note save: `AttachmentSaveDeps` without the attachment store (#1632). */
+export type MarkdownSaveDeps = Omit<AttachmentSaveDeps, 'attachmentDir'>
+
 /**
- * Copy `source` into `dir` under the first free browser-style candidate of `component`, and answer the
+ * Build the markdown reader's save driver (#1632): the text the window shows, written into Downloads
+ * under the sanitised display name through the same loop as an attachment, then revealed. The ask is
+ * already guarded by `isMarkdownOpenRequest`; the name is still untrusted and is sanitised here, on the
+ * value the path is built from. Never rejects and never throws; logs static codes only.
+ */
+export function createMarkdownSave(
+  deps: MarkdownSaveDeps
+): (request: MarkdownOpenRequest) => Promise<MarkdownSaveOutcome> {
+  const { downloadsDir, reveal, diagnosticLog } = deps
+
+  function settle(outcome: MarkdownSaveOutcome): MarkdownSaveOutcome {
+    diagnosticLog?.event({ event: 'markdown-save', code: outcome.type === 'saved' ? 'saved' : outcome.reason })
+    return outcome
+  }
+
+  return async function saveNote(request: MarkdownOpenRequest): Promise<MarkdownSaveOutcome> {
+    diagnosticLog?.event({ event: 'markdown-save', code: 'started' })
+    const component = sanitizeAttachmentFilename(request.displayName)
+    let saved: string
+    try {
+      // `wx` is O_CREAT|O_EXCL: the create the loop requires, and what keeps a symlink from being
+      // followed. The caught error is dropped unread; its message carries the path.
+      saved = await writeIntoDownloads(downloadsDir, component, (target) =>
+        writeFile(target, request.text, { flag: 'wx' })
+      )
+    } catch {
+      return settle({ type: 'failed', reason: 'save-failed' })
+    }
+    try {
+      reveal(saved)
+    } catch {
+      // The note is on disk; a reveal that fails must not report a save that did not happen.
+    }
+    return settle({ type: 'saved' })
+  }
+}
+
+/**
+ * Create a file in `dir` under the first free browser-style candidate of `component`, and answer the
  * absolute path written. Rejects with the underlying errno for the caller to classify — nothing here
  * builds a message, and the errno is the only thing ever read off it.
+ *
+ * `create` MUST CREATE `target` EXCLUSIVELY (O_CREAT|O_EXCL) and reject EEXIST when anything is there,
+ * a symlink included. That is the whole no-overwrite guarantee; this loop only chooses names. The
+ * attachment save passes `copyFile` with `COPYFILE_EXCL`, the note save `writeFile` with `wx`.
  *
  * `component` is ALREADY SANITISED: exactly one path segment, never empty, never `.` or `..`, never
  * beginning with `.`, no separator, ASCII. This function takes it rather than the raw name so that
@@ -164,11 +216,15 @@ export function createAttachmentSave(
  * overwrite AC 3 forbids. On any other errno the partial destination is best-effort unlinked before the
  * error propagates, so nothing partial is left in Downloads (AC 5).
  */
-async function copyIntoDownloads(source: string, dir: string, component: string): Promise<string> {
+async function writeIntoDownloads(
+  dir: string,
+  component: string,
+  create: (target: string) => Promise<void>
+): Promise<string> {
   for (let n = 0; n < MAX_SAVE_ATTEMPTS; n += 1) {
     const target = resolve(dir, candidateName(component, n))
     try {
-      await copyFile(source, target, constants.COPYFILE_EXCL)
+      await create(target)
       return target
     } catch (error) {
       if (isErrnoException(error) && error.code === 'EEXIST') continue

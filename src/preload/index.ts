@@ -63,6 +63,7 @@ import {
   type MarkdownOpenOutcome,
   type MarkdownOpenRequest
 } from '../shared/ipc/markdownOpen'
+import { MARKDOWN_SAVE_CHANNEL, type MarkdownSaveOutcome } from '../shared/ipc/markdownSave'
 
 // The bridge surface exposed to the renderer window. Typed events from the transport in
 // the background process arrive via onDaemonEvent; typed user commands go out via
@@ -647,7 +648,15 @@ const api = {
    * isMarkdownOpenRequest.
    */
   openMarkdownInApp: (request: MarkdownOpenRequest): Promise<MarkdownOpenOutcome> =>
-    ipcRenderer.invoke(MARKDOWN_OPEN_CHANNEL, request)
+    ipcRenderer.invoke(MARKDOWN_OPEN_CHANNEL, request),
+
+  /**
+   * Save the markdown reader's note into the operating system's Downloads folder and reveal it (#1632).
+   * The same request as openMarkdownInApp: the text on screen and a display name, no path. Main picks
+   * the folder and the final name and never overwrites; the answer is `saved` or one static reason.
+   */
+  saveMarkdownToDevice: (request: MarkdownOpenRequest): Promise<MarkdownSaveOutcome> =>
+    ipcRenderer.invoke(MARKDOWN_SAVE_CHANNEL, request)
 }
 
 // Context isolation is always on (webPreferences.contextIsolation: true), so the bridge is

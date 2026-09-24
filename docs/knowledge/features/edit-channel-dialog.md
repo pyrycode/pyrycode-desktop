@@ -12,8 +12,11 @@ below. [#1438](https://github.com/pyrycode/pyrycode-desktop/issues/1438) added t
 [§ The archive button](#the-archive-button-1438) below. (Filed as *Remove channel*; lettered
 **Archive channel** on the drawing and settled that way by the refiner on 2026-09-15, matching the
 sibling chat dialog's **Archive chat** and the fact that the channel lands in the Archive screen's
-Channels tab and Restore brings it back.) Every one of these extends this page and this file rather
-than adding a sibling.
+Channels tab and Restore brings it back.) [#1608](https://github.com/pyrycode/pyrycode-desktop/issues/1608),
+split from [#1596](https://github.com/pyrycode/pyrycode-desktop/issues/1596), added the **Mute
+notifications** checkbox between the system prompt field and the Archive channel button — see
+[§ The mute checkbox](#the-mute-checkbox-1608) below. Every one of these extends this page and this
+file rather than adding a sibling.
 
 ## What it does
 
@@ -46,6 +49,11 @@ than adding a sibling.
   paint, and the existing `sessionStore.subscribe` effect clears the held row a beat later. The
   conversation title and the system prompt are both daemon-authored and reach a controlled input or
   textarea and nothing else: never an attribute, never markup, never a log.
+- [#1608](https://github.com/pyrycode/pyrycode-desktop/issues/1608) added a **Mute notifications**
+  checkbox between the system prompt field and Archive channel. It opens checked exactly when the
+  conversation's row on its own server has `is_muted === true`, and OK sends one `setConversationMuted`
+  write, but only when the box's value actually changed — see
+  [§ The mute checkbox](#the-mute-checkbox-1608) below.
 
 ## How it works
 
@@ -321,6 +329,74 @@ dies with the container's unmount. AC2's `set_system_prompt`-absent assertion, a
 same locator ruling the block header states twice. One rule is deliberately **not** carried: the
 sibling's `:disabled` arm, since this button has no disabled state to select.
 
+### The mute checkbox (#1608)
+
+Mute is stored on the host, not the client: it rides each conversation list row as `is_muted`
+([#1594](https://github.com/pyrycode/pyrycode-desktop/issues/1594)), and the write is the existing
+`setConversationMuted` renderer command
+([#1595](daemon-connection-correlation-system-prompt-and-mcp.md#conversation-mute-write-correlation-1595)).
+This dialog only reads and writes that one flag; what muting actually suppresses is
+[Push notifications § Muting suppresses the send](push-notifications.md#muting-suppresses-the-send-1607),
+already shipped and untouched by this ticket.
+
+`MUTE_NOTIFICATIONS_LABEL`, a module constant reading **Mute notifications**, is the accessible name of
+a native `<input type="checkbox">` wrapped in its own `<label>` — no `aria-label`, so the string never
+sits in an attribute. The 20×20 ring and tick are drawn by an `aria-hidden` sibling span
+(`.edit-channel__mute-control`, holding `MuteTick` — `QuestionTick`'s path restated under this
+namespace rather than imported, since this directory never imports from `screens/conversation/`); the
+input itself is visually hidden (clip-path, not `display: none`) so it keeps focus, keyboard and the
+tab stop. The row's focus ring lives on the label via `:has(:focus-visible)`, the
+`.question-panel__option` precedent. **No `disabled` arm on any branch**, the same posture as Archive
+channel: the checkbox only edits a draft, and the host guard is taken at OK time by the caller, not by
+the view.
+
+The container holds one more state cell, seeded lazily at mount from
+`conversationMutedIn(conversationListStore.getState(), serverId, conversationId)` — both `seed` and
+`draft` start there:
+
+```ts
+export type MuteState = { seed: boolean; draft: boolean }
+export function muteWriteFor(state: MuteState): { muted: boolean } | null
+```
+
+`muteWriteFor` is pure and exported, `promptWriteFor`'s reason restated: no renderer spec in this repo
+can click. It returns `null` — send nothing — when `draft === seed`, else `{ muted: draft }`. A cell
+rather than a bare boolean, `PromptState`'s reason: the write rule needs what was read, not just what
+the box currently shows. Because the container mounts only while the dialog is open, a reopen re-reads
+the host's value by construction, and a list refresh that arrives while the dialog is still open never
+moves the operator's in-progress draft — the seed was captured once, at mount, and does not track the
+store afterward.
+
+The write sits inside the same `onSave(writePrompt)` callback the prompt write already used, in its
+own `try`/`catch` so a local throw from one write can never suppress the other:
+
+```ts
+window.pyry.sendCommand({
+  type: 'setConversationMuted',
+  payload: { conversation_id: conversationId, muted: muteWrite.muted },
+  attemptId: crypto.randomUUID()
+})
+```
+
+Because this only runs from inside the caller's own guarded body — `canMutateHost` in `ChannelList`,
+`connectedConversationHostNow` in `ConversationScreen` — the write reaches only the channel's own host
+and never a disconnected one, and Cancel, the header close control and Archive channel never invoke the
+callback at all, so none of them send a mute write (AC3). The `catch` is silent for `writePrompt`'s own
+reason: an escaping exception would abort the caller's dismissal. The container does not read
+`conversationMuteResult` — OK dismisses unconditionally, and a rejected write is invisible until the
+next reopen shows the host's real value, same posture as the rename and the prompt write's silent
+failure paths above.
+
+`channels.css`'s `.edit-channel__mute*` rules restate `.question-panel__control--checkbox`'s recipe
+(20px box, 2px `--color-tertiary` ring, 4px corner, 12px gap, label-medium emphasized) under this
+dialog's own namespace rather than importing it — the same locator-independence ruling every other
+`.edit-channel*` block above already carries.
+
+The checkbox is a native, always-focusable input, so it takes a Tab stop of its own between the name
+field and Archive channel. `conversation-create-rename.spec.ts`'s pinned keyboard walk through this
+dialog widened from three stops to four (input → Mute notifications → Archive channel → Cancel → OK)
+to match — see [§ Lessons learned](#lessons-learned).
+
 ## Edge cases and limitations
 
 - **A rename the daemon never confirms simply leaves the row's title unchanged** — the same answer
@@ -353,6 +429,13 @@ sibling's `:disabled` arm, since this button has no disabled state to select.
   info sheet's own Archive and the Edit chat dialog's Archive chat give. There is no busy state and no
   failure line: the archive is a one-way command with no invoke result, so there is nothing to await and
   no arm to wait in.
+- **A mute write the daemon never confirms simply leaves the row's flag unchanged.** The same answer
+  Archive channel and the rename give, above: the dialog does not read `conversationMuteResult`, OK
+  dismisses unconditionally, and only a reopen shows whatever the host actually holds.
+- **The checkbox's opening value is captured once, at mount, and does not track a live phone-side
+  change while the dialog stays open.** An untouched box still sends nothing on OK, so the dialog can
+  never overwrite a mute toggled from elsewhere while it was open; a touched box sends the operator's
+  explicit value, and the host keeps whichever write lands last.
 - **A reply that never comes leaves the box unreadable indefinitely.** There is no timeout, retry or
   error frame on the read — `SystemPromptSection`'s own accepted posture for this reply-only frame,
   inherited rather than re-decided. A malicious or slow relay that withholds `system_prompt` leaves
@@ -455,6 +538,27 @@ sibling's `:disabled` arm, since this button has no disabled state to select.
   worth reaching for whenever a plan's fix would create a back-edge between two modules already
   connected the other way.
 
+- **An early `return` guarding one optional write silently swallows a sibling write added after it.**
+  The prompt write's `onSave` body returned early when `promptWriteFor` produced nothing, which was
+  correct while it was the only write in that callback. #1608 needed to add the mute write beside it,
+  and a write placed after that early return would never run when the prompt was untouched — the
+  common case. The fix turned the early return into a guarded `if` block so control always reaches the
+  code after it, with each write in its own `try` so one failing does not suppress the other. Any
+  future write added to this callback must go after both, never inside either guard.
+- **A checkbox visually hidden under its own `<label>` cannot be clicked directly in Playwright.** The
+  label element receives the pointer event and intercepts `checkbox.click()`, which times out waiting
+  for the (invisible, zero-size) input to become the actual click target. `e2e/edit-channel-mute.spec.ts`
+  clicks the visible row (`.edit-channel__mute`) instead, and asserts state on the checkbox's role
+  locator. This applies to any future spec driving a visually-hidden-input-plus-label checkbox in this
+  codebase, not just this one.
+- **A keyboard-walk spec pins the *count and order* of Tab stops in a dialog, so any new focusable
+  control added anywhere inside it reddens the spec even when the new control's own behaviour is
+  correct.** Adding the mute checkbox between the name field and Archive channel shifted
+  `conversation-create-rename.spec.ts`'s pinned three-stop walk to four and reddened it on the first
+  pass; the fix belongs in the walking spec, never in the dialog — see
+  [§ The mute checkbox](#the-mute-checkbox-1608). A future control added to this dialog's content slot
+  should expect the same spec to need the same kind of update.
+
 ## Related
 
 - [Edit chat dialog (rename + archive) + per-row affordance](rename-conversation-dialog.md) — the
@@ -486,7 +590,11 @@ sibling's `:disabled` arm, since this button has no disabled state to select.
 - [Daemon connection — system-prompt and MCP-status correlation § Conversation-mute write
   correlation](daemon-connection-correlation-system-prompt-and-mcp.md#conversation-mute-write-correlation-1595)
   — the `setConversationMuted` command and content-free `conversationMuteResult` outcome
-  [#1595](https://github.com/pyrycode/pyrycode-desktop/issues/1595) shipped for the not-yet-built mute
-  checkbox this dialog will carry (#1596); no field or control here reads or sends it yet.
+  [#1595](https://github.com/pyrycode/pyrycode-desktop/issues/1595) shipped ahead of this dialog's own
+  [Mute checkbox](#the-mute-checkbox-1608) ([#1608](https://github.com/pyrycode/pyrycode-desktop/issues/1608)),
+  which sends the command and deliberately never reads the result.
+- [Push notifications § Muting suppresses the send](push-notifications.md#muting-suppresses-the-send-1607)
+  — what a muted conversation actually suppresses, and `conversationMutedIn`, the server-scoped
+  `is_muted` lookup this dialog's container reuses verbatim for the checkbox's opening value.
 - Spec: `docs/specs/architecture/1476-edit-channel-dialog.md`,
   `docs/specs/architecture/1477-edit-channel-system-prompt.md`.

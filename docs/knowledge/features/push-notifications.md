@@ -280,6 +280,11 @@ mute bit rather than one per kind. The sidebar status dot does not read mute and
 muted conversation still shows its state in the list, it just raises nothing outside it. The
 [app icon badge](app-badge.md) drops the same rows from its count (#1607, below).
 
+`conversationMutedIn` gained a second reader in
+[#1608](https://github.com/pyrycode/pyrycode-desktop/issues/1608): the
+[Edit channel dialog's Mute notifications checkbox](edit-channel-dialog.md#the-mute-checkbox-1608)
+calls it, unmodified, for its opening value.
+
 **A muted prompt is deliberately not recorded as announced.** Like a delivery the push toggle drops,
 a muted `modalShown` never enters the [`announcedModalIds` dedup set](#dedup-across-reconnects-514).
 Recording it anyway would mean a prompt unmuted while still outstanding would never notify when the

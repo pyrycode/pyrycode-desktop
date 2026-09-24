@@ -2115,6 +2115,70 @@
   letter-spacing: var(--text-body-medium-tracking);
 }
 
+/* #1608 — the Mute notifications row, the drawing's `Checkbox with label` (540:2158): a 20px control, a
+   12px gap, then the label. The same Figma `Checkbox` (347:6211) that `.question-panel__control--checkbox`
+   translates, restated declaration for declaration under this namespace per the block header. */
+.edit-channel__mute {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  cursor: pointer;
+}
+
+/* The row's focus ring, on the row: the `.question-panel__option:has(…)` precedent, since the native
+   input below is visually hidden and the aria-hidden control beside it cannot take focus. */
+.edit-channel__mute:has(.edit-channel__mute-input:focus-visible) {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Visually hidden, never `display: none`, which would take it out of the tab order and off the
+   accessibility tree — the `.question-panel__input` recipe. */
+.edit-channel__mute-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The 20x20 outer box, 2px tertiary ring included, 4px corner (`.question-panel__control--checkbox`'s
+   literal, since --radius-xs reads visibly rounder at this size). */
+.edit-channel__mute-control {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--color-tertiary);
+  border-radius: 4px;
+}
+
+.edit-channel__mute-tick {
+  width: 12px;
+  height: 12px;
+  color: var(--color-tertiary);
+}
+
+/* Label medium, emphasized; the 2px top inset is the drawing's optical centring of a 16px line against
+   the 20px control. */
+.edit-channel__mute-label {
+  min-width: 0;
+  padding-top: 2px;
+  color: var(--color-on-surface);
+  font-size: var(--text-label-medium-size);
+  line-height: var(--text-label-medium-line);
+  letter-spacing: var(--text-label-medium-tracking);
+  font-weight: var(--text-label-medium-weight-emphasized);
+  overflow-wrap: break-word;
+}
+
 /* #1438 — this dialog's own archive slot, the content frame's `Actions` row (502:2168): left-aligned
    below the text area, above the centred footer, with the drawing's 8px top inset. `align-items: center`
    plus no stretch is what keeps the button its own width rather than the column's — the drawing's frame

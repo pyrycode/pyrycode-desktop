@@ -5,6 +5,8 @@ import { systemPromptOverLimit } from './CreateChannelDialog'
 import { requestSystemPrompt, translateSystemPrompt } from '../../store/systemPromptBridge'
 import { submitSystemPrompt } from '../../store/systemPromptWriteBridge'
 import { systemPromptWriteStore } from '../../store/systemPromptWriteStore'
+import { conversationListStore } from '../../store/conversationListStore'
+import { conversationMutedIn } from '../../store/pushNotifyBridge'
 
 /**
  * The dialog's one client-owned string (#1476), in `EDIT_CHAT_COPY`'s idiom one dialog over: a module
@@ -57,6 +59,32 @@ const SYSTEM_PROMPT_READING = 'Reading the stored prompt from the daemon'
 const SYSTEM_PROMPT_OVER_LIMIT = `Over the ${MAX_SYSTEM_PROMPT_BYTES}-byte limit. Shorten it before saving.`
 
 /**
+ * #1608's checkbox label, the drawing's `Checkbox with label` (540:2158). Client-owned, and its text is
+ * the native checkbox's accessible name through the wrapping `<label>`, so no `aria-label`.
+ */
+const MUTE_NOTIFICATIONS_LABEL = 'Mute notifications'
+
+/**
+ * The checkbox's ticked Selector (Figma `Checkbox` 347:6211): `QuestionTick`'s path restated under this
+ * dialog's namespace rather than imported, because nothing in this directory imports from
+ * `screens/conversation/`. Inline JSX for `QuestionTick`'s CSP reason: the window has no `img-src`, so
+ * Figma's asset URL would draw nothing.
+ */
+function MuteTick(): JSX.Element {
+  return (
+    <svg
+      className="edit-channel__mute-tick"
+      viewBox="0 0 12 12"
+      fill="currentColor"
+      stroke="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M10.7051 1.63436C11.0243 1.85929 11.0957 2.29186 10.8636 2.60114L5.14911 10.2142C5.02634 10.3786 4.8366 10.4803 4.62678 10.4976C4.41695 10.5149 4.21382 10.4392 4.06649 10.2964L1.20927 7.52802C0.930244 7.25767 0.930244 6.81862 1.20927 6.54827C1.48829 6.27792 1.94143 6.27792 2.22046 6.54827L4.48615 8.74352L9.70951 1.78576C9.94166 1.47648 10.3881 1.40727 10.7073 1.6322L10.7051 1.63436Z" />
+    </svg>
+  )
+}
+
+/**
  * Which arm of the read the field is in — a SEALED UNION rather than a `value` beside a `reading` flag,
  * and that is load-bearing rather than stylistic: the `reading` arm has NO VALUE FIELD AT ALL, so a box
  * that has not been answered cannot show a draft it does not have, and the compiler says so.
@@ -106,6 +134,8 @@ export type EditChannelPrompt =
 export function EditChannelDialogView({
   name,
   prompt,
+  muted,
+  onMutedChange,
   onNameChange,
   onCancel,
   onSave,
@@ -113,6 +143,10 @@ export function EditChannelDialogView({
 }: {
   name: string
   prompt: EditChannelPrompt
+  /** #1608: the checkbox's current state. Required, per `onArchive`'s rule below: an optional pair would
+   *  ship an inert control on whichever of the two mount sites nobody remembered. */
+  muted: boolean
+  onMutedChange: (next: boolean) => void
   onNameChange: (next: string) => void
   onCancel: () => void
   onSave: () => void
@@ -199,6 +233,23 @@ export function EditChannelDialogView({
         {prompt.state === 'read' && prompt.overLimit && (
           <p className="edit-channel__notice">{SYSTEM_PROMPT_OVER_LIMIT}</p>
         )}
+        {/* #1608 — the drawing's `Checkbox with label` (540:2158), between the text area and the
+            Actions row. The native input is visually hidden and keeps focus, keyboard and the accessible
+            name; the aria-hidden span draws the design's 20px ring and tick. Like Archive channel it has
+            NO DISABLED ARM: it only edits a draft, and the write is taken at OK inside the caller's
+            host re-check. */}
+        <label className="edit-channel__mute">
+          <input
+            type="checkbox"
+            className="edit-channel__mute-input"
+            checked={muted}
+            onChange={(e) => onMutedChange(e.target.checked)}
+          />
+          <span className="edit-channel__mute-control" aria-hidden="true">
+            {muted && <MuteTick />}
+          </span>
+          <span className="edit-channel__mute-label">{MUTE_NOTIFICATIONS_LABEL}</span>
+        </label>
         {/* #1438 — the content frame's own `Actions` row (502:2168), the drawing's LAST child of
             `Content`: below the text area, above the centred footer, with the drawing's 8px top inset.
             The two notice lines stay between it and the text area they describe.
@@ -279,6 +330,21 @@ export function promptWriteFor(state: PromptState): { prompt: string | null } | 
   if (state.type !== 'read') return null
   if (state.draft === state.seed) return null
   return { prompt: state.draft === '' ? null : state.draft }
+}
+
+/**
+ * #1608's checkbox cell: `seed` is the host's value when the dialog opened, `draft` what the box holds.
+ * A cell rather than a bare boolean for `PromptState`'s reason: the write rule needs what was read.
+ */
+export type MuteState = { seed: boolean; draft: boolean }
+
+/**
+ * What OK should send for the mute cell, or `null` for "send nothing" — an unchanged box writes nothing
+ * (AC3). Pure and exported for `promptWriteFor`'s reason: no renderer spec here can click.
+ */
+export function muteWriteFor(state: MuteState): { muted: boolean } | null {
+  if (state.draft === state.seed) return null
+  return { muted: state.draft }
 }
 
 /**
@@ -363,6 +429,13 @@ export function EditChannelDialog({
   onSave: (writePrompt: () => void) => void
 }): JSX.Element {
   const [prompt, setPrompt] = useState<PromptState>({ type: 'reading' })
+  // #1608: seeded ONCE, at mount, from this server's own row — the container mounts only while the
+  // dialog is open, so a reopen re-reads the host's value by construction, and a list refresh while it is
+  // open never moves the operator's draft.
+  const [mute, setMute] = useState<MuteState>(() => {
+    const seed = conversationMutedIn(conversationListStore.getState(), serverId, conversationId)
+    return { seed, draft: seed }
+  })
 
   useEffect(() => {
     // Subscribe BEFORE asking, so a reply that arrives inside the same tick cannot outrun the listener.
@@ -406,6 +479,8 @@ export function EditChannelDialog({
       onNameChange={onNameChange}
       onCancel={onCancel}
       onArchive={onArchive}
+      muted={mute.draft}
+      onMutedChange={(next) => setMute((current) => ({ ...current, draft: next }))}
       prompt={
         prompt.type === 'reading'
           ? { state: 'reading' }
@@ -425,23 +500,40 @@ export function EditChannelDialog({
       onSave={() =>
         onSave(() => {
           const write = promptWriteFor(prompt)
-          if (write === null) return
+          // Not an early return since #1608: the mute write below must still be reached.
+          if (write !== null) {
+            try {
+              submitSystemPrompt(
+                {
+                  sendCommand: window.pyry.sendCommand,
+                  dispatch: (event) => systemPromptWriteStore.getState().dispatch(event)
+                },
+                conversationId,
+                write.prompt
+              )
+            } catch {
+              // Deliberately silent, `writePrompt`'s ruling one dialog over: `sendCommand` can throw
+              // locally, an exception escaping here would abort the caller's dismissal and strand this
+              // modal over a channel it has already renamed, and it would carry the failed command —
+              // prompt included — onto an error path this file does not control. The in-flight marker
+              // `submitSystemPrompt` records before sending is swept by the write store's `reconnected`
+              // arm, and there is nothing loggable here that is not forbidden.
+            }
+          }
+          // #1608: the mute write, in its OWN try so a local throw from the prompt send cannot suppress
+          // it and vice versa. Only reachable inside the caller's host re-check, so it reaches the
+          // channel's own host and never a disconnected one. The `conversationMuteResult` it earns is
+          // deliberately unread: OK dismisses, and a reopen shows the host's value.
+          const muteWrite = muteWriteFor(mute)
+          if (muteWrite === null) return
           try {
-            submitSystemPrompt(
-              {
-                sendCommand: window.pyry.sendCommand,
-                dispatch: (event) => systemPromptWriteStore.getState().dispatch(event)
-              },
-              conversationId,
-              write.prompt
-            )
+            window.pyry.sendCommand({
+              type: 'setConversationMuted',
+              payload: { conversation_id: conversationId, muted: muteWrite.muted },
+              attemptId: crypto.randomUUID()
+            })
           } catch {
-            // Deliberately silent, `writePrompt`'s ruling one dialog over: `sendCommand` can throw
-            // locally, an exception escaping here would abort the caller's dismissal and strand this
-            // modal over a channel it has already renamed, and it would carry the failed command —
-            // prompt included — onto an error path this file does not control. The in-flight marker
-            // `submitSystemPrompt` records before sending is swept by the write store's `reconnected`
-            // arm, and there is nothing loggable here that is not forbidden.
+            // Silent for the prompt write's reason above.
           }
         })
       }

@@ -92,6 +92,9 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
   // #1438's content-slot button. Located by its accessible name, which IS its text — the walk below is
   // the only thing this spec asks of it; the send it performs belongs to `edit-channel-system-prompt`.
   const channelArchive = channelDialog.getByRole('button', { name: 'Archive channel', exact: true })
+  // #1608's checkbox, between the system prompt and Archive channel. Only its Tab stop is asked of it
+  // here; its write belongs to `edit-channel-mute`.
+  const channelMute = channelDialog.getByRole('checkbox', { name: 'Mute notifications', exact: true })
 
   // launchPairedApp lands IN the seeded row's thread (it clicked the seeded promoted row to reach it),
   // with activeConversation = SEED. The app-singleton conversation-list store already holds SEED (listed
@@ -247,11 +250,11 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
   })
   expect(await channelDialog.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
   await channelInput.fill('  Renamed saved channel  ')
-  // THREE Tabs to OK — the chat dialog's own count, reached exactly as the two-Tab version of this
-  // comment predicted: #1438 put this dialog's own focusable BUTTON in the Modal's content slot. The
-  // document order is input → Archive channel → Cancel → OK, and that button must NOT be reachable as a
-  // footer button: an Archive landing after Cancel would put a channel's put-away inside the dialog's
-  // answer row.
+  // FOUR Tabs to OK. #1438 put this dialog's own focusable BUTTON in the Modal's content slot, and
+  // #1608 put the Mute notifications checkbox in front of it. The document order is input → Mute
+  // notifications → Archive channel → Cancel → OK, and neither content control may be reachable as a
+  // footer control: an Archive landing after Cancel would put a channel's put-away inside the dialog's
+  // answer row. The checkbox is only focused here, never toggled, so OK sends no mute write.
   // #1477's Channel system prompt text area is SKIPPED rather than absent — it is `disabled` until the
   // daemon answers `request_system_prompt`, and a disabled control stays OUT OF THE TAB ORDER.
   // `conversationStateFake` answers that verb never, so at this tier the box is permanently in its
@@ -259,6 +262,8 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
   // scroll-into-view assertion below is what this walk is really for: in a 180px-tall window the focused
   // footer button must still be reachable.
   await channelInput.press('Tab')
+  await expect(channelMute).toBeFocused()
+  await page.keyboard.press('Tab')
   await expect(channelArchive).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(channelCancel).toBeFocused()

@@ -3,6 +3,7 @@ import { isValidElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   EditChannelDialogView,
+  muteWriteFor,
   promptWriteFor,
   type EditChannelPrompt,
   type PromptState
@@ -26,11 +27,13 @@ function read(value: string, overLimit = false): EditChannelPrompt {
   return { state: 'read', value, overLimit, onChange: noop }
 }
 
-function renderView(name: string, prompt: EditChannelPrompt = READING): string {
+function renderView(name: string, prompt: EditChannelPrompt = READING, muted = false): string {
   return renderToStaticMarkup(
     <EditChannelDialogView
       name={name}
       prompt={prompt}
+      muted={muted}
+      onMutedChange={noop}
       onNameChange={noop}
       onCancel={noop}
       onSave={noop}
@@ -321,6 +324,8 @@ describe('EditChannelDialogView', () => {
     const props = {
       name: 'a name',
       prompt: read('stored text'),
+      muted: false,
+      onMutedChange: noop,
       onNameChange: noop,
       onCancel,
       onSave,
@@ -338,6 +343,105 @@ describe('EditChannelDialogView', () => {
     expect(onArchive).toHaveBeenCalledWith()
     expect(onSave).not.toHaveBeenCalled()
     expect(onCancel).not.toHaveBeenCalled()
+  })
+})
+
+// #1608 — the Mute notifications checkbox (Figma `Checkbox with label`, 540:2158). The click-through-OK
+// path is Playwright's (`e2e/edit-channel-mute.spec.ts`); this tier pins the markup and the binding.
+describe('EditChannelDialogView mute checkbox (#1608)', () => {
+  const MUTE_LABEL = 'Mute notifications'
+
+  /** The native checkbox's props, read off the element tree — the `archiveButtonProps` idiom. */
+  function muteInputProps(
+    props: Parameters<typeof EditChannelDialogView>[0]
+  ): { checked?: boolean; onChange?: (e: { target: { checked: boolean } }) => void } | null {
+    const hits: Array<{ checked?: boolean; onChange?: (e: { target: { checked: boolean } }) => void }> = []
+    const visit = (node: ReactNode): void => {
+      if (Array.isArray(node)) {
+        node.forEach(visit)
+        return
+      }
+      if (!isValidElement(node)) return
+      const elementProps = node.props as {
+        type?: string
+        checked?: boolean
+        onChange?: (e: { target: { checked: boolean } }) => void
+        children?: ReactNode
+      }
+      if (node.type === 'input' && elementProps.type === 'checkbox') hits.push(elementProps)
+      visit(elementProps.children)
+    }
+    visit(EditChannelDialogView(props))
+    return hits.length === 1 ? hits[0] : null
+  }
+
+  it('draws one checkbox labelled Mute notifications under the edit-channel namespace (AC1)', () => {
+    const markup = renderView('a name', read('stored text'))
+    expect(markup.match(/type="checkbox"/g)).toHaveLength(1)
+    expect(markup).toContain('class="edit-channel__mute"')
+    expect(markup).toContain('class="edit-channel__mute-input"')
+    expect(markup).toContain(`<span class="edit-channel__mute-label">${MUTE_LABEL}</span>`)
+    // The label text is the accessible name; no aria-label.
+    expect(markup).not.toMatch(/aria-label="[^"]*Mute/)
+  })
+
+  it('is checked, with the tick drawn, exactly when muted (AC1)', () => {
+    const on = renderView('a name', read('stored text'), true)
+    const off = renderView('a name', read('stored text'), false)
+    expect(on).toMatch(/type="checkbox"[^>]*checked=""/)
+    expect(on).toContain('edit-channel__mute-tick')
+    expect(off).not.toMatch(/type="checkbox"[^>]*checked/)
+    expect(off).not.toContain('edit-channel__mute-tick')
+  })
+
+  it('renders in the reading arm too, since it does not depend on the prompt read (AC1)', () => {
+    expect(renderView('a name', READING, true)).toMatch(/type="checkbox"[^>]*checked=""/)
+  })
+
+  it('sits after the text area and before the Archive channel button (AC1)', () => {
+    const markup = renderView('a name', read('stored text'))
+    const textarea = markup.indexOf('edit-channel__textarea')
+    const mute = markup.indexOf('edit-channel__mute"')
+    const archive = markup.indexOf('edit-channel__archive')
+    expect(mute).toBeGreaterThan(textarea)
+    expect(archive).toBeGreaterThan(mute)
+  })
+
+  it('reports the toggled value through onMutedChange and fires nothing on render (AC2)', () => {
+    const onMutedChange = vi.fn()
+    const onSave = vi.fn()
+    const props = {
+      name: 'a name',
+      prompt: read('stored text'),
+      muted: true,
+      onMutedChange,
+      onNameChange: noop,
+      onCancel: noop,
+      onSave,
+      onArchive: noop
+    }
+    renderToStaticMarkup(<EditChannelDialogView {...props} />)
+    expect(onMutedChange).not.toHaveBeenCalled()
+
+    const input = muteInputProps(props)
+    expect(input?.checked).toBe(true)
+    input?.onChange?.({ target: { checked: false } })
+    expect(onMutedChange).toHaveBeenCalledTimes(1)
+    expect(onMutedChange).toHaveBeenCalledWith(false)
+    expect(onSave).not.toHaveBeenCalled()
+  })
+})
+
+// #1608's write rule: `null` is SEND NOTHING (AC3's unchanged-OK case); otherwise the new value.
+describe('muteWriteFor', () => {
+  it('sends nothing when the checkbox still holds what was read (AC3)', () => {
+    expect(muteWriteFor({ seed: false, draft: false })).toBeNull()
+    expect(muteWriteFor({ seed: true, draft: true })).toBeNull()
+  })
+
+  it('sends the new value when the checkbox was flipped (AC2)', () => {
+    expect(muteWriteFor({ seed: false, draft: true })).toEqual({ muted: true })
+    expect(muteWriteFor({ seed: true, draft: false })).toEqual({ muted: false })
   })
 })
 

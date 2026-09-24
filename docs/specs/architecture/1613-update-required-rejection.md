@@ -109,3 +109,7 @@ Pending for the documentation stage: the ticket names no documentation acceptanc
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-24
+
+## Revisions
+
+- 2026-09-24 (build): Open question resolved, no design change. A host failed with `update-required` shows the generic `Pyrycode Offline` dot, and `e2e/update-required-host.spec.ts` asserts it holds past the first backoff step. Probed once with a retryable code (`4413`) in place of `4412`: the spec reddens (`Pyrycode Connected` after the automatic re-dial), so it discriminates.

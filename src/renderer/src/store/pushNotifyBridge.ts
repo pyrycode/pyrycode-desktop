@@ -15,7 +15,11 @@
 import { useEffect } from 'react'
 import type { NotifyKind, RendererCommand } from '@shared/ipc/commands'
 import type { DaemonEvent, StampedDaemonEvent } from '@shared/ipc/events'
-import { conversationListStore, type ConversationListState } from './conversationListStore'
+import {
+  conversationListStore,
+  type ConversationListState,
+  type ServerConversationSummary
+} from './conversationListStore'
 import { pushNotificationPrefStore } from './pushNotificationPrefStore'
 
 /**
@@ -88,12 +92,19 @@ export function notifyKindForEvent(event: DaemonEvent): NotifyKind | null {
  * omits the key (never a present `undefined`, which structured clone would carry across). The
  * conversation id is a lookup key only and never leaves the listener. The name is untrusted host text:
  * main cleans it before use, and nothing here logs it.
+ *
+ * #1597: the click opens the conversation that raised the notification. On the same send path, and from
+ * the same two lookup keys, `mintToken` files the event's server and conversation under a fresh opaque
+ * token; only the token rides the payload, and main echoes it back on the click. Optional so a caller
+ * that does not need click routing sends no token (the click then shows the active conversation);
+ * production always passes it.
  */
 export function subscribePushNotify(
   onDaemonEvent: (listener: (event: StampedDaemonEvent) => void) => () => void,
   sendCommand: (command: RendererCommand) => void,
   isPushEnabled: () => boolean,
-  nameFor: (serverId: string | null, conversationId: string) => string | null
+  nameFor: (serverId: string | null, conversationId: string) => string | null,
+  mintToken?: (target: NotificationTarget) => string
 ): () => void {
   const announcedModalIds = new Set<string>()
   return onDaemonEvent((event) => {
@@ -108,11 +119,17 @@ export function subscribePushNotify(
     if (!isPushEnabled()) return
     // Re-narrowed for the compiler: `kind !== null` already means one of these two arms, and both carry
     // the conversation id the name is looked up by.
-    const name =
-      event.type === 'turnEnd' || event.type === 'modalShown'
-        ? nameFor(event.serverId, event.conversationId)
-        : null
-    sendCommand({ type: 'notify', payload: name === null ? { kind } : { kind, name } })
+    if (event.type !== 'turnEnd' && event.type !== 'modalShown') return
+    const name = nameFor(event.serverId, event.conversationId)
+    const token = mintToken?.({ serverId: event.serverId, conversationId: event.conversationId })
+    sendCommand({
+      type: 'notify',
+      payload: {
+        kind,
+        ...(name === null ? {} : { name }),
+        ...(token === undefined ? {} : { token })
+      }
+    })
     if (modalId !== null) announcedModalIds.add(modalId)
   })
 }
@@ -129,8 +146,72 @@ export function conversationNameIn(
   serverId: string | null,
   conversationId: string
 ): string | null {
-  const row = state.byServer.get(serverId)?.find((summary) => summary.id === conversationId)
-  return row?.name ?? null
+  return conversationRowIn(state, serverId, conversationId)?.name ?? null
+}
+
+/** The one server-scoped row lookup behind both the name (#1593) and the click (#1597). */
+function conversationRowIn(
+  state: ConversationListState,
+  serverId: string | null,
+  conversationId: string
+): ServerConversationSummary | undefined {
+  return state.byServer.get(serverId)?.find((summary) => summary.id === conversationId)
+}
+
+/** Where a notification came from (#1597): the event's client-stamped origin and its conversation. */
+export interface NotificationTarget {
+  serverId: string | null
+  conversationId: string
+}
+
+/** The renderer-side half of the click token (#1597): `mint` files a target under a fresh token,
+ *  `resolve` answers it, or `null` for a token it does not hold. */
+export interface NotificationTargets {
+  mint(target: NotificationTarget): string
+  resolve(token: string): NotificationTarget | null
+}
+
+/** How many outstanding notifications a click can still be routed for (#1597). */
+export const NOTIFICATION_TARGETS_CAP = 16
+
+/**
+ * A bounded token → target map (#1597). Insertion-ordered, so once it holds more than the cap the
+ * oldest notification is forgotten first, and a click on it falls back to the active conversation.
+ * PairedShell holds one per mount, so unpair (which unmounts the shell) drops it whole, the way the
+ * announced-prompt set dies with its subscription. Tokens come from `crypto.randomUUID()` rather than a
+ * counter: a notification raised before an unpair and clicked after a re-pair must not resolve against
+ * the next shell's map.
+ */
+export function createNotificationTargets(
+  newToken: () => string = () => crypto.randomUUID()
+): NotificationTargets {
+  const targets = new Map<string, NotificationTarget>()
+  return {
+    mint: (target) => {
+      const token = newToken()
+      targets.set(token, target)
+      for (const oldest of targets.keys()) {
+        if (targets.size <= NOTIFICATION_TARGETS_CAP) break
+        targets.delete(oldest)
+      }
+      return token
+    },
+    resolve: (token) => targets.get(token) ?? null
+  }
+}
+
+/**
+ * The row a notification click opens (#1597): the target's conversation in its own server's slot, or
+ * `null` — no target, the host unpaired, the conversation deleted, or archived since the notification
+ * was raised. A `null` answer means the click falls back to showing the active conversation.
+ */
+export function notificationRowFor(
+  state: ConversationListState,
+  target: NotificationTarget | null
+): ServerConversationSummary | null {
+  if (target === null) return null
+  const row = conversationRowIn(state, target.serverId, target.conversationId)
+  return row === undefined || row.is_archived ? null : row
 }
 
 /**
@@ -143,9 +224,10 @@ export function conversationNameIn(
  * per-render caller callback to hold — every dep is a module-level singleton, so the effect closure
  * is stable and self-contained. Production reads the toggle via a thunk that snapshots the current store
  * state on each call (the per-event read AC3 needs). `window.pyry` is dereferenced ONLY inside the effect,
- * so PairedShell stays server-renderable.
+ * so PairedShell stays server-renderable. `targets` is the shell's own token map (#1597), created once
+ * per mount, so it is stable for the effect's life.
  */
-export function usePushNotify(): void {
+export function usePushNotify(targets: NotificationTargets): void {
   useEffect(
     () =>
       subscribePushNotify(
@@ -153,8 +235,9 @@ export function usePushNotify(): void {
         window.pyry.sendCommand,
         () => pushNotificationPrefStore.getState().pushNotificationsEnabled,
         (serverId, conversationId) =>
-          conversationNameIn(conversationListStore.getState(), serverId, conversationId)
+          conversationNameIn(conversationListStore.getState(), serverId, conversationId),
+        targets.mint
       ),
-    []
+    [targets]
   )
 }

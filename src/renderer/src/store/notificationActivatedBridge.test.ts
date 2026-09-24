@@ -45,15 +45,34 @@ describe('subscribeNotificationActivated', () => {
     expect(bridge.onDaemonEvent).toHaveBeenCalledTimes(1)
   })
 
-  it('invokes onActivated once per notificationActivated event, with no args (AC3, nullary)', () => {
+  it('invokes onActivated once per notificationActivated event, with null when no token rides it', () => {
     const bridge = fakeBridge()
     const onActivated = vi.fn()
     subscribeNotificationActivated(bridge.onDaemonEvent, onActivated)
 
     bridge.emit({ type: 'notificationActivated' })
     expect(onActivated).toHaveBeenCalledTimes(1)
-    // Nullary: no payload rides the arm — the callback is invoked with zero arguments.
-    expect(onActivated).toHaveBeenCalledWith()
+    expect(onActivated).toHaveBeenCalledWith(null)
+  })
+
+  it('forwards the echoed token when it is a bounded opaque string (#1597)', () => {
+    const bridge = fakeBridge()
+    const onActivated = vi.fn()
+    subscribeNotificationActivated(bridge.onDaemonEvent, onActivated)
+
+    bridge.emit({ type: 'notificationActivated', token: '0b7f6d2e-9c41-4a8e-b1d3-5f2a7c9e4b10' })
+    expect(onActivated).toHaveBeenCalledWith('0b7f6d2e-9c41-4a8e-b1d3-5f2a7c9e4b10')
+  })
+
+  it('re-validates the echoed token: anything else becomes null, never a throw (#1597)', () => {
+    const bridge = fakeBridge()
+    const onActivated = vi.fn()
+    subscribeNotificationActivated(bridge.onDaemonEvent, onActivated)
+
+    bridge.emit({ type: 'notificationActivated', token: 'x'.repeat(65) })
+    bridge.emit({ type: 'notificationActivated', token: '' })
+    bridge.emit({ type: 'notificationActivated', token: 42 } as unknown as DaemonEvent)
+    expect(onActivated.mock.calls).toEqual([[null], [null], [null]])
   })
 
   it('ignores a sample of unrelated daemon events — no navigation', () => {

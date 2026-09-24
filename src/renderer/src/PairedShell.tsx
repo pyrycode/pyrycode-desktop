@@ -15,7 +15,7 @@ import { useConversationDeletedExit } from './store/conversationDeletedBridge'
 import { useArchivedActiveConversationExit } from './store/conversationArchivedBridge'
 import { useActiveConversationReseed } from './store/activeConversationReseedBridge'
 import { useNotificationActivatedNav } from './store/notificationActivatedBridge'
-import { usePushNotify } from './store/pushNotifyBridge'
+import { createNotificationTargets, notificationRowFor, usePushNotify } from './store/pushNotifyBridge'
 import { useAppBadge } from './store/appBadgeBridge'
 import {
   conversationLastReadDeps,
@@ -417,8 +417,9 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // (the created-event nav below and `onOpen`), each already holding the conversation it is activating, so
   // the host/id pair is recorded from the nav action rather than read back out of a store. The set is exactly
   // co-located with `activateConversation` — that call is the marker for "a third activation must record
-  // the id too". The nullary `open` (a notification click, below) records nothing on purpose: it means
-  // "show the conversation that is already active", so the pane's identity has not changed. Nothing clears
+  // the id too". A notification click (below) opens through `openConversation` when its conversation is
+  // still listed (#1597); its fallback, the bare `open`, records nothing on purpose: it means "show the
+  // conversation that is already active", so the pane's identity has not changed. Nothing clears
   // it on the way out. In-app pairing now preserves the background subtree, so
   // this identity and all transient pane controls survive idle cancellation.
   const [paneKey, setPaneKey] = useState<string | null>(null)
@@ -525,15 +526,58 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // "the open chat" is. Both are module-scope arrows, which is what lets the hook take them as
   // subscribe-once pass-throughs rather than effect dependencies.
   useActiveConversationReseed(activateDeps.getActiveConversation, activateDeps.setActiveConversation)
-  // #393: a notification click drives the same list→thread `open` nav (focus the window + show the
-  // active conversation's thread). Crucially NO setActiveConversation — the nullary arm carries no
-  // payload; in the single-active model "open" means "show the existing active conversation", so this
-  // reuses the existing transition (absolute → thread from any paired view, AC2) with no new route or arm.
-  useNotificationActivatedNav(() => { leaveRecovery(); dispatch({ type: 'open' }) })
+  // #448 / #1597: opening a conversation — the sidebar row's `onOpen` and a notification click both come
+  // through here, so the two cannot drift apart. Opening a row records THAT conversation as active before
+  // navigating, the same record-then-open the created-event path above performs — so the thread's wire
+  // actions (send, snapshot, dequeue) target the clicked conversation's real id, not a placeholder. A
+  // ConversationSummary carries every ConversationCreatedPayload field (plus two more), so the store
+  // accepts it structurally; most-recent-wins replacement is the store's contract. #530: the record goes
+  // through activateConversation, which clears the previous conversation's rows and session id ONLY when
+  // the id changes — a re-click of the already-active row keeps its thread. #670: this is the sidebar
+  // switch the two-pane shell exists to enable — clicking a row while a DIFFERENT conversation's thread is
+  // up. Re-keying the pane on the clicked id is what stops that thread's screen-local state from
+  // following the operator into the new one.
+  const openConversation = (conversation: ConversationSummary): void => {
+    leaveRecovery()
+    localRead.current?.cancel()
+    setSavedTimelineTarget(undefined)
+    activateConversation(activateDeps, conversation)
+    if ('serverId' in conversation && typeof conversation.serverId === 'string') {
+      setSavedTimelineTarget({ serverId: conversation.serverId, conversationId: conversation.id })
+      localRead.current = readSavedTimeline({
+        timelines: conversationTimelineStore, read: window.pyry.chatHistory, log: window.pyry.sendDiagnostic
+      }, conversation.serverId, conversation.id)
+    }
+    setPaneKey(JSON.stringify([
+      'serverId' in conversation && typeof conversation.serverId === 'string' ? conversation.serverId : null,
+      conversation.id
+    ]))
+    dispatch({ type: 'open' })
+  }
+  // #1597: which conversation each outstanding notification was raised for, keyed by the opaque token
+  // its `notify` command carried. One map per shell mount, so unpair — which unmounts this shell —
+  // forgets every token at once.
+  const [notificationTargets] = useState(() => createNotificationTargets())
+  // #393 / #1597: a notification click (main has already brought the window forward) opens the
+  // conversation that raised THAT notification, read against the list as it is now. A token that is
+  // absent, unknown or evicted, or whose conversation is archived, deleted or on an unpaired host, falls
+  // back to the #393 behaviour: the absolute `open`, showing the conversation that is already active.
+  useNotificationActivatedNav((token) => {
+    const target = token === null ? null : notificationTargets.resolve(token)
+    const row = notificationRowFor(conversationListStore.getState(), target)
+    window.pyry.sendDiagnostic({ event: 'notification-click', code: row === null ? 'fallback' : 'opened' })
+    if (row !== null) {
+      openConversation(row)
+      return
+    }
+    leaveRecovery()
+    dispatch({ type: 'open' })
+  })
   // #392: watch the daemon-event channel for turn-end / permission-prompt moments and, gated by the
   // Settings push toggle (#408), ask main to raise an OS notification (#391 owns the unfocused-window
-  // gate). A headless subscriber — no nav, no payload — that tears down with the shell on unpair.
-  usePushNotify()
+  // gate). A headless subscriber — no nav — that tears down with the shell on unpair. Since #1597 each
+  // notification it asks for carries a token minted into `notificationTargets`.
+  usePushNotify(notificationTargets)
   // #1592: the app icon's badge counts the sidebar's attention dots across every paired host. Mounted
   // beside the push trigger for the same lifetime: unpairing the last host unmounts this shell, and the
   // bridge's teardown is what clears the badge.
@@ -582,33 +626,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
       recoveryLabel={hostRowLabel(recoveryLabel)}
       recoveryRejected={recoveryStatus?.type === 'error' && recoveryStatus.error.code === 'pairing-rejected'}
       onRepairHost={openRecovery}
-      // #448: opening a row records THAT conversation as active before navigating, the same
-      // record-then-open the created-event path above performs — so the thread's wire actions (send,
-      // snapshot, dequeue) target the clicked conversation's real id, not a placeholder. A
-      // ConversationSummary carries every ConversationCreatedPayload field (plus two more), so the
-      // store accepts it structurally; most-recent-wins replacement is the store's contract. #530: the
-      // record goes through activateConversation, which clears the previous conversation's rows and
-      // session id ONLY when the id changes — a re-click of the already-active row keeps its thread.
-      // #670: this is the sidebar switch the two-pane shell exists to enable — clicking a row while a
-      // DIFFERENT conversation's thread is up. Re-keying the pane on the clicked id is what stops that
-      // thread's screen-local state from following the operator into the new one.
-      onOpen={(conversation) => {
-        leaveRecovery()
-        localRead.current?.cancel()
-        setSavedTimelineTarget(undefined)
-        activateConversation(activateDeps, conversation)
-        if ('serverId' in conversation && typeof conversation.serverId === 'string') {
-          setSavedTimelineTarget({ serverId: conversation.serverId, conversationId: conversation.id })
-          localRead.current = readSavedTimeline({
-            timelines: conversationTimelineStore, read: window.pyry.chatHistory, log: window.pyry.sendDiagnostic
-          }, conversation.serverId, conversation.id)
-        }
-        setPaneKey(JSON.stringify([
-          'serverId' in conversation && typeof conversation.serverId === 'string' ? conversation.serverId : null,
-          conversation.id
-        ]))
-        dispatch({ type: 'open' })
-      }}
+      onOpen={openConversation}
       onOpenSettings={() => { leaveRecovery(); dispatch({ type: 'openSettings' }) }}
       onOpenArchive={() => { leaveRecovery(); dispatch({ type: 'openArchive' }) }}
       onBack={() => { leaveRecovery(); dispatch({ type: 'back' }) }}

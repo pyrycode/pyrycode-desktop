@@ -1081,18 +1081,27 @@ app.whenReady().then(() => {
         // satisfies FocusableWindow + ActivatableWindow and answers isDestroyed() honestly, which is
         // what keeps the no-window case the total no-op #518 made it (creating a window from a click
         // is out of scope); the paired emit rides the same sink as every other event.
-        fireNotification(
-          command.payload.kind,
-          {
-            isWindowFocused: () => windowHasFocus(live.window),
-            Notification,
-            onClick: () => {
-              activateWindow(live.window)
-              emitDaemonEvent(windowLocalSink, { type: 'notificationActivated' })
-            }
-          },
-          command.payload.name
-        )
+        // #1597: the click echoes this notification's own opaque token, unread, so the renderer opens
+        // the conversation that raised it. Taken into a local now so the closure holds this command's
+        // token; an absent one emits the bare arm (never a present `undefined` key). Never logged.
+        {
+          const token = command.payload.token
+          fireNotification(
+            command.payload.kind,
+            {
+              isWindowFocused: () => windowHasFocus(live.window),
+              Notification,
+              onClick: () => {
+                activateWindow(live.window)
+                emitDaemonEvent(
+                  windowLocalSink,
+                  token === undefined ? { type: 'notificationActivated' } : { type: 'notificationActivated', token }
+                )
+              }
+            },
+            command.payload.name
+          )
+        }
         return
       case 'setBadgeCount':
         // #1592: main-local like `notify`, so no server id. The count is already a non-negative safe

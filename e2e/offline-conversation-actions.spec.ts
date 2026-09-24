@@ -23,8 +23,9 @@ async function observe(app: PairedApp) {
   await app.page.evaluate(() => { (window as any).__offlineActions = { commands: [], attachments: [] } })
   for (const [method, slot] of [['sendCommand', 'commands'], ['requestAttachment', 'attachments']]) {
     const { result } = await cdp.send('Runtime.evaluate', { expression: `window.pyry.${method}` })
+    // The app badge's main-local count is not daemon-bound, so it is not recorded.
     await cdp.send('Debugger.setBreakpointOnFunctionCall', { objectId: result.objectId,
-      condition: `(globalThis.__offlineActions.${slot}.push(arguments[0]), false)` })
+      condition: `(arguments[0]?.type !== 'setBadgeCount' && globalThis.__offlineActions.${slot}.push(arguments[0]), false)` })
   }
   return () => app.page.evaluate(() => (window as any).__offlineActions as { commands: RendererCommand[], attachments: object[] })
 }

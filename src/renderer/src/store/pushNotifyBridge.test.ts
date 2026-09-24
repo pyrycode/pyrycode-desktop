@@ -7,7 +7,16 @@ import type {
   HelloAckPayload,
   MessagePayload
 } from '@shared/wire/types'
-import { conversationNameIn, notifyKindForEvent, subscribePushNotify } from './pushNotifyBridge'
+import { isNotificationToken } from '@shared/ipc/commands'
+import {
+  NOTIFICATION_TARGETS_CAP,
+  conversationNameIn,
+  createNotificationTargets,
+  notificationRowFor,
+  notifyKindForEvent,
+  subscribePushNotify,
+  type NotificationTarget
+} from './pushNotifyBridge'
 import type { ConversationListState, ServerConversationSummary } from './conversationListStore'
 
 // Framework-free data-path tests with injected spies (the notificationActivatedBridge idiom): no React,
@@ -373,5 +382,102 @@ describe('conversationNameIn', () => {
   it('never names a notification from a same-id row on another host', () => {
     expect(conversationNameIn(state, 'srv-A', 'c-3')).toBeNull()
     expect(conversationNameIn(state, 'srv-B', 'c-1')).toBeNull()
+  })
+})
+
+// #1597: the token main echoes back on a click. Minted per notification, mapped to its own server and
+// conversation, and never carrying either across.
+describe('subscribePushNotify tokens (#1597)', () => {
+  it('mints a token from the event’s own origin and sends only the token', () => {
+    const bridge = fakeBridge()
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    const mintToken = vi.fn((_target: NotificationTarget) => `tok-${mintToken.mock.calls.length}`)
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true, noName, mintToken)
+
+    bridge.emit(turnEnd, 'srv-A')
+    bridge.emit(modalShown, 'srv-B')
+    expect(mintToken).toHaveBeenNthCalledWith(1, { serverId: 'srv-A', conversationId: 'conv-XYZ' })
+    expect(mintToken).toHaveBeenNthCalledWith(2, { serverId: 'srv-B', conversationId: 'conv-modal-XYZ' })
+    expect(sendCommand).toHaveBeenNthCalledWith(1, { type: 'notify', payload: { kind: 'turn-complete', token: 'tok-1' } })
+    expect(sendCommand).toHaveBeenNthCalledWith(2, { type: 'notify', payload: { kind: 'prompt', token: 'tok-2' } })
+    for (const [command] of sendCommand.mock.calls) {
+      expect(JSON.stringify(command)).not.toContain('XYZ')
+      expect(JSON.stringify(command)).not.toContain('srv-')
+    }
+  })
+
+  it('mints nothing for an event that sends nothing', () => {
+    const bridge = fakeBridge()
+    const mintToken = vi.fn(() => 'tok')
+    let enabled = false
+    subscribePushNotify(bridge.onDaemonEvent, vi.fn(), () => enabled, noName, mintToken)
+
+    bridge.emit(turnEnd) // toggle off
+    enabled = true
+    bridge.emit(modalShown)
+    bridge.emit(modalShown) // deduped re-delivery
+    bridge.emit({ type: 'connecting' })
+    expect(mintToken).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('createNotificationTargets (#1597)', () => {
+  const counter = (): (() => string) => {
+    let n = 0
+    return () => `t${++n}`
+  }
+
+  it('resolves each token to its own target, and an unknown token to null', () => {
+    const targets = createNotificationTargets(counter())
+    const a = targets.mint({ serverId: 'srv-A', conversationId: 'c-1' })
+    const b = targets.mint({ serverId: 'srv-B', conversationId: 'c-2' })
+    expect(a).not.toBe(b)
+    expect(targets.resolve(b)).toEqual({ serverId: 'srv-B', conversationId: 'c-2' })
+    expect(targets.resolve(a)).toEqual({ serverId: 'srv-A', conversationId: 'c-1' })
+    expect(targets.resolve('never-minted')).toBeNull()
+  })
+
+  it('holds at most the cap, dropping the oldest first', () => {
+    const targets = createNotificationTargets(counter())
+    const tokens = Array.from({ length: NOTIFICATION_TARGETS_CAP + 1 }, (_, i) =>
+      targets.mint({ serverId: 'srv-A', conversationId: `c-${i}` })
+    )
+    expect(targets.resolve(tokens[0])).toBeNull()
+    expect(targets.resolve(tokens[1])).toEqual({ serverId: 'srv-A', conversationId: 'c-1' })
+    expect(targets.resolve(tokens[NOTIFICATION_TARGETS_CAP])).toEqual({
+      serverId: 'srv-A',
+      conversationId: `c-${NOTIFICATION_TARGETS_CAP}`
+    })
+  })
+
+  it('mints tokens the notify guard admits by default', () => {
+    const token = createNotificationTargets().mint({ serverId: null, conversationId: 'c-1' })
+    expect(isNotificationToken(token)).toBe(true)
+  })
+})
+
+describe('notificationRowFor (#1597)', () => {
+  function row(id: string, serverId: string | null, is_archived = false): ServerConversationSummary {
+    return { ...created, id, is_archived, last_message_ts: '2026-07-11T12:00:00Z', serverId }
+  }
+
+  const state: ConversationListState = {
+    conversations: null,
+    byServer: new Map([
+      ['srv-A', [row('c-1', 'srv-A'), row('c-old', 'srv-A', true)]],
+      ['srv-B', [row('c-2', 'srv-B')]]
+    ])
+  }
+
+  it('answers the row on the target’s own server', () => {
+    expect(notificationRowFor(state, { serverId: 'srv-B', conversationId: 'c-2' })).toEqual(row('c-2', 'srv-B'))
+  })
+
+  it('answers null for no target, another host’s same id, a missing server, a missing row or an archived row', () => {
+    expect(notificationRowFor(state, null)).toBeNull()
+    expect(notificationRowFor(state, { serverId: 'srv-B', conversationId: 'c-1' })).toBeNull()
+    expect(notificationRowFor(state, { serverId: 'srv-gone', conversationId: 'c-1' })).toBeNull()
+    expect(notificationRowFor(state, { serverId: 'srv-A', conversationId: 'c-deleted' })).toBeNull()
+    expect(notificationRowFor(state, { serverId: 'srv-A', conversationId: 'c-old' })).toBeNull()
   })
 })

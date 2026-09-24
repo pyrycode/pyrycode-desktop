@@ -1040,7 +1040,11 @@ type BaseDaemonEvent =
   // workspaceFolderRejected). Consumed by the notificationActivatedBridge (#393), which drives the
   // paired `open` nav (focus the window + show the single active conversation's thread) — a consume-only
   // filter bridge, so all three exhaustive bridges (session / timeline / modal) no-op it.
-  | { type: 'notificationActivated' }
+  // #1597: it may echo back the opaque `token` the renderer minted into that notification's `notify`
+  // command, so the click opens the conversation that raised it. Main copies it unread; it names no
+  // conversation or server, and the renderer re-validates it (isNotificationToken) before any lookup.
+  // Optional, so an absent token keeps the old meaning: show the active conversation.
+  | { type: 'notificationActivated'; token?: string }
   // The two modal arms (#201). Field names/types mirror `ModalEvent` (modalPrompts.ts, #122) so the
   // #223 bridge is a thin snake→camel rename. Consumed by the modal store + bridge (#223), NOT the
   // session store or timeline store.

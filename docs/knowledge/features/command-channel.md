@@ -64,7 +64,11 @@ Its guard, `isNotifyPayload`, is also the first to depart from the sibling `is*P
 other guard checks `typeof value.field === 'string'` (accepting any string); this one tests
 **closed-set membership** (`kind === 'turn-complete' || kind === 'prompt'`) — the by-construction
 guarantee that no daemon-relayed text can ride into an OS notification. Ships dormant — #392 is the
-not-yet-built consumer.
+not-yet-built consumer. [#1597](../codebase/1597.md) added a second, independent optional field,
+`token?: string`, admitted by a new sibling guard `isNotificationToken` (`^[A-Za-z0-9-]{1,64}$`) rather
+than `isNotifyPayload`'s closed-set check — opaque and renderer-minted, so main only ever echoes it
+back on click; see [Push notifications § Resolving the click to its own
+conversation](push-notifications.md#resolving-the-click-to-its-own-conversation-1597).
 
 The union grew a thirteenth and fourteenth member in
 [#920](https://github.com/pyrycode/pyrycode-desktop/issues/920): `answerQuestions`

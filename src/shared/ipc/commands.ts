@@ -144,6 +144,21 @@ export interface NotifyPayload {
    * notificationTitle) before it becomes the title, uses it as plain text only, and never logs it.
    */
   name?: string
+  /**
+   * An opaque, renderer-minted correlation token (#1597) that main echoes back unread on the click's
+   * `notificationActivated` event, so the renderer can open the conversation that raised THIS
+   * notification. It maps to a server and conversation only inside the renderer; neither id crosses.
+   * Bounded by isNotificationToken. Main never interprets or logs it.
+   */
+  token?: string
+}
+
+/** The shape a notification token may take on either side of the boundary (#1597): 1 to 64 ASCII
+ *  letters, digits or hyphens, which a `crypto.randomUUID()` satisfies. The main-side notify guard and
+ *  the renderer's re-validation of the echo both call this, so the two sides cannot disagree. Pure;
+ *  never throws. */
+export function isNotificationToken(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(value)
 }
 
 /**
@@ -1209,12 +1224,15 @@ function isDequeueMessagePayload(value: unknown): value is DequeueMessagePayload
  *  The optional `name` (#1593) is the one free-text field, and it only ever becomes the title: it must be
  *  absent, `undefined`, or a string, and any other type fails the whole command closed. Its content is
  *  not judged here — main's notificationTitle drops control characters and bounds the length, because
- *  this side of the boundary is not trusted to have done so. Extra fields are ignored (structural
+ *  this side of the boundary is not trusted to have done so. The optional `token` (#1597) must be
+ *  absent, `undefined`, or pass isNotificationToken; anything else fails closed. Extra fields are ignored (structural
  *  minimum, consistent with the other guards). Pure; never throws. */
 function isNotifyPayload(value: unknown): value is NotifyPayload {
   if (typeof value !== 'object' || value === null) return false
   if (!('kind' in value) || (value.kind !== 'turn-complete' && value.kind !== 'prompt')) return false
-  return !('name' in value) || value.name === undefined || typeof value.name === 'string'
+  if ('name' in value && value.name !== undefined && typeof value.name !== 'string') return false
+  // #1597: the token is opaque, so it is judged only on shape — bounded, never free text.
+  return !('token' in value) || value.token === undefined || isNotificationToken(value.token)
 }
 
 /** The renderer→main guard for the badge count (#1592). The one value that crosses must be a count: a

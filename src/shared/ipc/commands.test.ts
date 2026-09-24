@@ -1488,6 +1488,26 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand({ type: t, payload: { kind: 'prompt', name: ['a'] } })).toBe(false)
   })
 
+  it('accepts a notify carrying a bounded opaque token, or none (#1597)', () => {
+    const tokened: RendererCommand = {
+      type: 'notify',
+      payload: { kind: 'turn-complete', token: '0b7f6d2e-9c41-4a8e-b1d3-5f2a7c9e4b10' }
+    }
+    expect(isRendererCommand(tokened)).toBe(true)
+    expect(isRendererCommand({ type: 'notify', payload: { kind: 'prompt', token: 'x'.repeat(64) } })).toBe(true)
+    expect(isRendererCommand({ type: 'notify', payload: { kind: 'prompt', token: undefined } })).toBe(true)
+  })
+
+  it('rejects a notify whose token is not a bounded opaque string — the command fails closed (#1597)', () => {
+    const t = 'notify'
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', token: 'x'.repeat(65) } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', token: '' } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', token: 'conv/1' } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', token: 'a b' } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', token: 42 } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', token: null } })).toBe(false)
+  })
+
   it('accepts a setBadgeCount carrying zero or a positive integer (#1592)', () => {
     const cleared: RendererCommand = { type: 'setBadgeCount', payload: { count: 0 } }
     const three: RendererCommand = { type: 'setBadgeCount', payload: { count: 3 } }

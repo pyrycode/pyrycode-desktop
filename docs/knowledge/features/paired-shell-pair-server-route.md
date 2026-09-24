@@ -55,9 +55,13 @@ given. [`useConversationCreatedNav`](new-discussion-fab.md) (#242) is the one ad
 the daemon's `conversationCreated` event and dispatches the same `open` transition the list rows
 use, so a FAB-initiated create eventually opens the thread with no new route. `useNotificationActivatedNav`
 ([#393](../codebase/393.md), see [Push notifications](push-notifications.md#clicking-the-notification-393))
-is a second, sibling hook mounted the same way, over a different (main-local, nullary)
-`notificationActivated` event — its callback dispatches `open` only, with no
-`setActiveConversation` call, since a notification click carries no conversation payload. `PairedShell`
+is a second, sibling hook mounted the same way, over a different main-local `notificationActivated`
+event — nullary at #393, so its callback only ever dispatched `open`, with no `setActiveConversation`
+call. [#1597](../codebase/1597.md) gave the event an optional opaque `token`; when it resolves to a
+conversation still in the list, the callback opens that conversation through the shared
+`openConversation` (see [Push notifications § Resolving the click to its own
+conversation](push-notifications.md#resolving-the-click-to-its-own-conversation-1597)) instead of
+plain `open`. `PairedShell`
 itself still has no effects and no `window` deref — each hook's own effect is where `window.pyry` is
 dereferenced — so the container stays server-renderable and `App`'s `pending`/`pairing`
 neutral-first-paint invariant is untouched (`PairedShell` only mounts once the app-level route is

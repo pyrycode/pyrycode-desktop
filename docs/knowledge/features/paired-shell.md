@@ -88,13 +88,18 @@ reconnect preserves restored rows and their recording ownership. See
   container. No new route or nav arm — the existing `open` transition is reused as-is.
 - [#393](../codebase/393.md) added a **third** trigger: clicking a fired [push
   notification](push-notifications.md) (main-process, not daemon-relayed). A sibling hook,
-  `useNotificationActivatedNav`, is mounted beside `useConversationCreatedNav` and dispatches the same
-  `open` transition on a nullary `notificationActivated` `DaemonEvent`. Because `open` is already
-  absolute (any route → `thread`), this lands on the thread view regardless of which paired view —
-  list, settings, or archive — was showing when the notification fired, with no new route or arm.
-  Unlike the FAB trigger, it does **not** call `setActiveConversation` — the click carries no
-  conversation payload, and in the single-active-conversation model "open" already means "show the
-  existing active conversation's thread."
+  `useNotificationActivatedNav`, is mounted beside `useConversationCreatedNav`. At #393 the
+  `notificationActivated` `DaemonEvent` was nullary, so every click dispatched plain `open` and landed
+  on whichever conversation was already active — with two channels running, a notification from one
+  could open the other. [#1597](../codebase/1597.md) fixed that: the event now carries an optional
+  opaque `token`, renderer-minted at send time and re-validated on the way back (see [Push
+  notifications § Resolving the click to its own
+  conversation](push-notifications.md#resolving-the-click-to-its-own-conversation-1597)). A resolved
+  token opens that conversation through `openConversation`, the same function a sidebar row's `onOpen`
+  now calls — pulled out to one function so the two callers can't drift apart — and only an unresolved
+  token (absent, unknown, evicted, or its row archived/gone) still falls back to plain `open`. `open`
+  stays absolute (any route → `thread`), so either path lands on the thread view regardless of which
+  paired view — list, settings, or archive — was showing when the notification fired.
 - That same `conversationCreated` payload — previously discarded after triggering the nav — is now
   also snapshotted into the [active-conversation store](conversation-shell-workspace-chip-and-picker.md#workspace-chip-278) so
   the thread's workspace chip can read its `cwd` ([#278](../codebase/278.md)). Still no new route, nav
@@ -222,7 +227,7 @@ src/renderer/src/
 - [Pairing input screen](pairing-input-screen.md) / [#55](../codebase/55.md) — the fourth route, `pairServer` (#152), reuses this screen as-is
 - [Archive screen](archive-screen.md) / [#347](../codebase/347.md) — the fifth route, `archive`, and its entry button sharing the Channel List's actions cluster
 - [New-discussion FAB](new-discussion-fab.md) / [#242](../codebase/242.md) — the second `open` trigger, fired by a daemon-confirmed conversation create rather than a row click
-- [Push notifications](push-notifications.md) / [#393](../codebase/393.md) — the third `open` trigger, fired by clicking a push notification (main-local, not daemon-relayed)
+- [Push notifications](push-notifications.md) / [#393](../codebase/393.md), [#1597](../codebase/1597.md) — the third `open` trigger, fired by clicking a push notification (main-local, not daemon-relayed); since #1597 resolves to the conversation the notification named via an opaque renderer-minted token, not merely the active one
 - [App icon attention badge](app-badge.md) / [#1592](https://github.com/pyrycode/pyrycode-desktop/issues/1592) — `useAppBadge`, mounted beside `usePushNotify`; not a nav trigger, but the same unmount-on-unpair teardown is what clears the badge when the last host is unpaired
 - [Workspace chip](conversation-shell-workspace-chip-and-picker.md#workspace-chip-278) / [#278](../codebase/278.md) — the same `conversationCreated` payload the FAB's nav callback carries, now also snapshotted into `activeConversationStore` for the empty-thread workspace chip
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the thread view `PairedShellView` renders on `'thread'`, gaining `onBack` here

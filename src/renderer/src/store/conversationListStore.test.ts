@@ -96,6 +96,17 @@ describe('conversationListStore', () => {
     ])
   })
 
+  it('holds the decoded is_muted value per row, true and false alike (#1594)', () => {
+    const store = createConversationListStore()
+    store
+      .getState()
+      .setConversations([row({ id: 'm', is_muted: true }), row({ id: 'n', is_muted: false })], 'srv-1')
+    expect(selectConversations(store.getState())?.map((c) => [c.id, c.is_muted])).toEqual([
+      ['m', true],
+      ['n', false]
+    ])
+  })
+
   it('keeps BOTH servers — the second reply no longer overwrites the first (AC1)', () => {
     const store = createConversationListStore()
     store.getState().setConversations([row({ id: 'a1' })], 'srv-a')

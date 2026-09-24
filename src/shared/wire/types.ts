@@ -3103,12 +3103,19 @@ export type ListConversationsPayload = Record<string, never>
  * fails the decode closed. It shares `cwd`'s untrusted-opaque-display-text posture and differs from it
  * in one way worth stating: `cwd` is a PATH and this is a NAME, so it has no segment structure and
  * nothing may parse it — it is neither split, resolved, nor used as a lookup key.
+ *
+ * `is_muted` (#1594) is whether the host has muted this conversation's notifications. The daemon
+ * always writes it, but a daemon predating the field omits it, and such a row must keep notifying,
+ * so absence means NOT muted. The decoder normalises an absent key to `false`; the field is optional
+ * in this type so a row built elsewhere (the saved-list cache of an older build, a test fixture)
+ * carries the same meaning by omission. Read it as `row.is_muted === true`.
  */
 export interface ConversationSummary {
   id: string
   name: string | null
   is_promoted: boolean
   is_archived: boolean
+  is_muted?: boolean
   cwd: string
   last_message_ts: string
   last_used_at: string

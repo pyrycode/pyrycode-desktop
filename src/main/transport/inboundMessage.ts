@@ -2962,7 +2962,7 @@ function parseQueueStatePayload(payload: unknown): QueueStatePayload {
  * every field is required-present — `name: null` is a valid VALUE (a distinct unnamed conversation,
  * AC2), and `is_promoted: false` / `is_archived: false` are valid values (an ad-hoc discussion /
  * unarchived), never absences, so requireStringOrNull / requireBoolean check the TYPE, not truthiness.
- * Returns only the eight known fields; unknown server-added keys are tolerated (forward-compat) but
+ * Returns only the nine known fields; unknown server-added keys are tolerated (forward-compat) but
  * NOT copied through — this is what keeps the emitted event minimal. Its messages name the failure
  * category only — a `name` / `cwd` / `workspace_label` could echo a conversation title, a workspace path
  * or a workspace name.
@@ -2971,6 +2971,11 @@ function parseQueueStatePayload(payload: unknown): QueueStatePayload {
  * unconditionally, so `null` is a VALUE and an absent key fails closed. That direction is deliberate —
  * defaulting an absent key to `null` would let a stale or impersonating daemon silently suppress a label
  * the user set from another client, which is exactly the outcome the field exists to make impossible.
+ *
+ * `is_muted` (#1594) takes the opposite direction on absence, and deliberately: a daemon predating the
+ * field omits it, and its rows must keep notifying, so an absent key decodes as `false` (the
+ * conversation_updated.is_archived lesson). A present non-boolean still fails the row closed. The
+ * decoder always emits a boolean here, although the type marks the field optional.
  */
 function parseConversationSummary(payload: unknown): ConversationSummary {
   if (!isRecord(payload)) {
@@ -2984,11 +2989,13 @@ function parseConversationSummary(payload: unknown): ConversationSummary {
   const last_message_ts = requireString(payload, 'last_message_ts')
   const last_used_at = requireString(payload, 'last_used_at')
   const workspace_label = requireStringOrNull(payload, 'workspace_label')
+  const is_muted = payload.is_muted === undefined ? false : requireBoolean(payload, 'is_muted')
   return {
     id,
     name,
     is_promoted,
     is_archived,
+    is_muted,
     cwd,
     last_message_ts,
     last_used_at,

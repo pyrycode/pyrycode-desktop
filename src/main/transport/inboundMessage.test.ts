@@ -1021,6 +1021,7 @@ const CONV_NAMED = {
   name: 'My channel',
   is_promoted: true,
   is_archived: false,
+  is_muted: false,
   cwd: '/home/user/project',
   last_message_ts: '2026-07-08T00:00:00Z',
   last_used_at: '2026-07-09T00:00:00Z',
@@ -1033,6 +1034,7 @@ const CONV_UNNAMED = {
   name: null,
   is_promoted: false,
   is_archived: true,
+  is_muted: true,
   cwd: '/tmp/scratch',
   last_message_ts: '2026-07-07T00:00:00Z',
   last_used_at: '2026-07-07T12:00:00Z',
@@ -1701,6 +1703,43 @@ describe('parseInboundMessage — conversations fail-closed (#139, AC2/AC4)', ()
       { ...CONV_NAMED, is_promoted: 1 },
       { ...CONV_NAMED, is_archived: undefined },
       { ...CONV_NAMED, is_archived: null }
+    ]
+    for (const row of bad) {
+      expect(() => parseInboundMessage(encodeConversations({ conversations: [row] }))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  // #1594 — `is_muted` is optional to the CLIENT: a daemon predating the field omits it, and that row
+  // must keep notifying, so an absent key decodes as `false` (the conversation_updated.is_archived
+  // lesson). A present non-boolean fails the row closed like every other field.
+  it('decodes is_muted true and false as those values', () => {
+    const result = parseInboundMessage(
+      encodeConversations({ conversations: [CONV_NAMED, CONV_UNNAMED] })
+    )
+    if (result?.kind !== 'conversations') throw new Error('expected a conversations result')
+    expect(result.conversations[0].is_muted).toBe(false)
+    expect(result.conversations[1].is_muted).toBe(true)
+  })
+
+  it('decodes an absent is_muted as false, never as undefined', () => {
+    const { is_muted: _omitted, ...withoutMuted } = CONV_UNNAMED
+    const result = parseInboundMessage(encodeConversations({ conversations: [withoutMuted] }))
+    expect(result).toEqual({
+      kind: 'conversations',
+      conversations: [{ ...withoutMuted, is_muted: false }]
+    })
+    if (result?.kind !== 'conversations') throw new Error('expected a conversations result')
+    expect(result.conversations[0].is_muted).toBe(false)
+  })
+
+  it('throws when is_muted is present but non-boolean', () => {
+    const bad: unknown[] = [
+      { ...CONV_NAMED, is_muted: 'true' },
+      { ...CONV_NAMED, is_muted: 1 },
+      { ...CONV_NAMED, is_muted: null },
+      { ...CONV_NAMED, is_muted: {} }
     ]
     for (const row of bad) {
       expect(() => parseInboundMessage(encodeConversations({ conversations: [row] }))).toThrow(

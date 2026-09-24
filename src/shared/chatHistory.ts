@@ -193,7 +193,8 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
       return {
         id: id(c.id), name: nullable(c.name, string), is_promoted: bool(c.is_promoted),
         is_archived: bool(c.is_archived), cwd: string(c.cwd), last_message_ts: string(c.last_message_ts),
-        last_used_at: string(c.last_used_at), workspace_label: nullable(c.workspace_label, string)
+        last_used_at: string(c.last_used_at), workspace_label: nullable(c.workspace_label, string),
+        is_muted: optional(c.is_muted, bool)
       }
     })
     if (new Set(conversations.map((c) => c.id)).size !== conversations.length) return invalid()

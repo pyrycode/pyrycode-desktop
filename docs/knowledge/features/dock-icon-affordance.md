@@ -72,3 +72,4 @@ the Dock tile itself still need a human eyeball.
 
 - [Windows packaging § `build/` holds icon inputs, not app payload](windows-packaging.md#build-holds-icon-inputs-not-app-payload) — where `build/icon.png`/`build/icon.ico` are rendered from and what they contain.
 - [Window-presentation dev affordance](window-presentation-affordance.md), [Secret-backend dev affordance](secret-backend-affordance.md), [Loopback relay dev affordance](loopback-relay-affordance.md) — the three prior instances of the false-first `isPackaged` gate shape.
+- [App icon attention badge](app-badge.md) / [#1592](https://github.com/pyrycode/pyrycode-desktop/issues/1592) — a different, unrelated main-side control on the same icon: this file sets the Dock's *image* in `npm run dev` only; that one sets the Dock/taskbar *badge* in every build, dev and packaged alike.

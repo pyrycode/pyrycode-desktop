@@ -295,6 +295,11 @@ navigating to the thread.
 - **The push toggle is read per-event, not cached.** A user flipping [Settings](push-notification-preference-store.md)
   mid-session sees the change apply to the very next `turnEnd`/`modalShown`, not just future app
   launches.
+- **`usePushNotify` is renderer-owned, like every hook mounted in `PairedShell`.** On macOS the app
+  keeps running after its last window closes, so a hook that needs a live renderer to do its work
+  stops doing that work until a Dock reopen mounts a fresh shell. The [app icon attention
+  badge](app-badge.md) (#1592), mounted the same way, hits this identically and names it as a shared,
+  accepted limit rather than a defect either feature should fix alone.
 - **`notificationActivated` is the first main-local `DaemonEvent` arm.** Every other arm is decoded
   from a validated wire envelope; this one originates entirely in the main process (a click on a
   locally-constructed `Notification`). Documented as an exception at the arm's own doc comment in
@@ -311,6 +316,7 @@ navigating to the thread.
 
 ## Related
 
+- [App icon attention badge](app-badge.md) / [#1592](https://github.com/pyrycode/pyrycode-desktop/issues/1592) — the sibling main-local command mounted the same way in `PairedShell`; tells the operator *how many* things need them where this tells them *that* one just happened.
 - [Native edit context menu](edit-context-menu.md) — `editContextMenu.ts`, a later module in this one's
   injected-Electron family, copying this module's `fireNotification.test.ts` fake-constructor test idiom
   (#1445).

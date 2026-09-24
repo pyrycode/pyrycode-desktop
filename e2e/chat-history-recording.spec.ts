@@ -174,8 +174,9 @@ async function observeCommands(app: PairedApp) {
   await cdp.send('Debugger.enable')
   await app.page.evaluate(() => { (window as any).__savedCommands = [] })
   const { result } = await cdp.send('Runtime.evaluate', { expression: 'window.pyry.sendCommand' })
+  // The app badge's main-local count is not daemon-bound, so it is not recorded.
   await cdp.send('Debugger.setBreakpointOnFunctionCall', { objectId: result.objectId,
-    condition: '(globalThis.__savedCommands.push(arguments[0]), false)' })
+    condition: "(arguments[0].type !== 'setBadgeCount' && globalThis.__savedCommands.push(arguments[0]), false)" })
   return () => app.page.evaluate(() => (window as any).__savedCommands as object[])
 }
 
@@ -388,7 +389,8 @@ test('pending saved reading survives opening and cancelling host repair', async 
   await app.evaluate(({ ipcMain }) => {
     (globalThis as any).__offlineCommands = []
     ipcMain.on('pyry:command', (_event, command) => {
-      (globalThis as any).__offlineCommands.push(command)
+      // The app badge's main-local count is not daemon-bound, so it is not recorded.
+      if (command?.type !== 'setBadgeCount') (globalThis as any).__offlineCommands.push(command)
     })
   })
   const outbound = () => app.evaluate(() => (globalThis as any).__offlineCommands)

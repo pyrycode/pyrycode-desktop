@@ -214,6 +214,13 @@ one, it is the one that suppresses nothing, surfacing as `TS2578` pointing at th
 working directive one line below reads clean. Never open an explanatory comment line with the literal
 string `@ts-expect-error`.
 
+The union gained a `setBadgeCount` member in [#1592](https://github.com/pyrycode/pyrycode-desktop/issues/1592):
+a **payload-carrying** `BadgeCountPayload{count}` — the renderer-invokable trigger for the [app icon
+attention badge](app-badge.md). Main-local like `notify`: never reaches `../wire/types`, because it
+never reaches the daemon. `isBadgeCountPayload` requires `Number.isSafeInteger(count) && count >= 0`,
+the first guard on this channel to bound a *number* rather than check a string's shape or a set's
+membership — `Number.isInteger` alone would admit `1e300`, an integer but not a meaningful count.
+
 ## What it does
 
 Gives the renderer **one typed function** (`window.pyry.sendCommand`) to ship a sealed command to the background process, and gives the background process **one typed seam** (`onCommand`) to receive those commands — after validating each at the untrusted→trusted boundary. Every command travels on a single IPC channel; the union carries only wire payload types, so no token, key, or raw byte can cross the bridge. `ipcRenderer` itself never crosses to the window.
@@ -394,6 +401,7 @@ sendCommand: (command: RendererCommand): void => {
 - [Push notifications](push-notifications.md) / [#391 codebase notes](../codebase/391.md) — the payload-carrying `notify` member + `isNotifyPayload` guard this channel's union gained; the first member whose payload type is main-local (not wire-derived) and whose guard checks closed-set membership rather than `typeof`
 - [Question resolution envelope](question-resolution-envelope.md) / [#920](https://github.com/pyrycode/pyrycode-desktop/issues/920) — the `answerQuestions`/`refuseQuestions` members + their guards this channel's union gained, `Omit`-derived like `answerModal`'s but both token-excluded (unlike the modal pair); `isAnswerQuestionsPayload` is this file's first guard to recurse into a structured payload, and the first place the `for…of`-over-`every` hole distinction mattered. [Daemon connection](daemon-connection.md) is the consumer that mints `answer_token` for both.
 - [Run configuration store](run-config-store.md) / [#491](https://github.com/pyrycode/pyrycode-desktop/issues/491), widened [#945](https://github.com/pyrycode/pyrycode-desktop/issues/945) — the `requestSessionSettings` member's sole consumer, and the conversation-keying correction that gave it this file's only optional payload.
+- [App icon attention badge](app-badge.md) / [#1592](https://github.com/pyrycode/pyrycode-desktop/issues/1592) — the payload-carrying `setBadgeCount` member + `isBadgeCountPayload` guard this channel's union gained; main-local like `notify`, and the first guard here to bound a number rather than a string or a set.
 - [Model-list wire types § Outbound ask](model-list-wire-types.md#outbound-ask-1165) / [#1165](https://github.com/pyrycode/pyrycode-desktop/issues/1165) — the payload-carrying `requestModelList` member + `isRequestModelListPayload` guard this channel's union gained, required from the start; ships with no renderer sender, consumer is #1166.
 - [New session envelope](new-session-envelope.md) / [#1217](https://github.com/pyrycode/pyrycode-desktop/issues/1217) — the payload-carrying `newSession` member + `isNewSessionPayload` guard this channel's union gained, the only member whose payload type *tightens* its wire type (`Required<NewSessionPayload>`) and the only guard in this file that rejects an empty string; ships with no renderer sender, consumer is the sibling ticket.
 - [Request history send](request-history-send.md) / [#1222](https://github.com/pyrycode/pyrycode-desktop/issues/1222) — the payload-carrying `requestHistory` member + `isRequestHistoryPayload` guard this channel's union gained, checking type only on all three fields (an empty `cursor` is the normal opening value of a walk, not a rejectable one); the first member carrying a value this app did not mint — the daemon-minted `cursor` — which stays opaque end to end; ships with no renderer sender, consumer is #1224.

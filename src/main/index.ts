@@ -27,6 +27,7 @@ import { parsePairingPayload } from './pairingPayload'
 import { selectRelayPolicy } from './relayPolicy'
 import { selectWindowPresentation, type WindowPresentation } from './windowPresentation'
 import { selectDockIcon } from './dockIcon'
+import { applyBadgeCount } from './appBadge'
 import { registerPairingHandler } from './pairingHandler'
 import { registerPairingStatusHandler } from './pairingStatusHandler'
 import { registerUnpairServerHandler } from './unpairHandler'
@@ -1073,6 +1074,20 @@ app.whenReady().then(() => {
             emitDaemonEvent(windowLocalSink, { type: 'notificationActivated' })
           }
         })
+        return
+      case 'setBadgeCount':
+        // #1592: main-local like `notify`, so no server id. The count is already a non-negative safe
+        // integer (isBadgeCountPayload). The Windows overlay needs the real window, and LiveWindow's
+        // stand-in exposes only the focus and activate faces; the app holds one window at a time, and a
+        // reopened window's renderer re-sends its count, so the first window is the current one.
+        applyBadgeCount(command.payload.count, {
+          platform: process.platform,
+          setBadgeCount: (count) => app.setBadgeCount(count),
+          overlayWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+          toImage: (bitmap) =>
+            nativeImage.createFromBitmap(bitmap.buffer, { width: bitmap.width, height: bitmap.height })
+        })
+        diagnosticLog.event({ event: 'app-badge', count: command.payload.count })
         return
     }
   })

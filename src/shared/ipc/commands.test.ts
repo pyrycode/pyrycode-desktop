@@ -1470,6 +1470,30 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand({ type: t, payload: { kind: null } })).toBe(false)
   })
 
+  it('accepts a setBadgeCount carrying zero or a positive integer (#1592)', () => {
+    const cleared: RendererCommand = { type: 'setBadgeCount', payload: { count: 0 } }
+    const three: RendererCommand = { type: 'setBadgeCount', payload: { count: 3 } }
+    expect(isRendererCommand(cleared)).toBe(true)
+    expect(isRendererCommand(three)).toBe(true)
+    expect(isRendererCommand({ type: 'setBadgeCount', payload: { count: 1200 } })).toBe(true)
+  })
+
+  it('rejects a setBadgeCount whose count is not a non-negative safe integer (#1592)', () => {
+    // The one value that crosses is a count. Anything else — a negative, a fraction, a non-number, NaN,
+    // either infinity, or an integer past 2^53 that no real count reaches — is refused at the boundary.
+    const t = 'setBadgeCount'
+    for (const count of [-1, 1.5, '3', NaN, Infinity, -Infinity, 2 ** 60, null, true]) {
+      expect(isRendererCommand({ type: t, payload: { count } }), String(count)).toBe(false)
+    }
+  })
+
+  it('rejects a setBadgeCount with a missing, null or countless payload (#1592)', () => {
+    expect(isRendererCommand({ type: 'setBadgeCount' })).toBe(false)
+    expect(isRendererCommand({ type: 'setBadgeCount', payload: null })).toBe(false)
+    expect(isRendererCommand({ type: 'setBadgeCount', payload: {} })).toBe(false)
+    expect(isRendererCommand({ type: 'setBadgeCount', payload: 3 })).toBe(false)
+  })
+
   it('accepts a well-formed answerQuestions command over a mixed batch (#920)', () => {
     // The file's FIRST structured payload: `answers` is an array of objects, so the guard recurses
     // rather than stopping at Array.isArray. Mixed batch — entry 0 single-value, entry 1 multi-value

@@ -54,7 +54,8 @@ import {
   useBackgroundTaskRosterStore,
   selectLiveTaskCountFor
 } from '../../store/backgroundTaskRosterStore'
-import { usageLimitNotice } from './usageLimitNotice'
+import { TopOverlay } from './TopOverlay'
+import { useUsagePillDismissalStore, usagePillDismissalStore } from '../../store/usagePillDismissalStore'
 import {
   initialTimelineState,
   type ThreadItem,
@@ -454,6 +455,10 @@ export function ConversationScreen({
           daemon's next snapshot (#296 AC3) — now land on ONE row, so between them the message is drawn as
           an unmatched tail row for a relay round trip. Accepted, bounded and deliberately undefended: see
           the plan's § Design 8, which names why every alternative reverses a shipped ruling. */}
+      {/* #1604: the message area — the thread plus the Top overlay pinned over its top edge. Always
+          rendered, so the overlay (Re-pair above all) still shows when an offline host leaves the
+          Timeline nothing to draw; the region then stays empty rather than missing. */}
+      <div className="conversation__message-area">
       {(!offline || items.length > 0 || visibleQueued.length > 0) && <Timeline
         key={openConversationId}
         items={items}
@@ -474,6 +479,8 @@ export function ConversationScreen({
           })
         } : undefined}
       />}
+      <TopOverlayControl onRepairHost={onRepairHost} />
+      </div>
       {/* #962/#967: the region between the thread and the status area is EMPTY, and that emptiness is the
           design (Figma 102:4 stacks the message area straight onto the input area). #493's api-retry,
           #496's compaction and #317's stall each mounted their own null-at-rest bubble block here until
@@ -540,7 +547,7 @@ export function ConversationScreen({
                  pill opens the SAME overlay the overflow menu's Background-tasks item does — this setter,
                  verbatim. The control reads the roster itself, so only the callback goes down. */
               <ComposerErrorSlotControl
-                onRepairHost={onRepairHost} onCommand={sendText}
+                onCommand={sendText}
                 onOpenBackgroundTasks={() => setPanelOpen(true)}
                 onOpenChannelInfo={openChannelInfo}
               />
@@ -4205,51 +4212,6 @@ export function ComposerErrorChip({ status }: { status: ConnectionStatus }): JSX
   )
 }
 
-// #1321: the notice — claude's usage-window reading, drawn in the slot's LOWEST-PRIORITY arm. The pure,
-// exported view; `usageLimitNotice` owns every character it renders and every decision it makes.
-//
-// PROPS, NOT A STORE READ — the ComposerErrorChip / ConnectionBanner discipline, and here it is the only
-// way the matrix is assertable at all: zustand v5's useStore reads getInitialState() under
-// renderToStaticMarkup, so a container test can reach exactly one arm. `nowSeconds` is INJECTED for the
-// same reason and in the same unit as `selectUsageLimitFor`'s, which makes the markup a pure function of
-// the reading and the instant, exactly as this repo's node-environment specs need.
-//
-// NO DAEMON-AUTHORED STRING REACHES THIS DOM, and that is structural rather than conventional: the only
-// value rendered is `notice.text`, which `usageLimitNotice` composes from client-owned constants plus a
-// formatted instant, and the only value in an attribute is a class picked by an EXPLICIT TWO-WAY
-// CONDITIONAL over the client-owned `treatment` union. Interpolating the treatment into a template would
-// work today and would be one edit away from putting an untrusted string in `className`; the two literals
-// are also what a grep for either class finds. Do not "simplify" this into a template.
-//
-// A <div>, not a <p>, for ComposerErrorChip's recorded reason: this repo ships no global box-sizing or
-// margin reset, so a <p>'s UA margin is a live layout hazard in a row whose height is its occupant's.
-//
-// NO LIVE REGION, on the chip's ruling — the row is not a place to queue announcements. And NO
-// visually-hidden prefix, where the chip needs one: that prefix exists because "Host connection down!"
-// does not say it is an error, whereas both leads here say what they are in plain words, so the visible
-// text is already the accessible name.
-export function ComposerUsageLimitNotice({
-  reading,
-  nowSeconds
-}: {
-  reading: UsageLimitReading | null
-  nowSeconds: number
-}): JSX.Element | null {
-  if (reading === null) return null
-  const notice = usageLimitNotice(reading, nowSeconds)
-  return (
-    <div
-      className={
-        notice.treatment === 'exhausted'
-          ? 'composer-status__usage composer-status__usage--exhausted'
-          : 'composer-status__usage composer-status__usage--warning'
-      }
-    >
-      {notice.text}
-    </div>
-  )
-}
-
 // #1435: the count of background tasks claude has alive in the open conversation — the slot's LAST
 // reading, drawn as the design's neutral Pill (347:6617) rather than in either error treatment, because a
 // running task is not a failure.
@@ -4320,12 +4282,11 @@ export function ComposerMcpFailure({ name, onOpen }: {
 // the slot the chip otherwise holds (operator ruling 2026-09-02), which is what retires #167's separate
 // `.composer__repair` block beneath the composer — one control, in the place the operator already looks.
 //
-// Repair and reconnect are disjoint subsets of errors, ahead of the chip and all connected-only
-// occupants. Error fields select a branch but never supply markup, attributes, accessible copy or logs.
+// Reconnect is the one actionable error left here (#1604 moved Re-pair to the Top overlay), ahead of
+// the chip and all connected-only occupants. Error fields select a branch but never supply markup, attributes, accessible copy or logs.
 // Inject status and handlers so the pure view remains statically testable without stores or window.
 export function ComposerErrorSlot({
   status,
-  onRepair,
   onReconnect,
   notice,
   recovery,
@@ -4335,7 +4296,6 @@ export function ComposerErrorSlot({
   taskCount
 }: {
   status: ConnectionStatus
-  onRepair: () => void
   onReconnect: () => void
   notice: JSX.Element | null
   recovery?: JSX.Element | null
@@ -4344,13 +4304,8 @@ export function ComposerErrorSlot({
   mcpFailure?: JSX.Element | null
   taskCount?: JSX.Element | null
 }): JSX.Element | null {
-  if (shouldOfferRepair(status)) {
-    return (
-      <button type="button" className="button-small button-small--error" onClick={onRepair}>
-        {COMPOSER_REPAIR_BUTTON_COPY}
-      </button>
-    )
-  }
+  // #1604 moved Re-pair out of this slot into the conversation's Top overlay (`TopOverlayControl`), so
+  // pairing rejection — which `shouldOfferReconnect` excludes — now falls through to the chip below.
   if (shouldOfferReconnect(status)) {
     return (
       <button type="button" className="button-small button-small--error" onClick={onReconnect}>
@@ -4427,35 +4382,16 @@ export function ComposerHistoryFailure({ retryable, onRetry }: {
 // pill opens is the screen's own overlay — the same `setPanelOpen` the More actions item calls, so that
 // entry point and the panel itself are untouched.
 function ComposerErrorSlotControl({
-  onRepairHost,
   onCommand,
   onOpenBackgroundTasks,
   onOpenChannelInfo
 }: {
-  onRepairHost?: (serverId: string) => void
   onCommand: (command: string) => boolean
   onOpenBackgroundTasks: () => void
   onOpenChannelInfo: () => void
 }): JSX.Element | null {
   const status = useOpenConnectionStatus()
-  // #1321: the usage-limit reading for the conversation ON SCREEN, plus the instant it is read at. Two
-  // more narrow-slice subscriptions on the control that already owns this slot, rather than a fourth
-  // container mounted beside it — the slot holds one occupant at a time, so the priority has to be
-  // decided in one place, and that place is the view below.
-  //
-  // THE CLOCK IS READ AT RENDER AND NOTHING IS SCHEDULED FROM `resetsAt`. Expiry is the one comparison
-  // inside `selectUsageLimitFor`, so an expired reading leaves the row on the next render rather than on
-  // a tick; a timer driven off the number would fire immediately whether it were negative or past
-  // setTimeout's clamp. `Math.floor(Date.now() / 1000)` is UNIX SECONDS, which is the unit that selector
-  // documents and the unit `usageLimitNotice` takes — a millisecond value would expire every reading on
-  // arrival with no type error and no symptom beyond "nothing ever shows".
-  //
-  // A fresh selector identity each render is deliberate and costs a re-subscribe, never a loop:
-  // `selectUsageLimitFor` returns the HELD RECORD ITSELF or `null`, both stable references, so
-  // useSyncExternalStore's Object.is check short-circuits — including when another conversation's write
-  // produces a new map holding the same record.
   const open = useActiveConversationStore(selectActiveConversation)
-  const nowSeconds = Math.floor(Date.now() / 1000)
   const rows = useConversationListStore(selectConversations)
   const historyHost = serverIdForOpenConversation(rows, open?.id ?? null)
   const historyFailure = useConversationTimelineStore(s =>
@@ -4465,11 +4401,8 @@ function ComposerErrorSlotControl({
       retryHistoryPage(historyRetryDeps, open, historyHost, historyFailure)
     }
   }
-  const usageLimit = useUsageLimitStore(
-    open === null ? NO_USAGE_LIMIT_READING : selectUsageLimitFor(open.id, nowSeconds)
-  )
-  // #1435: the open conversation's background-task count. The `usageLimit` read above's shape verbatim,
-  // and for the same reasons — a fresh selector identity per render costs a re-subscribe and never a
+  // #1435: the open conversation's background-task count. `TopOverlayControl`'s usage read's shape, and
+  // for the same reasons — a fresh selector identity per render costs a re-subscribe and never a
   // loop, because the selector returns a PRIMITIVE, so useSyncExternalStore's Object.is check
   // short-circuits even when another conversation's write produces a new outer map.
   //
@@ -4548,15 +4481,6 @@ function ComposerErrorSlotControl({
     }, { field: 'model', value: offer.report.originalModel })
   }
 
-  const handleRepair = (): void => {
-    const open = selectActiveConversation(activeConversationStore.getState())
-    const serverId = serverIdForOpenConversation(
-      selectConversations(conversationListStore.getState()),
-      open === null ? null : open.id
-    )
-    if (serverId !== null) onRepairHost?.(serverId)
-  }
-
   const handleReconnect = async (): Promise<void> => {
     const open = selectActiveConversation(activeConversationStore.getState())
     const serverId = serverIdForOpenConversation(
@@ -4574,7 +4498,6 @@ function ComposerErrorSlotControl({
   return (
     <ComposerErrorSlot
       status={status}
-      onRepair={handleRepair}
       onReconnect={handleReconnect}
       recovery={recoveryCopy === null ? null : (
         <div className="stopped-turn-recovery" role="status">
@@ -4602,8 +4525,7 @@ function ComposerErrorSlotControl({
             Could not change the model — try again.
           </div>
         ) : (
-          stoppingBanner !== undefined ? <ComposerBannerReport report={stoppingBanner} /> :
-            usageLimit === null ? null : <ComposerUsageLimitNotice reading={usageLimit} nowSeconds={nowSeconds} />
+          stoppingBanner !== undefined ? <ComposerBannerReport report={stoppingBanner} /> : null
         )
       }
       history={historyFailure === null ? null :
@@ -4615,6 +4537,53 @@ function ComposerErrorSlotControl({
          is what makes it total and its absent arm assertable. */
       taskCount={taskCount === 0 ? null :
         <ComposerTaskCount count={taskCount} onOpen={onOpenBackgroundTasks} />}
+    />
+  )
+}
+
+// #1604: the store-bound container for the conversation's Top overlay — the usage-limit reading and the
+// pairing-error Re-pair, moved out of the composer slot so neither waits behind the slot's other
+// occupants. A sibling leaf of the thread, so its reads (usage, dismissal, connection status) re-render
+// this control and never the timeline.
+//
+// The usage read is #1321's, moved verbatim. THE CLOCK IS READ AT RENDER AND NOTHING IS SCHEDULED FROM
+// `resetsAt`: expiry is the one comparison inside `selectUsageLimitFor`, so an expired reading leaves on
+// the next render rather than on a tick. `Math.floor(Date.now() / 1000)` is UNIX SECONDS, the unit that
+// selector and `usageLimitNotice` take — milliseconds would expire every reading on arrival. A fresh
+// selector identity per render costs a re-subscribe, never a loop: the selector returns the held record
+// or `null`, both stable references.
+//
+// UNLIKE THE SLOT, NO CONNECTION GATE ON THE READING: an account's quota does not change when a socket
+// drops, and the move exists so the warning stops waiting behind other readings.
+//
+// Repair resolves the host from the stores at CLICK time and delegates to the shell, preserving this
+// host's saved credentials and held chats — the slot's former `handleRepair`, moved.
+function TopOverlayControl({ onRepairHost }: {
+  onRepairHost?: (serverId: string) => void
+}): JSX.Element | null {
+  const status = useOpenConnectionStatus()
+  const open = useActiveConversationStore(selectActiveConversation)
+  const nowSeconds = Math.floor(Date.now() / 1000)
+  const usageLimit = useUsageLimitStore(
+    open === null ? NO_USAGE_LIMIT_READING : selectUsageLimitFor(open.id, nowSeconds)
+  )
+  const dismissed = useUsagePillDismissalStore(s => s.dismissed)
+  const handleRepair = (): void => {
+    const current = selectActiveConversation(activeConversationStore.getState())
+    const serverId = serverIdForOpenConversation(
+      selectConversations(conversationListStore.getState()),
+      current === null ? null : current.id
+    )
+    if (serverId !== null) onRepairHost?.(serverId)
+  }
+  return (
+    <TopOverlay
+      reading={usageLimit}
+      nowSeconds={nowSeconds}
+      dismissed={dismissed}
+      repair={shouldOfferRepair(status)}
+      onDismissUsage={reading => usagePillDismissalStore.getState().dismiss(reading)}
+      onRepair={handleRepair}
     />
   )
 }

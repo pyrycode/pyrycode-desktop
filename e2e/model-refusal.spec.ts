@@ -181,14 +181,15 @@ test('local/no fallback, conversations, superseding swaps, manual picks and late
   await expect(action).toHaveCount(0)
 })
 
-test('connection errors and stopped-turn recovery take priority over the offer, which precedes usage', async ({ launchPairedApp }) => {
+test('connection errors and stopped-turn recovery take priority over the offer, while usage stays in the overlay', async ({ launchPairedApp }) => {
   const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: fake([]) })
-  const action = page.getByRole('button', { name: 'Switch back', exact: true }), usage = page.locator('.composer-status__usage')
+  const action = page.getByRole('button', { name: 'Switch back', exact: true }), usage = page.locator('.conversation__top-overlay .top-overlay-pill--error')
   daemon.pushFrame(frame('rate_limited', { conversation_id: SEEDED_ROW.id, status: 'rejected', limit_type: 'five_hour', resets_at: 4102444800, truncated_fields: null }))
   await expect(usage).toBeVisible()
   daemon.pushFrame(frame('model_refusal_fallback', refusal()))
   await expect(action).toBeVisible()
-  await expect(usage).toHaveCount(0)
+  // The usage pill lives in the Top overlay, so the offer taking the slot no longer hides it.
+  await expect(usage).toBeVisible()
   daemon.pushFrame(frame('turn_end', { conversation_id: SEEDED_ROW.id, turn_id: 'stopped', stop_reason: 'end_turn',
     is_error: true, terminal_reason: 'api_error', error_category: 'billing_error' }))
   await expect(page.locator('.stopped-turn-recovery')).toContainText('billing error')
@@ -204,7 +205,7 @@ test('connection errors and stopped-turn recovery take priority over the offer, 
     if (retryable) await expect(page.locator('.composer-status__error')).toBeVisible()
     else await expect(page.getByRole('button', { name: 'Connection error - Reconnect', exact: true })).toBeVisible()
     await expect(action).toHaveCount(0)
-    await expect(usage).toHaveCount(0)
+    await expect(usage).toBeVisible()
     await expect(page.locator('.model-refusal')).toHaveCount(1)
   }
 })

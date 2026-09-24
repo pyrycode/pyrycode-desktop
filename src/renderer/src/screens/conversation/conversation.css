@@ -180,6 +180,95 @@
   display: none;
 }
 
+/* #1604 — the message area: the thread plus the Top overlay pinned over it. It takes over the flexible
+   middle of .conversation's column (flex: 1 1 auto; min-height: 0), and .conversation__thread and
+   .conversation__empty fill it exactly as they filled the column before. `position: relative` is what the
+   overlay is pinned against, so the thread scrolls beneath it rather than carrying it. Always rendered:
+   with the Timeline skipped (an offline host with nothing to draw) the region stays, empty, so the
+   overlay's Re-pair still has somewhere to sit. */
+.conversation__message-area {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* #1604 — the Top overlay (Figma 132:4171, frame "Top overlay"): a right-aligned column of pills with a
+   12px gap across the message area's top edge. The drop shadow is the frame's own `drop-shadow` filter,
+   inlined verbatim — heavier than --shadow-thread, since the overlay floats over the content — so the
+   whole stack casts one shadow, as the export draws it. `pointer-events: none` on the full-width box, and
+   back on for the pills, so the thread beneath stays scrollable and clickable between and beside them. */
+.conversation__top-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-3);
+  filter: drop-shadow(0 6px 4px rgba(0, 0, 0, 0.6));
+  pointer-events: none;
+}
+
+/* #1604 — the Pill (Figma 347:6617). Hugs its text up to the message area's width, then WRAPS and stays
+   right-aligned instead of truncating — the reading's reset clause is the part an ellipsis would eat.
+   Worn by a <div> (the usage reading) and a <button> (Re-pair), so the button reset lives here; the UA
+   focus ring is deliberately not suppressed. */
+.top-overlay-pill {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  border-radius: var(--radius-xs);
+  font-family: inherit;
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+/* The two variants by token name. Colour follows dismissibility (`usageLimitNotice`'s `variant`), not
+   wording: Default is the dismissible warning, Error everything else, Re-pair included. */
+.top-overlay-pill--default {
+  background: var(--color-primary-container);
+  color: var(--color-on-primary-container);
+}
+
+.top-overlay-pill--error {
+  background: var(--color-error-container);
+  color: var(--color-error);
+}
+
+button.top-overlay-pill {
+  cursor: pointer;
+}
+
+.top-overlay-pill__text {
+  min-width: 0;
+}
+
+/* The X: an 8px glyph inked by currentColor, in a real button so it takes focus and a keypress. */
+.top-overlay-pill__dismiss {
+  flex: 0 0 auto;
+  display: flex;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
 /* #277 — the pre-first-message empty-thread state, shown in place of the thread scroll region while a
    fresh conversation has no items (replacing Timeline's former `return null`). Fills the flexible
    middle region like .conversation__thread (flex: 1 1 auto; min-height: 0) but is a DISTINCT class —
@@ -1681,74 +1770,9 @@
   border: 0;
 }
 
-/* #1321 — the usage-limit notice, the slot's THIRD occupant and its lowest-priority one. It carries no
-   action, so it wears the CHIP's box (Figma 112:3529) rather than #963's `Button small`: 8px/4px insets
-   around a 16px line, the same 6px corner, body/small. No width and no height declaration, for
-   .composer-status__error's two recorded reasons — the Figma's own width is content plus insets, and
-   under this repo's absent box-sizing reset a `height: 24px` beside `padding: 4px 0` would render a 32px
-   box in a row the notice must not grow.
-
-   ITS OWN BLOCK RATHER THAN A SHARED GEOMETRY LIFTED OUT OF .composer-status__error, and that is a
-   deliberate departure from the "One consumer is not a pattern" trigger .button-small followed one
-   ticket ago. That extraction was possible because #963's button WANTED every declaration of the rule it
-   lifted from. This occupant does not: it takes the chip's box but neither of its colours on one arm and
-   neither on the other, it has no `position: relative` because it has no absolutely-positioned hidden
-   prefix to contain, and #797's chip is reached by e2e locators and by its own describe. Sharing here
-   would couple two occupants that differ in what they draw for the sake of six declarations, and a later
-   change to the chip would silently move the notice.
-
-   flex: 0 1 auto + min-width: 0 + the ellipsis chain are a DELIBERATE DEPARTURE from both neighbours,
-   which are flex: 0 0 auto, and the reason is copy LENGTH rather than trust. #797's chip is one fixed
-   155px constant and #963's button less, so a row that must hold 316px of content at the app's 800px
-   minimum window (a 340px conversation pane, less --space-3 twice) can seat either with room over. This
-   occupant's longest string is 404px — `Nearly at usage limit - 7-day window, resets 01.01.2100 at 02:00`,
-   the warning lead on a seven-day window, which always resets on another local day and so always takes the
-   formatter's long form. Copied from the neighbours, that refuses every pixel of the squeeze: the activity
-   group absorbed all of it, went to ZERO width and took the turning mark off the row, and the row still
-   spilled 79px past the pane. THAT IS WHY THIS RULE DOES NOT COPY THEM.
-
-   THE CHAIN STILL TERMINATES IN THE LABEL for the daemon-controlled string, which is what the neighbours'
-   flex: 0 0 auto was protecting and the one property that may not be given up. Flex distributes shrink in
-   proportion to each item's base size, so against an oversized tool name — thousands of px of base against
-   this element's 404 — the activity group takes essentially all of it and ellipsizes, exactly as before.
-   This element gives only when the row is short because of the CLIENT'S OWN copy, which no daemon selects
-   the length of: `usageLimitNotice` renders neither `status` nor `limitType`, so every run here is a
-   client-owned constant or a bounded formatted instant. The inversion the neighbours guard against is
-   remotely triggerable; this rule's own overflow was not, and the two want opposite declarations.
-
-   white-space: nowrap is kept, and the ellipsis is what makes it safe. Wrapping would GROW a row whose
-   height is its occupant's and push the composer down — #963's AC3 from the other side, and #797's own
-   recorded reason. The runs are ordered lead, window, reset, so the clip eats the least important first
-   and the lead — the only run carrying the operator-facing fact — is the last thing to go.
-
-   RE-MEASURED WITH THE NOTICE UP, the way #797 measured with the chip and #963 with the button, and NOT
-   carried over from either's numbers: headless Chromium, this row's markup, both stylesheets, the
-   fixture's paired shell, AT THE 800px MINIMUM WINDOW rather than at the 1100 launch width. That width is
-   the correction: the pane is 640px at launch, every string this element can hold fits it, and the fit
-   measured there was an assertion that could not fail. At 800 the row reads 340x24 with a scrollWidth
-   equal to its clientWidth, and so does .conversation — no horizontal overflow at either level. The 316px
-   of row content divides as 22 to the activity group (its floor, above) and 294 to this element, whose
-   scrollWidth is 404: it fits BY COMPRESSING, with 110px of copy clipped. The row reads 24 on the warning
-   arm at the launch width and 24 on the exhausted arm at 800, which is what the identical geometry on both
-   modifiers buys. All of it is pinned in e2e/composer-usage-limit.spec.ts rather than left as a claim
-   here, because no vitest detector in this repo can read a resolved style. */
-.composer-status__usage {
-  flex: 0 1 auto;
-  min-width: 0;
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-xs);
-  font-size: var(--text-body-small-size);
-  line-height: var(--text-body-small-line);
-  letter-spacing: var(--text-body-small-tracking);
-  font-weight: var(--text-body-small-weight);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* #1435 — the background-task count, the slot's LAST reading, drawn as the design's `Pill` (347:6617).
-   Its OWN block rather than a geometry lifted out of a neighbour, on .composer-status__usage's own
-   ruling for the same decision: this occupant shares no colour with either error treatment, so sharing
+   Its OWN block rather than a geometry lifted out of a neighbour, on the retired usage notice's
+   ruling for the same decision (that notice now draws as a .top-overlay-pill): this occupant shares no colour with either error treatment, so sharing
    would couple two things that draw differently for the sake of a few declarations. What it does share
    is the Pill's declarations with .composer__attachment-name two regions down, and those are read off
    the node: px-[8px] py-[4px] → --space-2 / --space-1, rounded-[6px] → --radius-xs, M3/body/small at
@@ -1756,8 +1780,8 @@
    which sets the emphasized weight).
 
    THE TOKEN PAIR IS READ BY NAME. The export bakes #cfe4ff as the ground and #134a74 as the ink, which
-   is this app's pair TRANSPOSED — the light scheme, the trap .composer__attachment-name, .status-row and
-   .composer-status__usage--exhausted each already record. By name it is a dark ground under light text,
+   is this app's pair TRANSPOSED — the light scheme, the trap .composer__attachment-name and .status-row
+   each already record. By name it is a dark ground under light text,
    which is what the rendered node shows. Neither hex appears here.
 
    NO height DECLARATION, and that is AC5's second half: 16px of line plus 4px twice is exactly 24 under
@@ -1799,28 +1823,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* The exhausted arm — the one reading that means the operator is actually blocked, so it takes the error
-   PAIR by token name, the chip's own treatment. Never the export's #ffdad6/#ba1a1a, which are the light
-   scheme (the standing rule .composer-status and .status-row already record). */
-.composer-status__usage--exhausted {
-  background: var(--color-error-container);
-  color: var(--color-error);
-}
-
-/* The warning arm, and AC2's "visually distinct from the exhausted one". A DEPARTURE from a literal reuse
-   of #797's chip, and the reason is the copy's: that chip's fill is --color-error-container, so drawing a
-   band in which every turn still runs in it would repeat IN COLOUR exactly the overclaim the two leads
-   are careful to avoid. --color-warning already exists for this attention-not-failure role (it carries
-   the in-progress connection dot), so no new token and no new Figma node.
-
-   COLOUR ALONE, WITH NO FILL, and that is a choice rather than an omission: there is no
-   --color-warning-container token, inventing one would be a design decision this ticket has no mandate
-   for, and amber text against the row's own ground is already unmistakable beside a filled dark-red
-   chip. Geometry is identical on both arms, so the row's height cannot move across the transition. */
-.composer-status__usage--warning {
-  color: var(--color-warning);
 }
 
 /* #963 — the design's `Button small` (component set 347:6645), extracted as a shared treatment on its

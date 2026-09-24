@@ -1,6 +1,6 @@
-// #1321 — claude's usage-window reading turned into the one line the composer status row draws, plus
-// which of the row's two colour treatments it wears. `ComposerUsageLimitNotice` in ConversationScreen.tsx
-// is its only consumer.
+// #1321 — claude's usage-window reading turned into one line of client-owned text, plus which of two
+// wordings it wears. #1604 moved its drawing from the composer status row to the conversation's Top
+// overlay (`TopOverlay`), which is now its only consumer and which also takes the pill `variant` below.
 //
 // A REACT-FREE MODULE beside `messageTime`, for the same reason that one exists: the exact characters are
 // pinnable without rendering anything, and the whole of the ticket's untrusted-text discipline is then a
@@ -82,6 +82,16 @@ const WINDOW_COPY: ReadonlyMap<string, string> = new Map([
   ['seven_day', '7-day window']
 ])
 
+/**
+ * #1604: the one status whose pill is the dismissible Default variant, matched on EXACT EQUALITY for
+ * `EXHAUSTED_STATUS`'s reason. Pill colour follows dismissibility, not wording: every other status —
+ * the exhausted one AND an unrecognised one that still reads as a warning — is the Error pill with no X,
+ * so a value this client has never seen cannot be waved away.
+ *
+ * Module-private for the same reason as `EXHAUSTED_STATUS`.
+ */
+const DISMISSIBLE_STATUS = 'allowed_warning'
+
 /** What the view needs: which treatment to wear, and the one line to draw.
  *
  *  `treatment` is a CLIENT-OWNED UNION, decided here and nowhere else, so the view picks a class without
@@ -89,6 +99,9 @@ const WINDOW_COPY: ReadonlyMap<string, string> = new Map([
  *  of the text. */
 export interface UsageLimitNotice {
   treatment: 'exhausted' | 'warning'
+  /** #1604: the Top overlay pill variant — client-owned, so the view picks a class without re-testing
+   *  the status. `default` carries the X; `error` does not. */
+  variant: 'default' | 'error'
   text: string
 }
 
@@ -174,10 +187,32 @@ export function usageLimitNotice(reading: UsageLimitReading, nowSeconds: number)
   const reset = formatResetInstant(reading.resetsAt, nowSeconds)
   return {
     treatment: exhausted ? 'exhausted' : 'warning',
+    variant: reading.status === DISMISSIBLE_STATUS ? 'default' : 'error',
     text: [
       exhausted ? USAGE_LIMIT_EXHAUSTED_COPY : USAGE_LIMIT_WARNING_COPY,
       window === undefined ? '' : ` - ${window}`,
       reset === null ? '' : `, resets ${reset}`
     ].join('')
   }
+}
+
+/**
+ * #1604: whether `reading` is the one the operator dismissed with the pill's X — true only when status,
+ * limit type and reset time are each EXACTLY equal.
+ *
+ * FIELD BY FIELD, NEVER A COMPOSITE. Both strings are daemon-authored, and this repo's rule forbids
+ * daemon text as a cache key or lookup path: joining them into one string (or using them as a `Map` or
+ * object key) would also let `a|b` + `c` collide with `a` + `b|c`. No trim, no case fold — a
+ * normalised comparison would hide a reading the operator never saw.
+ */
+export function isUsageReadingDismissed(
+  reading: UsageLimitReading,
+  dismissed: UsageLimitReading | null
+): boolean {
+  return (
+    dismissed !== null &&
+    reading.status === dismissed.status &&
+    reading.limitType === dismissed.limitType &&
+    reading.resetsAt === dismissed.resetsAt
+  )
 }

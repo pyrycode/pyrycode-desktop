@@ -14,7 +14,7 @@ afterEach(() => vi.restoreAllMocks())
 
 const history = (retryable = true) => <ComposerHistoryFailure retryable={retryable} onRetry={() => {}} />
 const render = (status: ConnectionStatus, overrides = {}) => renderToStaticMarkup(
-  <ComposerErrorSlot onReconnect={() => {}} status={status} onRepair={() => {}} notice={null} history={history()} {...overrides} />)
+  <ComposerErrorSlot onReconnect={() => {}} status={status} notice={null} history={history()} {...overrides} />)
 
 describe('history status occupant', () => {
   it.each([false, true])('renders fixed error copy with Retry only when retryable=%s', retryable => {
@@ -86,7 +86,7 @@ describe('history in the store-bound composer status slot', () => {
     expect(stageScreen(host, displayed, status)()).not.toContain('Could not load older messages')
   })
 
-  it('preserves recovery, refusal, settings, stopping and usage priority ahead of history', () => {
+  it('preserves recovery, refusal, settings and stopping priority ahead of history', () => {
     const screen = stageScreen('host', 'chat', { type: 'connected' }, {
       latestTurnEnd: { type: 'turnEnd', turnId: 't', stopReason: 'error', isError: true, errorCategory: 'billing_error' },
       refusalOffer: { report: { type: 'modelRefusalFallback', originalModel: 'opus', fallbackModel: 'sonnet',
@@ -117,8 +117,11 @@ describe('history in the store-bound composer status slot', () => {
     vi.mocked(runSettingsWriteStore.getInitialState).mockReturnValue({ ...runSettingsWriteStore.getInitialState(), error: null })
     assertOccupant('Stopping report')
     clear('stoppingBanner')
-    assertOccupant('Usage limit reached')
-    vi.mocked(usageLimitStore.getInitialState).mockReturnValue({ ...usageLimitStore.getInitialState(), readings: new Map() })
-    expect(screen()).toContain('Could not load older messages')
+    // #1604: the usage reading left the slot for the Top overlay, so it no longer holds history back —
+    // both show, the pill above the thread and the failure in the row.
+    const markup = screen()
+    expect(markup).toContain('Could not load older messages')
+    expect(markup.indexOf('Usage limit reached')).toBeGreaterThan(-1)
+    expect(markup.indexOf('Usage limit reached')).toBeLessThan(markup.indexOf('class="composer-status"'))
   })
 })

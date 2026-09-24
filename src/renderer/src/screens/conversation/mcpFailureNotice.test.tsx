@@ -8,7 +8,7 @@ const connected: ConnectionStatus = {
 }
 const failure = (name = 'docs') => <ComposerMcpFailure name={name} onOpen={() => {}} />
 const render = (status: ConnectionStatus, overrides = {}) => renderToStaticMarkup(
-  <ComposerErrorSlot onReconnect={() => {}} status={status} onRepair={() => {}} notice={null}
+  <ComposerErrorSlot onReconnect={() => {}} status={status} notice={null}
     mcpFailure={failure()} {...overrides} />)
 
 describe('MCP failure status occupant', () => {

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { UsageLimitReading } from '../../store/usageLimitStore'
 import {
+  isUsageReadingDismissed,
   usageLimitNotice,
   USAGE_LIMIT_EXHAUSTED_COPY,
   USAGE_LIMIT_WARNING_COPY
@@ -197,5 +198,60 @@ describe('usageLimitNotice — no daemon-authored string reaches the text (#1321
       NOW
     )
     expect(notice.text).toBe(USAGE_LIMIT_WARNING_COPY)
+  })
+})
+
+// #1604 — the pill variant follows DISMISSIBILITY, not wording: exactly `allowed_warning` is the Default
+// pill with an X, and every other status (the exhausted one and the unrecognised ones that still read as
+// a warning) is the Error pill. Exact equality, so no near-miss of the one string earns the X.
+describe('usageLimitNotice — the pill variant (#1604)', () => {
+  it('gives exactly `allowed_warning` the default variant', () => {
+    expect(usageLimitNotice(reading({ status: 'allowed_warning' }), NOW).variant).toBe('default')
+  })
+
+  it.each(['rejected', 'allowed_warning ', 'ALLOWED_WARNING', 'allowed', '', 'DAEMON_STATUS_SENTINEL'])(
+    'gives %j the error variant',
+    (status) => {
+      expect(usageLimitNotice(reading({ status }), NOW).variant).toBe('error')
+    }
+  )
+
+  // Colour follows dismissibility while the WORDING keeps its own rule: an unrecognised status is an
+  // Error pill that still reads as a warning.
+  it('keeps the warning wording on an error pill for an unrecognised status', () => {
+    const notice = usageLimitNotice(reading({ status: 'something_new' }), NOW)
+    expect(notice.variant).toBe('error')
+    expect(notice.text.startsWith(USAGE_LIMIT_WARNING_COPY)).toBe(true)
+  })
+})
+
+// #1604 — the dismissal comparison: field by field, exact, and never through a composite key.
+describe('isUsageReadingDismissed (#1604)', () => {
+  const warning = reading({ status: 'allowed_warning', limitType: 'seven_day', resetsAt: 4_102_444_800 })
+
+  it('is false with nothing dismissed', () => {
+    expect(isUsageReadingDismissed(warning, null)).toBe(false)
+  })
+
+  it('is true for an equal triple held as a different object', () => {
+    expect(isUsageReadingDismissed(warning, { ...warning })).toBe(true)
+  })
+
+  it.each([
+    ['status', { status: 'rejected' }],
+    ['limitType', { limitType: 'five_hour' }],
+    ['resetsAt', { resetsAt: 4_102_444_801 }]
+  ] as const)('is false when only %s differs', (_field, change) => {
+    expect(isUsageReadingDismissed({ ...warning, ...change }, warning)).toBe(false)
+  })
+
+  // Exact, not normalised: a trimmed or case-folded comparison would hide a reading the operator never
+  // dismissed. Also the composite-key trap — joined, these two triples would collide.
+  it('does not normalise and does not collide across field boundaries', () => {
+    expect(isUsageReadingDismissed({ ...warning, status: 'allowed_warning ' }, warning)).toBe(false)
+    expect(isUsageReadingDismissed(
+      { status: 'a|b', limitType: 'c', resetsAt: 1 },
+      { status: 'a', limitType: 'b|c', resetsAt: 1 }
+    )).toBe(false)
   })
 })

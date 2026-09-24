@@ -60,7 +60,7 @@ test('status spacing stays outside the scrollport with a warning and five-line d
           resets_at: 4_102_444_800, truncated_fields: null
         } satisfies RateLimitedPayload
       }))
-      await expect(page.locator('.composer-status__usage--warning')).toHaveCount(warning ? 1 : 0)
+      await expect(page.locator('.conversation__top-overlay .top-overlay-pill--default')).toHaveCount(warning ? 1 : 0)
       await input.fill(warning ? 'First line\nSecond line\nThird line\nFourth line\nFifth line' : '')
       await expect.poll(() => page.locator('.composer__row').evaluate(
         el => el.getBoundingClientRect().height

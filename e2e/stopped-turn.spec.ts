@@ -79,15 +79,16 @@ test('stopped records survive recovery, Compact uses the guarded composer path, 
   await page.screenshot({ path: '/tmp/1237-stopped-turn.png' })
 })
 
-test('connection errors outrank recovery, recovery outranks usage, and trailing idle preserves it', async ({ launchPairedApp }) => {
+test('connection errors outrank recovery, usage stays in the overlay, and trailing idle preserves it', async ({ launchPairedApp }) => {
   const { page, app, daemon } = await launchPairedApp()
   const recovery = page.locator('.stopped-turn-recovery')
-  const notice = page.locator('.composer-status__usage')
+  const notice = page.locator('.conversation__top-overlay .top-overlay-pill--error')
   daemon.pushFrame(frame('rate_limited', { conversation_id: SEEDED_ROW.id, status: 'rejected', limit_type: 'five_hour', resets_at: 4102444800, truncated_fields: null }))
   await expect(notice).toBeVisible()
   daemon.pushFrame(stop('api_error', { error_category: 'authentication_failed' }))
   await expect(recovery).toHaveText('Claude reported an authentication failure. Check Claude sign-in on this server.')
-  await expect(notice).toHaveCount(0)
+  // The usage pill lives in the Top overlay, so recovery taking the slot no longer hides it.
+  await expect(notice).toBeVisible()
   daemon.pushFrame(frame('turn_state', { conversation_id: SEEDED_ROW.id, state: 'idle' }))
   await expect(recovery).toBeVisible()
   // Inject the typed connection failure at the preload boundary; stop reports above use real decoding.
@@ -98,7 +99,7 @@ test('connection errors outrank recovery, recovery outranks usage, and trailing 
   }, DAEMON_EVENT_CHANNEL)
   await expect(page.locator('.composer-status__error')).toBeVisible()
   await expect(recovery).toHaveCount(0)
-  await expect(notice).toHaveCount(0)
+  await expect(notice).toBeVisible()
   await expect(page.locator('.stopped-turn')).toHaveCount(1)
   await app.evaluate(({ BrowserWindow }, channel) => {
     BrowserWindow.getAllWindows()[0].webContents.send(channel, {

@@ -1,15 +1,17 @@
 # Conversation shell — composer status row and error slot
 
-The status row directly above the message box: its activity/thinking display, its error chip, that chip's fold into an actionable repair or reconnect button, and the retry/compacting/stall statuses folded into its label. Split from [Composer](conversation-shell-composer.md) 2026-09-05, once this ticket's message-box growth would have pushed the combined document over the size cap.
+The status row directly above the message box: its activity/thinking display, its error chip, that chip's fold into an actionable reconnect button, and the retry/compacting/stall statuses folded into its label. Split from [Composer](conversation-shell-composer.md) 2026-09-05, once this ticket's message-box growth would have pushed the combined document over the size cap. (Through #1604 the chip's fold also produced a Re-pair button here; Re-pair now shows in the conversation's Top overlay instead — see below.)
 
 Part of [Composer](conversation-shell-composer.md); see that document for the message box and footer row, and [Conversation shell](conversation-shell.md) for the screen overall.
 
 This page holds the row's own geometry and the five small, connected-only occupants of its trailing
-slot's precedence chain. The four largest occupants live on their own pages, linked from their stub
+slot's precedence chain. The largest occupants live on their own pages, linked from their stub
 headings below: [Composer status row](conversation-shell-composer-status-row.md) (#796),
-[Composer error chip](conversation-shell-composer-error-chip.md) (#797),
-[Actionable-error button](conversation-shell-composer-repair-button.md) (#963), and
-[The usage-limit notice](conversation-shell-composer-usage-limit-notice.md) (#1321).
+[Composer error chip](conversation-shell-composer-error-chip.md) (#797), and
+[Actionable-error button](conversation-shell-composer-repair-button.md) (#963, Reconnect only since #1604).
+[The usage-limit notice](conversation-shell-composer-usage-limit-notice.md) (#1321) and Re-pair, #963's
+other arm, both moved out of this slot into the conversation's Top overlay by #1604 — their pages describe
+where they live now, and neither is an occupant of the chain below any more.
 
 ## Composer status row (#796)
 
@@ -24,13 +26,13 @@ Split out to its own page: [Composer error chip](conversation-shell-composer-err
 `trailing` slot filled with a red pill reading `COMPOSER_ERROR_CHIP_COPY` in the `error` connection arm
 and no other, and why it never destructures `status.error`.
 
-## Actionable-error button, and the row that grows to fit it (#963)
+## Actionable-error button, and the row that grows to fit it (#963; Re-pair moved out by #1604)
 
 Split out to its own page: [Actionable-error button, and the row that grows to fit it](conversation-shell-composer-repair-button.md) —
-the `Pairing error - Re-pair` button for explicit non-retryable pairing rejection and
-`Connection error - Reconnect` for other terminal failures except `unpair` and `not-paired`, the
-row's growth from 24 to 32px to fit it, and the retired `RepairPrompt`/`RepairControl`/`.composer__repair`
-block this retires.
+`Connection error - Reconnect` for terminal failures except `unpair` and `not-paired`, the row's growth
+from 24 to 32px to fit it, and the retired `RepairPrompt`/`RepairControl`/`.composer__repair` block this
+retires. `Pairing error - Re-pair`, #963's other arm, moved to the conversation's Top overlay in #1604; on
+a pairing rejection this slot now falls through to the ordinary connection-error chip below instead.
 
 ## Stopped-turn recovery
 
@@ -54,8 +56,10 @@ slash command**, as of [#1496](https://github.com/pyrycode/pyrycode-desktop/issu
 outside `sendText` entirely; see [New session control
 action](conversation-shell-actions-menu-and-reader-cutover.md#new-session-control-action-1218-folded-to-the-menus-only-reset-row-by-1496).
 
-Recovery has priority after re-pair, reconnect and connection errors, before refusal recovery,
-model-settings rejection, Claude reports and usage notices; it is visible only while connected. The
+Recovery has priority after reconnect and connection errors, before refusal recovery and
+model-settings rejection; it is visible only while connected. (Through #1604, the usage-limit notice
+also sat in this chain, below Claude stopping reports; it now shows independently, in the Top overlay,
+and no longer competes with recovery in either direction.) The
 next local submitted message or daemon turn activity clears recovery while preserving the
 boundary; the stopped turn's trailing idle does **not** clear it. Session boundaries,
 reset and reconnect also clear the reading. A timeline reset or eviction drops the
@@ -97,15 +101,18 @@ for retirement and stale-reply rules. Styling reuses `button-small button-small-
 
 `ComposerErrorSlotControl` reads `useRunSettingsWriteStore(selectError)`. When the last
 correlated settings rejection is for `model`, it supplies “Could not change the model —
-try again.” as the slot's `notice`, above Claude reports and usage notices (#1252). The message is
+try again.” as the slot's `notice`, above Claude reports (#1252). The message is
 fixed client copy in a `role="alert"` element. It is available both with the ordinary
 composer and while the [questionnaire's model footer](composer-model-menu.md#availability-during-question-batches)
 is visible; rejection leaves the question answerable and rolls back the optimistic label.
 
-The single-occupant priority is repair button → reconnect button → connection-error chip → stopped-turn
+The single-occupant priority is reconnect button → connection-error chip → stopped-turn
 recovery → refusal Switch back (with any rejection feedback) → model rejection → Claude
-stopping report → usage notice → history failure → MCP server failure → task count. Recovery and notices
-require `connected`; disconnected and connecting states hide them without clearing held reports.
+stopping report → history failure → MCP server failure → task count. Recovery and notices
+require `connected`; disconnected and connecting states hide them without clearing held reports. The
+[usage-limit notice](conversation-shell-composer-usage-limit-notice.md) and Re-pair are no longer part of
+this chain (#1604): both show in the conversation's Top overlay whatever this chain holds, and the usage
+reading shows whatever the connection state too.
 `.composer-status__error--settings` retains the error treatment but uses
 `flex: 0 1 auto`, `min-width: 0` and `white-space: normal` so the sentence can wrap at the
 800px minimum window width.
@@ -120,9 +127,11 @@ Closing the question or the model menu does not clear it. Refusal recovery also 
 its own rejection across navigation, as described above.
 
 Static slot tests cover connection priority. The fake question-answer drive holds the
-settings response, checks rollback on rejection, verifies that rejection outranks an
-existing usage notice, and checks that a fresh dispatch restores that notice while the
-original question remains answerable.
+settings response, checks rollback on rejection, and checks that a fresh dispatch clears the rejection
+message while the original question remains answerable. Through #1604 this drive also proved rejection
+outranked an existing usage notice; the notice now shows in the Top overlay independently of the
+rejection, so `e2e/question-answer-continue.spec.ts` instead asserts the pill stays visible across both
+the rejection and the fresh dispatch.
 
 ## Claude stopping reports
 
@@ -174,13 +183,14 @@ id, holds the reply to prove one pending request and retained rows, then release
 success. Immediate replies could conceal duplicate-demand bugs. It also delivers
 a nonretryable error and proves fresh upward demand remains available.
 
-## The usage-limit notice, the slot's third occupant (#1321)
+## The usage-limit notice — moved to the Top overlay (#1321; moved by #1604)
 
-Split out to its own page: [The usage-limit notice, the slot's third occupant](conversation-shell-composer-usage-limit-notice.md) —
-the per-conversation [usage-limit store](usage-limit-store.md) reading drawn in the trailing slot,
-`usageLimitNotice.ts`'s three-run copy composition (lead, window, reset clause), and the layout
-hazard the first review cleared, wrongly, when a client-owned string (not a daemon one) blew the row
-past the pane.
+Split out to its own page: [The usage-limit notice](conversation-shell-composer-usage-limit-notice.md) —
+the per-conversation [usage-limit store](usage-limit-store.md) reading, `usageLimitNotice.ts`'s three-run
+copy composition (lead, window, reset clause), and the layout hazard the first #1321 review cleared,
+wrongly, when a client-owned string (not a daemon one) blew the row past the pane. Through #1604 the
+reading drew in this slot, as its third occupant; #1604 moved it out entirely, into the conversation's
+Top overlay, where it now shows whatever this slot holds and whatever the connection state.
 
 ## MCP server failure notice (#1494)
 
@@ -269,7 +279,8 @@ This ticket adds the count as the trailing slot's **last** reading, appended to 
 that includes the MCP failure notice — and it is visible only when nothing else in the chain is.
 
 **The count was originally the raw roster size**, `roster.tasks.size + roster.droppedTasks`, read via
-`selectRosterFor(open.id)` the same shape as the usage-limit read beside it. **Since
+`selectRosterFor(open.id)` — the same no-conditional-hook-call shape as the usage-limit read this slot used
+to hold beside it, before #1604 moved that read into `TopOverlayControl`. **Since
 [#1561](https://github.com/pyrycode/pyrycode-desktop/issues/1561) the count is the LIVE count**,
 [`backgroundTaskRosterStore`](background-task-roster-store.md)'s `selectLiveTaskCountFor(open.id)` — the
 listed tasks claude has not reported terminal on a `background_task_updated` (`status` exactly
@@ -288,13 +299,14 @@ surface counting live background tasks cannot silently disagree with this pill a
 finished.
 
 **`ComposerTaskCount({ count, onOpen })`** is a new pure, exported view in `ConversationScreen.tsx`,
-`ComposerUsageLimitNotice`'s shape verbatim: a prop, not a store read, because zustand v5's `useStore`
-reads `getInitialState()` under `renderToStaticMarkup`, so a container test can otherwise reach only one
-arm. Returns `null` at `count <= 0` (`<=` rather than `===`, since `droppedTasks` decodes through a plain
-`requireNumber` and a hostile or buggy daemon can drive the sum negative); otherwise a real
-`<button type="button" className="composer-status__tasks">` holding `'1 task running'` or
-`` `${count} tasks running` `` — a two-way conditional over two client-owned literals, no copy module
-(unlike #1321's `usageLimitNotice.ts`: one number and one word need no pinning module of their own). No
+a prop rather than a store read — the same discipline `TopOverlay` follows for the usage pill it moved
+out of this file — because zustand v5's `useStore` reads `getInitialState()` under `renderToStaticMarkup`,
+so a container test can otherwise reach only one arm. Returns `null` at `count <= 0` (`<=` rather than
+`===`, since `droppedTasks` decodes through a plain `requireNumber` and a hostile or buggy daemon can drive
+the sum negative); otherwise a real `<button type="button" className="composer-status__tasks">` holding
+`'1 task running'` or `` `${count} tasks running` `` — a two-way conditional over two client-owned literals,
+no copy module (unlike #1321's `usageLimitNotice.ts`: one number and one word need no pinning module of
+their own). No
 `aria-label`, no live region — the visible text is already the accessible name, and a count that moves
 every turn would announce on each one. Activating it calls `onOpen`, which the screen wires to the same
 `setPanelOpen(true)` the More actions item already calls, so the panel and its menu entry are untouched.

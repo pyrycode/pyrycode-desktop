@@ -15,16 +15,19 @@ feature is now **live end-to-end**.
 
 ## What it does
 
-Given a `notify` command carrying a closed `kind` (`'turn-complete' | 'prompt'`), the main process:
+Given a `notify` command carrying a closed `kind` (`'turn-complete' | 'prompt'`) and an optional
+conversation `name` ([#1593](https://github.com/pyrycode/pyrycode-desktop/issues/1593)), the main
+process:
 
 1. Reads the window's focus state via `windowHasFocus(live.window)` **at fire-time** — no separate
    stateful focus tracker. Focused → no-op. (Destroyed-safe since [#518](../codebase/518.md): a
    destroyed window reports unfocused without touching `isFocused()`. Since [#519](../codebase/519.md),
    `live.window` is the [live-window](live-window.md) holder's current-window face, not a captured
    `BrowserWindow`, so a dock-reopened window is queried correctly instead of a destroyed original.)
-2. Unfocused → looks up `kind` in a main-owned copy table, constructs an Electron `Notification` with
-   that title/body, registers the [click handler](#clicking-the-notification-393) on it, then calls
-   `.show()`.
+2. Unfocused → looks up `kind` in a main-owned copy table for the **body**, cleans `name` into the
+   **title** (`notificationTitle`, falling back to "Pyrycode"), constructs an Electron `Notification`
+   with that title/body, registers the [click handler](#clicking-the-notification-393) on it, then
+   calls `.show()`.
 
 ## Why the command is main-local, not wire
 
@@ -43,7 +46,7 @@ notification and appear on a lock screen — it is impossible by construction, n
 |---|---|
 | `NotifyKind` / `NotifyPayload` / `notify` union member | `src/shared/ipc/commands.ts` |
 | `isNotifyPayload` guard (closed-set, not `typeof === 'string'`) | `src/shared/ipc/commands.ts` |
-| `fireNotification(kind, deps)` + `NOTIFICATION_COPY` table + `activateWindow` (#393) | `src/main/fireNotification.ts` |
+| `fireNotification(kind, deps, name?)` + `NOTIFICATION_COPY` table (body) + `notificationTitle` (title, #1593) + `activateWindow` (#393) | `src/main/fireNotification.ts` |
 | `case 'notify':` dispatch, incl. the `onClick` composition (#393) | `src/main/index.ts` (the single `onCommand` switch) |
 | `notificationActivated` `DaemonEvent` arm (#393) | `src/shared/ipc/events.ts` |
 | `notificationActivatedBridge.ts` (#393) | `src/renderer/src/store/notificationActivatedBridge.ts` |
@@ -51,7 +54,10 @@ notification and appear on a lock screen — it is impossible by construction, n
 
 ```ts
 export type NotifyKind = 'turn-complete' | 'prompt'
-export interface NotifyPayload { kind: NotifyKind }
+export interface NotifyPayload {
+  kind: NotifyKind
+  name?: string   // #1593 — the conversation name, resolved renderer-side; title only, never body
+}
 
 export interface OsNotification {
   show(): void
@@ -63,7 +69,8 @@ export interface OsNotificationConstructor {
 
 export function fireNotification(
   kind: NotifyKind,
-  deps: { isWindowFocused: () => boolean; Notification: OsNotificationConstructor; onClick: () => void }
+  deps: { isWindowFocused: () => boolean; Notification: OsNotificationConstructor; onClick: () => void },
+  name?: string   // #1593 — cleaned by notificationTitle before it becomes the title
 ): void
 ```
 
@@ -189,17 +196,32 @@ a `default: null` **filter**, not an `assertNever` exhaustive switch — it intr
 `DaemonEvent` arm, so it doesn't force a matching no-op case into `modalBridge` / `timelineBridge` /
 `daemonEventBridge`, unlike the `notificationActivated` arm #393 added.
 
-`subscribePushNotify(onDaemonEvent, sendCommand, isPushEnabled)` is the React-free data path: filter
-first (short-circuits on the common case), then — only for the two owned arms — reads
-`isPushEnabled()` and, if true, sends `{ type: 'notify', payload: { kind } }` as an inline
-`RendererCommand` literal (no constructor helper added). `isPushEnabled` is a **per-event thunk**,
-not a boolean captured at subscribe time — production passes
+`subscribePushNotify(onDaemonEvent, sendCommand, isPushEnabled, nameFor)` is the React-free data
+path: filter first (short-circuits on the common case), then — only for the two owned arms — reads
+`isPushEnabled()` and, if true, sends `{ type: 'notify', payload }` as an inline `RendererCommand`
+literal (no constructor helper added). `isPushEnabled` is a **per-event thunk**, not a boolean
+captured at subscribe time — production passes
 `() => pushNotificationPrefStore.getState().pushNotificationsEnabled`, so a user who flips the
 [Settings toggle](push-notification-preference-store.md) mid-session sees the very next
 turn-end/prompt respect the new value. `usePushNotify()` mounts this in
 [`PairedShell`](paired-shell.md) beside `useNotificationActivatedNav`, with no `useRef` — unlike its
-sibling hooks, it takes no per-render caller callback, so its three dependencies (`window.pyry.*`,
-the pref-store thunk) can be closed over directly in an empty-dep effect.
+sibling hooks, it takes no per-render caller callback, so its dependencies (`window.pyry.*`, the
+pref-store thunk, the conversation-list lookup) can be closed over directly in an empty-dep effect.
+
+**Naming the notification ([#1593](https://github.com/pyrycode/pyrycode-desktop/issues/1593)).** The
+`onDaemonEvent` listener type widens from `DaemonEvent` to `StampedDaemonEvent` so it can read the
+event's client-stamped `serverId` alongside its `conversationId`. A fourth required parameter,
+`nameFor: (serverId: string | null, conversationId: string) => string | null`, is read only after the
+dedup and toggle gates pass (so it's never called for an event that won't send). The payload omits the
+`name` key entirely on a `null` result — never a present `name: undefined`, which structured clone
+would still carry across the IPC boundary. The conversation id is read purely as a lookup key inside
+the listener and never leaves it; the lookup itself, `conversationNameIn`, is a pure function of a
+`ConversationListState` snapshot, `serverId`, and `conversationId` — it finds the row by id in that
+server's own slot and returns its `name`, or `null` when the slot, the row, or the name is missing.
+Keyed by the event's own server on purpose: a same-id row filed under a different host must never name
+the notification. Production wires `nameFor` to
+`(serverId, id) => conversationNameIn(conversationListStore.getState(), serverId, id)`, `nameFor` being
+required (not defaulted) so an unwired call site is a type error, the same posture as `isPushEnabled`.
 
 ### Dedup across reconnects (#514)
 
@@ -213,8 +235,8 @@ only new read of a daemon-supplied field, never leaving the listener), short-cir
 toggle read if `modalId !== null && announcedModalIds.has(modalId)`, and — **only after** the
 `sendCommand` call — records `modalId` into the set. `turnEnd` is untouched by construction: `modalId`
 is `null` for every non-`modalShown` arm, so both the check and the record are skipped for the rest of
-the union without a second rule. The `{ kind }` payload literal is unchanged; `modalId` is never
-spread or interpolated into it.
+the union without a second rule. `modalId` is never spread or interpolated into the payload (`{ kind }`
+or `{ kind, name }` since [#1593](https://github.com/pyrycode/pyrycode-desktop/issues/1593)).
 
 Two properties make this correct rather than a no-op:
 
@@ -252,18 +274,41 @@ would defeat the whole guarantee — an arbitrary string would pass the boundary
 copy at all. This is the one guard in the command-channel family that checks value equality against
 a literal set rather than just type.
 
-## The copy table is exhaustive by construction
+The closed-set invariant covers the **body** only. [#1593](https://github.com/pyrycode/pyrycode-desktop/issues/1593)
+gave `NotifyPayload` an optional `name: string` — the conversation's name, resolved renderer-side and
+title-bound only. `isNotifyPayload` admits it as a second, independent clause: absent, `undefined`, or
+a `string`; any other type (number, `null`, object, array) fails the whole command closed. The
+conversation id itself never crosses this boundary — the renderer resolves id → name before sending,
+so main only ever sees the already-looked-up string. Main does not trust that string's *content* just
+because its *type* passed the guard: `fireNotification`'s `notificationTitle` (below) is the actual
+cleaner, belt-and-suspenders in different fabric from the guard's type check.
+
+## The copy table holds the body only
 
 ```ts
-const NOTIFICATION_COPY: Record<NotifyKind, { title: string; body: string }> = {
-  'turn-complete': { title: 'Pyrycode', body: 'Your turn is complete.' },
-  prompt:          { title: 'Pyrycode', body: 'Waiting for your response.' }
+const NOTIFICATION_COPY: Record<NotifyKind, string> = {
+  'turn-complete': 'Your turn is complete.',
+  prompt:          'Waiting for your response.'
 }
+const DEFAULT_TITLE = 'Pyrycode'
 ```
 
-`Record<NotifyKind, …>` means a future `kind` won't type-check until it has copy — the table can't
-silently fall out of sync with the enum. Copy wording is **provisional** (client-invented, no Figma,
-no daemon source); only the shape (static, main-owned, keyed by `kind`) is load-bearing.
+`Record<NotifyKind, …>` means a future `kind` won't type-check until it has body copy — the table
+can't silently fall out of sync with the enum. Copy wording is **provisional** (client-invented, no
+Figma, no daemon source); only the shape (static, main-owned, keyed by `kind`) is load-bearing.
+
+The title used to live in this same table, always `'Pyrycode'` for both kinds. Since
+[#1593](https://github.com/pyrycode/pyrycode-desktop/issues/1593) the title is computed, not looked
+up: `notificationTitle(name?: string): string` in `fireNotification.ts` drops every control character
+(`\p{Cc}`: C0, DEL, C1), keeps at most 80 code points (a surrogate pair is never split — the walk
+counts code points, not UTF-16 units, and stops as soon as it has kept 80, so an oversized name costs
+no more than the characters it keeps), trims surrounding whitespace, and falls back to `DEFAULT_TITLE`
+when nothing usable is left — no name, an empty string, or a string that was whitespace/control-only
+before cleaning. `\p{Cc}` does not reach U+2028/U+2029 (line/paragraph separator, category Zl/Zp) or
+`\p{Cf}` format characters such as the U+202E bidi override; both can pass through into the title
+uncleaned. This matches the ticket's "control characters" wording and was accepted as out of scope at
+review — the name only ever reorders or line-breaks the operator's own host's own conversation name, a
+cosmetic ceiling, not a body-injection path. Revisit only if a spoofing or rendering report surfaces.
 
 ## Configuration and usage
 
@@ -304,9 +349,11 @@ navigating to the thread.
   from a validated wire envelope; this one originates entirely in the main process (a click on a
   locally-constructed `Notification`). Documented as an exception at the arm's own doc comment in
   `events.ts` rather than editing `emitDaemonEvent.ts`'s "nothing else sends" header.
-- **No conversation id on the notification.** Desktop's single-active-conversation model means daemon
-  events drop `conversation_id` at the emit, so `NotifyPayload` carries only `kind` — clicking always
-  opens the one active conversation ([#393](../codebase/393.md)), never a specific thread.
+- **No conversation id on the notification, even though the title now names the conversation
+  ([#1593](https://github.com/pyrycode/pyrycode-desktop/issues/1593)).** The renderer resolves
+  `serverId` + `conversationId` to a `name` and sends only that string; `NotifyPayload` still carries
+  no id. Clicking still always opens the one active conversation ([#393](../codebase/393.md)), never a
+  specific thread — the title identifies the source, it doesn't make the notification click-targeted.
 - **One notification per prompt across reconnects, not per raised OS notification ([#514](../codebase/514.md)).**
   The daemon re-sends every still-outstanding `modal_shown` after each re-handshake; the trigger now
   dedupes on `modalId` in a closure-local `Set` that survives reconnects and dies on unpair. Dedup is
@@ -342,3 +389,6 @@ navigating to the thread.
   too, and therefore cannot be #514's dedup oracle.
 - [#158](https://github.com/pyrycode/pyrycode-desktop/issues/158) — the parent split into
   #391/#392/#393, all merged.
+- [#1593](https://github.com/pyrycode/pyrycode-desktop/issues/1593) — the title now names the
+  conversation the notification is about; the body stays client-owned. Renderer-resolved name,
+  main-side cleaning (`notificationTitle`), no conversation id crosses the boundary.

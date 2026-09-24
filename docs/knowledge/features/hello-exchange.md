@@ -34,7 +34,7 @@ export function parseHelloAck(bytes: Uint8Array): HelloAckPayload
 
 ### `buildClientHello`
 
-1. `makeHelloClientPayload({ deviceName, clientVersion, token, capabilities, lastSeenTs })` — the codec injects `role:'client'` and `protocol_versions:['v2']`, defaults `capabilities` to `[]` when omitted, and omits `last_seen_ts` when absent. **Never hand-build `HelloClientPayload`** — that would drop the injected defaults, the one thing that constructor exists to prevent.
+1. `makeHelloClientPayload({ deviceName, clientVersion, token, capabilities, lastSeenTs })` — the codec injects `role:'client'` and `protocol_versions:['v2']`, defaults `capabilities` to `[]` when omitted, omits `last_seen_ts` when absent, and prefixes `clientVersion` (the bare app version) into `client_version: "pyrycode-desktop/<clientVersion>"` (see [wire codec](wire-codec.md#defaults-the-typescript-specific-problem)). **Never hand-build `HelloClientPayload`** — that would drop the injected defaults, the one thing that constructor exists to prevent.
 2. Wrap it: `{ id, type: 'hello', ts, payload }` — `type` is the literal `'hello'`; no optional envelope fields on an outbound hello.
 3. `encodeEnvelope(...)` → UTF-8 bytes, the Noise early-data.
 

@@ -8,13 +8,15 @@ need them.
 
 ## What it does
 
-The badge counts every non-archived conversation, across every paired host, whose sidebar status
-dot resolves to `input-required` or `new-messages` — exactly the rows
+The badge counts every non-archived, non-muted conversation, across every paired host, whose
+sidebar status dot resolves to `input-required` or `new-messages` — exactly the rows
 [`ConversationStatusDotControl`](channel-list-status-dot.md) draws a dot for. `working` does not
 count: the sidebar shows it as working, not attention, and counting it would tick the badge up on
-every streamed turn. macOS gets the system's own Dock badge (`app.setBadgeCount`); Windows, which
-has no such API, gets a drawn taskbar overlay — a red disc with a white count, `9+` above nine,
-cleared at zero.
+every streamed turn. A conversation muted on its host ([#1607](https://github.com/pyrycode/pyrycode-desktop/issues/1607))
+does not count either, even with an outstanding prompt — the sidebar status dot is unchanged and
+still shows it, only the badge and [notifications](push-notifications.md) go quiet. macOS gets the
+system's own Dock badge (`app.setBadgeCount`); Windows, which has no such API, gets a drawn taskbar
+overlay — a red disc with a white count, `9+` above nine, cleared at zero.
 
 ## Key types and files
 
@@ -33,10 +35,12 @@ cleared at zero.
 `resolveConversationStatus(…, isConversationUnread(…))`, copied verbatim so the badge and the dots
 can never disagree about what needs attention. `attentionCountNow()` applies the same
 `!is_archived` filter the [Channel List view model](channel-list.md) applies to its active list,
+plus `row.is_muted !== true` since [#1607](https://github.com/pyrycode/pyrycode-desktop/issues/1607),
 over `selectConversations` (every paired server's rows in one array), then calls the pure
 `countAttentionConversations(conversations, statusOf)` — which takes its list from the **caller**,
-not a fixed source, so a later muted-channel filter is one more `.filter` at the call site, not a
-change to the counting rule itself.
+not a fixed source, so the muted-channel filter is one more `.filter` at the call site, not a
+change to the counting rule itself. `countAttentionConversations` stays one rule over whatever rows
+it is handed; it does not know what "muted" or "archived" mean.
 
 `subscribeAppBadge({ subscribe, count, sendCommand })` computes once on subscribe and again on every
 notification from the five source stores (`conversationListStore`, `modalStore`,

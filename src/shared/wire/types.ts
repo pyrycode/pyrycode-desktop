@@ -410,6 +410,13 @@ export type EnvelopeType =
   // internal/protocol/attachments.go RequestAttachmentPayload / codes.go TypeRequestAttachment,
   // docs/protocol-mobile.md § Attachments. Declared by pyrycode#2052, answered by #2054.
   | 'request_attachment'
+  // The daemon's announcement that the ASSISTANT sent the operator a file (#1619) — emitted when claude
+  // calls its `send_file` tool (pyrycode#2165, emitted since #2166). DAEMON → CLIENT ONLY, and
+  // BROADCAST to every attached client, so a consumer filters on the payload's conversation_id. It is
+  // LIVE-ONLY: decodeHistoryEvent gains no arm for it. Its attachment_id is the first id on this wire
+  // the client did not mint. Carries AttachmentOfferedPayload. SSOT pyrycode docs/protocol-mobile.md
+  // § Attachments, heading `attachment_offered`.
+  | 'attachment_offered'
   // Conversation scroll-back's ASK (#1222) — one backward step of a walk over the daemon-owned,
   // append-only on-disk log (pyrycode#2112), which a conversation opened today can otherwise see
   // nothing of. v2 client → daemon only, absent from the daemon's `v1TypeSet`, so an old client never
@@ -3749,6 +3756,28 @@ export interface RequestAttachmentPayload {
    *  every chunk of the upload. NOT a capability — not secret, not unguessable, and never resolved
    *  into a filesystem path on this side. */
   attachment_id: string
+}
+
+/**
+ * Inbound `attachment_offered` event (daemon → client, #1619) — the assistant sent the operator a file.
+ * Mirrors the daemon's payload field-for-field, wire order `conversation_id, attachment_id, filename`,
+ * all three ALWAYS PRESENT. SSOT pyrycode docs/protocol-mobile.md § Attachments, heading
+ * `attachment_offered`. A truncated or hostile payload arrives as three empty strings, so the decoder
+ * rejects an empty value in any of them.
+ *
+ * SECURITY: NARROWED IS NOT TRUSTED. Every field is a claim by the peer. `conversation_id` is a
+ * daemon-asserted ROUTING KEY a consumer filters on, never authorization. `attachment_id` is
+ * daemon-minted and must match the lowercase-UUIDv4 rule of that doc's "The `attachment_id` shape"
+ * section; passing it is not proof the bytes exist, and any path built from it still goes through the
+ * path guard in attachmentPath. `filename` is CLAUDE-AUTHORED display text of at most
+ * ATTACHMENT_FILENAME_MAX_BYTES UTF-8 bytes, which may carry control or bidi characters: it is never a
+ * path, never an attribute, URL or cache key, and never logged. Neither it nor the conversation id
+ * reaches a log.
+ */
+export interface AttachmentOfferedPayload {
+  conversation_id: string
+  attachment_id: string
+  filename: string
 }
 
 export interface BackfillSincePayload {

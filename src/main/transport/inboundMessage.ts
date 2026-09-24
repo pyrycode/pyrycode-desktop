@@ -24,7 +24,7 @@
 // sibling #133). Absent a logger the module is silent; behaviour is otherwise identical.
 import { blake2s } from '@noble/hashes/blake2'
 import { decodeEnvelope, base64StdDecode, WireDecodeError } from './codec'
-import { MAX_PLAINTEXT_BYTES } from '../../shared/wire/types'
+import { ATTACHMENT_FILENAME_MAX_BYTES, MAX_PLAINTEXT_BYTES } from '../../shared/wire/types'
 import type {
   BannerPayload,
   MessagePayload,
@@ -36,6 +36,7 @@ import type {
   ApiRetryPayload,
   CompactingPayload,
   ResettingPayload,
+  AttachmentOfferedPayload,
   CompactionBoundaryPayload,
   BackgroundTaskStartedPayload,
   BackgroundTaskUpdatedPayload,
@@ -863,6 +864,7 @@ export type InboundDaemonMessage =
   | ({ kind: 'api-retry'; apiRetry: ApiRetryPayload } & FrameTimestamp)
   | ({ kind: 'compacting'; compacting: CompactingPayload } & FrameTimestamp)
   | { kind: 'resetting'; resetting: ResettingPayload }
+  | { kind: 'attachment-offered'; attachmentOffered: AttachmentOfferedPayload }
   | { kind: 'compaction-boundary'; boundary: CompactionBoundaryPayload }
   | { kind: 'session-facts'; sessionFacts: SessionFactsPayload }
   | { kind: 'model-announced'; modelAnnounced: ModelAnnouncedPayload }
@@ -2015,6 +2017,42 @@ function parseResettingPayload(payload: unknown): ResettingPayload {
     throw new WireDecodeError('missing required field: handoff')
   }
   return { conversation_id, active, phase, handoff }
+}
+
+/**
+ * The lowercase-UUIDv4 rule from pyrycode docs/protocol-mobile.md § The `attachment_id` shape (#1619).
+ * Anchored and CASE-SENSITIVE on purpose: no `i` flag, so an uppercase id fails, and no `m` flag, so
+ * `$` matches only at the end of input and a trailing newline fails. Stricter than the path-safety
+ * alphabet in attachmentPath, which it does not replace.
+ */
+const ATTACHMENT_ID_UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
+/**
+ * Narrow an opaque payload into an AttachmentOfferedPayload (#1619). parseResettingPayload's shape over
+ * three required strings, each with a rule `requireString` alone does not apply, since it admits `''`
+ * and a truncated or hostile payload arrives as three empty strings: a non-empty conversation_id, an
+ * attachment_id matching ATTACHMENT_ID_UUID_V4, and a filename that is non-empty and at most
+ * ATTACHMENT_FILENAME_MAX_BYTES in UTF-8 BYTES, not characters. Returns a fresh three-field literal, so
+ * unknown server-added keys are tolerated but never copied through. Messages name the failure CATEGORY
+ * only: the filename is claude-authored and the conversation id correlates a conversation.
+ */
+function parseAttachmentOfferedPayload(payload: unknown): AttachmentOfferedPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed attachment_offered payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  if (conversation_id === '') {
+    throw new WireDecodeError('missing required field: conversation_id')
+  }
+  const attachment_id = requireString(payload, 'attachment_id')
+  if (!ATTACHMENT_ID_UUID_V4.test(attachment_id)) {
+    throw new WireDecodeError('malformed attachment_offered attachment_id')
+  }
+  const filename = requireString(payload, 'filename')
+  if (filename === '' || Buffer.byteLength(filename, 'utf8') > ATTACHMENT_FILENAME_MAX_BYTES) {
+    throw new WireDecodeError('malformed attachment_offered filename')
+  }
+  return { conversation_id, attachment_id, filename }
 }
 
 /** Invalid counts degrade to absence, never to zero or rejection of the whole divider. */
@@ -4141,6 +4179,22 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'resetting', resetting }
+    }
+    case 'attachment_offered': {
+      // Narrow BEFORE logging so a malformed frame throws first and leaves no record. NOTHING decoded
+      // is logged: not the claude-authored filename, not the conversation_id, and not the attachment
+      // id either, though a validated one would be allowed, because nothing needs it and it would add
+      // a DiagnosticEvent field. The code is a static literal, never the wire-supplied envelope.type.
+      // NO `ts`: the frame is live-only and gains no decodeHistoryEvent arm. Nothing consumes this arm
+      // yet; the IPC carry to the window is a later ticket.
+      const attachmentOffered = parseAttachmentOfferedPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'attachment_offered',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'attachment-offered', attachmentOffered }
     }
     case 'session_facts': {
       const sessionFacts = parseSessionFactsPayload(envelope.payload)

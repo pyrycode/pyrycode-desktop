@@ -81,3 +81,37 @@ The ticket carries no Documentation handoff section. Pending for the documentati
 ## Revisions
 
 **2026-09-24, rework 1 (verifier triage: `conversation-create-rename.spec.ts` red).** No design change. The checkbox is a native input and takes a Tab stop between the name field and Archive channel, as the Design section places it. That spec's keyboard walk in the Edit channel dialog pinned the old order, input → Archive channel → Cancel → OK. It now reads input → Mute notifications → Archive channel → Cancel → OK. The walk only focuses the checkbox, so OK still sends no mute write there.
+
+**2026-09-24, rework 2 (verifier judgment: plan lacked `## Security review`).** No design or code change. The ticket carries `security-sensitive`, and the plan was committed without the pass from `builder/security-review.md`. The pass has now been run against this design and the shipped diff, and its section follows below. The verdict is PASS with no MUST FIX and no SHOULD FIX findings.
+
+## Security review
+
+**Verdict:** PASS
+
+**Findings:**
+
+- [Trust boundaries] No findings. The design crosses one boundary in each direction, and both already have a single named guard.
+  - **Renderer → main.** The `setConversationMuted` arm of the renderer-command validator in `src/shared/ipc/commands.ts` runs `isSetConversationMutedPayload`. That guard requires exactly the keys `conversation_id` and `muted`, a non-empty id and a real boolean, and it refuses a truthy `1` or `'true'`. The same arm requires an `attemptId` string of 1–128 characters.
+  - **Host selection.** The renderer cannot choose the host. The `setConversationMuted` case in `src/main/index.ts` routes by `router.route(conversation_id)`, so the frame reaches only the host that claimed that id. An unclaimed id puts no frame on any wire and settles the attempt as `rejected`.
+  - **Daemon → renderer.** The opening value comes from `conversationMutedIn`, which is server-scoped by `serverId` and uses a strict `is_muted === true`. A missing, `null` or non-boolean field from a hostile or older host therefore reads as unmuted. It can only affect a checkbox's `checked` state, never a string sink.
+- [Tokens, secrets, credentials] No findings. The change touches no token, key or credential. The `attemptId` comes from `crypto.randomUUID()`, the WebCrypto CSPRNG, and it is a correlation id, not a secret. A guessable id would let nothing forge a result, because main correlates the ack by wire envelope id, per the attempt map in `createDaemonConnection`.
+- [File / storage operations] No findings. Mute is stored on the host. The dialog persists nothing locally: no file, no `localStorage` and no IndexedDB. The draft is one `useState` cell that dies when the dialog unmounts.
+- [Inter-process / Electron attack surface] No findings. The change adds no IPC channel, no `contextBridge` member, no `webPreferences` change and no navigation. It uses the existing `window.pyry.sendCommand` bridge with a command arm that #1595 already validates. A compromised renderer could already send this command directly, so this ticket grants no new capability.
+- [Cryptographic primitives] No findings. The change adds no primitive. The frame is built by the existing `buildSetConversationMuted` and sealed by the unchanged Noise session in main.
+- [Network & I/O] No findings. Each OK press sends at most one mute frame, and `muteWriteFor` returns `null` when the box is unchanged. Cancel, the close control and Archive never invoke the `onSave` callback. The dialog has no retry and no loop, so a click cannot amplify into traffic. Frame limits, timeouts and TLS belong to the existing connection and do not change.
+- [Error messages, logs, telemetry] No findings.
+  - The renderer logs nothing. The `catch` around `sendCommand` is silent for the prompt write's reason: an escaping throw would abort the caller's dismissal. The command carries a conversation id, which must not reach a log.
+  - Main's refusal path already logs content-free events only: `conversation-mute-failed` with the static code `unavailable-host`, and no id.
+  - No daemon text reaches a new sink. The only string this change renders is the client-owned constant `MUTE_NOTIFICATIONS_LABEL`, and it sets no attribute from daemon data.
+- [Concurrency] No findings.
+  - **Guard and send.** Both mount sites take a live host re-check at OK and only then call the container's callback: `canMutateHost` in `ChannelList` and `connectedConversationHostNow` in `ConversationScreen`. The callback runs synchronously in the same tick as its guard, with no `await` between them. A disconnect that still slips in is caught by main's route-by-conversation arm, which emits `rejected` instead of sending.
+  - **Stale opening value.** The seed is read once at mount, so a change from the phone while the dialog is open is not reflected. An untouched box still sends nothing, so the dialog never overwrites the phone's change. A touched box sends the operator's explicit value, and the host keeps whichever write arrives last.
+  - **Cleanup.** The change adds no subscription, timer or promise, so there is nothing to tear down.
+- [Threat model alignment] No findings.
+  - **Hostile relay.** A hostile relay can drop or delay the mute frame but cannot read or forge it inside the Noise session. The dialog does not wait for the result, so a dropped frame costs nothing except the change itself, and a reopen shows the host's real value.
+  - **Hostile host.** A hostile host can report a false `is_muted`, and the effect is limited to the checkbox's opening state.
+  - **Compromised renderer.** Process isolation is unchanged, and this ticket adds no reachable capability.
+  - **What muting suppresses.** That behaviour is #1607, already merged, and outside this ticket.
+
+**Reviewer:** builder (self-review per `builder/security-review.md`)
+**Date:** 2026-09-24

@@ -38,6 +38,7 @@ import { buildMcpReconnect } from './transport/mcpReconnectEnvelope'
 import { buildMcpToggle } from './transport/mcpToggleEnvelope'
 import { buildRequestSystemPrompt } from './transport/requestSystemPromptEnvelope'
 import { buildSetSystemPrompt } from './transport/setSystemPromptEnvelope'
+import { buildSetConversationMuted } from './transport/setConversationMutedEnvelope'
 import { buildRequestHistory } from './transport/requestHistoryEnvelope'
 import { buildNewSession } from './transport/newSessionEnvelope'
 import { buildListConversations } from './transport/listConversationsEnvelope'
@@ -100,6 +101,7 @@ import {
   type ChangeWorkspacePayload,
   type RenameWorkspacePayload,
   type SetSystemPromptPayload,
+  type SetConversationMutedPayload,
   MAX_SYSTEM_PROMPT_BYTES,
   type RequestAttachmentPayload,
   type SetSessionSettingsPayload,
@@ -536,6 +538,14 @@ export interface DaemonConnection {
    */
   setSystemPrompt(payload: SetSystemPromptPayload): void
   /**
+   * Encrypt a `set_conversation_muted` envelope onto the live session — mutes or unmutes one
+   * conversation's notifications on its host (#1595). Exactly one content-free conversationMuteResult
+   * per call: `confirmed` off the correlated `conversation_updated`, `rejected` off a correlated `error`
+   * or any local failure (not connected, build or send throw). A write the daemon never answers settles
+   * nothing and is cleared on the next dial. The attempt id never reaches the wire. Never throws.
+   */
+  setConversationMuted(payload: SetConversationMutedPayload, attemptId: string): void
+  /**
    * Encrypt a payload-carrying `set_session_settings` control envelope onto the live session — asks the
    * daemon to change one session's model / reasoning effort / YOLO (pyrycode #844/#845). Honors the
    * omitempty PRESENCE CONTRACT via the builder: an unset field is absent ("leave unchanged"), a field
@@ -923,6 +933,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   const pendingMcpToggles = new Map<number, string>()
   // Wire envelope id to the optional renderer attempt; reset with each connection generation.
   const pendingWorkspaceRenames = new Map<number, string>()
+  // Wire envelope id → the renderer attempt of a set_conversation_muted write (#1595). Keyed by a
+  // client-minted number, so no daemon-supplied string ever becomes a key. Settled (and deleted) by
+  // the correlated ack or error, whichever lands first, and cleared on each dial.
+  const pendingMuteWrites = new Map<number, string>()
   // Attachment transfers currently on the wire (#861). A SET, not the debug bundle's single slot: two
   // files can be attached in one session, and a lone slot would have to abandon the first to admit the
   // second. Membership plus a scan is the whole query — the success reply is looked up by
@@ -1300,6 +1314,14 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               if (failedRename !== undefined) {
                 pendingWorkspaceRenames.delete(inReplyTo)
                 workspaceRenameResult(failedRename, 'rejected')
+                return
+              }
+              // Mute write refusal (#1595): every code settles as the one rejected outcome, and the
+              // code itself is not read.
+              const failedMute = pendingMuteWrites.get(inReplyTo)
+              if (failedMute !== undefined) {
+                pendingMuteWrites.delete(inReplyTo)
+                conversationMuteResult(failedMute, 'rejected')
                 return
               }
               // Attachment-RETRIEVAL rejection correlation (#996), the fourth member of the same
@@ -2304,6 +2326,14 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // is the read path's answer.
             const inReplyTo = inbound.inReplyTo
             if (inReplyTo === undefined) return
+            // The set_conversation_muted ack (#1595), the same additive reading: the emit above has
+            // already refreshed the list, and a match settles only the write this client recorded.
+            const muteAttempt = pendingMuteWrites.get(inReplyTo)
+            if (muteAttempt !== undefined) {
+              pendingMuteWrites.delete(inReplyTo)
+              conversationMuteResult(muteAttempt, 'confirmed')
+              return
+            }
             const written = pendingSystemPromptWrites.get(inReplyTo)
             if (written === undefined) return
             pendingSystemPromptWrites.delete(inReplyTo)
@@ -3367,6 +3397,34 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function conversationMuteResult(attemptId: string, outcome: 'confirmed' | 'rejected'): void {
+    deps.diagnosticLog?.event({ event: 'conversation-mute-result', code: outcome })
+    emitDaemonEvent(sink, { type: 'conversationMuteResult', attemptId, outcome })
+  }
+
+  function setConversationMuted(payload: SetConversationMutedPayload, attemptId: string): void {
+    if (driver === null) {
+      conversationMuteResult(attemptId, 'rejected')
+      return
+    }
+    try {
+      const envelopeId = nextEnvelopeId
+      // A fresh literal naming exactly the two modeled fields, never a spread of the caller's object.
+      const bytes = buildSetConversationMuted({
+        id: envelopeId, ts: now(), payload: { conversation_id: payload.conversation_id, muted: payload.muted }
+      })
+      nextEnvelopeId += 1
+      driver.sendMessage(bytes)
+      // Recorded after the send, so a throw leaves no entry under an id the next write re-mints.
+      pendingMuteWrites.set(envelopeId, attemptId)
+      deps.diagnosticLog?.event({ event: 'conversation-mute-sent' })
+    } catch {
+      // The caught object is dropped: its message could echo the payload.
+      deps.diagnosticLog?.event({ event: 'conversation-mute-failed', code: 'local-send' })
+      conversationMuteResult(attemptId, 'rejected')
+    }
+  }
+
   function setSystemPrompt(payload: SetSystemPromptPayload): void {
     // THE BYTE BOUND RUNS FIRST — before the connected guard, deliberately, and this is the one place
     // this method departs from every sibling write verb's opening line. The verdict is about the VALUE,
@@ -3814,6 +3872,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     pendingMcpReconnects.clear()
     pendingMcpToggles.clear()
     pendingWorkspaceRenames.clear()
+    pendingMuteWrites.clear()
     // Abandon any in-flight bundle stream (#505), the fourth per-connection reset: its daemon-side
     // request does not survive the fresh Noise session, so the consumer is failed HERE rather than
     // via the stopped driver's terminal — `gen = ++generation` above already fenced that terminal
@@ -3879,6 +3938,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     changeWorkspace,
     renameWorkspace,
     setSystemPrompt,
+    setConversationMuted,
     setSessionSettings,
     answerModal,
     cancelModal,

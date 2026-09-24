@@ -1764,3 +1764,49 @@ it('bounds optional workspace rename attempt identifiers', () => {
   }
   expect(isRendererCommand(command)).toBe(true)
 })
+
+describe('setConversationMuted (#1595)', () => {
+  const payload = { conversation_id: 'conv-42', muted: true }
+  const valid = { type: 'setConversationMuted', payload, attemptId: 'attempt-1' }
+
+  it('accepts a strict boolean mute or unmute beside a named conversation and an attempt id', () => {
+    const command: RendererCommand = { type: 'setConversationMuted', payload, attemptId: 'attempt-1' }
+    expect(isRendererCommand(command)).toBe(true)
+    expect(isRendererCommand({ ...valid, payload: { conversation_id: 'conv-42', muted: false } })).toBe(true)
+  })
+
+  it('rejects a payload whose conversation id is empty, missing or not a string', () => {
+    for (const bad of [
+      { conversation_id: '', muted: true },
+      { muted: true },
+      { conversation_id: 42, muted: true },
+      { conversation_id: null, muted: true }
+    ]) {
+      expect(isRendererCommand({ ...valid, payload: bad })).toBe(false)
+    }
+  })
+
+  it('rejects a missing muted and every truthy or falsy non-boolean', () => {
+    // `undefined` is listed because structured clone preserves an explicitly-undefined property.
+    for (const muted of [undefined, null, 1, 0, 'true', 'false', {}, []]) {
+      expect(isRendererCommand({ ...valid, payload: { conversation_id: 'conv-42', muted } })).toBe(false)
+    }
+    expect(isRendererCommand({ ...valid, payload: { conversation_id: 'conv-42' } })).toBe(false)
+  })
+
+  it('rejects an extra payload field and a non-object payload', () => {
+    expect(isRendererCommand({ ...valid, payload: { ...payload, is_archived: true } })).toBe(false)
+    for (const bad of [null, undefined, 'conv-42', true, []]) {
+      expect(isRendererCommand({ ...valid, payload: bad })).toBe(false)
+    }
+    expect(isRendererCommand({ type: 'setConversationMuted', attemptId: 'attempt-1' })).toBe(false)
+  })
+
+  it('requires an attempt id of 1 to 128 characters', () => {
+    expect(isRendererCommand({ type: 'setConversationMuted', payload })).toBe(false)
+    for (const attemptId of ['', 'x'.repeat(129), 7, null]) {
+      expect(isRendererCommand({ ...valid, attemptId })).toBe(false)
+    }
+    expect(isRendererCommand({ ...valid, attemptId: 'x'.repeat(128) })).toBe(true)
+  })
+})

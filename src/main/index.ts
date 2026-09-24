@@ -1011,6 +1011,20 @@ app.whenReady().then(() => {
         // return silently.
         router.route(command.payload.conversation_id)?.setSystemPrompt(command.payload)
         return
+      case 'setConversationMuted': {
+        // ROUTED BY CONVERSATION (#1595), like setSystemPrompt: the frame goes to the one host that
+        // claimed the id or to no wire at all. An unclaimed id still settles its attempt as rejected,
+        // the renameWorkspace arm's posture, so the waiting dialog is never left pending.
+        const connection = router.route(command.payload.conversation_id)
+        if (connection !== null) connection.setConversationMuted(command.payload, command.attemptId)
+        else {
+          diagnosticLog.event({ event: 'conversation-mute-failed', code: 'unavailable-host' })
+          emitDaemonEvent(bindServerOrigin(live.sink, null), {
+            type: 'conversationMuteResult', attemptId: command.attemptId, outcome: 'rejected'
+          })
+        }
+        return
+      }
       case 'setSessionSettings':
         // ROUTED BY SESSION ID (#1119) — the DAEMON's own session id, not a conversation id (#501 is the
         // standing bug about those two being confused), learned off the stamped `runConfigReceived` and

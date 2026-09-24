@@ -131,6 +131,7 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // a compile error (the workspaceFolderRejected-is-a-no-op precedent).
       return null
     case 'workspaceRenameResult':
+    case 'conversationMuteResult':
     case 'workspaceUpdated':
       // No session-store action: the conversation-list refresh trigger (#1288, conversationListBridge's
       // shouldRefreshList) re-requests the list so the renamed workspace's label lands, not the session

@@ -27,6 +27,7 @@ import type {
   RenameConversationPayload,
   ChangeWorkspacePayload,
   SetSystemPromptPayload,
+  SetConversationMutedPayload,
   CreateWorkspaceFolderPayload,
   RenameWorkspacePayload,
   SetSessionSettingsPayload,
@@ -338,6 +339,9 @@ export type RendererCommand =
   | { type: 'renameConversation'; payload: RenameConversationPayload }
   | { type: 'changeWorkspace'; payload: ChangeWorkspacePayload }
   | { type: 'setSystemPrompt'; payload: SetSystemPromptPayload }
+  // Routed by conversation (#1595). The client-only attemptId is required and correlates exactly one
+  // content-free conversationMuteResult; it never reaches the wire.
+  | { type: 'setConversationMuted'; payload: SetConversationMutedPayload; attemptId: string }
   | { type: 'createWorkspaceFolder'; payload: CreateWorkspaceFolderPayload; serverId?: string }
   | { type: 'renameWorkspace'; payload: RenameWorkspacePayload; serverId?: string; attemptId?: string }
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
@@ -535,6 +539,10 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       // Payload-required (#1249) — the neighbours' idiom verbatim, including why the
       // explicitly-`undefined` case is refused by the payload guard rather than by the `in` check.
       return 'payload' in value && isSetSystemPromptPayload(value.payload)
+    case 'setConversationMuted':
+      return 'payload' in value && isSetConversationMutedPayload(value.payload) &&
+        'attemptId' in value && typeof value.attemptId === 'string' &&
+        value.attemptId.length > 0 && value.attemptId.length <= 128
     case 'createWorkspaceFolder':
       return (
         'payload' in value && isCreateWorkspaceFolderPayload(value.payload) && hasValidServerId(value)
@@ -1055,6 +1063,19 @@ function isSetSystemPromptPayload(value: unknown): value is SetSystemPromptPaylo
   if (!('conversation_id' in value) || typeof value.conversation_id !== 'string') return false
   if (!('system_prompt' in value)) return false
   return typeof value.system_prompt === 'string' || value.system_prompt === null
+}
+
+/** The untrusted renderer→main boundary guard for the setConversationMuted payload (#1595). STRICT,
+ *  unlike the structural-minimum siblings: the keys must be exactly `conversation_id` and `muted`, the id
+ *  a non-empty string and `muted` a real boolean. A truthy `1` or `'true'` is refused rather than coerced,
+ *  and so is an explicitly-undefined `muted`, which structured clone preserves across the bridge. The
+ *  connection method still rebuilds a fresh two-field literal. Pure; never throws. */
+function isSetConversationMutedPayload(value: unknown): value is SetConversationMutedPayload {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const keys = Object.keys(value)
+  if (keys.length !== 2 || !('conversation_id' in value) || !('muted' in value)) return false
+  if (typeof value.conversation_id !== 'string' || value.conversation_id.length === 0) return false
+  return value.muted === true || value.muted === false
 }
 
 /** The untrusted renderer→main boundary guard for the requestHistory payload (#1222). The guard above

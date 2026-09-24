@@ -348,6 +348,11 @@ export type EnvelopeType =
   // docs/protocol-mobile.md § Setting a conversation's system prompt / internal/protocol/codes.go.
   // Declared and answered by pyrycode#2151.
   | 'set_system_prompt'
+  // Mute or unmute one conversation's notifications on its host (#1595, pyrycode#2572). Carries
+  // SetConversationMutedPayload. Answered by the reused `conversation_updated` correlated by
+  // `in_reply_to` and carrying the new `is_muted`, pushed uncorrelated to every other connection;
+  // refused with a correlated non-retryable `error`.
+  | 'set_conversation_muted'
   | 'create_workspace_folder'
   | 'workspace_folder_created'
   // The client's ASK that a workspace be renamed (#1289) — the outbound half of the contract whose
@@ -3349,6 +3354,17 @@ export interface ChangeWorkspacePayload {
 export interface SetSystemPromptPayload {
   conversation_id: string
   system_prompt: string | null
+}
+
+/**
+ * Outbound `set_conversation_muted` request body (client → daemon, #1595). Mirrors the daemon's
+ * payload `{conversation_id, muted}` field-for-field (pyrycode#2572). Both keys are REQUIRED: the daemon
+ * refuses a payload without `muted`, so `false` must reach the wire as a present key. A distinct type
+ * so the verb owns its wire surface. Do NOT drift it without a daemon/mobile change.
+ */
+export interface SetConversationMutedPayload {
+  conversation_id: string
+  muted: boolean
 }
 
 /**

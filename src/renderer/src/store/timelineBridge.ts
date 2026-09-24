@@ -391,6 +391,7 @@ export function translateTimelineEvent(
     case 'questionDismissed':
     case 'rateLimited':
     case 'contextUsage':
+    case 'attachmentOffered':
       // No timeline event: the session store (#19), download UI (#72), conversation-list store
       // (#208), modal store + bridge (#223, and the #249 rejection render), the create render slice
       // (#242), the #261 / #256 session-settings consumers (confirmed + rejected #269), the #293
@@ -479,6 +480,10 @@ export function translateTimelineEvent(
       // queueState rule (#720) still holds for what this arm is NOT: no turn_id, it opens and closes
       // no turn, and it produces no ThreadItem, however plainly the turn it interrupts is the one the
       // operator is watching.
+      // attachmentOffered (#1620) is DORMANT here, not permanent: #1621 is expected to flip it into
+      // the thread's file row. The call is #1621's; this slice writes no reducer arm ahead of it.
+      // Present meanwhile so the assertNever guard does not stringify the whole event — the
+      // claude-authored filename included — into an Error message and a crash reporter.
       return null
     case 'runConfigReceived':
       // Not a timeline event (#491). Present only because the assertNever guard makes a new arm a

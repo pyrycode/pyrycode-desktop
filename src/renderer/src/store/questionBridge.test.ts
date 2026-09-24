@@ -444,12 +444,20 @@ describe('translateQuestionEvent — every other arm returns null (the inverse f
         active: true,
         phase: 'wrapping_up',
         handoff: 'pending'
+      },
+      // an offered file is PERMANENTLY no-op here (#1620): unsolicited, nothing outstanding, no answer
+      // to give. Its consumer is the #1621 thread row.
+      {
+        type: 'attachmentOffered',
+        conversationId: 'conv-1',
+        attachmentId: '3f2a1c40-9b7e-4d21-a5c3-0e8f6b2d9a17',
+        filename: 'quarterly-secret-report.pdf'
       }
     ]
 
     // The count is asserted so a future arm silently dropped from this table cannot pass unnoticed:
-    // 48 union arms minus the 3 owned above.
-    expect(others).toHaveLength(45)
+    // 49 union arms minus the 3 owned above.
+    expect(others).toHaveLength(46)
     for (const event of others) expect(translateQuestionEvent(event)).toBeNull()
   })
 })

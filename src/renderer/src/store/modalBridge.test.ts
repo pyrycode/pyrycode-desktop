@@ -468,6 +468,14 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
         active: false,
         phase: '',
         handoff: ''
+      },
+      // an offered file is PERMANENTLY no-op here (#1620): nothing daemon-side waits on an answer and
+      // there is no `modal_id`. Its consumer is the #1621 thread row.
+      {
+        type: 'attachmentOffered',
+        conversationId: 'conv-1',
+        attachmentId: '3f2a1c40-9b7e-4d21-a5c3-0e8f6b2d9a17',
+        filename: 'quarterly-secret-report.pdf'
       }
     ]
     for (const event of others) expect(translateModalEvent(event, noConversations)).toBeNull()

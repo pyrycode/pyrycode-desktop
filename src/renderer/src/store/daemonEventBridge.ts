@@ -374,6 +374,12 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // note was written into a stack trace and a crash reporter. This case is what keeps them out
       // of it.
       return null
+    case 'attachmentOffered':
+      // No session-store action (#1620): an offered file's consumer is the #1621 thread row, and it
+      // says nothing about CONNECTION status. PERMANENTLY a no-op. Present because the assertNever
+      // guard below would otherwise stringify the whole event — the claude-authored filename included
+      // — into an Error message and a crash reporter. This case is what keeps it out.
+      return null
     default:
       return assertNever(event)
   }

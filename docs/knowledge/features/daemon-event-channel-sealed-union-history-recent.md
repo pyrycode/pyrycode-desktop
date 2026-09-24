@@ -423,6 +423,41 @@ the combined list again exceeded the size cap.
   its composer status row owns. All four cases exist only so each bridge's `assertNever` guard makes a new
   arm a compile error — and it is not a formality: it stringifies the whole event into an `Error` message,
   which would put the conversation id and both tokens into a stack trace and a crash reporter.
+- **`attachmentOffered{conversationId,attachmentId,filename}`**
+  ([#1620](https://github.com/pyrycode/pyrycode-desktop/issues/1620)) carries the daemon's report that
+  claude sent the operator a file, the last hop across IPC — the wire vocabulary and the fail-closed
+  decode ([#1619](https://github.com/pyrycode/pyrycode-desktop/issues/1619)) already existed; this arm is
+  the emit, placed directly after `resetting`. **A reading, not an edge** — one frame per offer, nothing
+  rises or falls, unlike its `resetting` neighbour directly above. **All three decoded fields cross,
+  copied by name from the already-validated payload, never a spread** — the `resetting` precedent, so a
+  decoder that later grows a field cannot smuggle it across IPC. **No `daemonTs`**, the
+  `resetting`/`mcp_status` precedent: the frame is live-only, with no replay ring or durable history
+  upstream. **Not deduped**: no dedup, no coalescing, none keyed by `attachmentId` — a repeated frame
+  emits twice. Not compile-forced at the decode side (`daemonConnection`'s inbound switch has no
+  `assertNever`) — the round-trip test guards this emit, including an `Object.keys` presence check beside
+  the `toEqual`, since `toEqual` alone ignores an undefined-valued property and would miss a stray
+  `daemonTs` or a smuggled extra payload key.
+
+  SECURITY: **narrowed is not trusted** — all three fields remain claims by the daemon. `conversationId`
+  is a daemon-asserted routing key, never authorization; if a consumer indexes by it, the index is a
+  `Map`. `attachmentId` passed the decoder's UUIDv4 shape check, which proves nothing about the bytes
+  existing — it must still cross `resolveAttachmentPath`'s guard before any filesystem use, never be
+  trusted as a path on its own. `filename` is claude-authored display text, unsanitized, that may carry
+  control or bidi characters (an RLO spoofing a false extension): render it only as bounded, escaped text,
+  and never let it reach an attribute, a URL, a path, a cache key or a log field. Nothing decoded reaches
+  a log on this leg: `emitDaemonEvent` is log-free by construction and #1619's decode-side line is pinned
+  content-free, a test asserting the filename, the attachment id and the conversation id are each absent
+  from the captured diagnostic log.
+
+  Ships **dormant** on one of its four bridges, **permanent** on the other three — the `resetting` shape
+  exactly. `daemonEventBridge`, `modalBridge` and `questionBridge` no-op it **permanently**: nothing
+  daemon-side is waiting on an answer, there is no `modal_id`, and an offered file is orthogonal to
+  connection status — none of the three will ever claim it. `timelineBridge`'s case stays **dormant**:
+  [#1621](https://github.com/pyrycode/pyrycode-desktop/issues/1621) is expected to flip it into the
+  thread's file row, the same two-step every prior dormant arm on this union took. All four cases exist
+  only so each bridge's `assertNever` guard makes a new arm a compile error — and it is not a formality:
+  it would otherwise stringify the whole event, the claude-authored filename included, into an `Error`
+  message and a crash reporter.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.

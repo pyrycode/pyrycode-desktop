@@ -290,3 +290,11 @@ unchanged; see [Modal-prompt model](modal-prompt-model.md) for the reducer contr
   consumers are the [#1516](https://github.com/pyrycode/pyrycode-desktop/issues/1516) channel-list dot and
   the [#1517](https://github.com/pyrycode/pyrycode-desktop/issues/1517) composer status row, neither of
   which is this store.
+- [Daemon event channel — the sealed union: per-member history (recent members)](daemon-event-channel-sealed-union-history-recent.md)
+  — the `attachmentOffered` arm ([#1620](https://github.com/pyrycode/pyrycode-desktop/issues/1620),
+  decoded at [#1619](https://github.com/pyrycode/pyrycode-desktop/issues/1619)) that folds into this
+  bridge's no-op group. **Permanently**, the plainest grounds in the group: nothing daemon-side is
+  waiting on an answer and there is no `modal_id` to resolve an offered file against. Unlike its
+  `resetting` neighbour, its fourth bridge case is not also permanent — `timelineBridge`'s stays
+  **dormant**, pending [#1621](https://github.com/pyrycode/pyrycode-desktop/issues/1621)'s thread file
+  row.

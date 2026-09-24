@@ -182,6 +182,7 @@ export function translateModalEvent(
     case 'rateLimited':
     case 'contextUsage':
     case 'resetting':
+    case 'attachmentOffered':
       // No modal event: the session store (#19), download UI (#72), conversation-list store (#208),
       // timeline store (#202), create render slice (#242), the #259 session-id holder, the #261 /
       // #256 session-settings consumers (confirmed + rejected #269), the #293 queue store
@@ -252,6 +253,9 @@ export function translateModalEvent(
       // reader is most tempted to hand to a store whose vocabulary includes `modalDismissed`, and
       // the two retire nothing alike — that retires a permission prompt against `modal_id` under
       // first-answer-wins, while this reports that a reset the operator started has finished.
+      // attachmentOffered (#1620) is PERMANENTLY no-op on the plainest grounds of all: nothing
+      // daemon-side waits on an answer and there is no `modal_id`. Its consumer is the #1621 thread
+      // row. The case keeps the claude-authored filename out of assertNever's Error message.
       return null
     case 'runConfigReceived':
       // Not a modal event (#491). Present only because the assertNever guard makes a new arm a

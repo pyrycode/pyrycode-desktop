@@ -1837,6 +1837,20 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               resetsAt: inbound.rateLimited.resets_at
             })
             return
+          case 'attachment-offered':
+            // The assistant-sent-file data path (#1620, decoded at #1619). A fresh literal copied BY
+            // NAME from the already-validated payload, never a spread, so a decoder that later grows a
+            // field cannot smuggle it across IPC. All three fields cross; no `daemonTs`, because the
+            // frame is live-only. Nothing here logs: the filename is claude-authored and the id pair
+            // correlates a conversation. Stateless — one event per frame, no dedup. Not compile-forced
+            // (this inner switch has no assertNever); the round-trip test guards this emit.
+            emitDaemonEvent(sink, {
+              type: 'attachmentOffered',
+              conversationId: inbound.attachmentOffered.conversation_id,
+              attachmentId: inbound.attachmentOffered.attachment_id,
+              filename: inbound.attachmentOffered.filename
+            })
+            return
           case 'resetting':
             invalidateConfigRequests(inbound.resetting.conversation_id)
             // The session-reset data path (#1515, decoded at #1514). Emit a fresh literal carrying

@@ -1870,6 +1870,25 @@ type BaseDaemonEvent =
       phase: WireResetPhase
       handoff: WireResetHandoff
     }
+  // The assistant sent the operator a file (#1620) — the daemon's `attachment_offered` announcement,
+  // decoded at #1619 and carried here. BROADCAST to every attached client, so a consumer filters on
+  // `conversationId`. LIVE-ONLY, so NO `daemonTs`: the decode arm takes no FrameTimestamp and there is
+  // no history arm to join against (the `resetting` precedent directly above).
+  //
+  // SECURITY: NARROWED IS NOT TRUSTED — every field is a claim by the peer. `conversationId` is a
+  // daemon-asserted ROUTING KEY, never authorization; if a consumer indexes by it, the index is a
+  // `Map`. `attachmentId` passed the lowercase-UUIDv4 rule, which proves nothing about the bytes
+  // existing, and it reaches the filesystem only through `resolveAttachmentPath`. `filename` is
+  // CLAUDE-AUTHORED display text of at most ATTACHMENT_FILENAME_MAX_BYTES UTF-8 bytes that may carry
+  // control or bidi characters: render it only as bounded, escaped text, never as an attribute, URL,
+  // path, cache key or log field. Ships dormant — all four exhaustive bridges no-op it until #1621 (the
+  // thread's file row).
+  | {
+      type: 'attachmentOffered'
+      conversationId: string
+      attachmentId: string
+      filename: string
+    }
 
 /**
  * The DAEMON'S OWN timestamp for the logical event this DaemonEvent was decoded from (#1225) — the

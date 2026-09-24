@@ -391,6 +391,19 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     ).toBeNull()
   })
 
+  it('attachmentOffered → null (the #1621 thread row is its consumer, not the session store)', () => {
+    // Returning null without throwing is also the proof that assertNever — which would stringify the
+    // whole event, filename included, into an Error message — is unreachable for this arm.
+    expect(
+      translateDaemonEvent({
+        type: 'attachmentOffered',
+        conversationId: 'conv-1',
+        attachmentId: '3f2a1c40-9b7e-4d21-a5c3-0e8f6b2d9a17',
+        filename: 'quarterly-secret-report.pdf'
+      })
+    ).toBeNull()
+  })
+
   it('resetting → null (consumed by #1516 / #1517, not the session store)', () => {
     expect(
       translateDaemonEvent({

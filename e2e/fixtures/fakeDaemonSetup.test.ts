@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import * as daemonModule from '../../src/main/transport/fakeDaemon'
+import { NoiseLoadError } from '../../src/main/transport/noiseLib'
 import { startFakeDaemonForTest } from './fakeDaemonSetup'
 
 afterEach(() => vi.restoreAllMocks())
@@ -38,14 +39,29 @@ describe('paired fake daemon setup diagnostics', () => {
   })
 
   it.each([
+    [new NoiseLoadError('wasm-load-failed'), 'wasm-load-failed'],
+    [new NoiseLoadError('wasm-load-timeout'), 'wasm-load-timeout'],
+    [Object.assign(new Error('connect private-sentinel'), { code: 'ECONNREFUSED' }), 'ECONNREFUSED'],
+    [Object.assign(new Error('read private-sentinel'), { code: 'ECONNRESET' }), 'ECONNRESET'],
+    [new Error('Unexpected server response: 503'), 'HTTP 503']
+  ])('names the fixed class of a recognised setup failure', async (failure, suffix) => {
+    vi.spyOn(daemonModule, 'startFakeDaemon').mockRejectedValue(failure)
+    const error = await startFakeDaemonForTest({ url: 'ws://fixture.invalid' }).catch(error => error)
+    expect(error.message).toBe(`Fake daemon setup failed before Electron launch: ${suffix}`)
+    expect(error.cause).toBeUndefined()
+    expect(error.stack).not.toContain('private-sentinel')
+  })
+
+  it.each([
     new Error('Unexpected server response: 404 private-sentinel'),
     new Error('private-sentinel', { cause: new Error('private-cause') }),
+    Object.assign(new Error('private-sentinel'), { code: 'private-sentinel' }),
     'private-sentinel', null
   ])('does not expose arbitrary failure contents or causes', async failure => {
     vi.spyOn(daemonModule, 'startFakeDaemon').mockRejectedValue(failure)
     const error = await startFakeDaemonForTest({ url: 'ws://fixture.invalid' }).catch(error => error)
     expect(error).toBeInstanceOf(Error)
-    expect(error.message).toBe('Fake daemon setup failed before Electron launch')
+    expect(error.message).toBe('Fake daemon setup failed before Electron launch: unclassified')
     expect(error.cause).toBeUndefined()
     expect(error.stack).not.toContain('private-sentinel')
   })

@@ -4,10 +4,13 @@ The chronological, kind-by-kind history of every additive extension to `InboundD
 
 Part of [Inbound message decode](inbound-message-decode.md); see that document for what the package does, its data flow, and its links. Split out of that document 2026-09-02, once this history alone had grown past the size cap; each entry below keeps the wording it had in the parent.
 
-Split a second time, 2026-09-08, once the combined list grew past the cap again:
+Split a second time, 2026-09-08, once the combined list grew past the cap again, and a third time,
+2026-09-24, once `attachment_offered` (#1619) needed room:
 
 - [Early extensions](inbound-message-decode-history-early.md) — the boundary's introduction
   ([#68](../codebase/68.md)) through `attachment_stored` (#964).
-- [Recent extensions](inbound-message-decode-history-recent.md) — `model_list` (#972) onward,
-  including `thinking_progress` (#1312), `rate_limited` (#1318), `context_usage` (#1454) and
-  `resetting` (#1514).
+- [Recent extensions](inbound-message-decode-history-recent.md) — `model_list` (#972) through
+  `thinking_progress` (#1312).
+- [Latest extensions](inbound-message-decode-history-latest.md) — `rate_limited` (#1318) onward,
+  including `context_usage` (#1454), `resetting` (#1514), `mcp_status` (#1489) and
+  `attachment_offered` (#1619).

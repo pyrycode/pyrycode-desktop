@@ -11,7 +11,9 @@ now merged: [#391](../codebase/391.md) (the delivery primitive — a `notify` co
 that main turns into an Electron `Notification`, gated on focus), [#392](../codebase/392.md) (the
 **trigger** — decides *when* the renderer sends `notify`, see [below](#the-trigger-392)), and
 [#393](../codebase/393.md) (click-to-focus, see [below](#clicking-the-notification-393)). The
-feature is now **live end-to-end**.
+feature is now **live end-to-end**. [#1597](../codebase/1597.md) later corrected what the click
+opens — see [Resolving the click to its own
+conversation](#resolving-the-click-to-its-own-conversation-1597) below.
 
 ## What it does
 
@@ -48,9 +50,11 @@ notification and appear on a lock screen — it is impossible by construction, n
 | `isNotifyPayload` guard (closed-set, not `typeof === 'string'`) | `src/shared/ipc/commands.ts` |
 | `fireNotification(kind, deps, name?)` + `NOTIFICATION_COPY` table (body) + `notificationTitle` (title, #1593) + `activateWindow` (#393) | `src/main/fireNotification.ts` |
 | `case 'notify':` dispatch, incl. the `onClick` composition (#393) | `src/main/index.ts` (the single `onCommand` switch) |
-| `notificationActivated` `DaemonEvent` arm (#393) | `src/shared/ipc/events.ts` |
-| `notificationActivatedBridge.ts` (#393) | `src/renderer/src/store/notificationActivatedBridge.ts` |
-| `pushNotifyBridge.ts` — `notifyKindForEvent`, `subscribePushNotify`, `usePushNotify` (#392) | `src/renderer/src/store/pushNotifyBridge.ts` |
+| `notificationActivated` `DaemonEvent` arm, nullary at #393, optional `token` since #1597 | `src/shared/ipc/events.ts` |
+| `notificationActivatedBridge.ts` (#393, re-validates the echoed token since #1597) | `src/renderer/src/store/notificationActivatedBridge.ts` |
+| `pushNotifyBridge.ts` — `notifyKindForEvent`, `subscribePushNotify`, `usePushNotify` (#392); `createNotificationTargets`, `notificationRowFor` (#1597) | `src/renderer/src/store/pushNotifyBridge.ts` |
+| `isNotificationToken` guard + `NotifyPayload.token` (#1597) | `src/shared/ipc/commands.ts` |
+| `openConversation` — the shared sidebar-row/notification-click open steps (#1597) | `src/renderer/src/PairedShell.tsx` |
 
 ```ts
 export type NotifyKind = 'turn-complete' | 'prompt'
@@ -152,24 +156,59 @@ Two effects, composed in one place:
    made the resulting click actually surface the **current** window rather than safe-no-op on a
    destroyed original — see [live window](live-window.md).
 
-3. **Renderer navigation** — a new bare `DaemonEvent` arm, `{ type: 'notificationActivated' }`
+3. **Renderer navigation** — a `DaemonEvent` arm, `{ type: 'notificationActivated'; token?: string }`
    (`src/shared/ipc/events.ts`). This is the **first main-local signal** on the `DaemonEvent`
    channel: unlike every other arm, it is not derived from a validated wire envelope — it is emitted
-   directly by this click handler. Nullary by construction, so no daemon-relayed content, conversation
-   id, or wire field can ride it. A new consume-only filter bridge,
-   `src/renderer/src/store/notificationActivatedBridge.ts` (a near-clone of
+   directly by this click handler. It shipped nullary at #393; [#1597](../codebase/1597.md) added the
+   optional `token`, still carrying no daemon-relayed content, conversation id, or wire field of its
+   own — see [Resolving the click to its own
+   conversation](#resolving-the-click-to-its-own-conversation-1597) below. A consume-only filter
+   bridge, `src/renderer/src/store/notificationActivatedBridge.ts` (a near-clone of
    [`conversationCreatedBridge`](new-discussion-fab.md), minus the command-send half and the
    payload), consumes it and is mounted in [`PairedShell`](paired-shell.md) beside
-   `useConversationCreatedNav`: `useNotificationActivatedNav(() => dispatch({ type: 'open' }))`. Since
-   `nextPairedRoute`'s `open` transition is already absolute (any route → `thread`), the click lands
-   on the thread view regardless of which paired view (list / settings / archive) was showing, with
-   no new route or nav arm. Deliberately **no** `setActiveConversation` call — the arm carries no
-   payload, and in the single-active-conversation model "open" already means "show the existing
-   active conversation."
+   `useConversationCreatedNav`. Since `nextPairedRoute`'s `open` transition is already absolute (any
+   route → `thread`), the click lands on the thread view regardless of which paired view (list /
+   settings / archive) was showing, with no new route or nav arm. At #393 this carried **no**
+   `setActiveConversation` call by construction — the arm had no payload to resolve one from.
+   [#1597](../codebase/1597.md) changed that: when the token resolves to a conversation still in the
+   list, the click opens that conversation specifically; only an unresolved token (absent, unknown,
+   evicted, or its row archived/gone) still falls back to "show the existing active conversation."
 
    The three exhaustive renderer bridges (`daemonEventBridge` / `timelineBridge` / `modalBridge`) each
    gained a one-line `case 'notificationActivated': return null` (or equivalent), compile-forced by
    their `assertNever` guards — the same cascade every prior arm-adding slice paid.
+
+### Resolving the click to its own conversation (#1597)
+
+At #393, `notificationActivated` was nullary, so every click opened whichever conversation
+happened to be active — with two channels running, a notification raised by channel B opened
+channel A. [#1597](../codebase/1597.md) closes that gap with an opaque, renderer-minted token, so
+main still never learns a conversation or server id — only the posture changes, not the boundary:
+
+- `pushNotifyBridge.ts` gains `createNotificationTargets(newToken = () => crypto.randomUUID())`, a
+  bounded (`NOTIFICATION_TARGETS_CAP = 16`, oldest dropped first) `Map`-backed `mint`/`resolve` pair.
+  `subscribePushNotify` takes an optional fifth parameter, `mintToken`; only on the send path (after
+  the toggle and [#514](#dedup-across-reconnects-514) modal-dedup gates), it mints from the event's
+  own `serverId` + `conversationId` — the same pair the [#1593](#the-copy-table-holds-the-body-only)
+  name lookup already had in hand — and puts the token in the `notify` payload. `PairedShell` owns one
+  `NotificationTargets` instance per mount (`useState`), so it lives and dies with the shell exactly as
+  the #514 `announcedModalIds` set does — a token minted under one pairing can never resolve against a
+  later one.
+- `NotifyPayload` gains `token?: string`; `isNotifyPayload` admits it only when a new exported guard,
+  `isNotificationToken` (`^[A-Za-z0-9-]{1,64}$`), holds — closed-set-flavored like the `kind` check
+  [above](#the-guard-is-the-security-relevant-line), applied to a field that is opaque rather than
+  enumerable. `src/main/index.ts` reads the token into a local and echoes it back on
+  `notificationActivated` unchanged; it never logs it, never inspects it, and `fireNotification.ts`
+  needed no change — the token just closes over `onClick`. `notificationActivatedBridge.ts` re-runs
+  `isNotificationToken` on the echo before ever using it as a map key, so main is never trusted to have
+  forwarded exactly what the renderer minted.
+- The click resolves through `notificationRowFor(state, target)` — the row with
+  `target.conversationId` in `target.serverId`'s own `byServer` slot, or `null` if the target is
+  `null`, the slot or row is missing, or the row is archived — the same server-scoped lookup
+  `conversationNameIn` ([#1593](#the-copy-table-holds-the-body-only)) already used for the title. A
+  resolved row runs through `openConversation`, the same function a sidebar row's `onOpen` now calls
+  (`PairedShell.tsx`, pulled out to one function so the two callers can't drift apart); an unresolved
+  token falls back to today's `open` dispatch, never throwing.
 
 ## The trigger (#392)
 
@@ -349,11 +388,14 @@ navigating to the thread.
   from a validated wire envelope; this one originates entirely in the main process (a click on a
   locally-constructed `Notification`). Documented as an exception at the arm's own doc comment in
   `events.ts` rather than editing `emitDaemonEvent.ts`'s "nothing else sends" header.
-- **No conversation id on the notification, even though the title now names the conversation
-  ([#1593](https://github.com/pyrycode/pyrycode-desktop/issues/1593)).** The renderer resolves
-  `serverId` + `conversationId` to a `name` and sends only that string; `NotifyPayload` still carries
-  no id. Clicking still always opens the one active conversation ([#393](../codebase/393.md)), never a
-  specific thread — the title identifies the source, it doesn't make the notification click-targeted.
+- **No conversation id in the `notify` payload's `name` path, even though the title names the
+  conversation ([#1593](https://github.com/pyrycode/pyrycode-desktop/issues/1593)).** The renderer
+  resolves `serverId` + `conversationId` to a `name` and sends only that string for the title. A
+  second, independent field carries the click target instead: since
+  [#1597](../codebase/1597.md), `subscribePushNotify` also mints an opaque `token` from the same
+  `serverId`/`conversationId` pair and the click resolves through it — see [Resolving the click to its
+  own conversation](#resolving-the-click-to-its-own-conversation-1597) above. Neither field is derived
+  from the other, and main still never sees a conversation or server id, only the opaque string.
 - **One notification per prompt across reconnects, not per raised OS notification ([#514](../codebase/514.md)).**
   The daemon re-sends every still-outstanding `modal_shown` after each re-handshake; the trigger now
   dedupes on `modalId` in a closure-local `Set` that survives reconnects and dies on unpair. Dedup is

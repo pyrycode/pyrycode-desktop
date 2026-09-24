@@ -118,11 +118,12 @@ export type RefuseQuestionsCommandPayload = Omit<QuestionRefusedPayload, 'answer
 
 /**
  * The closed set of push-notification kinds the renderer may ask main to raise (#391). A sealed
- * enum, NEVER free text: the main process owns the copy table that maps each kind to a static
- * title/body, so it is impossible by construction for daemon-relayed content (a permission-prompt
- * title, an assistant message, a workspace path) to ride into an OS notification. Add a kind here
- * only alongside its copy in fireNotification's NOTIFICATION_COPY (a Record<NotifyKind, …>, so a
- * new member won't type-check until it has copy).
+ * enum, NEVER free text: the main process owns the copy table that maps each kind to a static body,
+ * so it is impossible by construction for daemon-relayed content (a permission-prompt title, an
+ * assistant message, a workspace path) to ride into an OS notification's BODY. The title may carry
+ * the conversation's name (#1593, NotifyPayload.name); the body never does. Add a kind here only
+ * alongside its copy in fireNotification's NOTIFICATION_COPY (a Record<NotifyKind, …>, so a new
+ * member won't type-check until it has copy).
  */
 export type NotifyKind = 'turn-complete' | 'prompt'
 
@@ -130,10 +131,18 @@ export type NotifyKind = 'turn-complete' | 'prompt'
  * The `notify` command payload (#391). Defined HERE, not imported from ../wire/types — unlike every
  * other payload-bearing member, this command is a MAIN-LOCAL side-effect that never reaches the
  * transport, so its type is client-internal (like the derived AnswerModalCommandPayload above). It
- * carries only the closed `kind` enum — no title/body free text, no conversation id, no secret.
+ * carries the closed `kind` enum, which picks the body, and optionally the conversation's `name`
+ * (#1593), which becomes the title. No body free text, no conversation id, no secret.
  */
 export interface NotifyPayload {
   kind: NotifyKind
+  /**
+   * The name of the conversation the notification is about (#1593) — UNTRUSTED host-supplied text,
+   * resolved renderer-side from the conversation list, so the conversation id never crosses. Absent
+   * when the conversation is unnamed or not in the list. Main cleans it (fireNotification's
+   * notificationTitle) before it becomes the title, uses it as plain text only, and never logs it.
+   */
+  name?: string
 }
 
 /**
@@ -206,8 +215,9 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * process-wide follow-active cursor (daemon SSOT pyrycode #707, widened by #2103); and `notify` (#391), whose `payload`
  * is NotifyPayload — the sole member whose payload type is defined in THIS file, not imported from
  * ../wire/types, because it is a MAIN-LOCAL side-effect command that never reaches the transport. It
- * carries only the closed `kind` enum (`turn-complete` | `prompt`) — no free-text title/body, no id, no
- * secret — which main maps to a static copy table to raise an OS notification when the window is unfocused.
+ * carries the closed `kind` enum (`turn-complete` | `prompt`), which main maps to a static body, plus an
+ * optional conversation `name` that main cleans into the title (#1593) — no free-text body, no id, no
+ * secret — to raise an OS notification when the window is unfocused.
  * `setBadgeCount` (#1592) is main-local for the same reason: a bare non-negative count for the app icon's
  * badge, with no id, name or host beside it.
  * and `answerQuestions` / `refuseQuestions` (#920), the question vertical's resolution pair, whose payloads
@@ -296,8 +306,8 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * id from until #1070/#1085/#1086 land. An absent id resolves to the sole connection when the registry
  * holds exactly one entry, and is refused when it holds more — bounded and observable, never an
  * arbitrary server. `notify` is deliberately NOT in this set: it is main-local (fireNotification owns
- * the copy table, no command field supplies text, no frame results), so an id on it would be a field
- * nothing reads.
+ * the body copy, the only free text is the title-bound name resolved renderer-side, no frame results),
+ * so an id on it would be a field nothing reads.
  *
  * Extend additively (connect/disconnect) when their transport tickets land — and add a
  * matching case to isRendererCommand in lockstep, or the new member is silently dropped at
@@ -1172,12 +1182,18 @@ function isDequeueMessagePayload(value: unknown): value is DequeueMessagePayload
  *  this guard tests CLOSED-SET MEMBERSHIP: `kind` must equal one of the two NotifyKind literals. This is
  *  the security-relevant line of the slice: a `typeof === 'string'` check here would let an arbitrary,
  *  possibly daemon-derived string pass the boundary and later map to no copy at all, defeating the
- *  by-construction guarantee that no free text can ride into an OS notification. A non-object, a missing
- *  `kind`, a non-string `kind`, and any string outside the set are all rejected. Extra fields are ignored
- *  (structural minimum, consistent with the other guards). Pure; never throws. */
+ *  by-construction guarantee that no free text can ride into an OS notification's body. A non-object, a
+ *  missing `kind`, a non-string `kind`, and any string outside the set are all rejected.
+ *
+ *  The optional `name` (#1593) is the one free-text field, and it only ever becomes the title: it must be
+ *  absent, `undefined`, or a string, and any other type fails the whole command closed. Its content is
+ *  not judged here — main's notificationTitle drops control characters and bounds the length, because
+ *  this side of the boundary is not trusted to have done so. Extra fields are ignored (structural
+ *  minimum, consistent with the other guards). Pure; never throws. */
 function isNotifyPayload(value: unknown): value is NotifyPayload {
   if (typeof value !== 'object' || value === null) return false
-  return 'kind' in value && (value.kind === 'turn-complete' || value.kind === 'prompt')
+  if (!('kind' in value) || (value.kind !== 'turn-complete' && value.kind !== 'prompt')) return false
+  return !('name' in value) || value.name === undefined || typeof value.name === 'string'
 }
 
 /** The renderer→main guard for the badge count (#1592). The one value that crosses must be a count: a

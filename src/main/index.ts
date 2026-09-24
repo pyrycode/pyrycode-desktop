@@ -1042,13 +1042,14 @@ app.whenReady().then(() => {
       }
       case 'notify':
         // NOT SERVER-SCOPED, and deliberately gains no id (#1120). It is main-local: fireNotification
-        // owns the copy table, no command field supplies text, and no frame results — so a server id
-        // here would be a field nothing reads. Host-attributed notification copy, if it turns out to be
-        // wanted, is a separate ticket with its own consumer. The event the click emits stays
-        // origin-free for the reason `windowLocalSink` gives above.
+        // owns the body copy, and no frame results — so a server id here would be a field nothing reads.
+        // #1593: the title names the conversation. The renderer resolved the name against the event's
+        // own server, so neither a server nor a conversation id crosses; `payload.name` is untrusted and
+        // fireNotification cleans it (notificationTitle) before it reaches the OS. Never log it. The
+        // event the click emits stays origin-free for the reason `windowLocalSink` gives above.
         // Main-local side effect, no connection method: raise an OS notification only when the window
         // is unfocused. Focus is queried at fire-time (one synchronous isFocused(), no stateful
-        // tracker); the kind→copy mapping is owned by the module, so no command field supplies text.
+        // tracker); the kind→body mapping is owned by the module, so no command field supplies the body.
         // Live since #392 shipped (pushNotifyBridge.ts sends it). The click path is reachable in one
         // sequence: a notification raised while the window is open but unfocused, the window then
         // closed, the notification clicked afterwards. The focus query with no window at all stays
@@ -1066,14 +1067,18 @@ app.whenReady().then(() => {
         // satisfies FocusableWindow + ActivatableWindow and answers isDestroyed() honestly, which is
         // what keeps the no-window case the total no-op #518 made it (creating a window from a click
         // is out of scope); the paired emit rides the same sink as every other event.
-        fireNotification(command.payload.kind, {
-          isWindowFocused: () => windowHasFocus(live.window),
-          Notification,
-          onClick: () => {
-            activateWindow(live.window)
-            emitDaemonEvent(windowLocalSink, { type: 'notificationActivated' })
-          }
-        })
+        fireNotification(
+          command.payload.kind,
+          {
+            isWindowFocused: () => windowHasFocus(live.window),
+            Notification,
+            onClick: () => {
+              activateWindow(live.window)
+              emitDaemonEvent(windowLocalSink, { type: 'notificationActivated' })
+            }
+          },
+          command.payload.name
+        )
         return
       case 'setBadgeCount':
         // #1592: main-local like `notify`, so no server id. The count is already a non-negative safe

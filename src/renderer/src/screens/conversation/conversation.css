@@ -6740,6 +6740,23 @@ button.top-overlay-pill {
   opacity: 0.6;
 }
 
+/* #1630 — the refresh failure line inside the reader (the thread's banner, set in from the rule) and the
+   copy confirmation. Both are client-owned static text drawn between the bar and the body. */
+.markdown-reader__notice {
+  margin-bottom: var(--space-3);
+  padding-inline: var(--space-3);
+}
+
+.markdown-reader__copied {
+  flex: 0 0 auto;
+  margin: 0 0 var(--space-3);
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
 /* The only scroll box, so the note scrolls beneath the fixed bar. Body-large on-surface per the drawn
    body; the .bubble__markdown rules inside give the headings, lists, code blocks and quotes. */
 .markdown-reader__body {

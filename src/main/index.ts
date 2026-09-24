@@ -249,8 +249,11 @@ app.whenReady().then(() => {
   // ipcMain handler that writes the clipboard on the renderer's behalf grants the SAME capability
   // through more code, and adds a channel that has to be validated. The marginal risk here is small —
   // a renderer compromised badly enough to reach this already holds the `window.pyry` bridge, which
-  // sends to the daemon and unpairs. `clipboard-sanitized-write` is text/plain only, so no HTML flavour
-  // reaches the clipboard either.
+  // sends to the daemon and unpairs. `clipboard-sanitized-write` is NOT text/plain only: #1630 measured
+  // it, in the built app, letting the async `navigator.clipboard.write` put a `text/html` flavour on the
+  // clipboard, which the markdown reader's Copy as HTML relies on (copyRichText). Chromium sanitizes that
+  // HTML on write, and the reader's HTML is already inert because it is AssistantMarkdown's own render.
+  // The grant stays this one string; nothing here reads the clipboard.
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) =>
     callback(permission === 'clipboard-sanitized-write')
   )

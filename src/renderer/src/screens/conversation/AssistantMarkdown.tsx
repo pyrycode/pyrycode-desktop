@@ -91,8 +91,12 @@ import { copyMessageText } from './copyMessageText'
  * NOT DONE: declaring the `unified.Data` augmentation here ourselves. It would work today only because
  * `remark-parse`'s types happen to be absent from the program, and would become a hard duplicate-property
  * error the moment anything pulls them in. A latent trap traded for one fewer package.json line.
+ *
+ * #1630 EXPORTS IT for the markdown reader's Copy as plain text, which parses a note with exactly this
+ * plugin so its text walk sees the same tree this module renders. The export adds a parser, not a
+ * renderer: nothing that walk produces reaches a markup sink.
  */
-function remarkGfmSubset(this: Processor): undefined {
+export function remarkGfmSubset(this: Processor): undefined {
   const data = this.data()
   const micromarkExtensions = data.micromarkExtensions ?? (data.micromarkExtensions = [])
   const fromMarkdownExtensions = data.fromMarkdownExtensions ?? (data.fromMarkdownExtensions = [])

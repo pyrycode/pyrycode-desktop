@@ -420,7 +420,15 @@ export function ConversationScreen({
   const readerOpen = reader.state.type !== 'closed'
   return (
     <div className="conversation">
-      {reader.state.type !== 'closed' && <MarkdownReaderView state={reader.state} onBack={reader.back} />}
+      {reader.state.type !== 'closed' && (
+        <MarkdownReaderView
+          state={reader.state}
+          copied={reader.copied}
+          onBack={reader.back}
+          onRefresh={reader.refresh}
+          onCopy={reader.copy}
+        />
+      )}
       <div className="conversation__covered" data-covered={readerOpen ? 'true' : undefined}>
       {/* #276: the trailing overflow menu (Figma 16-16) — the single entry point to per-conversation
           actions. #365 wires its Channel-info item to open the Channel Info sheet (below): the seam is no

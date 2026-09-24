@@ -13,8 +13,10 @@
  *
  * SECURITY POSTURE. The value is relay-peer-authored and this is a new egress path out of the app, so
  * three things are deliberate:
- *   - `writeText` is the SANITIZED write — text/plain only — so no HTML flavour reaches the clipboard
- *     even when the source carries markup.
+ *   - `writeText` writes text/plain only, so no HTML flavour reaches the clipboard from this helper
+ *     even when the source carries markup. (The window's `clipboard-sanitized-write` grant itself is
+ *     wider — #1630 measured it covering the async `write` with `text/html` — and `copyRichText` below
+ *     is the one caller of that.)
  *   - The text reaches no log, no attribute, no URL and no cache key (CLAUDE.md's 2026-08-20 ruling).
  *     The failure log is an EVENT NAME alone: not the text, and not the caught error either. That is
  *     questionResolution's posture rather than composerSend's `console.error(msg, error)` — a
@@ -40,6 +42,36 @@ export async function copyMessageText(text: string): Promise<boolean> {
     return true
   } catch {
     console.error('message copy failed')
+    return false
+  }
+}
+
+/**
+ * #1630 — the markdown reader's Copy as HTML: one clipboard item carrying `html` as text/html and `text`
+ * as its text/plain fallback, through the async `navigator.clipboard.write`.
+ *
+ * MEASURED, not assumed: in the built app the existing `clipboard-sanitized-write` grant (src/main/index.ts)
+ * lets this write through, and the main process reads both flavours back. So there is no IPC route and
+ * no widened permission. Chromium sanitizes the HTML flavour on this write as well, but the caller's
+ * HTML is already inert by construction (`markdownHtml` renders through AssistantMarkdown); the
+ * sanitizer is a second fabric, not the one relied on.
+ *
+ * The posture is `copyMessageText`'s: feature-checked rather than assumed, never throws, and a failure
+ * logs an event name alone — never the strings and never the caught error.
+ */
+export async function copyRichText({ html, text }: { html: string; text: string }): Promise<boolean> {
+  const clipboard = globalThis.navigator?.clipboard
+  if (typeof clipboard?.write !== 'function' || typeof globalThis.ClipboardItem !== 'function') return false
+  try {
+    await clipboard.write([
+      new ClipboardItem({
+        'text/html': new Blob([html], { type: 'text/html' }),
+        'text/plain': new Blob([text], { type: 'text/plain' })
+      })
+    ])
+    return true
+  } catch {
+    console.error('rich copy failed')
     return false
   }
 }

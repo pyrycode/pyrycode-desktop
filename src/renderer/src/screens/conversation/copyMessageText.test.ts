@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { copyMessageText } from './copyMessageText'
+import { copyMessageText, copyRichText } from './copyMessageText'
 
 // #969 — the copy control's one effect, isolated from the row that renders it. Renderer tests are
 // static server renders under `environment: 'node'` (vitest.config.ts), so nothing here can click the
@@ -84,5 +84,51 @@ describe('copyMessageText — the message bubble copy control effect (#969)', ()
     vi.stubGlobal('navigator', undefined)
 
     await expect(copyMessageText('nowhere to go')).resolves.toBe(false)
+  })
+})
+
+// #1630 — the markdown reader's Copy as HTML: one ClipboardItem carrying the HTML and its plain-text
+// fallback, through the async `write` the `clipboard-sanitized-write` grant was measured to cover.
+describe('copyRichText — the reader HTML copy (#1630)', () => {
+  class FakeClipboardItem {
+    constructor(readonly items: Record<string, Blob>) {}
+  }
+
+  it('writes one item carrying both flavours and reports success', async () => {
+    const write = vi.fn(async (_items: FakeClipboardItem[]) => {})
+    vi.stubGlobal('navigator', { clipboard: { write } })
+    vi.stubGlobal('ClipboardItem', FakeClipboardItem)
+
+    await expect(copyRichText({ html: '<h1>Plan</h1>', text: 'Plan' })).resolves.toBe(true)
+
+    expect(write).toHaveBeenCalledTimes(1)
+    const [items] = write.mock.calls[0]
+    expect(items).toHaveLength(1)
+    const flavours = items[0].items
+    expect(Object.keys(flavours).sort()).toEqual(['text/html', 'text/plain'])
+    expect(await flavours['text/html'].text()).toBe('<h1>Plan</h1>')
+    expect(flavours['text/html'].type).toBe('text/html')
+    expect(await flavours['text/plain'].text()).toBe('Plan')
+  })
+
+  it('reports failure without throwing or logging the content when the write is refused', async () => {
+    vi.stubGlobal('navigator', { clipboard: { write: vi.fn(async () => { throw new Error('denied: <h1>Plan</h1>') }) } })
+    vi.stubGlobal('ClipboardItem', FakeClipboardItem)
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await expect(copyRichText({ html: '<h1>Plan</h1>', text: 'Plan' })).resolves.toBe(false)
+
+    expect(error).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(error.mock.calls)).not.toContain('Plan')
+  })
+
+  it('reports failure when the async write or ClipboardItem is unavailable', async () => {
+    vi.stubGlobal('navigator', { clipboard: {} })
+    vi.stubGlobal('ClipboardItem', FakeClipboardItem)
+    await expect(copyRichText({ html: '<p>x</p>', text: 'x' })).resolves.toBe(false)
+
+    vi.stubGlobal('navigator', { clipboard: { write: vi.fn(async () => {}) } })
+    vi.stubGlobal('ClipboardItem', undefined)
+    await expect(copyRichText({ html: '<p>x</p>', text: 'x' })).resolves.toBe(false)
   })
 })

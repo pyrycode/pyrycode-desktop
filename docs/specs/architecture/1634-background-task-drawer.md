@@ -61,3 +61,8 @@ No new failure modes. The drawer sends nothing and logs nothing, and daemon text
 ## Documentation handoff
 
 Pending for the documentation stage: the ticket names no documentation requirement. The `conversation-shell` overview's background-task-panel description, which calls it an interim status-sheet overlay, will need the drawer form, the lifted open state and the Escape arbitration.
+
+## Revisions
+
+- **2026-09-25, close glyph drawn inline.** Design § 1 planned the close button as an `<img>` of `modal-close.svg`. Three shipped escaping tests in `BackgroundTaskPanel.test.tsx` assert that there is no `<img` anywhere in the panel's markup, since that is how they prove a markup-shaped description stayed text. So the same circle-xmark path is now an inline `<svg>`, with its two fills taken from tokens (`--color-primary` disc, `--color-on-primary` cut-out). The tests are unchanged.
+- **Open question resolved.** Capture-phase `stopPropagation` is kept. The options-overlay leg of `e2e/background-task-drawer.spec.ts` proves the overlay stays open while the drawer closes. `chat-top-bar-geometry` (Escape closing the drawer after a menu pick) and `escape-interrupt` pass unchanged.

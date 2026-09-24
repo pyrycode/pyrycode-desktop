@@ -29,7 +29,8 @@ speculative observer here would defend an unobserved need.
 translateTimelineEvent(event: DaemonEvent | HistoryTimelineEvent): ThreadEvent | null
 // Owns exactly assistantDelta / turnEnd / turnState / toolUse / toolResult (#229) / stallDetected
 // (#317) / apiRetry (#493) / compacting / compactionBoundary / connected->reconnected (#538) / messageReceived->
-// userText (#1223) / thinkingProgress (#1314), each rebuilt as a fresh named-field literal (never `return event`, never a spread
+// userText (#1223) / thinkingProgress (#1314) / resetting (#1517) / attachmentOffered->attachmentOffer
+// (#1621), each rebuilt as a fresh named-field literal (never `return event`, never a spread
 // — for stallDetected and connected->reconnected, both sides are nullary, so the "literal" is
 // arm-selection only; apiRetry and compacting carry data, so each is a filter-and-copy like
 // toolUse/toolResult — apiRetry's DaemonEvent side also carries conversationId since #737, which the
@@ -51,12 +52,13 @@ translateTimelineEvent(event: DaemonEvent | HistoryTimelineEvent): ThreadEvent |
 
 timelineTargetFor(event: DaemonEvent): string | null   // #756
 // switch (event.type) { case 'assistantDelta': ... case 'unrecognizedMessage': case 'thinkingProgress':
-//   case 'sessionTransition':
+//   case 'resetting': case 'sessionTransition': case 'attachmentOffered':
 //   return event.conversationId
 //   case 'connected': return null
 //   default: return null }
-// The eleven id-carrying owned arms (#784 moved `unrecognizedMessage` into this group, #1314 moved
-// `thinkingProgress` in beside it, #1559 moved `sessionTransition` in last) share one
+// The id-carrying owned arms (#784 moved `unrecognizedMessage` into this group, #1314 moved
+// `thinkingProgress` in beside it, #1517 moved `resetting` in, #1559 moved `sessionTransition` in,
+// #1621 moved `attachmentOffered` in last) share one
 // `return event.conversationId` (non-nullable: a missing or non-string conversation_id already fails
 // the decode without emitting) — each resolves from this group with no cast and no probe, since the
 // field is required on it, and it routes by the frame's own conversation rather than through
@@ -182,6 +184,26 @@ literally *is* the payload, so `reduceTimeline`'s `thinkingProgress` arm assigns
 [Thread timeline § The reducer](thread-timeline-internals.md#the-reducer) for the `thinkingTokens` scalar's three
 clearing edges, none of which live in this bridge. Between #1313 and #1314 it sat dormantly in the `null`
 fall-through group below, the member of that group a reader was most likely to want owned here.
+
+`attachmentOffered` ([#1621](https://github.com/pyrycode/pyrycode-desktop/issues/1621), decoded and
+carried across IPC at [#1619](https://github.com/pyrycode/pyrycode-desktop/issues/1619)/[#1620](https://github.com/pyrycode/pyrycode-desktop/issues/1620))
+is the arm those two tickets left dormant, claimed here as a whole-row arm rather than a scalar: the
+DaemonEvent carries `conversationId` beside `attachmentId` and `filename`; the `ThreadEvent` this
+returns keeps only the latter two in a fresh `MessageAttachment`-shaped literal, so the id STOPS here
+and reaches the keyed store only through `timelineTargetFor`, the `thinkingProgress`/`resetting`
+discipline. Unlike every scalar arm above, `reduceTimeline` neither sets a status field nor resolves an
+existing row — it tail-appends a new `attachmentOffer` [`ThreadItem`](thread-timeline-internals.md#types)
+in arrival order (the frame carries no `turn_id`, the `userText`/`sessionBoundary` precedent), and
+de-duplicates by comparing the incoming `attachmentId` against every `attachmentOffer` item already in
+the slice — a same-reference no-op on a repeat, never a `Map` or object keyed by the id. No chrome
+scalar changes: an offer is not turn activity, so `phase`/`stalled`/`apiRetry`/`compacting` and the rest
+carry through unchanged, the same posture `banner` and `modelRefusal` already have. The row draws in
+[Conversation shell § The assistant-offered file
+row](conversation-shell-message-bubble-attachments.md#the-assistant-offered-file-row-1621), reusing the
+file row / image tile a sent message's own attachments draw with. `chatHistoryWriter.ts` filters the
+kind out of every snapshot before capture — see [Local chat history § Snapshot
+contract](chat-history.md#snapshot-contract) — so an offer never reaches disk and a reload or history
+replay shows none; the frame is live-only, and the wire has no path to resupply one.
 
 **The reducer's `assertNever` default is a live secret sink, not a formality — #1314's own RED proved
 it.** `reduceTimeline`'s exhaustive `switch` over `ThreadEvent` ends `default: assertNever(event)`, whose

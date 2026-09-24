@@ -449,15 +449,18 @@ the combined list again exceeded the size cap.
   content-free, a test asserting the filename, the attachment id and the conversation id are each absent
   from the captured diagnostic log.
 
-  Ships **dormant** on one of its four bridges, **permanent** on the other three — the `resetting` shape
-  exactly. `daemonEventBridge`, `modalBridge` and `questionBridge` no-op it **permanently**: nothing
-  daemon-side is waiting on an answer, there is no `modal_id`, and an offered file is orthogonal to
-  connection status — none of the three will ever claim it. `timelineBridge`'s case stays **dormant**:
-  [#1621](https://github.com/pyrycode/pyrycode-desktop/issues/1621) is expected to flip it into the
-  thread's file row, the same two-step every prior dormant arm on this union took. All four cases exist
-  only so each bridge's `assertNever` guard makes a new arm a compile error — and it is not a formality:
-  it would otherwise stringify the whole event, the claude-authored filename included, into an `Error`
-  message and a crash reporter.
+  Shipped **dormant** on one of its four bridges at #1620, **permanent** on the other three — the
+  `resetting` shape exactly. `daemonEventBridge`, `modalBridge` and `questionBridge` no-op it
+  **permanently**: nothing daemon-side is waiting on an answer, there is no `modal_id`, and an offered
+  file is orthogonal to connection status — none of the three will ever claim it. `timelineBridge`'s case
+  stayed dormant only until [#1621](https://github.com/pyrycode/pyrycode-desktop/issues/1621) flipped it
+  into the thread's file row (an assistant-side `attachmentOffer` item, deduplicated by attachment id and
+  excluded from durable chat history — see [Conversation shell § The assistant-offered file
+  row](conversation-shell-message-bubble-attachments.md#the-assistant-offered-file-row-1621)), the same
+  two-step every prior dormant arm on this union took. All four cases exist only so each bridge's
+  `assertNever` guard makes a new arm a compile error — and it is not a formality: it would otherwise
+  stringify the whole event, the claude-authored filename included, into an `Error` message and a crash
+  reporter.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.

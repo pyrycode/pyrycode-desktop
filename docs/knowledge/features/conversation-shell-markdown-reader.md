@@ -102,9 +102,9 @@ One new file, `src/renderer/src/screens/conversation/MarkdownReader.tsx`.
 
 [#1630](https://github.com/pyrycode/pyrycode-desktop/issues/1630) added a three-dot button at
 the bar's right end — the phone twin is pyrycode-mobile#1031, and the operator ruled on
-2026-09-24 that both clients ship the same six items in the same order; this ticket shipped
-the first four, the composer's Open in another app and Save to device are sibling tickets
-that append below Refresh.
+2026-09-24 that both clients ship the same six items in the same order; #1630 shipped the
+first four, [#1631](#open-in-another-app-1631) the fifth (Open in another app, below), and a
+sixth sibling ticket (Save to device) is still to append below it.
 
 **The menu reuses `ComposerOptionsMenu`** ([Composer options
 panel](conversation-shell-composer-options-panel.md)) rather than a second dropdown — an
@@ -179,6 +179,58 @@ row and reading the clipboard back are Playwright's job —
 clipboard back through main the way `e2e/message-copy.spec.ts` already does, including
 `clipboard.readHTML()` for the HTML flavour.
 
+## Open in another app (#1631)
+
+[#1631](https://github.com/pyrycode/pyrycode-desktop/issues/1631) added the menu's fifth row,
+directly below Refresh: `unavailable: state.type !== 'loaded'`, same as the three copy rows. Choosing
+it hands the note to the operating system's default app for `.md` — the reader never renders the
+content itself for this action, and no path crosses the bridge in either direction.
+
+**One new invoke channel, not attachment-open's send/push pair.** `src/shared/ipc/markdownOpen.ts`
+(`MARKDOWN_OPEN_CHANNEL = 'pyry:markdown-open'`) departs deliberately from
+[attachment open](attachment-open.md)'s channel-pair shape: the AC limits the request to the text and
+the display name, so there is no correlation key, and a pushed outcome with no key would land on
+whichever reader is listening — including one mounted after the asker unmounted, if a conversation
+switch remounted the screen mid-flight. An invoke resolves back to the exact caller, and the answer is
+short-lived (a local write plus the OS hand-off), so there was nothing to gain from a second channel.
+`isMarkdownOpenRequest` guards shape and size only (text ≤ `MAX_MARKDOWN_OPEN_TEXT_LENGTH`, 32 Mi UTF-16
+code units — pinned by a `src/main` test to be `>= ATTACHMENT_MAX_RETRIEVAL_BYTES`, since the shared
+module cannot import from `src/main`; name ≤ `MAX_MARKDOWN_OPEN_NAME_LENGTH`, 255, the reader's own
+title cap); empty strings pass on both fields. A request that fails the guard is dropped before any
+filesystem or OS call, and the invoke still answers `'refused'` so the caller's promise settles — a
+conforming window never sees that answer.
+
+**`src/main/markdownOpen.ts` writes into its own sibling directory, `userData/markdown-views/`** (next
+to [attachment open](attachment-open.md)'s `attachment-views`), reusing `sanitizeAttachmentFilename`
+for the name — the same gate, not a second sanitiser. `markdownOpenFileName` strips a trailing `.md`
+before clamping the stem to 252 characters and re-appending it, so the clamp runs after the sanitiser's
+own steps and the result is always `<stem>.md`; a name already ending in `.md` within the bound comes
+back unchanged. The write goes through an exclusive-create temp file (`wx`, so nothing already at that
+name — a symlink included — is ever opened) and then a `rename` onto the final name, which **replaces**
+whatever sits there rather than following it. That is also the retention rule: the same display name
+overwrites its earlier file, so the directory holds at most one file per distinct sanitised name — a
+name choice the window can vary, unlike the fixed identifier `attachment-views` keys on, but the review
+accepted an unbounded rename-driven directory rather than filing a cap, since a conforming renderer only
+ever names notes the operator actually opens (see the architecture doc's security review, Electron
+attack surface, out of scope). `open` (`shell.openPath`, narrowed to a boolean at `src/main/index.ts`,
+same as attachment open) then either returns the outcome `'opened'` or, on a false or rejected answer,
+`'open-failed'`; a failed `mkdir`, temp write or rename is `'write-failed'`. The driver never rejects and
+never throws, and is Electron-free like its sibling, so it unit-tests against a real temp directory with
+an injected `open`.
+
+**The reader shows one static notice, `MARKDOWN_OPEN_IN_APP_FAILED_NOTICE`** (`'Could not open the note
+in another app.'`), drawn inside the still-open reader over the current text — never the thread-level
+`MARKDOWN_OPEN_FAILED_NOTICE`, since a failed open-in-app leaves the reader open rather than closing it.
+`openInAppFailed` is UI-local `useState`, cleared by the next attempt and by Back, same lifetime as
+`copied`; the `alive` ref already guarding the copy-confirmation timer also stops a late answer from
+setting it after unmount. Diagnostics are the static codes `open-in-app` and `open-in-app-failed` — never
+the text, the name or the failure reason, matching every other diagnostic this reader emits.
+
+**No Playwright coverage was added on purpose.** An e2e run must never launch a real external app; the
+unit tests against the injected `open` seam (main) and the guard (shared) carry the proof instead.
+`e2e/markdown-reader-menu.spec.ts` (#1630) now expects five rows and asserts the new one is disabled
+while loading and enabled once loaded, but it never chooses it.
+
 ## Pane wiring
 
 `ConversationScreen` holds `const reader = useMarkdownReader(openConversationId)` beside its
@@ -243,6 +295,9 @@ mount-local state it drops is traced.
 - [Attachment retrieval](attachment-retrieval.md) — the `readWorkspaceFile`/
   `onWorkspaceFileReadEvent` bridge (#1626) this reader's `open`, `refresh` and outcome
   listener call.
+- [Attachment open](attachment-open.md) — #867, the shape § Open in another app follows: injected
+  directory and `open` seam, never-rejects driver, gate-before-any-filesystem-call ordering — but a
+  single invoke channel here, not that ticket's send/push pair.
 - [Composer attach — pending attachments and the strip](composer-attach-pending.md) — the
   mount-local composer state an unmount silently drops; the reason the pane hides rather than
   unmounts.
@@ -250,7 +305,14 @@ mount-local state it drops is traced.
   and the rework that replaced the early return with the covered-wrapper layer.
 - [PR #1633](https://github.com/pyrycode/pyrycode-desktop/pull/1633) — #1630's note-actions
   menu: the HTML clipboard measurement, the refresh state machine and their tests.
+- [PR #1637](https://github.com/pyrycode/pyrycode-desktop/pull/1637) — #1631's Open in another
+  app: the invoke-channel deviation from the attachment-open shape, and the write-through-temp-
+  plus-rename driver and its tests.
 - `docs/specs/architecture/1627-markdown-link-reader.md` — the design, its `## Revisions`
   recording the layering fix, and the security review.
 - `docs/specs/architecture/1630-markdown-reader-menu.md` — the note-actions menu design: the
   HTML clipboard measurement, the refresh state additions and the security review.
+- `docs/specs/architecture/1631-markdown-open-in-app.md` — the Open in another app design: the
+  invoke-vs-channel-pair rationale and the security review's accepted out-of-scope items (an
+  orphaned temp file after a mid-write kill, an unbounded directory driven by display-name
+  choice).

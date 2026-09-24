@@ -8,6 +8,8 @@ import type {
   SendMessagePayload,
   TurnEndPayload
 } from '../src/shared/wire/types'
+import { ATTACHMENT_UPLOAD_EVENT_CHANNEL } from '../src/shared/ipc/attachmentUpload'
+import type { AttachmentUploadEvent } from '../src/shared/ipc/attachmentUpload'
 
 // #1627 — a markdown link in an assistant reply opens the in-app reader, end to end. The renderer tier
 // is static markup and cannot click, so the transition (thread → reader → thread), the fresh fetch on
@@ -82,7 +84,18 @@ const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
 test('a markdown link in a reply opens the note in the reader, refetched on every open, and back returns (#1627)', async ({
   launchPairedApp
 }) => {
-  const { page } = await launchPairedApp({ buildReplyFrames })
+  const { page, app } = await launchPairedApp({ buildReplyFrames })
+  // A completed upload, pushed on the channel main sends its terminals on (composer-attach.spec.ts's seam:
+  // a real attach opens a native file dialog no locator can dismiss).
+  const pushUpload = (event: AttachmentUploadEvent): Promise<void> =>
+    app.evaluate(
+      ({ BrowserWindow }, payload) => {
+        const [window] = BrowserWindow.getAllWindows()
+        window.webContents.send(payload.channel, payload.event)
+      },
+      { channel: ATTACHMENT_UPLOAD_EVENT_CHANNEL, event }
+    )
+  const tiles = page.locator('.composer__attachment')
 
   await page.getByPlaceholder('Message…').fill('where is the plan?')
   await page.getByRole('button', { name: 'Send' }).click()
@@ -102,21 +115,31 @@ test('a markdown link in a reply opens the note in the reader, refetched on ever
   const reader = page.locator('.markdown-reader')
   const composer = page.getByPlaceholder('Message…')
 
-  // --- 1. Open: the reader replaces the pane, composer included; the title is the last component. ---
+  // The composer holds a pending attachment when the reader opens (the verifier's MUST FIX on PR #1629).
+  await pushUpload({ type: 'completed', uploadId: 'e2e-reader-1', filename: 'e2e-report.pdf' })
+  await expect(tiles).toHaveCount(1, { timeout: TIMEOUT_MS })
+
+  // --- 1. Open: the reader covers the pane, composer included; the title is the last component. ---
   await planLink.click()
   await expect(reader).toBeVisible({ timeout: TIMEOUT_MS })
   await expect(reader.locator('.markdown-reader__title')).toHaveText('Plan.md')
   await expect(reader.locator('h1')).toHaveText('Plan version 1', { timeout: TIMEOUT_MS })
-  await expect(composer).toHaveCount(0)
-  await expect(assistant).toHaveCount(0)
+  // Hidden, NOT unmounted: the Composer's pending set and upload listener are mount-local.
+  await expect(composer).toBeHidden()
+  await expect(assistant).toBeHidden()
   // The sidebar stays.
   await expect(page.locator('.paired-shell__pane')).toBeVisible()
+  // An upload that completes while the reader is open still reaches the composer's live listener.
+  await pushUpload({ type: 'completed', uploadId: 'e2e-reader-2', filename: 'e2e-bundle.zip' })
 
-  // --- 2. Back returns to the same conversation's thread. ---
+  // --- 2. Back returns to the same conversation's thread, with both pending attachments still held. ---
   await reader.getByRole('button', { name: 'Back' }).click()
   await expect(reader).toHaveCount(0)
   await expect(composer).toBeVisible()
   await expect(planLink).toBeVisible()
+  await expect(tiles).toHaveCount(2, { timeout: TIMEOUT_MS })
+  await expect(tiles.nth(0)).toHaveText('PDF')
+  await expect(tiles.nth(1)).toHaveText('ZIP')
 
   // --- 3. Reopen fetches again: the note changed on the host, so the new text shows. ---
   await planLink.click()

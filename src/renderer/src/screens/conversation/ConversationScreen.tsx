@@ -413,17 +413,15 @@ export function ConversationScreen({
     setChannelInfoOpen(true)
     requestMcpStatus(window.pyry.sendCommand, activeConversation?.id ?? null)
   }
-  // #1627: an open reader replaces the whole pane, composer included; the sidebar is PairedShell's. Every
-  // hook runs above this branch. Back returns to this same mounted screen, whose thread is store-held.
-  if (reader.state.type !== 'closed') {
-    return (
-      <div className="conversation">
-        <MarkdownReaderView state={reader.state} onBack={reader.back} />
-      </div>
-    )
-  }
+  // #1627: an open reader covers the whole pane, composer included; the sidebar is PairedShell's. The
+  // thread and the Composer stay MOUNTED beneath it, hidden, never unmounted: the Composer's pending
+  // attachments and its upload listener are mount-local, so an early return here would silently drop them
+  // on a same-conversation round trip through the reader. Hiding also keeps the thread's scroll position.
+  const readerOpen = reader.state.type !== 'closed'
   return (
     <div className="conversation">
+      {reader.state.type !== 'closed' && <MarkdownReaderView state={reader.state} onBack={reader.back} />}
+      <div className="conversation__covered" data-covered={readerOpen ? 'true' : undefined}>
       {/* #276: the trailing overflow menu (Figma 16-16) — the single entry point to per-conversation
           actions. #365 wires its Channel-info item to open the Channel Info sheet (below): the seam is no
           longer a no-op. Gated on onBack presence, the established "mounted in the paired shell" signal —
@@ -458,7 +456,7 @@ export function ConversationScreen({
         <SavedTimelineNotice status={localStatus} />}
       {/* #1627: a markdown file that could not be opened. One client-owned line, never the path or the
           reason; cleared by the next open, and gone with the screen on a conversation switch. */}
-      {reader.state.notice && (
+      {reader.state.type === 'closed' && reader.state.notice && (
         <p className="conversation__banner" role="status">{MARKDOWN_OPEN_FAILED_NOTICE}</p>
       )}
       {/* #1214: the backlog goes INTO the thread. `queue_state` is still daemon state held verbatim by
@@ -627,6 +625,7 @@ export function ConversationScreen({
           onClose={() => setPanelOpen(false)}
         />
       )}
+      </div>
     </div>
   )
 }

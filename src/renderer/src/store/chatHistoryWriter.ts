@@ -6,10 +6,16 @@ import type { RendererDiagnosticEvent } from '@shared/ipc/diagnostics'
 import { conversationListStore, type ConversationListStore } from './conversationListStore'
 import { conversationTimelineStore, type ConversationTimelineStore } from './conversationTimelineStore'
 import { subscribeChatHistoryRemoval } from './chatHistoryRemoval'
+import type { ThreadItem } from './threadTimeline'
 
 type ConversationRemoval = Extract<ChatHistoryRequest, { operation: 'removeConversation' }>
 type TimelineSnapshot = Extract<ChatHistorySnapshot, { kind: 'timeline' }>
 type Receipt = { type: string; serverId: string | null | undefined }
+
+/** #1621: an offered file is live-only (the wire cannot resupply it), so it is never saved. */
+function isDurable(item: ThreadItem): item is Exclude<ThreadItem, { kind: 'attachmentOffer' }> {
+  return item.kind !== 'attachmentOffer'
+}
 type Observation = { owner: string | null; coverage: TimelineSnapshot['coverage'] }
 
 /** Receipts are synchronous; snapshots and their supplying host are detached before scheduling. */
@@ -176,7 +182,7 @@ export function createChatHistoryWriter(deps: {
       if (owner === null) { report('unknown-ownership'); continue }
       if (echo) localEchoes.add(tail)
       capture({ version: 1, kind: 'timeline', serverId: owner, conversationId: id,
-        items: [...items], prependedRows: slice.prependedRows, coverage })
+        items: items.filter(isDurable), prependedRows: slice.prependedRows, coverage })
     }
   })
   const offEvents = deps.subscribeEvents?.(event => {

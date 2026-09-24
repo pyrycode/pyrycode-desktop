@@ -611,6 +611,13 @@ button.top-overlay-pill {
    ramp (--color-primary against the resting --color-inverse-primary) instead of lifting a neutral grey
    surface that would read as a foreign patch on either navy fill. The focus half is not optional here —
    AC1 requires keyboard activation, and a control the keyboard can reach must show where it is. */
+/* #1621 — an offered file's bubble holds the file row (or the image slot) and nothing else. Each filling
+   carries margin-top for the text-above case; with no text above it would pad the bubble's top. Two
+   classes outrank each filling's one without !important. */
+.bubble--attachment-offer > :first-child {
+  margin-top: 0;
+}
+
 .bubble__file:hover {
   color: var(--color-primary);
 }

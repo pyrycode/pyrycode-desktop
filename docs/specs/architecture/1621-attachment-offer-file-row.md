@@ -95,3 +95,7 @@ The ticket has no Documentation handoff section. Pending for the documentation s
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-24
+
+## Revisions
+
+- 2026-09-24, build: `chatHistoryContract.test.ts` pins `DurableThreadItem` equal to `ThreadItem` minus live-only fields (#1565 precedent). It now also excludes the `attachmentOffer` kind, the type-level half of the writer filter above. Test-only; the design is unchanged.

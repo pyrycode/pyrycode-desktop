@@ -1566,6 +1566,24 @@ function TimelineRow({
       // assistant/user/tool — claude did not say this, the daemon did), identified by class, like
       // .session-delimiter.
       return <UnrecognizedRow item={item} />
+    case 'attachmentOffer':
+      // #1621: a file the ASSISTANT sent (Figma `File field` 132:4605, in context 102-4), in an
+      // assistant-side bubble of its own. It reuses the sent message's two fillings unchanged — the file
+      // row or, when `isImageAttachmentName` reads the name as an image, the image slot — so activation
+      // is the same `downloadAttachment` closure: the local-original ask answers `unavailable` for an
+      // offer, and the path falls back to `requestAttachment` and a save. No BubbleMeta: nothing to copy
+      // and no timestamp. The filename reaches the DOM only as escaped text inside those components.
+      return (
+        <div className="message-row message-row--daemon">
+          <div className="bubble bubble--daemon bubble--attachment-offer" data-thread-role="assistant">
+            {isImageAttachmentName(item.attachment.filename) ? (
+              <BubbleAttachmentImage attachment={item.attachment} />
+            ) : (
+              <BubbleAttachmentRow attachment={item.attachment} />
+            )}
+          </div>
+        </div>
+      )
   }
 }
 

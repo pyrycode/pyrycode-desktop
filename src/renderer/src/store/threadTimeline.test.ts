@@ -1633,3 +1633,61 @@ describe('reduceTimeline — resetting (#1517)', () => {
     expect(initialTimelineState.resetting).toBeNull()
   })
 })
+
+describe('reduceTimeline — an offered attachment (#1621)', () => {
+  function offer(attachmentId: string, filename = 'report.pdf'): ThreadEvent {
+    return { type: 'attachmentOffered', attachment: { attachmentId, filename } }
+  }
+
+  it('appends one attachmentOffer item carrying both fields, after the existing items', () => {
+    const state = reduceTimeline(reduceTimeline(initialTimelineState, delta('A', 'Here it is')), offer('id-1'))
+    expect(selectItems(state).map((item) => item.kind)).toEqual(['assistantText', 'attachmentOffer'])
+    expect(selectItems(state)[1]).toEqual({
+      kind: 'attachmentOffer',
+      attachment: { attachmentId: 'id-1', filename: 'report.pdf' }
+    })
+  })
+
+  it('a second offer with the same attachment id adds nothing (same state reference)', () => {
+    const once = reduceTimeline(initialTimelineState, offer('id-1'))
+    const twice = reduceTimeline(once, offer('id-1', 'renamed.pdf'))
+    expect(twice).toBe(once)
+  })
+
+  it('an offer with a different attachment id appends a second item', () => {
+    const state = reduceTimeline(reduceTimeline(initialTimelineState, offer('id-1')), offer('id-2', 'b.txt'))
+    expect(selectItems(state)).toHaveLength(2)
+  })
+
+  it('dedupes against offer items only, not a sent message carrying the same attachment id', () => {
+    const sent: ThreadEvent = {
+      type: 'userText',
+      text: 'see file',
+      attachments: [{ attachmentId: 'id-1', filename: 'report.pdf' }]
+    }
+    const state = reduceTimeline(reduceTimeline(initialTimelineState, sent), offer('id-1'))
+    expect(selectItems(state).map((item) => item.kind)).toEqual(['userText', 'attachmentOffer'])
+  })
+
+  it('is not turn activity: phase, stall, local send window and retry status are carried unchanged', () => {
+    const before: TimelineState = {
+      ...initialTimelineState,
+      phase: 'responding',
+      stalled: true,
+      localSendPending: true,
+      apiRetry: { current: 1, total: 3 }
+    }
+    const after = reduceTimeline(before, offer('id-1'))
+    expect(selectPhase(after)).toBe('responding')
+    expect(selectStalled(after)).toBe(true)
+    expect(selectLocalSendPending(after)).toBe(true)
+    expect(selectApiRetry(after)).toBe(before.apiRetry)
+  })
+
+  it('builds a fresh attachment record rather than sharing the event object', () => {
+    const event = offer('id-1')
+    const state = reduceTimeline(initialTimelineState, event)
+    const item = selectItems(state)[0] as Extract<ThreadItem, { kind: 'attachmentOffer' }>
+    expect(event.type === 'attachmentOffered' && item.attachment === event.attachment).toBe(false)
+  })
+})

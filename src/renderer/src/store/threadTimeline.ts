@@ -196,6 +196,12 @@ export type ThreadItem =
       raw: string
       truncated: boolean
     }
+  // #1621: a file the ASSISTANT sent (`attachment_offered`), drawn on the assistant side with the same
+  // file row a sent message's attachment gets. `MessageAttachment` carries its contract here too: the id
+  // is the daemon's and is what `downloadAttachment` addresses, the filename is claude-authored display
+  // text. No `turnId` (the frame carries none) and no `createdAt` (the row draws no meta). LIVE-ONLY: the
+  // wire cannot resupply an offer, and `chatHistoryWriter` leaves this kind out of the durable snapshot.
+  | { kind: 'attachmentOffer'; attachment: MessageAttachment }
 
 /**
  * The renderer-local, sealed input union the reducer consumes. camelCase and
@@ -375,6 +381,10 @@ export type ThreadEvent =
   // `handoff`) combinations decode, so every consumer handles all of them, and nothing
   // security-relevant may branch on either. The frame is a REPORT, never a control input.
   | { type: 'resetting'; active: boolean; phase: WireResetPhase; handoff: WireResetHandoff }
+  // #1621: one offered file (#1619 decodes it, #1620 carried it to the window). The DaemonEvent carries
+  // `conversationId`; this arm does not, so the routing key STOPS at the bridge (the `resetting`
+  // discipline). Folded by a tail-append deduplicated on `attachmentId` — see the reducer arm.
+  | { type: 'attachmentOffered'; attachment: MessageAttachment }
 
 /**
  * #493: the live api-retry attempt counter. Present ⇒ a retry is in flight; `null` ⇒ none.
@@ -987,6 +997,22 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
         localSendPending: state.localSendPending,
         thinkingTokens: state.thinkingTokens
       }
+    case 'attachmentOffered':
+      // #1621: a whole offered-file row, tail-appended in arrival order (the frame has no `turn_id`, the
+      // `userText` / `sessionBoundary` discipline). NOT turn activity: every chrome scalar and `phase` are
+      // carried unchanged. A repeat of an attachment id this timeline already holds AS AN OFFER is a
+      // same-reference no-op; the id is compared for strict equality only, never used as a key or path.
+      // The record is rebuilt by name, never shared with or spread from the event.
+      return state.items.some((item) =>
+        item.kind === 'attachmentOffer' && item.attachment.attachmentId === event.attachment.attachmentId)
+        ? state
+        : {
+            ...state,
+            items: [...state.items, {
+              kind: 'attachmentOffer',
+              attachment: { attachmentId: event.attachment.attachmentId, filename: event.attachment.filename }
+            }]
+          }
     case 'stallDetected':
       // #317: onset-only stall — set the scalar, leave `items`/`phase` untouched. A redundant onset (the
       // stall is already live) is a same-reference no-op, mirroring the pure-duplicate discipline of the

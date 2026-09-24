@@ -197,6 +197,35 @@ describe('createAttachmentReassembler — the stream contradicts itself', () => 
     expect(failed).toEqual(['stream-contradiction'])
   })
 
+  it('with no id to pin in advance, adopts the first chunk’s id and completes the transfer (#1626)', () => {
+    // `read_workspace_file`: the daemon mints the transfer id, so the client cannot name it. The
+    // first chunk's id is adopted, whatever it is, and the rest of the stream is held to it.
+    const bytes = bytesOf(STRIDE + 1)
+    const minted = 'e7a0c1d2-0b3c-4d5e-8f60-718293a4b5c6'
+    const chunks = conformingChunks(bytes).map((chunk) => ({ ...chunk, attachment_id: minted }))
+    const { consumer, completed, failed } = makeConsumer()
+    const r = createAttachmentReassembler(null, consumer)
+
+    r.chunk(chunks[1])
+    r.chunk(chunks[0])
+
+    expect(failed).toEqual([])
+    expect(completed).toEqual([bytes])
+  })
+
+  it('with no id to pin in advance, refuses a later chunk naming a different transfer (#1626)', () => {
+    const bytes = bytesOf(STRIDE + 1)
+    const chunks = conformingChunks(bytes)
+    const { consumer, completed, failed } = makeConsumer()
+    const r = createAttachmentReassembler(null, consumer)
+
+    r.chunk(chunks[0])
+    r.chunk({ ...chunks[1], attachment_id: 'a0000000-4f89-41d3-9a0c-0305e82c3301' })
+
+    expect(completed).toEqual([])
+    expect(failed).toEqual(['stream-contradiction'])
+  })
+
   it.each([
     ['total_chunks', { total_chunks: 9 }],
     ['size', { size: 11 }],

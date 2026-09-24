@@ -57,6 +57,7 @@ import { buildDequeueMessage } from './transport/dequeueMessageEnvelope'
 import { buildInterrupt } from './transport/interruptEnvelope'
 import { buildAttachmentChunk } from './transport/attachmentChunkEnvelope'
 import { buildRequestAttachment } from './transport/requestAttachmentEnvelope'
+import { buildReadWorkspaceFile } from './transport/readWorkspaceFileEnvelope'
 import {
   createAttachmentReassembler,
   type AttachmentReassembler
@@ -104,6 +105,7 @@ import {
   type SetConversationMutedPayload,
   MAX_SYSTEM_PROMPT_BYTES,
   type RequestAttachmentPayload,
+  type ReadWorkspaceFilePayload,
   type SetSessionSettingsPayload,
   type ModalAnswerPayload,
   type ModalCancelPayload,
@@ -248,7 +250,8 @@ export interface AttachmentRetrievalConsumer {
  * exported: a caller holds its consumer and needs nothing else.
  */
 interface PendingRetrieval {
-  /** #995's accumulator for this transfer, pinned to the id THIS CLIENT asked for. */
+  /** #995's accumulator for this transfer, pinned to the id THIS CLIENT asked for, or to the first
+   *  chunk's id when the daemon mints it (`read_workspace_file`, #1626). */
   reassembler: AttachmentReassembler
   /** The caller's sink, settled exactly once by `settleRetrieval`. */
   consumer: AttachmentRetrievalConsumer
@@ -680,6 +683,18 @@ export interface DaemonConnection {
    */
   requestAttachment(
     payload: RequestAttachmentPayload,
+    consumer: AttachmentRetrievalConsumer
+  ): void
+  /**
+   * Ask the host for one markdown file from a conversation's workspace, as it is right now, and
+   * settle `consumer` with its verified bytes or one static reason (#1626). `requestAttachment`'s
+   * contract exactly — same correlation by envelope id, same rejects, same idle deadline, same
+   * teardown net, never throws — except that the daemon mints the transfer id, so the reassembler
+   * pins to the first chunk's id rather than to one this client named. Every call sends a fresh
+   * frame. The path is sent unchanged and is never resolved, logged or echoed on this side.
+   */
+  readWorkspaceFile(
+    payload: ReadWorkspaceFilePayload,
     consumer: AttachmentRetrievalConsumer
   ): void
 }
@@ -3796,6 +3811,56 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     payload: RequestAttachmentPayload,
     consumer: AttachmentRetrievalConsumer
   ): void {
+    startRetrieval(
+      // A FRESH LITERAL with named fields, never the caller's object spread through: the two ids
+      // originate in an untrusted renderer, so a smuggled key must not reach the envelope even though
+      // the boundary guard reads only these two (createConversation's posture).
+      (envelopeId) =>
+        buildRequestAttachment({
+          id: envelopeId,
+          ts: now(),
+          payload: {
+            conversation_id: payload.conversation_id,
+            attachment_id: payload.attachment_id
+          }
+        }),
+      // Pinned to the id THIS CLIENT ASKED FOR, never one read back off the wire — the second half
+      // of the correlation, and storeAttachment's stated precondition further down the chain.
+      payload.attachment_id,
+      consumer
+    )
+  }
+
+  function readWorkspaceFile(
+    payload: ReadWorkspaceFilePayload,
+    consumer: AttachmentRetrievalConsumer
+  ): void {
+    startRetrieval(
+      // A fresh literal, for requestAttachment's reason. The path goes to the daemon unchanged.
+      (envelopeId) =>
+        buildReadWorkspaceFile({
+          id: envelopeId,
+          ts: now(),
+          payload: { conversation_id: payload.conversation_id, path: payload.path }
+        }),
+      // The daemon mints the transfer id, so there is none to pin in advance: the reassembler adopts
+      // the first chunk's and holds the rest of the stream to it.
+      null,
+      consumer
+    )
+  }
+
+  /**
+   * The shared body of both retrieval asks: send the frame `build` produces under the next envelope
+   * id, then register the pending entry the chunk and reject arms of onDriverEvent route by. The two
+   * verbs differ only in the frame and in what the reassembler pins to; everything after the send is
+   * one correlation machine.
+   */
+  function startRetrieval(
+    build: (envelopeId: number) => Uint8Array,
+    pinnedId: string | null,
+    consumer: AttachmentRetrievalConsumer
+  ): void {
     // Not connected (before start(), mid-bootstrap, bootstrap-failed): fail the consumer terminally
     // so #996's orchestrator never hangs. requestDebugBundle's posture — send's silent no-op is
     // wrong for a call that owns a waiting consumer. There is nothing accumulated to discard, so this
@@ -3808,19 +3873,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // in_reply_to on every answering chunk AND on the reject (the createWorkspaceFolder template).
     const envelopeId = nextEnvelopeId
     try {
-      // A FRESH LITERAL with named fields, never the caller's object spread through: the two ids
-      // originate in an untrusted renderer, so a smuggled key must not reach the envelope even though
-      // the boundary guard reads only these two (createConversation's posture). Shares the one
-      // monotonic nextEnvelopeId with send / requestDebugBundle — no second counter — so ids stay
-      // unique across interleaved calls, which is what the daemon correlates replies by.
-      const bytes = buildRequestAttachment({
-        id: envelopeId,
-        ts: now(),
-        payload: {
-          conversation_id: payload.conversation_id,
-          attachment_id: payload.attachment_id
-        }
-      })
+      // Shares the one monotonic nextEnvelopeId with send / requestDebugBundle — no second counter —
+      // so ids stay unique across interleaved calls, which is what the daemon correlates replies by.
+      const bytes = build(envelopeId)
       nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
       driver.sendMessage(bytes)
     } catch {
@@ -3847,9 +3902,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // an envelope id at all, so nothing it leaves behind can be re-minted; that half of its analogy
     // does not carry here.
     const entry: PendingRetrieval = {
-      // Pinned to the id THIS CLIENT ASKED FOR, never one read back off the wire — the second half
-      // of the correlation, and storeAttachment's stated precondition further down the chain.
-      reassembler: createAttachmentReassembler(payload.attachment_id, {
+      reassembler: createAttachmentReassembler(pinnedId, {
         complete: (bytes) => {
           clearTimer(entry.deadline)
           pendingRetrievals.delete(envelopeId)
@@ -3997,6 +4050,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     refuseQuestions,
     requestDebugBundle,
     uploadAttachment,
-    requestAttachment
+    requestAttachment,
+    readWorkspaceFile
   }
 }

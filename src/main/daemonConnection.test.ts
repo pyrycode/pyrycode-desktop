@@ -11980,3 +11980,184 @@ describe('conversation mute write results (#1595)', () => {
     connection.stop()
   })
 })
+
+/** The envelope ids of every `read_workspace_file` a driver has been handed, in send order. */
+function readWorkspaceFileEnvelopes(driver: FakeDriver): { id: number; payload: unknown }[] {
+  return driver.sent
+    .map((bytes) => decodeEnvelope(bytes))
+    .filter((envelope) => envelope.type === 'read_workspace_file')
+    .map((envelope) => ({ id: envelope.id, payload: envelope.payload }))
+}
+
+describe('readWorkspaceFile (#1626)', () => {
+  const PATH = 'docs/notes/plan.md'
+  const ASK = { conversation_id: RETRIEVED_CONVERSATION, path: PATH }
+  /** The transfer id the daemon mints; the client never names it. */
+  const MINTED = 'e7a0c1d2-0b3c-4d5e-8f60-718293a4b5c6'
+
+  it('fails the consumer not-connected before start, sending nothing', () => {
+    const { connection, drivers } = build()
+    const spy = makeRetrievalConsumer()
+
+    connection.readWorkspaceFile(ASK, spy.consumer)
+
+    expect(spy.failed).toEqual(['not-connected'])
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('sends one new read_workspace_file per ask, carrying exactly the two fields', async () => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection, drivers } = await reachConnectedWithTimers(scheduler.timing)
+
+    connection.readWorkspaceFile(
+      { ...ASK, extra: 'smuggled' } as typeof ASK,
+      makeRetrievalConsumer().consumer
+    )
+    connection.readWorkspaceFile(ASK, makeRetrievalConsumer().consumer)
+
+    const sent = readWorkspaceFileEnvelopes(drivers[0])
+    expect(sent).toHaveLength(2)
+    expect(sent[0].id).not.toBe(sent[1].id)
+    for (const frame of sent) {
+      expect(frame.payload).toEqual(ASK)
+      expect(Object.keys(frame.payload as Record<string, unknown>)).toEqual(['conversation_id', 'path'])
+    }
+  })
+
+  it('completes with the verified bytes of a transfer whose id the daemon minted', async () => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection, drivers } = await reachConnectedWithTimers(scheduler.timing)
+    const spy = makeRetrievalConsumer()
+    const whole = new Uint8Array(45_001).fill(0x61)
+
+    connection.readWorkspaceFile(ASK, spy.consumer)
+    const [{ id }] = readWorkspaceFileEnvelopes(drivers[0])
+    for (const index of [0, 1]) {
+      drivers[0].emit({
+        type: 'message',
+        plaintext: retrievalChunkPlaintext(id, {
+          attachment_id: MINTED,
+          index,
+          total_chunks: 2,
+          size: whole.length,
+          sha256: sha256Hex(whole),
+          data: whole.subarray(index * 45_000, (index + 1) * 45_000)
+        })
+      })
+    }
+
+    expect(spy.failed).toEqual([])
+    expect(spy.completed).toEqual([whole])
+    expect(scheduler.pending()).toHaveLength(0)
+  })
+
+  it('fails stream-contradiction when a later chunk names a different transfer', async () => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection, drivers } = await reachConnectedWithTimers(scheduler.timing)
+    const spy = makeRetrievalConsumer()
+    const whole = new Uint8Array(45_001).fill(0x62)
+
+    connection.readWorkspaceFile(ASK, spy.consumer)
+    const [{ id }] = readWorkspaceFileEnvelopes(drivers[0])
+    const chunk = (attachmentId: string, index: number): Uint8Array =>
+      retrievalChunkPlaintext(id, {
+        attachment_id: attachmentId,
+        index,
+        total_chunks: 2,
+        size: whole.length,
+        sha256: sha256Hex(whole),
+        data: whole.subarray(index * 45_000, (index + 1) * 45_000)
+      })
+    drivers[0].emit({ type: 'message', plaintext: chunk(MINTED, 0) })
+    drivers[0].emit({
+      type: 'message',
+      plaintext: chunk('aaaabbbb-cccc-4ddd-8eee-ffff00001111', 1)
+    })
+
+    expect(spy.completed).toEqual([])
+    expect(spy.failed).toEqual(['stream-contradiction'])
+  })
+
+  it.each([
+    ['attachment.not_found', 'not-found'],
+    ['attachment.too_large', 'daemon-error'],
+    ['protocol.malformed', 'daemon-error']
+  ] as const)('settles %s as exactly one %s', async (code, reason) => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection, drivers } = await reachConnectedWithTimers(scheduler.timing)
+    const spy = makeRetrievalConsumer()
+
+    connection.readWorkspaceFile(ASK, spy.consumer)
+    const [{ id }] = readWorkspaceFileEnvelopes(drivers[0])
+    drivers[0].emit({ type: 'message', plaintext: codedErrorPlaintext(code, id) })
+    drivers[0].emit({ type: 'message', plaintext: codedErrorPlaintext(code, id) })
+
+    expect(spy.failed).toEqual([reason])
+    expect(scheduler.pending()).toHaveLength(0)
+  })
+
+  it('settles attachment.stream_aborted mid-stream as stream-aborted', async () => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection, drivers } = await reachConnectedWithTimers(scheduler.timing)
+    const spy = makeRetrievalConsumer()
+    const whole = new Uint8Array(45_001).fill(0x63)
+
+    connection.readWorkspaceFile(ASK, spy.consumer)
+    const [{ id }] = readWorkspaceFileEnvelopes(drivers[0])
+    drivers[0].emit({
+      type: 'message',
+      plaintext: retrievalChunkPlaintext(id, {
+        attachment_id: MINTED,
+        index: 0,
+        total_chunks: 2,
+        size: whole.length,
+        sha256: sha256Hex(whole),
+        data: whole.subarray(0, 45_000)
+      })
+    })
+    drivers[0].emit({
+      type: 'message',
+      plaintext: codedErrorPlaintext('attachment.stream_aborted', id)
+    })
+
+    expect(spy.failed).toEqual(['stream-aborted'])
+  })
+
+  it('fires timed-out when the host goes silent', async () => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection } = await reachConnectedWithTimers(scheduler.timing)
+    const spy = makeRetrievalConsumer()
+
+    connection.readWorkspaceFile(ASK, spy.consumer)
+    scheduler.fireNext()
+
+    expect(spy.failed).toEqual(['timed-out'])
+  })
+
+  it('fails connection-lost when the relay link drops mid-read', async () => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection, drivers } = await reachConnectedWithTimers(scheduler.timing)
+    const spy = makeRetrievalConsumer()
+
+    connection.readWorkspaceFile(ASK, spy.consumer)
+    drivers[0].emit({ type: 'relay-link-down', code: 1006 })
+
+    expect(spy.failed).toEqual(['connection-lost'])
+    expect(scheduler.pending()).toHaveLength(0)
+  })
+
+  it('leaves request_attachment pinned: a first chunk naming another id is still refused', async () => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection, drivers } = await reachConnectedWithTimers(scheduler.timing)
+    const spy = makeRetrievalConsumer()
+
+    connection.requestAttachment(
+      { conversation_id: RETRIEVED_CONVERSATION, attachment_id: RETRIEVED_ID },
+      spy.consumer
+    )
+    const id = requestAttachmentEnvelopeId(drivers[0])
+    drivers[0].emit({ type: 'message', plaintext: wholeFileChunk(id, MINTED, new Uint8Array([1])) })
+
+    expect(spy.failed).toEqual(['stream-contradiction'])
+  })
+})

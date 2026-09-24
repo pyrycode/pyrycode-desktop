@@ -121,7 +121,10 @@ export const ATTACHMENT_MAX_RETRIEVAL_BYTES =
  * Build a reassembler for the transfer `attachmentId`, streaming its one terminal to `consumer`.
  *
  * `attachmentId` is the identifier THIS CLIENT ASKED FOR, and it is the second half of a correlation
- * that is checked twice on purpose. #996 routes a frame to this transfer by `inReplyTo`, which says
+ * that is checked twice on purpose. `null` is the one exception (#1626): `read_workspace_file` names a
+ * path, and the daemon mints the transfer id, so there is nothing to pin in advance. The first chunk's
+ * id is adopted instead and every later chunk is held to it, which still catches a stream that
+ * switches transfers midway; only the wrong-bytes-for-the-right-ask case has no oracle there. #996 routes a frame to this transfer by `inReplyTo`, which says
  * WHICH REQUEST the frame answers; the payload `attachment_id` says WHICH TRANSFER it belongs to.
  * The failure only the payload id catches is the host answering the right ask with the wrong bytes,
  * which is what makes the two non-redundant rather than belt-and-braces.
@@ -132,9 +135,13 @@ export const ATTACHMENT_MAX_RETRIEVAL_BYTES =
  * not arise at all — the keys are numbers.
  */
 export function createAttachmentReassembler(
-  attachmentId: string,
+  attachmentId: string | null,
   consumer: AttachmentConsumer
 ): AttachmentReassembler {
+  // The id every chunk must name. Fixed at construction when the client asked for one; otherwise
+  // taken from the first chunk, before its declaration is checked (a refused first chunk settles the
+  // transfer, so what it pinned is never consulted).
+  let pinned = attachmentId
   const arrived = new Map<number, Uint8Array>()
   let settled = false
   let started = false
@@ -228,7 +235,8 @@ export function createAttachmentReassembler(
 
       // Checked on EVERY chunk, the first included: a frame answering this request while naming
       // another transfer is the host answering the right ask with the wrong bytes.
-      if (chunk.attachment_id !== attachmentId) {
+      if (pinned === null) pinned = chunk.attachment_id
+      if (chunk.attachment_id !== pinned) {
         settle('stream-contradiction')
         return
       }

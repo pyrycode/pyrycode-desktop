@@ -391,6 +391,7 @@ export function translateTimelineEvent(
     case 'backgroundTaskStarted':
     case 'backgroundTaskUpdated':
     case 'backgroundTaskRoster':
+    case 'backgroundTaskProgress':
     case 'sessionFacts': // Informational only; the session-facts bridge owns retention.
     case 'mcpStatus': // Informational only; the MCP status bridge owns retention.
     case 'mcpStatusRequestRejected': // The channel info sheet's notice owns this (#1579).
@@ -437,6 +438,8 @@ export function translateTimelineEvent(
       // consumer, same wire facts: no turn_id, opens and closes no turn. A snapshot of what claude left
       // running is daemon STATE, not a turn-stream item, even when it is empty. Whether the
       // background-task panel ever becomes a timeline surface remains #568's call.
+      // backgroundTaskProgress (#1638) joins the family here on the same wire facts — no turn_id, opens
+      // and closes no turn — dormant until the #1640 background-task store claims it.
       // modelAnnounced (#587) ships dormant here on the same wire facts — no turn_id, opens and closes
       // no turn — so it is daemon STATE by the queueState rule (#720): an identity report ABOUT the
       // turn claude is running is not an item IN it. Its consumer is the #588 announced-model store,

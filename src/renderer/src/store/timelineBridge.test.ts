@@ -1633,6 +1633,29 @@ describe('subscribeTimeline', () => {
     expect(selectItems(store.getState())).toHaveLength(0)
   })
 
+  it('#1638: a backgroundTaskProgress daemon event creates NO timeline item (ships dormant)', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    const before = store.getState()
+    bridge.emit({
+      type: 'backgroundTaskProgress',
+      conversationId: 'conv-1',
+      taskId: 'task_01ABC',
+      currentActivity: 'Reading beta.txt',
+      subagentType: 'general-purpose',
+      lastToolName: 'Read',
+      totalTokens: 16246,
+      toolUses: 2,
+      durationMs: 4546,
+      truncatedFields: null
+    })
+
+    expect(store.getState()).toBe(before)
+    expect(selectItems(store.getState())).toHaveLength(0)
+  })
+
   it('#566: a backgroundTaskRoster daemon event creates NO timeline item (ships dormant)', () => {
     const bridge = fakeBridge()
     const store = createTimelineStore()

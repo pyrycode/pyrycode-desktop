@@ -509,8 +509,12 @@ an exact `toEqual` and `conversationId`/`questionBatchId` distinct in the fixtur
 `multi_select` key, asserted on the key set since an extra key survives a loose match; each rebuilt
 question's `options` is the same array/object references as the wire question's; `questionDismissed` →
 `dismissed` including an unrecognised `source`, proving the field is not enum-checked; `connected` → a
-payload-free `reconnected`; an inverse-filter table over the other 38 `DaemonEvent` arms, each
-`toBeNull()`; `subscribeQuestionBatches` unit coverage; and an end-to-end pass through a real
+payload-free `reconnected`; an inverse-filter table over the other `DaemonEvent` arms, each
+`toBeNull()`, guarded by a hardcoded `expect(others).toHaveLength(N)` (`N` = the full union's arm
+count minus the 3 owned above). Every additive `DaemonEvent` member needs both a new fixture literal
+in the table and `N` bumped by one; omitting the fixture silently drops the new arm from coverage, and
+`toHaveLength` only catches that omission if `N` is bumped without it, or vice versa — forgetting both
+together leaves the suite green with the new arm untested (#1638 bumped 46→47); `subscribeQuestionBatches` unit coverage; and an end-to-end pass through a real
 `createQuestionBatchStore()` and the seam (no React) proving shown → dismissed drives `outstanding`
 `[1] → []` and a `connected` after a `shown` clears the held set.
 

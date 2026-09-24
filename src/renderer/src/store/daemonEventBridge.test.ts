@@ -455,6 +455,23 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     ).toBeNull()
   })
 
+  it('backgroundTaskProgress → null (consumed by the #1640 background-task store, not the session store)', () => {
+    expect(
+      translateDaemonEvent({
+        type: 'backgroundTaskProgress',
+        conversationId: 'conv-1',
+        taskId: 'task_01ABC',
+        currentActivity: 'Reading beta.txt',
+        subagentType: 'general-purpose',
+        lastToolName: 'Read',
+        totalTokens: 16246,
+        toolUses: 2,
+        durationMs: 4546,
+        truncatedFields: null
+      })
+    ).toBeNull()
+  })
+
   it('backgroundTaskUpdated → null (consumed by the #567 background-task store, not the session store)', () => {
     expect(
       translateDaemonEvent({

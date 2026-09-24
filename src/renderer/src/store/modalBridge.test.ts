@@ -297,6 +297,19 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
         summary: '',
         truncatedFields: ['patch']
       },
+      // background-task progress ships dormant (#1638); its consumer is the #1640 background-task store.
+      {
+        type: 'backgroundTaskProgress',
+        conversationId: 'conv-1',
+        taskId: 'task_01ABC',
+        currentActivity: 'Reading beta.txt',
+        subagentType: 'general-purpose',
+        lastToolName: 'Read',
+        totalTokens: 16246,
+        toolUses: 2,
+        durationMs: 4546,
+        truncatedFields: null
+      },
       // background-task roster ships dormant (#566); its consumer is the #567 background-task store,
       // not the modal store — a snapshot of what claude left running is not a modal either, since
       // nothing is waiting on an answer.

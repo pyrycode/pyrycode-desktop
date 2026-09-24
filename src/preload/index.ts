@@ -58,6 +58,11 @@ import {
   type AttachmentOpenEvent,
   type AttachmentOpenRequest
 } from '../shared/ipc/attachmentOpen'
+import {
+  MARKDOWN_OPEN_CHANNEL,
+  type MarkdownOpenOutcome,
+  type MarkdownOpenRequest
+} from '../shared/ipc/markdownOpen'
 
 // The bridge surface exposed to the renderer window. Typed events from the transport in
 // the background process arrive via onDaemonEvent; typed user commands go out via
@@ -632,7 +637,17 @@ const api = {
     const handler = (_event: IpcRendererEvent, event: AttachmentOpenEvent): void => listener(event)
     ipcRenderer.on(ATTACHMENT_OPEN_EVENT_CHANNEL, handler)
     return () => ipcRenderer.removeListener(ATTACHMENT_OPEN_EVENT_CHANNEL, handler)
-  }
+  },
+
+  /**
+   * Open the markdown reader's note in the operating system's default app for `.md` (#1631). CALLED
+   * WITH THE TEXT ON SCREEN AND A DISPLAY NAME, NOTHING ELSE: the background process picks the directory
+   * and sanitises the name, so no path crosses in either direction. Request/response on a fixed channel;
+   * the answer is `opened` or one static failure reason. The main side re-checks the shape with
+   * isMarkdownOpenRequest.
+   */
+  openMarkdownInApp: (request: MarkdownOpenRequest): Promise<MarkdownOpenOutcome> =>
+    ipcRenderer.invoke(MARKDOWN_OPEN_CHANNEL, request)
 }
 
 // Context isolation is always on (webPreferences.contextIsolation: true), so the bridge is

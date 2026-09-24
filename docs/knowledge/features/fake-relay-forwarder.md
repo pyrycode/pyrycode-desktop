@@ -88,11 +88,13 @@ the two drive opposite classifications on the client side:
   (no codec/Noise import) and content-agnostic about the code itself — the forwarder never interprets it,
   just passes it to `ws`'s `close`.
 - **The caller picks the code to pick the client's classification.** A code in the client's
-  `DEFAULT_FATAL_CLOSE_CODES` (`4401`/`4421`/`4426`, `relaySupervisor.ts:40`) drives the supervised client
-  to a **terminal, non-retryable** failure (no re-dial armed) — the opposite of `dropClientLeg`'s abnormal
-  1006, which the client treats as retryable and auto-reconnects from. This is what #464 needed: driving
-  the client to the terminal `error` status that surfaces the `Re-pair` affordance ([#167](../codebase/167.md))
-  without accidentally triggering a reconnect.
+  `DEFAULT_FATAL_CLOSE_CODES` (`4401`/`4412`/`4421`/`4426`, `relaySupervisor.ts:40`) drives the supervised
+  client to a **terminal, non-retryable** failure (no re-dial armed) — the opposite of `dropClientLeg`'s
+  abnormal 1006, which the client treats as retryable and auto-reconnects from. This is what #464 needed:
+  driving the client to the terminal `error` status that surfaces the `Re-pair` affordance
+  ([#167](../codebase/167.md)) without accidentally triggering a reconnect. [#1613](daemon-connection.md#app-too-old-rejection-update-required-1613)
+  is the first caller to drive `4412` specifically — a bare close with no preceding sealed error, the
+  fallback path for a daemon whose error-sealing itself failed.
 - **Reuses the existing identity-guarded leg-null-on-`close` handler unchanged** — a clean close fires the
   same socket `close` event `dropClientLeg`'s `terminate()` does, so no new nulling logic was needed.
 

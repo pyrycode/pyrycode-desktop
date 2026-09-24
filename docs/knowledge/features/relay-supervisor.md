@@ -20,7 +20,7 @@ One file, five exported symbols: `src/main/transport/relaySupervisor.ts`, siblin
 ### Public surface
 
 ```ts
-export const DEFAULT_FATAL_CLOSE_CODES: ReadonlySet<number>  // = new Set([4401, 4421, 4426])
+export const DEFAULT_FATAL_CLOSE_CODES: ReadonlySet<number>  // = new Set([4401, 4412, 4421, 4426])
 export const NO_PAIRED_RECORD_CLOSE_CODE = 4000  // #83: synthetic, client-side, NEVER sent on the wire
 
 export type RelaySupervisorEvent =
@@ -107,10 +107,11 @@ Source of truth: `pyrycode` `docs/protocol-mobile.md` § Reconnect and § Error 
   | `4401` unauthorized (bad device token) | **FATAL** | retrying the same token is a permanent-reject storm; needs re-pair |
   | `4404` no server with that server-id | **retryable** | binary temporarily offline; it reconnects within its grace window |
   | `4409` server-id already claimed | **N/A** | binary-leg code — the client never receives it; **do NOT hardcode** |
+  | `4412` app build older than the host's minimum (#1613) | **FATAL** | fails identically on retry; needs an app update, not a re-dial — see [Daemon connection](daemon-connection.md#app-too-old-rejection-update-required-1613) |
   | `4421` protocol mismatch | **FATAL** | version incompatibility; fails identically on retry; needs app update |
   | `4426` Noise handshake failure | **FATAL** | wrong static key / stale pair record / impersonation; needs re-pair |
 
-  **Default: `{4401, 4421, 4426}`.** `4404` is deliberately retryable (transient binary-offline is the common case; the capped 30s backoff already bounds a permanently-wrong server-id to ~2 dials/min — not a storm). `4409` is deliberately absent (binary-leg only). The set is **injected config** with this wire-spec default, mirroring the Go `FatalCloseCodes`.
+  **Default: `{4401, 4412, 4421, 4426}`.** `4404` is deliberately retryable (transient binary-offline is the common case; the capped 30s backoff already bounds a permanently-wrong server-id to ~2 dials/min — not a storm). `4409` is deliberately absent (binary-leg only). The set is **injected config** with this wire-spec default, mirroring the Go `FatalCloseCodes`. `4412` normally arrives with a preceding sealed `client.update_required` error that halts the connection before this close is even seen — see the linked section for why membership here is still needed as the close-only fallback.
 
 ## Why security-sensitive
 

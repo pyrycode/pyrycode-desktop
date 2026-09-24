@@ -840,6 +840,35 @@ describe('createDaemonConnection', () => {
     expect(sink.webContents.send.mock.calls.length).toBe(before)
   })
 
+  it('drops a malformed attachment_offered and keeps processing the next frame (#1619)', async () => {
+    const { sink, drivers } = await reachConnected()
+    const before = emitted(sink).length
+    const offered = (payload: unknown): Uint8Array =>
+      encodeEnvelope({ id: 4, type: 'attachment_offered', ts: FIXED_TS, payload })
+    const message = { conversation_id: 'c1', message_id: 'm1', role: 'assistant', text: 'hi there' }
+
+    // The truncated / hostile shape (three empty strings), then an uppercase attachment id.
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: offered({ conversation_id: '', attachment_id: '', filename: '' })
+      })
+    ).not.toThrow()
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: offered({
+          conversation_id: 'c1',
+          attachment_id: '3F2A1C40-9B7E-4D21-A5C3-0E8F6B2D9A17',
+          filename: 'report.pdf'
+        })
+      })
+    ).not.toThrow()
+    drivers[0].emit({ type: 'message', plaintext: messagePlaintext(message) })
+
+    expect(emitted(sink).slice(before)).toEqual([{ type: 'messageReceived', message }])
+  })
+
   it('drops an inbound message with a missing field or unknown role, without emitting or throwing', async () => {
     const { sink, drivers } = await reachConnected()
     const before = sink.webContents.send.mock.calls.length

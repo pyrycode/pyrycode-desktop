@@ -273,6 +273,11 @@ function encodeResetting(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 32, type: 'resetting', ts: FIXED_TS, payload })
 }
 
+/** An `attachment_offered` envelope's plaintext bytes, wrapping an arbitrary payload (#1619). */
+function encodeAttachmentOffered(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 33, type: 'attachment_offered', ts: FIXED_TS, payload })
+}
+
 /** A `model_announced` envelope's plaintext bytes, wrapping an arbitrary payload (#587). */
 function encodeModelAnnounced(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 29, type: 'model_announced', ts: FIXED_TS, payload })
@@ -381,6 +386,14 @@ const RESETTING_ROWS: Array<[string, Record<string, unknown>]> = [
   ['rising restarting/skipped', { ...RESETTING, phase: 'restarting', handoff: 'skipped' }],
   ['falling edge, both tokens empty', { conversation_id: 'c1', active: false, phase: '', handoff: '' }]
 ]
+
+/** A well-formed attachment_offered payload (#1619): a daemon-asserted conversation id, a lowercase
+ *  UUIDv4 attachment id the daemon minted, and a claude-authored display filename. */
+const ATTACHMENT_OFFERED = {
+  conversation_id: 'c1',
+  attachment_id: '3f2a1c40-9b7e-4d21-a5c3-0e8f6b2d9a17',
+  filename: 'report.pdf'
+}
 
 /** A well-formed model_announced payload — the daemon's canonical fixture VERBATIM (#587,
  *  pyrycode/internal/protocol/testdata/model_announced.json). All three fields are always present. */
@@ -3015,6 +3028,134 @@ describe('parseInboundMessage — resetting fail-closed (#1514, AC2)', () => {
       expect(message).not.toContain(SECRET_CONV)
       expect(message).not.toContain('handed_over_to_a_later_daemon')
       expect(message).not.toContain('wrapping_up')
+    }
+  })
+})
+
+describe('parseInboundMessage — attachment_offered recognition (#1619, AC1)', () => {
+  it('narrows a well-formed attachment_offered into { kind: attachment-offered } carrying all three fields', () => {
+    // Spelled-out literal, never the fixture reused as its own expectation.
+    expect(parseInboundMessage(encodeAttachmentOffered(ATTACHMENT_OFFERED))).toEqual({
+      kind: 'attachment-offered',
+      attachmentOffered: {
+        conversation_id: 'c1',
+        attachment_id: '3f2a1c40-9b7e-4d21-a5c3-0e8f6b2d9a17',
+        filename: 'report.pdf'
+      }
+    })
+  })
+
+  it('carries NO ts — the frame is live-only and gains no decodeHistoryEvent arm', () => {
+    expect(parseInboundMessage(encodeAttachmentOffered(ATTACHMENT_OFFERED))).not.toHaveProperty('ts')
+  })
+
+  it('tolerates unknown server-added keys without copying them through', () => {
+    const withExtras = { ...ATTACHMENT_OFFERED, path: '/etc/passwd', size: 42 }
+    const decoded = parseInboundMessage(encodeAttachmentOffered(withExtras))
+    expect(decoded?.kind === 'attachment-offered' && Object.keys(decoded.attachmentOffered).sort()).toEqual([
+      'attachment_id',
+      'conversation_id',
+      'filename'
+    ])
+  })
+
+  it('accepts a filename of exactly 255 UTF-8 bytes, measured in bytes rather than characters', () => {
+    // 85 three-byte characters = 255 bytes, but only 85 characters.
+    const filename = '\u20ac'.repeat(85)
+    const decoded = parseInboundMessage(encodeAttachmentOffered({ ...ATTACHMENT_OFFERED, filename }))
+    expect(decoded?.kind === 'attachment-offered' && decoded.attachmentOffered.filename).toBe(filename)
+    expect(
+      parseInboundMessage(encodeAttachmentOffered({ ...ATTACHMENT_OFFERED, filename: 'a'.repeat(255) }))
+    ).not.toBeNull()
+  })
+})
+
+describe('parseInboundMessage — attachment_offered fail-closed (#1619, AC2)', () => {
+  it.each(['conversation_id', 'attachment_id', 'filename'])(
+    'throws when %s is absent, null or not a string',
+    (field) => {
+      const absent: Record<string, unknown> = { ...ATTACHMENT_OFFERED }
+      delete absent[field]
+      const bad: unknown[] = [
+        absent,
+        { ...ATTACHMENT_OFFERED, [field]: null },
+        { ...ATTACHMENT_OFFERED, [field]: 42 },
+        { ...ATTACHMENT_OFFERED, [field]: ['a'] },
+        { ...ATTACHMENT_OFFERED, [field]: { value: 'a' } }
+      ]
+      for (const payload of bad) {
+        expect(() => parseInboundMessage(encodeAttachmentOffered(payload))).toThrow(WireDecodeError)
+      }
+    }
+  )
+
+  it('throws when the payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeAttachmentOffered('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeAttachmentOffered(['a']))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeAttachmentOffered(null))).toThrow(WireDecodeError)
+  })
+
+  it('throws on the truncated / hostile shape — all three fields empty', () => {
+    expect(() =>
+      parseInboundMessage(
+        encodeAttachmentOffered({ conversation_id: '', attachment_id: '', filename: '' })
+      )
+    ).toThrow(WireDecodeError)
+  })
+
+  it('throws on an empty conversation_id', () => {
+    expect(() =>
+      parseInboundMessage(encodeAttachmentOffered({ ...ATTACHMENT_OFFERED, conversation_id: '' }))
+    ).toThrow(WireDecodeError)
+  })
+
+  it.each([
+    ['empty', ''],
+    ['uppercase', '3F2A1C40-9B7E-4D21-A5C3-0E8F6B2D9A17'],
+    ['one uppercase nibble', '3f2a1c40-9b7e-4d21-a5c3-0e8f6b2d9A17'],
+    ['version 1 nibble', '3f2a1c40-9b7e-1d21-a5c3-0e8f6b2d9a17'],
+    ['variant nibble outside 89ab', '3f2a1c40-9b7e-4d21-c5c3-0e8f6b2d9a17'],
+    ['no hyphens', '3f2a1c409b7e4d21a5c30e8f6b2d9a17'],
+    ['braced', '{3f2a1c40-9b7e-4d21-a5c3-0e8f6b2d9a17}'],
+    ['trailing newline', '3f2a1c40-9b7e-4d21-a5c3-0e8f6b2d9a17\n'],
+    ['leading space', ' 3f2a1c40-9b7e-4d21-a5c3-0e8f6b2d9a17'],
+    ['one nibble short', '3f2a1c40-9b7e-4d21-a5c3-0e8f6b2d9a1'],
+    ['path traversal', '../../etc/passwd'],
+    ['non-hex letter', '3f2a1c40-9b7e-4d21-a5c3-0e8f6b2d9a1g']
+  ])('throws when attachment_id is not the lowercase UUIDv4 shape — %s', (_label, attachment_id) => {
+    expect(() =>
+      parseInboundMessage(encodeAttachmentOffered({ ...ATTACHMENT_OFFERED, attachment_id }))
+    ).toThrow(WireDecodeError)
+  })
+
+  it.each([
+    ['empty', ''],
+    ['256 ASCII bytes', 'a'.repeat(256)],
+    // 86 three-byte characters = 258 bytes in only 86 characters: a character count would admit it.
+    ['over 255 bytes in under 255 characters', '\u20ac'.repeat(86)]
+  ])('throws when filename is %s', (_label, filename) => {
+    expect(() =>
+      parseInboundMessage(encodeAttachmentOffered({ ...ATTACHMENT_OFFERED, filename }))
+    ).toThrow(WireDecodeError)
+  })
+
+  it('names the failure CATEGORY only — never the filename or the conversation id (AC3)', () => {
+    const SECRET_CONV = 'secret-conversation-id'
+    const SECRET_NAME = 'secret-filename.pdf'
+    const hostile: unknown[] = [
+      { conversation_id: SECRET_CONV, attachment_id: 'NOT-A-UUID', filename: SECRET_NAME },
+      { conversation_id: SECRET_CONV, attachment_id: ATTACHMENT_OFFERED.attachment_id, filename: SECRET_NAME.repeat(20) }
+    ]
+    for (const payload of hostile) {
+      try {
+        parseInboundMessage(encodeAttachmentOffered(payload))
+        expect.unreachable('a malformed attachment_offered must throw')
+      } catch (error) {
+        const message = (error as Error).message
+        expect(message).not.toContain(SECRET_CONV)
+        expect(message).not.toContain(SECRET_NAME)
+        expect(message).not.toContain('NOT-A-UUID')
+      }
     }
   })
 })
@@ -8314,6 +8455,51 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(lines).toHaveLength(0)
   })
 
+  it('logs an attachment_offered content-free, never the filename or the conversation_id (#1619, AC3)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONV = 'secret-conversation-id'
+    const SECRET_NAME = 'secret-filename.pdf'
+    const plaintext = encodeAttachmentOffered({
+      ...ATTACHMENT_OFFERED,
+      conversation_id: SECRET_CONV,
+      filename: SECRET_NAME
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    // The client-owned type literal, never the wire-supplied envelope.type the `default:` arm logged.
+    expect(record.code).toBe('attachment_offered')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_CONV)
+    expect(lines[0]).not.toContain(SECRET_NAME)
+  })
+
+  it('writes NO inbound-unmodeled record for an attachment_offered any more (#1619)', () => {
+    const { log, lines } = captureLog()
+    parseInboundMessage(encodeAttachmentOffered(ATTACHMENT_OFFERED), log)
+    expect(lines).toHaveLength(1)
+    expect(JSON.parse(lines[0]).event).not.toBe('inbound-unmodeled')
+  })
+
+  it('does NOT log on a malformed attachment_offered drop path (#1619, AC3)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONV = 'secret-conversation-id'
+    const SECRET_NAME = 'secret-filename.pdf'
+    for (const payload of [
+      { conversation_id: SECRET_CONV, attachment_id: 'NOT-A-UUID', filename: SECRET_NAME },
+      { conversation_id: SECRET_CONV, attachment_id: ATTACHMENT_OFFERED.attachment_id, filename: '' },
+      { conversation_id: '', attachment_id: ATTACHMENT_OFFERED.attachment_id, filename: SECRET_NAME }
+    ]) {
+      expect(() => parseInboundMessage(encodeAttachmentOffered(payload), log)).toThrow(WireDecodeError)
+    }
+    expect(lines).toHaveLength(0)
+  })
+
   it('logs a context_usage content-free, never the conversation_id, the model or an integer (#1454)', () => {
     const { log, lines } = captureLog()
     const SECRET_CONV = 'secret-conversation-id'
@@ -10498,10 +10684,10 @@ describe('parseInboundMessage — history entry payload decode (#1227)', () => {
     expect(JSON.stringify(decoded)).not.toContain('SHOULD-NOT-CROSS')
   })
 
-  // AC3: a stored type the timeline does not draw is skipped rather than crossing. The first eleven
+  // AC3: a stored type the timeline does not draw is skipped rather than crossing. The first twelve
   // this client DOES decode on the live lane and never draws in the thread — `thinking_progress`
-  // joined them at #1312, `rate_limited` at #1318, `context_usage` at #1454, `resetting` at #1514 and
-  // `mcp_status` at #1489, each given a live-lane parser and deliberately no arm here; the last is a type it has never seen.
+  // joined them at #1312, `rate_limited` at #1318, `context_usage` at #1454, `resetting` at #1514,
+  // `mcp_status` at #1489 and `attachment_offered` at #1619, each given a live-lane parser and deliberately no arm here; the last is a type it has never seen.
   it.each([
     'background_task_started',
     'background_task_updated',
@@ -10514,6 +10700,7 @@ describe('parseInboundMessage — history entry payload decode (#1227)', () => {
     'context_usage',
     'resetting',
     'mcp_status',
+    'attachment_offered',
     'a_frame_type_from_a_later_daemon'
   ])('skips a stored %s — undrawn, and not an error', (type) => {
     expect(decodedEntries([historyEntry(type, { conversation_id: 'c1' })])).toEqual([])
@@ -10564,6 +10751,13 @@ describe('parseInboundMessage — history entry payload decode (#1227)', () => {
     // failed" — the distinction the neighbouring skips-by-stored-TYPE test draws. `resetting` is
     // ephemeral status: no replay ring and no durable history upstream, so there is nothing to draw.
     expect(decodedEntries([historyEntry('resetting', RESETTING)])).toEqual([])
+  })
+
+  it('skips a WELL-FORMED stored attachment_offered — live-only, no history arm (#1619)', () => {
+    // The discriminating version of the row above: that row's payload would fail
+    // `parseAttachmentOfferedPayload` anyway, so only a well-formed payload proves the skip is the
+    // missing arm.
+    expect(decodedEntries([historyEntry('attachment_offered', ATTACHMENT_OFFERED)])).toEqual([])
   })
 
   it('skips by stored TYPE, not by payload failure — one payload valid for both parsers', () => {

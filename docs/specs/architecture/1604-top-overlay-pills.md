@@ -190,3 +190,13 @@ Pending for the documentation stage: update `docs/knowledge/features/conversatio
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-24
+
+## Revisions
+
+**2026-09-24, during implementation**
+
+- Two more unit specs encoded the old "usage waits in the slot" priority. Both assertions are repointed to the overlay contract: the reading always shows as a pill ahead of `.composer-status` and no longer holds history back.
+  - `banner.test.tsx`: the store-bound priority `it.each`.
+  - `historyRetry.test.tsx`: its priority chain.
+- The describe that pinned the `notice` prop's precedence stays and is retitled. The prop still carries the settings error and the stopping banner.
+- Open question resolved: `pairing-recovery.spec.ts` and `host-row-per-server.spec.ts` needed no change. They locate Re-pair by role and name and pass as they are. Only `unpair-repair.spec.ts`'s first test asserted the 32px row. It now asserts that the row keeps its at-rest 24px geometry with the chip, and that the pill sits at the message area's top-right.

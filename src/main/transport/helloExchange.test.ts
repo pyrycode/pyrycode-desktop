@@ -38,6 +38,11 @@ describe('buildClientHello', () => {
     )
   })
 
+  it('reports client_version as pyrycode-desktop/<version>, the format the daemon parses', () => {
+    const json = utf8.decode(buildClientHello(baseInput))
+    expect(json).toContain('"client_version":"pyrycode-desktop/0.1.0"')
+  })
+
   it('defaults capabilities to [] and never advertises interactive when none is passed', () => {
     const json = utf8.decode(buildClientHello(baseInput))
     expect(json).toContain('"capabilities":[]')

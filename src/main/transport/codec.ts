@@ -137,6 +137,9 @@ export function decodeEnvelope(bytes: Uint8Array): Envelope {
   return envelope
 }
 
+/** The `<app>` half of the hello's `client_version`. */
+const CLIENT_APP_NAME = 'pyrycode-desktop'
+
 /**
  * The one default-injecting constructor. TS interfaces carry no runtime defaults, so the
  * non-literal default `protocol_versions` (["v2"]) must be injected here (mobile's
@@ -153,6 +156,11 @@ export function decodeEnvelope(bytes: Uint8Array): Envelope {
  *
  * HelloClientPayload is the ONLY encode-side payload with a non-literal default — hence one
  * constructor, not a per-payload wrapper.
+ *
+ * `clientVersion` is the bare app version; the constructor writes `client_version` as
+ * `<app>/<version>`, the format the daemon parses (pyrycode `docs/protocol-mobile.md`, § hello).
+ * The prefix is added here rather than by the caller because the bare value also feeds the
+ * relay `User-Agent` header and the session banner.
  */
 export function makeHelloClientPayload(input: {
   deviceName: string
@@ -164,7 +172,7 @@ export function makeHelloClientPayload(input: {
   const payload: HelloClientPayload = {
     role: 'client',
     device_name: input.deviceName,
-    client_version: input.clientVersion,
+    client_version: `${CLIENT_APP_NAME}/${input.clientVersion}`,
     protocol_versions: [PROTOCOL_VERSION],
     token: input.token,
     capabilities: input.capabilities ? [...input.capabilities] : []

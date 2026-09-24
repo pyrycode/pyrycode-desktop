@@ -116,16 +116,29 @@ Suppression on a green run did not disappear, it moved to where it was always ac
 `launchPairedApp` awaits its fake-daemon connections before `launchIsolatedApp`.
 A dial failure can therefore leave no launch-fate attachment: Electron does not
 exist yet. `startFakeDaemonForTest` in `e2e/fixtures/fakeDaemonSetup.ts` translates
-the exact `ws` error `Unexpected server response: 404` into the static message
-`Fake daemon setup failed before Electron launch: HTTP 404`. Other failures use
-`Fake daemon setup failed before Electron launch`. No caught error, cause, URL,
-headers, options or payload enter the replacement diagnostic.
+any caught error into `Fake daemon setup failed before Electron launch: <class>`,
+where `<class>` comes from a private `classifySetupFailure`, never from the
+original error's own text — one of a `NoiseLoadError`'s `reason` (`wasm-load-failed`
+/ `wasm-load-timeout`), a `code` matched against a fixed socket-error allowlist
+(`ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, `EPIPE`, `ECONNABORTED`,
+`EHOSTUNREACH`, `ENETUNREACH`, `EADDRNOTAVAIL`, `EAI_AGAIN`, `ENOTFOUND`), the
+digits of a message matching exactly `Unexpected server response: NNN` (so the
+original 404 case still reads `HTTP 404`), or `unclassified` for anything else —
+an unrecognised `NoiseLoadError` reason, `code` or message shape included. No
+caught error, cause, URL, headers, options or payload enter the replacement
+diagnostic; the thrown `Error` carries no `cause`.
 
 The helper does not retry; errors still fail the test, and existing teardown drains
 the forwarder. `fakeDaemonSetup.test.ts` drives a real local HTTP 404, checks
-success pass-through and verifies arbitrary-error redaction. This proves the
-setup-stage classification, not the cause of the intermittent 404 seen in the
-host-edit drive; that original responder remains unidentified.
+success pass-through, and asserts each classified suffix via `it.each` (both
+`NoiseLoadError` reasons, two allowlisted socket codes, one non-404 HTTP status),
+plus an `it.each` over unclassified inputs — including a `code` outside the
+allowlist and a `cause` — that all collapse to `unclassified` with no original
+text in message, `cause` or stack ([#1601](https://github.com/pyrycode/pyrycode-desktop/issues/1601)).
+This proves the setup-stage classification, not the cause of the intermittent 404
+seen in the host-edit drive, nor any new recurrence — a classified suffix on a
+future flake only narrows which of these paths to chase; that original responder
+remains unidentified.
 
 ### Reconnect delivery evidence
 

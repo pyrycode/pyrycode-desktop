@@ -103,8 +103,8 @@ One new file, `src/renderer/src/screens/conversation/MarkdownReader.tsx`.
 [#1630](https://github.com/pyrycode/pyrycode-desktop/issues/1630) added a three-dot button at
 the bar's right end — the phone twin is pyrycode-mobile#1031, and the operator ruled on
 2026-09-24 that both clients ship the same six items in the same order; #1630 shipped the
-first four, [#1631](#open-in-another-app-1631) the fifth (Open in another app, below), and a
-sixth sibling ticket (Save to device) is still to append below it.
+first four, [#1631](#open-in-another-app-1631) the fifth (Open in another app) and
+[#1632](#save-to-device-1632) the sixth and last (Save to device). All six have shipped.
 
 **The menu reuses `ComposerOptionsMenu`** ([Composer options
 panel](conversation-shell-composer-options-panel.md)) rather than a second dropdown — an
@@ -231,6 +231,66 @@ unit tests against the injected `open` seam (main) and the guard (shared) carry 
 `e2e/markdown-reader-menu.spec.ts` (#1630) now expects five rows and asserts the new one is disabled
 while loading and enabled once loaded, but it never chooses it.
 
+## Save to device (#1632)
+
+[#1632](https://github.com/pyrycode/pyrycode-desktop/issues/1632) added the menu's sixth and last row,
+directly below Open in another app: `unavailable: state.type !== 'loaded'`, the same gate as the three
+copy rows and Open in another app. Choosing it keeps a copy of the note shown now in the operating
+system's Downloads folder — the operator's "the existing attachment save dialog" request, applied to
+text the window already holds rather than to a file already on disk. As with Open in another app, no
+path crosses the bridge in either direction; the request carries only the text on screen and
+`markdownFileName(state.path)`.
+
+**The request and its guard are Open in another app's, reused rather than restated**:
+`MarkdownOpenRequest` and `isMarkdownOpenRequest` from `src/shared/ipc/markdownOpen.ts`, imported into
+the new `src/shared/ipc/markdownSave.ts`. The new module adds only one invoke channel
+(`MARKDOWN_SAVE_CHANNEL = 'pyry:markdown-save'`, for the open's own reason — no correlation key on the
+request) and one outcome union, `MarkdownSaveOutcome = { type: 'saved' } | { type: 'failed'; reason:
+'refused' | 'save-failed' }`. **The write is deliberately not shared with the open's.** The open
+([§ above](#open-in-another-app-1631)) writes through an exclusive-create temp file and a `rename` that
+*replaces* whatever sits at the final name — the right behaviour for a scratch copy the OS opens once.
+A save into Downloads must never overwrite, so it reuses [attachment
+save](attachment-save.md)'s collision loop instead — see [Attachment save § The copy
+driver](attachment-save.md#2-the-copy-driver--srcmainattachmentsavets) for `writeIntoDownloads` itself.
+
+**`createMarkdownSave`, in `src/main/attachmentSave.ts` beside `createAttachmentSave`** (not a new
+module — the ticket's own reasoning was to give the shared loop one home with exactly two callers,
+both in that file). It sanitises `displayName` with `sanitizeAttachmentFilename` — the same gate
+[Attachment save](attachment-save.md) re-runs main-side, not a second sanitiser, and no `.md` is
+appended: the display name is a file name that already carries its extension, unlike the attachment
+save's bare identifier-derived name. It then calls `writeIntoDownloads(downloadsDir, component, create)`
+with `create = (target) => writeFile(target, text, { flag: 'wx' })` — `wx` is `O_CREAT|O_EXCL`, the
+same exclusivity the attachment save's `copyFile(..., COPYFILE_EXCL)` provides, so a symlink planted at
+the target name is never written through and a pre-existing or repeat-named file gets the next
+browser-style candidate rather than being overwritten. Any rejection (a missing Downloads folder, an
+over-long name, exhaustion, anything else) answers the single `'save-failed'` — there is no
+`'source-unavailable'` here, since there is no source file to be missing, only text the window already
+holds. On success, `reveal(saved)` (`shell.showItemInFolder`) runs inside a `try`/`catch` whose `catch`
+still answers `'saved'`, the same "the bytes are already on disk" reasoning as the attachment save's own
+reveal. The driver never rejects and never throws; logging is the event `markdown-save` with codes
+`started` / `saved` / `save-failed` only, and the caught error is dropped unread rather than inspected,
+since a `node:fs` error message carries the path.
+
+`src/main/index.ts` wires `ipcMain.handle(MARKDOWN_SAVE_CHANNEL, …)`, running `isMarkdownOpenRequest`
+before any filesystem call and answering `{ type: 'failed', reason: 'refused' }` on a malformed ask
+without invoking the driver; `removeHandler` on `will-quit`, matching every other channel this reader
+owns. `downloadsDir` and the `shell.showItemInFolder` reveal are the same values [attachment
+save](attachment-save.md) already closes in, not a second `app.getPath` call.
+
+**The reader shows `MARKDOWN_SAVE_FAILED_NOTICE`** (`'Could not save the note.'`) inside the still-open
+reader over the current text on any non-`saved` answer or a rejected invoke — the same
+`.markdown-reader__notice` banner Open in another app's failure uses, never the name or the path.
+`saveFailed` is UI-local `useState` with the same lifetime as `openInAppFailed` and `copied`: cleared by
+the next attempt and by Back, guarded by the same `alive` ref against a late answer after unmount.
+Diagnostics are the static codes `save` and `save-failed`.
+
+**No Playwright coverage was added, for Open in another app's reason.** An e2e run must never write into
+the real Downloads folder or open Finder/Explorer to reveal a file there; the unit tests against the
+injected `writeIntoDownloads`/`reveal` seams (in `src/main/attachmentSave.test.ts`, alongside the
+attachment save's own tests) and the guard carry the proof instead.
+`e2e/markdown-reader-menu.spec.ts` now expects six rows and asserts Save to device is disabled while
+loading and enabled once loaded, but never chooses it.
+
 ## Pane wiring
 
 `ConversationScreen` holds `const reader = useMarkdownReader(openConversationId)` beside its
@@ -298,6 +358,9 @@ mount-local state it drops is traced.
 - [Attachment open](attachment-open.md) — #867, the shape § Open in another app follows: injected
   directory and `open` seam, never-rejects driver, gate-before-any-filesystem-call ordering — but a
   single invoke channel here, not that ticket's send/push pair.
+- [Attachment save](attachment-save.md) — the collision loop § Save to device shares as
+  `writeIntoDownloads`, and the Downloads-no-overwrite-reveal contract that section's driver repeats
+  for text instead of a file already on disk.
 - [Composer attach — pending attachments and the strip](composer-attach-pending.md) — the
   mount-local composer state an unmount silently drops; the reason the pane hides rather than
   unmounts.
@@ -308,6 +371,8 @@ mount-local state it drops is traced.
 - [PR #1637](https://github.com/pyrycode/pyrycode-desktop/pull/1637) — #1631's Open in another
   app: the invoke-channel deviation from the attachment-open shape, and the write-through-temp-
   plus-rename driver and its tests.
+- [PR #1642](https://github.com/pyrycode/pyrycode-desktop/pull/1642) — #1632's Save to device: the
+  `writeIntoDownloads` loop extraction and its tests.
 - `docs/specs/architecture/1627-markdown-link-reader.md` — the design, its `## Revisions`
   recording the layering fix, and the security review.
 - `docs/specs/architecture/1630-markdown-reader-menu.md` — the note-actions menu design: the
@@ -316,3 +381,6 @@ mount-local state it drops is traced.
   invoke-vs-channel-pair rationale and the security review's accepted out-of-scope items (an
   orphaned temp file after a mid-write kill, an unbounded directory driven by display-name
   choice).
+- `docs/specs/architecture/1632-markdown-save-to-device.md` — the Save to device design: the
+  `writeIntoDownloads` generalisation, the case for reusing the open's request and guard while
+  keeping the write itself unshared, and the security review.

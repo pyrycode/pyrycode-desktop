@@ -127,6 +127,12 @@ export function createAttachmentSave(
 temp directory. Enforced deterministically rather than by discipline: a module-graph test asserts the
 source imports no `electron` and contains no `console.` call.
 
+**This file also exports `createMarkdownSave`** (#1632), the markdown reader's note-to-Downloads
+driver — see [Conversation shell — markdown reader § Save to device
+(#1632)](conversation-shell-markdown-reader.md#save-to-device-1632) for its own shape. It lives here
+rather than in a new module so `writeIntoDownloads` has one home with exactly two callers, both in this
+file.
+
 **The terminal is a resolved value, not a pushed event** — the one departure from
 `createAttachmentRetrieval`. That driver takes an `emit` because it holds cross-ask state (a
 concurrency cap, coalescing) that outlives one ask; this flow holds none, so "exactly one terminal per
@@ -141,21 +147,33 @@ Flow, in order:
 
 1. `resolveAttachmentPath(attachmentDir, attachmentId)` — a refusal answers
    `failed / 'source-unavailable'` **before any filesystem call**.
-2. `sanitizeAttachmentFilename(request.filename)`, main-side. `copyIntoDownloads` takes the already
+2. `sanitizeAttachmentFilename(request.filename)`, main-side. `writeIntoDownloads` takes the already
    -sanitised **component**, never the request, so building a path from the raw field would take
    editing two functions rather than one line (the architecture review's Phase-B item, shipped).
 3. The copy loop.
 4. `reveal(savedPath)` on success only.
 
-**The copy loop** is `saveDebugBundle`'s (`src/main/saveDebugBundle.ts`), with
-`copyFile(source, candidate, COPYFILE_EXCL)` in place of `writeFile(..., { flag: 'wx' })`.
-`COPYFILE_EXCL` is `O_CREAT|O_EXCL`, so the collision check and the create are one syscall — no
-`existsSync`-then-write TOCTOU gap, and **the guarantee this buys is stronger than a debug-bundle
-write**: a pre-planted symlink already sitting in Downloads under the target name cannot be written
-through, because `O_EXCL` fails `EEXIST` on an existing path even when the symlink dangles. On
+**The copy loop is `writeIntoDownloads`, shared with the markdown reader's note save
+([#1632](https://github.com/pyrycode/pyrycode-desktop/issues/1632)).** It used to be this module's own
+private `copyIntoDownloads`, doing the copy itself; #1632 needed the same collision-and-no-overwrite
+loop for a `writeFile` rather than a `copyFile`, so the loop was generalised to
+`writeIntoDownloads(dir, component, create)`, where `create(target)` is an injected function the loop
+calls instead of doing the write inline. **The precondition that carries the whole no-overwrite
+guarantee is on `create`, not the loop**: it must create `target` exclusively (`O_CREAT|O_EXCL`) and
+reject `EEXIST` when anything is already there, a symlink included — the loop only ever chooses names
+and reacts to that one errno. This module passes `copyFile(source, candidate, COPYFILE_EXCL)`; the note
+save ([Conversation shell — markdown reader § Save to
+device](conversation-shell-markdown-reader.md#save-to-device-1632)) passes `writeFile(target, text, {
+flag: 'wx' })`. Both are `O_CREAT|O_EXCL` under different names, so the collision check and the create
+stay one syscall — no `existsSync`-then-write TOCTOU gap — and **the guarantee is stronger than a
+debug-bundle write**: a pre-planted symlink already sitting in Downloads under the target name cannot be
+written through, because `O_EXCL` fails `EEXIST` on an existing path even when the symlink dangles. On
 `EEXIST` the loop advances to the next candidate **without unlinking** (that file is not ours); on any
 other errno it best-effort-unlinks the partial destination and stops. `MAX_SAVE_ATTEMPTS` is loop
--termination insurance, not a defence against an observed attack.
+-termination insurance, not a defence against an observed attack. `writeIntoDownloads` stays
+module-private on purpose — its correctness depends on a property (`create`'s exclusivity) the type
+system can't express, so it is deliberately kept to exactly the two callers in this file, each proven
+by its own test to never overwrite, rather than exported for a future caller to get wrong.
 
 Candidate naming is browser-style, `saveDebugBundle`'s `candidateName` restated: `n === 0` is the
 component verbatim, `n >= 1` inserts a browser-style ` (n)` **before the extension**, split at the
@@ -170,7 +188,10 @@ what makes losing that guarantee harmless — a suffix appended whole — rather
 if the attachment were never fetched. Accepted rather than repaired: distinguishing the two needs a
 check-then-act on a path, the mis-report costs one wasted retry, and `app.getPath('downloads')` naming
 a directory that doesn't exist is a pathological environment. Pinned by a test so the behaviour is
-recorded rather than rediscovered.
+recorded rather than rediscovered. **The note save has no such conflation** — it has no source file, so
+every `writeIntoDownloads` rejection, missing Downloads folder included, answers its own single
+`'save-failed'`; the two-reason split above is this module's own, not something `writeIntoDownloads`
+imposes on its other caller.
 
 **Never rejects, never throws a message carrying a path.** Every path resolves to one terminal, which
 licenses the composition root's bare `void`. The exhaustion branch deliberately does **not** copy
@@ -281,7 +302,12 @@ slice has no renderer surface, so no Playwright coverage is owed.
   directory each answering `source-unavailable`; a 300-character name answering `save-failed`;
   `reveal` never called on a failure path; every path resolving rather than rejecting; diagnostic
   records carrying only static codes; the module-graph assertion (no `electron` import, no `console.`
-  call).
+  call). The same file's `describe('createMarkdownSave')` (#1632) proves `writeIntoDownloads`'s shared
+  contract from the note save's side: a traversal, an absolute path and an empty display name each land
+  as one file inside Downloads; a symlink planted at the target name is not written through; a
+  pre-existing file and a repeat save both advance the suffix rather than overwriting; a throwing
+  `reveal` still answers `saved`; log records carry only static codes, never the text, the name or a
+  path.
 
 ## Edge cases and limitations
 
@@ -316,3 +342,8 @@ slice has no renderer surface, so no Playwright coverage is owed.
   click asks retrieval first.
 - [Attachment open](attachment-open.md) — #867, landed: open in the OS image viewer, the feature that
   closes the extension-spoofing / quarantine question this one declines.
+- [Conversation shell — markdown reader § Save to device
+  (#1632)](conversation-shell-markdown-reader.md#save-to-device-1632) — the reader's note save, the
+  second and last caller of `writeIntoDownloads` (the collision loop this document's `copyIntoDownloads`
+  was generalised into), passing an exclusive `writeFile` where this module passes an exclusive
+  `copyFile`.

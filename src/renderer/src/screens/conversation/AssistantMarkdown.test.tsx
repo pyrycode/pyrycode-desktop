@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { AssistantMarkdown } from './AssistantMarkdown'
+import { AssistantMarkdown, markdownLinkPath } from './AssistantMarkdown'
+import { MAX_WORKSPACE_FILE_PATH_LENGTH } from '@shared/ipc/workspaceFileRead'
 
 // Server-render only (vitest `environment: 'node'`) — the ArchivedCountRow idiom. Every criterion in
 // #608 is a property of the emitted markup, so a string is the right assertion surface.
@@ -589,5 +590,76 @@ describe('AssistantMarkdown', () => {
     // The image renders as alt text only — no fetching element inside a task item either.
     expect(markup).toContain('alt text')
     expect(markup).not.toContain('<img')
+  })
+})
+
+// #1627 — a relative link to a markdown file becomes a control that opens the in-app reader. The rule is
+// `markdownLinkPath`; the control exists only when the caller passes `onOpenMarkdownPath`.
+describe('markdownLinkPath (#1627)', () => {
+  it.each([
+    ['notes/Plan.md', 'notes/Plan.md'],
+    ['Plan.markdown', 'Plan.markdown'],
+    ['notes/PLAN.MD', 'notes/PLAN.MD'],
+    ['notes/Plan.md:12', 'notes/Plan.md'],
+    ['notes/Plan.md:12:3', 'notes/Plan.md'],
+    ['notes/Plan.md#next-steps', 'notes/Plan.md'],
+    // No slash before the colon: read as a line suffix, not as a URL scheme `plan.md:`.
+    ['Plan.md:12', 'Plan.md'],
+    // micromark percent-encodes a destination; it is decoded exactly once.
+    ['notes/My%20Plan.md', 'notes/My Plan.md'],
+    ['notes/100%2525.md', 'notes/100%25.md'],
+    ['/abs/path/Plan.md', '/abs/path/Plan.md']
+  ])('reads %s as the markdown path %s', (href, path) => {
+    expect(markdownLinkPath(href)).toBe(path)
+  })
+
+  it.each([
+    [undefined],
+    [''],
+    ['https://example.com/Plan.md'],
+    ['file:///home/me/Plan.md'],
+    ['javascript:alert(1)//.md'],
+    ['mailto:someone@example.com.md'],
+    ['notes/plan.txt'],
+    ['notes/Plan.md?raw=1'],
+    ['notes/Plan.mdx'],
+    // An escape that does not decode keeps today's plain-text rendering.
+    ['notes/%E0%A4%A.md'],
+    // The main-side guard drops an over-length path silently; the window never asks for one.
+    [`${'a'.repeat(MAX_WORKSPACE_FILE_PATH_LENGTH)}.md`]
+  ])('is not a markdown path: %s', (href) => {
+    expect(markdownLinkPath(href)).toBeNull()
+  })
+})
+
+describe('AssistantMarkdown markdown-path links (#1627)', () => {
+  const renderWithOpen = (markdown: string): string =>
+    renderToStaticMarkup(<AssistantMarkdown text={markdown} onOpenMarkdownPath={() => {}} />)
+
+  it('renders a markdown path as a button whose path appears in no attribute', () => {
+    const markup = renderWithOpen('See [the plan](notes/Secret-Plan.md:12) now.')
+    expect(markup).toContain('<button type="button" class="markdown-link">the plan</button>')
+    expect(markup).not.toContain('Secret-Plan')
+    expect(markup).not.toContain('<a ')
+  })
+
+  it('shows the path only where the reply already had it: the visible link text', () => {
+    const markup = renderWithOpen('[notes/Plan.md](notes/Plan.md)')
+    expect(count(markup, /notes\/Plan\.md/g)).toBe(1)
+    expect(markup).toContain('>notes/Plan.md</button>')
+  })
+
+  it('keeps every other link on the allowedLinkHref rule', () => {
+    const markup = renderWithOpen('[web](https://example.com/Plan.md) and [txt](notes/plan.txt)')
+    expect(markup).toContain('<a href="https://example.com/Plan.md" target="_blank" rel="noreferrer">web</a>')
+    expect(markup).toContain('and txt')
+    expect(markup).not.toContain('<button type="button" class="markdown-link"')
+  })
+
+  it('renders a markdown path as plain text when no opener is passed (the reader, other call sites)', () => {
+    const markup = render('See [the plan](notes/Plan.md) now.')
+    expect(markup).toContain('See the plan now.')
+    expect(markup).not.toContain('markdown-link')
+    expect(markup).not.toContain('<a ')
   })
 })

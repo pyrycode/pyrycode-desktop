@@ -18,6 +18,7 @@ import {
 import './conversation.css'
 import { connectedConversationHostNow, useConversationActionAvailability } from './conversationActionAvailability'
 import { AssistantMarkdown } from './AssistantMarkdown'
+import { MARKDOWN_OPEN_FAILED_NOTICE, MarkdownReaderView, useMarkdownReader } from './MarkdownReader'
 import { PyryMark } from '../../theme/PyryMark'
 import type { Message } from './messageViewModel'
 import type { QueuedItem, ConversationCreatedPayload, WireResetHandoff } from '@shared/wire/types'
@@ -381,6 +382,9 @@ export function ConversationScreen({
   // and needs only the active conversation's id, derived from the `activeConversation` slice already held
   // above (no second subscription). One overlay at a time in normal use.
   const [panelOpen, setPanelOpen] = useState(false)
+  // #1627: the markdown reader, screen-local like the three overlays above, so a conversation switch (a
+  // remount under PairedShell's key) closes it, drops its notice and ignores any late answer.
+  const reader = useMarkdownReader(openConversationId)
   // The render-time clock for the two detail sheets' relative times (#365's "Last activity", #383's
   // "Last used …"). A plain render-local value, not store state (the ChannelList precedent) — safe under
   // renderToStaticMarkup, adds no subscription, and re-derives on each render so the lines stay fresh.
@@ -409,8 +413,15 @@ export function ConversationScreen({
     setChannelInfoOpen(true)
     requestMcpStatus(window.pyry.sendCommand, activeConversation?.id ?? null)
   }
+  // #1627: an open reader covers the whole pane, composer included; the sidebar is PairedShell's. The
+  // thread and the Composer stay MOUNTED beneath it, hidden, never unmounted: the Composer's pending
+  // attachments and its upload listener are mount-local, so an early return here would silently drop them
+  // on a same-conversation round trip through the reader. Hiding also keeps the thread's scroll position.
+  const readerOpen = reader.state.type !== 'closed'
   return (
     <div className="conversation">
+      {reader.state.type !== 'closed' && <MarkdownReaderView state={reader.state} onBack={reader.back} />}
+      <div className="conversation__covered" data-covered={readerOpen ? 'true' : undefined}>
       {/* #276: the trailing overflow menu (Figma 16-16) — the single entry point to per-conversation
           actions. #365 wires its Channel-info item to open the Channel Info sheet (below): the seam is no
           longer a no-op. Gated on onBack presence, the established "mounted in the paired shell" signal —
@@ -443,6 +454,11 @@ export function ConversationScreen({
           true sentence. The disconnection itself is still announced, by the #279 banner above. */}
       {selectedHost !== null && (localStatus !== 'loaded' || (offline && items.length > 0)) &&
         <SavedTimelineNotice status={localStatus} />}
+      {/* #1627: a markdown file that could not be opened. One client-owned line, never the path or the
+          reason; cleared by the next open, and gone with the screen on a conversation switch. */}
+      {reader.state.type === 'closed' && reader.state.notice && (
+        <p className="conversation__banner" role="status">{MARKDOWN_OPEN_FAILED_NOTICE}</p>
+      )}
       {/* #1214: the backlog goes INTO the thread. `queue_state` is still daemon state held verbatim by
           queueStore and never written through the timeline reducer — the fold is render-time, per
           foldQueuedRows' header — but the two row lists are now joined before they are drawn, so a message
@@ -470,6 +486,7 @@ export function ConversationScreen({
         queued={visibleQueued}
         olderSaved={olderSaved}
         saved={offline || ownSlice?.localRead !== undefined}
+        onOpenMarkdownPath={reader.open}
         onDropQueued={actionsAvailable ? (queuedMsgId, messageId) => {
           if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
           dropQueuedMessage(openConversationId, queuedMsgId, messageId, {
@@ -608,6 +625,7 @@ export function ConversationScreen({
           onClose={() => setPanelOpen(false)}
         />
       )}
+      </div>
     </div>
   )
 }
@@ -1026,7 +1044,8 @@ export function Timeline({
   onDropQueued,
   firstRowKey = 0,
   olderSaved = false,
-  saved = false
+  saved = false,
+  onOpenMarkdownPath
 }: {
   items: readonly ThreadItem[]
   scrollPin?: ThreadScrollPin
@@ -1038,6 +1057,9 @@ export function Timeline({
   firstRowKey?: number
   olderSaved?: boolean
   saved?: boolean
+  /** #1627: opens the in-app reader for a markdown link in a settled assistant reply. Optional for the
+   *  `onDropQueued` reason: absent, such a link keeps its plain-text rendering. */
+  onOpenMarkdownPath?: (path: string) => void
 }): JSX.Element {
   const rows = foldQueuedRows(items, queued ?? EMPTY_QUEUED)
   // #1566: keyed by item index, which is the row index below items.length (foldQueuedRows).
@@ -1078,6 +1100,7 @@ export function Timeline({
         if (row.item.kind !== 'toolCall') return (
           <TimelineRow key={group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
             item={row.item} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(group.index)}
+            onOpenMarkdownPath={onOpenMarkdownPath}
             inProgress={!saved && group.index === items.length - 1 && row.item.kind === 'assistantText'} />
         )
         const content = (
@@ -1379,7 +1402,8 @@ function TimelineRow({
   inProgress,
   queued = null,
   onDropQueued,
-  turnStats
+  turnStats,
+  onOpenMarkdownPath
 }: {
   item: ThreadItem
   inProgress: boolean
@@ -1387,6 +1411,8 @@ function TimelineRow({
   onDropQueued?: (queuedMsgId: number, messageId: string | undefined) => void
   /** #1566: set only on a closed turn's last assistant bubble; read only by the `assistantText` arm. */
   turnStats?: string
+  /** #1627: read only by the settled `assistantText` arm; user messages render no markdown. */
+  onOpenMarkdownPath?: (path: string) => void
 }): JSX.Element | null {
   switch (item.kind) {
     case 'assistantText': {
@@ -1432,7 +1458,7 @@ function TimelineRow({
               // called from inside this switch), which is sound because the render is a pure function of
               // that one prop.
               <div className="bubble__markdown">
-                <AssistantMarkdown text={item.text} />
+                <AssistantMarkdown text={item.text} onOpenMarkdownPath={onOpenMarkdownPath} />
               </div>
             )}
             {/* #969: appended AFTER the fork, so it is the bubble's last child on BOTH branches. The

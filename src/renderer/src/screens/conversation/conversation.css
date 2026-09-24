@@ -1771,8 +1771,8 @@ button.top-overlay-pill {
 }
 
 /* #1435 — the background-task count, the slot's LAST reading, drawn as the design's `Pill` (347:6617).
-   Its OWN block rather than a geometry lifted out of a neighbour, on .composer-status__usage's own
-   ruling for the same decision: this occupant shares no colour with either error treatment, so sharing
+   Its OWN block rather than a geometry lifted out of a neighbour, on the retired usage notice's
+   ruling for the same decision (that notice now draws as a .top-overlay-pill): this occupant shares no colour with either error treatment, so sharing
    would couple two things that draw differently for the sake of a few declarations. What it does share
    is the Pill's declarations with .composer__attachment-name two regions down, and those are read off
    the node: px-[8px] py-[4px] → --space-2 / --space-1, rounded-[6px] → --radius-xs, M3/body/small at
@@ -1780,8 +1780,8 @@ button.top-overlay-pill {
    which sets the emphasized weight).
 
    THE TOKEN PAIR IS READ BY NAME. The export bakes #cfe4ff as the ground and #134a74 as the ink, which
-   is this app's pair TRANSPOSED — the light scheme, the trap .composer__attachment-name, .status-row and
-   .composer-status__usage--exhausted each already record. By name it is a dark ground under light text,
+   is this app's pair TRANSPOSED — the light scheme, the trap .composer__attachment-name and .status-row
+   each already record. By name it is a dark ground under light text,
    which is what the rendered node shows. Neither hex appears here.
 
    NO height DECLARATION, and that is AC5's second half: 16px of line plus 4px twice is exactly 24 under

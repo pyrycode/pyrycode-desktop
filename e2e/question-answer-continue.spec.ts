@@ -276,7 +276,9 @@ test('question panel: Continue waits for a complete batch, then sends every answ
   const error = page.locator('.composer-status').getByRole('alert')
   await expect(model).toHaveText('Opus')
   await expect(error).toHaveText('Could not change the model — try again.')
-  await expect(page.locator('.composer-status__usage')).toHaveCount(0)
+  // The usage warning is a Top overlay pill, so the settings error in the slot no longer holds it back.
+  const usage = page.locator('.conversation__top-overlay .top-overlay-pill--default')
+  await expect(usage).toBeVisible()
   await expect.poll(() => page.locator('.composer-status').evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(0)
   await expect(otherField).toHaveValue(OTHER_TYPED)
   await expect(panel.locator('.question-panel__question')).toHaveText(QUESTIONS[1].question)
@@ -286,12 +288,12 @@ test('question panel: Continue waits for a complete batch, then sends every answ
   expect(box!.x + box!.width).toBeLessThanOrEqual(800)
   await page.screenshot({ path: '/tmp/1252-question-model-footer.png' })
 
-  // A fresh model dispatch clears the error and reveals the held usage notice.
+  // A fresh model dispatch clears the error; the usage pill stays where it was.
   await trigger.click()
   await page.getByRole('menuitem', { name: 'Sonnet', exact: true }).click()
   await expect.poll(() => settings.length).toBe(3)
   await expect(error).toHaveCount(0)
-  await expect(page.locator('.composer-status__usage')).toBeVisible()
+  await expect(usage).toBeVisible()
   daemon.pushFrame(frame('session_settings_updated', { session_id: 'question-session' }, settings[2].id))
 
   expect(settings[2].payload).toEqual({ session_id: 'question-session', model: 'sonnet' })

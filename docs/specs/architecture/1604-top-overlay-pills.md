@@ -200,3 +200,13 @@ Pending for the documentation stage: update `docs/knowledge/features/conversatio
   - `historyRetry.test.tsx`: its priority chain.
 - The describe that pinned the `notice` prop's precedence stays and is retitled. The prop still carries the settings error and the stopping banner.
 - Open question resolved: `pairing-recovery.spec.ts` and `host-row-per-server.spec.ts` needed no change. They locate Re-pair by role and name and pass as they are. Only `unpair-repair.spec.ts`'s first test asserted the 32px row. It now asserts that the row keeps its at-rest 24px geometry with the chip, and that the pill sits at the message area's top-right.
+
+**2026-09-24, rework after the e2e gate (verifier triage on PR #1611)**
+
+Four e2e specs still located the usage notice by the retired `.composer-status__usage` class. The Open Question was resolved by running only the touched specs, which missed them; `grep -rn 'composer-status__usage' e2e/` is the check that finds this class of miss, and it now returns nothing.
+
+- `e2e/stopped-turn.spec.ts`: the priority test locates the usage pill as the overlay's error pill (`rejected`). Its two "usage yields" assertions (after recovery, after the connection error) are inverted to "the pill stays visible". The test is retitled.
+- `e2e/model-refusal.spec.ts`: the same repointing, with its "usage yields to the offer" and "usage yields to the connection error" assertions inverted and the test retitled.
+- `e2e/question-answer-continue.spec.ts`: the usage warning is the overlay's default pill. It is visible alongside the settings error instead of held back by it, and it is still visible after the error clears.
+- `e2e/composer-status-spacing.spec.ts`: only the warning locator moves to the overlay's default pill. The re-derived geometry is unchanged: the `.composer__row` heights of 132 and 52 come from the five-line draft, not the warning, and the 12/8/24 spacing is the status row's at-rest geometry, which the warning no longer occupies.
+- `conversation.css`: the two comment references to the deleted `.composer-status__usage` rules in the background-task pill block are reworded.

@@ -245,6 +245,25 @@ describe('chat history recording', () => {
     expect(timelineRequests(h)[1].snapshot.items.some((i) => i.kind === 'turnBoundary')).toBe(false)
   })
 
+  // #1621: an offered file is live-only — the wire cannot resupply it — so it never reaches the durable
+  // snapshot, and no claude-authored filename is written to disk through this path.
+  it('leaves offered-file rows out of the saved timeline', async () => {
+    const h = harness()
+    h.list()
+    h.delta('here it is')
+    h.receive('attachmentOffered', () => h.timelines.getState().dispatchFor('chat', {
+      type: 'attachmentOffered', attachment: { attachmentId: 'offer-1', filename: 'secret-name.pdf' } }))
+    await h.writer.stop()
+    const saved = timelineRequests(h)
+    expect(saved.length).toBeGreaterThan(0)
+    expect(h.timelines.getState().timelines.get('chat')?.timeline.items.map((i) => i.kind))
+      .toEqual(['assistantText', 'attachmentOffer'])
+    for (const request of saved) {
+      expect(request.snapshot.items.map((i) => i.kind)).toEqual(['assistantText'])
+      expect(JSON.stringify(request.snapshot)).not.toContain('secret-name')
+    }
+  })
+
   it('does not replace a record whose buffered changes return to its saved value', async () => {
     const h = harness()
     h.list(['saved'])

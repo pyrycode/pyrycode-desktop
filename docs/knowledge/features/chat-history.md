@@ -114,11 +114,19 @@ loaded state advances durable coverage. A live-only timeline stays `unknown`,
 and a successfully received empty page still establishes coverage.
 
 `DurableThreadItem` retains the display fields of every current
-[`ThreadItem`](../../../src/renderer/src/store/threadTimeline.ts) variant, with one
-exception: `turnBoundary`'s six `TurnEndMetrics` fields (duration, token counts, the
-session's running cost —
-[#1565](https://github.com/pyrycode/pyrycode-desktop/issues/1565)) are live-only and never
-persisted, so a reload never restores them. In this table, `?` marks an optional field:
+[`ThreadItem`](../../../src/renderer/src/store/threadTimeline.ts) variant except two live-only
+carve-outs: `turnBoundary`'s six `TurnEndMetrics` fields (duration, token counts, the session's
+running cost — [#1565](https://github.com/pyrycode/pyrycode-desktop/issues/1565)) are dropped
+field-by-field, so a reload never restores them; `attachmentOffer`
+([#1621](https://github.com/pyrycode/pyrycode-desktop/issues/1621), a file the assistant sent, see
+[Conversation shell § The assistant-offered file row](conversation-shell-message-bubble-attachments.md#the-assistant-offered-file-row-1621))
+is dropped whole — the report is live-only with no wire replay, so `chatHistoryWriter.ts`'s
+`isDurable` type guard filters the kind out of the timeline's `items` before capture, and the on-disk
+parser in `src/shared/chatHistory.ts` has no arm for it. `chatHistoryContract.test.ts` pins
+`DurableThreadItem` equal to `ThreadItem` minus both carve-outs, so a future live-only `ThreadItem`
+kind that skips narrowing that type and adding a writer filter fails the type check rather than
+silently reaching disk. In this table, `?` marks an optional field, and `attachmentOffer` has no row
+at all:
 
 | Row kind | Retained fields beyond `kind` |
 | --- | --- |

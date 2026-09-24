@@ -650,16 +650,42 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
       // #1517 TOOK the reset report out of this table. It shipped DORMANT rather than permanently
       // no-op (#1515), the disposition `compacting` held here until #496 took it, and the composer
       // status row is the consumer that reversed it — see the owned-arm describe below.
-      // an offered file ships DORMANT (#1620): #1621 is expected to take it out of this table when the
-      // thread's file row lands.
-      {
-        type: 'attachmentOffered',
-        conversationId: 'conv-1',
-        attachmentId: '3f2a1c40-9b7e-4d21-a5c3-0e8f6b2d9a17',
-        filename: 'quarterly-secret-report.pdf'
-      }
+      // #1621 TOOK the offered file out of this table: it shipped DORMANT (#1620) and the thread's file
+      // row is the consumer that reversed it — see the owned-arm describe below.
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
+  })
+})
+
+describe('translateTimelineEvent — the attachmentOffered arm (#1621)', () => {
+  it('translates an offer into a ThreadEvent carrying the attachment and NOT the conversation id', () => {
+    const translated = translateTimelineEvent({
+      type: 'attachmentOffered',
+      conversationId: 'conv-1',
+      attachmentId: '3f2a1c40-9b7e-4d21-a5c3-0e8f6b2d9a17',
+      filename: 'report.pdf'
+    })
+    expect(translated).toEqual({
+      type: 'attachmentOffered',
+      attachment: { attachmentId: '3f2a1c40-9b7e-4d21-a5c3-0e8f6b2d9a17', filename: 'report.pdf' }
+    })
+    // The routing key stops at the bridge, and the attachment is a fresh two-field literal.
+    expect(Object.keys(translated ?? {}).sort()).toEqual(['attachment', 'type'])
+    const attachment = translated?.type === 'attachmentOffered' ? translated.attachment : undefined
+    expect(Object.keys(attachment ?? {}).sort()).toEqual(['attachmentId', 'filename'])
+  })
+
+  it('does not carry an extra key smuggled onto the event object', () => {
+    const smuggled = {
+      type: 'attachmentOffered',
+      conversationId: 'conv-1',
+      attachmentId: 'id-1',
+      filename: 'a.txt',
+      path: '/etc/passwd'
+    } as DaemonEvent
+    const translated = translateTimelineEvent(smuggled)
+    const attachment = translated?.type === 'attachmentOffered' ? translated.attachment : undefined
+    expect(Object.keys(attachment ?? {}).sort()).toEqual(['attachmentId', 'filename'])
   })
 })
 
@@ -774,11 +800,22 @@ describe('timelineTargetFor', () => {
         phase: 'wrapping_up',
         handoff: 'pending'
       }
+    ],
+    // #1621: the twelfth. The offer is broadcast to every attached client, so it is filed only into
+    // the conversation the frame names — never the chat on screen.
+    [
+      'conv-offer',
+      {
+        type: 'attachmentOffered',
+        conversationId: 'conv-offer',
+        attachmentId: '3f2a1c40-9b7e-4d21-a5c3-0e8f6b2d9a17',
+        filename: 'report.pdf'
+      }
     ]
   ]
 
-  it('returns each id-carrying owned arm its OWN conversation id (all eleven)', () => {
-    expect(idCarrying).toHaveLength(11)
+  it('returns each id-carrying owned arm its OWN conversation id (all twelve)', () => {
+    expect(idCarrying).toHaveLength(12)
     for (const [expected, event] of idCarrying) {
       expect(timelineTargetFor(event)).toBe(expected)
     }
@@ -1374,12 +1411,11 @@ describe('subscribeTimeline', () => {
     expect(selectItems(store.getState())).toHaveLength(0)
   })
 
-  it('#1620: an attachmentOffered daemon event creates NO timeline item and writes NO store (dormant)', () => {
+  it('#1621: an attachmentOffered daemon event appends ONE attachmentOffer item (no longer dormant)', () => {
     const bridge = fakeBridge()
     const store = createTimelineStore()
     subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
 
-    const before = store.getState()
     bridge.emit({
       type: 'attachmentOffered',
       conversationId: 'conv-1',
@@ -1387,10 +1423,15 @@ describe('subscribeTimeline', () => {
       filename: 'quarterly-secret-report.pdf'
     })
 
-    // Same state ref (no dispatch reached the reducer) and no chat row: the dormant disposition as an
-    // assertion. #1621 flips both halves.
-    expect(store.getState()).toBe(before)
-    expect(selectItems(store.getState())).toHaveLength(0)
+    expect(selectItems(store.getState())).toEqual([
+      {
+        kind: 'attachmentOffer',
+        attachment: {
+          attachmentId: '3f2a1c40-9b7e-4d21-a5c3-0e8f6b2d9a17',
+          filename: 'quarterly-secret-report.pdf'
+        }
+      }
+    ])
   })
 
   it('#1517: a resetting daemon event moves the chrome scalar and creates NO timeline item', () => {
@@ -1691,6 +1732,30 @@ describe('subscribeTimeline', () => {
       expect(slice).not.toBeNull()
       expect(slice?.items).toHaveLength(1)
       expect(textOf(slice?.items, 0)).toBe('Hello')
+    })
+
+    // #1621: the offer frame is broadcast to every attached client. It lands in the conversation it names
+    // and nowhere else — not in the chat on screen — and a repeat of the same id adds nothing.
+    it('#1621: an offer for conv-b lands only in conv-b while conv-a is open, and a repeat adds nothing', () => {
+      const { bridge, keyed, setOpen } = wired()
+      bridge.emit({ type: 'assistantDelta', turnId: 'A', seq: 0, text: 'Hi', conversationId: 'conv-a' })
+      setOpen('conv-a')
+      const offer: DaemonEvent = {
+        type: 'attachmentOffered',
+        conversationId: 'conv-b',
+        attachmentId: 'offer-1',
+        filename: 'notes.md'
+      }
+
+      bridge.emit(offer)
+      const afterFirst = sliceOf(keyed, 'conv-b')
+      bridge.emit(offer)
+
+      expect(sliceOf(keyed, 'conv-b')?.items).toEqual([
+        { kind: 'attachmentOffer', attachment: { attachmentId: 'offer-1', filename: 'notes.md' } }
+      ])
+      expect(sliceOf(keyed, 'conv-b')).toBe(afterFirst)
+      expect(sliceOf(keyed, 'conv-a')?.items.map((item) => item.kind)).toEqual(['assistantText'])
     })
 
     // The failure this ticket exists to fix: interleaved frames for two conversations. Both slices are

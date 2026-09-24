@@ -5676,3 +5676,56 @@ describe('saved timeline notices', () => {
     expect(renderToStaticMarkup(<Timeline items={[]} />)).not.toContain('Older messages require')
   })
 })
+
+// #1621: a file the ASSISTANT sent (`attachment_offered`) draws as the same file row — or the same image
+// slot — inside an assistant-side bubble of its own (Figma `File field` 132:4605, in context 102-4).
+// Activation is the existing row's handler, so there is no click to prove here; what this tier owns is
+// the side, the reuse of the row, the image fork, and the untrusted-filename posture.
+describe('Timeline — a file the assistant offered (#1621)', () => {
+  const rowCount = (markup: string): number => markup.match(/class="bubble__file"/g)?.length ?? 0
+  const offer = (attachmentId: string, filename: string): ThreadItem => ({
+    kind: 'attachmentOffer',
+    attachment: { attachmentId, filename }
+  })
+
+  it('draws the existing file row inside an assistant-side bubble with no meta row', () => {
+    const markup = renderToStaticMarkup(<Timeline items={[offer('offer-1', 'report.pdf')]} />)
+    expect(markup).toContain(
+      '<div class="message-row message-row--daemon"><div class="bubble bubble--daemon bubble--attachment-offer" ' +
+        'data-thread-role="assistant"><button type="button" class="bubble__file" disabled="">'
+    )
+    expect(rowCount(markup)).toBe(1)
+    expect(markup).toContain('<span class="bubble__file-name">report.pdf</span>')
+    expect(markup).toContain('<span class="bubble__file-ext" aria-hidden="true">PDF</span>')
+    expect(markup).not.toContain('bubble__meta')
+    expect(markup).not.toContain('data-thread-role="user"')
+  })
+
+  it('takes the image slot instead of the row when the name reads as an image', () => {
+    const markup = renderToStaticMarkup(<Timeline items={[offer('offer-1', 'chart.png')]} />)
+    expect(rowCount(markup)).toBe(0)
+    expect(markup).toContain('bubble--attachment-offer')
+    // The picture's fetch starts in an effect, which a static render does not run: nothing is drawn yet.
+    expect(markup).not.toContain('chart.png')
+  })
+
+  it('draws one bubble per offer item', () => {
+    const markup = renderToStaticMarkup(
+      <Timeline items={[offer('offer-1', 'a.txt'), offer('offer-2', 'b.txt')]} />
+    )
+    expect(rowCount(markup)).toBe(2)
+    expect(markup.match(/bubble--attachment-offer/g)?.length ?? 0).toBe(2)
+  })
+
+  it('renders a hostile filename only as escaped text, never inside an attribute', () => {
+    const hostile = '"><img src=x onerror=alert(1)>.pdf'
+    const markup = renderToStaticMarkup(<Timeline items={[offer('offer-1', hostile)]} />)
+    expect(markup).not.toContain('<img')
+    expect(markup).toContain(
+      '<span class="bubble__file-name">&quot;&gt;&lt;img src=x onerror=alert(1)&gt;.pdf</span>'
+    )
+    // No attribute value anywhere carries any part of the name.
+    const attributeValues = [...markup.matchAll(/="([^"]*)"/g)].map((match) => match[1])
+    expect(attributeValues.some((value) => value.includes('onerror') || value.includes('.pdf'))).toBe(false)
+  })
+})

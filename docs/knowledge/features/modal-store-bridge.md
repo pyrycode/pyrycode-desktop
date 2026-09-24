@@ -295,6 +295,7 @@ unchanged; see [Modal-prompt model](modal-prompt-model.md) for the reducer contr
   decoded at [#1619](https://github.com/pyrycode/pyrycode-desktop/issues/1619)) that folds into this
   bridge's no-op group. **Permanently**, the plainest grounds in the group: nothing daemon-side is
   waiting on an answer and there is no `modal_id` to resolve an offered file against. Unlike its
-  `resetting` neighbour, its fourth bridge case is not also permanent — `timelineBridge`'s stays
-  **dormant**, pending [#1621](https://github.com/pyrycode/pyrycode-desktop/issues/1621)'s thread file
-  row.
+  `resetting` neighbour, its fourth bridge case is not also permanent — `timelineBridge` claimed the arm
+  as [an owned case](conversation-shell-message-bubble-attachments.md#the-assistant-offered-file-row-1621)
+  in [#1621](https://github.com/pyrycode/pyrycode-desktop/issues/1621), drawing the assistant's offered
+  file as a thread row.

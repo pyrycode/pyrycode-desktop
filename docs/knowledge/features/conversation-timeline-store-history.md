@@ -378,3 +378,23 @@ id-less arms … create NO slice" — so a screen-routing pin can hide anywhere 
 drifted from a faithful copy of `useTimelineBridge`: it dropped the join-key argument, so no test built on
 it could exercise the AC2 join at all until it was added back. Spec:
 `docs/specs/architecture/1559-session-boundary-routing.md`.
+
+[#1621](https://github.com/pyrycode/pyrycode-desktop/issues/1621) claims `attachmentOffered` — the arm
+[#1619](https://github.com/pyrycode/pyrycode-desktop/issues/1619)/[#1620](https://github.com/pyrycode/pyrycode-desktop/issues/1620)
+decoded and carried across IPC but left dormant in every bridge's no-op group — as a further owned arm on
+`translateTimelineEvent`'s switch, and joins `timelineTargetFor`'s id-carrying group beside
+`resetting`/`sessionTransition`. Unlike the status-scalar arms, it neither sets a chrome scalar nor resolves
+an existing row: it tail-appends a
+new `attachmentOffer` item holding the offered file's id and claude-authored filename, deduplicated against
+every `attachmentOffer` item the slice already holds by comparing `attachmentId` for strict equality — a
+same-reference no-op on a repeat. The row draws in an assistant-side bubble reusing the sent-message file
+row / image tile unchanged; see [Conversation shell § The assistant-offered file
+row](conversation-shell-message-bubble-attachments.md#the-assistant-offered-file-row-1621) for the render
+side and [Internals](conversation-timeline-store-internals.md#the-translator--binding-srcrenderersrcstoretimelinebridgets)
+for the reducer arm's full account. `chatHistoryWriter.ts` gained a type guard, `isDurable`, filtering the
+new kind out of every captured snapshot — the ticket's own lesson: a new `ThreadItem` kind is not only a
+`TimelineRow` case, it is also an assignment to `DurableThreadItem[]` the writer performs and
+`chatHistoryContract.test.ts` pins by type equality, so a live-only kind needs the writer filter and the
+contract's exclusion updated together or the type check catches the gap before a runtime one can. See [Local
+chat history § Snapshot contract](chat-history.md#snapshot-contract) for the durable-item table this kind is
+deliberately absent from. Spec: `docs/specs/architecture/1621-attachment-offer-file-row.md`.

@@ -15,10 +15,11 @@ apart and both vertically centred. Figma `File field` 132:4605, inside the bubbl
 supplied the record this reads (`MessageAttachment[]` on a `userText` [timeline item](thread-timeline-internals.md#types));
 until that ticket landed there was no name to draw.
 
-**User-arm only, and structurally so — not a scope choice.** The drawing is an *assistant* bubble, but
-`MessagePayload` carries no attachment field and there is no list verb, so an assistant-produced file
-cannot reach the window at all today. `attachments` can only ever describe files the client itself
-minted. Building an assistant-side mount would be building for a wire change nobody has filed.
+**User-arm only through #1620.** The drawing sits in a *user* bubble because `MessagePayload` (a sent
+message's own record) carries no attachment field except the ones the composer itself minted; nothing
+about the row, the icon or `attachmentExtensionLabel` is user-specific. [#1621](#the-assistant-offered-file-row-1621)
+reuses both fillings unchanged for a file the assistant sends, through a separate wire event rather
+than a widened `MessagePayload` — see below.
 
 **Rendered as one `<div className="bubble__file">` per attachment, each a direct child of `.bubble`, no
 wrapper** — the same reason `.bubble__meta` uses a `margin-top` rather than a flex-column gap (`.bubble`
@@ -318,6 +319,33 @@ picture is unchanged. A bubble whose thumbnail is `failed` has no `.bubble__imag
 debt: a `<button>` wrapping the existing `<img>` adds no text-bearing element, so neither
 `toHaveText`/`toContainText` nor `textContent`/`allTextContents`/`innerText` across `e2e/` shifts.
 
+## The assistant-offered file row (#1621)
+
+A file the assistant sends reaches the window as the `attachmentOffered` daemon event (#1620), not a
+widened `MessagePayload`, so it needed its own [`ThreadItem` kind, `attachmentOffer`](thread-timeline-internals.md#types)
+rather than an `attachments` entry on `userText`. `TimelineRow`'s `attachmentOffer` arm draws an
+assistant-side bubble (`data-thread-role="assistant"`) holding exactly one of the two fillings above,
+unchanged: `BubbleAttachmentImage` when `isImageAttachmentName` reads the offered filename as an
+image, `BubbleAttachmentRow` otherwise. Activation is the same `downloadAttachment` closure a sent
+file's row uses — the local-original ask answers `unavailable` for a file with no local copy, and the
+existing fallback to `requestAttachment` plus a save takes over. No `BubbleMeta`: the item carries no
+text to copy and no timestamp, matching the Figma `File field` (132:4605) node, which has neither.
+
+**`.bubble--attachment-offer > :first-child { margin-top: 0 }`, not `.bubble > :first-child`.**
+`.bubble__file`, `.bubble__image-button` and `.bubble__image-fallback` each carry `margin-top:
+var(--space-3)` for the case where message text sits above them in a sent bubble. An offer bubble has
+no text above its one child, so left alone that margin pads the bubble's own top. `.bubble > :first-child`
+would zero the *same* margin in a user bubble that opens with text — text nodes aren't elements, so
+`:first-child` there would match the first attachment row instead of the text and remove a margin that
+belongs. The modifier class scopes the reset to bubbles built with no leading text, at (0,2,0)
+specificity — enough to beat the single-class rules above with no `!important`.
+
+Read as its own [`ThreadEvent`/reducer arm](conversation-timeline-store-internals.md#the-translator--binding-srcrenderersrcstoretimelinebridgets),
+routed by the frame's own `conversationId` and deduplicated by `attachmentId` before the render
+this section covers ever runs — see there for the store side. The item is excluded from
+[durable chat history](chat-history.md#snapshot-contract): the frame is live-only, so a reload shows
+no offer rows.
+
 ## Testing
 
 **#815's own coverage:** `attachmentExtensionLabel.test.ts` pins the four ordering decisions (last-dot,
@@ -405,3 +433,13 @@ thumbnail.
 - [#1028](https://github.com/pyrycode/pyrycode-desktop/issues/1028) / [#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039) —
   the record a sent message's attachments carry on its timeline item, which #815 reads and without which
   it has no name to draw.
+- [Modal state and bridge](modal-store-bridge.md) / [Inbound message decode — recent
+  history](inbound-message-decode-history-latest.md) — the `attachmentOffered` daemon event this
+  section's row draws, carried across IPC ([#1620](https://github.com/pyrycode/pyrycode-desktop/issues/1620))
+  over the already-decoded, already-validated wire payload
+  ([#1619](https://github.com/pyrycode/pyrycode-desktop/issues/1619)).
+- [Conversation timeline store — internals § The translator + binding](conversation-timeline-store-internals.md#the-translator--binding-srcrenderersrcstoretimelinebridgets) —
+  the `attachmentOffered` → `attachmentOffer` reducer arm this row renders: routing by `conversationId`,
+  dedupe by `attachmentId`, and why it stays out of `chatHistoryWriter`'s snapshot.
+- [#1621 architecture spec](../../specs/architecture/1621-attachment-offer-file-row.md) — this section's
+  full design and security review.

@@ -5729,3 +5729,27 @@ describe('Timeline — a file the assistant offered (#1621)', () => {
     expect(attributeValues.some((value) => value.includes('onerror') || value.includes('.pdf'))).toBe(false)
   })
 })
+
+// #1627: the markdown-path link reaches only a settled assistant reply's markdown. The click and the
+// reader are e2e/markdown-reader.spec.ts's.
+describe('Timeline markdown-path links (#1627)', () => {
+  const LINK = 'See [the plan](notes/Plan.md).'
+
+  it('renders a settled assistant reply\'s markdown link as the reader control', () => {
+    const items: ThreadItem[] = [
+      { kind: 'assistantText', turnId: 't1', text: LINK },
+      { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }
+    ]
+    const markup = renderToStaticMarkup(<Timeline items={items} onOpenMarkdownPath={() => {}} />)
+    expect(markup).toContain('<button type="button" class="markdown-link">the plan</button>')
+    expect(markup).not.toContain('notes/Plan.md')
+  })
+
+  it('leaves a user message with the same text unchanged', () => {
+    const markup = renderToStaticMarkup(
+      <Timeline items={[{ kind: 'userText', text: LINK }]} onOpenMarkdownPath={() => {}} />
+    )
+    expect(markup).toContain(LINK)
+    expect(markup).not.toContain('markdown-link')
+  })
+})

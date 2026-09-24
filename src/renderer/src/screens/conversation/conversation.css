@@ -6637,3 +6637,103 @@ button.top-overlay-pill {
 .mcp-server-dot--other {
   background: var(--color-outline);
 }
+
+/* #1627 — a markdown-path link in a settled assistant reply. A <button>, because it opens the in-app
+   reader and must never navigate, dressed as the reply's anchor (.bubble__markdown a) so the two kinds
+   of link read alike. Inherits the run's type so it sits inline in a sentence. */
+.markdown-link {
+  display: inline;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  letter-spacing: inherit;
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+.markdown-link:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+/* #1627 — the markdown reader (Figma 552:2404), filling .conversation in place of the thread and the
+   composer. The bar mirrors .conversation__overflow's geometry (title-large title, a 0.6 inverse-primary
+   rule 16px below, 16px under it) with the drawn 8px gap between the arrow and the name. */
+.markdown-reader {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.markdown-reader__bar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: var(--space-4);
+}
+
+.markdown-reader__bar-content {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* `Frame` 552:2864: a 28px row holding the 24px glyph. The box is the hit target. */
+.markdown-reader__back {
+  flex: 0 0 auto;
+  width: var(--space-6);
+  height: var(--space-7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-on-surface);
+  cursor: pointer;
+}
+
+.markdown-reader__back:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.markdown-reader__title {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-on-primary-container);
+  font-family: var(--font-sans);
+  font-size: var(--text-title-large-size);
+  line-height: var(--text-title-large-line);
+  letter-spacing: var(--text-title-large-tracking);
+  font-weight: var(--text-title-large-weight);
+}
+
+.markdown-reader__rule {
+  flex: 0 0 auto;
+  height: 1px;
+  margin-top: var(--space-4);
+  background: var(--color-inverse-primary);
+  opacity: 0.6;
+}
+
+/* The only scroll box, so the note scrolls beneath the fixed bar. Body-large on-surface per the drawn
+   body; the .bubble__markdown rules inside give the headings, lists, code blocks and quotes. */
+.markdown-reader__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  color: var(--color-on-surface);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight);
+}

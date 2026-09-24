@@ -94,3 +94,8 @@ Pending for the documentation stage: the ticket has no Documentation handoff sec
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-24
+
+## Revisions
+
+- 2026-09-24 (build): the shared link helper is named `webLink` rather than `renderLink`; same contract. `markdownFileName` cuts at the last `/` with `lastIndexOf` rather than a split. The `stale` diagnostic compares against a `pendingKey` ref that is cleared only by its own answer or by back, so a stale answer arriving while a newer ask is pending does not make the real answer log as stale. The reducer remains the sole authority on which answer applies.
+- Open question resolved as planned: back remounts `Timeline`, so the thread returns pinned to the bottom.

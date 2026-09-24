@@ -1,4 +1,4 @@
-import { Children, isValidElement, useRef, type ReactNode } from 'react'
+import { Children, isValidElement, useMemo, useRef, type ReactNode } from 'react'
 import Markdown, { type Components } from 'react-markdown'
 import { gfmTable } from 'micromark-extension-gfm-table'
 import { gfmTableFromMarkdown } from 'mdast-util-gfm-table'
@@ -11,6 +11,7 @@ import { gfmStrikethroughFromMarkdown } from 'mdast-util-gfm-strikethrough'
 // exists in this shape.
 import type {} from 'remark-parse'
 import type { Processor } from 'unified'
+import { MAX_WORKSPACE_FILE_PATH_LENGTH } from '@shared/ipc/workspaceFileRead'
 import { copyMessageText } from './copyMessageText'
 
 // #608: assistant-reply markdown → React elements. Daemon-supplied text may render as content
@@ -222,6 +223,62 @@ function allowedLinkHref(href: string | undefined): string | null {
   return href
 }
 
+/** A trailing `:line` or `:line:column` suffix. Anchored, digits only: nothing to backtrack on. */
+const LINE_SUFFIX = /:\d+(?::\d+)?$/
+/** A leading URL scheme, per RFC 3986's `scheme ":"`. */
+const URL_SCHEME = /^[a-z][a-z0-9+.-]*:/i
+const MARKDOWN_EXTENSION = /\.(?:md|markdown)$/i
+
+/**
+ * #1627 — the workspace path a link names when it points at a markdown file, or null for every other
+ * link. A markdown path has no URL scheme and, once a `#fragment` and then a trailing `:line` /
+ * `:line:column` are removed, ends in `.md` or `.markdown` in any case. The result is that remainder with
+ * its percent-escapes decoded ONCE, because micromark percent-encodes a destination (`<My Plan.md>`
+ * arrives as `My%20Plan.md`).
+ *
+ * The scheme test runs AFTER the suffix is removed, so `Plan.md:12` is a line reference rather than the
+ * scheme `plan.md:`. It FAILS CLOSED like `allowedLinkHref`: an escape that does not decode, or a path the
+ * main-side `isWorkspaceFileReadRequest` would silently drop for length (leaving the reader loading
+ * forever), is not a markdown path and keeps today's plain-text rendering.
+ *
+ * The path is UNTRUSTED and goes to the daemon unchanged, which does all confinement. Nothing here
+ * resolves it, checks it against a local folder or logs it.
+ */
+export function markdownLinkPath(href: string | undefined): string | null {
+  if (href === undefined) return null
+  const hash = href.indexOf('#')
+  const target = (hash === -1 ? href : href.slice(0, hash)).replace(LINE_SUFFIX, '')
+  if (URL_SCHEME.test(target) || !MARKDOWN_EXTENSION.test(target)) return null
+  let path: string
+  try {
+    path = decodeURIComponent(target)
+  } catch {
+    return null
+  }
+  return path.length > MAX_WORKSPACE_FILE_PATH_LENGTH ? null : path
+}
+
+/**
+ * The #610 link rule, shared by both component tables below so the two cannot drift: an allowed web link
+ * is an anchor, and everything else is its visible text.
+ *
+ * `target="_blank"` IS THE CLICK MECHANISM, not decoration. It is what makes the click a window-open
+ * request, which setWindowOpenHandler (src/main/index.ts) answers by handing the URL to
+ * shell.openExternal and denying the in-app window on every path. A plain anchor would instead be a
+ * same-document navigation, which will-navigate cancels — so the link would look correct and do
+ * NOTHING. `rel="noreferrer"` makes the anchor correct in isolation rather than correct-only-because-
+ * another-process guards it.
+ */
+function webLink(href: string | undefined, children: ReactNode): JSX.Element {
+  const allowed = allowedLinkHref(href)
+  if (allowed === null) return <>{children}</>
+  return (
+    <a href={allowed} target="_blank" rel="noreferrer">
+      {children}
+    </a>
+  )
+}
+
 /**
  * Element overrides. The link, image and input rules are load-bearing — none of the three falls out of
  * "raw HTML disabled", because a conforming renderer emits a real `<a href>`, a real `<img src>` and
@@ -241,25 +298,10 @@ const components: Components = {
   // string `href`, all three of which the deny criterion forbids. Only an override can render no element
   // at all, and a denied href renders exactly what every href used to: the visible link text.
   //
-  // `target="_blank"` IS THE CLICK MECHANISM, not decoration. It is what makes the click a window-open
-  // request, which setWindowOpenHandler (src/main/index.ts:56) answers by handing the URL to
-  // shell.openExternal and denying the in-app window on every path. A plain anchor would instead be a
-  // same-document navigation, which will-navigate (:79) cancels — so the link would look correct and do
-  // NOTHING. `rel="noreferrer"` makes the anchor correct in isolation rather than correct-only-because-
-  // another-process guards it; the handler never constructs the child window, so no opener relationship
-  // exists for it to sever, and it is belt to that suspender rather than the control.
-  //
   // Bound by the never-spread rule above: `href` and `children` are destructured and nothing else is
-  // passed through, so `title` and every other attribute react-markdown supplies is dropped.
-  a: ({ href, children }) => {
-    const allowed = allowedLinkHref(href)
-    if (allowed === null) return <>{children}</>
-    return (
-      <a href={allowed} target="_blank" rel="noreferrer">
-        {children}
-      </a>
-    )
-  },
+  // passed through, so `title` and every other attribute react-markdown supplies is dropped. The anchor
+  // itself and its click mechanism are `webLink`'s.
+  a: ({ href, children }) => webLink(href, children),
   // #1080 — the task-list mark, and THE ANSWER TO "should a reply contain a checkbox": no. The task-list
   // extension's hast handler emits `<input type="checkbox" disabled>` into the item's first paragraph;
   // this renders an inert <span> in its place, so no source-authored checkbox exists. A
@@ -357,9 +399,33 @@ function CodeBlock({ children }: { children?: ReactNode }): JSX.Element {
  * CommonMark ends the language token at the first whitespace character and CSS class separators ARE
  * whitespace, so a fence can never contribute more than that one token.
  */
-export function AssistantMarkdown({ text }: { text: string }): JSX.Element {
+export function AssistantMarkdown({ text, onOpenMarkdownPath }: {
+  text: string
+  /** #1627: when passed, a link to a markdown path (see `markdownLinkPath`) renders as a button that
+   *  calls this with the path. Absent — the reader, and every caller that predates it — such a link keeps
+   *  its plain-text rendering and the module-constant table is used unchanged. */
+  onOpenMarkdownPath?: (path: string) => void
+}): JSX.Element {
+  const table = useMemo<Components>(() => {
+    if (onOpenMarkdownPath === undefined) return components
+    return {
+      ...components,
+      // THE PATH LIVES ONLY IN THE CLICK CLOSURE. No href, title, data-* or aria-* carries it, so the
+      // markup shows it nowhere but the visible text the reply already had. A <button>, not an anchor:
+      // it opens an in-app view and must never navigate. Bound by the never-spread rule like `a` above.
+      a: ({ href, children }) => {
+        const path = markdownLinkPath(href)
+        if (path === null) return webLink(href, children)
+        return (
+          <button type="button" className="markdown-link" onClick={() => onOpenMarkdownPath(path)}>
+            {children}
+          </button>
+        )
+      }
+    }
+  }, [onOpenMarkdownPath])
   return (
-    <Markdown components={components} remarkPlugins={remarkPlugins}>
+    <Markdown components={table} remarkPlugins={remarkPlugins}>
       {text}
     </Markdown>
   )

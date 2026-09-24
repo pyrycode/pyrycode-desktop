@@ -1470,6 +1470,24 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand({ type: t, payload: { kind: null } })).toBe(false)
   })
 
+  it('accepts a notify carrying a string name, which only ever becomes the title (#1593)', () => {
+    // The name is untrusted host text; main cleans it before use (notificationTitle), so the guard
+    // admits any string — an empty one included — and leaves the cleaning to main.
+    const named: RendererCommand = { type: 'notify', payload: { kind: 'prompt', name: 'deploy-bot' } }
+    expect(isRendererCommand(named)).toBe(true)
+    expect(isRendererCommand({ type: 'notify', payload: { kind: 'turn-complete', name: '' } })).toBe(true)
+    const absent = { type: 'notify', payload: { kind: 'turn-complete', name: undefined } }
+    expect(isRendererCommand(absent)).toBe(true)
+  })
+
+  it('rejects a notify whose name is not a string — the command fails closed (#1593)', () => {
+    const t = 'notify'
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', name: 42 } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', name: null } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', name: { toString: 'x' } } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', name: ['a'] } })).toBe(false)
+  })
+
   it('accepts a setBadgeCount carrying zero or a positive integer (#1592)', () => {
     const cleared: RendererCommand = { type: 'setBadgeCount', payload: { count: 0 } }
     const three: RendererCommand = { type: 'setBadgeCount', payload: { count: 3 } }

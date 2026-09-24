@@ -14,7 +14,8 @@
 // this path deliberately consumes only its two arms (turnEnd, modalShown) and no-ops everything else.
 import { useEffect } from 'react'
 import type { NotifyKind, RendererCommand } from '@shared/ipc/commands'
-import type { DaemonEvent } from '@shared/ipc/events'
+import type { DaemonEvent, StampedDaemonEvent } from '@shared/ipc/events'
+import { conversationListStore, type ConversationListState } from './conversationListStore'
 import { pushNotificationPrefStore } from './pushNotificationPrefStore'
 
 /**
@@ -49,7 +50,8 @@ export function notifyKindForEvent(event: DaemonEvent): NotifyKind | null {
  * the store, and keeps "every other daemon event no-ops" literally true regardless of toggle state (AC4).
  * `isPushEnabled` is read PER-EVENT (a thunk), not captured at subscribe time — load-bearing for AC3: a
  * user who flips the toggle off in Settings mid-session must see the NEXT turn-end/prompt not fire. The
- * `{ kind }` payload is a fresh literal built from the closed kind alone — no daemon field is copied in.
+ * payload is a fresh literal built from the closed kind plus, since #1593, the looked-up conversation name
+ * — no field of the event itself is copied in.
  * The listener only ever calls `sendCommand` inside the two owned arms and never throws into React.
  *
  * #514: one OS notification per prompt, however many times the link re-handshakes. The daemon re-sends
@@ -75,15 +77,23 @@ export function notifyKindForEvent(event: DaemonEvent): NotifyKind | null {
  *
  * Dedup is per COMMAND, not per raised OS notification: if the window is focused on the first delivery,
  * main's focus gate (fireNotification.ts) drops it silently and the id is still recorded. Accepted —
- * `isWindowFocused()` is main-side, the payload is `{ kind }`-only, and there is no reply channel; a
+ * `isWindowFocused()` is main-side, the payload carries no id, and there is no reply channel; a
  * focused window means the prompt was rendered in front of the user, and it stays on screen.
  * `turnEnd` is untouched: `modalId` is null for every other arm, so both the check and the record are
  * skipped for the whole rest of the union by construction.
+ *
+ * #1593: the notification's title names the conversation. Only for an event that will actually send,
+ * `nameFor` resolves the event's own client-stamped `serverId` and its `conversationId` to a name,
+ * read per event like the toggle. A name rides as `payload.name`; an unnamed or unknown conversation
+ * omits the key (never a present `undefined`, which structured clone would carry across). The
+ * conversation id is a lookup key only and never leaves the listener. The name is untrusted host text:
+ * main cleans it before use, and nothing here logs it.
  */
 export function subscribePushNotify(
-  onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
+  onDaemonEvent: (listener: (event: StampedDaemonEvent) => void) => () => void,
   sendCommand: (command: RendererCommand) => void,
-  isPushEnabled: () => boolean
+  isPushEnabled: () => boolean,
+  nameFor: (serverId: string | null, conversationId: string) => string | null
 ): () => void {
   const announcedModalIds = new Set<string>()
   return onDaemonEvent((event) => {
@@ -96,9 +106,31 @@ export function subscribePushNotify(
     const modalId = event.type === 'modalShown' ? event.modalId : null
     if (modalId !== null && announcedModalIds.has(modalId)) return
     if (!isPushEnabled()) return
-    sendCommand({ type: 'notify', payload: { kind } })
+    // Re-narrowed for the compiler: `kind !== null` already means one of these two arms, and both carry
+    // the conversation id the name is looked up by.
+    const name =
+      event.type === 'turnEnd' || event.type === 'modalShown'
+        ? nameFor(event.serverId, event.conversationId)
+        : null
+    sendCommand({ type: 'notify', payload: name === null ? { kind } : { kind, name } })
     if (modalId !== null) announcedModalIds.add(modalId)
   })
+}
+
+/**
+ * The production name lookup (#1593): the `name` of the row with `conversationId` in `serverId`'s own
+ * slot of the conversation list, or `null` when the slot or the row is missing or the row is unnamed.
+ * Scoped to the event's server on purpose — conversation ids are only unique per host, so a same-id
+ * row filed under another server must never name the notification. The key is the client-bound
+ * origin stamp, never a wire field (selectConversationsFor's rule).
+ */
+export function conversationNameIn(
+  state: ConversationListState,
+  serverId: string | null,
+  conversationId: string
+): string | null {
+  const row = state.byServer.get(serverId)?.find((summary) => summary.id === conversationId)
+  return row?.name ?? null
 }
 
 /**
@@ -108,7 +140,7 @@ export function subscribePushNotify(
  * (empty-dep effect, off-handle as cleanup — a StrictMode double-mount nets exactly one live listener).
  *
  * No `useRef` ceremony (unlike useNotificationActivatedNav / useConversationCreatedNav): there is no
- * per-render caller callback to hold — all three deps are module-level singletons, so the effect closure
+ * per-render caller callback to hold — every dep is a module-level singleton, so the effect closure
  * is stable and self-contained. Production reads the toggle via a thunk that snapshots the current store
  * state on each call (the per-event read AC3 needs). `window.pyry` is dereferenced ONLY inside the effect,
  * so PairedShell stays server-renderable.
@@ -119,7 +151,9 @@ export function usePushNotify(): void {
       subscribePushNotify(
         window.pyry.onDaemonEvent,
         window.pyry.sendCommand,
-        () => pushNotificationPrefStore.getState().pushNotificationsEnabled
+        () => pushNotificationPrefStore.getState().pushNotificationsEnabled,
+        (serverId, conversationId) =>
+          conversationNameIn(conversationListStore.getState(), serverId, conversationId)
       ),
     []
   )

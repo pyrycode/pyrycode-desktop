@@ -1,14 +1,20 @@
 import { describe, it, expect, vi } from 'vitest'
-import type { DaemonEvent } from '@shared/ipc/events'
+import type { DaemonEvent, StampedDaemonEvent } from '@shared/ipc/events'
 import type { RendererCommand } from '@shared/ipc/commands'
-import type { ConversationCreatedPayload, HelloAckPayload, MessagePayload } from '@shared/wire/types'
-import { notifyKindForEvent, subscribePushNotify } from './pushNotifyBridge'
+import type {
+  ConversationCreatedPayload,
+  ConversationSummary,
+  HelloAckPayload,
+  MessagePayload
+} from '@shared/wire/types'
+import { conversationNameIn, notifyKindForEvent, subscribePushNotify } from './pushNotifyBridge'
+import type { ConversationListState, ServerConversationSummary } from './conversationListStore'
 
 // Framework-free data-path tests with injected spies (the notificationActivatedBridge idiom): no React,
 // no Electron, no store singleton. The React glue (usePushNotify) is proven by composition in
-// PairedShell — its server-render safety by PairedShell.test.tsx (no window deref at render). All three
-// deps (event source, command sender, toggle read) are spies, so both gates (filter + toggle) are
-// exercised without touching pushNotificationPrefStore.
+// PairedShell — its server-render safety by PairedShell.test.tsx (no window deref at render). All four
+// deps (event source, command sender, toggle read, name lookup) are fakes, so both gates (filter +
+// toggle) are exercised without touching pushNotificationPrefStore or conversationListStore.
 
 const message: MessagePayload = {
   conversation_id: 'c',
@@ -68,19 +74,29 @@ const ack: HelloAckPayload = {
 }
 
 // A fake onDaemonEvent that captures the listener and hands back an off spy — the bridge-test idiom.
+// `emit` stamps the origin the way main's bindServerOrigin does (#1593 reads it for the name lookup);
+// it defaults to a present null, the honest-unknown stamp.
 function fakeBridge(): {
-  onDaemonEvent: (l: (e: DaemonEvent) => void) => () => void
-  emit: (e: DaemonEvent) => void
+  onDaemonEvent: (l: (e: StampedDaemonEvent) => void) => () => void
+  emit: (e: DaemonEvent, serverId?: string | null) => void
   off: ReturnType<typeof vi.fn>
 } {
-  let listener: ((e: DaemonEvent) => void) | undefined
+  let listener: ((e: StampedDaemonEvent) => void) | undefined
   const off = vi.fn()
-  const onDaemonEvent = vi.fn((l: (e: DaemonEvent) => void) => {
+  const onDaemonEvent = vi.fn((l: (e: StampedDaemonEvent) => void) => {
     listener = l
     return off
   })
-  return { onDaemonEvent, emit: (e) => listener?.(e), off }
+  return {
+    onDaemonEvent,
+    emit: (e, serverId = null) => listener?.({ ...e, serverId } as StampedDaemonEvent),
+    off
+  }
 }
+
+// The name lookup for tests that are not about naming: every conversation is unnamed, so the payload
+// stays the bare `{ kind }` the pre-#1593 assertions pin.
+const noName = (): string | null => null
 
 describe('notifyKindForEvent', () => {
   it('maps turnEnd → turn-complete', () => {
@@ -103,14 +119,14 @@ describe('notifyKindForEvent', () => {
 describe('subscribePushNotify', () => {
   it('subscribes exactly once', () => {
     const bridge = fakeBridge()
-    subscribePushNotify(bridge.onDaemonEvent, vi.fn(), () => true)
+    subscribePushNotify(bridge.onDaemonEvent, vi.fn(), () => true, noName)
     expect(bridge.onDaemonEvent).toHaveBeenCalledTimes(1)
   })
 
   it('turnEnd + toggle enabled → notify turn-complete, no daemon field leaks (AC1, AC4)', () => {
     const bridge = fakeBridge()
     const sendCommand = vi.fn<(command: RendererCommand) => void>()
-    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true)
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true, noName)
 
     bridge.emit(turnEnd)
     expect(sendCommand).toHaveBeenCalledTimes(1)
@@ -122,7 +138,7 @@ describe('subscribePushNotify', () => {
   it('modalShown + toggle enabled → notify prompt, no daemon field leaks (AC2, AC4)', () => {
     const bridge = fakeBridge()
     const sendCommand = vi.fn<(command: RendererCommand) => void>()
-    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true)
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true, noName)
 
     bridge.emit(modalShown)
     expect(sendCommand).toHaveBeenCalledTimes(1)
@@ -134,7 +150,7 @@ describe('subscribePushNotify', () => {
   it('turnEnd + toggle disabled → no command (AC3)', () => {
     const bridge = fakeBridge()
     const sendCommand = vi.fn<(command: RendererCommand) => void>()
-    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => false)
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => false, noName)
 
     bridge.emit(turnEnd)
     expect(sendCommand).not.toHaveBeenCalled()
@@ -143,7 +159,7 @@ describe('subscribePushNotify', () => {
   it('modalShown + toggle disabled → no command (AC3)', () => {
     const bridge = fakeBridge()
     const sendCommand = vi.fn<(command: RendererCommand) => void>()
-    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => false)
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => false, noName)
 
     bridge.emit(modalShown)
     expect(sendCommand).not.toHaveBeenCalled()
@@ -153,7 +169,7 @@ describe('subscribePushNotify', () => {
     const bridge = fakeBridge()
     const sendCommand = vi.fn<(command: RendererCommand) => void>()
     let enabled = true
-    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => enabled)
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => enabled, noName)
 
     bridge.emit(turnEnd)
     expect(sendCommand).toHaveBeenCalledTimes(1)
@@ -166,7 +182,7 @@ describe('subscribePushNotify', () => {
   it('ignores every other daemon event even with the toggle enabled (AC4)', () => {
     const bridge = fakeBridge()
     const sendCommand = vi.fn<(command: RendererCommand) => void>()
-    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true)
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true, noName)
 
     bridge.emit({ type: 'connecting' })
     bridge.emit({ type: 'messageReceived', message })
@@ -187,7 +203,7 @@ describe('subscribePushNotify', () => {
   it('the same modalId twice → exactly one command, and the id never rides along (#514 AC1, AC5)', () => {
     const bridge = fakeBridge()
     const sendCommand = vi.fn<(command: RendererCommand) => void>()
-    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true)
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true, noName)
 
     bridge.emit(modalShown)
     bridge.emit(modalShown)
@@ -200,7 +216,7 @@ describe('subscribePushNotify', () => {
   it('the same modalId across a reconnect → exactly one command (#514 AC2)', () => {
     const bridge = fakeBridge()
     const sendCommand = vi.fn<(command: RendererCommand) => void>()
-    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true)
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true, noName)
 
     // The shape this ticket exists for: prompt left outstanding, link drops, re-handshake, daemon
     // re-sends the still-outstanding prompt (#415 reconcile). `connected` lands BEFORE the re-send,
@@ -214,7 +230,7 @@ describe('subscribePushNotify', () => {
   it('a genuinely new modalId after a suppressed re-delivery still notifies (#514 AC3)', () => {
     const bridge = fakeBridge()
     const sendCommand = vi.fn<(command: RendererCommand) => void>()
-    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true)
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true, noName)
 
     bridge.emit(modalShown)
     bridge.emit(modalShown)
@@ -227,7 +243,7 @@ describe('subscribePushNotify', () => {
   it('two turnEnds with the toggle on still send two commands — suppression is prompt-only (#514 AC4)', () => {
     const bridge = fakeBridge()
     const sendCommand = vi.fn<(command: RendererCommand) => void>()
-    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true)
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true, noName)
 
     bridge.emit(turnEnd)
     bridge.emit(turnEnd)
@@ -238,7 +254,7 @@ describe('subscribePushNotify', () => {
     const bridge = fakeBridge()
     const sendCommand = vi.fn<(command: RendererCommand) => void>()
     let enabled = false
-    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => enabled)
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => enabled, noName)
 
     // Push off while the prompt arrives — nothing announced, so nothing to remember.
     bridge.emit(modalShown)
@@ -252,7 +268,7 @@ describe('subscribePushNotify', () => {
 
   it('the announced-prompt memory is per-subscription, not module-level (#514, unpair reset edge)', () => {
     const first = fakeBridge()
-    const cleanup = subscribePushNotify(first.onDaemonEvent, vi.fn(), () => true)
+    const cleanup = subscribePushNotify(first.onDaemonEvent, vi.fn(), () => true, noName)
     first.emit(modalShown)
     cleanup()
 
@@ -260,16 +276,102 @@ describe('subscribePushNotify', () => {
     // relationship and starts with no memory. A module-level Set would swallow this command.
     const second = fakeBridge()
     const sendCommand = vi.fn<(command: RendererCommand) => void>()
-    subscribePushNotify(second.onDaemonEvent, sendCommand, () => true)
+    subscribePushNotify(second.onDaemonEvent, sendCommand, () => true, noName)
     second.emit(modalShown)
     expect(sendCommand).toHaveBeenCalledTimes(1)
   })
 
   it('returns the off handle from onDaemonEvent as the cleanup', () => {
     const bridge = fakeBridge()
-    const cleanup = subscribePushNotify(bridge.onDaemonEvent, vi.fn(), () => true)
+    const cleanup = subscribePushNotify(bridge.onDaemonEvent, vi.fn(), () => true, noName)
     expect(bridge.off).not.toHaveBeenCalled()
     cleanup()
     expect(bridge.off).toHaveBeenCalledTimes(1)
+  })
+
+  it('a named conversation sends its name, looked up by the event’s own origin (#1593)', () => {
+    const bridge = fakeBridge()
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    const nameFor = vi.fn((_serverId: string | null, _conversationId: string): string | null => 'deploy-bot')
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true, nameFor)
+
+    bridge.emit(turnEnd, 'srv-A')
+    bridge.emit(modalShown, 'srv-B')
+    expect(nameFor).toHaveBeenNthCalledWith(1, 'srv-A', 'conv-XYZ')
+    expect(nameFor).toHaveBeenNthCalledWith(2, 'srv-B', 'conv-modal-XYZ')
+    expect(sendCommand).toHaveBeenNthCalledWith(1, {
+      type: 'notify',
+      payload: { kind: 'turn-complete', name: 'deploy-bot' }
+    })
+    expect(sendCommand).toHaveBeenNthCalledWith(2, {
+      type: 'notify',
+      payload: { kind: 'prompt', name: 'deploy-bot' }
+    })
+    // The conversation id is a lookup key only — it never crosses to main.
+    for (const [command] of sendCommand.mock.calls) expect(JSON.stringify(command)).not.toContain('XYZ')
+  })
+
+  it('an unnamed or unknown conversation sends no name key at all (#1593)', () => {
+    const bridge = fakeBridge()
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true, noName)
+
+    bridge.emit(turnEnd, 'srv-A')
+    const [command] = sendCommand.mock.calls[0]
+    expect(command.type === 'notify' && 'name' in command.payload).toBe(false)
+  })
+
+  it('does not look the name up for an event that sends nothing (#1593)', () => {
+    const bridge = fakeBridge()
+    const nameFor = vi.fn((): string | null => 'deploy-bot')
+    let enabled = false
+    subscribePushNotify(bridge.onDaemonEvent, vi.fn(), () => enabled, nameFor)
+
+    bridge.emit(turnEnd) // toggle off
+    enabled = true
+    bridge.emit(modalShown)
+    bridge.emit(modalShown) // deduped re-delivery
+    bridge.emit({ type: 'connecting' }) // not a notify arm
+    expect(nameFor).toHaveBeenCalledTimes(1)
+  })
+})
+
+// #1593 AC1: the production lookup. Keyed by the event's own server, so a same-id row that belongs to
+// another host never names the notification.
+describe('conversationNameIn', () => {
+  function row(id: string, name: string | null, serverId: string | null): ServerConversationSummary {
+    const summary: ConversationSummary = {
+      ...created,
+      id,
+      name,
+      is_archived: false,
+      last_message_ts: '2026-07-11T12:00:00Z'
+    }
+    return { ...summary, serverId }
+  }
+
+  const state: ConversationListState = {
+    conversations: null,
+    byServer: new Map([
+      ['srv-A', [row('c-1', 'deploy-bot', 'srv-A'), row('c-2', null, 'srv-A')]],
+      ['srv-B', [row('c-3', 'other-host-only', 'srv-B')]],
+      [null, [row('c-9', 'origin-unknown', null)]]
+    ])
+  }
+
+  it('resolves a named row on the event’s server', () => {
+    expect(conversationNameIn(state, 'srv-A', 'c-1')).toBe('deploy-bot')
+    expect(conversationNameIn(state, null, 'c-9')).toBe('origin-unknown')
+  })
+
+  it('answers null for an unnamed row, an unknown id and an unknown server', () => {
+    expect(conversationNameIn(state, 'srv-A', 'c-2')).toBeNull()
+    expect(conversationNameIn(state, 'srv-A', 'c-404')).toBeNull()
+    expect(conversationNameIn(state, 'srv-Z', 'c-1')).toBeNull()
+  })
+
+  it('never names a notification from a same-id row on another host', () => {
+    expect(conversationNameIn(state, 'srv-A', 'c-3')).toBeNull()
+    expect(conversationNameIn(state, 'srv-B', 'c-1')).toBeNull()
   })
 })

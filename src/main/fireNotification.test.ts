@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   fireNotification,
+  notificationTitle,
   activateWindow,
   windowHasFocus,
   type OsNotification,
@@ -115,6 +116,30 @@ describe('fireNotification (#391)', () => {
     }
   })
 
+  it('titles the notification with the given name and keeps the kind’s body (#1593)', () => {
+    const { Notification } = fakeNotification()
+
+    fireNotification(
+      'prompt',
+      { isWindowFocused: () => false, Notification, onClick: vi.fn() },
+      'deploy-bot'
+    )
+
+    expect(Notification).toHaveBeenCalledWith({ title: 'deploy-bot', body: 'Waiting for your response.' })
+  })
+
+  it('cleans the name before it becomes the title (#1593)', () => {
+    const { Notification } = fakeNotification()
+
+    fireNotification(
+      'turn-complete',
+      { isWindowFocused: () => false, Notification, onClick: vi.fn() },
+      'build\n\u0000ops'
+    )
+
+    expect(Notification).toHaveBeenCalledWith({ title: 'buildops', body: 'Your turn is complete.' })
+  })
+
   // #393: the fired notification is actionable — a click invokes the injected onClick.
   it('registers a click listener that invokes onClick when the fired notification is clicked', () => {
     const { Notification, on, click } = fakeNotification()
@@ -168,6 +193,41 @@ describe('fireNotification (#391)', () => {
     click()
     expect(show).toHaveBeenCalledTimes(1)
     expect(focus).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('notificationTitle (#1593)', () => {
+  it('falls back to "Pyrycode" when no name is given', () => {
+    expect(notificationTitle(undefined)).toBe('Pyrycode')
+  })
+
+  it('keeps a plain name as it is', () => {
+    expect(notificationTitle('deploy-bot · staging')).toBe('deploy-bot · staging')
+  })
+
+  it('drops C0, DEL and C1 control characters', () => {
+    expect(notificationTitle('a\nb\tc\u0000d\u007fe\u009bf\u001bg')).toBe('abcdefg')
+  })
+
+  it('cuts the name to 80 characters', () => {
+    expect(notificationTitle('x'.repeat(81))).toBe('x'.repeat(80))
+    expect(notificationTitle('x'.repeat(10_000))).toBe('x'.repeat(80))
+  })
+
+  it('counts characters, not UTF-16 units — a surrogate pair at the cut is never split', () => {
+    const title = notificationTitle('x'.repeat(79) + '🙂🙂')
+    expect(title).toBe('x'.repeat(79) + '🙂')
+    expect(Array.from(title)).toHaveLength(80)
+  })
+
+  it('counts only the kept characters toward the limit', () => {
+    expect(notificationTitle('\n'.repeat(100) + 'y'.repeat(80))).toBe('y'.repeat(80))
+  })
+
+  it('falls back to "Pyrycode" for a name that is empty once cleaned', () => {
+    expect(notificationTitle('')).toBe('Pyrycode')
+    expect(notificationTitle('   ')).toBe('Pyrycode')
+    expect(notificationTitle('\n\u0000\u009b')).toBe('Pyrycode')
   })
 })
 

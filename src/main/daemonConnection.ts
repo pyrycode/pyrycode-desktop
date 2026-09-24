@@ -2079,6 +2079,27 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               droppedTasks: inbound.backgroundTaskRoster.dropped_tasks
             })
             return
+          case 'background-task-progress':
+            // The background-task progress data path (#1638). A fresh literal copied BY NAME from the
+            // already-decoded payload — never a spread, so a decoder that later grows a field cannot
+            // smuggle it across IPC. The wire `description` crosses as `currentActivity`, so it can
+            // never be joined with the opening description `backgroundTaskStarted` carries. The
+            // counters cross as received: nothing here accumulates, diffs or bounds them. Stateless for
+            // the siblings' reasons; #1640 joins on task_id. Not compile-forced (this inner switch has no
+            // assertNever) — the stream test guards this emit.
+            emitDaemonEvent(sink, {
+              type: 'backgroundTaskProgress',
+              conversationId: inbound.backgroundTaskProgress.conversation_id,
+              taskId: inbound.backgroundTaskProgress.task_id,
+              currentActivity: inbound.backgroundTaskProgress.description,
+              subagentType: inbound.backgroundTaskProgress.subagent_type,
+              lastToolName: inbound.backgroundTaskProgress.last_tool_name,
+              totalTokens: inbound.backgroundTaskProgress.total_tokens,
+              toolUses: inbound.backgroundTaskProgress.tool_uses,
+              durationMs: inbound.backgroundTaskProgress.duration_ms,
+              truncatedFields: inbound.backgroundTaskProgress.truncated_fields
+            })
+            return
           case 'unrecognized-message':
             // The parser-gap diagnostic data path (widened by #784). Emit a fresh literal carrying the
             // four display fields plus `conversationId`, copied BY NAME from the already-decoded,

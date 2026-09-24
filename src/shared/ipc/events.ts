@@ -670,6 +670,39 @@ type BaseDaemonEvent =
       summary: string
       truncatedFields: readonly string[] | null
     }
+  // The background-task progress arm (#1638) — the fourth frame of the family: a running task is still
+  // working, and what it is doing right now. Joined to the other three on `taskId`. Carries
+  // `conversationId` for the siblings' reason: no turn_id, opens and closes no turn, so daemon STATE
+  // (the queue_state rule, #720).
+  //
+  // `currentActivity` IS THE WIRE `description`, RENAMED ON PURPOSE. On this frame it is the task's
+  // current activity ("Reading alpha.txt"); on `backgroundTaskStarted` the same wire name is the task's
+  // opening description, a literal command line for `local_bash`. The distinct name keeps a consumer from
+  // ever joining or overwriting one with the other.
+  //
+  // The three counters are claude's own readings, CUMULATIVE PER TASK and NOT GUARANTEED MONOTONIC,
+  // carried exactly as received: never sum two frames, and tolerate a negative difference. The frames
+  // are rate-bounded per task, so a gap between them proves nothing about a stall. There is no
+  // `summary`, `patch` or `ambient` here. `truncatedFields: null` means NOTHING WAS CUT and must not be
+  // collapsed into `[]`.
+  //
+  // SECURITY: `currentActivity`, `subagentType` and `lastToolName` are UNTRUSTED model- and
+  // tool-authored text, and the current activity names a file on the operator's host. A consumer must
+  // render them as PLAIN TEXT, NEVER HTML (no innerHTML / dangerouslySetInnerHTML), never into an
+  // attribute, a URL, a filename, a path, a cache key or a log, and must never parse, execute or
+  // re-shell them. Ships dormant: every exhaustive bridge no-ops it until #1640.
+  | {
+      type: 'backgroundTaskProgress'
+      conversationId: string
+      taskId: string
+      currentActivity: string
+      subagentType: string
+      lastToolName: string
+      totalTokens: number
+      toolUses: number
+      durationMs: number
+      truncatedFields: readonly string[] | null
+    }
   // The background-task roster arm (#566) — the AGGREGATE PEER of the two arms above: they report what
   // happened to ONE task, this reports the WHOLE LIVE SET. Three fields: one id, the rows, and a count.
   //

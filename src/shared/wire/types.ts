@@ -118,6 +118,10 @@ export type EnvelopeType =
   // rather than amending it — and an EMPTY `tasks` is the positive statement that NOTHING is alive,
   // which is the payoff signal of the whole family. Same gating and same non-turn character.
   | 'background_task_roster'
+  // The fourth background-task frame (#1638): a running task is still working, and what it is doing
+  // right now. Rate-bounded per task by the daemon. Same gating and same non-turn character as the
+  // three above. Not claude's `tool_progress`, which is a different thing under a similar name.
+  | 'background_task_progress'
   // The announced-model report (#587). Grouped alone rather than with the status cluster above,
   // following the daemon's own rationale: it is not a turn sub-state with two edges, not
   // turn-independent work, not a periodic reading and not a condition report about a window. It is an
@@ -1601,6 +1605,49 @@ export interface BackgroundTaskUpdatedPayload {
   status: string
   /** claude's account of the finished task; '' on a mid-life frame. Untrusted free text, never logged. */
   summary: string
+  truncated_fields: string[] | null
+}
+
+/**
+ * Inbound `background_task_progress` event (daemon → client, #1638). Mirrors the daemon's
+ * BackgroundTaskProgressPayload field-for-field (SSOT pyrycode#2246, internal/protocol/interactive.go,
+ * docs/protocol-mobile.md § background_task_progress), wire order `conversation_id, task_id,
+ * description, subagent_type, last_tool_name, total_tokens, tool_uses, duration_ms, truncated_fields` —
+ * all always present (no `omitempty`). Fanned out ONLY to `interactive`-capable clients. Joined to its
+ * three siblings on `task_id`; no `turn_id`, and it opens and closes no turn.
+ *
+ * `description` IS THE TASK'S CURRENT ACTIVITY ("Reading alpha.txt"), NOT its opening description,
+ * which BackgroundTaskStartedPayload carries under the same wire name. The wire keeps the daemon's name;
+ * the emitted daemon event renames it `currentActivity` so the two are never joined.
+ *
+ * The three counters are claude's own readings, CUMULATIVE PER TASK and NOT GUARANTEED MONOTONIC. The
+ * daemon accumulates and computes nothing, and neither does this client: each is carried as received,
+ * with no range or monotonicity check. Summing two frames double-counts; a diff may be negative. The
+ * frames are rate-bounded per task, so they do not enumerate claude's lines, and ABSENCE PROVES
+ * NOTHING (a task past the daemon's concurrent-task cap gets no progress frames at all).
+ *
+ * There is deliberately NO `summary`, NO `patch` and NO `ambient` on this frame. `truncated_fields` names
+ * the cut string fields (`task_id` / `description` / `subagent_type` / `last_tool_name`); `null` means
+ * NOTHING WAS CUT and is distinct from `[]`. Its element vocabulary stays open.
+ *
+ * SECURITY: `description`, `subagent_type` and `last_tool_name` are model- and tool-authored text, and
+ * the current activity NAMES A FILE on the operator's host in every captured frame. They arrive
+ * repeatedly for one row, the shape most likely to be bound straight into a template. Render them as
+ * INERT PLAIN TEXT only: never parse them, never execute or re-shell them, and never feed them to an
+ * HTML sink (`innerHTML` / `dangerouslySetInnerHTML`), an attribute, a URL, a filename, a path, a cache
+ * key or a log. See #1638 (this decode) and #1640 (the store and the render).
+ */
+export interface BackgroundTaskProgressPayload {
+  conversation_id: string
+  task_id: string
+  /** The task's CURRENT ACTIVITY — not the opening description. Untrusted text; may name a file. */
+  description: string
+  subagent_type: string
+  last_tool_name: string
+  // Go `int`s; plain `number`s like every other integer on this wire. Cumulative, not monotonic.
+  total_tokens: number
+  tool_uses: number
+  duration_ms: number
   truncated_fields: string[] | null
 }
 

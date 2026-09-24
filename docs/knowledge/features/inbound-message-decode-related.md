@@ -257,3 +257,18 @@ the size cap; each entry below keeps the wording it had in the parent.
   drop path, each pinned by its own test. Ships dormant: `daemonConnection.ts`'s inbound switch has no
   case for `'attachment-offered'` yet, and its inner switch has no `assertNever`, so the new kind
   compiles unconsumed — the IPC carry and the render belong to later slices of the #1617 family.
+- [#1638](https://github.com/pyrycode/pyrycode-desktop/issues/1638) extended it once more, additively:
+  the `background_task_progress` kind — the background-task family's fourth frame, joined to
+  `background_task_started`/`background_task_updated`/`background_task_roster` (#564/#565/#566) on
+  `task_id`. `parseBackgroundTaskProgressPayload` narrows five required strings, three `requireNumber`
+  counters and `truncated_fields` through the existing `requireStringArrayOrNull` — no new helper. The
+  wire's `description` is the task's **current activity** ("Reading alpha.txt"), a different fact from
+  `backgroundTaskStarted`'s opening description under the same wire name; the emitted event renames it
+  `currentActivity` so a consumer can never join the two. The three counters get no range, integer or
+  monotonicity check — the `thinkingProgress` posture, since the daemon's own contract states they are
+  cumulative per task but not guaranteed monotonic. `truncated_fields: null` means nothing was cut,
+  distinct from `[]`. Content-free-logged as `inbound-decoded(code: 'background_task_progress')` before
+  the `default` branch; neither `description` (which can name a file on the operator's host) nor either
+  counter ever reaches a log line. Ships dormant: [daemon connection](daemon-connection.md) forwards it
+  as `backgroundTaskProgress`, and all four exhaustive renderer bridges no-op it — #1640 is the first
+  consumer.

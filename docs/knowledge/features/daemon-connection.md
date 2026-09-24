@@ -249,6 +249,21 @@ send mechanics and required-id posture, but with no reply of any kind.
   was otherwise unasserted end-to-end. No new method on this factory — `rate_limited` is inbound-only.
   Ships dormant: all four exhaustive bridges no-op it (three permanently, `timelineBridge` dormantly)
   until [#1320](https://github.com/pyrycode/pyrycode-desktop/issues/1320) claims it.
+- [#1638](https://github.com/pyrycode/pyrycode-desktop/issues/1638) — the `background-task-progress`
+  inbound kind + the new `case 'background-task-progress':` consumer emit, placed directly after
+  `background-task-roster` so the switch mirrors `InboundDaemonMessage`'s own arm order. A fresh
+  **non-nullary** nine-field literal `{ type: 'backgroundTaskProgress', conversationId, taskId,
+  currentActivity, subagentType, lastToolName, totalTokens, toolUses, durationMs, truncatedFields }`
+  copied by name from `inbound.backgroundTaskProgress` (never a spread) — `conversationId` **kept**,
+  the same in-family reason as its three siblings (daemon state, no `turn_id`, opens/closes no turn).
+  The wire's `description` crosses as `currentActivity`, a deliberate rename so this arm's current-
+  activity text can never be joined with `backgroundTaskStarted`'s opening description under the same
+  key. The three counters cross exactly as received, same posture as `thinkingProgress`'s reading — no
+  accumulation, diff or bound. Not `assertNever`-guarded in this inner switch; the round-trip test is
+  the guard. No new method on this factory — `background_task_progress` is inbound-only. Ships dormant:
+  all four exhaustive bridges no-op it, `backgroundTaskRosterBridge` needing no change since its own
+  switch already ends in `default: null`. [#1640](https://github.com/pyrycode/pyrycode-desktop/issues/1640)
+  is the first consumer.
 - [#642 codebase notes](../codebase/642.md) — the `tool-use` `case` arm widened by one field: `input: inbound.toolUse.input` added to the existing fresh literal, unconditional (`undefined` when the wire omitted it). Crosses **by reference** to the already-narrowed fresh map `parseToolUsePayload` built — no second copy, since the reserved-key strip already happened at decode. Ships dormant; #643 is the first consumer. No new method on this factory — the sixth `tool_use` field is inbound-only, like the five it joins.
 - [#328 codebase notes](../codebase/328.md) / [Relay supervisor](relay-supervisor.md) / [Noise relay driver](noise-relay-driver.md) — the `relay-link-up`/`relay-link-down{code}` driver events + the two new `onDriverEvent` cases that classify the raw close code into the renderer-facing `relayLinkChanged{status}` `DaemonEvent` (the relay-**socket** leg, distinct from this module's own session-level `connecting`/`connected`/`failed`). Ships dormant; first of three slices toward a two-dot connection-status indicator.
 - [Inbound message decode](inbound-message-decode.md) / [#68](../codebase/68.md) — `parseInboundMessage`, the transport-layer decoder the `case 'message'` arm calls; it owns the wire boundary (size guard, `decodeEnvelope`, per-field narrowing) so this arm stays a thin IPC map.

@@ -136,6 +136,15 @@ export interface NotifyPayload {
   kind: NotifyKind
 }
 
+/**
+ * The `setBadgeCount` command payload (#1592): how many conversations need the operator, for the app
+ * icon's badge. Main-local like NotifyPayload and defined here for the same reason. A bare count — no
+ * conversation id, no name, no host — so nothing about WHICH conversations crosses to main.
+ */
+export interface BadgeCountPayload {
+  count: number
+}
+
 /** The IPC channel every typed renderer command travels on, renderer → main.
  *  Single source of truth: the preload sender ships on it, the main receiver listens on it.
  *  A mismatch would silently drop every command, so both sides reference this constant. */
@@ -199,6 +208,8 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * ../wire/types, because it is a MAIN-LOCAL side-effect command that never reaches the transport. It
  * carries only the closed `kind` enum (`turn-complete` | `prompt`) — no free-text title/body, no id, no
  * secret — which main maps to a static copy table to raise an OS notification when the window is unfocused.
+ * `setBadgeCount` (#1592) is main-local for the same reason: a bare non-negative count for the app icon's
+ * badge, with no id, name or host beside it.
  * and `answerQuestions` / `refuseQuestions` (#920), the question vertical's resolution pair, whose payloads
  * are AnswerQuestionsCommandPayload (`question_batch_id` + the ordered `answers` entries) and
  * RefuseQuestionsCommandPayload (`question_batch_id` alone) — BOTH `Omit`-derivatives, because unlike the
@@ -324,6 +335,7 @@ export type RendererCommand =
   | { type: 'interrupt'; payload: InterruptCommandPayload }
   | { type: 'newSession'; payload: NewSessionCommandPayload }
   | { type: 'notify'; payload: NotifyPayload }
+  | { type: 'setBadgeCount'; payload: BadgeCountPayload }
 
 /**
  * Wrap already-assembled send-message fields into a well-formed command. Pure: it does NOT
@@ -549,6 +561,9 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return 'payload' in value && isNewSessionPayload(value.payload)
     case 'notify':
       return 'payload' in value && isNotifyPayload(value.payload)
+    case 'setBadgeCount':
+      // Main-local like `notify`, and for the same reason carries no serverId arm.
+      return 'payload' in value && isBadgeCountPayload(value.payload)
     default:
       return false
   }
@@ -1163,4 +1178,18 @@ function isDequeueMessagePayload(value: unknown): value is DequeueMessagePayload
 function isNotifyPayload(value: unknown): value is NotifyPayload {
   if (typeof value !== 'object' || value === null) return false
   return 'kind' in value && (value.kind === 'turn-complete' || value.kind === 'prompt')
+}
+
+/** The renderer→main guard for the badge count (#1592). The one value that crosses must be a count: a
+ *  non-negative SAFE integer. `Number.isSafeInteger` refuses a non-number, NaN, both infinities, a
+ *  fraction and a magnitude past 2^53 that no real count reaches, so `applyBadgeCount` only ever sees a
+ *  bounded whole number. Extra fields are ignored, as in the sibling guards. Pure; never throws. */
+function isBadgeCountPayload(value: unknown): value is BadgeCountPayload {
+  if (typeof value !== 'object' || value === null) return false
+  return (
+    'count' in value &&
+    typeof value.count === 'number' &&
+    Number.isSafeInteger(value.count) &&
+    value.count >= 0
+  )
 }

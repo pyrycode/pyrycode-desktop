@@ -16,6 +16,7 @@ import { useArchivedActiveConversationExit } from './store/conversationArchivedB
 import { useActiveConversationReseed } from './store/activeConversationReseedBridge'
 import { useNotificationActivatedNav } from './store/notificationActivatedBridge'
 import { usePushNotify } from './store/pushNotifyBridge'
+import { useAppBadge } from './store/appBadgeBridge'
 import {
   conversationLastReadDeps,
   stampLastReadFor,
@@ -533,6 +534,10 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // Settings push toggle (#408), ask main to raise an OS notification (#391 owns the unfocused-window
   // gate). A headless subscriber — no nav, no payload — that tears down with the shell on unpair.
   usePushNotify()
+  // #1592: the app icon's badge counts the sidebar's attention dots across every paired host. Mounted
+  // beside the push trigger for the same lifetime: unpairing the last host unmounts this shell, and the
+  // bridge's teardown is what clears the badge.
+  useAppBadge()
   // #777: restore point 2 — keep the OPEN conversation's last-read mark level with its own held item
   // count as content lands, so a chat the operator is looking at never accrues an unread mark against
   // itself. It observes conversationTimelineStore rather than the daemon-event channel: the composer's

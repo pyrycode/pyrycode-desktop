@@ -95,3 +95,9 @@ None named by the ticket. Pending for the documentation stage: fold the badge br
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-24
+
+## Revisions
+
+- 2026-09-24 (build): the hook's two closures are exported as `attentionCountNow()` and `subscribeToAttentionStores(listener)` so the archive filter, the cross-host count and the five-store fan-out are unit-tested without React. The contract is unchanged, and `useAppBadge` passes them straight through.
+- 2026-09-24 (build): the Windows overlay description reads "1 conversation needs attention" in the singular and "N conversations need attention" otherwise. It is still built from the label alone.
+- Open question resolved: rendered in scratch to a PNG at 6×, the bitmap shows a red disc with a centred white count for 1–9 and `9+`. How Windows scales the 32×32 bitmap into its small overlay size is still unverified on real hardware.

@@ -171,7 +171,8 @@ function createFactoryFake() {
       refuseQuestions: noop,
       requestDebugBundle: noop,
       uploadAttachment: async () => ({ ok: true }),
-      requestAttachment: noop
+      requestAttachment: noop,
+      readWorkspaceFile: noop
     }
   }
   return {

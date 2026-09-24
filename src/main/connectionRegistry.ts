@@ -276,7 +276,8 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
     refuseQuestions: (payload) => resolve().refuseQuestions(payload),
     requestDebugBundle: (consumer) => resolve().requestDebugBundle(consumer),
     uploadAttachment: (input, onProgress) => resolve().uploadAttachment(input, onProgress),
-    requestAttachment: (payload, consumer) => resolve().requestAttachment(payload, consumer)
+    requestAttachment: (payload, consumer) => resolve().requestAttachment(payload, consumer),
+    readWorkspaceFile: (payload, consumer) => resolve().readWorkspaceFile(payload, consumer)
   })
 
   /** Dial a freshly built entry if the set is already dialling; otherwise `start()` will reach it. */

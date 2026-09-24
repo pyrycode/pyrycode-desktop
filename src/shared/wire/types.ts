@@ -410,6 +410,12 @@ export type EnvelopeType =
   // internal/protocol/attachments.go RequestAttachmentPayload / codes.go TypeRequestAttachment,
   // docs/protocol-mobile.md § Attachments. Declared by pyrycode#2052, answered by #2054.
   | 'request_attachment'
+  // Reads one markdown file LIVE from a conversation's recorded workspace (#1626). v2 client →
+  // daemon only. Carries ReadWorkspaceFilePayload. Answered like `request_attachment` — an
+  // `attachment_chunk` stream correlated by `in_reply_to`, or one `attachment.not_found` — except
+  // that the daemon mints the transfer's `attachment_id`, so the client cannot know it in advance.
+  // SSOT pyrycode internal/protocol/attachments.go ReadWorkspaceFilePayload (pyrycode#2598).
+  | 'read_workspace_file'
   // The daemon's announcement that the ASSISTANT sent the operator a file (#1619) — emitted when claude
   // calls its `send_file` tool (pyrycode#2165, emitted since #2166). DAEMON → CLIENT ONLY, and
   // BROADCAST to every attached client, so a consumer filters on the payload's conversation_id. It is
@@ -3756,6 +3762,24 @@ export interface RequestAttachmentPayload {
    *  every chunk of the upload. NOT a capability — not secret, not unguessable, and never resolved
    *  into a filesystem path on this side. */
   attachment_id: string
+}
+
+/**
+ * Outbound `read_workspace_file` payload (client → daemon, #1626). Mirrors pyrycode
+ * `ReadWorkspaceFilePayload` field-for-field, wire order `conversation_id, path`. Both keys are
+ * always present (no `omitempty` upstream).
+ *
+ * THE PATH IS A FILESYSTEM PATH ON THE HOST, relative to the conversation's workspace or absolute,
+ * and every field is an unverified claim to the daemon. The daemon confines it to that workspace
+ * (symlinks resolved) and serves only `.md` / `.markdown`; every refusal is the one static
+ * `attachment.not_found`. On this side the path is never resolved, never used as a local path, and
+ * never logged or echoed: it names host layout, and its leaf is a filename.
+ */
+export interface ReadWorkspaceFilePayload {
+  /** The conversation whose workspace is read. A lookup key, not authorization. */
+  conversation_id: string
+  /** The file, relative to the conversation's workspace or absolute. Sent unchanged. */
+  path: string
 }
 
 /**

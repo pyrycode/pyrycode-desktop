@@ -292,6 +292,72 @@ either leg is subscribed, `MAX_RETRIEVAL_IDENTIFIER_LENGTH` imported rather than
 identical reason: a malformed ask is dropped with no terminal at all, so subscribing first would leak a
 listener with nothing to ever tear it down.
 
+## The `read_workspace_file` leg (#1626)
+
+[#1626](https://github.com/pyrycode/pyrycode-desktop/issues/1626) reuses this driver's whole
+correlation machinery for a second ask that has nothing to do with attachment storage: the in-app
+markdown reader (#1627, Refresh in #1623) needs a file's current text from a conversation's workspace,
+fetched live from the host with nothing saved on this machine. The daemon answers `read_workspace_file`
+exactly as it answers `request_attachment` — a chunk stream correlated by `in_reply_to`, or one reject —
+except that it **mints the transfer id itself**, so there is nothing for the client to pin in advance.
+
+**`daemonConnection.ts`'s `requestAttachment` body became a shared `startRetrieval(build, pinnedId,
+consumer)`.** `requestAttachment` is now `startRetrieval(id => buildRequestAttachment(...), payload.attachment_id,
+consumer)`; the new `readWorkspaceFile(payload, consumer)` is `startRetrieval(id =>
+buildReadWorkspaceFile(...), null, consumer)`. Everything after the send — the one `pendingRetrievals`
+map keyed by envelope id, chunk routing, reject routing, the idle deadline and the four-site teardown
+net — is untouched and shared by both verbs; only the frame and the reassembler's pin differ.
+
+**The reassembler's pin became `attachmentId: string | null`.** `null` means adopt the first chunk's
+`attachment_id` as `pinned` and hold every later chunk to it — still catches a stream that switches
+transfers mid-flight, the same way the string-pinned mode does. What it cannot catch, because there was
+never an id to ask for, is the host answering the right ask with the wrong bytes; that oracle only
+exists when the client names the transfer itself, as `request_attachment` still does.
+
+**Correlation on the IPC boundary is a window-minted request key, not the path.** A retrieval's outcome
+addresses by attachment id because at most one retrieval per id is ever live (§ 4's coalescing); a
+read has no such invariant — the reader's Refresh asks for the *same path* again, so the path cannot
+tell two asks apart. `src/shared/ipc/workspaceFileRead.ts` mints its own channel pair
+(`WORKSPACE_FILE_READ_CHANNEL` / `WORKSPACE_FILE_READ_EVENT_CHANNEL`, off `DAEMON_EVENT_CHANNEL` for
+this doc's own § 1 reason) carrying `WorkspaceFileReadRequest { requestKey; conversationId; path }`.
+`requestKey` is a client-internal token, echoed on the outcome and never sent to the daemon.
+`isWorkspaceFileReadRequest` reuses `MAX_RETRIEVAL_IDENTIFIER_LENGTH` for `requestKey`/`conversationId`
+and adds `MAX_WORKSPACE_FILE_PATH_LENGTH = 4096` (UTF-16 code units — PATH_MAX's order) for `path`; a
+test builds the worst-case JSON-escaped envelope (6 bytes per code unit) and asserts it still encodes
+under `MAX_PLAINTEXT_BYTES`. Shape and size only, exactly this driver's posture — the path gets no
+canonicity check because nothing on this side resolves it; the daemon's confinement is the one gate,
+and it is out of scope here by design (upstream pyrycode#2598).
+
+**`WorkspaceFileReadFailure` is `Exclude<AttachmentRetrievalFailure, 'store-failed'> | 'not-text'`.**
+`store-failed` is dropped because this leg writes nothing to disk for it to mean anything about;
+`not-text` is new — the verified bytes decoded, but a fatal `TextDecoder('utf-8', { fatal: true
+}).decode(bytes)` threw. The main flow's `fail(reason)` collapses a `store-failed` it can never
+legitimately receive to `daemon-error` rather than forwarding it, so the event type stays honest about
+a leg that never stores.
+
+**`src/main/workspaceFileRead.ts`'s `createWorkspaceFileRead` copies § 4's orchestrator shape** — a
+process-lifetime driver, a per-ask `emit`, a concurrency cap answered `busy` before the transport is
+touched — with two departures. **No coalescing**: every ask, Refresh included, sends a fresh frame;
+nothing is cached or deduplicated between asks, because the reader wants the file *as it is right now*,
+not the first answer it got. **Nothing is stored**: `complete(bytes)` decodes in memory and the text
+goes only to `emit`; there is no `store` call and no path ever exists on this side to log. The cap is
+`ATTACHMENT_MAX_CONCURRENT_RETRIEVALS`, imported rather than restated, but counted in its **own**
+in-flight number — reads and retrievals do not share one counter, so the accepted worst case is both
+caps full at once (recorded as an open question in `docs/specs/architecture/1626-read-workspace-file.md`,
+deferred until observed memory pressure says otherwise).
+
+**Composition root and preload copy this driver's shapes exactly.** `src/main/index.ts` routes
+`readWorkspaceFile` by conversation through the same router `attachmentRetrieval`'s registration uses,
+fails `not-connected` on no owner, and guards the reply with `isDestroyed()`, removed on `will-quit`.
+`src/preload/index.ts` adds `readWorkspaceFile(request)` (fire-and-forget send) and
+`onWorkspaceFileReadEvent(listener)` (strip-`IpcRendererEvent`-and-resubscribe) beside the retrieval
+pair. No renderer caller is wired yet — the reader (#1627) is the first consumer.
+
+**Testing lesson: a "one terminal per ask" test that only checks a later ask is admitted can pass even
+when a double settle double-decrements the in-flight counter.** The counter would read low enough to
+admit one more ask than the cap allows, and a test that stops at "the next ask succeeds" never notices.
+The check has to push a real ask *past* the cap and assert `busy`, not merely that admission continued.
+
 ## Revisions during implementation
 
 **`emit` moved from a construction dependency to a per-ask argument.** The design as first written
@@ -432,3 +498,11 @@ queue rather than taking a single tick.
   this driver, chaining its `completed` terminal into [attachment bytes](attachment-bytes.md) and
   minting a `blob:` URL from what comes back — see [§ The renderer image source
   (#1044)](#the-renderer-image-source-1044) above.
+- `docs/specs/architecture/1626-read-workspace-file.md` — the full architecture spec for the
+  `read_workspace_file` leg (§ above), including its security review and the accepted open question
+  on the two legs' separate in-flight caps.
+- `src/main/transport/readWorkspaceFileEnvelope.ts` — the `read_workspace_file` builder,
+  [request-attachment envelope](request-attachment-envelope.md)'s `{id, ts, payload}` shape restated
+  for a payload the daemon, not the client, mints a transfer id for.
+- `src/shared/ipc/workspaceFileRead.ts` / `src/main/workspaceFileRead.ts` — the read leg's own IPC
+  contract and main-process driver, § above.

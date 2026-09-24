@@ -62,6 +62,7 @@ import {
   type AttachmentUploadDeps
 } from './attachmentUpload'
 import { createAttachmentRetrieval } from './attachmentRetrieval'
+import { createWorkspaceFileRead } from './workspaceFileRead'
 import { ATTACHMENT_DIR_NAME, storeAttachment } from './attachmentStore'
 import {
   ATTACHMENT_UPLOAD_CHANNEL,
@@ -75,6 +76,11 @@ import {
   ATTACHMENT_RETRIEVAL_EVENT_CHANNEL,
   isAttachmentRetrievalRequest
 } from '../shared/ipc/attachmentRetrieval'
+import {
+  WORKSPACE_FILE_READ_CHANNEL,
+  WORKSPACE_FILE_READ_EVENT_CHANNEL,
+  isWorkspaceFileReadRequest
+} from '../shared/ipc/workspaceFileRead'
 import { createAttachmentSave } from './attachmentSave'
 import { createAttachmentBytes } from './attachmentBytes'
 import { ATTACHMENT_OPEN_DIR_NAME, createAttachmentOpen } from './attachmentOpen'
@@ -1398,6 +1404,39 @@ app.whenReady().then(() => {
   ipcMain.on(ATTACHMENT_RETRIEVAL_CHANNEL, attachmentRetrievalListener)
   app.on('will-quit', () =>
     ipcMain.removeListener(ATTACHMENT_RETRIEVAL_CHANNEL, attachmentRetrievalListener)
+  )
+
+  // The workspace-file-read edge (#1626): the retrieval edge's shape, for a file read live from a
+  // conversation's workspace and handed to the window as text, with nothing stored. Routed by
+  // conversation, and a conversation with no live owner answers `not-connected` on the asker's emit,
+  // as a retrieval does. ONE driver for the app lifetime so its concurrency cap spans asks.
+  const readWorkspaceFile = createWorkspaceFileRead({
+    readWorkspaceFile: (payload, consumer) => {
+      const owner = router.route(payload.conversation_id)
+      if (owner === null) {
+        consumer.fail('not-connected')
+        return
+      }
+      owner.readWorkspaceFile(payload, consumer)
+    },
+    diagnosticLog
+  })
+
+  // Three values arrive from an untrusted renderer, the path among them, so the guard runs first and
+  // a malformed ask is DROPPED: no frame, no event. The path is never resolved or logged here; it goes
+  // to the daemon unchanged, which confines it. The isDestroyed() guard drops the outcome for a window
+  // closed mid-read.
+  const workspaceFileReadListener = (event: Electron.IpcMainEvent, request: unknown): void => {
+    if (!isWorkspaceFileReadRequest(request)) return
+    const sender = event.sender
+    readWorkspaceFile(request, (readEvent) => {
+      if (sender.isDestroyed()) return
+      sender.send(WORKSPACE_FILE_READ_EVENT_CHANNEL, readEvent)
+    })
+  }
+  ipcMain.on(WORKSPACE_FILE_READ_CHANNEL, workspaceFileReadListener)
+  app.on('will-quit', () =>
+    ipcMain.removeListener(WORKSPACE_FILE_READ_CHANNEL, workspaceFileReadListener)
   )
 
   // The save-to-Downloads edge (#814) — the consumer of what the retrieval edge above puts on this

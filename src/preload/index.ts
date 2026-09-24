@@ -35,6 +35,12 @@ import {
   type AttachmentRetrievalRequest
 } from '../shared/ipc/attachmentRetrieval'
 import {
+  WORKSPACE_FILE_READ_CHANNEL,
+  WORKSPACE_FILE_READ_EVENT_CHANNEL,
+  type WorkspaceFileReadEvent,
+  type WorkspaceFileReadRequest
+} from '../shared/ipc/workspaceFileRead'
+import {
   ATTACHMENT_SAVE_CHANNEL,
   ATTACHMENT_SAVE_EVENT_CHANNEL,
   type AttachmentSaveEvent,
@@ -472,6 +478,31 @@ const api = {
       listener(event)
     ipcRenderer.on(ATTACHMENT_RETRIEVAL_EVENT_CHANNEL, handler)
     return () => ipcRenderer.removeListener(ATTACHMENT_RETRIEVAL_EVENT_CHANNEL, handler)
+  },
+
+  /**
+   * Ask the background process for a markdown file from a conversation's workspace, as the host holds
+   * it right now (#1626). Fire-and-forget; the outcome arrives on the push channel below, carrying the
+   * `requestKey` this window minted. Every ask fetches afresh — nothing is cached — so the reader's
+   * Refresh is simply a second ask with a new key. The main side re-checks the shape with
+   * isWorkspaceFileReadRequest and drops a malformed ask. No caller is wired yet — the reader is #1627.
+   */
+  readWorkspaceFile: (request: WorkspaceFileReadRequest): void => {
+    ipcRenderer.send(WORKSPACE_FILE_READ_CHANNEL, request)
+  },
+
+  /**
+   * Subscribe to workspace-file-read outcomes (#1626); returns the unsubscribe handle the renderer
+   * must call on teardown. Correlate on `requestKey`. The event carries the file's text or one static
+   * failure, never the path. The raw IpcRendererEvent is stripped before the listener runs.
+   */
+  onWorkspaceFileReadEvent: (
+    listener: (event: WorkspaceFileReadEvent) => void
+  ): (() => void) => {
+    const handler = (_event: IpcRendererEvent, event: WorkspaceFileReadEvent): void =>
+      listener(event)
+    ipcRenderer.on(WORKSPACE_FILE_READ_EVENT_CHANNEL, handler)
+    return () => ipcRenderer.removeListener(WORKSPACE_FILE_READ_EVENT_CHANNEL, handler)
   },
 
   /**

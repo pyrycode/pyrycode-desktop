@@ -77,3 +77,7 @@ Visual: capture the open dialog at the fake tier and compare against the Figma s
 ## Documentation handoff
 
 The ticket carries no Documentation handoff section. Pending for the documentation stage: the Edit channel dialog's entry in the owning sidebar/channels package overview should mention the Mute notifications checkbox and its OK-time write.
+
+## Revisions
+
+**2026-09-24, rework 1 (verifier triage: `conversation-create-rename.spec.ts` red).** No design change. The checkbox is a native input and takes a Tab stop between the name field and Archive channel, as the Design section places it. That spec's keyboard walk in the Edit channel dialog pinned the old order, input → Archive channel → Cancel → OK. It now reads input → Mute notifications → Archive channel → Cancel → OK. The walk only focuses the checkbox, so OK still sends no mute write there.

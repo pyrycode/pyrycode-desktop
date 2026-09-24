@@ -287,3 +287,62 @@ full in `docs/specs/architecture/1586-mcp-toggle.md`. The four exhaustive render
 `case 'mcpToggleRejected':` arm; nothing in the window consumes the event yet — presenting the refusal and
 the on/off switch itself are [#1587](https://github.com/pyrycode/pyrycode-desktop/issues/1587), which this
 ticket blocks.
+
+# Conversation-mute write correlation ([#1595](https://github.com/pyrycode/pyrycode-desktop/issues/1595))
+
+A twelfth correlation store, `pendingMuteWrites: Map<number, string>`, mapping a sent
+`set_conversation_muted`'s `envelopeId` to a renderer-minted `attemptId` — the workspace-renaming shape
+above (§ Workspace renaming), not the eight verb-id-keyed stores that map to a conversation id. It
+exists for the same reason `pendingWorkspaceRenames` does: this verb has more than one consumer of its
+name and needs an outcome addressed back to the specific caller who asked, not a broadcast.
+
+`setConversationMuted(payload, attemptId)` mirrors `renameWorkspace`: a null driver rejects
+immediately; past that, `envelopeId` is captured into one local read by the build, the counter advance
+and the `set` alike, and a **fresh** `{ conversation_id, muted }` literal — never a spread of the
+renderer's payload — is what gets sent, so no extra field smuggled past the IPC guard can reach the
+wire. The map is written only after `driver.sendMessage` returns; a build/send throw leaves no entry
+and rejects that attempt directly.
+
+- **Confirm match — additive, after the existing unconditional `conversationUpdated` emit**, the
+  `set_system_prompt` shape (§ above), not the `daemon-error`-tier consume-and-return shape: the
+  requester's own mute toggle must still refresh their own row through the ordinary list re-request,
+  so the ack cannot consume the frame. `case 'conversation-updated':` keeps emitting `conversationUpdated`
+  first, unconditionally, exactly as before this ticket; only then does `inbound.inReplyTo` get checked
+  against `pendingMuteWrites`. A miss or absent `inReplyTo` leaves the broadcast as the only emit; a hit
+  `delete`s the entry and emits `conversationMuteResult { attemptId, outcome: 'confirmed' }` — content-free,
+  carrying neither the conversation id nor the daemon's `is_muted` value. A consumer that wants the
+  stored value reads it off the list refresh the broadcast already triggered, not off this event.
+- **Reject match — a ninth member of the `daemon-error` precedence tier**, checked alongside
+  `pendingSettings`/`pendingCreateFolders`/`transferForEnvelope`/`pendingHistoryRequests`/
+  `pendingSystemPromptWrites`/`pendingMcpStatusRequests`/`pendingMcpReconnects`/`pendingMcpToggles`. A
+  hit `delete`s the entry and emits `conversationMuteResult { attemptId, outcome: 'rejected' }`, then
+  consumes the frame and `return`s, on the tier's standing precedent. The daemon's error code is not
+  read; every code settles the same way. **Checked before `pendingSystemPromptWrites` in source order,**
+  which is safe only because both maps draw their keys from the one shared `nextEnvelopeId` sequence —
+  an id is minted once and can therefore be held by at most one of the tier's maps, so which map is
+  checked first never changes which one matches.
+- **Reset — `dial()` clears the map next to its siblings.** A reconnect recycles envelope ids from 2, so
+  a surviving entry would settle a new connection's write against a dead attempt.
+- **No cap**, the same evidence-based, no-observed-failure posture as every matched-success store in this
+  file — the confirm arm above always deletes the entry on a match, unlike the three MCP stores' guaranteed-
+  growth shape.
+
+**The IPC guard is strict, not structural-minimum like its siblings.** `isSetConversationMutedPayload`
+requires the payload's key set to be *exactly* `{conversation_id, muted}` and `muted` to be `=== true ||
+=== false` — rejecting `muted: 1`, `muted: 'true'`, a missing `muted`, and any extra key. Copying a
+sibling guard such as `isSetSystemPromptPayload` (which accepts any object with the right shape and
+ignores extra keys) would have let a truthy non-boolean through undetected by any existing test pattern;
+the acceptance criteria asked for strictness explicitly, so this is the one guard in the file that
+differs from the rest on that axis.
+
+**No routing failure has its own event.** An id no paired host claims, or an owning connection that is
+not connected, both settle through `bindServerOrigin`'s null-origin path in `src/main/index.ts` as an
+ordinary `rejected` — the same posture `renameWorkspace`'s arm established — rather than a distinct
+"unrouted" outcome. `#1596`, the Edit channel dialog, is this event's only intended consumer and adds no
+renderer store of its own; it decides what a pending/confirmed/rejected outcome means for its own UI.
+
+`security-sensitive`, builder self-review **PASS**, no findings; the design and its security review are
+recorded in full in `docs/specs/architecture/1595-set-conversation-muted.md`. The four exhaustive
+renderer bridges (`questionBridge`, `daemonEventBridge`, `timelineBridge`, `modalBridge`) each gained a
+one-line ignored `case 'conversationMuteResult':` arm, the `workspaceRenameResult` shape — #1596 is the
+first real consumer.

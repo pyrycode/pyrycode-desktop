@@ -368,6 +368,7 @@ export function translateTimelineEvent(
     case 'workspaceFolderRejected':
     case 'conversationCreateRejected':
     case 'workspaceRenameResult':
+    case 'conversationMuteResult':
     case 'workspaceUpdated':
     case 'modalShown':
     case 'modalDismissed':

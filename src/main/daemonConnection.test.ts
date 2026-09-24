@@ -11664,3 +11664,99 @@ describe('workspace rename attempt results', () => {
     connection.stop()
   })
 })
+
+describe('conversation mute write results (#1595)', () => {
+  const RECORD = {
+    id: 'conv-42', is_promoted: true, name: 'Kitchen', cwd: '/home/user/project',
+    last_used_at: '2026-07-12T00:00:00Z', workspace_label: null, is_muted: true
+  }
+  const updated = (inReplyTo?: number): Uint8Array => encodeEnvelope({
+    id: 71, type: 'conversation_updated', ts: FIXED_TS,
+    ...(inReplyTo === undefined ? {} : { in_reply_to: inReplyTo }), payload: RECORD
+  })
+  const results = (sink: Parameters<typeof emitted>[0]) =>
+    emitted(sink).filter(e => e.type === 'conversationMuteResult')
+
+  it('sends one frame carrying exactly the two modeled keys, never the attempt id', async () => {
+    const { connection, drivers } = build()
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    const smuggled = { conversation_id: 'conv-42', muted: false, is_archived: true }
+    connection.setConversationMuted(smuggled, 'attempt-secret')
+    expect(drivers[0].sent).toHaveLength(1)
+    const request = decodeEnvelope(drivers[0].sent[0])
+    expect(request.type).toBe('set_conversation_muted')
+    expect(request.payload).toEqual({ conversation_id: 'conv-42', muted: false })
+    expect(Object.keys(request.payload as object)).toEqual(['conversation_id', 'muted'])
+    expect(JSON.stringify(request)).not.toContain('attempt-secret')
+    connection.stop()
+  })
+
+  it('confirms once off the correlated ack while every record still refreshes the list', async () => {
+    const { connection, drivers, sink } = build({ serverId: 'host-a' })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    connection.setConversationMuted({ conversation_id: 'conv-42', muted: true }, 'attempt-one')
+    const id = decodeEnvelope(drivers[0].sent[0]).id
+    for (const inReplyTo of [undefined, 999, id, id]) {
+      drivers[0].emit({ type: 'message', plaintext: updated(inReplyTo) })
+    }
+    expect(emitted(sink).filter(e => e.type === 'conversationUpdated')).toHaveLength(4)
+    expect(results(sink)).toEqual([
+      { type: 'conversationMuteResult', attemptId: 'attempt-one', outcome: 'confirmed' }
+    ])
+    expect(stampedEvents(sink).find(e => e.type === 'conversationMuteResult')?.serverId).toBe('host-a')
+    connection.stop()
+  })
+
+  it('rejects once off a correlated error and carries no daemon text', async () => {
+    const { connection, drivers, sink } = build()
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    connection.setConversationMuted({ conversation_id: 'conv-42', muted: true }, 'attempt-two')
+    const id = decodeEnvelope(drivers[0].sent[0]).id
+    drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 72, type: 'error', ts: FIXED_TS,
+      in_reply_to: id, payload: { code: 'conversation.not_found', message: 'daemon prose', retryable: false } }) })
+    drivers[0].emit({ type: 'message', plaintext: updated(id) })
+    expect(results(sink)).toEqual([
+      { type: 'conversationMuteResult', attemptId: 'attempt-two', outcome: 'rejected' }
+    ])
+    expect(emitted(sink).filter(e => e.type === 'conversationUpdated')).toHaveLength(1)
+    expect(JSON.stringify(results(sink))).not.toContain('daemon prose')
+    expect(JSON.stringify(results(sink))).not.toContain('conversation.not_found')
+    connection.stop()
+  })
+
+  it('rejects local failures without putting a frame on the wire', async () => {
+    const { connection, drivers, sink } = build({ throwOnSend: true })
+    connection.setConversationMuted({ conversation_id: 'conv-42', muted: true }, 'offline')
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    connection.setConversationMuted({ conversation_id: 'conv-42', muted: true }, 'send-failed')
+    connection.setConversationMuted(
+      { conversation_id: 'x'.repeat(MAX_PLAINTEXT_BYTES), muted: true }, 'build-failed')
+    expect(results(sink)).toEqual(['offline', 'send-failed', 'build-failed'].map(attemptId => ({
+      type: 'conversationMuteResult', attemptId, outcome: 'rejected'
+    })))
+    connection.stop()
+  })
+
+  it('clears pending mute correlation on redial', async () => {
+    const { connection, drivers, sink } = build()
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    connection.setConversationMuted({ conversation_id: 'conv-42', muted: true }, 'old-connection')
+    const id = decodeEnvelope(drivers[0].sent[0]).id
+    connection.reconnect()
+    await tick()
+    drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    drivers[1].emit({ type: 'message', plaintext: updated(id) })
+    expect(results(sink)).toEqual([])
+    connection.stop()
+  })
+})

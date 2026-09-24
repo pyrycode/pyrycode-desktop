@@ -996,6 +996,10 @@ type BaseDaemonEvent =
   | { type: 'workspaceUpdated'; path: string; label: string | null }
   // Additive acknowledgement for identified renames; host origin is stamped in main.
   | { type: 'workspaceRenameResult'; attemptId: string; outcome: 'confirmed' | 'rejected' }
+  // The outcome of one set_conversation_muted write (#1595), correlated by the renderer's attemptId.
+  // Content-free on purpose: no conversation id, no daemon code or text, no muted value. What the
+  // conversation now holds is the re-listed row's `is_muted`, not this event.
+  | { type: 'conversationMuteResult'; attemptId: string; outcome: 'confirmed' | 'rejected' }
   // The create_workspace_folder REJECTION arm (#396), the rejected twin of workspaceFolderCreated.
   // Emitted by the MAIN-side correlation gate (daemonConnection.ts) when a content-free daemon `error`
   // (#116) arrives whose `Envelope.in_reply_to` matches a pending create_workspace_folder request — the

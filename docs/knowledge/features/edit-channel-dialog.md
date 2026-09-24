@@ -483,5 +483,10 @@ sibling's `:disabled` arm, since this button has no disabled state to select.
 - [Create-channel dialog](create-channel-dialog.md) — `systemPromptOverLimit` and
   `MAX_SYSTEM_PROMPT_BYTES`, imported rather than re-derived so the two byte gates cannot disagree;
   the precedent for a dialog owning its own `onDaemonEvent` subscription behind a `serverId` gate.
+- [Daemon connection — system-prompt and MCP-status correlation § Conversation-mute write
+  correlation](daemon-connection-correlation-system-prompt-and-mcp.md#conversation-mute-write-correlation-1595)
+  — the `setConversationMuted` command and content-free `conversationMuteResult` outcome
+  [#1595](https://github.com/pyrycode/pyrycode-desktop/issues/1595) shipped for the not-yet-built mute
+  checkbox this dialog will carry (#1596); no field or control here reads or sends it yet.
 - Spec: `docs/specs/architecture/1476-edit-channel-dialog.md`,
   `docs/specs/architecture/1477-edit-channel-system-prompt.md`.

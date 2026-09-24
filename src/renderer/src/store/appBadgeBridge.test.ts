@@ -147,6 +147,18 @@ describe('attentionCountNow and subscribeToAttentionStores', () => {
     expect(attentionCountNow()).toBe(2)
   })
 
+  it('leaves a muted row out of the count, and counts the same row unmuted (#1607)', () => {
+    modalStore.setState({ outstanding: [{ conversationId: 'noisy' }] } as never)
+    conversationListStore.setState({
+      conversations: [{ id: 'noisy', serverId: 'host-a', is_archived: false, is_muted: true }]
+    } as never)
+    expect(attentionCountNow()).toBe(0)
+    conversationListStore.setState({
+      conversations: [{ id: 'noisy', serverId: 'host-a', is_archived: false, is_muted: false }]
+    } as never)
+    expect(attentionCountNow()).toBe(1)
+  })
+
   it('reads zero before any list has loaded', () => {
     expect(attentionCountNow()).toBe(0)
   })

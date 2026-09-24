@@ -98,13 +98,20 @@ export function notifyKindForEvent(event: DaemonEvent): NotifyKind | null {
  * token; only the token rides the payload, and main echoes it back on the click. Optional so a caller
  * that does not need click routing sends no token (the click then shows the active conversation);
  * production always passes it.
+ *
+ * #1607: a conversation muted on its host notifies nothing, for either kind — the host stores one flag.
+ * `isMuted` is read per event like the toggle, keyed by the event's own `serverId` like the name, and
+ * sits after the toggle gate so a muted event mints no token. Like a toggle-dropped prompt, a muted one
+ * is never recorded as announced, so a prompt unmuted while outstanding notifies on the daemon's
+ * re-send. Optional and "not muted" when omitted, so a caller that does not care passes nothing.
  */
 export function subscribePushNotify(
   onDaemonEvent: (listener: (event: StampedDaemonEvent) => void) => () => void,
   sendCommand: (command: RendererCommand) => void,
   isPushEnabled: () => boolean,
   nameFor: (serverId: string | null, conversationId: string) => string | null,
-  mintToken?: (target: NotificationTarget) => string
+  mintToken?: (target: NotificationTarget) => string,
+  isMuted?: (serverId: string | null, conversationId: string) => boolean
 ): () => void {
   const announcedModalIds = new Set<string>()
   return onDaemonEvent((event) => {
@@ -120,6 +127,7 @@ export function subscribePushNotify(
     // Re-narrowed for the compiler: `kind !== null` already means one of these two arms, and both carry
     // the conversation id the name is looked up by.
     if (event.type !== 'turnEnd' && event.type !== 'modalShown') return
+    if (isMuted?.(event.serverId, event.conversationId) === true) return
     const name = nameFor(event.serverId, event.conversationId)
     const token = mintToken?.({ serverId: event.serverId, conversationId: event.conversationId })
     sendCommand({
@@ -149,7 +157,20 @@ export function conversationNameIn(
   return conversationRowIn(state, serverId, conversationId)?.name ?? null
 }
 
-/** The one server-scoped row lookup behind both the name (#1593) and the click (#1597). */
+/**
+ * The production mute lookup (#1607): whether `serverId`'s own row for `conversationId` is muted on its
+ * host. A missing flag, row or slot reads as not muted, and a same-id row muted under another server
+ * never silences this one (the `conversationNameIn` scoping).
+ */
+export function conversationMutedIn(
+  state: ConversationListState,
+  serverId: string | null,
+  conversationId: string
+): boolean {
+  return conversationRowIn(state, serverId, conversationId)?.is_muted === true
+}
+
+/** The one server-scoped row lookup behind the name (#1593), the click (#1597) and mute (#1607). */
 function conversationRowIn(
   state: ConversationListState,
   serverId: string | null,
@@ -236,7 +257,9 @@ export function usePushNotify(targets: NotificationTargets): void {
         () => pushNotificationPrefStore.getState().pushNotificationsEnabled,
         (serverId, conversationId) =>
           conversationNameIn(conversationListStore.getState(), serverId, conversationId),
-        targets.mint
+        targets.mint,
+        (serverId, conversationId) =>
+          conversationMutedIn(conversationListStore.getState(), serverId, conversationId)
       ),
     [targets]
   )

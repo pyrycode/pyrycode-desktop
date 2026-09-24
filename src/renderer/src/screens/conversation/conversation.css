@@ -1832,6 +1832,13 @@ button.top-overlay-pill {
   white-space: nowrap;
 }
 
+/* #1634 — the pill while the drawer is open (Figma 566:2654): a 1px Primary border drawn INSIDE the box, as
+   Figma draws it. An inset box-shadow rather than a border, so the pill keeps the 24px the row reserves, and
+   rather than an outline, which is the UA focus ring's and must stay free for it. */
+.composer-status__tasks--open {
+  box-shadow: inset 0 0 0 1px var(--color-primary);
+}
+
 /* #963 — the design's `Button small` (component set 347:6645), extracted as a shared treatment on its
    SECOND consumer. The question panel's three action buttons shipped these exact declarations as one
    three-selector rule; this ticket's actionable-error button wants every one of them, so the common half
@@ -5416,16 +5423,104 @@ button.top-overlay-pill {
   font-weight: var(--text-body-small-weight);
 }
 
-/* #581 — the background-task panel and its trigger. The panel reuses the .status-sheet__* chrome verbatim
-   as the INTERIM visual vocabulary (there is no Figma counterpart — the canonical file is the mobile design
-   and this is a desktop-only surface; #580 owns the real design). So nothing below is written as a
-   `.status-sheet …` descendant selector and no row carries positional CSS: #580 can swap the outer chrome
-   for a docked sidebar without touching the list. All token-based — no color/size/spacing literals. */
+/* #581 — the background-task panel. Its list rules below are written without any chrome descendant
+   selector and with no positional CSS, which is what let #1634 swap the interim .status-sheet__* bottom
+   sheet for #580's drawer without touching the list. */
 
-/* #962 retired `.background-task-trigger`, the clock button that sat beside the status row: the design
-   draws no home for it in that region, and #580 owns the panel's final trigger. Until that drawing lands
-   the panel is opened from a `Background tasks` item in the thread's overflow menu, which wears
-   `.conversation__overflow-item` and needs no rule here. The panel chrome below is unchanged. */
+/* #1634 — the drawer (Figma 565:2966): a NON-modal column pinned over the right of the message area, which
+   is its containing block (`.conversation__message-area` is position: relative). The drawing spans exactly
+   that region's height, from under the header rule to the status row's 12px gap, so top/bottom 0 is the
+   whole of the vertical placement. No scrim: everything outside the 360 column stays live. z-index 1 and
+   later in the DOM than the Top overlay (also 1), so the drawer paints above it; the modal sheets' 2
+   still covers it. The width yields at the 800px minimum window, where the region is narrower than 360.
+   The shadow is the design's Default effect, which --shadow-thread already is. */
+.background-task-drawer {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(360px, 100%);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  background: var(--color-on-primary-fixed);
+  border: 1px solid var(--color-primary-container);
+  border-radius: var(--radius-xs);
+  box-shadow: var(--shadow-thread);
+  color: var(--color-on-surface);
+}
+
+/* The header never scrolls: the title on the left, the 20px close on the right. */
+.background-task-drawer__header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+/* Figma Primary Fixed (#cfe4ff) has no token; --color-on-primary-container resolves to the same value, the
+   .markdown-reader__title precedent. Title-medium is the drawn 16/24 medium at 0.15 tracking. */
+.background-task-drawer__title {
+  min-width: 0;
+  margin: 0;
+  color: var(--color-on-primary-container);
+  font-size: var(--text-title-medium-size);
+  line-height: var(--text-title-medium-line);
+  letter-spacing: var(--text-title-medium-tracking);
+  font-weight: var(--text-title-medium-weight);
+}
+
+/* The drawn glyph is the whole hit target, 20×20: a real <button> with the UA chrome reset away. */
+.background-task-drawer__close {
+  flex: 0 0 auto;
+  display: flex;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-primary);
+  cursor: pointer;
+}
+
+.background-task-drawer__close:focus-visible {
+  outline: 1px solid var(--color-outline);
+  outline-offset: 2px;
+}
+
+/* The circle-xmark's two fills, as modal-close.svg paints them: a Primary disc, the cross cut out of it in
+   On Primary. */
+.background-task-drawer__close-icon {
+  display: block;
+  fill: currentColor;
+}
+
+.background-task-drawer__close-cutout {
+  fill: var(--color-on-primary);
+}
+
+/* The 1px separator under the header: Inverse Primary at 60%, the drawn Separator instance. Opacity is not
+   a colour literal. */
+.background-task-drawer__rule {
+  flex: 0 0 auto;
+  height: 1px;
+  background: var(--color-inverse-primary);
+  opacity: 0.6;
+}
+
+/* The body is the only part that scrolls; min-height: 0 lets it shrink inside the fixed-height column. */
+.background-task-drawer__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* #962 retired `.background-task-trigger`, the clock button that sat beside the status row. The drawer is
+   opened by the task count pill (#1634) and by a `Background tasks` item in the thread's overflow menu,
+   which wears `.conversation__overflow-item` and needs no rule here. */
 
 /* The task list — a plain semantic <ul> with the browser's list chrome reset away; the rows carry the
    panel's own padding. */
@@ -5520,7 +5615,7 @@ button.top-overlay-pill {
 /* The patch itself. Mono like the description — it is structured-looking text — but MUTED body-small
    rather than on-surface body-medium, so the task's identity stays the primary line. Wrapping, not
    ellipsized: overflow-wrap breaks a 4 KiB unbroken token instead of overflowing the panel, and
-   .status-sheet__body already scrolls, so no height clamp is needed here. Clamping is a visual decision
+   .background-task-drawer__body already scrolls, so no height clamp is needed here. Clamping is a visual decision
    #580 owns — and if it lands it must stay CSS-only, never a substring operation on daemon text. */
 .background-task-panel__patch {
   min-width: 0;

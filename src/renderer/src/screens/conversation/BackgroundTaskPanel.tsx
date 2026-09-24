@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from 'react'
+import { shouldInterruptOnKeyDown, type ComposerKeyEvent } from './composerSend'
 import {
   useBackgroundTaskRosterStore,
   selectRosterFor,
@@ -29,10 +30,11 @@ import {
 // the roster bridge is already app-wide — <BackgroundTaskRosterData /> is the seventh headless leaf in
 // App.tsx — so a mount here would be a second, wrong write path. This file is a pure reader.
 //
-// The chrome is the shared `.status-sheet__*` overlay vocabulary, used as the INTERIM visual language:
-// #580 owns the real design and may land this as a docked sidebar rather than an overlay sheet. So only
-// the outermost wrapper is chrome — the rows and the branch copy carry their own `background-task-panel__*`
-// classes and no positional CSS, and #580 can swap the wrapper without touching the list.
+// #1634: the chrome is #580's drawing (Figma 565:2966): a NON-modal drawer on the right of the message
+// area, with no scrim, so the thread scrolls and the composer takes input while it is open. It replaced
+// the interim `.status-sheet__*` bottom sheet. Only the outermost wrapper is chrome — the rows and the
+// branch copy carry their own `background-task-panel__*` classes and no positional CSS, so the list's own
+// redraw can land without touching the wrapper, as this swap landed without touching the list.
 //
 // SECURITY: every `description` rendered here is, for `taskType: local_bash`, the literal command line
 // claude ran — untrusted, model-influenced text the daemon bounds but does not sanitize. It is rendered as
@@ -161,33 +163,31 @@ export function BackgroundTaskPanelView({
   onClose: () => void
 }): JSX.Element {
   return (
-    <div className="status-sheet-overlay">
-      <div className="status-sheet-overlay__scrim" aria-hidden="true" onClick={onClose} />
-      <div
-        className="status-sheet"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={BACKGROUND_TASK_PANEL_TITLE_ID}
-      >
-        <div className="status-sheet__handle" aria-hidden="true" />
-        <div className="status-sheet__header">
-          <p id={BACKGROUND_TASK_PANEL_TITLE_ID} className="status-sheet__title">
-            {BACKGROUND_TASK_PANEL_TITLE}
-          </p>
-          <button type="button" className="status-sheet__close" aria-label="Close" onClick={onClose}>
-            <svg
-              className="status-sheet__close-icon"
-              viewBox="0 0 24 24"
-              width="22"
-              height="22"
-              fill="currentColor"
-              aria-hidden="true"
-            >
-              <path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-            </svg>
-          </button>
-        </div>
-        <div className="status-sheet__body">
+    // #1634: `role="dialog"` WITHOUT `aria-modal` — a non-modal dialog, which is what a drawer that leaves
+    // the thread and the composer usable is. The role and its name are also what every spec finds it by.
+    <section
+      className="background-task-drawer"
+      role="dialog"
+      aria-labelledby={BACKGROUND_TASK_PANEL_TITLE_ID}
+    >
+      <div className="background-task-drawer__header">
+        <h2 id={BACKGROUND_TASK_PANEL_TITLE_ID} className="background-task-drawer__title">
+          {BACKGROUND_TASK_PANEL_TITLE}
+        </h2>
+        {/* The design's circle-xmark (the glyph `modal-close.svg` carries), drawn INLINE rather than as an
+            <img>: the escaping tests below assert no `<img` anywhere in this markup, which is what proves a
+            markup-shaped description stayed text. The disc and the cross cut-out take their colours from
+            the stylesheet, not from literals. */}
+        <button type="button" className="background-task-drawer__close" aria-label="Close" onClick={onClose}>
+          <svg className="background-task-drawer__close-icon" viewBox="0 0 28 28" width="20" height="20"
+            aria-hidden="true">
+            <circle className="background-task-drawer__close-cutout" cx="14" cy="14" r="9.8" />
+            <path d="M14 28C21.7328 28 28 21.7328 28 14C28 6.26719 21.7328 0 14 0C6.26719 0 0 6.26719 0 14C0 21.7328 6.26719 28 14 28ZM9.13281 9.13281C9.64687 8.61875 10.4781 8.61875 10.9867 9.13281L13.9945 12.1406L17.0023 9.13281C17.5164 8.61875 18.3477 8.61875 18.8562 9.13281C19.3648 9.64687 19.3703 10.4781 18.8562 10.9867L15.8484 13.9945L18.8562 17.0023C19.3703 17.5164 19.3703 18.3477 18.8562 18.8562C18.3422 19.3648 17.5109 19.3703 17.0023 18.8562L13.9945 15.8484L10.9867 18.8562C10.4727 19.3703 9.64141 19.3703 9.13281 18.8562C8.62422 18.3422 8.61875 17.5109 9.13281 17.0023L12.1406 13.9945L9.13281 10.9867C8.61875 10.4727 8.61875 9.64141 9.13281 9.13281Z" />
+          </svg>
+        </button>
+      </div>
+      <div className="background-task-drawer__rule" aria-hidden="true" />
+      <div className="background-task-drawer__body">
           {/* #582: the partial-list notice, a SIBLING of the branch below rather than a child of any of
               its arms. That placement is the acceptance criterion, not a style choice: the count belongs
               to the ENTRY, not to the list, so a present entry reporting dropped tasks must show it
@@ -315,9 +315,8 @@ export function BackgroundTaskPanelView({
               ))}
             </ul>
           )}
-        </div>
       </div>
-    </div>
+    </section>
   )
 }
 
@@ -331,9 +330,11 @@ export function BackgroundTaskPanelView({
 // read carries, since #1009 retired the control this used to name).
 function BackgroundTaskPanel({
   conversationId,
+  turnRunning,
   onClose
 }: {
   conversationId: string | null
+  turnRunning: boolean
   onClose: () => void
 }): JSX.Element {
   // A useMemo-stable selector per id (`ConversationScreen`'s `selectOpenBacklog`) so a fresh closure per render does not
@@ -343,16 +344,40 @@ function BackgroundTaskPanel({
   const selectRoster = useMemo(() => selectRosterFor(conversationId ?? ''), [conversationId])
   const entry = useBackgroundTaskRosterStore(selectRoster)
   useEffect(() => {
-    // Index the DOM event map — the WorkspacePickerSheet Escape effect verbatim. The panel only mounts
-    // while open (gated in ConversationScreen), so the listener attaches on mount / detaches on cleanup —
-    // no `open` flag, no leak past close.
+    // #1634: a CAPTURE listener on `document`, which runs before React's root listener and before any
+    // bubble-phase document listener. A press the drawer takes is stopped right here, so the options
+    // overlay, the type-ahead and every other Escape claimant never see it: one Escape does one thing.
+    // A press it yields travels on untouched, which is how the composer's #1072 stop still works with
+    // the drawer open. The panel only mounts while open, so the listener lives exactly as long as it.
     const onKeyDown = (event: DocumentEventMap['keydown']): void => {
-      if (event.key === 'Escape') onClose()
+      const { target } = event
+      const inComposerStop = target instanceof Element && target.matches(COMPOSER_STOP_BINDINGS)
+      if (!drawerClosesOnKeyDown(event, { inComposerStop, turnRunning })) return
+      event.stopPropagation()
+      onClose()
     }
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => document.removeEventListener('keydown', onKeyDown, true)
+  }, [onClose, turnRunning])
   return <BackgroundTaskPanelView entry={entry} onClose={onClose} />
+}
+
+// #1634: the two elements that carry #1072's Escape-stops-the-turn binding — the message box and the
+// send button in its stop variant. The drawer defers to exactly these, and only while that binding will
+// act; an options row or any other focus inside the composer does not count.
+const COMPOSER_STOP_BINDINGS = '.composer__input, .composer__send'
+
+/** #1634: does this key press close the drawer? Escape does, except while an IME composition is open
+ *  (that Escape belongs to the composition) and except when focus is on one of the composer's stop
+ *  bindings and `shouldInterruptOnKeyDown` — the decision those bindings consult — says it will stop a
+ *  running turn. Then the composer acts and the drawer stays open. Asking the composer's own predicate
+ *  rather than restating it keeps the two from disagreeing about which press is the composer's. */
+export function drawerClosesOnKeyDown(
+  keystroke: ComposerKeyEvent,
+  focus: { inComposerStop: boolean; turnRunning: boolean }
+): boolean {
+  if (keystroke.key !== 'Escape' || keystroke.isComposing) return false
+  return !(focus.inComposerStop && shouldInterruptOnKeyDown(keystroke, focus.turnRunning))
 }
 
 export { BackgroundTaskPanel }

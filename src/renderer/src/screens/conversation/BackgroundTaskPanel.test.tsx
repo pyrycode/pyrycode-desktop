@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { BackgroundTaskPanelView } from './BackgroundTaskPanel'
+import { BackgroundTaskPanelView, drawerClosesOnKeyDown } from './BackgroundTaskPanel'
 import type {
   BackgroundTaskRosterEntry,
   HeldBackgroundTask
@@ -32,23 +32,26 @@ function entry(tasks: readonly HeldBackgroundTask[], droppedTasks = 0): Backgrou
 }
 
 describe('BackgroundTaskPanelView — the background-task panel (#581)', () => {
-  it('renders the labelled modal dialog chrome, under a title id distinct from the other three (AC1)', () => {
+  it('renders the non-modal drawer chrome, under a title id distinct from the other three (#1634 AC1)', () => {
     const markup = renderToStaticMarkup(
       <BackgroundTaskPanelView entry={entry([])} onClose={noop} />
     )
-    // The status-sheet chrome, reused verbatim: a modal dialog labelled by its own title id, the drag
-    // handle, the static title, and the icon-only close control.
+    // #1634: a NON-modal dialog. The role stays, so the panel is still found by role and name, but
+    // aria-modal goes with the scrim: the thread and the composer stay usable while it is open.
     expect(markup).toContain('role="dialog"')
-    expect(markup).toContain('aria-modal="true"')
+    expect(markup).not.toContain('aria-modal')
     expect(markup).toContain('aria-labelledby="background-task-panel-title"')
     expect(markup).toContain('id="background-task-panel-title"')
-    expect(markup).toContain('status-sheet__handle')
+    // The drawer's own chrome, and none of the modal sheet's: no scrim, no handle, no status-sheet class.
+    expect(markup).toContain('class="background-task-drawer"')
+    expect(markup).toContain('background-task-drawer__header')
+    expect(markup).toContain('background-task-drawer__rule')
+    expect(markup).toContain('background-task-drawer__body')
+    expect(markup).not.toContain('status-sheet')
+    expect(markup).not.toContain('scrim')
     expect(markup).toContain('Background tasks')
     expect(markup).toContain('aria-label="Close"')
     // The id is distinct from the three existing ones, so all four can coexist without duplicate ids.
-    // `status-sheet-title` is a substring of nothing else here (the chrome's class is
-    // `status-sheet__title`, with an underscore pair), so the assertion is meaningful.
-    expect(markup).not.toContain('status-sheet-title')
     expect(markup).not.toContain('channel-info-sheet-title')
     expect(markup).not.toContain('workspace-picker-sheet-title')
   })
@@ -231,8 +234,8 @@ describe('BackgroundTaskPanelView — a capped roster and cut task text (#582)',
     // top of the body — silently, on EVERY non-truncated roster. `0` is a value here, never consulted
     // for truthiness (the store says so at backgroundTaskRosterStore.ts:164-165), and this is that rule
     // at a render site. Anchored on the body's opening tag rather than asserting `not.toContain('0')`,
-    // which is impossible: the close icon alone carries `viewBox="0 0 24 24"`.
-    expect(markup).not.toContain('status-sheet__body">0')
+    // which a digit anywhere in the chrome would make meaningless.
+    expect(markup).not.toContain('background-task-drawer__body">0')
   })
 
   it('marks a rendered field the daemon names as cut, and only that field (AC3)', () => {
@@ -553,5 +556,28 @@ describe('BackgroundTaskPanelView — the latest reported change (#583)', () => 
     expect(markup).toContain('background-task-panel__cut-patch')
     expect(markup).toContain('background-task-panel__no-change')
     expect(markup).not.toMatch(/completed|complete|failed|failure|succeeded|success|finished|error/i)
+  })
+})
+
+// #1634: the drawer does not take focus, so its Escape and the composer's #1072 Escape can meet on one
+// key press. This is the whole arbitration as plain values: the container's capture listener asks it and
+// either closes (and stops the press there) or lets the press through to the composer untouched.
+describe('drawerClosesOnKeyDown — one Escape does one thing (#1634 AC3)', () => {
+  const esc = { key: 'Escape', shiftKey: false, isComposing: false }
+  it('closes on Escape with focus outside the composer, turn running or not', () => {
+    expect(drawerClosesOnKeyDown(esc, { inComposerStop: false, turnRunning: false })).toBe(true)
+    expect(drawerClosesOnKeyDown(esc, { inComposerStop: false, turnRunning: true })).toBe(true)
+  })
+  it('closes on Escape from the composer while no turn is running', () => {
+    expect(drawerClosesOnKeyDown(esc, { inComposerStop: true, turnRunning: false })).toBe(true)
+  })
+  it('yields to the composer when its Escape will stop a running turn', () => {
+    expect(drawerClosesOnKeyDown(esc, { inComposerStop: true, turnRunning: true })).toBe(false)
+  })
+  it('ignores every other key, and an Escape that ends an IME composition', () => {
+    expect(drawerClosesOnKeyDown({ ...esc, key: 'Enter' }, { inComposerStop: false, turnRunning: false }))
+      .toBe(false)
+    expect(drawerClosesOnKeyDown({ ...esc, isComposing: true }, { inComposerStop: false, turnRunning: false }))
+      .toBe(false)
   })
 })

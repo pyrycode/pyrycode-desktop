@@ -101,6 +101,10 @@ export const MARKDOWN_OPEN_FAILED_NOTICE = 'Could not open the file.'
  *  another app. Never the name, the path or the reason. */
 export const MARKDOWN_OPEN_IN_APP_FAILED_NOTICE = 'Could not open the note in another app.'
 
+/** #1632: the static, client-owned line drawn inside the reader when the note could not be saved to
+ *  Downloads. Never the name, the path or the reason. */
+export const MARKDOWN_SAVE_FAILED_NOTICE = 'Could not save the note.'
+
 /** #1630: the static, client-owned line a successful copy shows for `COPY_CONFIRMATION_MS`. */
 export const MARKDOWN_COPIED_NOTICE = 'Copied to the clipboard.'
 
@@ -200,10 +204,11 @@ type MarkdownReaderMenuAction =
   | { type: 'copy'; kind: MarkdownCopyKind }
   | { type: 'refresh' }
   | { type: 'open-in-app' }
+  | { type: 'save' }
 
 /**
- * #1630 — the menu rows, in the order the operator fixed on 2026-09-24 (the sibling tickets append Open
- * in another app and Save to device below Refresh). Every copy row acts on the content shown now, so
+ * #1630 — the menu rows, in the order the operator fixed on 2026-09-24 (#1631 and #1632 append Open in
+ * another app and Save to device below Refresh). Every row but Refresh acts on the content shown now, so
  * each is unavailable until that content has loaded; Refresh is always available.
  */
 export function markdownReaderMenuOptions(
@@ -216,7 +221,9 @@ export function markdownReaderMenuOptions(
     { id: 'copy-html', label: 'Copy as HTML', unavailable: noContent, action: { type: 'copy', kind: 'html' } },
     { id: 'refresh', label: 'Refresh', unavailable: false, action: { type: 'refresh' } },
     // #1631: hands the content shown now to another app, so it waits for that content too.
-    { id: 'open-in-app', label: 'Open in another app', unavailable: noContent, action: { type: 'open-in-app' } }
+    { id: 'open-in-app', label: 'Open in another app', unavailable: noContent, action: { type: 'open-in-app' } },
+    // #1632: saves the content shown now into Downloads, so it waits for that content too.
+    { id: 'save', label: 'Save to device', unavailable: noContent, action: { type: 'save' } }
   ]
 }
 
@@ -235,19 +242,21 @@ function copyNote(kind: MarkdownCopyKind, text: string): Promise<boolean> {
 /**
  * The reader's state plus its actions, bound to the open conversation. Subscribes to the outcome
  * channel for the life of the screen and removes the listener on unmount. Content-free diagnostics only:
- * `open`, `refresh`, `copied`, `copy-failed`, `open-in-app`, `open-in-app-failed`, and `stale` for an
- * answer no current ask is waiting for.
+ * `open`, `refresh`, `copied`, `copy-failed`, `open-in-app`, `open-in-app-failed`, `save`, `save-failed`,
+ * and `stale` for an answer no current ask is waiting for.
  * The main process already logs how each fetch ended.
  */
 export function useMarkdownReader(conversationId: string | null): {
   state: MarkdownReaderState
   copied: boolean
   openInAppFailed: boolean
+  saveFailed: boolean
   open: (path: string) => void
   back: () => void
   refresh: () => void
   copy: (kind: MarkdownCopyKind) => void
   openInApp: () => void
+  save: () => void
 } {
   const [state, dispatch] = useReducer(markdownReaderReducer, CLOSED)
   // Diagnostics only: the reducer is the authority on which answer applies.
@@ -260,6 +269,8 @@ export function useMarkdownReader(conversationId: string | null): {
   // #1631: the open-in-another-app failure, UI-local like the copy confirmation. Cleared by the next
   // attempt and by back; a conversation switch remounts the screen and drops it.
   const [openInAppFailed, setOpenInAppFailed] = useState(false)
+  // #1632: the save failure, with the same lifetime as the open-in-another-app one.
+  const [saveFailed, setSaveFailed] = useState(false)
   const clearCopied = useCallback((): void => {
     if (copiedTimer.current !== null) clearTimeout(copiedTimer.current)
     copiedTimer.current = null
@@ -299,6 +310,7 @@ export function useMarkdownReader(conversationId: string | null): {
     pendingKey.current = null
     clearCopied()
     setOpenInAppFailed(false)
+    setSaveFailed(false)
     dispatch({ type: 'back' })
   }, [clearCopied])
 
@@ -346,7 +358,23 @@ export function useMarkdownReader(conversationId: string | null): {
       })
   }, [state])
 
-  return { state, copied, openInAppFailed, open, back, refresh, copy, openInApp }
+  // #1632: the same request as openInApp; main writes it into Downloads, never over an existing file,
+  // and reveals it. The reveal is the success feedback, so only a failure draws anything here.
+  const save = useCallback((): void => {
+    if (state.type !== 'loaded') return
+    setSaveFailed(false)
+    window.pyry.sendDiagnostic({ event: LOG_EVENT, code: 'save' })
+    void window.pyry
+      .saveMarkdownToDevice({ text: state.text, displayName: markdownFileName(state.path) })
+      .then((outcome) => outcome.type === 'saved', () => false)
+      .then((ok) => {
+        if (ok) return
+        window.pyry.sendDiagnostic({ event: LOG_EVENT, code: 'save-failed' })
+        if (alive.current) setSaveFailed(true)
+      })
+  }, [state])
+
+  return { state, copied, openInAppFailed, saveFailed, open, back, refresh, copy, openInApp, save }
 }
 
 /**
@@ -359,18 +387,22 @@ export function MarkdownReaderView({
   state,
   copied,
   openInAppFailed,
+  saveFailed,
   onBack,
   onRefresh,
   onCopy,
-  onOpenInApp
+  onOpenInApp,
+  onSave
 }: {
   state: Exclude<MarkdownReaderState, { type: 'closed' }>
   copied: boolean
   openInAppFailed: boolean
+  saveFailed: boolean
   onBack: () => void
   onRefresh: () => void
   onCopy: (kind: MarkdownCopyKind) => void
   onOpenInApp: () => void
+  onSave: () => void
 }): JSX.Element {
   const options = markdownReaderMenuOptions(state)
   const choose = (id: string): void => {
@@ -378,6 +410,7 @@ export function MarkdownReaderView({
     if (action?.type === 'refresh') onRefresh()
     else if (action?.type === 'copy') onCopy(action.kind)
     else if (action?.type === 'open-in-app') onOpenInApp()
+    else if (action?.type === 'save') onSave()
   }
   return (
     <div className="markdown-reader">
@@ -431,6 +464,9 @@ export function MarkdownReaderView({
       )}
       {openInAppFailed && (
         <p className="conversation__banner markdown-reader__notice" role="status">{MARKDOWN_OPEN_IN_APP_FAILED_NOTICE}</p>
+      )}
+      {saveFailed && (
+        <p className="conversation__banner markdown-reader__notice" role="status">{MARKDOWN_SAVE_FAILED_NOTICE}</p>
       )}
       {copied && <p className="markdown-reader__copied" role="status">{MARKDOWN_COPIED_NOTICE}</p>}
       {state.type === 'loaded' ? (

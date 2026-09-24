@@ -52,7 +52,7 @@ notification and appear on a lock screen — it is impossible by construction, n
 | `case 'notify':` dispatch, incl. the `onClick` composition (#393) | `src/main/index.ts` (the single `onCommand` switch) |
 | `notificationActivated` `DaemonEvent` arm, nullary at #393, optional `token` since #1597 | `src/shared/ipc/events.ts` |
 | `notificationActivatedBridge.ts` (#393, re-validates the echoed token since #1597) | `src/renderer/src/store/notificationActivatedBridge.ts` |
-| `pushNotifyBridge.ts` — `notifyKindForEvent`, `subscribePushNotify`, `usePushNotify` (#392); `createNotificationTargets`, `notificationRowFor` (#1597) | `src/renderer/src/store/pushNotifyBridge.ts` |
+| `pushNotifyBridge.ts` — `notifyKindForEvent`, `subscribePushNotify`, `usePushNotify` (#392); `createNotificationTargets`, `notificationRowFor` (#1597); `conversationMutedIn` (#1607) | `src/renderer/src/store/pushNotifyBridge.ts` |
 | `isNotificationToken` guard + `NotifyPayload.token` (#1597) | `src/shared/ipc/commands.ts` |
 | `openConversation` — the shared sidebar-row/notification-click open steps (#1597) | `src/renderer/src/PairedShell.tsx` |
 
@@ -262,6 +262,30 @@ the notification. Production wires `nameFor` to
 `(serverId, id) => conversationNameIn(conversationListStore.getState(), serverId, id)`, `nameFor` being
 required (not defaulted) so an unwired call site is a type error, the same posture as `isPushEnabled`.
 
+### Muting suppresses the send (#1607)
+
+Mute is stored on the host and rides each conversation list row as `is_muted` (#1594), read as
+`row.is_muted === true` so a missing value means not muted. `subscribePushNotify` takes an optional
+sixth parameter, `isMuted?: (serverId, conversationId) => boolean`, read per event — not cached —
+right after the dedup/toggle gates and before the name lookup and the token mint, so a muted send
+mints nothing and looks up no name. Production wires it to a new exported
+`conversationMutedIn(state, serverId, conversationId)`, built over the same server-scoped
+`conversationRowIn` lookup `conversationNameIn` and `notificationRowFor` already use — keyed by the
+event's own `serverId` so a same-id row muted only under another host never silences this one.
+Omitted, `isMuted` means "not muted," so the roughly twenty existing `subscribePushNotify` call sites
+in tests needed no change.
+
+One flag silences both `notify` kinds, turn-complete and prompt, because the host stores a single
+mute bit rather than one per kind. The sidebar status dot does not read mute and is unchanged — a
+muted conversation still shows its state in the list, it just raises nothing outside it. The
+[app icon badge](app-badge.md) drops the same rows from its count (#1607, below).
+
+**A muted prompt is deliberately not recorded as announced.** Like a delivery the push toggle drops,
+a muted `modalShown` never enters the [`announcedModalIds` dedup set](#dedup-across-reconnects-514).
+Recording it anyway would mean a prompt unmuted while still outstanding would never notify when the
+daemon re-sends it after the next reconnect — the same reasoning the toggle-drop case already
+established, applied to a second gate ahead of the same set.
+
 ### Dedup across reconnects (#514)
 
 The daemon deliberately re-sends every still-outstanding `modal_shown` after each re-handshake
@@ -434,3 +458,6 @@ navigating to the thread.
 - [#1593](https://github.com/pyrycode/pyrycode-desktop/issues/1593) — the title now names the
   conversation the notification is about; the body stays client-owned. Renderer-resolved name,
   main-side cleaning (`notificationTitle`), no conversation id crosses the boundary.
+- [#1607](https://github.com/pyrycode/pyrycode-desktop/issues/1607) — a conversation muted on its
+  host sends neither `notify` kind; see [Muting suppresses the send](#muting-suppresses-the-send-1607)
+  above. The [app icon badge](app-badge.md) drops the same rows from its count.

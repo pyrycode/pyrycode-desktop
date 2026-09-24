@@ -10,6 +10,7 @@ import type {
 import { isNotificationToken } from '@shared/ipc/commands'
 import {
   NOTIFICATION_TARGETS_CAP,
+  conversationMutedIn,
   conversationNameIn,
   createNotificationTargets,
   notificationRowFor,
@@ -418,6 +419,77 @@ describe('subscribePushNotify tokens (#1597)', () => {
     bridge.emit(modalShown) // deduped re-delivery
     bridge.emit({ type: 'connecting' })
     expect(mintToken).toHaveBeenCalledTimes(1)
+  })
+})
+
+// #1607: a conversation muted on its host sends nothing. Read per event like the toggle, keyed by the
+// event's own server, and a prompt dropped while muted is not remembered as announced.
+describe('subscribePushNotify mute (#1607)', () => {
+  it('sends and mints nothing for a muted conversation, for either kind', () => {
+    const bridge = fakeBridge()
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    const mintToken = vi.fn(() => 'tok')
+    const isMuted = vi.fn(() => true)
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true, noName, mintToken, isMuted)
+
+    bridge.emit(turnEnd, 'srv-A')
+    bridge.emit(modalShown, 'srv-B')
+    expect(sendCommand).not.toHaveBeenCalled()
+    expect(mintToken).not.toHaveBeenCalled()
+    expect(isMuted).toHaveBeenNthCalledWith(1, 'srv-A', 'conv-XYZ')
+    expect(isMuted).toHaveBeenNthCalledWith(2, 'srv-B', 'conv-modal-XYZ')
+  })
+
+  it('reads mute per event, and notifies a prompt re-sent after it is unmuted', () => {
+    const bridge = fakeBridge()
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    let muted = false
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true, noName, undefined, () => muted)
+
+    bridge.emit(turnEnd)
+    expect(sendCommand).toHaveBeenCalledTimes(1)
+    muted = true
+    bridge.emit(turnEnd)
+    bridge.emit(modalShown)
+    expect(sendCommand).toHaveBeenCalledTimes(1)
+    muted = false
+    bridge.emit(modalShown) // the daemon's re-send after a reconnect
+    expect(sendCommand).toHaveBeenCalledTimes(2)
+    expect(sendCommand).toHaveBeenLastCalledWith({ type: 'notify', payload: { kind: 'prompt' } })
+  })
+})
+
+describe('conversationMutedIn (#1607)', () => {
+  function row(id: string, serverId: string | null, is_muted?: boolean): ServerConversationSummary {
+    const summary: ConversationSummary = {
+      ...created,
+      id,
+      is_archived: false,
+      last_message_ts: '2026-07-11T12:00:00Z',
+      ...(is_muted === undefined ? {} : { is_muted })
+    }
+    return { ...summary, serverId }
+  }
+
+  const state: ConversationListState = {
+    conversations: null,
+    byServer: new Map([
+      ['srv-A', [row('c-1', 'srv-A', true), row('c-2', 'srv-A', false), row('c-3', 'srv-A')]],
+      ['srv-B', [row('c-4', 'srv-B', true)]]
+    ])
+  }
+
+  it('is true only for a row muted on the event’s own server', () => {
+    expect(conversationMutedIn(state, 'srv-A', 'c-1')).toBe(true)
+    expect(conversationMutedIn(state, 'srv-B', 'c-4')).toBe(true)
+  })
+
+  it('is false for an unmuted, unset or missing row, and for a row muted only under another host', () => {
+    expect(conversationMutedIn(state, 'srv-A', 'c-2')).toBe(false)
+    expect(conversationMutedIn(state, 'srv-A', 'c-3')).toBe(false)
+    expect(conversationMutedIn(state, 'srv-A', 'c-404')).toBe(false)
+    expect(conversationMutedIn(state, 'srv-Z', 'c-1')).toBe(false)
+    expect(conversationMutedIn(state, 'srv-A', 'c-4')).toBe(false)
   })
 })
 

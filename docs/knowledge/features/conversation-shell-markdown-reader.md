@@ -19,13 +19,22 @@ operator decided on 2026-09-24 that the reader always shows the current file —
 fetches again, nothing is cached between opens**, not even a reopen of the same path in the
 same conversation.
 
+[#1630](https://github.com/pyrycode/pyrycode-desktop/issues/1630) added a three-dot menu at
+the bar's right edge — Copy as markdown, Copy as plain text, Copy as HTML and Refresh, in
+that order (operator ruling 2026-09-24; the phone twin is pyrycode-mobile#1031). See
+§ Note actions menu.
+
 ## How it works
 
 One new file, `src/renderer/src/screens/conversation/MarkdownReader.tsx`.
 
 - **`MarkdownReaderState`** — `{ type: 'closed', notice }` (with the one static failure
   line's on/off state), `{ type: 'loading', requestKey, path }`, `{ type: 'loaded',
-  requestKey, path, text }`.
+  requestKey, path, text, refreshKey, notice }`. The last two fields are
+  [#1630](https://github.com/pyrycode/pyrycode-desktop/issues/1630)'s: `refreshKey` is the
+  one pending refresh's request key (`null` when none is in flight) and `notice` there is the
+  same static failure line, but drawn **inside** the reader over the still-shown old text
+  rather than in the thread — a loaded reader never closes itself over a refresh failure.
 - **`markdownReaderReducer(state, event)`** — pure. `open` always moves to `loading` with a
   fresh `requestKey`, clearing any notice and superseding any open reader. `back` always
   returns the closed state with **no** notice. `outcome` (a `WorkspaceFileReadEvent`) applies
@@ -34,26 +43,45 @@ One new file, `src/renderer/src/screens/conversation/MarkdownReader.tsx`.
   second answer to an already-loaded key — returns the state unchanged. **The request key,
   minted fresh by `crypto.randomUUID()` on each `open`, is the entire mechanism that
   recognizes a stale answer**; there is no timestamp, no generation counter, no cancellation
-  of the outstanding IPC ask itself.
+  of the outstanding IPC ask itself. `refresh` ([#1630](https://github.com/pyrycode/pyrycode-desktop/issues/1630))
+  extends the same key discipline to a loaded reader: in `loading` it replaces the pending
+  `requestKey` (a refresh clicked before the first answer supersedes that fetch, exactly like
+  a second `open` would); in `loaded` it sets `refreshKey` to a fresh key without touching
+  `text`, so the old content stays on screen through the round trip; in `closed` it is a
+  no-op. A `loaded` state's `outcome` handling is now gated on `refreshKey`, not
+  `requestKey`: an outcome applies only when it answers the one pending `refreshKey`, and a
+  `loaded` outcome replaces `text` and adopts the key while a `failed` one keeps the old text
+  and sets `notice` — an older refresh's answer, or the shown key answering a second time,
+  changes nothing. The `loading` arm is untouched by this, so a first-open failure still
+  closes to the thread notice as before.
 - **`useMarkdownReader(conversationId)`** — one `useReducer` plus one
   `window.pyry.onWorkspaceFileReadEvent` subscription, unsubscribed in the effect's cleanup.
   `open(path)` does nothing when `conversationId` is `null`; otherwise it mints the key,
   dispatches `open` synchronously (so the bar is on screen before the fetch resolves), then
   calls `window.pyry.readWorkspaceFile({ requestKey, conversationId, path })`. A `pendingKey`
   ref (diagnostics only — the reducer is still the authority on which answer applies) drives
-  the `markdown-reader` diagnostic's two static codes, `open` and `stale`; neither the path,
-  the file text nor a failure reason is ever part of either code.
+  the `markdown-reader` diagnostic's static codes, now `open`, `refresh`, `copied`,
+  `copy-failed` and `stale`; neither the path, the file text, the clipboard content nor a
+  failure reason is ever part of any of them.
+  [#1630](https://github.com/pyrycode/pyrycode-desktop/issues/1630) added `refresh()` (a
+  no-op when closed; else a fresh key, same `pendingKey`/dispatch/fetch shape as `open`,
+  reusing the state's own `path`) and `copy(kind)` (a no-op unless `state.type === 'loaded'`,
+  so it always acts on the text shown at the moment of the click — a refresh landing mid-write
+  cannot mix contents; on a successful write it sets a `copied` flag for 2000ms via a timer
+  cleared on re-copy, on `back` and on unmount, guarded by an `alive` ref so a write that
+  resolves after unmount can't re-arm it).
 - **`markdownFileName(path)`** — the path's last `/`-separated component via `lastIndexOf`,
   cut to 255 characters (`MAX_TITLE_CHARS`, a filesystem component's own cap) — the title is
   daemon-influenced text, so it is length-bounded in addition to React's escaping, per
   CLAUDE.md's "rendered, escaped and length-bounded" rule for daemon text. The CSS
   `nowrap`/`ellipsis` on `.markdown-reader__title` is a second, geometric bound for the
   narrow-window residual truncation can't cover — neither is redundant with the other.
-- **`MarkdownReaderView({ state, onBack })`** — pure, a function of `loading | loaded` state
-  only (the `closed` variant is never passed in — see § Pane wiring). The bar is drawn in
-  **both** states, so it has somewhere to live while the first fetch is in flight — this is
-  what gives [#1623](https://github.com/pyrycode/pyrycode-desktop/issues/1623)'s later
-  three-dot menu a mount point that isn't gated on content having arrived. The body renders
+- **`MarkdownReaderView({ state, copied, onBack, onRefresh, onCopy })`** — pure, a function
+  of `loading | loaded` state only (the `closed` variant is never passed in — see § Pane
+  wiring). The bar is drawn in **both** states, so it has somewhere to live while the first
+  fetch is in flight — this is what gave
+  [#1630](https://github.com/pyrycode/pyrycode-desktop/issues/1630)'s three-dot menu a mount
+  point that isn't gated on content having arrived (see § Note actions menu). The body renders
   `<AssistantMarkdown text={state.text} />` inside `.bubble__markdown` when loaded (reusing
   the reply's own markdown CSS — headings, code chrome, tables, task marks — rather than
   restating it), and an empty `aria-busy="true"` box while loading. **No `onOpenMarkdownPath`
@@ -64,7 +92,92 @@ One new file, `src/renderer/src/screens/conversation/MarkdownReader.tsx`.
   file.'`, shown in the thread (not the reader, which has already closed by the time it
   renders) as `<p className="conversation__banner" role="status">`. Never the path, never the
   failure reason — a `failed` outcome for the current key is the reducer's only route to
-  `{ type: 'closed', notice: true }`.
+  `{ type: 'closed', notice: true }`. [#1630](https://github.com/pyrycode/pyrycode-desktop/issues/1630)
+  reuses the same string for a failed **refresh**, but rendered inside the still-open reader
+  (`.markdown-reader__notice`) over the old text rather than in the thread — the two call
+  sites share the string because the failure reads the same to the operator either way, not
+  because they share a rendering path.
+
+## Note actions menu
+
+[#1630](https://github.com/pyrycode/pyrycode-desktop/issues/1630) added a three-dot button at
+the bar's right end — the phone twin is pyrycode-mobile#1031, and the operator ruled on
+2026-09-24 that both clients ship the same six items in the same order; this ticket shipped
+the first four, the composer's Open in another app and Save to device are sibling tickets
+that append below Refresh.
+
+**The menu reuses `ComposerOptionsMenu`** ([Composer options
+panel](conversation-shell-composer-options-panel.md)) rather than a second dropdown — an
+explicit operator ruling, since that component already carries an icon-only trigger
+(`triggerAriaLabel`), a `bottom-end` placement and `unavailable` (disabled) rows. The trigger
+reuses `ThreadOverflowMenu`'s own drawing and glyph (`.conversation__overflow-trigger` /
+`.conversation__overflow-icon`), so the desktop chat screen's overflow button and the
+reader's note-actions button are visually the same control in two places. `markdownReaderMenuOptions(state)`
+builds the four rows from state alone (pure, exported for the unit tier): the three copy rows
+carry `unavailable: state.type !== 'loaded'`, Refresh is always available. Escape and an
+outside click close the menu through `ComposerOptionsMenu`'s own handling, not anything local
+to the reader.
+
+**The three copy kinds** (`MarkdownCopyKind = 'markdown' | 'plain' | 'html'`) all act on
+`state.text` — the note as currently shown, never re-fetched for the copy:
+
+- **Copy as markdown** — `copyMessageText(state.text)`, the raw file text, through the
+  existing [`copyMessageText`](conversation-shell-message-bubble.md#copymessagetextts-new)
+  sink.
+- **Copy as plain text** — `markdownPlainText(state.text)` through the same sink.
+  `markdownPlainText` parses with `unified().use(remarkParse).use(remarkGfmSubset)` — the
+  exact plugin [`AssistantMarkdown`](assistant-markdown-renderer.md) registers, now exported
+  from that module for this reason — and walks the resulting tree from `unknown` (no `mdast`
+  type import, no casts): blocks join on a blank line, list items and table rows on a newline,
+  table cells on a tab; text/inline-code/code/raw-HTML nodes contribute their literal value
+  (raw HTML is literal text in the rendered view too, so it stays literal text here);
+  emphasis, strong, delete and links contribute their children; images contribute their alt
+  text; a hard break is a newline; definitions and thematic breaks contribute nothing.
+- **Copy as HTML** — `copyRichText({ html: markdownHtml(state.text), text:
+  markdownPlainText(state.text) })`. `markdownHtml` is `renderToStaticMarkup(<AssistantMarkdown
+  text={text} />)` (`react-dom/server`) — **the rendered view's own pipeline, server-rendered,
+  not a second sanitizer** — so every `AssistantMarkdown` security rule holds by construction:
+  raw HTML in the note arrives on the clipboard as escaped text, links follow the http/https
+  allowlist, images become alt text. A unit test pins this directly: a note containing
+  `<script>` and `<img onerror>` copies with no live `<script`/`<img`/`onerror=` in the
+  markup. The HTML carries `AssistantMarkdown`'s client-owned code-block chrome (the Copy code
+  button) along with it — stripping it would need a second component table in that
+  security-boundary file for no observed need, so it ships as-is. Like the reader's own
+  render, `markdownHtml` passes no `onOpenMarkdownPath`.
+- **`copyRichText`** ([`copyMessageText.ts`](conversation-shell-message-bubble.md#copymessagetextts-new))
+  is the one clipboard call all three kinds funnel non-markdown/plain copies through: one
+  `ClipboardItem` carrying both `text/html` and `text/plain`, via the async
+  `navigator.clipboard.write`. **Measured, not assumed, in the built app**: the existing
+  `clipboard-sanitized-write` permission — believed at the time to be text/plain-only, per the
+  comment in `src/main/index.ts` and the header of `copyMessageText.ts` — also allows this
+  async `write` call with a `text/html` flavour. Both comments were wrong and are corrected in
+  this ticket; no IPC channel or preload change was needed, and the permission handler's
+  allowlist stays exactly the one string. Chromium's own sanitization of the HTML on write is
+  a second fabric, not the one this design relies on — the HTML is already inert by
+  construction, per the point above.
+- Every copy write shares `copyMessageText`'s posture: feature-checked (`typeof
+  clipboard?.write === 'function'` and `typeof ClipboardItem === 'function'`), never throws, a
+  failed write shows no confirmation, and a caught rejection logs an event name alone — never
+  the text, the HTML or the caught error.
+- A successful copy of any kind sets `copied` for 2000ms (`COPY_CONFIRMATION_MS`), shown as
+  `MARKDOWN_COPIED_NOTICE` (`'Copied to the clipboard.'`) — a neutral `role="status"` line, not
+  the failure banner's styling.
+
+**Refresh** (`onRefresh` → `refresh()`) re-asks `readWorkspaceFile` for the state's own `path`
+under a fresh request key, exactly like `open`, but the *reducer* keeps `text` on screen for
+the duration (§ How it works) rather than showing the loading box — the visible difference
+between opening a file and refreshing the one already shown. A failing refresh leaves the old
+text in place and shows the notice inside the reader; the next successful refresh (of that
+note or, after Back and a new open, of any note) clears it. A stale refresh answer — an older
+refresh superseded by a newer one, or an answer arriving after Back or after a new `open` —
+changes nothing, by the same request-key discipline the first fetch already used.
+
+**Test note**: renderer unit tests are static `renderToStaticMarkup` renders with no click
+([Development verification](development-verification.md)), so opening the menu, choosing a
+row and reading the clipboard back are Playwright's job —
+`e2e/markdown-reader-menu.spec.ts`, beside `e2e/markdown-reader.spec.ts`. It reads the OS
+clipboard back through main the way `e2e/message-copy.spec.ts` already does, including
+`clipboard.readHTML()` for the HTML flavour.
 
 ## Pane wiring
 
@@ -117,14 +230,27 @@ mount-local state it drops is traced.
 - [Conversation shell](conversation-shell.md) — the parent document; `.conversation`'s layout,
   the screen's other overlays, and `PairedShell`'s per-conversation `key`.
 - [Assistant markdown renderer](assistant-markdown-renderer.md) — `markdownLinkPath`, the
-  `onOpenMarkdownPath` opt-in on `AssistantMarkdown`, and the shared `webLink` helper the link
-  rule was split out of.
+  `onOpenMarkdownPath` opt-in on `AssistantMarkdown`, the shared `webLink` helper the link
+  rule was split out of, and `remarkGfmSubset` — exported for `markdownPlainText`'s parse —
+  and `markdownHtml`'s reuse of the render pipeline itself.
+- [Composer options panel](conversation-shell-composer-options-panel.md) — `ComposerOptionsMenu`,
+  the one dropdown this reader's note-actions menu reuses rather than building a second one
+  (operator ruling 2026-09-24).
+- [Conversation shell — message bubble](conversation-shell-message-bubble.md#copymessagetextts-new) —
+  `copyMessageText.ts`: the sanitized text write this menu's markdown/plain-text copies reuse,
+  the clipboard permission section `copyRichText` extends, and its content-free logging
+  posture.
 - [Attachment retrieval](attachment-retrieval.md) — the `readWorkspaceFile`/
-  `onWorkspaceFileReadEvent` bridge (#1626) this reader's `open` and outcome listener call.
+  `onWorkspaceFileReadEvent` bridge (#1626) this reader's `open`, `refresh` and outcome
+  listener call.
 - [Composer attach — pending attachments and the strip](composer-attach-pending.md) — the
   mount-local composer state an unmount silently drops; the reason the pane hides rather than
   unmounts.
 - [PR #1629](https://github.com/pyrycode/pyrycode-desktop/pull/1629) — the verifier's MUST FIX
   and the rework that replaced the early return with the covered-wrapper layer.
+- [PR #1633](https://github.com/pyrycode/pyrycode-desktop/pull/1633) — #1630's note-actions
+  menu: the HTML clipboard measurement, the refresh state machine and their tests.
 - `docs/specs/architecture/1627-markdown-link-reader.md` — the design, its `## Revisions`
   recording the layering fix, and the security review.
+- `docs/specs/architecture/1630-markdown-reader-menu.md` — the note-actions menu design: the
+  HTML clipboard measurement, the refresh state additions and the security review.

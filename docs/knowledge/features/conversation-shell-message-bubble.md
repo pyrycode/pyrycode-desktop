@@ -181,6 +181,14 @@ un-rendering step inside it. Length is already bounded upstream by `parseInbound
 
 The call site is `onClick={() => void copyMessageText(item.text)}` — an explicitly voided promise.
 
+**[#1630](https://github.com/pyrycode/pyrycode-desktop/issues/1630) added a sibling,
+`copyRichText({ html, text })`, beside this function** — [the markdown reader](conversation-shell-markdown-reader.md#note-actions-menu)'s
+Copy as HTML. It writes one `ClipboardItem` carrying both `text/html` and `text/plain` through
+the async `navigator.clipboard.write`, under the same posture: feature-checked, never throws,
+a failure logs an event name alone. This is a materially different grant than `writeText`
+above — an HTML flavour on the clipboard — and § The clipboard permission below now reflects
+what that ticket measured, not what this ticket originally documented.
+
 ### The clipboard permission (`src/main/index.ts`)
 
 `session.defaultSession.setPermissionRequestHandler` denied every renderer permission unconditionally
@@ -201,6 +209,15 @@ list) and asserts it still comes back denied. Granting the write directly, rathe
 through a new `ipcMain` channel in the `shared/ipc/unpair.ts` request/response shape, was a deliberate
 choice — that idiom grants the same capability through more code and would have pushed the ticket over
 its file-count boundary.
+
+**Correction ([#1630](https://github.com/pyrycode/pyrycode-desktop/issues/1630), measured in
+the built app):** `clipboard-sanitized-write` is **not** text/plain only. The async
+`navigator.clipboard.write` with a `text/html`-carrying `ClipboardItem` is routed through the
+same permission string and is granted by the same `callback(permission ===
+'clipboard-sanitized-write')` line — Electron does not distinguish the plain-text `writeText`
+call this ticket introduced from the richer `write` call #1630 added. `copyRichText` above is
+that second call; the permission handler itself needed no change, since the allowlist is
+already scoped to the one string rather than to a flavour.
 
 ## Whitespace (#1057)
 
@@ -458,6 +475,9 @@ alongside the sections that describe what each spec proves.
   re-derives.
 - [#969 architecture spec](../../specs/architecture/969-message-bubble-redraw-with-meta-row.md) — full
   design, the clipboard-permission open question and its resolution, and the security review.
+- [Conversation shell — markdown reader § Note actions menu](conversation-shell-markdown-reader.md#note-actions-menu) —
+  `copyRichText`'s one caller, and the #1630 measurement that corrected this document's
+  `clipboard-sanitized-write` claim above.
 - [#970](https://github.com/pyrycode/pyrycode-desktop/issues/970) — the parent ticket this meta row's
   timestamp slot was reserved for; split into [#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013)
   (shipped — gives `assistantText`/`userText` [timeline items](thread-timeline-internals.md#types) an optional

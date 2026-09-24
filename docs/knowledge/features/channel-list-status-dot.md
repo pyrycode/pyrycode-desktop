@@ -163,6 +163,9 @@ the cheap fix, if wanted, is `aria-hidden` on the dot's idle branch — a change
   reducer and store `selectHasOutstandingFor(conversationId)` is defined on, re-exported from
   `modalStore.ts` and read as the fourth per-id subscription by
   [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874).
+- [App icon attention badge](app-badge.md) / [#1592](https://github.com/pyrycode/pyrycode-desktop/issues/1592)
+  — a second consumer of this exact four-selector composition, copied verbatim so the app icon and the
+  sidebar dots can never disagree about which conversations need the operator.
 - [#801 spec](../../specs/architecture/801-sidebar-row-status-dot.md) — the row's status dot.
 - [#874 spec](../../specs/architecture/874-input-required-dot-call-site.md) — the fourth subscription that
   composes the input-required status into it.

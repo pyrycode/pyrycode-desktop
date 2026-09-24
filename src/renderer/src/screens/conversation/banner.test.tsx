@@ -84,6 +84,8 @@ describe('banner display surfaces', () => {
     const html = renderToStaticMarkup(<ConversationScreen />)
     expect(html.includes('Could not change the model — try again.')).toBe(occupant === 'model')
     expect(html.includes('composer-status__banner')).toBe(occupant === 'banner')
-    expect(html.includes('Nearly at usage limit')).toBe(occupant === 'usage')
+    // #1604: the usage reading is a Top overlay pill now, drawn whatever the slot holds and never in it.
+    expect(html.includes('Nearly at usage limit')).toBe(true)
+    expect(html.indexOf('Nearly at usage limit')).toBeLessThan(html.indexOf('class="composer-status"'))
   })
 })

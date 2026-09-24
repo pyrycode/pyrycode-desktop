@@ -77,34 +77,35 @@ test('re-pair: a sealed pairing rejection opens a recovery modal', async ({
   // A sealed invalid-token frame establishes pairing rejection; a bare close does not.
   daemon.pushFrame(rejection())
 
-  const repair = page.getByRole('button', { name: COMPOSER_REPAIR_BUTTON_COPY, exact: true })
+  // #1604: Re-pair is a pill in the conversation's Top overlay, pinned over the message area, and the
+  // status row's slot falls through to the existing connection chip.
+  const repair = page.locator('.conversation__top-overlay')
+    .getByRole('button', { name: COMPOSER_REPAIR_BUTTON_COPY, exact: true })
   await expect(repair).toBeVisible()
-  await expect(page.locator('.composer-status__error')).toHaveCount(0)
+  await expect(page.locator('.composer-status').getByRole('button', { name: COMPOSER_REPAIR_BUTTON_COPY }))
+    .toHaveCount(0)
+  await expect(page.locator('.composer-status__error')).toHaveCount(1)
 
-  // AC3 — the row grew to fit the button and nothing else moved with it. The button is 32 (16px line plus
-  // 8px twice) and the row declares only a min-height, so the button's own box IS the row's height; the
-  // group stays flush with the bottom edge, so the mark — and with it the label that shares its 24px
-  // group — sits exactly where it did at 24.
-  const withButton = await readStatusRowGeometry(page)
-  expect(withButton.rowHeight).toBe(32)
-  expect(withButton.groupFromBottom).toBe(0)
-  expect(withButton.iconFromBottom).toBe(atRest.iconFromBottom)
+  // The row keeps its 24px at-rest geometry: the chip wears the row's own box, so moving Re-pair out of it
+  // is what retires #963's 32px growth on this transition.
+  const withChip = await readStatusRowGeometry(page)
+  expect(withChip).toEqual(atRest)
 
-  // NO ASSERTION ON THE MESSAGE BOX'S POSITION, and the reason is worth recording rather than leaving as
-  // an absence. The ticket accepts "the message box moves 8px on this transition" as a terminal-state
-  // cost, and the box does move by more than the row's own 8px: the same status change also mounts
-  // #279's connection banner above the thread, so two things resize at once and the box's absolute
-  // position isolates neither. (A 20px upward movement was measured here before #968 retired the
-  // composer's own caption, which used to be a third mover; that figure is stale and is deliberately not
-  // re-measured, because no assertion depends on it.)
-  // What the row's growth alone does is settled by the column: `.conversation` is a fixed-height
-  // flex column whose thread region is `flex: 1 1 auto; min-height: 0`, so a `flex: 0 0 auto` sibling
-  // growing is absorbed by the thread. An assertion here would pin the banner's geometry under a name
-  // that claims to be about this row.
-  //
-  // AC3's focus ring. The design draws Default and Hover and no focus state, so the treatment is the UA's
-  // and the requirement is that nothing suppresses it — `.button-small` declines `outline: none` on
-  // purpose. A keypress first, because Chromium only paints the ring for keyboard-driven focus: after any
+  // The pill sits at the message area's top edge and inside its right edge.
+  const [areaBox, pillBox] = await Promise.all([
+    page.locator('.conversation__message-area').boundingBox(),
+    repair.boundingBox()
+  ])
+  expect(areaBox).not.toBeNull()
+  expect(pillBox).not.toBeNull()
+  if (areaBox !== null && pillBox !== null) {
+    expect(Math.round(pillBox.y)).toBe(Math.round(areaBox.y))
+    expect(Math.round(pillBox.x + pillBox.width)).toBe(Math.round(areaBox.x + areaBox.width))
+  }
+
+  // AC3's focus ring. The design draws no focus state, so the treatment is the UA's and the requirement
+  // is that nothing suppresses it — `.top-overlay-pill` declines `outline: none` on purpose. A keypress
+  // first, because Chromium only paints the ring for keyboard-driven focus: after any
   // key the subsequent programmatic focus counts as keyboard intent.
   await page.keyboard.press('Tab')
   await repair.focus()

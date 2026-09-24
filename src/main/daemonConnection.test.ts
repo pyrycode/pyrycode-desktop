@@ -373,6 +373,11 @@ function resettingPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'resetting', ts: FIXED_TS, payload })
 }
 
+/** An `attachment_offered` plaintext, wrapping an arbitrary payload (#1620). */
+function attachmentOfferedPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'attachment_offered', ts: FIXED_TS, payload })
+}
+
 /** A `context_usage` plaintext, wrapping an arbitrary payload (#1419). */
 function contextUsagePlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'context_usage', ts: FIXED_TS, payload })
@@ -2650,6 +2655,91 @@ describe('createDaemonConnection — resetting stream (#1515)', () => {
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — attachment_offered stream (#1620)', () => {
+  /** A well-formed offer; the filename is distinctive so a leak into a log or an event is findable. */
+  const OFFER = {
+    conversation_id: 'conv-offer-1',
+    attachment_id: '3f2a1c40-9b7e-4d21-a5c3-0e8f6b2d9a17',
+    filename: 'quarterly-secret-report.pdf'
+  }
+
+  /** The event OFFER must produce, verbatim. */
+  const CARRIED = {
+    type: 'attachmentOffered',
+    conversationId: 'conv-offer-1',
+    attachmentId: '3f2a1c40-9b7e-4d21-a5c3-0e8f6b2d9a17',
+    filename: 'quarterly-secret-report.pdf'
+  }
+
+  /** Reach the connected window under a bound host, so the stamped origin is observable. */
+  async function connected(diagnosticLog?: DiagnosticLog): Promise<ReturnType<typeof build>> {
+    const ctx = build({ diagnosticLog, serverId: 'paired-host' })
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('carries a well-formed offer as exactly one event, stamped with the host serverId', async () => {
+    const { sink, drivers } = await connected()
+    const before = stampedEvents(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: attachmentOfferedPlaintext(OFFER) })
+
+    // The stamped form: the three decoded fields, the tag and the bound host, and nothing else.
+    expect(stampedEvents(sink).slice(before)).toEqual([{ ...CARRIED, serverId: 'paired-host' }])
+  })
+
+  it('emits exactly the four modeled properties — no snake key, no extra key, no daemonTs', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: attachmentOfferedPlaintext({ ...OFFER, smuggled: 'must-not-cross' })
+    })
+
+    const events = emitted(sink).slice(before)
+    // Key set, not toEqual: toEqual ignores an undefined-valued property, so only this catches a
+    // stray `daemonTs: undefined` or a spread of the decoded payload.
+    expect(Object.keys(events[0]).sort()).toEqual([
+      'attachmentId',
+      'conversationId',
+      'filename',
+      'type'
+    ])
+    expect(JSON.stringify(events)).not.toContain('conversation_id')
+    expect(JSON.stringify(events)).not.toContain('must-not-cross')
+  })
+
+  it('emits one event per frame — a repeated offer is not deduped', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: attachmentOfferedPlaintext(OFFER) })
+    drivers[0].emit({ type: 'message', plaintext: attachmentOfferedPlaintext(OFFER) })
+
+    expect(emitted(sink).slice(before)).toEqual([CARRIED, CARRIED])
+  })
+
+  it('logs no decoded field — not the filename, the attachment id or the conversation id', async () => {
+    const cap = captureLog()
+    const { drivers } = await connected(cap.log)
+    cap.records.length = 0
+
+    drivers[0].emit({ type: 'message', plaintext: attachmentOfferedPlaintext(OFFER) })
+
+    const logged = JSON.stringify(cap.records)
+    expect(logged).not.toContain('quarterly-secret-report')
+    expect(logged).not.toContain(OFFER.attachment_id)
+    expect(logged).not.toContain('conv-offer-1')
+    // Not vacuous: the frame WAS decoded and recorded, under a client-owned code literal.
+    expect(
+      cap.records.some((r) => r.event === 'inbound-decoded' && r.code === 'attachment_offered')
+    ).toBe(true)
   })
 })
 

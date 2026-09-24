@@ -192,6 +192,7 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
     case 'rateLimited':
     case 'contextUsage':
     case 'resetting':
+    case 'attachmentOffered':
       // No question event. The session store, timeline store, conversation-list store, queue store,
       // relay-link store, background-task store, announced-model store and the modal store consume
       // these — not the question store. `conversationCreateRejected` (#1307) is the newest member and
@@ -253,6 +254,10 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
       // choose. The frame is a REPORT, never a control input, and nothing may branch on either of its
       // tokens. Its consumers are the #1516 channel-list dot and the #1517 composer status row, so
       // the no-op is PERMANENT.
+      //
+      // `attachmentOffered` (#1620) is unsolicited and offers no answer to give. Its consumer is the
+      // #1621 thread row, so the no-op is PERMANENT. The case keeps the claude-authored filename out of
+      // assertNever's Error message.
       return null
     case 'systemPromptWriteConfirmed':
     case 'systemPromptWriteRejected':

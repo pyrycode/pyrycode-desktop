@@ -650,6 +650,14 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
       // #1517 TOOK the reset report out of this table. It shipped DORMANT rather than permanently
       // no-op (#1515), the disposition `compacting` held here until #496 took it, and the composer
       // status row is the consumer that reversed it — see the owned-arm describe below.
+      // an offered file ships DORMANT (#1620): #1621 is expected to take it out of this table when the
+      // thread's file row lands.
+      {
+        type: 'attachmentOffered',
+        conversationId: 'conv-1',
+        attachmentId: '3f2a1c40-9b7e-4d21-a5c3-0e8f6b2d9a17',
+        filename: 'quarterly-secret-report.pdf'
+      }
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
   })
@@ -1362,6 +1370,25 @@ describe('subscribeTimeline', () => {
     // written differently than before this slice" an assertion rather than a claim. The adversarial
     // row values are carried here deliberately — this is the assertion that nothing on the dormant
     // path reaches a render sink with them.
+    expect(store.getState()).toBe(before)
+    expect(selectItems(store.getState())).toHaveLength(0)
+  })
+
+  it('#1620: an attachmentOffered daemon event creates NO timeline item and writes NO store (dormant)', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    const before = store.getState()
+    bridge.emit({
+      type: 'attachmentOffered',
+      conversationId: 'conv-1',
+      attachmentId: '3f2a1c40-9b7e-4d21-a5c3-0e8f6b2d9a17',
+      filename: 'quarterly-secret-report.pdf'
+    })
+
+    // Same state ref (no dispatch reached the reducer) and no chat row: the dormant disposition as an
+    // assertion. #1621 flips both halves.
     expect(store.getState()).toBe(before)
     expect(selectItems(store.getState())).toHaveLength(0)
   })

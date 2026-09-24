@@ -127,6 +127,13 @@ const SERVER_KEY_LENGTH = 32
 const RELAY_NO_DAEMON_CLOSE_CODE = 4404
 
 /**
+ * The app-too-old close (#1613): a host whose minimum app version this build is below. Fatal in
+ * relaySupervisor's DEFAULT_FATAL_CLOSE_CODES, and reported as `update-required` rather than
+ * `connection-closed` when it arrives without the sealed `client.update_required` error.
+ */
+const CLIENT_UPDATE_REQUIRED_CLOSE_CODE = 4412
+
+/**
  * How long one retrieval may go SILENT before this client gives up on it (#996). An IDLE deadline,
  * not a total-duration one: it is armed when the `request_attachment` goes out and re-armed on every
  * accepted chunk, so a large legitimate transfer is never killed for taking long — only for stopping.
@@ -686,6 +693,8 @@ function messageFor(code: string): string {
   switch (code) {
     case 'pairing-rejected':
       return 'Your pairing has expired or is no longer valid. Enter a new pairing code to reconnect.'
+    case 'update-required':
+      return 'This app is too old for this host. Update Pyrycode to reconnect.'
     case 'not-paired':
       return 'No paired pyrybox — pair a device to connect.'
     case 'malformed-hello-ack':
@@ -965,13 +974,17 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // A later send/close failure must not erase this connection's authentication rejection.
   let pairingRejected = false
 
-  function emitFailed(code: string, message = messageFor(code)): void {
+  // `minClientVersion` is the classifier's already-validated MAJOR.MINOR.PATCH (#1613), placed on the
+  // event only for `update-required`, and never logged.
+  function emitFailed(code: string, message = messageFor(code), minClientVersion?: string): void {
     authenticated = false
     if (pairingRejected) {
       code = 'pairing-rejected'
       message = messageFor(code)
     }
-    emitDaemonEvent(sink, { type: 'failed', error: { code, message, retryable: false } })
+    const version = code === 'update-required' && minClientVersion !== undefined
+      ? { min_client_version: minClientVersion } : {}
+    emitDaemonEvent(sink, { type: 'failed', error: { code, message, retryable: false, ...version } })
     // The single failure choke point (all five classifications) shadows onto the log — the static
     // `code` only, never the `message` param (which interpolates the numeric close code, #127's leg).
     deps.diagnosticLog?.event({ event: 'daemon-failed', code })
@@ -1147,6 +1160,24 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               failAttachmentRetrievals()
               abandonHistoryRequests()
               emitFailed('pairing-rejected')
+              return
+            }
+            // The app-too-old rejection (#1613), terminal for THIS host only. Supervision is halted
+            // on the sealed error itself, not left to the 4412 close that follows it, so no backoff
+            // re-dial can start whatever close the socket ends with. Bumping `generation` is dial()'s
+            // own fence: the stopped driver's terminal and the relay's close both carry the old
+            // generation and are dropped before onDriverEvent, so neither can overwrite the reason
+            // with `connection-closed`. Nothing is persisted; a manual reconnect() dials afresh.
+            if (inbound.updateRequired !== undefined) {
+              failBundleStream()
+              failAttachmentTransfers()
+              failAttachmentRetrievals()
+              abandonHistoryRequests()
+              generation++
+              const halted = driver
+              driver = null
+              halted?.stop()
+              emitFailed('update-required', undefined, inbound.updateRequired.minClientVersion)
               return
             }
             // Settings-rejection correlation takes PRECEDENCE over both co-consumers (#269). Correlate
@@ -2670,6 +2701,12 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         // tearing down on quit). Every other fatal close is an authoritative drop the user sees.
         // The supervisor's `reason` string is deliberately NOT forwarded (conservative).
         if (stopped) return
+        // A 4412 with no sealed error before it (the daemon's close-only path when sealing fails)
+        // still names the app-too-old reason, with no version to carry (#1613).
+        if (event.code === CLIENT_UPDATE_REQUIRED_CLOSE_CODE) {
+          emitFailed('update-required')
+          return
+        }
         emitFailed('connection-closed', `The connection to pyrybox was closed (code ${event.code}).`)
         return
       case 'error':

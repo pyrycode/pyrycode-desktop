@@ -3791,6 +3791,11 @@ export interface ErrorPayload {
   // Advisory retry delay in seconds. Meaningful only when `retryable` is true; omitted
   // otherwise (daemon ErrorPayload.RetryAfterS, *int,omitempty).
   retry_after_s?: number
+  // The host's minimum app version, carried by `client.update_required` alone (daemon
+  // ErrorPayload.MinClientVersion, string,omitempty; pyrycode#2576). Daemon-authored and untrusted:
+  // read only by the update-required narrowing in parseInboundMessage, which keeps it solely when it
+  // is a digits-only MAJOR.MINOR.PATCH. On the window's `failed` event it is that validated value.
+  min_client_version?: string
 }
 
 /** QR pairing payload: relay address, server id, pairing token, server static key. */

@@ -45,6 +45,43 @@ failure, an independent healthy connection, and a successful reconnect followed 
 See [Session store](session-store.md#one-slot-per-server-since-1133) for the notice and per-host readers,
 and [shell recovery](paired-shell-routing.md#host-recovery-and-navigation-lifetime) for navigation.
 
+### App-too-old rejection (`update-required`, #1613)
+
+A daemon whose release sets a desktop minimum answers an older build's `hello` with a sealed
+`client.update_required` error, then closes with `4412` — the same order as `auth.invalid_token`/`4401`.
+The spec makes this terminal for that host only, with a manual `reconnect()` allowed. `4412` also joined
+`DEFAULT_FATAL_CLOSE_CODES` in [relaySupervisor](relay-supervisor.md), but the connection does not lean on
+that: the halt happens on the sealed error itself, inside the `daemon-error` arm of `onDriverEvent`,
+**before** the close arrives. It runs the four teardown nets (`failBundleStream`,
+`failAttachmentTransfers`, `failAttachmentRetrievals`, `abandonHistoryRequests`), bumps `generation`, nulls
+and stops the driver, then `emitFailed('update-required', …)`. The bumped generation is [`dial()`'s own
+fence](daemon-connection-lifecycle.md#the-generation-fence): the stopped driver's `terminal` and the
+relay's following `4412` both carry the superseded generation and are dropped before `onDriverEvent`, so
+neither can overwrite `update-required` with `connection-closed`. A `4412` that arrives **without** a
+preceding sealed error (the daemon's close-only path when sealing itself fails) is handled separately in
+the `terminal` arm and reports the same `update-required` code, with no version.
+
+**This does not reuse the `pairingRejected` sticky-flag pattern above, and that is deliberate, not an
+inconsistency to reconcile.** The sticky flag exists because `auth.invalid_token` is recognised but the
+connection is left running until whatever close follows; the flag is what stops that close from relabelling
+the reason. Halting the driver immediately removes the need for a flag: once `generation` is bumped and the
+driver is stopped, nothing downstream of the sealed error can reach `onDriverEvent` at all. A build that
+tried the sticky-flag shape here first found it insufficient — a sticky flag only stops re-dialling if the
+fatal close actually arrives, and the halt-on-error design makes the sealed error alone sufficient, per
+AC1. Also unlike the pairing rejection, the daemon sends this rejection **after** a successful Noise
+response — `handshake-complete` fires, so the client's own `connected` event is followed by `failed`. A
+classifier hooked into `parseHelloAck` or the handshake path would never see it; the recognition has to live
+in the `daemon-error` arm alongside `pairingReject`, keyed off `inbound.updateRequired` — narrowed in
+[inbound message decode](inbound-message-decode.md) by `narrowUpdateRequired`, a total, never-throwing
+comparison against the client-owned `client.update_required` literal, same idiom as `pairingReject`.
+
+`min_client_version` rides on the `failed` event's `error` only when the classifier accepted it as a
+digits-only `MAJOR.MINOR.PATCH` (`MIN_CLIENT_VERSION_PATTERN`); a malformed or absent value degrades to a
+rejection with no version, never a dropped rejection, and `messageFor('update-required')` is a static line
+that names no version regardless. Nothing about the rejection is persisted — it lives only in the halted
+driver inside this connection's closure — so a relaunch dials the host normally, and the generation fence
+that isolates a reconnect from a superseded dial is per-connection, so another paired host is unaffected.
+
 ### Tool-denial delivery
 
 `tool_denied` uses one payload parser for live frames and stored history. All seven

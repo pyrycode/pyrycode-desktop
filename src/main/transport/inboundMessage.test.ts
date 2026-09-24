@@ -5,7 +5,7 @@ import {
   type DecodedHistoryPage
 } from './inboundMessage'
 import { encodeEnvelope, base64StdEncode, WireDecodeError } from './codec'
-import { createDiagnosticLog, type DiagnosticLog } from '../diagnosticLog'
+import { createDiagnosticLog, type DiagnosticLog, type DiagnosticEvent } from '../diagnosticLog'
 import {
   MAX_PLAINTEXT_BYTES,
   type HistoryEntry,
@@ -11385,4 +11385,46 @@ describe('pairing rejection classification', () => {
     expect(result).toEqual({ kind: 'daemon-error', outcome: 'unclassified', pairingReject })
     expect(JSON.stringify(result)).not.toContain('private-daemon-detail')
   })
+})
+
+describe('update-required rejection classification', () => {
+  function decodeRejection(payload: unknown, records?: DiagnosticEvent[]): ReturnType<typeof parseInboundMessage> {
+    const log = records === undefined ? undefined : { event: (fields: DiagnosticEvent) => { records.push(fields) } }
+    return parseInboundMessage(encodeEnvelope({ id: 1, type: 'error', ts: '2026-09-24T00:00:00Z', payload }), log)
+  }
+
+  it('carries a well-formed MAJOR.MINOR.PATCH minimum and never logs it', () => {
+    const records: DiagnosticEvent[] = []
+    const result = decodeRejection({ code: 'client.update_required', message: 'private-daemon-detail',
+      retryable: false, min_client_version: '12.0.34567' }, records)
+    expect(result).toMatchObject({ kind: 'daemon-error', updateRequired: { minClientVersion: '12.0.34567' } })
+    expect(JSON.stringify(result)).not.toContain('private-daemon-detail')
+    expect(records.length).toBeGreaterThan(0)
+    expect(JSON.stringify(records)).not.toContain('12.0.34567')
+  })
+
+  it.each([
+    ['absent', undefined],
+    ['a number', 123],
+    ['two parts', '1.2'],
+    ['four parts', '1.2.3.4'],
+    ['a pre-release suffix', '1.2.3-beta'],
+    ['surrounding whitespace', ' 1.2.3'],
+    ['a trailing newline', '1.2.3\n'],
+    ['full-width digits', '１.2.3'],
+    ['an over-long part', '123456.0.0'],
+    ['markup', '<b>1</b>.2.3']
+  ])('drops a minimum that is %s but still classifies the rejection', (_label, minClientVersion) => {
+    const result = decodeRejection({ code: 'client.update_required', message: 'm', retryable: false,
+      ...(minClientVersion === undefined ? {} : { min_client_version: minClientVersion }) })
+    expect(result).toMatchObject({ kind: 'daemon-error', updateRequired: {} })
+    expect(result?.kind === 'daemon-error' && result.updateRequired?.minClientVersion).toBeUndefined()
+  })
+
+  it.each(['client.update_required extra', 'auth.invalid_token', 'other'])(
+    'does not classify %s as update-required, even with a version', (code) => {
+      const result = decodeRejection({ code, message: 'm', retryable: false, min_client_version: '1.2.3' })
+      expect(result).toMatchObject({ kind: 'daemon-error' })
+      expect(result?.kind === 'daemon-error' && result.updateRequired).toBeUndefined()
+    })
 })

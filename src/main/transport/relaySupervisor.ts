@@ -33,11 +33,12 @@ const WIRE_JITTER_RATIO = 0.2
 
 /**
  * Wire-spec default fatal close codes for the /v2/client leg (protocol-mobile.md § Error codes):
- * 4401 unauthorized (bad device token), 4421 protocol mismatch, 4426 Noise handshake failure —
- * each fails identically on retry, so reconnecting is a permanent-reject storm. Excludes 4409
- * (a binary-leg code the client never receives) and 4404 (transient binary-offline, retryable).
+ * 4401 unauthorized (bad device token), 4412 app build older than the host's minimum (#1613),
+ * 4421 protocol mismatch, 4426 Noise handshake failure — each fails identically on retry, so
+ * reconnecting is a permanent-reject storm. Excludes 4409 (a binary-leg code the client never
+ * receives) and 4404 (transient binary-offline, retryable).
  */
-export const DEFAULT_FATAL_CLOSE_CODES: ReadonlySet<number> = new Set([4401, 4421, 4426])
+export const DEFAULT_FATAL_CLOSE_CODES: ReadonlySet<number> = new Set([4401, 4412, 4421, 4426])
 
 /**
  * Synthetic terminal close code for the fail-closed reload path (#83): an automatic re-dial whose

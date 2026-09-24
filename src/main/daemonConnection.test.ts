@@ -199,12 +199,13 @@ function captureLog(): { log: DiagnosticLog; records: DiagnosticEvent[] } {
 function makeStores(overrides: {
   load?: () => Promise<PairedServerRecord | null>
   ensure?: () => Promise<DeviceKeyPair>
+  save?: () => Promise<void>
 } = {}): { deviceKeypair: DeviceKeypairStore; pairedServer: PairedServerStore } {
   const load = overrides.load ?? (() => Promise.resolve(RECORD))
   const ensure = overrides.ensure ?? (() => Promise.resolve(PAIR))
   return {
     deviceKeypair: { ensure },
-    pairedServer: { load, save: () => Promise.resolve() }
+    pairedServer: { load, save: overrides.save ?? (() => Promise.resolve()) }
   }
 }
 
@@ -212,6 +213,7 @@ function build(
   overrides: {
     load?: () => Promise<PairedServerRecord | null>
     ensure?: () => Promise<DeviceKeyPair>
+    save?: () => Promise<void>
     throwOnSend?: boolean
     diagnosticLog?: DiagnosticLog
     mintToken?: () => string
@@ -11600,6 +11602,105 @@ describe('pairing rejection lifetime', () => {
     a.connection.stop()
     b.connection.stop()
   })
+})
+
+describe('update-required rejection (#1613)', () => {
+  const UPDATE_MESSAGE = 'This app is too old for this host. Update Pyrycode to reconnect.'
+  function updateRequiredPlaintext(minClientVersion?: unknown): Uint8Array {
+    return encodeEnvelope({ id: 3, type: 'error', ts: FIXED_TS, payload: {
+      code: 'client.update_required', message: 'private daemon detail', retryable: false,
+      ...(minClientVersion === undefined ? {} : { min_client_version: minClientVersion })
+    } })
+  }
+  const failures = (sink: ReturnType<typeof fakeSink>): DaemonEvent[] =>
+    emitted(sink).filter(event => event.type === 'failed')
+
+  it('halts supervision on the sealed error and keeps the reason through the following 4412 close', async () => {
+    const { log, records } = captureLog()
+    const save = vi.fn(() => Promise.resolve())
+    const { connection, sink, drivers } = build({ diagnosticLog: log, save })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    drivers[0].emit({ type: 'message', plaintext: updateRequiredPlaintext('1.4.0') })
+    // The driver is stopped by the error itself, so no backoff re-dial can follow any close.
+    expect(drivers[0].stopped).toBe(true)
+    drivers[0].emit({ type: 'terminal', code: 4412, reason: 'private reason' })
+    drivers[0].emit({ type: 'terminal', code: 1000, reason: 'stopped' })
+    expect(failures(sink)).toEqual([{ type: 'failed', error: {
+      code: 'update-required', message: UPDATE_MESSAGE, retryable: false, min_client_version: '1.4.0'
+    } }])
+    expect(emitted(sink).at(-1)?.type).toBe('failed')
+    expect(drivers).toHaveLength(1)
+    expect(JSON.stringify(emitted(sink))).not.toContain('private')
+    expect(records).toContainEqual({ event: 'daemon-failed', code: 'update-required' })
+    expect(JSON.stringify(records)).not.toContain('1.4.0')
+    // Nothing about the rejection is persisted, so a relaunch dials normally.
+    expect(save).not.toHaveBeenCalled()
+    connection.stop()
+  })
+
+  it.each([undefined, '1.4', '1.4.0-beta', 140])('carries no version when the minimum is %s', async (min) => {
+    const { connection, sink, drivers } = await reachConnectedWith()
+    drivers[0].emit({ type: 'message', plaintext: updateRequiredPlaintext(min) })
+    const [failure] = failures(sink)
+    expect(failure).toEqual({ type: 'failed', error: {
+      code: 'update-required', message: UPDATE_MESSAGE, retryable: false
+    } })
+    expect(drivers[0].stopped).toBe(true)
+    connection.stop()
+  })
+
+  it('reports a 4412 close without the sealed error as update-required, with no version', async () => {
+    const { connection, sink, drivers } = await reachConnectedWith()
+    drivers[0].emit({ type: 'terminal', code: 4412, reason: 'private reason' })
+    expect(failures(sink)).toEqual([{ type: 'failed', error: {
+      code: 'update-required', message: UPDATE_MESSAGE, retryable: false
+    } }])
+    // Any other fatal close keeps its generic reason.
+    const other = await reachConnectedWith()
+    other.drivers[0].emit({ type: 'terminal', code: 4421, reason: 'x' })
+    expect(failures(other.sink)[0]).toMatchObject({ error: { code: 'connection-closed' } })
+    connection.stop()
+    other.connection.stop()
+  })
+
+  it('isolates the rejected host, and a manual retry fails once without looping or connects', async () => {
+    const a = build({ serverId: 'host-a' })
+    const b = build({ serverId: 'host-b' })
+    a.connection.start()
+    b.connection.start()
+    await tick()
+    for (const ctx of [a, b]) ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    a.drivers[0].emit({ type: 'message', plaintext: updateRequiredPlaintext('2.0.0') })
+    expect(emitted(b.sink).at(-1)?.type).toBe('connected')
+    expect(b.drivers[0].stopped).toBe(false)
+    // Manual retry against a daemon that still rejects this build: one more failure, halted again.
+    a.connection.reconnect()
+    await tick()
+    expect(a.drivers).toHaveLength(2)
+    a.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    a.drivers[1].emit({ type: 'message', plaintext: updateRequiredPlaintext('2.0.0') })
+    a.drivers[1].emit({ type: 'terminal', code: 4412, reason: 'x' })
+    expect(failures(a.sink)).toHaveLength(2)
+    expect(a.drivers[1].stopped).toBe(true)
+    // Manual retry after the app is updated: the host connects normally.
+    a.connection.reconnect()
+    await tick()
+    a.drivers[2].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    expect(emitted(a.sink).at(-1)?.type).toBe('connected')
+    expect(a.drivers).toHaveLength(3)
+    a.connection.stop()
+    b.connection.stop()
+  })
+
+  async function reachConnectedWith(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
 })
 
 describe('workspace rename attempt results', () => {

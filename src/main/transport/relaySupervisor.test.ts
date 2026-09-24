@@ -263,7 +263,7 @@ describe('createRelaySupervisor', () => {
   })
 
   it('treats a fatal close code as terminal — no reconnect (AC3)', () => {
-    for (const code of [4401, 4421, 4426]) {
+    for (const code of [4401, 4412, 4421, 4426]) {
       const { factory, scheduler, sink } = setup()
       const conn = factory.connections[0]
       conn.emit({ type: 'closed', code, reason: 'rejected' })
@@ -325,9 +325,10 @@ describe('createRelaySupervisor', () => {
       expect(scheduler.pending()).toHaveLength(1)
       expect(terminals(sink.events)).toHaveLength(0)
     }
-    // the wire-spec default is exactly {4401, 4421, 4426} — excludes 4409 (binary leg) and 4404
-    expect(DEFAULT_FATAL_CLOSE_CODES.size).toBe(3)
-    for (const code of [4401, 4421, 4426]) expect(DEFAULT_FATAL_CLOSE_CODES.has(code)).toBe(true)
+    // the wire-spec default is exactly {4401, 4412, 4421, 4426} — excludes 4409 (binary leg) and 4404.
+    // 4412 is the app-too-old rejection (#1613): the same build fails identically on every re-dial.
+    expect(DEFAULT_FATAL_CLOSE_CODES.size).toBe(4)
+    for (const code of [4401, 4412, 4421, 4426]) expect(DEFAULT_FATAL_CLOSE_CODES.has(code)).toBe(true)
     expect(DEFAULT_FATAL_CLOSE_CODES.has(4409)).toBe(false)
     expect(DEFAULT_FATAL_CLOSE_CODES.has(4404)).toBe(false)
   })

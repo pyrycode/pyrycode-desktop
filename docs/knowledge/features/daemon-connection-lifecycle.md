@@ -35,6 +35,8 @@ named-host reconnect can re-dial an unchanged pairing through the separate entry
 
 **`stopped` and `generation` are two orthogonal fences.** `stopped` fences **permanent** teardown (`stop()` on app quit); `generation` fences **reconnect supersession**. `stop()` is unchanged and deliberately does not bump `generation`, so the app-quit terminal is still suppressed by `onDriverEvent`'s `if (stopped) return` (the wrapper passes it through — gen unchanged on stop). One fence resolves all three reconnect races: (1) the old driver's stop-terminal after a reconnect → wrapper drops it (old gen); (2) a reconnect superseding an in-flight `bootstrap` mid-`await` → guards abort the stale bootstrap; (3) rapid double reconnect → each `++generation` supersedes; last dial wins.
 
+**`generation` also gets bumped from outside `dial()` (#1613).** The app-too-old halt in `onDriverEvent`'s sealed-`client.update_required` arm calls `generation++` directly, with no matching `dial()` call — a fourth use the three races above don't cover: a deliberate, one-shot **stop without a successor**. The stopped driver's own `terminal` and the relay's following `4412` close both carry the now-superseded generation and are dropped by the same `onEvent` wrapper, so the halt reuses the fence purely for its drop-stale-events effect, not for its reconnect-supersession one. See [Daemon connection § App-too-old rejection](daemon-connection.md#app-too-old-rejection-update-required-1613).
+
 ## Data flow (connect-on-pair)
 
 ```

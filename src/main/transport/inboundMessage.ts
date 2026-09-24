@@ -823,6 +823,10 @@ export type InboundDaemonMessage =
       inReplyTo?: number
       outcome: DaemonErrorOutcome
       pairingReject?: 'pairing-rejected'
+      // The app-too-old rejection (#1613): set only for the exact `client.update_required` code. The
+      // minimum rides along only when narrowUpdateRequired accepted it as a digits-only
+      // MAJOR.MINOR.PATCH; any other value is dropped here and never logged.
+      updateRequired?: { minClientVersion?: string }
       // The history verb's refusal (#1222), narrowed off the SAME untrusted `code` string `outcome` is
       // and by the same comparand idiom — see HistoryRejectReason for why it is a second field rather
       // than five members added to that union.
@@ -3844,6 +3848,25 @@ function narrowMCPStatusRejectReason(payload: unknown): MCPStatusRejectReason | 
   return payload.code === 'mcp_status.unavailable' ? 'mcp-status-unavailable' : undefined
 }
 
+/**
+ * The daemon's minimum app version as the window may see it (#1613): ASCII digits only, exactly
+ * three parts, at most five digits each, so at most 17 characters. Anchored, and linear, so a
+ * hostile string costs one pass. Everything else, including a pre-release suffix, is rejected.
+ */
+const MIN_CLIENT_VERSION_PATTERN = /^[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}$/
+
+/**
+ * Recognise the app-too-old rejection (#1613), or `undefined` for any other code. The untrusted
+ * `code` is a comparand against one client-owned literal, like `auth.invalid_token`. The optional
+ * `min_client_version` is kept only when it matches MIN_CLIENT_VERSION_PATTERN; a malformed one
+ * degrades to a rejection with no version, never a dropped rejection. Total, never throws.
+ */
+function narrowUpdateRequired(payload: unknown): { minClientVersion?: string } | undefined {
+  if (!isRecord(payload) || payload.code !== 'client.update_required') return undefined
+  const min = payload.min_client_version
+  return typeof min === 'string' && MIN_CLIENT_VERSION_PATTERN.test(min) ? { minClientVersion: min } : {}
+}
+
 function parseBannerPayload(payload: unknown): BannerPayload {
   if (!isRecord(payload)) throw new WireDecodeError('malformed banner payload')
   return {
@@ -4792,6 +4815,7 @@ export function parseInboundMessage(
         outcome,
         pairingReject: isRecord(envelope.payload) && envelope.payload.code === 'auth.invalid_token'
           ? 'pairing-rejected' : undefined,
+        updateRequired: narrowUpdateRequired(envelope.payload),
         historyReject,
         systemPromptReject,
         mcpStatusReject

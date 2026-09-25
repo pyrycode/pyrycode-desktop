@@ -5347,6 +5347,40 @@ describe('createDaemonConnection — createConversation (create_conversation req
     expect(decodeEnvelope(drivers[0].sent[0]).payload).toEqual(POPULATED)
   })
 
+  it('sends the agent, model and effort when the payload carries them (#1652)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.createConversation({ ...POPULATED, agent: 'codex', model: 'gpt-5', effort: 'low' })
+
+    expect(decodeEnvelope(drivers[0].sent[0]).payload).toEqual({
+      ...POPULATED,
+      agent: 'codex',
+      model: 'gpt-5',
+      effort: 'low'
+    })
+  })
+
+  it('sends none of the agent, model or effort keys without them — the frame is unchanged (#1652)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.createConversation(POPULATED)
+    connection.createConversation({ ...POPULATED, agent: undefined, model: undefined, effort: undefined })
+
+    const expected = '{"is_promoted":true,"name":"design review","cwd":"/home/user/project"}'
+    expect(JSON.stringify(decodeEnvelope(drivers[0].sent[0]).payload)).toBe(expected)
+    expect(JSON.stringify(decodeEnvelope(drivers[0].sent[1]).payload)).toBe(expected)
+  })
+
+  it('sends only the choice keys that are present (#1652)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.createConversation({ ...ALL_NULL, effort: 'high' })
+
+    expect(JSON.stringify(decodeEnvelope(drivers[0].sent[0]).payload)).toBe(
+      '{"is_promoted":null,"name":null,"cwd":null,"effort":"high"}'
+    )
+  })
+
   it('shares the one envelope-id counter with send (no second counter)', async () => {
     const { connection, drivers } = await connected()
 

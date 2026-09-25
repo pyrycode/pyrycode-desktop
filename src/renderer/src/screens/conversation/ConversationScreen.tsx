@@ -21,7 +21,7 @@ import { AssistantMarkdown } from './AssistantMarkdown'
 import { MARKDOWN_OPEN_FAILED_NOTICE, MarkdownReaderView, useMarkdownReader } from './MarkdownReader'
 import { PyryMark } from '../../theme/PyryMark'
 import type { Message } from './messageViewModel'
-import type { QueuedItem, ConversationCreatedPayload, WireResetHandoff } from '@shared/wire/types'
+import type { QueuedItem, ConversationCreatedPayload, WireResetHandoff, WireAgent } from '@shared/wire/types'
 import type { ModelRefusalEvent, RelayLinkStatus } from '@shared/ipc/events'
 import { sessionStore, useSessionStore, initialSessionState, selectStatusFor, type ConnectionStatus } from '../../store/sessionStore'
 import { canRespondToPromptNow, usePromptResponseAvailability } from './promptResponseAvailability'
@@ -114,7 +114,12 @@ import { toolHeadlineRuns } from './toolHeadline'
 import { listedInputFields, shellCommandBlock } from './toolBody'
 import { serverIdForOpenConversation } from './unpairAction'
 import { selectDraft, useComposerDraftStore } from '../../store/composerDraftStore'
-import { conversationListStore, useConversationListStore, selectConversations } from '../../store/conversationListStore'
+import {
+  conversationListStore,
+  useConversationListStore,
+  selectConversations,
+  selectConversationAgentFor
+} from '../../store/conversationListStore'
 import { dropQueuedMessage } from './dropQueuedMessage'
 import { foldQueuedRows, type QueuedRowHandle } from './foldQueuedRows'
 import { groupToolRows } from './groupToolRows'
@@ -321,6 +326,16 @@ export function ConversationScreen({
     { phase, apiRetry, compacting, stalled, resetting },
     localSendPending
   )
+  // #1653: which agent runs the open conversation, so a Codex reset says it is restarting codex. Read
+  // from the CLIENT-HELD host's own rows through #1649's selector, memoised per (host, id) so a fresh
+  // closure per render does not churn the subscription. A primitive, so the read is Object.is-stable.
+  const selectOpenAgent = useMemo(
+    () => (openConversationId === null
+      ? (): WireAgent => 'claude'
+      : selectConversationAgentFor(selectedHost, openConversationId)),
+    [selectedHost, openConversationId]
+  )
+  const openAgent = useConversationListStore(selectOpenAgent)
   // #1009: the open conversation's queued backlog, read HERE rather than one level down. #1009's own reason
   // was the scroll pin: the backlog was a REGION between the thread and the composer, so its appearance and
   // growth shrank `.conversation__thread`'s viewport, and the pin's re-assert below is a dep-free layout
@@ -614,6 +629,7 @@ export function ConversationScreen({
               retry={apiRetry}
               resetting={resetting}
               thinkingTokens={thinkingTokens}
+              agent={openAgent}
             />
           </ComposerStatusArea>
         )}
@@ -2323,6 +2339,9 @@ export const COMPACTING_COPY = 'Compacting the conversation…'
 export const RESETTING_COPY = 'Resetting…'
 export const RESETTING_WRAPPING_UP_COPY = 'Resetting: writing the handoff note…'
 export const RESETTING_RESTARTING_COPY = 'Resetting: restarting claude…'
+// #1653: a Codex conversation resets through the same path, so its restarting phase names Codex. The
+// conversation's agent SELECTS between the two, exactly as the wire tokens do; it is never interpolated.
+export const RESETTING_RESTARTING_CODEX_COPY = 'Resetting: restarting codex…'
 
 // The outcome of the note, appended to the restarting copy as ONE TEXT RUN (see `resettingLabel`). Not
 // sentences of their own: the row holds one line, and the phase is the subject both of these modify.
@@ -2378,11 +2397,12 @@ function statusRowCopy(
   state: WorkingIndicatorState,
   retry: ApiRetryStatus | null,
   thinkingTokens: number | null,
-  resetting: ResettingStatus | null
+  resetting: ResettingStatus | null,
+  agent: WireAgent
 ): string {
   switch (state) {
     case 'resetting':
-      return resettingLabel(resetting)
+      return resettingLabel(resetting, agent)
     case 'retrying':
       return apiRetryLabel(retry)
     case 'compacting':
@@ -2472,7 +2492,7 @@ function thinkingLabel(thinkingTokens: number | null): string {
 // ONE TEXT RUN, not constant-plus-span, for the reason stated on `ThinkingIndicator`: the row's label
 // ellipsizes as a unit and two runs draw two ellipses. The handoff outcome is therefore appended into
 // the string, exactly as the retry counter is one function down.
-function resettingLabel(resetting: ResettingStatus | null): string {
+function resettingLabel(resetting: ResettingStatus | null, agent: WireAgent): string {
   if (resetting === null) return RESETTING_COPY
   switch (resetting.phase) {
     case 'wrapping_up':
@@ -2480,12 +2500,23 @@ function resettingLabel(resetting: ResettingStatus | null): string {
       // and the copy deliberately reports no outcome.
       return RESETTING_WRAPPING_UP_COPY
     case 'restarting':
-      return `${RESETTING_RESTARTING_COPY}${handoffSuffix(resetting.handoff)}`
+      return `${restartingCopy(agent)}${handoffSuffix(resetting.handoff)}`
     case '':
       // Go's zero value. On the falling edge it never reaches here (the reducer stores `null`); paired
       // with `active: true` it is traffic the daemon does not emit, and the bare copy is what stays
       // true of it — the phase is unnamed, the reset is not.
       return RESETTING_COPY
+  }
+}
+
+/** #1653: which agent the restarting phase names. Total over `WireAgent`, so a third agent is a `tsc`
+ *  error here rather than a reset that silently claims to restart claude. */
+function restartingCopy(agent: WireAgent): string {
+  switch (agent) {
+    case 'claude':
+      return RESETTING_RESTARTING_COPY
+    case 'codex':
+      return RESETTING_RESTARTING_CODEX_COPY
   }
 }
 
@@ -2600,11 +2631,16 @@ export function ThinkingIndicator({
   retry,
   resetting,
   thinkingTokens,
-  toolElapsedSeconds
+  toolElapsedSeconds,
+  agent = 'claude'
 }: {
   state: WorkingIndicatorState | null
   toolName: string | null
   retry: ApiRetryStatus | null
+  // #1653: which agent runs the open conversation; it only chooses which name the reset's restarting
+  // phase says. Optional where `resetting` is required, because absent MEANS Claude on the wire and in
+  // `selectConversationAgentFor` alike, so the default is that contract rather than a guess.
+  agent?: WireAgent
   // #1517: REQUIRED, on `toolName`'s and `retry`'s stated reasoning — an optional prop would let the
   // container silently omit it and nothing in this repo could catch that, since every container test
   // renders the idle store. Two closed-set tokens and no free string, so the type-level "this prop
@@ -2631,7 +2667,7 @@ export function ThinkingIndicator({
   }`
   const label = toolLabel !== null
     ? `${toolLabel}${toolElapsedSeconds === undefined ? '' : ` ${formatToolElapsed(toolElapsedSeconds)}`}`
-    : statusRowCopy(state, retry, thinkingTokens, resetting)
+    : statusRowCopy(state, retry, thinkingTokens, resetting, agent)
   return <span className={labelClass}>{label}</span>
 }
 

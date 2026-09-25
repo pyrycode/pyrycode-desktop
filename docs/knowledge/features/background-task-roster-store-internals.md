@@ -65,6 +65,7 @@ backgroundTaskRosterStore                  // app-wide singleton
 useBackgroundTaskRosterStore(selector)     // narrow-slice React binding: useStore(store, selector)
 selectRosterFor(conversationId)(state)          // selector FACTORY — the panel's read surface (#568), returns `?? null`
 selectLiveTaskCountFor(conversationId)(state)   // selector FACTORY — the pill's read surface (#1561), returns a primitive count
+selectFinishedTasksFor(conversationId)(state)   // selector FACTORY — the panel's grouping read (#1635), returns `?? null`
 ```
 
 Keyed by `conversationId`, not a flat slot, for the same reason [`queueStore`](queue-store.md) is: the
@@ -222,6 +223,30 @@ inline `roster.tasks.size + roster.droppedTasks` arithmetic (see [Conversation s
 § Background-task count pill](conversation-shell-composer-status.md#background-task-count-pill-the-slots-last-occupant-1435)) — so a later surface counting the same thing cannot silently disagree with the pill about
 what counts as finished. The panel itself is unchanged: it still reads `selectRosterFor` and still lists a
 finished task until a roster omits it, `finishedTasks` is invisible to it.
+
+### The panel's grouping read, `selectFinishedTasksFor` (#1635)
+
+The panel's Running/Finished split ([Conversation shell — background tasks § List
+redraw](conversation-shell-background-tasks.md#list-redraw-1635)) needed a third selector, not a second
+call to `selectLiveTaskCountFor`'s logic: the count selector already folds `finishedTasks` into a number,
+but the panel needs the **set itself**, one conversation at a time, to test membership per row:
+
+```ts
+export const selectFinishedTasksFor =
+  (conversationId: string) =>
+  (s: BackgroundTaskRosterState): ReadonlySet<string> | null =>
+    s.finishedTasks.get(conversationId) ?? null
+```
+
+Same selector-factory shape as `selectRosterFor` and the same held-reference discipline the rest of this
+store keeps: `finishedTasks`'s copy-on-write means a write for a *different* conversation never rebuilds
+this conversation's set, so `Object.is` holds and the panel does not re-render on someone else's finish.
+Unlike `selectRosterFor`, the `null` collapse here is **safe** rather than a distinction to preserve: with
+no roster (`selectRosterFor` returning `null`) there is no populated arm to group in the first place, so a
+`finishedTasks` reading of `null` versus "empty set" makes no visible difference to the one caller
+(`BackgroundTaskPanel`, passing the result through as `finishedTaskIds`). `finishedTasks` gained no fourth
+reader from this ticket — `setRoster`'s prune and `setUpdatedTask`'s terminal-status write are unchanged,
+and `resetRostersFor`/`clearAllRosters` drop it exactly as before this selector existed.
 
 `resetRostersFor(conversationIds)` ([#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139),
 the `connected`-edge reset) iterates the **held** map's own keys, not the id set, and deletes the ones

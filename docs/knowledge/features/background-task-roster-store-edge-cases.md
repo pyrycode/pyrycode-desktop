@@ -104,4 +104,8 @@ qualify, and [Related](background-task-roster-store-related.md) for cross-refere
   count](background-task-roster-store-internals.md#the-pills-count-selectlivetaskcountfor-1561)), which
   excludes a task claude has reported terminal — the roster's raw size kept the pill lit for a task that
   had already finished whenever the emptier roster that usually precedes the terminal frame did not land
-  first.
+  first. **`finishedTasks` gained a second reader, the panel, since #1635**: the panel does not read
+  `selectLiveTaskCountFor` (a number cannot say *which* rows to move), so it reads the set directly
+  through [`selectFinishedTasksFor`](background-task-roster-store-internals.md#the-panels-grouping-read-selectfinishedtasksfor-1635)
+  and still lists a finished task, now in its own group, until a roster omits it — the list's removal path
+  named two bullets up is unchanged by having a second reader.

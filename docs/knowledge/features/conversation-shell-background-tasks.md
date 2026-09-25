@@ -15,13 +15,14 @@ duplicated so that only the outermost wrapper was chrome and every row and branc
 `background-task-panel__*` class with no positional CSS.
 
 **[#1634](https://github.com/pyrycode/pyrycode-desktop/issues/1634) swapped that placeholder for #580's
-actual drawing** (Figma node 565:2966): a **non-modal** 360px drawer pinned over the right of the message
+drawer chrome** (Figma node 565:2966): a **non-modal** 360px drawer pinned over the right of the message
 area, with no scrim, so the thread keeps scrolling and the composer keeps taking input while it is open.
 Because only the wrapper was ever chrome, the swap landed without touching a single list row — the list's
-own redraw is still the follow-up ticket. The design's circle-xmark close glyph is drawn as an inline
-`<svg>`, not an `<img>`: three of this panel's escaping tests assert there is no `<img` anywhere in its
-markup, since that absence is how they prove a markup-shaped `description` stayed text, so any future chrome
-icon in this view needs the same inline treatment.
+own redraw was the follow-up ticket, [#1635](#list-redraw-1635). The design's circle-xmark close glyph is
+drawn as an inline `<svg>`, not an `<img>`: three of this panel's escaping tests assert there is no `<img`
+anywhere in its markup, since that absence is how they prove a markup-shaped `description` stayed text, so
+any future chrome icon in this view needs the same inline treatment (the empty readings' rings, added by
+\#1635 below, follow it too).
 
 ```
 .conversation
@@ -34,19 +35,24 @@ icon in this view needs the same inline treatment.
             ├── .background-task-drawer__header   <h2> "Background tasks" + .background-task-drawer__close (inline svg)
             ├── .background-task-drawer__rule
             └── .background-task-drawer__body
-                ├── entry.droppedTasks > 0    → .background-task-panel__partial     "Partial list (N not shown)"
-                │                                 (sibling of the branch below, not nested in any arm — #582)
-                └── entry === null            → .background-task-panel__unobserved  "No background-task report yet"
-                  · entry.tasks.size === 0    → .background-task-panel__empty       "No background tasks"
-                  · otherwise                 → .background-task-panel__list > .background-task-panel__row × N
-                                                  (description + taskType, roster order, each field followed
-                                                  by .background-task-panel__cut-description / -cut-type
-                                                  "Truncated by the daemon" when truncatedFields names it — #582;
-                                                  then task.latestUpdate !== null            → one of:
-                                                    patch === ''  → .background-task-panel__no-change  "No change reported"
-                                                    patch !== ''  → .background-task-panel__patch       <patch text, escaped>
-                                                  followed by .background-task-panel__cut-patch "Truncated by the daemon"
-                                                  when update.truncatedFields (not task.truncatedFields) names "patch" — #583)
+                ├── entry.droppedTasks > 0    → .background-task-panel__partial   filled notice, dot + "Partial list (N not shown)"
+                │                                 (sibling of the branch below, not nested in any arm — #582; dot added #1635)
+                ├── entry === null            → .background-task-panel__reading  ring(dashed) + .__unobserved "No background-task report yet" + .__reading-support
+                ├── entry.tasks.size === 0    → .background-task-panel__reading  ring(solid)  + .__empty       "No background tasks" + .__reading-support
+                └── otherwise                 → .background-task-panel__groups                                (#1635, TaskGroups)
+                                                  ├── running.length > 0  → .background-task-panel__group  <h3> "Running · n" + .__list > .__row × running.length
+                                                  └── finished.length > 0 → .background-task-panel__group  <h3> "Finished · n" + .__list > .__row.__row--finished × finished.length
+                                                       (roster order within each group; a row is finished when finishedTaskIds.has(taskId); an empty
+                                                       group renders nothing, header included; a dropped task has no row and is counted by the
+                                                       partial notice alone)
+
+each .background-task-panel__row (TaskRow, #1635):
+  .__head → .__type <taskType, mono>  +  .__tag (dot + "Running" | dot + "Finished", .__tag--running | .__tag--stopped)
+  .__cut-type "Truncated by the daemon" when task.truncatedFields names task_type — #582
+  .__description <description, mono for local_bash, body text otherwise; muted on a finished row>
+  .__cut-description "Truncated by the daemon" when task.truncatedFields names description — #582
+  task.latestUpdate !== null → .__update ("Latest update" label + .__update-block > .__no-change | .__patch) + .__cut-patch
+                                 when update.truncatedFields (not task.truncatedFields) names "patch" — #583
 ```
 
 **No bridge mount.** Unlike `WorkspacePickerSheet` (which mounts `RecentWorkspacesData` inside itself),
@@ -69,7 +75,11 @@ retired its `QueuedBacklogControl` container): `activeConversation?.id ?? null` 
 `ConversationScreen` mount site (no second subscription), a `useMemo`-stable
 `selectRosterFor(conversationId ?? '')` selector, and
 `useBackgroundTaskRosterStore(selectRoster)`. The `''` sentinel matches no store key, so "no active
-conversation" reads as `null` — the correct "never observed" reading — for free.
+conversation" reads as `null` — the correct "never observed" reading — for free. Since #1635 the container
+takes a second, sibling `useMemo`-stable read the same way —
+[`selectFinishedTasksFor(conversationId ?? '')`](background-task-roster-store-internals.md#the-panels-grouping-read-selectfinishedtasksfor-1635)
+— and passes the result down as `finishedTaskIds`; the view stays a pure function of its props and does not
+read the store itself.
 
 **Open state lifted into `PairedShell` by #1634.** The drawer is non-modal and takes no focus, so it has
 to survive the conversation switch that remounts `ConversationScreen` under `PairedShell`'s `paneKey`. The
@@ -172,6 +182,48 @@ or class in this slice names completion, failure, or success.) No prop, type, st
 change; same `entry` prop #581 shipped. Architect
 self-review PASS (security-sensitive label); code review PASS with two non-blocking SHOULD FIX
 (both test-coverage gaps, not production defects — see [#583 codebase notes](../codebase/583.md)).
+
+**List redraw (#1635).** #580's drawing for the populated arm — cards, a status tag, a latest-update code
+block, the dashed cut chip, the filled partial notice and the two ringed empty readings — landed on top of
+the three-way branch and the field-level rules #581/#582/#583 already established, none of which moved:
+the branch order, the cut-marker pairing, the never-updated/empty-patch/patch distinction and the crossover
+guard between a task's own `truncatedFields` and its update's are all unchanged, only re-styled and
+re-wrapped in new elements. Two things did change:
+
+- **Running vs. Finished is a partition of the same list, drawn once, module-private.** `TaskGroups`
+  filters `[...entry.tasks.values()]` twice — once for `!isFinished`, once for `isFinished` — rather than
+  threading a third state through the existing map, so roster order is preserved inside each partition for
+  free (the held `Map`'s insertion order, unchanged). A row is finished when
+  `finishedTaskIds?.has(task.taskId) === true`, the same `!== true` / `=== true` discipline
+  `selectLiveTaskCountFor` already uses for the same set, for the same reason:
+  `finishedTaskIds?.has(id)` alone is `boolean | undefined`, and an `undefined` reads as falsy either way
+  used bare, but the explicit comparison is what keeps a future find-and-replace from turning `!isFinished`
+  into something that silently inverts on `undefined`. Each count (`` `${label} · ${tasks.length}` ``) is
+  the partition's length, so a dropped task — which has no `HeldBackgroundTask` and therefore no row — is
+  never counted by either header; it is counted by the partial notice alone, the same separation #582 drew
+  between the roster's `droppedTasks` and its `tasks`. An empty partition renders nothing, `TaskGroup`
+  included, so an all-running roster shows no "Finished" text anywhere in the markup — load-bearing for the
+  #583-era AC4 sweep that a running-only render must contain none of
+  `completed|complete|failed|failure|succeeded|success|finished|error`: `finished` now appears only on a
+  finished row's own class, the Finished header, and the Finished tag.
+- **The class-name collision constraint is why the code block is `__update-block`, not `__patch-block`,
+  and why the reading wrapper is `__reading`, not `__empty-state`.** #581–#583's shipped tests assert
+  substrings — `not.toContain('background-task-panel__patch')` on an empty-patch render,
+  `not.toContain('background-task-panel__cut-')` on an uncut render, `not.toContain('background-task-panel__empty')`
+  on the unobserved render — so a redraw that reused those substrings as a *prefix* of a new class would
+  have made an old negative assertion fail on markup the ticket didn't even touch. The container element for
+  a patch/no-change pair is named around the concept (`update`) rather than around either reading inside
+  it, and the two empty readings share one wrapper class (`__reading`) that names neither of the two
+  existing leaf classes (`__unobserved`, `__empty`) it wraps. Any later redraw in this panel inherits the
+  same constraint: check the shipped substring assertions in `BackgroundTaskPanel.test.tsx` before choosing
+  a new class name, not just the classes currently in the markup.
+
+The Finished tag wears the **Stopped** style (`--tag--stopped`, Secondary Container fill) under a neutral
+"Finished" label — not a status word — because the daemon's actual `completed` / `failed` / `stopped`
+distinction is #1639's to map; this ticket only had `finishedTasks` membership (a boolean), never the
+`status` string itself. The per-row progress lines the Populated and Capped Figma frames also show belong
+to #1640, and are not drawn here either. `tokens.css` gained `--color-secondary` (#bac8da, M3 Secondary,
+dark scheme) for the group headers — the palette had no existing token that matched it.
 
 See [#581 codebase notes](../codebase/581.md) for the shell's full design, test posture, and
 code-review record.

@@ -223,15 +223,16 @@ composing rule lands on both bindings at once. It calls the existing `onInterrup
 `sendInterrupt` directly: this view still never touches `window.pyry`, the same "a view that cannot
 answer is a bug" property the click handler above already had.
 
-**No ordering coordination was needed against the screen's seven other Escape claimants** (the channel
-info sheet, the thread overflow menu, the background task panel, the workspace picker, the
-default-workspace sheet, the four footer menus behind `ComposerOptionsMenu`, and the slash type-ahead) —
-**and the reason is not a focus trap, precisely stated.** No surface calls `.focus()` when it opens; what
-actually holds is that the click that opens each one leaves focus on that surface's own trigger
+**No ordering coordination was needed against the screen's seven other Escape claimants as they stood at
+\#1072** (the channel info sheet, the thread overflow menu, the background task panel, the workspace
+picker, the default-workspace sheet, the four footer menus behind `ComposerOptionsMenu`, and the slash
+type-ahead) — **and the reason is not a focus trap, precisely stated.** No surface calls `.focus()` when it
+opens; what actually holds is that the click that opens each one leaves focus on that surface's own trigger
 `<button>`, so while one is open, neither composer binding is on the keydown's path at all. Operationally
 identical to a focus trap for the two states this ticket covers, but worth the distinction: a surface
 opened by some future route other than a click (a keyboard shortcut, say) would not inherit this property
-for free, and would need its own check.
+for free, and would need its own check — which is exactly what happened to the background task panel below,
+once its drawer stopped taking focus at all.
 
 A `document`-level interrupt listener was considered and rejected for a reason worth recording precisely,
 because the ticket's own stated reasoning for rejecting it was subtly wrong: "`document` listeners fire
@@ -242,6 +243,23 @@ way up, never before it. The five `document`-listener dismissals above are mount
 attaches on mount, detaches on cleanup, and mounts only while its surface is open), so this was never
 load-bearing for #1072 — but it matters for a future change widening Escape's reach to the whole window:
 the real constraint is listener order on one node, not attach order across the React/DOM boundary.
+
+**[#1634](https://github.com/pyrycode/pyrycode-desktop/issues/1634) is that future change, for the
+background task panel.** Its drawer went non-modal ([Background-task
+panel](conversation-shell-background-tasks.md)) and stopped taking focus on open, which broke the implicit
+focus-trap property the paragraph above relies on: with nothing left to hold focus, its Escape listener
+had to become a `document`-level **capture**-phase listener (`addEventListener('keydown', onKeyDown,
+true)`), which the precise constraint above says fires before every React handler and before this
+module's own bubble-phase bindings — `Composer`'s `handleKeyDown` and `ComposerSendButton`'s running-variant
+`onKeyDown` included. Left unguarded, that would swallow every Escape meant for a running turn, not only
+the drawer's own. Instead of coordinating on listener order the way the other five claimants do for free,
+the drawer asks an exported pure predicate, `drawerClosesOnKeyDown`, which defers — leaves the press
+untouched — exactly when focus is on one of the two #1072 bindings (`.composer__input`, `.composer__send`)
+and this module's own `shouldInterruptOnKeyDown` says that Escape will stop the turn; everywhere else it
+closes the drawer and calls `stopPropagation()` so no other claimant reacts to the same press. The two
+predicates asking each other, rather than each restating the other's rule, is what keeps them from
+silently disagreeing about which press belongs to the composer. See [Background-task panel § Escape is
+arbitrated](conversation-shell-background-tasks.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583).
 
 **The glyph is now Figma-sourced.** The mobile Figma file used to draw only the steady-send composer
 state (16-61) with no stop/interrupt component in the design system, so #307 derived a generic M3 `stop`

@@ -8,21 +8,32 @@ An openable surface listing the tasks claude has running in the background for t
 — the first reader of [`backgroundTaskRosterStore`](background-task-roster-store.md), shipped and
 unread since #573. The store joins three daemon frames (roster, started, updated); this slice reads
 only two of the held per-task fields, `description` and `taskType`. Split from #568 (whose panel work
-was itself split three ways: #581 → #582 → #583). No Figma node exists for this surface — it is
-desktop-only (pyrycode#1241) and the canonical mobile file has no counterpart; visual design is #580's,
-so the chrome deliberately reuses the shared `.status-sheet__*` overlay vocabulary as an interim
-placeholder rather than anything #580 would have to unwind.
+was itself split three ways: #581 → #582 → #583). It shipped with no Figma node — desktop-only
+(pyrycode#1241), the canonical mobile file has no counterpart — so the shell reused the shared
+`.status-sheet__*` overlay vocabulary as an interim placeholder, deliberately reused rather than
+duplicated so that only the outermost wrapper was chrome and every row and branch carried its own
+`background-task-panel__*` class with no positional CSS.
+
+**[#1634](https://github.com/pyrycode/pyrycode-desktop/issues/1634) swapped that placeholder for #580's
+actual drawing** (Figma node 565:2966): a **non-modal** 360px drawer pinned over the right of the message
+area, with no scrim, so the thread keeps scrolling and the composer keeps taking input while it is open.
+Because only the wrapper was ever chrome, the swap landed without touching a single list row — the list's
+own redraw is still the follow-up ticket. The design's circle-xmark close glyph is drawn as an inline
+`<svg>`, not an `<img>`: three of this panel's escaping tests assert there is no `<img` anywhere in its
+markup, since that absence is how they prove a markup-shaped `description` stayed text, so any future chrome
+icon in this view needs the same inline treatment.
 
 ```
 .conversation
-├── ThreadOverflowMenu > menuitem "Background tasks"    (trigger since #962 — see below)
+├── ThreadOverflowMenu > menuitem "Background tasks"       (trigger since #962 — opens only, never toggles)
+├── ComposerTaskCount (.composer-status__tasks pill)       (toggles since #1634 — see conversation-shell-composer-status.md)
 └── BackgroundTaskPanel (if panelOpen)
     └── BackgroundTaskPanelView
-        ├── .status-sheet-overlay__scrim        (onClick → onClose)
-        └── .status-sheet  role="dialog" aria-labelledby="background-task-panel-title"
-            ├── .status-sheet__handle
-            ├── .status-sheet__header             "Background tasks" + close
-            └── .status-sheet__body
+        └── section.background-task-drawer  role="dialog" aria-labelledby="background-task-panel-title"
+            │                                (non-modal — no aria-modal, no scrim — #1634)
+            ├── .background-task-drawer__header   <h2> "Background tasks" + .background-task-drawer__close (inline svg)
+            ├── .background-task-drawer__rule
+            └── .background-task-drawer__body
                 ├── entry.droppedTasks > 0    → .background-task-panel__partial     "Partial list (N not shown)"
                 │                                 (sibling of the branch below, not nested in any arm — #582)
                 └── entry === null            → .background-task-panel__unobserved  "No background-task report yet"
@@ -58,10 +69,32 @@ retired its `QueuedBacklogControl` container): `activeConversation?.id ?? null` 
 `ConversationScreen` mount site (no second subscription), a `useMemo`-stable
 `selectRosterFor(conversationId ?? '')` selector, and
 `useBackgroundTaskRosterStore(selectRoster)`. The `''` sentinel matches no store key, so "no active
-conversation" reads as `null` — the correct "never observed" reading — for free. An Escape `keydown`
-effect closes the panel; open/closed state is a fourth screen-local `useState` boolean in
-`ConversationScreen` (the `pickerOpen`/`channelInfoOpen`/`sheetOpen` twin, [ADR
-0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md)).
+conversation" reads as `null` — the correct "never observed" reading — for free.
+
+**Open state lifted into `PairedShell` by #1634.** The drawer is non-modal and takes no focus, so it has
+to survive the conversation switch that remounts `ConversationScreen` under `PairedShell`'s `paneKey`. The
+boolean moved one level up, beside `paneKey`, and reaches the screen as an optional
+`backgroundTasksOpen` / `onBackgroundTasksOpenChange` prop pair — still [ADR
+0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) screen-local state, just held by
+the parent shell instead of the screen itself. When the props are absent, as at every bare
+`<ConversationScreen />` render site the test suite already used, the screen falls back to its own
+`useState`, so none of those sites needed to change. Unpairing unmounts `PairedShell` and drops the state;
+switching conversations keeps it and re-renders the newly active conversation's roster underneath it.
+
+**Escape is arbitrated, not just handled, since #1634.** The container's `document` listener moved to the
+**capture** phase (`addEventListener('keydown', onKeyDown, true)`), which runs before React's root
+listener and before any bubble-phase document listener, so a press the drawer takes never reaches the
+options overlay, a type-ahead, or any other claimant. Whether a given press is the drawer's is decided by
+the exported pure predicate `drawerClosesOnKeyDown(keystroke, { inComposerStop, turnRunning })`: false for
+a non-`Escape` key or mid-IME-composition, and false when focus is on one of the composer's own #1072 stop
+bindings (`.composer__input`, `.composer__send`) and the composer's own `shouldInterruptOnKeyDown`
+predicate says that Escape will stop the running turn — the drawer asks the composer's predicate rather
+than restating it, so the two cannot disagree about which press belongs to which. Everywhere else, Escape
+closes the drawer. The container gained a `turnRunning: boolean` prop, wired from `ConversationScreen` as
+`isTurnRunning(phase)`, the same gate the stop button itself uses. One interaction is accepted rather than
+fixed: `stopPropagation` on a press the drawer takes means a modal overlay stacked over it (the markdown
+reader, Run configuration, Channel info) needs a **second** Escape to close, since the first one only
+closes the drawer beneath it — "one Escape does one thing" per press, not per overlay stack.
 
 **Trigger.** Originally an icon-only `.background-task-trigger` button (`aria-label="Background tasks"`,
 `aria-haspopup="dialog"`), mounted unconditionally as a `StatusRow` sibling — not gated on tasks
@@ -78,10 +111,12 @@ originally passed over (it now generalises to three items instead of one) — se
 [Run-configuration row and background-task trigger retired](conversation-shell-chrome.md#run-configuration-row-and-background-task-trigger-retired-overflow-menu-grows-to-three-items-962)
 for the menu's design. The `ThreadOverflowMenu` item itself still carries no task-count badge of its
 own. [#1435](conversation-shell-composer-status.md#background-task-count-pill-the-slots-last-occupant-1435)
-gave the panel a second trigger instead — a count pill in the composer status row's trailing slot,
-wired to the same `setPanelOpen(true)` this menu item calls — so a badge on the menu item itself, if
-ever wanted, is still open, left to #580, which also owns the panel's final presentation and may
-re-point either trigger again.
+gave the panel a second trigger — a count pill in the composer status row's trailing slot, originally
+wired to the same `setPanelOpen(true)` this menu item calls. **[#1634](https://github.com/pyrycode/pyrycode-desktop/issues/1634)
+re-pointed the pill to toggle instead** (`setPanelOpen(!panelOpen)`) and gave it a Primary outline while
+open — see [Background-task count pill](conversation-shell-composer-status.md#background-task-count-pill-the-slots-last-occupant-1435).
+The menu item is unchanged: it still only opens, never closes. A badge on the menu item itself, if ever
+wanted, remains open.
 
 **SECURITY.** For `taskType: local_bash`, `description` is the literal shell command claude ran —
 untrusted, model-influenced text the daemon bounds but does not sanitize. Rendered as auto-escaped

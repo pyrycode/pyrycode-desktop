@@ -1,9 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { BackgroundTaskPanelView, drawerClosesOnKeyDown } from './BackgroundTaskPanel'
+import {
+  BackgroundTaskPanelView,
+  drawerClosesOnKeyDown,
+  formatTaskProgressCounts
+} from './BackgroundTaskPanel'
 import type {
   BackgroundTaskRosterEntry,
-  HeldBackgroundTask
+  HeldBackgroundTask,
+  HeldBackgroundTaskProgress
 } from '../../store/backgroundTaskRosterStore'
 
 // #581: the background-task panel. BackgroundTaskPanelView is the pure, exported view (the
@@ -831,5 +836,124 @@ describe('BackgroundTaskPanelView — status tag and summary (#1639)', () => {
     expect(markup).toContain('<span class="background-task-panel__summary">&lt;img')
     expect(markup).not.toContain('<img')
     expect(markup).not.toMatch(/\son[a-z]+="/)
+  })
+})
+
+describe('formatTaskProgressCounts — the meta line after the tool name (#1640)', () => {
+  const counts = (toolUses: number, totalTokens: number, durationMs: number): string =>
+    formatTaskProgressCounts({ toolUses, totalTokens, durationMs })
+
+  it('says 1 tool, otherwise N tools', () => {
+    expect(counts(1, 0, 0)).toBe('1 tool · 0 tokens · 0s')
+    expect(counts(4, 0, 0)).toBe('4 tools · 0 tokens · 0s')
+    expect(counts(0, 0, 0)).toBe('0 tools · 0 tokens · 0s')
+  })
+
+  it('prints tokens under 1000 plainly, otherwise rounded to the nearest thousand with k', () => {
+    expect(counts(1, 850, 0)).toBe('1 tool · 850 tokens · 0s')
+    expect(counts(1, 999, 0)).toBe('1 tool · 999 tokens · 0s')
+    expect(counts(1, 1000, 0)).toBe('1 tool · 1k tokens · 0s')
+    expect(counts(1, 18400, 0)).toBe('1 tool · 18k tokens · 0s')
+    expect(counts(1, 18500, 0)).toBe('1 tool · 19k tokens · 0s')
+  })
+
+  it('prints elapsed as seconds, then minutes and padded seconds, then hours and minutes', () => {
+    expect(counts(1, 0, 41_999)).toBe('1 tool · 0 tokens · 41s')
+    expect(counts(1, 0, 161_000)).toBe('1 tool · 0 tokens · 2m 41s')
+    expect(counts(1, 0, 65_000)).toBe('1 tool · 0 tokens · 1m 05s')
+    expect(counts(1, 0, 3_599_999)).toBe('1 tool · 0 tokens · 59m 59s')
+    expect(counts(1, 0, 3_720_000)).toBe('1 tool · 0 tokens · 1h 2m')
+  })
+})
+
+describe("BackgroundTaskPanelView — a running task's progress (#1640)", () => {
+  function report(overrides: Partial<HeldBackgroundTaskProgress> = {}): HeldBackgroundTaskProgress {
+    return {
+      currentActivity: 'ACTIVITYONE',
+      subagentType: 'general-purpose',
+      lastToolName: 'Bash',
+      totalTokens: 18000,
+      toolUses: 4,
+      durationMs: 161_000,
+      truncatedFields: null,
+      ...overrides
+    }
+  }
+  const render = (tasks: readonly HeldBackgroundTask[], finished: readonly string[] = []): string =>
+    renderToStaticMarkup(
+      <BackgroundTaskPanelView
+        entry={entry(tasks)}
+        finishedTaskIds={finished.length > 0 ? new Set(finished) : null}
+        onClose={noop}
+      />
+    )
+
+  it('shows the activity and the meta line between the description and the latest update (AC1)', () => {
+    const markup = render([
+      task({
+        taskId: 'r1',
+        description: 'DESCONE',
+        latestUpdate: { patch: 'PATCHONE', truncatedFields: null },
+        progress: report()
+      })
+    ])
+    expect(markup).toContain(
+      'DESCONE</span><div class="background-task-panel__progress">' +
+        '<span class="background-task-panel__activity">ACTIVITYONE</span>' +
+        '<span class="background-task-panel__progress-meta">' +
+        '<span class="background-task-panel__progress-tool">Bash</span> · 4 tools · 18k tokens · 2m 41s' +
+        '</span></div><div class="background-task-panel__update">'
+    )
+  })
+
+  it('leaves an empty tool name and its separator out (AC1)', () => {
+    const markup = render([task({ taskId: 'r1', progress: report({ lastToolName: '' }) })])
+    expect(markup).toContain('<span class="background-task-panel__progress-meta">4 tools · 18k tokens · 2m 41s</span>')
+    expect(markup).not.toContain('background-task-panel__progress-tool')
+  })
+
+  it("chips the activity from the REPORT's list only, never the task's own (AC1)", () => {
+    const cut = render([task({ taskId: 'r1', progress: report({ truncatedFields: ['description'] }) })])
+    expect(cut).toContain(
+      '<span class="background-task-panel__activity">ACTIVITYONE</span>' +
+        '<span class="background-task-panel__cut-activity">Truncated by the daemon</span>' +
+        '<span class="background-task-panel__progress-meta">'
+    )
+    // The task's own list naming `description` chips the description, not the activity.
+    const crossed = render([
+      task({ taskId: 'r1', truncatedFields: ['description'], progress: report({ truncatedFields: ['task_id'] }) })
+    ])
+    expect(crossed).not.toContain('background-task-panel__cut-activity')
+    expect(crossed).toContain('background-task-panel__cut-description')
+  })
+
+  it('shows no block on a running row without a report or on any finished row (AC2)', () => {
+    const none = render([task({ taskId: 'r1', progress: null })])
+    expect(none).not.toContain('background-task-panel__progress')
+    const finished = render(
+      [task({ taskId: 'f1', status: 'completed', progress: report({ currentActivity: 'ACTIVITYHIDDEN' }) })],
+      ['f1']
+    )
+    expect(finished).toContain('Finished · 1')
+    expect(finished).not.toContain('ACTIVITYHIDDEN')
+    expect(finished).not.toContain('background-task-panel__progress')
+  })
+
+  it('keeps a markup-shaped activity and tool name inert and out of every attribute (AC3)', () => {
+    const markup = render([
+      task({
+        taskId: 'r1',
+        progress: report({
+          currentActivity: '<b>ACTHOSTILE</b>',
+          lastToolName: '<img src=x onerror="alert(1)">TOOLHOSTILE'
+        })
+      })
+    ])
+    expect(markup).toContain('<span class="background-task-panel__activity">&lt;b&gt;ACTHOSTILE&lt;/b&gt;</span>')
+    expect(markup).toContain('<span class="background-task-panel__progress-tool">&lt;img')
+    expect(markup).not.toContain('<b>')
+    expect(markup).not.toContain('<img')
+    expect(markup).not.toMatch(/="[^"]*(ACTHOSTILE|TOOLHOSTILE)/)
+    expect(markup).not.toMatch(/\stitle="/)
   })
 })

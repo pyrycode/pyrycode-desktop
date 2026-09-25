@@ -1,10 +1,9 @@
 // The renderer data path feeding the background-task store: it observes FOUR typed daemon events — the
 // `backgroundTaskRoster` aggregate (#566's transport half decodes the `background_task_roster`
 // snapshot: `conversationId` plus the live rows and the drop count), the `backgroundTaskStarted`
-// scalar (#564: the six fields that open one task, `toolCallId` among them) and the
-// `backgroundTaskUpdated` scalar (#565: four fields — the latest patch and its own cut report) — the `backgroundTaskProgress` scalar
-// (#1640: a running task's latest report) — and
-// lands each in the app-singleton `backgroundTaskRosterStore` the panel slice (#568) will read, where
+// scalar (#564: the six fields that open one task, `toolCallId` among them), the
+// `backgroundTaskUpdated` scalar (#565: four fields — the latest patch and its own cut report) and the
+// `backgroundTaskProgress` scalar (#1640: a running task's latest report) — and lands each in the app-singleton `backgroundTaskRosterStore` the panel slice (#568) will read, where
 // they are JOINED on `conversationId` + `taskId`. Reactive-only — like queueBridge and sessionIdBridge,
 // the daemon PUSHES all three unsolicited, so there is NO request half: no command sent, no
 // connected-edge fetch. The helpers are React-free and injected, so the whole path is unit-testable

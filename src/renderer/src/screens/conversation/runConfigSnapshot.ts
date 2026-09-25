@@ -43,7 +43,14 @@ export function toRunConfigSnapshot(event: DaemonEvent): RunConfigSnapshot | nul
         yolo: event.yolo,
         permissionMode: event.permissionMode,
         usedTokens: event.used_tokens,
-        windowTokens: event.window_tokens
+        windowTokens: event.window_tokens,
+        // #1655: each capability flag only when reported, as effectiveEffort above — the event carries
+        // an unreported one as an explicit undefined, and the snapshot holds no key the daemon did not send.
+        ...(event.slashCommands === undefined ? {} : { slashCommands: event.slashCommands }),
+        ...(event.mcpServers === undefined ? {} : { mcpServers: event.mcpServers }),
+        ...(event.contextUsageDetail === undefined
+          ? {}
+          : { contextUsageDetail: event.contextUsageDetail })
       }
     default:
       return null

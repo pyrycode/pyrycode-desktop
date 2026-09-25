@@ -512,3 +512,22 @@ describe('applied effort readings', () => {
     expect(Object.prototype.hasOwnProperty.call(snapshot, 'effectiveEffort')).toBe(effectiveEffort !== undefined)
   })
 })
+
+// #1655: the three capability flags reach the snapshot verbatim. An unreported flag — which crosses IPC as
+// an explicitly-undefined property — is omitted, so the snapshot never holds a key the daemon did not send.
+describe('capability flags', () => {
+  const FLAGS = ['slashCommands', 'mcpServers', 'contextUsageDetail'] as const
+  it.each(FLAGS.flatMap((flag) => [true, false, undefined].map((value) => [flag, value] as const)))(
+    'copies %s = %j',
+    (flag, value) => {
+      const event: DaemonEvent = {
+        type: 'runConfigReceived', conversationId: OPEN, sessionId: 'session', model: '',
+        effort: '', yolo: false, permissionMode: 'default', used_tokens: 0, window_tokens: 0,
+        [flag]: value
+      }
+      const snapshot = toRunConfigSnapshot(event)
+      expect(snapshot?.[flag]).toBe(value)
+      expect(Object.prototype.hasOwnProperty.call(snapshot, flag)).toBe(value !== undefined)
+    }
+  )
+})

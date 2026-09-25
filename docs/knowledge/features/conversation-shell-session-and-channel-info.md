@@ -128,7 +128,7 @@ owns only their display.
                 ├── .channel-info__row × 2          Workspace (mono, cwd) / Last activity  — or —
                 ├── .channel-info__empty            "No conversation details yet" (conversation === null)
                 ├── "Session" + two detail rows     Claude/Codex version / Reported permission mode (conversation !== null)
-                ├── McpServersSection                #1490, conversation !== null only — see [linked doc](conversation-shell-channel-info-mcp.md)
+                ├── McpServersSection                #1490, conversation !== null AND the session's mcpServers capability flag is not false (#1655) — see [linked doc](conversation-shell-channel-info-mcp.md)
                 ├── SystemPromptSection              #1078, conversation !== null only — see below
                 ├── "Actions" section-header
                 ├── .channel-info__actions          mount point for #366/#367/#368 (Rename+Archive built, Delete #367 open)

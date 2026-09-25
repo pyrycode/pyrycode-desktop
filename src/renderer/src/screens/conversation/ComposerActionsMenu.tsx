@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { useConversationActionAvailability } from './conversationActionAvailability'
 import { ComposerOptionsMenu, type ComposerOptionsPanelOption } from './ComposerOptionsPanel'
 import { markUnavailableActions } from './composerActionAvailability'
+import { useRunConfigStore, selectSlashCommandsSupported } from '../../store/runConfigStore'
 import {
   useSlashCommandListStore,
   selectSlashCommandListFor,
@@ -118,10 +119,17 @@ export const NEW_SESSION_ACTION: ComposerOptionsPanelOption = {
  * when nothing is unavailable. Nothing consumes that identity: `useComposerOptionsClamp`'s deps are
  * `[active]` precisely so no effect depends on `options`, and no component in this chain is memoised.
  * The by-reference property is unchanged for that function's own callers.
+ *
+ * #1655 — `slashCommands` false (the session's capability list says it has none, as for Codex) leaves the
+ * control row alone. The slash-command rows are dropped, not greyed: such a session publishes no menu, so
+ * `markUnavailableActions` would read it as unknown and leave both live, and each would reach the agent as
+ * prompt text.
  */
 export function composerActionRows(
-  menu: SlashCommandListEntry | null
+  menu: SlashCommandListEntry | null,
+  slashCommands: boolean
 ): readonly ComposerOptionsPanelOption[] {
+  if (!slashCommands) return [NEW_SESSION_ACTION]
   return [NEW_SESSION_ACTION, ...markUnavailableActions(COMPOSER_ACTIONS, menu)]
 }
 
@@ -153,10 +161,13 @@ const CHEVRON_PATH =
  */
 export function ComposerActionsMenuView({
   menu,
+  slashCommands,
   onCommand,
   onNewSession
 }: {
   menu: SlashCommandListEntry | null
+  // #1655 — whether the session accepts slash commands; see composerActionRows.
+  slashCommands: boolean
   onCommand: (command: string) => void
   // #1218 — the control arm, and REQUIRED like every other prop here ("a view that cannot answer is a
   // bug"). It takes NO argument: the screen closes over the same `activeConversationId` it already
@@ -166,7 +177,7 @@ export function ComposerActionsMenuView({
 }): JSX.Element {
   return (
     <ComposerOptionsMenu
-      options={composerActionRows(menu)}
+      options={composerActionRows(menu, slashCommands)}
       // A list of actions, not a choice: no row wears aria-current. The panel already handles this
       // through the same branch a non-matching id takes (ComposerOptionsPanel.tsx:32-35).
       currentId={null}
@@ -239,9 +250,16 @@ export function ComposerActionsMenu({
     [conversationId]
   )
   const menu = useSlashCommandListStore(selectMenu)
+  // #1655 — the run-config snapshot holds only the open conversation's reply, which is this menu's.
+  const slashCommands = useRunConfigStore(selectSlashCommandsSupported)
   if (!available) return null
 
   return (
-    <ComposerActionsMenuView menu={menu} onCommand={onCommand} onNewSession={onNewSession} />
+    <ComposerActionsMenuView
+      menu={menu}
+      slashCommands={slashCommands}
+      onCommand={onCommand}
+      onNewSession={onNewSession}
+    />
   )
 }

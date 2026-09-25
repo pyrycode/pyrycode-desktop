@@ -464,3 +464,17 @@ walks the full checklist (PASS, no findings).
 
 Covered by `e2e/composer-context-breakdown.spec.ts`: no reading held, a frame carrying all three
 inventories, and a categories-only frame (no MCP or memory group renders).
+
+## No breakdown for a session that reports none (#1655)
+
+`ContextUsageControl` keeps the bare `<ContextUsageReading/>` span but stops wrapping it in
+`ContextBreakdownPopover` when `sessionSupports(snapshot, 'contextUsageDetail')` is false — a
+Codex session, which the popover would otherwise say "arrives after the next turn" forever, since
+no such reply is coming. The reading's own presence and exact styling are unchanged: the control
+still returns `null` when `contextUsagePercent` is `null`, and the `sessionSupports` check runs
+only once that guard has already passed. See [Run configuration store § Session capability
+flags](run-config-store.md#session-capability-flags-1655) for the reading rule — an absent flag, a
+snapshot that has not arrived yet, and every Claude session keep the trigger exactly as before the
+flag existed. Pinned by `ConversationScreen.test.tsx`'s seeded-snapshot cases (`contextUsageDetail`
+false/true/absent) and by `e2e/session-capabilities.spec.ts`, which also covers the Actions menu and
+Channel info's MCP section for the same all-false reply.

@@ -42,7 +42,7 @@ const TRIGGER_CLASS_RUN = 'class="composer__footer-button composer__actions"'
  *  neither the command arm nor #1218's control arm can be reached from this tier. */
 function viewMarkup(): string {
   return renderToStaticMarkup(
-    <ComposerActionsMenuView menu={null} onCommand={noop} onNewSession={noop} />
+    <ComposerActionsMenuView menu={null} slashCommands onCommand={noop} onNewSession={noop} />
   )
 }
 
@@ -138,7 +138,7 @@ describe('ComposerActionsMenuView', () => {
   it('feeds three unmarked rows to the shared panel (AC1)', () => {
     const markup = renderToStaticMarkup(
       <ComposerOptionsPanel
-        options={composerActionRows(null)}
+        options={composerActionRows(null, true)}
         currentId={null}
         onSelect={noop}
         ariaLabel={COMPOSER_ACTIONS_LABEL}
@@ -146,7 +146,7 @@ describe('ComposerActionsMenuView', () => {
       />
     )
     expect(rowCount(markup)).toBe(3)
-    for (const action of composerActionRows(null)) {
+    for (const action of composerActionRows(null, true)) {
       expect(markup).toContain(`>${action.label}<`)
     }
     expect(countOf(markup, 'aria-current')).toBe(0)
@@ -178,7 +178,7 @@ const WITHOUT_KNOWLEDGE_CAPTURE: SlashCommandListEntry = {
 function panelMarkup(menu: SlashCommandListEntry | null): string {
   return renderToStaticMarkup(
     <ComposerOptionsPanel
-      options={composerActionRows(menu)}
+      options={composerActionRows(menu, true)}
       currentId={null}
       onSelect={noop}
       ariaLabel={COMPOSER_ACTIONS_LABEL}
@@ -272,7 +272,7 @@ describe('NEW_SESSION_ACTION (#1218, folded by #1496)', () => {
   // capture. The availability-marked block stays contiguous (it is now the tail rather than the head) and
   // the composition stays a single splice-free expression.
   it('renders first, leaving the slash commands in their shipped order (AC1)', () => {
-    expect(composerActionRows(null)).toStrictEqual([NEW_SESSION_ACTION, ...COMPOSER_ACTIONS])
+    expect(composerActionRows(null, true)).toStrictEqual([NEW_SESSION_ACTION, ...COMPOSER_ACTIONS])
   })
 
   // #1218's AC3 AND #1496's AC2, AND THE DETECTOR FOR THE FAILURE MODE THAT SHIPS LOOKING CORRECT.
@@ -289,7 +289,7 @@ describe('NEW_SESSION_ACTION (#1218, folded by #1496)', () => {
     ['a complete but empty published menu', { commands: [], droppedCommands: 0 }]
   ]
   it.each(COMPLETE_MENUS)('is never marked unavailable by %s (AC3)', (_case, menu) => {
-    const rows = composerActionRows(menu)
+    const rows = composerActionRows(menu, true)
     const newSession = rows[0]
 
     expect(newSession.id).toBe(NEW_SESSION_ACTION.id)
@@ -300,5 +300,39 @@ describe('NEW_SESSION_ACTION (#1218, folded by #1496)', () => {
     expect(panelMarkup(menu)).toContain(
       `class="composer-options__item">${NEW_SESSION_ACTION.label}</button>`
     )
+  })
+})
+
+// #1655 — a session whose capability list says it has no slash commands (a Codex session) is offered the
+// control row alone: no entry sends a Claude command to it as a prompt. Keyed on the flag, not on whether a
+// menu was published, so the answer is the same with or without one.
+describe('a session without slash commands (#1655)', () => {
+  it.each([
+    ['no published menu', null],
+    ['a published menu', WITHOUT_KNOWLEDGE_CAPTURE]
+  ] as const)('offers only Reset session with %s', (_case, menu) => {
+    expect(composerActionRows(menu, false)).toStrictEqual([NEW_SESSION_ACTION])
+  })
+
+  it('draws only the Reset session row in the panel', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerOptionsPanel
+        options={composerActionRows(null, false)}
+        currentId={null}
+        onSelect={noop}
+        ariaLabel={COMPOSER_ACTIONS_LABEL}
+        focusedIndex={0}
+      />
+    )
+    expect(rowCount(markup)).toBe(1)
+    expect(markup).toContain(`>${NEW_SESSION_ACTION.label}<`)
+    for (const action of COMPOSER_ACTIONS) expect(markup).not.toContain(`>${action.label}<`)
+  })
+
+  it('leaves the trigger unchanged', () => {
+    const without = renderToStaticMarkup(
+      <ComposerActionsMenuView menu={null} slashCommands={false} onCommand={noop} onNewSession={noop} />
+    )
+    expect(without).toBe(viewMarkup())
   })
 })

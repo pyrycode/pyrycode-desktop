@@ -8,6 +8,19 @@ Part of [Conversation shell](conversation-shell.md); see [Channel Info
 sheet](conversation-shell-session-and-channel-info.md#channel-info-sheet-365) for the
 sheet's chrome, its other sections and its open-state ownership.
 
+## No section at all for a session that reports none (#1655)
+
+`ChannelInfoSheet` mounts this section only when the open conversation exists *and* the run-config
+snapshot's `mcpServers` flag is not exactly `false` (`selectMcpServersSupported`, [Run configuration
+store § Session capability flags](run-config-store.md#session-capability-flags-1655)) — a Codex
+session, which has no MCP status to report. The sheet passes `undefined` into the
+`mcpServersSection` slot in that case, the same branch it already took for `conversation === null`,
+so no section, toggle or "No MCP report has arrived yet." line renders at all rather than one that
+would wait forever. An absent flag, a snapshot that has not arrived yet, and every Claude session
+render the section exactly as before the flag existed; the flag is read from the open conversation's
+own snapshot (`subscribeRunConfig` drops any reply for another conversation), the same snapshot
+Channel info's other run-config-derived reads use.
+
 ## MCP servers section ([#1490](https://github.com/pyrycode/pyrycode-desktop/issues/1490))
 
 A read-only list of claude's MCP servers, sitting after the Session facts rows and before the System

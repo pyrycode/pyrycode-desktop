@@ -264,11 +264,25 @@ export const NEW_SESSION_ACTION: ComposerOptionsPanelOption = {
   label: 'Reset session'
 }
 export function composerActionRows(
-  menu: SlashCommandListEntry | null
+  menu: SlashCommandListEntry | null,
+  slashCommands: boolean            // #1655 — see below
 ): readonly ComposerOptionsPanelOption[] {
+  if (!slashCommands) return [NEW_SESSION_ACTION]
   return [NEW_SESSION_ACTION, ...markUnavailableActions(COMPOSER_ACTIONS, menu)]
 }
 ```
+
+**A session whose capability list says it has no slash commands drops the two command rows
+outright (#1655), rather than greying them out.** `slashCommands` comes from [Run configuration
+store § Session capability flags](run-config-store.md#session-capability-flags-1655)
+(`selectSlashCommandsSupported`) — a Codex session publishes no `slash_command_list` at all, so
+`markUnavailableActions` (§ Grey-out above) reads the missing list as *unknown* and would leave
+both rows live, each reachable as a command that gets sent to Codex as prompt text. The early
+return is keyed on the flag alone, never on whether a menu was published or on the agent name, so
+the answer is the same with or without a published `slash_command_list`. `ComposerActionsMenuView`
+takes `slashCommands` as a required prop and the container reads the selector directly; `false`
+leaves the Actions trigger itself unchanged — only the panel's contents shrink to the single Reset
+session row.
 
 **`NEW_SESSION_ACTION` keeps its constant name and its `id` (`new-session`) across the #1496 rename —
 deliberately, not by oversight.** The id, the view's `onNewSession` prop, the `sendNewSession` helper, the

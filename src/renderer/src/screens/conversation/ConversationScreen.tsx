@@ -2195,7 +2195,7 @@ export const UNRECOGNIZED_TRUNCATED_COPY = 'Payload truncated by the daemon.'
 /**
  * A human label for each drop site. A total function over the closed union — CLIENT-OWNED copy, so the
  * daemon's `site` value selects a string but never becomes one, which is what keeps a daemon-supplied
- * value out of the rendered text here. Exhaustive by the union, so a future fifth site is a compile
+ * value out of the rendered text here. Exhaustive by the union, so a future site is a compile
  * error rather than a blank slot.
  */
 export function unrecognizedSiteLabel(site: UnrecognizedSite): string {
@@ -2208,6 +2208,10 @@ export function unrecognizedSiteLabel(site: UnrecognizedSite): string {
       return 'user block'
     case 'undecodable':
       return 'could not be decoded'
+    case 'codex_method':
+      return 'Codex notification'
+    case 'codex_item':
+      return 'Codex item'
   }
 }
 

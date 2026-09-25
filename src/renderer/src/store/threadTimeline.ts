@@ -25,9 +25,15 @@ export type SessionBoundaryReason = 'clear' | 'idle_evict' | 'workspace_change'
  * Where the daemon's stream parser met claude output it has no mapping for, renderer-local. A
  * deliberate re-declaration of `WireUnrecognizedSite` on the SessionBoundaryReason model, not an
  * import: it keeps this reducer wire-free, lets the bridge assign `event.site` with no cast (the
- * literal unions are identical), and turns a future fifth wire site into a compile error here.
+ * literal unions are identical), and turns a future wire site into a compile error here.
  */
-export type UnrecognizedSite = 'line_type' | 'assistant_block' | 'user_block' | 'undecodable'
+export type UnrecognizedSite =
+  | 'line_type'
+  | 'assistant_block'
+  | 'user_block'
+  | 'undecodable'
+  | 'codex_method'
+  | 'codex_item'
 
 /**
  * #1039: one file the operator attached to a message they sent, as the timeline records it.

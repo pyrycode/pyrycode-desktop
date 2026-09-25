@@ -31,7 +31,8 @@ export type DurableThreadItem =
       workspaceCwd: string | null; occurredAt: string
     }
   | {
-      kind: 'unrecognizedMessage'; site: 'line_type' | 'assistant_block' | 'user_block' | 'undecodable'
+      kind: 'unrecognizedMessage'
+      site: 'line_type' | 'assistant_block' | 'user_block' | 'undecodable' | 'codex_method' | 'codex_item'
       messageType: string; raw: string; truncated: boolean
     }
   | {
@@ -164,7 +165,7 @@ function threadItem(value: unknown): DurableThreadItem {
       workspaceCwd: nullable(v.workspaceCwd, string), occurredAt: string(v.occurredAt)
     }
     case 'unrecognizedMessage': return {
-      kind: v.kind, site: choice(v.site, ['line_type', 'assistant_block', 'user_block', 'undecodable']),
+      kind: v.kind, site: choice(v.site, ['line_type', 'assistant_block', 'user_block', 'undecodable', 'codex_method', 'codex_item']),
       messageType: string(v.messageType), raw: string(v.raw), truncated: bool(v.truncated)
     }
     case 'compactionBoundary': return {

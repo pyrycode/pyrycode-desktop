@@ -1,10 +1,16 @@
 import { useMemo } from 'react'
+import type { WireAgent } from '@shared/wire/types'
 import { ComposerOptionsMenu, type ComposerOptionsPanelOption } from './ComposerOptionsPanel'
 import { useModelListStore, selectModelListFor, type ModelListEntry } from '../../store/modelListStore'
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
 import { useSessionIdStore, selectSessionId } from '../../store/sessionIdStore'
 import { useRunSettingsWriteStore, selectEffectiveSettings } from '../../store/runSettingsWriteStore'
-import { publishedRowFor, useSessionSettingsConnected, changeConnectedSetting } from './RunConfigSections'
+import {
+  publishedRowFor,
+  useConversationAgent,
+  useSessionSettingsConnected,
+  changeConnectedSetting
+} from './RunConfigSections'
 import { isAddressableSessionId } from './runSettingsControls'
 
 // #682: the composer footer's PERMISSION MODE menu (Figma 115:3678) — the row's second control, between
@@ -185,10 +191,12 @@ export interface ComposerPermissionModeMenuModel {
 export function composerPermissionModeMenuModel(
   models: ModelListEntry | null | undefined,
   model: string,
-  permissionMode: string
+  permissionMode: string,
+  agent: WireAgent = 'claude'
 ): ComposerPermissionModeMenuModel | null {
   if (permissionMode === '') return null
-  const row = publishedRowFor(models, model)
+  // #1651: only the conversation's own agent's row can hide `auto`; the rule itself is unchanged.
+  const row = publishedRowFor(models, model, agent)
   const hidesAuto = row !== undefined && row.supports_auto_mode === false
   return {
     label: permissionModeLabel(permissionMode),
@@ -226,17 +234,20 @@ export function ComposerPermissionModeMenuView({
   model,
   permissionMode,
   models,
+  agent = 'claude',
   onSelect
 }: {
   model: string
   permissionMode: string
   models: ModelListEntry | null
+  /** #1651 — the conversation's agent; absent reads Claude. */
+  agent?: WireAgent
   onSelect?: (mode: string) => void
 }): JSX.Element | null {
   // Model and models remain required inputs. The container always knows both, so
   // an optional `models` would only hide the wiring seam: the model function stays green with the mount
   // unwired, and the failure is silent in the fail-open direction. The e2e drive is what catches that.
-  const menu = composerPermissionModeMenuModel(models, model, permissionMode)
+  const menu = composerPermissionModeMenuModel(models, model, permissionMode, agent)
   if (menu === null) return null
   if (!onSelect) {
     return (
@@ -310,6 +321,7 @@ export function ComposerPermissionModeMenu({
     [conversationId]
   )
   const models = useModelListStore(selectModels)
+  const agent = useConversationAgent(conversationId)
 
   // Model intent still controls Auto availability. Permission posture comes only from the
   // confirmed read: pending or acknowledged writes and initialization facts cannot establish it.
@@ -320,6 +332,7 @@ export function ComposerPermissionModeMenu({
       model={effective.model}
       permissionMode={snapshot?.permissionMode ?? ''}
       models={models}
+      agent={agent}
       // An arrow, so `window.pyry` is dereferenced at INTERACTION time and never during render — hoisting
       // it (or the deps object) would move the dereference into the render path, where window.pyry does not
       // exist under renderToStaticMarkup and every container smoke test would throw. Bypass uses the

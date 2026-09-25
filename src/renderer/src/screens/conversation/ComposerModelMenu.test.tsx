@@ -6,6 +6,8 @@ import {
   ComposerModelMenuView,
   COMPOSER_MODEL_MENU_LABEL,
   composerModelMenuModel,
+  composerModelRowLabel,
+  COMPOSER_MODEL_DEFAULT_LABEL,
   type ComposerModelLayers
 } from './ComposerModelMenu'
 import { ComposerOptionsPanel } from './ComposerOptionsPanel'
@@ -699,5 +701,86 @@ describe('composerModelMenuModel — no snapshot has arrived (#1495)', () => {
   ])('draws nothing on %s, snapshot or none', (_why, models) => {
     expect(composerModelMenuModel(models, stored(null))).toBeNull()
     expect(composerModelMenuModel(models, stored(''))).toBeNull()
+  })
+})
+
+// #1651 — a MERGED list, the shape every conversation receives once `multi_agent` is advertised: the Claude
+// rows first, then one Codex row per family. The Codex rows are invented too; each `display_name` differs
+// from anything a family rule could derive from its `value` or `resolved_model`, so a client-built name
+// cannot pass as the daemon's.
+describe('#1651 — the menu offers only the conversation agent\'s rows', () => {
+  const CODEX_ROWS: readonly WireModelOption[] = [
+    row({ value: 'delta', display_name: 'Vendor Delta face', resolved_model: 'vendor-6-delta', agent: 'codex', family: 'delta' }),
+    row({ value: 'epsilon', display_name: 'Vendor Epsilon face', resolved_model: 'vendor-6-epsilon', agent: 'codex', family: 'epsilon' })
+  ]
+  const CLAUDE_ROWS: readonly WireModelOption[] = [
+    row({ value: 'default', display_name: 'Default tier', agent: 'claude' }),
+    ...ROWS
+  ]
+  const MERGED: ModelListEntry = { models: [...CLAUDE_ROWS, ...CODEX_ROWS], droppedModels: 0 }
+
+  it('lists only Claude rows, in the daemon\'s order and with today\'s labels, on a Claude conversation', () => {
+    const claude = composerModelMenuModel(MERGED, stored('beta[1m]'), 'claude')
+    const untagged = composerModelMenuModel({ models: CLAUDE_ROWS, droppedModels: 0 }, stored('beta[1m]'))
+    expect(claude).toEqual(untagged)
+    expect(claude?.options.map((o) => o.id)).toEqual(['default', 'alpha', 'beta[1m]', 'gamma'])
+    expect(claude?.options.map((o) => o.label)).toEqual(['Default', ...ROW_FAMILIES])
+    expect(claude?.label).toBe('Beta')
+  })
+
+  it('lists only Codex rows with each display_name verbatim on a Codex conversation', () => {
+    const menu = composerModelMenuModel(MERGED, stored('delta'), 'codex')
+    expect(menu?.options).toEqual([
+      { id: 'delta', label: 'Vendor Delta face' },
+      { id: 'epsilon', label: 'Vendor Epsilon face' }
+    ])
+    // The trigger over a hit is the row's display_name, never a family of its resolved_model.
+    expect(menu?.label).toBe('Vendor Delta face')
+    expect(menu?.currentId).toBe('delta')
+  })
+
+  it('never matches a Claude row from a Codex conversation, or a Codex row from a Claude one', () => {
+    expect(composerModelMenuModel(MERGED, stored('alpha'), 'codex')?.currentId).toBeNull()
+    expect(composerModelMenuModel(MERGED, stored('delta'), 'claude')?.currentId).toBeNull()
+  })
+
+  it('shows a Codex miss verbatim rather than deriving a family from it', () => {
+    const menu = composerModelMenuModel(MERGED, layers({ announced: 'vendor-6-delta', stored: 'delta' }), 'codex')
+    expect(menu?.label).toBe('vendor-6-delta')
+    expect(menu?.currentId).toBe('delta')
+  })
+
+  it('reads Default, marks nothing and still offers the Codex rows with no model set', () => {
+    const menu = composerModelMenuModel(MERGED, stored(''), 'codex')
+    expect(menu).toEqual({
+      label: COMPOSER_MODEL_DEFAULT_LABEL,
+      currentId: null,
+      options: [
+        { id: 'delta', label: 'Vendor Delta face' },
+        { id: 'epsilon', label: 'Vendor Epsilon face' }
+      ]
+    })
+    const markup = renderToStaticMarkup(
+      <ComposerModelMenuView models={MERGED} layers={stored('')} agent="codex" onSelect={noop} />
+    )
+    expect(triggerInner(markup)).toContain('>Default</span>')
+    expect(markup).toContain('aria-haspopup')
+    expect(countOf(markup, 'aria-current')).toBe(0)
+    // Claude's unset model still resolves the daemon's own `default` row.
+    expect(composerModelMenuModel(MERGED, stored(''), 'claude')?.currentId).toBe('default')
+  })
+
+  it('draws nothing on a Codex conversation before any snapshot', () => {
+    expect(composerModelMenuModel(MERGED, stored(null), 'codex')).toBeNull()
+  })
+
+  it('offers nothing on a Codex conversation whose list carries only untagged rows', () => {
+    expect(composerModelMenuModel(LIST, stored('alpha'), 'codex')?.options).toEqual([])
+  })
+
+  it('labels a row by its own agent', () => {
+    expect(composerModelRowLabel(CODEX_ROWS[0])).toBe('Vendor Delta face')
+    expect(composerModelRowLabel(ROWS[1])).toBe('Beta')
+    expect(composerModelRowLabel(row({ value: '[1m]', display_name: 'Opaque tier' }))).toBe('Opaque tier')
   })
 })

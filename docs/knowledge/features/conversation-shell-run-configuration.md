@@ -316,6 +316,20 @@ existed for (an announced identifier that is a *superstring* of a published `val
 that row) is re-anchored on a published row rather than dropped with the `matchedFamily` matcher it
 used to name.
 
+**Since #1651, the rows are also filtered by agent.** Once the daemon advertises `multi_agent`,
+`model_list` is one merged list, and `ModelSection` renders only `modelRowsFor(entry, agent)` — the
+entry's rows whose own `agent` (absent counts as Claude) matches the conversation's, in the daemon's
+order. An agent with no rows reads the identical `RUN_CONFIG_MODELS_EMPTY_COPY` sentence the no-rows
+case already used; the frame-level partial notice still reports the whole entry's drops regardless of
+which agent they belong to. `RunConfigSections` (the container) resolves the agent through
+`useConversationAgent`, a `useMemo`-stable hook over an exported pure selector,
+`selectAgentForConversation(conversationId)`, that resolves the owning host exactly as
+`useSessionSettingsConnected` does and then reads
+[`selectConversationAgentFor`](conversation-list-store.md#which-agent-runs-a-conversation-since-1649)
+from it — a null id or an unattributable owner answers Claude. `RunConfigView` threads the result down
+through a new `agent?: WireAgent` prop (absent = Claude, so every pre-#1651 view test is the Claude
+path unchanged) to `RunningModelSection`, `ModelSection` and `EffortSection` alike.
+
 **The React `key` is the array index, deliberately.** `display_name` and `value` are both
 claude-authored text a key would turn into a lookup path — the store's own header assigns this slice
 that obligation. There is also no cross-frame identity to preserve: each frame replaces the
@@ -390,6 +404,17 @@ model menu](composer-model-menu.md#composermodelmenumodel-one-pure-function-deci
 See [Composer effort
 menu](composer-effort-menu.md#composereffortmenumodel-one-pure-function-deciding-all-three-renderings)
 for the shared wrapper's docblock, which now states the rule for all three callers rather than two.
+
+**Since #1651, both `publishedRowFor` and `effortRowFor` take a required, not optional, `agent:
+WireAgent` third argument.** A merged `model_list` carries both agents' rows once the daemon advertises
+`multi_agent`, and a model of the other agent is refused on a session — required rather than optional so
+no caller can join across agents by omission; the typecheck enforces every production call site (this
+section, `ModelSection`, `RunningModelSection`, the three composer footer menus, and
+`EffortDefaultData`). **The `default`-row substitution stays Claude's alone**: `effortRowFor`'s empty-model
+branch resolves the inherited-default row only when `agent === 'claude'`. A new Codex conversation starts
+with no model (pyrycode#2647), so on Codex an empty model returns `undefined` and this section offers no
+levels — the same `nothingKnown` first row of the four-input table above, reached for a different reason
+than "no list yet."
 
 **Four inputs, three renderings** — the section's own `nothingKnown` guard is the one place this table
 is written down in code:

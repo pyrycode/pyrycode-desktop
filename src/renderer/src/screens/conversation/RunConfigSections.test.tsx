@@ -7,8 +7,13 @@ import {
 } from '../../store/runSettingsWriteStore'
 import type { ModelListEntry, ModelListState } from '../../store/modelListStore'
 import type { WireModelOption } from '@shared/wire/types'
-import { RunConfigView, RunConfigSections, changeConnectedSetting } from './RunConfigSections'
-import { conversationListStore } from '../../store/conversationListStore'
+import {
+  RunConfigView,
+  RunConfigSections,
+  changeConnectedSetting,
+  selectAgentForConversation
+} from './RunConfigSections'
+import { conversationListStore, createConversationListStore } from '../../store/conversationListStore'
 import { sessionStore, type ConnectionStatus } from '../../store/sessionStore'
 import { sessionIdStore } from '../../store/sessionIdStore'
 import { runSettingsWriteStore, type SettingsChange } from '../../store/runSettingsWriteStore'
@@ -1504,5 +1509,97 @@ describe('RunConfigSections (container)', () => {
     // #560: the fourth store read is wired and still needs no bridge mock — under server render zustand
     // reads getInitialState() (announced: null), so the container renders the not-yet-known state.
     expect(markup).toContain('Running model not yet known')
+  })
+})
+
+// #1651 — a MERGED list: PUBLISHED_ROWS are Claude's (untagged, as a daemon sending no tags writes them),
+// then one Codex row per family. The first Codex row shares a Claude row's `value`, so a match that ignored
+// the agent would answer with the Claude row.
+describe('#1651 — the sheet offers only the conversation agent\'s rows', () => {
+  const CODEX_ROWS: readonly WireModelOption[] = [
+    modelRow({ value: 'haiku', display_name: 'Vendor shared value', resolved_model: 'vendor-6-shared',
+      effort_levels: ['low', 'medium', 'high', 'xhigh'], agent: 'codex' }),
+    modelRow({ value: 'vendor', display_name: 'Vendor face', resolved_model: 'vendor-6-face',
+      effort_levels: ['low'], agent: 'codex' })
+  ]
+  const MERGED: ModelListEntry = { models: [...PUBLISHED_ROWS, ...CODEX_ROWS], droppedModels: 0 }
+  const sheet = (agent: 'claude' | 'codex' | undefined, model: string, effort = ''): string =>
+    renderToStaticMarkup(
+      <RunConfigView model={model} effort={effort} yolo={false} {...NO_USAGE} models={MERGED} agent={agent}
+        announced={{ model: 'vendor-6-shared', truncated: false }} />
+    )
+
+  it('lists only Claude rows on a Claude conversation, byte-identical to an untagged list', () => {
+    const untagged = renderToStaticMarkup(
+      <RunConfigView model="haiku" effort="" yolo={false} {...NO_USAGE} models={PUBLISHED}
+        announced={{ model: 'vendor-6-shared', truncated: false }} />
+    )
+    expect(sheet(undefined, 'haiku')).toBe(untagged)
+    expect(sheet('claude', 'haiku')).toBe(untagged)
+  })
+
+  it('lists only Codex rows, display_name verbatim and in the daemon\'s order, on a Codex conversation', () => {
+    const markup = sheet('codex', 'haiku')
+    const names = [...markup.matchAll(/run-config__model-name">([^<]*)</g)].map((m) => m[1])
+    expect(names).toEqual(['Vendor shared value', 'Vendor face'])
+    expect(segmentFor(markup, 'run-config__model-row', 'Vendor shared value')).toContain('Current model')
+    expect(markup.split('Current model').length - 1).toBe(1)
+  })
+
+  it('offers exactly the chosen Codex row\'s effort levels, xhigh included', () => {
+    const markup = sheet('codex', 'haiku', 'high')
+    const levels = [...markup.matchAll(/run-config__effort-segment"[^>]*>([^<]*)</g)].map((m) => m[1])
+    expect(levels).toEqual(['low', 'medium', 'high', 'xhigh'])
+    // The same value on Claude reads the Claude row, which publishes none.
+    expect(sheet('claude', 'haiku')).toContain(EFFORT_EMPTY)
+  })
+
+  it('offers no effort levels on a Codex conversation with no model set', () => {
+    const markup = sheet('codex', '', 'high')
+    expect(markup).not.toContain('run-config__effort-segment')
+    expect(markup).toContain('run-config__effort-current">high<')
+    // Claude's unset model still resolves the daemon's `default` row.
+    expect(sheet('claude', '')).toContain('>brisk<')
+  })
+
+  it('names the running model only from a row of the conversation\'s agent', () => {
+    // The running line joins the announcement by `value`, so announcing the shared value tells the two
+    // agents' rows apart.
+    const running = (agent: 'claude' | 'codex'): string => renderToStaticMarkup(
+      <RunConfigView model="" effort="" yolo={false} {...NO_USAGE} models={MERGED} agent={agent}
+        announced={{ model: 'haiku', truncated: false }} />
+    )
+    expect(running('codex')).toContain('run-config__running-value">Vendor shared value<')
+    expect(running('claude')).toContain('run-config__running-value">Quick tier<')
+  })
+
+  it('reads an agent with no rows as the empty list', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView model="" effort="" yolo={false} {...NO_USAGE} models={PUBLISHED} agent="codex" />
+    )
+    expect(markup).toContain(MODELS_EMPTY)
+  })
+})
+
+describe('#1651 — selectAgentForConversation', () => {
+  const summary = { name: null, is_promoted: false, is_archived: false, cwd: '/fake', last_message_ts: '',
+    last_used_at: '', workspace_label: null }
+
+  it('answers the agent of the conversation\'s own host row', () => {
+    const store = createConversationListStore()
+    store.getState().setConversations([{ ...summary, id: 'codex-chat', agent: 'codex' },
+      { ...summary, id: 'claude-chat' }], 'host-a')
+    expect(selectAgentForConversation('codex-chat')(store.getState())).toBe('codex')
+    expect(selectAgentForConversation('claude-chat')(store.getState())).toBe('claude')
+  })
+
+  it('answers Claude for a null id, an unknown id, no list and an unattributable owner', () => {
+    const store = createConversationListStore()
+    expect(selectAgentForConversation('codex-chat')(store.getState())).toBe('claude')
+    store.getState().setConversations([{ ...summary, id: 'codex-chat', agent: 'codex' }], 'host-a')
+    store.getState().setConversations([{ ...summary, id: 'codex-chat', agent: 'codex' }], 'host-b')
+    expect(selectAgentForConversation(null)(store.getState())).toBe('claude')
+    expect(selectAgentForConversation('missing')(store.getState())).toBe('claude')
+    expect(selectAgentForConversation('codex-chat')(store.getState())).toBe('claude')
   })
 })

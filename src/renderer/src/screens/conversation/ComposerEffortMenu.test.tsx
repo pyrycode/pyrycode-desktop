@@ -438,3 +438,40 @@ it('escapes an applied reading without putting it in any attribute', () => {
   expect(html).not.toContain('<img')
   for (const attribute of html.match(/[a-z-]+="[^"]*"/g) ?? []) expect(attribute).not.toContain(hostile)
 })
+
+// #1651 — a merged list: Claude's inherited-default row and GRADED, then a Codex row carrying its own
+// levels, `xhigh` among them. The Codex row shares GRADED's value, so a match that ignored the agent
+// would answer with the wrong row's levels.
+describe('#1651 — the effort menu reads the conversation agent\'s row', () => {
+  const CODEX_LEVELS = ['low', 'medium', 'high', 'xhigh']
+  const CLAUDE_DEFAULT = row({ value: 'default', display_name: 'Default tier', effort_levels: [...LEVELS, 'max'] })
+  const CODEX = row({ value: GRADED.value, display_name: 'Vendor graded', effort_levels: CODEX_LEVELS, agent: 'codex' })
+  const MERGED: ModelListEntry = { models: [CLAUDE_DEFAULT, GRADED, CODEX], droppedModels: 0 }
+
+  it('lists exactly the chosen Codex row\'s levels on a Codex conversation', () => {
+    expect(composerEffortMenuModel(MERGED, GRADED.value, 'high', 'codex').options.map((o) => o.id))
+      .toEqual(CODEX_LEVELS)
+    expect(composerEffortMenuModel(MERGED, GRADED.value, 'high', 'claude').options.map((o) => o.id))
+      .toEqual(LEVELS)
+  })
+
+  it('offers no levels on a Codex conversation with no model set', () => {
+    expect(composerEffortMenuModel(MERGED, '', '', 'codex').options).toEqual([])
+    // Claude's unset model still resolves the daemon's `default` row, and an untagged call is Claude's.
+    expect(composerEffortMenuModel(MERGED, '', '').options.map((o) => o.id)).toEqual([...LEVELS, 'max'])
+    const markup = renderToStaticMarkup(
+      <ComposerEffortMenuView model="" effort="" models={MERGED} agent="codex" onSelect={noop} />
+    )
+    expect(markup).not.toContain('aria-haspopup')
+  })
+
+  it('names Codex in the tooltip on a Codex conversation and keeps Claude\'s strings', () => {
+    const tooltip = (agent: 'claude' | 'codex', effort: string | null): string => renderToStaticMarkup(
+      <ComposerEffortMenuView model={GRADED.value} effort={effort} models={MERGED} agent={agent} onSelect={noop} />
+    )
+    expect(tooltip('codex', null)).toContain('title="Codex reports no model effort parameter."')
+    expect(tooltip('codex', '')).toContain('title="Codex default; applied effort is unavailable."')
+    expect(tooltip('claude', null)).toContain('title="Claude reports no model effort parameter."')
+    expect(tooltip('claude', '')).toContain('title="Claude default; applied effort is unavailable."')
+  })
+})

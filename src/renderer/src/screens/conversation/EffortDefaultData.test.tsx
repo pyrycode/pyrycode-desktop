@@ -219,3 +219,21 @@ it.each([undefined, null, '', 'brisk'])('recalls with applied reading %j when th
     expect(effortDefaultToApply({ ...APPLIES, ...explicit, remembered })).toBeNull()
   }
 })
+
+// #1651 — on a Codex conversation the remembered effort joins the Codex row's levels only. Claude's
+// inherited-default row is in the list, so an unset Codex model would inherit its levels if the agent
+// were ignored.
+describe('#1651 — effortDefaultToApply reads the conversation agent\'s row', () => {
+  const CODEX: WireModelOption = { ...GRADED, value: 'vendor', agent: 'codex' }
+  const MERGED = models([INHERITED, GRADED, CODEX])
+
+  it('applies nothing on a Codex conversation with no model set', () => {
+    expect(effortDefaultToApply({ ...APPLIES, model: '', models: MERGED, agent: 'codex' })).toBeNull()
+    expect(effortDefaultToApply({ ...APPLIES, model: '', models: MERGED })).toBe(REMEMBERED)
+  })
+
+  it('applies a level the chosen Codex row lists, and never a Claude row\'s', () => {
+    expect(effortDefaultToApply({ ...APPLIES, model: CODEX.value, models: MERGED, agent: 'codex' })).toBe(REMEMBERED)
+    expect(effortDefaultToApply({ ...APPLIES, model: GRADED.value, models: MERGED, agent: 'codex' })).toBeNull()
+  })
+})

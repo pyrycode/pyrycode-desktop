@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import type { WireModelOption } from '@shared/wire/types'
+import type { WireAgent, WireModelOption } from '@shared/wire/types'
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
 import { useSessionIdStore, selectSessionId, sessionIdStore } from '../../store/sessionIdStore'
 import {
@@ -24,7 +24,13 @@ import {
 } from '../../store/runSettingsWriteStore'
 import { changeSetting, isAddressableSessionId } from './runSettingsControls'
 import { contextUsagePercent } from './contextUsage'
-import { conversationListStore, useConversationListStore, selectConversations } from '../../store/conversationListStore'
+import {
+  conversationListStore,
+  useConversationListStore,
+  selectConversations,
+  selectConversationAgentFor,
+  type ConversationListState
+} from '../../store/conversationListStore'
 import { sessionStore, useSessionStore } from '../../store/sessionStore'
 import { serverIdForOpenConversation } from './unpairAction'
 
@@ -33,6 +39,26 @@ export function useSessionSettingsConnected(conversationId: string | null): bool
   const rows = useConversationListStore(selectConversations)
   const serverId = serverIdForOpenConversation(rows, conversationId)
   return useSessionStore(s => serverId !== null && s.statuses.get(serverId)?.type === 'connected')
+}
+
+/** #1651 — which agent runs the conversation these controls configure. The owner is resolved exactly as
+ *  `useSessionSettingsConnected` resolves it, then #1649's `selectConversationAgentFor` answers from that
+ *  host's own rows. A null id or an owner that cannot be attributed answers Claude, the wire's reading of
+ *  an absent agent. It returns a primitive, so the subscription is Object.is-stable. */
+export const selectAgentForConversation =
+  (conversationId: string | null) =>
+  (s: ConversationListState): WireAgent => {
+    const serverId = serverIdForOpenConversation(selectConversations(s), conversationId)
+    return serverId === null || conversationId === null
+      ? 'claude'
+      : selectConversationAgentFor(serverId, conversationId)(s)
+  }
+
+/** The hook every settings control reads its conversation's agent through, with a useMemo-stable selector
+ *  per id so a fresh closure per render does not churn the subscription. */
+export function useConversationAgent(conversationId: string | null): WireAgent {
+  const selectAgent = useMemo(() => selectAgentForConversation(conversationId), [conversationId])
+  return useConversationListStore(selectAgent)
 }
 
 /** Re-read ownership and status at the action boundary, including for pre-opened controls. */
@@ -105,11 +131,31 @@ export function changeConnectedSetting(conversationId: string | null, change: Se
 // be sure of the second group is that this body never learned about the case. #1423 kept it that way when
 // it moved a fourth surface into the first group: it changed one call site in ComposerModelMenu.tsx, not
 // this rule.
+//
+// #1651 MADE THE AGENT PART OF THE RULE. A merged list carries both agents' rows, and a model of the other
+// agent is refused on a session, so a row matches only when its `value` is equal AND it belongs to the
+// conversation's agent. The agent is a required argument so no caller can join across agents by omission.
 export function publishedRowFor(
   models: ModelListEntry | null | undefined,
-  model: string
+  model: string,
+  agent: WireAgent
 ): WireModelOption | undefined {
-  return models?.models.find((row) => row.value === model)
+  return models?.models.find((row) => row.value === model && rowAgent(row) === agent)
+}
+
+// #1651 — which agent offers a row. An untagged row is Claude's, the wire rule `agentFromWire` states, so a
+// daemon that sends no tags reads exactly as it did before.
+function rowAgent(row: WireModelOption): WireAgent {
+  return row.agent ?? 'claude'
+}
+
+/** #1651 — the rows one agent offers, in the daemon's order: the only rows a conversation's model lists may
+ *  show. Nothing is reordered or deduped; `[]` when no list has arrived. */
+export function modelRowsFor(
+  models: ModelListEntry | null | undefined,
+  agent: WireAgent
+): readonly WireModelOption[] {
+  return (models?.models ?? []).filter((row) => rowAgent(row) === agent)
 }
 
 // #1168 — the row `value` the daemon publishes for its own inherited default. One of the measured set
@@ -172,9 +218,13 @@ const INHERITED_DEFAULT_MODEL_VALUE = 'default'
  */
 export function effortRowFor(
   models: ModelListEntry | null | undefined,
-  model: string
+  model: string,
+  agent: WireAgent
 ): WireModelOption | undefined {
-  return publishedRowFor(models, model === '' ? INHERITED_DEFAULT_MODEL_VALUE : model)
+  // #1651: the substitution is Claude's. The `default` row is a Claude row, and a new Codex conversation
+  // starts with no model, so on Codex the empty model resolves no row and offers no levels.
+  if (model === '') return agent === 'claude' ? publishedRowFor(models, INHERITED_DEFAULT_MODEL_VALUE, agent) : undefined
+  return publishedRowFor(models, model, agent)
 }
 
 // #975 — the Model section's two non-populated readings, which the store deliberately keeps apart and
@@ -282,7 +332,8 @@ export function RunConfigView({
   errorField,
   pending,
   announced,
-  models
+  models,
+  agent = 'claude'
 }: {
   model: string
   effort: string
@@ -294,6 +345,8 @@ export function RunConfigView({
   pending?: ReturnType<typeof selectPendingFields>
   announced?: AnnouncedModel | null
   models?: ModelListEntry | null
+  /** #1651 — the conversation's agent; absent reads Claude. */
+  agent?: WireAgent
 }): JSX.Element {
   // #975/#976: the submitted string is a published row's `value` — or, for effort, a published level —
   // VERBATIM, never normalised on the way out, which is the half of the round-trip these lines own.
@@ -309,10 +362,11 @@ export function RunConfigView({
       {/* #560: what is running, then what you can switch to. Placed BEFORE the rows deliberately —
           reading order first, and it keeps the surface out of the last model row's open-ended
           segmentFor chunk in the tests. */}
-      <RunningModelSection announced={announced} models={models} />
+      <RunningModelSection announced={announced} models={models} agent={agent} />
       <ModelSection
         model={model}
         models={models}
+        agent={agent}
         onSelect={onModel}
         error={errorField === 'model'}
         busy={pending?.model}
@@ -321,6 +375,7 @@ export function RunConfigView({
         effort={effort}
         model={model}
         models={models}
+        agent={agent}
         onSelect={onEffort}
         error={errorField === 'effort'}
         busy={pending?.effort}
@@ -364,12 +419,14 @@ export function RunConfigView({
 // Nothing here slices, measures, re-joins or re-sinks the identifier to produce the marker.
 function RunningModelSection({
   announced,
-  models
+  models,
+  agent
 }: {
   announced?: AnnouncedModel | null
   models?: ModelListEntry | null
+  agent: WireAgent
 }): JSX.Element {
-  const row = announced ? publishedRowFor(models, announced.model) : undefined
+  const row = announced ? publishedRowFor(models, announced.model, agent) : undefined
   return (
     <>
       <p className="status-sheet__section-header">Running model</p>
@@ -423,17 +480,22 @@ function RunningModelSection({
 function ModelSection({
   model,
   models,
+  agent,
   onSelect,
   error,
   busy
 }: {
   model: string
   models?: ModelListEntry | null
+  agent: WireAgent
   onSelect?: (value: string) => void
   error?: boolean
   busy?: boolean
 }): JSX.Element {
   const entry = models ?? null
+  // #1651: only the conversation's own agent's rows. An agent offering none reads the empty sentence; the
+  // frame-level partial notice above still reports the entry's own drops.
+  const rows = modelRowsFor(entry, agent)
   return (
     <>
       <p className="status-sheet__section-header">Model</p>
@@ -453,10 +515,10 @@ function ModelSection({
       <div className="run-config__model-list" aria-busy={busy ? 'true' : undefined}>
         {entry === null ? (
           <p className="run-config__model-unknown">{RUN_CONFIG_MODELS_UNKNOWN_COPY}</p>
-        ) : entry.models.length === 0 ? (
+        ) : rows.length === 0 ? (
           <p className="run-config__model-empty">{RUN_CONFIG_MODELS_EMPTY_COPY}</p>
         ) : (
-          entry.models.map((row, index) => {
+          rows.map((row, index) => {
             // EXACT EQUALITY, and the whole of the selection rule: no substring, no prefix, no case
             // fold, no trim, anywhere on this path. It is also the half of the round-trip this line
             // owns — the row submits its `value` verbatim, the optimistic overlay holds that same
@@ -574,6 +636,7 @@ function EffortSection({
   effort,
   model,
   models,
+  agent,
   onSelect,
   error,
   busy
@@ -581,11 +644,12 @@ function EffortSection({
   effort: string
   model: string
   models?: ModelListEntry | null
+  agent: WireAgent
   onSelect?: (level: string) => void
   error?: boolean
   busy?: boolean
 }): JSX.Element {
-  const row = effortRowFor(models, model)
+  const row = effortRowFor(models, model, agent)
   const levels = row?.effort_levels ?? []
   // `null` and `[]` say the identical thing per the wire contract, so the test is membership rather
   // than presence. Read PER FIELD: a report naming only `display_name` says nothing about this list.
@@ -816,6 +880,7 @@ export function RunConfigSections({ conversationId }: { conversationId: string |
     [conversationId]
   )
   const reported = useReportedContextStore(selectReported)
+  const agent = useConversationAgent(conversationId)
 
   const effective = selectEffectiveSettings(snapshot, writeState)
   // #558: derived from the SAME writeState reference in the SAME render pass as `effective` — that is
@@ -858,6 +923,7 @@ export function RunConfigSections({ conversationId }: { conversationId: string |
       pending={pending}
       announced={announced}
       models={models}
+      agent={agent}
     />
   )
 }

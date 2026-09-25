@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import type { WireAgent } from '@shared/wire/types'
 import { ComposerOptionsMenu, type ComposerOptionsPanelOption } from './ComposerOptionsPanel'
 import { useModelListStore, selectModelListFor, type ModelListEntry } from '../../store/modelListStore'
 import { useRunConfigStore, selectSnapshot, type RunConfigSnapshot } from '../../store/runConfigStore'
@@ -6,7 +7,12 @@ import { useSessionIdStore, selectSessionId } from '../../store/sessionIdStore'
 import {
   useRunSettingsWriteStore, selectEffectiveSettings, type RunSettingsWriteState
 } from '../../store/runSettingsWriteStore'
-import { effortRowFor, useSessionSettingsConnected, changeConnectedSetting } from './RunConfigSections'
+import {
+  effortRowFor,
+  useConversationAgent,
+  useSessionSettingsConnected,
+  changeConnectedSetting
+} from './RunConfigSections'
 import { isAddressableSessionId } from './runSettingsControls'
 
 // #989: the composer footer's EFFORT menu (Figma 115:3688) — the row's last control before the context
@@ -64,9 +70,11 @@ export interface ComposerEffortMenuModel {
 export function composerEffortMenuModel(
   models: ModelListEntry | null | undefined,
   model: string,
-  effort: string | null | undefined
+  effort: string | null | undefined,
+  agent: WireAgent = 'claude'
 ): ComposerEffortMenuModel {
-  const levels = effortRowFor(models, model)?.effort_levels ?? []
+  // #1651: the conversation's own agent's row. On Codex an unset model resolves no row, so no levels.
+  const levels = effortRowFor(models, model, agent)?.effort_levels ?? []
   return {
     label: effort || COMPOSER_EFFORT_MENU_LABEL,
     currentId: effort ?? '',
@@ -100,19 +108,25 @@ export function ComposerEffortMenuView({
   model,
   effort,
   models,
+  agent = 'claude',
   onSelect,
   selectedOnly = false
 }: {
   model: string
   effort: string | null | undefined
   models: ModelListEntry | null
+  /** #1651 — the conversation's agent; absent reads Claude. */
+  agent?: WireAgent
   onSelect?: (level: string) => void
   selectedOnly?: boolean
 }): JSX.Element | null {
-  const menu = composerEffortMenuModel(models, model, effort)
+  const menu = composerEffortMenuModel(models, model, effort, agent)
+  // #1651: the tooltip names the agent that reports the effort. Client-owned, so Claude's two strings stay
+  // byte-identical and Codex's differ only in the name.
+  const agentName = agent === 'codex' ? 'Codex' : 'Claude'
   const description = effort === null
-    ? 'Claude reports no model effort parameter.'
-    : !effort ? 'Claude default; applied effort is unavailable.'
+    ? `${agentName} reports no model effort parameter.`
+    : !effort ? `${agentName} default; applied effort is unavailable.`
       : selectedOnly ? 'Selected effort; applied effort is unavailable.' : undefined
 
   // AC3. Not `options={[]}` through the shared menu, which would advertise a popup and open an empty
@@ -193,6 +207,7 @@ export function ComposerEffortMenu({
     [conversationId]
   )
   const models = useModelListStore(selectModels)
+  const agent = useConversationAgent(conversationId)
 
   // Keep a saved choice visible before launch; a reported applied value takes precedence.
   const effective = selectEffectiveSettings(snapshot, writeState)
@@ -204,6 +219,7 @@ export function ComposerEffortMenu({
       effort={displayedEffort}
       selectedOnly={snapshot?.effectiveEffort === undefined || snapshot.effectiveEffort === ''}
       models={models}
+      agent={agent}
       // An arrow, so `window.pyry` is dereferenced at INTERACTION time and never during render —
       // hoisting it (or the deps object) would move the dereference into the render path, where
       // window.pyry does not exist under renderToStaticMarkup and every container smoke test would

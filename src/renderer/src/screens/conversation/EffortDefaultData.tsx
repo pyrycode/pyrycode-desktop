@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react'
+import type { WireAgent } from '@shared/wire/types'
 import { useModelListStore, selectModelListFor, type ModelListEntry } from '../../store/modelListStore'
 import { useRunConfigStore, selectSnapshot, runConfigStore } from '../../store/runConfigStore'
 import { useSessionIdStore, selectSessionId, sessionIdStore } from '../../store/sessionIdStore'
@@ -8,7 +9,13 @@ import {
   runSettingsWriteStore
 } from '../../store/runSettingsWriteStore'
 import { useLastEffortStore, selectLastEffort, lastEffortStore } from '../../store/lastEffortStore'
-import { effortRowFor, useSessionSettingsConnected, sessionSettingsConnected, changeConnectedSetting } from './RunConfigSections'
+import {
+  effortRowFor,
+  useConversationAgent,
+  useSessionSettingsConnected,
+  sessionSettingsConnected,
+  changeConnectedSetting
+} from './RunConfigSections'
 import { isAddressableSessionId } from './runSettingsControls'
 
 // #1169 — a new chat opens at the last effort level used. The footer's effort control draws nothing when
@@ -60,6 +67,9 @@ export interface EffortDefaultInput {
   model: string
   models: ModelListEntry | null | undefined
   remembered: string | null
+  /** #1651 — the conversation's agent; absent reads Claude. On Codex an unset model offers no levels, so
+   *  no remembered effort is applied. */
+  agent?: WireAgent
 }
 
 /**
@@ -125,13 +135,13 @@ export interface EffortDefaultInput {
  * rule 1 and as rule 3's key.
  */
 export function effortDefaultToApply(input: EffortDefaultInput): string | null {
-  const { conversationId, appliedFor, sessionId, effort, model, models, remembered } = input
+  const { conversationId, appliedFor, sessionId, effort, model, models, remembered, agent = 'claude' } = input
   if (conversationId === null) return null
   if (remembered === null) return null
   if (appliedFor === conversationId) return null
   if (effort !== '') return null
   if (!isAddressableSessionId(sessionId)) return null
-  const levels = effortRowFor(models, model)?.effort_levels ?? []
+  const levels = effortRowFor(models, model, agent)?.effort_levels ?? []
   return levels.includes(remembered) ? remembered : null
 }
 
@@ -195,6 +205,7 @@ export function EffortDefaultData({
     [conversationId]
   )
   const models = useModelListStore(selectModels)
+  const agent = useConversationAgent(conversationId)
 
   // The conversation id this leaf last applied for. A ref rather than state: it must not trigger a
   // re-render, and it is this leaf's own record rather than anything shared. One id, not a set — the
@@ -222,7 +233,8 @@ export function EffortDefaultData({
       effort: effective.effort,
       model: effective.model,
       models,
-      remembered: selectLastEffort(lastEffortStore.getState())
+      remembered: selectLastEffort(lastEffortStore.getState()),
+      agent
     })
     if (level === null) return
     // BEFORE the send, so a throw out of `sendCommand` cannot leave this chat eligible for a retry on the
@@ -232,7 +244,7 @@ export function EffortDefaultData({
     // An arrow body, so `window.pyry` is dereferenced at effect time and never during render — under
     // `renderToStaticMarkup` there is no window.pyry and the container smoke test would throw.
     changeConnectedSetting(conversationId, { field: 'effort', value: level })
-  }, [conversationId, connected, sessionId, snapshot, writeState, models, remembered])
+  }, [conversationId, connected, sessionId, snapshot, writeState, models, remembered, agent])
 
   return null
 }

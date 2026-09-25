@@ -507,3 +507,23 @@ describe('composerPermissionModeMenuModel — an inherited-default session (#116
     expect(named?.options.map((each) => each.id)).not.toContain(AUTO_PERMISSION_MODE)
   })
 })
+
+// #1651 — only the conversation's own agent's row can hide `auto`. The Codex row shares REFUSING's value,
+// so a match that ignored the agent would read the Claude row's refusal.
+describe('#1651 — the auto rule reads the conversation agent\'s row', () => {
+  const CODEX_ACCEPTING = row({ value: REFUSING.value, display_name: 'Vendor pick', agent: 'codex' })
+  const CODEX_REFUSING = row({ value: 'vendor-refuser', display_name: 'Vendor refuser', supports_auto_mode: false, agent: 'codex' })
+  const MERGED: ModelListEntry = { models: [REFUSING, CODEX_ACCEPTING, CODEX_REFUSING], droppedModels: 0 }
+  const ids = (agent: 'claude' | 'codex', model: string): readonly string[] =>
+    composerPermissionModeMenuModel(MERGED, model, 'default', agent)?.options.map((o) => o.id) ?? []
+
+  it('offers auto on Codex where only the Claude row of that value refuses it', () => {
+    expect(ids('codex', REFUSING.value)).toContain(AUTO_PERMISSION_MODE)
+    expect(ids('claude', REFUSING.value)).not.toContain(AUTO_PERMISSION_MODE)
+  })
+
+  it('hides auto on a Codex row that refuses it, and offers it with no model set', () => {
+    expect(ids('codex', CODEX_REFUSING.value)).not.toContain(AUTO_PERMISSION_MODE)
+    expect(ids('codex', '')).toContain(AUTO_PERMISSION_MODE)
+  })
+})

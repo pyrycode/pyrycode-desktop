@@ -246,8 +246,8 @@ export interface BackgroundTaskUpdatedSnapshot {
  *  `background_task_updated`. Beside the records rather than on them, so no setter that rebuilds a
  *  record can lose it, and a start or a roster naming the task again cannot restore it to the count.
  *  Every id in it is an id held in `rosters` or `unlistedStarts` of the same conversation: it is written
- *  only on an update that HITS, pruned to the rows of each roster, and dropped by both clears. Only
- *  `selectLiveTaskCountFor` reads it. */
+ *  only on an update that HITS, pruned to the rows of each roster, and dropped by both clears. Read by
+ *  `selectLiveTaskCountFor` for the pill and `selectFinishedTasksFor` for the panel's groups (#1635). */
 export interface BackgroundTaskRosterState {
   rosters: ReadonlyMap<string, BackgroundTaskRosterEntry>
   unlistedStarts: ReadonlyMap<string, ReadonlyMap<string, HeldBackgroundTask>>
@@ -641,6 +641,19 @@ export const selectRosterFor =
   (conversationId: string) =>
   (s: BackgroundTaskRosterState): BackgroundTaskRosterEntry | null =>
     s.rosters.get(conversationId) ?? null
+
+/**
+ * The panel's grouping read (#1635) — one conversation's finished task ids, which split its list into a
+ * Running and a Finished group. Returns the HELD set or `null` ("nothing finished"), never a fresh set:
+ * `withFinished` and `setRoster`'s prune build a new set only when this conversation's membership
+ * changes, so a write for another conversation leaves the result `Object.is`-identical and the panel
+ * does not re-render. `null` is safe to collapse here, unlike in `selectRosterFor`: with no roster there
+ * are no rows to group.
+ */
+export const selectFinishedTasksFor =
+  (conversationId: string) =>
+  (s: BackgroundTaskRosterState): ReadonlySet<string> | null =>
+    s.finishedTasks.get(conversationId) ?? null
 
 /**
  * The pill's count (#1561) — a selector FACTORY bound to one `conversationId`, and the one definition of

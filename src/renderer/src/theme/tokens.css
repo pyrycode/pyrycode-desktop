@@ -54,6 +54,8 @@
                                         trapped by — that node's own generated export prints #001d34 too,
                                         agreeing with the variable rather than contradicting it. */
   --color-on-primary-container: #cfe4ff;
+  --color-secondary: #bac8da; /* M3 Schemes/Secondary, dark scheme — the background-task panel's group
+                                 headers (#1635, Figma 564:2240). */
   --color-secondary-container: #3a4857;
   --color-on-secondary-container: #d6e4f7;
   --color-outline: #8c9199;

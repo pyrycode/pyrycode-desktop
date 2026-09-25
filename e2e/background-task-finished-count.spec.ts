@@ -94,6 +94,9 @@ test('a terminal status takes a listed task out of the pill count but not out of
   const panel = panelFor(page)
   await expect(panel).toBeVisible()
   await expect(panel.locator('.background-task-panel__row')).toHaveCount(2)
+  // #1635: the container hands the store's finished ids to the view, so both rows sit in Finished.
+  await expect(panel.locator('.background-task-panel__group-header')).toHaveText(['Finished · 2'])
+  await expect(panel.locator('.background-task-panel__row--finished')).toHaveCount(2)
   await expect(panel).toContainText(FIRST)
   await expect(panel).toContainText(SECOND)
 })

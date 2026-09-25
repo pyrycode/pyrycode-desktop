@@ -5522,119 +5522,270 @@ button.top-overlay-pill {
    opened by the task count pill (#1634) and by a `Background tasks` item in the thread's overflow menu,
    which wears `.conversation__overflow-item` and needs no rule here. */
 
-/* The task list — a plain semantic <ul> with the browser's list chrome reset away; the rows carry the
-   panel's own padding. */
+/* #1635 — the list inside the body, #580's drawing (Figma 564:2230, 565:2241, 565:2281, 565:2327,
+   565:2341; components 563:1054 and 563:1055). Nothing here takes an error colour: the cut chip, the
+   partial notice and the two readings are the daemon reporting honestly, not failures. */
+
+/* The partial-list notice: a filled Secondary Container chip with an 8px dot, at the top of the body. Its
+   bottom margin is the body's drawn 10px gap to the first group. */
+.background-task-panel__partial {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 10px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-xs);
+  background: var(--color-secondary-container);
+  color: var(--color-on-secondary-container);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-small-weight-emphasized);
+}
+
+.background-task-panel__partial-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+}
+
+/* The two groups: the drawn body gap (10) either side of the drawn 6px spacer between them. */
+.background-task-panel__groups {
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+
+.background-task-panel__group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* "Running · n" / "Finished · n": label-medium in Secondary. The drawn 17px line takes the scale's 16. */
+.background-task-panel__group-header {
+  margin: 0;
+  color: var(--color-secondary);
+  font-size: var(--text-label-medium-size);
+  line-height: var(--text-label-medium-line);
+  letter-spacing: var(--text-label-medium-tracking);
+  font-weight: var(--text-label-medium-weight);
+}
+
+/* A plain semantic <ul> with the browser's list chrome reset away; the cards carry the drawn 10px gap. */
 .background-task-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-/* One task row: the description line over the muted task-type line. Not interactive — there is no action
-   on a task in this slice — so no hover/focus affordance is advertised. */
+/* One task card. Not interactive, so no hover or focus affordance. The fill is On Primary at 41% (22% on a
+   finished card), drawn by a pseudo-element at `opacity` — the .composer__row::before house form, never a
+   colour-mix value. `isolation: isolate` plus z-index: -1 keeps that ground under every child without
+   positioning them. */
 .background-task-panel__row {
+  position: relative;
+  isolation: isolate;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: var(--space-3) var(--space-4);
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-bubble-x);
+  border-radius: var(--radius-xs);
 }
 
-/* The description (for a local_bash task, the command line claude ran) — mono on-surface, wrapping rather
-   than ellipsizing: a cut command line reads as a different command. overflow-wrap breaks a long unbroken
-   token instead of overflowing the panel. */
+.background-task-panel__row::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--color-on-primary);
+  opacity: 0.41;
+}
+
+.background-task-panel__row--finished::before {
+  opacity: 0.22;
+}
+
+/* The type-and-status line: the raw task type on the left, the tag on the right. */
+.background-task-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  align-self: stretch;
+}
+
+/* The raw task type, mono 11/16 in Primary. overflow-wrap breaks an unbroken daemon token. */
+.background-task-panel__type {
+  min-width: 0;
+  color: var(--color-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-label-small-size);
+  line-height: var(--text-label-small-line);
+  overflow-wrap: anywhere;
+}
+
+/* The Task status tag: a pill with a 6px dot in the label's colour. */
+.background-task-panel__tag {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px 2px var(--space-2);
+  border-radius: var(--radius-full);
+  font-size: var(--text-label-small-size);
+  line-height: var(--text-label-small-line);
+  letter-spacing: var(--text-label-small-tracking);
+  font-weight: var(--text-label-small-weight);
+  white-space: nowrap;
+}
+
+.background-task-panel__tag--running {
+  background: var(--color-primary-container);
+  color: var(--color-on-primary-container);
+}
+
+.background-task-panel__tag--stopped {
+  background: var(--color-secondary-container);
+  color: var(--color-on-secondary-container);
+}
+
+.background-task-panel__tag-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+}
+
+/* The description, wrapped in full rather than ellipsized: a cut command line reads as a different
+   command. Body text by default; a local_bash command line is mono. Muted on a finished card. The drawn
+   18px line takes the scale's 16. */
 .background-task-panel__description {
+  align-self: stretch;
   min-width: 0;
   color: var(--color-on-surface);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-small-weight);
+  overflow-wrap: anywhere;
+}
+
+.background-task-panel__description--mono {
   font-family: var(--font-mono);
-  font-size: var(--text-body-medium-size);
-  line-height: var(--text-body-medium-line);
-  letter-spacing: var(--text-body-medium-tracking);
-  font-weight: var(--text-body-medium-weight);
-  overflow-wrap: anywhere;
+  letter-spacing: 0;
 }
 
-/* The task type — the muted secondary line (the .workspace-picker__meta token set). */
-.background-task-panel__type {
+.background-task-panel__row--finished .background-task-panel__description {
   color: var(--color-on-surface-variant);
-  font-size: var(--text-body-small-size);
-  line-height: var(--text-body-small-line);
-  letter-spacing: var(--text-body-small-tracking);
-  font-weight: var(--text-body-small-weight);
-  overflow-wrap: anywhere;
 }
 
-/* The two non-populated readings — separate rules, not one shared class, so #580 can style them
-   differently. Same muted body-medium token set as .workspace-picker__empty; NEITHER is an error state, so
-   neither takes an error colour. */
-.background-task-panel__unobserved,
-.background-task-panel__empty {
-  margin: 0;
-  padding: var(--space-3) var(--space-4);
-  color: var(--color-on-surface-variant);
-  font-size: var(--text-body-medium-size);
-  line-height: var(--text-body-medium-line);
-  letter-spacing: var(--text-body-medium-tracking);
-  font-weight: var(--text-body-medium-weight);
-}
-
-/* #582 — the daemon's two truncation reports. Like the readings above, NEITHER is an error state and
-   neither takes an error colour: the daemon reporting its own bounds honestly is not a failure. Both use
-   the .unrecognized-row__truncated declaration set, which is what the app already wears when it says the
-   daemon cut something. Own classes, no positional CSS — #580 can restyle or reposition them freely. */
-
-/* The partial-list notice — sits above the branch, so it takes the rows' horizontal padding to align
-   with them and with the branch copy beneath it. */
-.background-task-panel__partial {
-  margin: 0;
-  padding: var(--space-3) var(--space-4);
-  color: var(--color-on-surface-variant);
-  font-size: var(--text-body-small-size);
-  line-height: var(--text-body-small-line);
-  letter-spacing: var(--text-body-small-tracking);
-  font-weight: var(--text-body-small-weight);
-}
-
-/* The per-field cut markers. One rule for both — the sentence is the same and only the ATTRIBUTION
-   differs, which position already carries; the classes stay separate so a test can prove which field was
-   marked and so #580 can style them apart. No padding: the row provides it, and the row is
-   flex-direction: column, so each marker lands on its own line under its field. */
+/* The cut marker (Figma 563:1055): a dashed Tertiary chip on its own line straight after the cut field.
+   One rule for the three; the classes stay separate so a test can prove which field was marked. */
 .background-task-panel__cut-description,
 .background-task-panel__cut-type,
 .background-task-panel__cut-patch {
-  color: var(--color-on-surface-variant);
-  font-size: var(--text-body-small-size);
-  line-height: var(--text-body-small-line);
-  letter-spacing: var(--text-body-small-tracking);
-  font-weight: var(--text-body-small-weight);
+  padding: 1px 6px;
+  border: 1px dashed var(--color-tertiary);
+  border-radius: 4px;
+  color: var(--color-tertiary);
+  font-size: var(--text-label-small-size);
+  line-height: var(--text-label-small-line);
+  letter-spacing: 0.3px;
+  font-weight: var(--text-label-small-weight);
 }
 
-/* #583 — the latest change claude reported about a task. Neither of these is an error state either: a
-   patch is a change report about something still ALIVE, and this family reports no terminal event at all,
-   so nothing here takes an error colour or names a completion. Own classes, no positional CSS. */
+/* The latest update: an Outline label over a Surface code block, the patch's cut chip under the block. */
+.background-task-panel__update {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  align-self: stretch;
+}
 
-/* The patch itself. Mono like the description — it is structured-looking text — but MUTED body-small
-   rather than on-surface body-medium, so the task's identity stays the primary line. Wrapping, not
-   ellipsized: overflow-wrap breaks a 4 KiB unbroken token instead of overflowing the panel, and
-   .background-task-drawer__body already scrolls, so no height clamp is needed here. Clamping is a visual decision
-   #580 owns — and if it lands it must stay CSS-only, never a substring operation on daemon text. */
+.background-task-panel__update-label {
+  color: var(--color-outline);
+  font-size: var(--text-label-small-size);
+  line-height: var(--text-label-small-line);
+  letter-spacing: var(--text-label-small-tracking);
+  font-weight: var(--text-label-small-weight);
+}
+
+.background-task-panel__update-block {
+  align-self: stretch;
+  padding: var(--space-2) 10px;
+  border-radius: var(--radius-xs);
+  background: var(--color-surface);
+}
+
+/* The raw patch: mono 11/16, pre-wrapped so its own line breaks show, never parsed or highlighted. The
+   body already scrolls, so no height clamp; if one lands it must stay CSS-only. */
 .background-task-panel__patch {
-  min-width: 0;
+  display: block;
   color: var(--color-on-surface-variant);
   font-family: var(--font-mono);
-  font-size: var(--text-body-small-size);
-  line-height: var(--text-body-small-line);
-  letter-spacing: var(--text-body-small-tracking);
-  font-weight: var(--text-body-small-weight);
+  font-size: var(--text-label-small-size);
+  line-height: var(--text-label-small-line);
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-/* The recorded-empty-patch reading — client copy, not daemon text, so it wears the muted prose set
-   .background-task-panel__type does rather than the patch's mono. */
+/* The recorded-empty-patch reading — client copy, so italic prose in Outline rather than the patch's mono. */
 .background-task-panel__no-change {
+  display: block;
+  color: var(--color-outline);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-style: italic;
+}
+
+/* The two non-populated readings: a centred ring, heading and support line. Separate heading classes and
+   ring modifiers keep them apart; neither is an error state. */
+.background-task-panel__reading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 48px 0;
+  text-align: center;
+}
+
+.background-task-panel__ring {
+  display: block;
+  fill: none;
+  stroke: var(--color-outline);
+  stroke-width: 2;
+}
+
+.background-task-panel__ring--dashed {
+  stroke-dasharray: 3 3;
+}
+
+.background-task-panel__unobserved,
+.background-task-panel__empty {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight-emphasized);
+}
+
+.background-task-panel__reading-support {
+  margin: 0;
   color: var(--color-on-surface-variant);
   font-size: var(--text-body-small-size);
   line-height: var(--text-body-small-line);
-  letter-spacing: var(--text-body-small-tracking);
+  letter-spacing: var(--text-body-medium-tracking);
   font-weight: var(--text-body-small-weight);
 }
 

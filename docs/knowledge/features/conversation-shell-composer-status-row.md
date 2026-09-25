@@ -80,6 +80,23 @@ copy; neither decoded token is interpolated. A second rising edge updates the sa
 label when either phase or outcome changes, while an identical repeat preserves
 state identity. See [#1517](https://github.com/pyrycode/pyrycode-desktop/issues/1517).
 
+**The restarting phase names the conversation's own agent, not always Claude.**
+[#1653](https://github.com/pyrycode/pyrycode-desktop/issues/1653) added a second
+constant, `RESETTING_RESTARTING_CODEX_COPY`, and `restartingCopy(agent: WireAgent)`
+selects between the two by exhaustive switch — the same "select, never interpolate"
+posture #1517 established for the phase and outcome, now extended to the agent name,
+so a third agent is a `tsc` error here rather than a reset that silently claims to
+restart Claude. The container reads the open conversation's agent through
+[#1649](https://github.com/pyrycode/pyrycode-desktop/issues/1649)'s
+`selectConversationAgentFor(host, id)` and passes it down as `ThinkingIndicator`'s
+`agent` prop, which defaults to `'claude'` when omitted — the one prop on this
+component that is optional rather than required, breaking the "all four required"
+posture the [thinking/working indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)
+doc records for `toolName`/`retry`/`thinkingTokens`/`resetting`, because an absent
+agent already means Claude on the wire and in the #1649 selector alike, so the
+default restates an existing contract instead of guessing. The wrapping-up phase,
+the bare copy and both handoff suffixes are agent-independent and unchanged.
+
 Reset frames route by their conversation id through both the translator and target
 selector in the [timeline bridge](conversation-timeline-store.md). Turn activity
 must not clear the held reset, or the first handoff delta would erase its own label.

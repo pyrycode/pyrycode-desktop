@@ -98,15 +98,32 @@ and [Edge cases](background-task-roster-store-edge-cases.md) for the store itsel
   `docs/specs/architecture/1561-task-count-drops-finished-tasks.md` — the pill's first real removal path
   beyond roster omission: `BackgroundTaskUpdatedSnapshot` gains `status`, a new `finishedTasks:
   ReadonlyMap<string, ReadonlySet<string>>` state field holds the ids a `setUpdatedTask` HIT has reported
-  exactly `completed` / `failed` / `stopped` (`summary` stays uncopied), and `selectLiveTaskCountFor`
-  reads the roster's listed tasks minus that set, plus `droppedTasks` — see [§ The pill's
+  exactly `completed` / `failed` / `stopped` (`summary` stayed uncopied at the time; #1639 later copies
+  it), and `selectLiveTaskCountFor` reads the roster's listed tasks minus that set, plus `droppedTasks` —
+  see [§ The pill's
   count](background-task-roster-store-internals.md#the-pills-count-selectlivetaskcountfor-1561). The
   composer pill ([Conversation shell — composer status row § Background-task count
   pill](conversation-shell-composer-status.md#background-task-count-pill-the-slots-last-occupant-1435))
   is its first and, so far, only reader; the panel keeps reading `selectRosterFor` and keeps listing a
-  finished task until a roster omits it (#1246 owns rendering the panel's own finished state). Security
+  finished task until a roster omits it (#1639 gave the panel the status word and summary text; grouping
+  itself stayed #1635's `finishedTaskIds`, not this ticket's `finishedTasks`). Security
   review PASS (self-review) with one SHOULD FIX — `clearAllRosters` must drop `finishedTasks` too, and its
   short-circuit must consider it — fixed in the design as shipped. One accepted, unguarded gap carried to
   [Edge cases](background-task-roster-store-edge-cases.md): a reconnect's reconcile burst re-listing an
   already-finished task counts it again, since `resetRostersFor` drops `finishedTasks` with the rosters it
   scopes to.
+- [#1639](https://github.com/pyrycode/pyrycode-desktop/issues/1639) · Spec:
+  `docs/specs/architecture/1639-background-task-status-tag-summary.md` — the render split from #1246 that
+  finally reads the `status` word and `summary` text #1560 shipped dormant. `BackgroundTaskUpdatedSnapshot`
+  gains `summary` (SIX fields); `HeldBackgroundTask` gains `status: string | null` (the latest non-empty
+  word; `''` leaves it unchanged) and `summary: HeldBackgroundTaskSummary | null` (text + cut report,
+  written only from a terminal HIT). Both ride across every rebuild the same way `latestUpdate` does — see
+  [Internals § How it works](background-task-roster-store-internals.md#how-it-works). Deliberately a
+  second, independent read of `isTerminalTaskStatus` alongside `finishedTasks`: this ticket changed what
+  the panel **draws**, not which group a row sits in or the pill's count, both still `finishedTasks`'s
+  call alone. Reader: [Conversation shell — background tasks § Status tag and
+  summary](conversation-shell-background-tasks.md#status-tag-and-summary-1639). Security review PASS
+  (self-review): status/summary reach the DOM only as auto-escaped children, the tag's class is chosen by
+  `Map.get`/`===` against four client-owned literals, and the daemon word never becomes a class. Known gap
+  carried to the PR, not this ticket's to fix: a terminal frame still carries `patch: ''`, so a finished
+  row still shows a "No change reported" update block the Figma finished rows do not.

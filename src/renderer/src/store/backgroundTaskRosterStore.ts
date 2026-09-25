@@ -115,6 +115,21 @@ export interface HeldBackgroundTaskUpdate {
   truncatedFields: readonly string[] | null
 }
 
+/** The summary claude sent with a task's TERMINAL status (#1639), plus that frame's cut report, so the
+ *  panel can tell whether `summary` was cut. Recorded only from a frame whose status is terminal and
+ *  kept across every later frame, terminal ones replacing it. `text: ''` is a recorded value (the frame
+ *  always carries the field); the view is what decides an empty summary draws no line.
+ *
+ *  `truncatedFields` is the whole frame's list, straight across — `null` is never collapsed into `[]`.
+ *
+ *  SECURITY: `text` is UNTRUSTED, model-authored text, observed carrying a literal command line. It is
+ *  the same class as `description` and `patch`: inert escaped text only, never an attribute, a class
+ *  name, a key or a log line. */
+export interface HeldBackgroundTaskSummary {
+  text: string
+  truncatedFields: readonly string[] | null
+}
+
 /** ONE background task as this app holds it — the join of what the three frames each report, mapped to
  *  renderer-side camelCase from whichever source last spoke about it.
  *
@@ -160,11 +175,19 @@ export interface HeldBackgroundTaskUpdate {
  *  `taskId` is carried in the value as well as being the map key — redundant by one field so that #568
  *  can iterate values without threading entry keys alongside them.
  *
- *  Deliberately carries NO terminal state, although the family now reports one (#1561): an update's
- *  terminal `status` is recorded as an id in `BackgroundTaskRosterState.finishedTasks`, BESIDE this
- *  record, so no rebuild of the record — a roster row, a start upgrading it, a hold moving in — can drop
- *  it. Absence from a later roster is still the only thing that removes a task from the LIST; a terminal
- *  status only removes it from the COUNT (`selectLiveTaskCountFor`). */
+ *  Whether a task is FINISHED is not decided here (#1561): an update's terminal `status` is recorded as
+ *  an id in `BackgroundTaskRosterState.finishedTasks`, BESIDE this record, so no rebuild of the record — a
+ *  roster row, a start upgrading it, a hold moving in — can drop it. Absence from a later roster is still
+ *  the only thing that removes a task from the LIST; a terminal status only removes it from the COUNT
+ *  (`selectLiveTaskCountFor`).
+ *
+ *  `status` and `summary` (#1639) are what the panel DRAWS for that state, and both are the
+ *  rides-across-the-rebuild kind above: no roster row and no started frame can report them. `status` is
+ *  the latest NON-EMPTY word any update reported — `null` means none has arrived, and a `''` frame leaves
+ *  it unchanged. It stays the open string the daemon sent, never narrowed to a union, and it never decides
+ *  grouping or the count. `summary` is the terminal frame's (see `HeldBackgroundTaskSummary`); `null`
+ *  means no terminal frame has arrived. Required and nullable, like `latestUpdate`, so every construction
+ *  site has to state them. */
 export interface HeldBackgroundTask {
   taskId: string
   toolCallId: string | null
@@ -172,6 +195,8 @@ export interface HeldBackgroundTask {
   description: string
   truncatedFields: readonly string[] | null
   latestUpdate: HeldBackgroundTaskUpdate | null
+  status: string | null
+  summary: HeldBackgroundTaskSummary | null
 }
 
 /** The held value for ONE conversation: the tasks currently believed alive, keyed by `taskId`, plus the
@@ -213,18 +238,18 @@ export interface BackgroundTaskStartedSnapshot {
   truncatedFields: readonly string[] | null
 }
 
-/** The update write unit — the `backgroundTaskUpdated` daemon-event arm minus its `type` tag and its
- *  `summary`. FIVE fields: no `toolCallId`, no `description`, no `taskType`, and it gains `patch` and
- *  `status`. `status` is an OPEN string (#1560), `''` on every patch-bearing frame; only
- *  `isTerminalTaskStatus` reads it, and it is never narrowed to a union (#1561). `summary` is untrusted
- *  model-authored text and stays unread until #1246 renders it. Flat, like
- *  its sibling above and like the arm itself, so the translator stays a copy-the-named-fields filter;
- *  `setUpdatedTask` is what assembles the nested `HeldBackgroundTaskUpdate` from the pair. */
+/** The update write unit — the `backgroundTaskUpdated` daemon-event arm minus its `type` tag. SIX
+ *  fields: no `toolCallId`, no `description`, no `taskType`, and it gains `patch`, `status` and
+ *  `summary`. `status` is an OPEN string (#1560), `''` on every patch-bearing frame, and it is never
+ *  narrowed to a union (#1561). `summary` is untrusted model-authored text, held only from a terminal
+ *  frame (#1639). Flat, like its sibling above and like the arm itself, so the translator stays a
+ *  copy-the-named-fields filter; `setUpdatedTask` is what assembles the nested held records. */
 export interface BackgroundTaskUpdatedSnapshot {
   conversationId: string
   taskId: string
   patch: string
   status: string
+  summary: string
   truncatedFields: readonly string[] | null
 }
 
@@ -355,8 +380,9 @@ function withFinished(
  * never opens a task and never creates a conversation entry, because a patch is a change report about
  * something already alive, not an announcement — and the same-reference return is what makes "creates
  * no partial entry" provable by `Object.is` rather than by enumerating what did not appear. On a hit it
- * replaces `latestUpdate` wholesale (latest-wins, never an accumulating list) and touches NOTHING else:
- * an update frame reports no `description`, `taskType`, `toolCallId`, or task-level `truncatedFields`.
+ * replaces `latestUpdate` wholesale (latest-wins, never an accumulating list), records a non-empty
+ * `status` word and a terminal frame's `summary` (#1639), and touches NOTHING else: an update frame
+ * reports no `description`, `taskType`, `toolCallId`, or task-level `truncatedFields`.
  * The two cut reports stay distinct fields rather than merging, since they name different vocabularies.
  * A hit whose `status` is terminal also records the task id in `finishedTasks` (#1561), which takes it
  * out of the count and keeps it out — a later `''` or unknown status never removes that id, and
@@ -488,7 +514,10 @@ export function createBackgroundTaskRosterStore(
                   // would freeze. `??` is right HERE and is not the collapse the rule above forbids —
                   // it normalises "no prior record" and "held, never updated" to the one reading they
                   // share, and no wire value passes through it.
-                  latestUpdate: held?.latestUpdate ?? null
+                  latestUpdate: held?.latestUpdate ?? null,
+                  // The status word and summary ride across for the same reason (#1639).
+                  status: held?.status ?? null,
+                  summary: held?.summary ?? null
                 }
           )
         }
@@ -516,15 +545,18 @@ export function createBackgroundTaskRosterStore(
         const existing = s.rosters.get(snapshot.conversationId)
         const listed = existing?.tasks.get(snapshot.taskId)
         const holds = s.unlistedStarts.get(snapshot.conversationId)
+        const prior = listed ?? holds?.get(snapshot.taskId)
         const record: HeldBackgroundTask = {
           taskId: snapshot.taskId,
           toolCallId: snapshot.toolCallId,
           taskType: snapshot.taskType,
           description: snapshot.description,
           truncatedFields: snapshot.truncatedFields,
-          // Same carry-over as the roster path: a started frame reports no patch, so an update that
-          // arrived before it (claude's ordering, not the daemon's) is not thrown away.
-          latestUpdate: (listed ?? holds?.get(snapshot.taskId))?.latestUpdate ?? null
+          // Same carry-over as the roster path: a started frame reports no patch, status or summary, so
+          // an update that arrived before it (claude's ordering, not the daemon's) is not thrown away.
+          latestUpdate: prior?.latestUpdate ?? null,
+          status: prior?.status ?? null,
+          summary: prior?.summary ?? null
         }
         if (existing === undefined || listed === undefined) {
           // No roster lists this task, so it is held where no surface reads it (#1563): `rosters` is
@@ -546,10 +578,22 @@ export function createBackgroundTaskRosterStore(
         const existing = s.rosters.get(snapshot.conversationId)
         const held = existing?.tasks.get(snapshot.taskId)
         const latestUpdate = { patch: snapshot.patch, truncatedFields: snapshot.truncatedFields }
+        const terminal = isTerminalTaskStatus(snapshot.status)
         // Written only on a hit, below: a finished id is always an id this store already holds.
-        const finishedTasks = isTerminalTaskStatus(snapshot.status)
+        const finishedTasks = terminal
           ? withFinished(s.finishedTasks, snapshot.conversationId, snapshot.taskId)
           : s.finishedTasks
+        // #1639: the word the tag draws and the summary a finished row shows. `''` keeps the held word;
+        // only a terminal frame's summary is recorded, and a later non-terminal frame keeps it.
+        const outcome = (
+          prior: HeldBackgroundTask
+        ): Pick<HeldBackgroundTask, 'latestUpdate' | 'status' | 'summary'> => ({
+          latestUpdate,
+          status: snapshot.status === '' ? prior.status : snapshot.status,
+          summary: terminal
+            ? { text: snapshot.summary, truncatedFields: snapshot.truncatedFields }
+            : prior.summary
+        })
         if (existing === undefined || held === undefined) {
           // Not listed: a start may be waiting for its roster, and its update must not be lost (#1563).
           const holds = s.unlistedStarts.get(snapshot.conversationId)
@@ -560,7 +604,7 @@ export function createBackgroundTaskRosterStore(
           // patch text in a file.
           if (holds === undefined || pending === undefined) return s
           const nextHolds = new Map(holds)
-          nextHolds.set(snapshot.taskId, { ...pending, latestUpdate })
+          nextHolds.set(snapshot.taskId, { ...pending, ...outcome(pending) })
           const unlistedStarts = new Map(s.unlistedStarts)
           unlistedStarts.set(snapshot.conversationId, nextHolds)
           return { unlistedStarts, finishedTasks }
@@ -570,7 +614,7 @@ export function createBackgroundTaskRosterStore(
         // whose whole meaning is "every other field is untouched", and an update reports none of them.
         // `truncatedFields` straight across — no `??`, no `|| []` (AC3). `Map.set` on an existing key
         // keeps its position, so display order is untouched.
-        tasks.set(snapshot.taskId, { ...held, latestUpdate })
+        tasks.set(snapshot.taskId, { ...held, ...outcome(held) })
         const next = new Map(s.rosters)
         // `droppedTasks` PRESERVED: an update reports nothing about roster truncation.
         next.set(snapshot.conversationId, { tasks, droppedTasks: existing.droppedTasks })

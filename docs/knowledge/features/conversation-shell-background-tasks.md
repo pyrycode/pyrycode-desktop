@@ -47,10 +47,13 @@ any future chrome icon in this view needs the same inline treatment (the empty r
                                                        partial notice alone)
 
 each .background-task-panel__row (TaskRow, #1635):
-  .__head → .__type <taskType, mono>  +  .__tag (dot + "Running" | dot + "Finished", .__tag--running | .__tag--stopped)
+  .__head → .__type <taskType, mono>  +  .__tag (task.status mapped to a label + one of four classes — #1639,
+                                                   see § Status tag and summary)
   .__cut-type "Truncated by the daemon" when task.truncatedFields names task_type — #582
   .__description <description, mono for local_bash, body text otherwise; muted on a finished row>
   .__cut-description "Truncated by the daemon" when task.truncatedFields names description — #582
+  finished && task.summary !== null && task.summary.text !== '' → .__summary <task.summary.text> + .__cut-summary
+                                 "Truncated by the daemon" when task.summary.truncatedFields names "summary" — #1639
   task.latestUpdate !== null → .__update ("Latest update" label + .__update-block > .__no-change | .__patch) + .__cut-patch
                                  when update.truncatedFields (not task.truncatedFields) names "patch" — #583
 ```
@@ -172,14 +175,16 @@ description/task-type markers, compiles and type-checks (both are `readonly stri
 matches — the crossover both directions guard against. Neither list ever reaches the markup; names are
 matched, never displayed. No history: `latestUpdate` is latest-wins, one record per task — the panel
 does not accumulate patches into a list, a ref, or component state. Nothing here is read as a terminal
-signal: `patch` itself carries no finish state, and this slice's `entry` prop never reads
-`background_task_updated`'s `status` field. (The frame family does carry one, since #1560/#1561 — it
-drives the composer's count pill's second removal path, see [Background-task roster store — internals §
-The pill's
-count](background-task-roster-store-internals.md#the-pills-count-selectlivetaskcountfor-1561) — but this
-panel is not that reader: a finished task simply stops appearing here once a roster omits it, and no copy
-or class in this slice names completion, failure, or success.) No prop, type, store, bridge or wire
-change; same `entry` prop #581 shipped. Architect
+signal: `patch` itself carries no finish state, and — as of #583 — this slice's `entry` prop never read
+`background_task_updated`'s `status` field. (The frame family did carry one, since #1560/#1561 — it drove
+only the composer's count pill's removal path, see [Background-task roster store — internals § The pill's
+count](background-task-roster-store-internals.md#the-pills-count-selectlivetaskcountfor-1561) — and as of
+\#583 the panel was not that reader: a finished task simply stopped appearing here once a roster omitted
+it, and no copy or class in this slice named completion, failure, or success. **#1639 changed this**: the
+row now reads `task.status`/`task.summary` and draws Completed/Failed/Stopped styling and a finished row's
+summary text — see § Status tag and summary below. Grouping itself is still #1635's `finishedTaskIds`, not
+`status`.) No prop, type, store, bridge or wire change from #581; same `entry` prop, widened by #1639.
+Architect
 self-review PASS (security-sensitive label); code review PASS with two non-blocking SHOULD FIX
 (both test-coverage gaps, not production defects — see [#583 codebase notes](../codebase/583.md)).
 
@@ -218,12 +223,63 @@ re-wrapped in new elements. Two things did change:
   same constraint: check the shipped substring assertions in `BackgroundTaskPanel.test.tsx` before choosing
   a new class name, not just the classes currently in the markup.
 
-The Finished tag wears the **Stopped** style (`--tag--stopped`, Secondary Container fill) under a neutral
-"Finished" label — not a status word — because the daemon's actual `completed` / `failed` / `stopped`
-distinction is #1639's to map; this ticket only had `finishedTasks` membership (a boolean), never the
-`status` string itself. The per-row progress lines the Populated and Capped Figma frames also show belong
-to #1640, and are not drawn here either. `tokens.css` gained `--color-secondary` (#bac8da, M3 Secondary,
-dark scheme) for the group headers — the palette had no existing token that matched it.
+As shipped by #1635, the Finished tag wore the **Stopped** style (`--tag--stopped`, Secondary Container
+fill) under a neutral "Finished" label — not a status word — because this ticket only had `finishedTasks`
+membership (a boolean), never the `status` string itself; mapping the daemon's actual `completed` /
+`failed` / `stopped` distinction was left to #1639 (below). The per-row progress lines the Populated and
+Capped Figma frames also show still belong to #1640, and are not drawn here. `tokens.css` gained
+`--color-secondary` (#bac8da, M3 Secondary, dark scheme) for the group headers — the palette had no
+existing token that matched it.
+
+## Status tag and summary (#1639)
+
+Closes the "stays unread" hand-off the bridge doc comment named since #1561: `backgroundTaskUpdated`'s
+`status` and `summary` now reach the row, held on `HeldBackgroundTask` itself (`status: string | null`,
+`summary: HeldBackgroundTaskSummary | null` — see [Background-task roster store — internals § How it
+works](background-task-roster-store-internals.md#how-it-works)), separate from the `finishedTasks` set
+that still alone decides grouping and the count.
+
+`TaskStatusTag` takes `status: string | null` in place of the #1635 `finished: boolean`:
+
+- `null` (no status word has ever arrived) → Running, `--tag--running`.
+- `'completed'` / `'failed'` / `'stopped'` → their own label and class (`--tag--completed`,
+  `--tag--failed`, `--tag--stopped`), looked up in a module-level `TASK_STATUS_TAGS` `Map` and matched
+  only by `Map.get`/`===` — the daemon word is the lookup key, never templated into a class string the way
+  `ReadingRing`'s `--${variant}` does for a client-owned union.
+- Any other non-empty word → the word itself, auto-escaped, in the `--tag--stopped` class
+  (`TASK_TAG_UNKNOWN_CLASS`). The class is always one of these four literal strings; only the row's own
+  group membership (`finishedTaskIds`, unchanged from #1635) decides whether that row sits under Running
+  or Finished, so an unrecognised word still counts and displays as Running even while its tag shows the
+  raw text.
+
+A finished row (`finished && task.summary !== null && task.summary.text !== ''`) draws
+`.background-task-panel__summary` straight after the description and its cut chip, holding
+`task.summary.text` as an auto-escaped child — never mono, unlike the `local_bash` description. Its own
+cut report, `wasCut(task.summary.truncatedFields, CUT_FIELD_SUMMARY)`, draws the existing dashed cut chip
+(now `.background-task-panel__cut-summary`) straight after it, the same `wasCut`/`CUT_FIELD_*` pattern
+\#582/\#583 established for `task_type`/`description`/`patch` — `CUT_FIELD_SUMMARY` (`'summary'`) is matched
+only against `task.summary.truncatedFields`, never `task.truncatedFields`, the same crossover trap #583
+already documents for the patch marker. An empty summary (`text === ''`) draws no line; a running row
+never draws one, since the `finished` guard is checked first.
+
+**CSS.** Completed reuses `--color-success` for its label over a 16% tint expressed as
+`color-mix(in srgb, var(--color-success) 16%, transparent)` — no new hex literal, matching the Figma-drawn
+`rgba(47,192,56,0.16)`. Failed uses the existing `--color-error-container`/`--color-on-error-container`
+pair. `.background-task-panel__summary` is body-small, On Surface Variant, with `overflow-wrap: anywhere`
+for an unbroken daemon token, the same rule the description carries.
+
+**SECURITY.** `status` and `summary` are daemon-relayed, model-influenced text — `summary` has been
+observed carrying a literal command line, the same class as `description`/`patch`. Both render only as
+auto-escaped React children: never `dangerouslySetInnerHTML`, an attribute, a key, or a log line, and the
+tag's class is chosen exclusively by the `Map`/`===` lookup above, never string-built from the word. Panel
+tests render markup-shaped status words and summaries and assert no `<b` element and no attribute carries
+either. Architect self-review PASS (security-sensitive label); verifier PASS with no findings blocking
+merge.
+
+**Known gap, left open.** A terminal frame's `patch` is still `''` on every finish, so a finished row still
+renders the `.background-task-panel__no-change` "No change reported" block even though the Figma finished
+rows show none. This predates #1639 (#583/#1635) and is outside this ticket's acceptance criteria; noted
+in the PR as a candidate for a follow-up ticket rather than fixed here.
 
 See [#581 codebase notes](../codebase/581.md) for the shell's full design, test posture, and
 code-review record.

@@ -15,6 +15,10 @@ export interface HeldBackgroundTaskUpdate {                    // the latest pat
   patch: string                                                 // opaque text, held verbatim, never parsed
   truncatedFields: readonly string[] | null
 }
+export interface HeldBackgroundTaskSummary {                   // the terminal frame's text + ITS OWN cut report (#1639)
+  text: string                                                  // untrusted model-authored text; inert escaped text only
+  truncatedFields: readonly string[] | null
+}
 export interface HeldBackgroundTask {                          // per-task, renderer-side camelCase (#576)
   taskId: string
   toolCallId: string | null       // null = roster-sourced; only a started frame ever reports one
@@ -22,6 +26,8 @@ export interface HeldBackgroundTask {                          // per-task, rend
   description: string
   truncatedFields: readonly string[] | null
   latestUpdate: HeldBackgroundTaskUpdate | null   // null = no update has ever matched this task (#577)
+  status: string | null           // latest NON-EMPTY status word any update reported; '' leaves it unchanged (#1639)
+  summary: HeldBackgroundTaskSummary | null   // set only from a HIT whose status is terminal (#1639)
 }
 export interface BackgroundTaskRosterEntry {
   tasks: ReadonlyMap<string, HeldBackgroundTask>   // keyed by taskId, built at WRITE time; insertion order = roster order
@@ -40,11 +46,12 @@ export interface BackgroundTaskStartedSnapshot {               // started write 
   description: string
   truncatedFields: readonly string[] | null
 }
-export interface BackgroundTaskUpdatedSnapshot {               // update write unit (#577) — FIVE fields since #1561
+export interface BackgroundTaskUpdatedSnapshot {               // update write unit (#577) — SIX fields since #1639
   conversationId: string
   taskId: string
   patch: string
   status: string                                                // open string (#1560); '' on every patch-bearing frame; only isTerminalTaskStatus reads it (#1561)
+  summary: string                                                // open string (#1560); copied verbatim (#1639), held only from a terminal HIT
   truncatedFields: readonly string[] | null
 }
 export interface BackgroundTaskRosterState {
@@ -92,7 +99,9 @@ is authoritative and never repeats, so refreshing from the row would throw away 
 permanently (AC2). Otherwise a fresh `HeldBackgroundTask` is built from the row with `toolCallId: null`,
 and that fresh literal carries `latestUpdate: held?.latestUpdate ?? null` — a recorded patch rides across
 the rebuild **individually**, deliberately *not* folded into the `toolCallId !== null` provenance
-predicate that gates keeping the whole record. Folding it in would freeze a patched roster-sourced task's
+predicate that gates keeping the whole record. Since #1639, `status` and `summary` ride across the same
+way (`held?.status ?? null`, `held?.summary ?? null`): no roster row can report either, so a rebuilt
+roster-sourced record must not lose the tag word or the finished summary a prior update already recorded. Folding it in would freeze a patched roster-sourced task's
 label/type/own cut report at whatever they were when the patch arrived, since the rebuild branch would
 then never run again for that task; leaving it out of the fresh literal entirely would drop the patch at
 the very next roster. Both mistakes compile clean and break no other test — see [#577's codebase
@@ -133,7 +142,10 @@ different vocabularies, so a started frame's list replaces rather than unions wi
 `droppedTasks` is **preserved** from the existing listed entry — a started frame reports nothing about
 roster truncation and must not reset the count; an unlisted hold has no `droppedTasks` to preserve in the
 first place. A held `latestUpdate` is likewise **preserved**, in either place — a started frame reports no
-patch, so it must not silently erase one recorded before it arrived.
+patch, so it must not silently erase one recorded before it arrived. Since #1639, `status` and `summary`
+are preserved the same way, from the listed record or the hold, whichever the task is found in — a
+started frame reports neither, so an update that already tagged or finished the task must survive an
+upgrade that arrives after it.
 
 `setUpdatedTask` (#577, new; #1563 widened where it looks) records **one task's latest patch and its own
 cut report**, joined on `conversationId` + `taskId` and never on arrival order — an update can arrive
@@ -155,6 +167,19 @@ records `taskId` into the conversation's `finishedTasks`. A miss records nothing
 claude 2.1.280 the emptier roster usually lands one line before the terminal update, so the miss is the
 *common* case and must stay the same silent no-op it already was, not a special case that needs its own
 branch.
+
+Since #1639, a HIT also writes `status` and `summary` onto the held record (both places a hit can land —
+the listed `tasks` map and an `unlistedStarts` hold — through one shared `outcome(prior)` helper so the two
+sites cannot drift): `status` becomes `snapshot.status === '' ? prior.status : snapshot.status` — a `''`
+frame (the common patch-only case) leaves the held word exactly where a fresh non-empty word wrote it,
+never resetting it to `null`. `summary` is written only when `isTerminalTaskStatus(snapshot.status)` is
+true, as `{ text: snapshot.summary, truncatedFields: snapshot.truncatedFields }`; a non-terminal frame
+after a terminal one keeps the prior summary rather than overwriting it with an update that carries none.
+This is a second, independent read of the same `status`/`isTerminalTaskStatus` value `finishedTasks`
+already computes in the same setter — `status`/`summary` are what the panel **draws**, `finishedTasks` is
+what decides membership and the count, and the two must never be merged into one field: [Conversation
+shell — background tasks § Status tag and
+summary](conversation-shell-background-tasks.md#status-tag-and-summary-1639) is the reader.
 
 **Why `finishedTasks` is a set held beside the task records, never a field on `HeldBackgroundTask`
 itself.** A field would need a carry-over at every site that rebuilds a record — `setRoster`'s
@@ -289,7 +314,7 @@ translateBackgroundTaskStarted(event: DaemonEvent): BackgroundTaskStartedSnapsho
 // switch (event.type) { case 'backgroundTaskStarted': return { conversationId, taskId, toolCallId, taskType, description, truncatedFields }; default: return null }
 
 translateBackgroundTaskUpdated(event: DaemonEvent): BackgroundTaskUpdatedSnapshot | null   // #577, third sibling translator
-// switch (event.type) { case 'backgroundTaskUpdated': return { conversationId, taskId, patch, status, truncatedFields }; default: return null }   // status added #1561
+// switch (event.type) { case 'backgroundTaskUpdated': return { conversationId, taskId, patch, status, summary, truncatedFields }; default: return null }   // status added #1561, summary added #1639
 
 originOf(event: DaemonEvent): ConversationListOrigin   // since #1139 — reads #1068's stamp, never event.ack
 
@@ -378,14 +403,17 @@ daemon → background_task_started frame → parseBackgroundTaskStartedPayload �
 
 daemon → background_task_updated frame → parseBackgroundTaskUpdatedPayload → backgroundTaskUpdated DaemonEvent [#565]
   (the DaemonEvent gained status/summary under #1560, both crossing verbatim, '' included; #1561 carries
-   status — the family's only finish signal — into the snapshot below; summary stays uncopied)
+   status — the family's only finish signal — into the snapshot below; #1639 carries summary too)
   → DAEMON_EVENT_CHANNEL → subscribeBackgroundTaskRoster listener (roster + started translators return null first)
-    → translateBackgroundTaskUpdated → { conversationId, taskId, patch, status, truncatedFields }   [#1561]
+    → translateBackgroundTaskUpdated → { conversationId, taskId, patch, status, summary, truncatedFields }   [#1561, #1639]
     → backgroundTaskRosterStore.setUpdatedTask(snapshot)
       [joins on conversationId + taskId, never on order; miss on unknown conversation OR unknown taskId
-       returns state unchanged, silently, terminal status or not; on a hit replaces latestUpdate wholesale
-       and, when status is exactly completed/failed/stopped, also files taskId into finishedTasks (#1561)]
-  → selectRosterFor(openId) / useBackgroundTaskRosterStore   (the panel's read, #568)
+       returns state unchanged, silently, terminal status or not; on a hit replaces latestUpdate wholesale,
+       writes status/summary onto the held record for display (#1639), and, when status is exactly
+       completed/failed/stopped, also files taskId into finishedTasks (#1561) — two independent reads of
+       the same terminal check, one for the DRAWN tag, one for MEMBERSHIP]
+  → selectRosterFor(openId) / useBackgroundTaskRosterStore   (the panel's read, #568 — now also reads
+    task.status/task.summary per row, #1639)
   → selectLiveTaskCountFor(openId) / useBackgroundTaskRosterStore   (the pill's read, #1561 — excludes a
     finished id from the count; the panel's list is untouched)
 

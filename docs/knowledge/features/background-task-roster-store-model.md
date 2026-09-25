@@ -46,7 +46,13 @@ either source held verbatim:
   `''` on every patch-bearing frame) and `summary`; #1561 reads `status` — exact match on `completed` /
   `failed` / `stopped` — as the family's one finish signal and records it beside the task, never on it
   (see [§ Live task count](background-task-roster-store-internals.md#the-pills-count-selectlivetaskcountfor-1561)).
-  `summary` stays uncopied and unread: untrusted model-authored text, left for a later panel slice.
+  Since #1639 the same frame's `status` and `summary` are also held **on** `HeldBackgroundTask`
+  (`status`/`summary`, distinct from the `finishedTasks` set above) so the panel's tag and a finished
+  row's summary line can draw them — see [Internals § How it
+  works](background-task-roster-store-internals.md#how-it-works) and [Conversation shell — background
+  tasks § Status tag and summary](conversation-shell-background-tasks.md#status-tag-and-summary-1639).
+  `summary` is untrusted model-authored text, the same class as `description` and `patch`, rendered only
+  as inert escaped text.
 
 Deliberately **not** a [session store](session-store.md) or [timeline store](conversation-timeline-store.md)
 facet: like `queue_state`, this family is daemon *state* (SSOT pyrycode #720), not part of claude's turn

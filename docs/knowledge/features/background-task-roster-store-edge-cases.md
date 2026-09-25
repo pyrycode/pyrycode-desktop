@@ -69,7 +69,19 @@ qualify, and [Related](background-task-roster-store-related.md) for cross-refere
   `stopped` removes a task from `selectLiveTaskCountFor` alone, recorded in `finishedTasks` beside the
   task record rather than read off `HeldBackgroundTask`, `patch`, or a roster diff. Everything else in
   this bullet's earlier claim — that a patch itself carries no terminal state, and that the LIST has no
-  removal path but a later roster's omission — still holds.
+  removal path but a later roster's omission — still holds. Since #1639 `HeldBackgroundTask` separately
+  holds `status`/`summary` for **display** (the panel's tag and a finished row's summary line) — a second,
+  independent read of the same terminal check, never merged into `finishedTasks` or used to decide
+  grouping: an unrecognised status word still counts as running and still shows in the Running group, even
+  though its tag reads the raw word.
+- **`status` and `summary` (#1639) join `description` and `patch` as untrusted, daemon-relayed text now
+  reaching a render surface.** `status` is the latest non-empty word any update reported, held verbatim
+  and compared only by `===`/`Map.get` against four client-owned tag constants; an unrecognised word
+  renders as itself, an auto-escaped child in the Stopped style, and never becomes a class name. `summary`
+  is the terminal frame's own text plus its cut report, drawn only on a finished row, directly under the
+  description — same posture as `description`/`patch`: inert escaped text only, never an attribute, a
+  class, a key, or a log line. See [Conversation shell — background tasks § Status tag and
+  summary](conversation-shell-background-tasks.md#status-tag-and-summary-1639).
 - **An unlisted start is invisible, not merely stale — and evicted three ways, not two.** Before #1563
   (see [Related](background-task-roster-store-related.md)), a started-only task was shown, and stayed shown, until a roster contradicted it or a
   reset/clear ran — the stuck "N tasks running" pill of #1558. Since #1563 such a start is held in

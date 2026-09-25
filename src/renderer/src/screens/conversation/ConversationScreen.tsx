@@ -133,7 +133,7 @@ import { downloadAttachment, attachmentDownloadDeps } from './downloadAttachment
 import { sendInterrupt } from './sendInterrupt'
 import { sendNewSession } from './sendNewSession'
 import { RunConfigData } from './RunConfigData'
-import { RunConfigSections } from './RunConfigSections'
+import { RunConfigSections, useConversationAgent } from './RunConfigSections'
 import { SystemPromptSection } from './SystemPromptSection'
 import { LogDataSection } from './LogDataSection'
 import { PermissionModal } from './PermissionModal'
@@ -525,6 +525,7 @@ export function ConversationScreen({
         olderSaved={olderSaved}
         saved={offline || ownSlice?.localRead !== undefined}
         onOpenMarkdownPath={reader.open}
+        agent={openAgent}
         onDropQueued={actionsAvailable ? (queuedMsgId, messageId) => {
           if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
           dropQueuedMessage(openConversationId, queuedMsgId, messageId, {
@@ -545,6 +546,7 @@ export function ConversationScreen({
         <BackgroundTaskPanel
           conversationId={activeConversation?.id ?? null}
           turnRunning={isTurnRunning(phase)}
+          agent={openAgent}
           onClose={() => setPanelOpen(false)}
         />
       )}
@@ -1087,7 +1089,8 @@ export function Timeline({
   firstRowKey = 0,
   olderSaved = false,
   saved = false,
-  onOpenMarkdownPath
+  onOpenMarkdownPath,
+  agent
 }: {
   items: readonly ThreadItem[]
   scrollPin?: ThreadScrollPin
@@ -1102,6 +1105,9 @@ export function Timeline({
   /** #1627: opens the in-app reader for a markdown link in a settled assistant reply. Optional for the
    *  `onDropQueued` reason: absent, such a link keeps its plain-text rendering. */
   onOpenMarkdownPath?: (path: string) => void
+  /** #1656: the open conversation's agent, named by the banner and stopped-turn rows. Optional for the
+   *  `scrollPin` reason: absent reads Claude, so the existing render sites stay byte-identical. */
+  agent?: WireAgent
 }): JSX.Element {
   const rows = foldQueuedRows(items, queued ?? EMPTY_QUEUED)
   // #1566: keyed by item index, which is the row index below items.length (foldQueuedRows).
@@ -1142,7 +1148,7 @@ export function Timeline({
         if (row.item.kind !== 'toolCall') return (
           <TimelineRow key={group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
             item={row.item} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(group.index)}
-            onOpenMarkdownPath={onOpenMarkdownPath}
+            onOpenMarkdownPath={onOpenMarkdownPath} agent={agent}
             inProgress={!saved && group.index === items.length - 1 && row.item.kind === 'assistantText'} />
         )
         const content = (
@@ -1414,7 +1420,7 @@ export function stoppedTurnText(item: {
   isError?: boolean
   terminalReason?: string
   errorCategory?: string
-}): string | null {
+}, agent: WireAgent = 'claude'): string | null {
   if (item.stopReason === 'cancelled') return null
   const outcome = stoppedReportText(item.outcome)
   if (item.isError !== true && (outcome === '' || outcome === 'success')) return null
@@ -1433,7 +1439,8 @@ export function stoppedTurnText(item: {
     case 'model_error': text = 'Stopped: model error'; break
     default: text = reason ? `Stopped: ${reason}` : 'Stopped: error'
   }
-  return category ? `${text} (Claude reported: ${category})` : text
+  // #1656: the category is the conversation agent's own report, so the agent's client-owned name credits it.
+  return category ? `${text} (${agent === 'codex' ? 'Codex' : 'Claude'} reported: ${category})` : text
 }
 
 // #1214: `queued` is the row's not-yet-run state, non-null exactly while the daemon reports this row's
@@ -1445,7 +1452,8 @@ function TimelineRow({
   queued = null,
   onDropQueued,
   turnStats,
-  onOpenMarkdownPath
+  onOpenMarkdownPath,
+  agent
 }: {
   item: ThreadItem
   inProgress: boolean
@@ -1455,6 +1463,8 @@ function TimelineRow({
   turnStats?: string
   /** #1627: read only by the settled `assistantText` arm; user messages render no markdown. */
   onOpenMarkdownPath?: (path: string) => void
+  /** #1656: read by the banner and turnBoundary arms, which name the conversation's agent. */
+  agent?: WireAgent
 }): JSX.Element | null {
   switch (item.kind) {
     case 'assistantText': {
@@ -1524,12 +1534,12 @@ function TimelineRow({
       return item.level === 'info' ? null : (
         <p className={item.level === 'warning'
           ? 'session-delimiter__title claude-banner claude-banner--warning'
-          : 'session-delimiter__title claude-banner'}>{bannerDisplayText(item)}</p>
+          : 'session-delimiter__title claude-banner'}>{bannerDisplayText(item, agent)}</p>
       )
     case 'modelRefusal':
       return <ModelRefusalRow refusal={item.refusal} />
     case 'turnBoundary': {
-      const text = stoppedTurnText(item)
+      const text = stoppedTurnText(item, agent)
       return text === null ? null : <p className="session-delimiter__title stopped-turn">{text}</p>
     }
     case 'compactionBoundary':
@@ -1876,20 +1886,22 @@ function denialDisplayText(text: string): string {
 }
 
 // Presentation only: keep the retained payload intact and leave truncation to the producer.
-function bannerDisplayText(report: { text: string; truncated: boolean }): string {
+// #1656: the prefix names the conversation's agent, a client-owned name the agent selects.
+function bannerDisplayText(report: { text: string; truncated: boolean }, agent: WireAgent = 'claude'): string {
   const text = report.text
     .replace(/(?:\x1b\]|\x9d)[\s\S]*?(?:\x07|\x1b\\|\x9c|$)/g, '')
     .replace(/(?:\x1b[PX^_]|[\x90\x98\x9e\x9f])[\s\S]*?(?:\x1b\\|\x9c|$)/g, '')
     .replace(/(?:\x1b\[|\x9b)[0-?]*[ -/]*(?:[@-~]|$)/g, '')
     .replace(/\x1b[ -/]*[0-~]/g, '')
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, '')
-  return `Claude: ${text}${report.truncated ? '…' : ''}`
+  return `${agent === 'codex' ? 'Codex' : 'Claude'}: ${text}${report.truncated ? '…' : ''}`
 }
 
-export function ComposerBannerReport({ report }: {
+export function ComposerBannerReport({ report, agent }: {
   report: { text: string; truncated: boolean }
+  agent?: WireAgent
 }): JSX.Element {
-  return <div className="composer-status__error composer-status__banner" role="status">{bannerDisplayText(report)}</div>
+  return <div className="composer-status__error composer-status__banner" role="status">{bannerDisplayText(report, agent)}</div>
 }
 
 export function ToolRow({
@@ -3109,9 +3121,12 @@ export function ChannelInfoSheetView({
   systemPromptSection,
   mcpServersSection,
   sessionFacts = null,
-  sessionCostUsd = null
+  sessionCostUsd = null,
+  agent = 'claude'
 }: {
   conversation: ConversationCreatedPayload | null
+  /** #1656: the conversation's agent, which the Session section's version row names; absent reads Claude. */
+  agent?: WireAgent
   now?: number
   onClose: () => void
   // #368: the Rename action, supplied by the container ONLY when there is a conversation to rename.
@@ -3201,7 +3216,8 @@ export function ChannelInfoSheetView({
             <>
               <p className="status-sheet__section-header">Session</p>
               {[
-                { field: 'claude_code_version', label: 'Claude version', value: sessionFacts?.claudeCodeVersion },
+                // #1656: the label names the agent; the field stays the wire's truncation key.
+                { field: 'claude_code_version', label: agent === 'codex' ? 'Codex version' : 'Claude version', value: sessionFacts?.claudeCodeVersion },
                 { field: 'permission_mode', label: 'Reported permission mode', value: sessionFacts?.permissionMode }
               ].map(({ field, label, value }) => {
                 // Bound code points, keeping surrogate pairs intact; claims never drive controls.
@@ -3357,6 +3373,7 @@ function ChannelInfoSheet({
     conversation?.id ?? null
   )
   const sessionFacts = useSessionFactsStore(selectSessionFactsFor(conversation?.id ?? null))
+  const agent = useConversationAgent(conversation?.id ?? null)
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameName, setRenameName] = useState('')
   // #377: the Delete confirm's per-interaction state — the `renameOpen` twin (transient UI state →
@@ -3378,6 +3395,7 @@ function ChannelInfoSheet({
         conversation={conversation}
         sessionFacts={sessionFacts}
         sessionCostUsd={sessionCostUsd}
+        agent={agent}
         now={now}
         onClose={onClose}
         // Supply onRename ONLY for a non-null conversation — a null active conversation yields no button
@@ -4516,6 +4534,8 @@ function ComposerErrorSlotControl({
 }): JSX.Element | null {
   const status = useOpenConnectionStatus()
   const open = useActiveConversationStore(selectActiveConversation)
+  // #1656: the stopping banner's prefix names this conversation's agent.
+  const agent = useConversationAgent(open?.id ?? null)
   const rows = useConversationListStore(selectConversations)
   const historyHost = serverIdForOpenConversation(rows, open?.id ?? null)
   const historyFailure = useConversationTimelineStore(s =>
@@ -4649,7 +4669,7 @@ function ComposerErrorSlotControl({
             Could not change the model — try again.
           </div>
         ) : (
-          stoppingBanner !== undefined ? <ComposerBannerReport report={stoppingBanner} /> : null
+          stoppingBanner !== undefined ? <ComposerBannerReport report={stoppingBanner} agent={agent} /> : null
         )
       }
       history={historyFailure === null ? null :

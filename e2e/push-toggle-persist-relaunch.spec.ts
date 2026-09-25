@@ -23,7 +23,7 @@ import { test, expect } from './fixtures/launchPairedApp'
 // never echoed. No failure diagnostic serialises a token, key, or plaintext.
 
 test('push-notification toggle persists across an app relaunch', async ({ launchPairedApp }) => {
-  const pushToggleName = 'Push notifications when claude responds'
+  const pushToggleName = 'Push notifications when an agent responds'
   const settings = 'section[aria-label="Settings screen"]'
 
   // --- Launch 1: flip the toggle away from its ENABLED default. ---

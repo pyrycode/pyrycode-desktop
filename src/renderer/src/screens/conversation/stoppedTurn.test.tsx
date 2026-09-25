@@ -42,6 +42,16 @@ describe('stopped turn presentation', () => {
     expect(html).not.toContain('\u0000')
     expect(stoppedTurnText({ ...boundary, terminalReason: 'x'.repeat(257) })).toBe('Stopped: error')
   })
+  it('names the conversation agent in the reported category (#1656)', () => {
+    const item = { ...boundary, outcome: 'success', errorCategory: 'overloaded' }
+    expect(stoppedTurnText(item, 'codex')).toBe('Stopped: API error (Codex reported: overloaded)')
+    expect(stoppedTurnText(item, 'claude')).toBe('Stopped: API error (Claude reported: overloaded)')
+    const html = renderToStaticMarkup(<Timeline agent="codex" items={[item]} />)
+    expect(html).toContain('Stopped: API error (Codex reported: overloaded)')
+    expect(html).not.toContain('Claude')
+    expect(renderToStaticMarkup(<Timeline agent="claude" items={[item]} />))
+      .toBe(renderToStaticMarkup(<Timeline items={[item]} />))
+  })
   it('carries live translation and history records', () => {
     const event = translateTimelineEvent({ ...end, conversationId: 'c' })
     expect(event).toMatchObject(end)

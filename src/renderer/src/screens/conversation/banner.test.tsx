@@ -37,6 +37,19 @@ describe('banner display surfaces', () => {
       expect(html).not.toMatch(/<script|<a |<strong|href=|hidden|secret-control|\x1b|\x00|\x08|\x7f|\x9d/)
     }
   })
+  it('names the conversation agent on both surfaces (#1656)', () => {
+    const codex = [
+      renderToStaticMarkup(<Timeline agent="codex" items={[{ kind: 'banner', ...report }]} />),
+      renderToStaticMarkup(<ComposerBannerReport report={report} agent="codex" />)
+    ]
+    for (const html of codex) {
+      expect(html).toContain('Codex: hook blocked')
+      expect(html).not.toContain('Claude:')
+    }
+    expect(renderToStaticMarkup(<Timeline agent="claude" items={[{ kind: 'banner', ...report }]} />)).toBe(row())
+    expect(renderToStaticMarkup(<ComposerBannerReport report={report} agent="claude" />))
+      .toBe(renderToStaticMarkup(<ComposerBannerReport report={report} />))
+  })
   it('does not apply a second length cap or infer truncation', () => {
     const value = { ...report, text: 'x'.repeat(6000) }
     for (const html of [row(value), renderToStaticMarkup(<ComposerBannerReport report={value} />)]) {
@@ -87,5 +100,27 @@ describe('banner display surfaces', () => {
     // #1604: the usage reading is a Top overlay pill now, drawn whatever the slot holds and never in it.
     expect(html.includes('Nearly at usage limit')).toBe(true)
     expect(html.indexOf('Nearly at usage limit')).toBeLessThan(html.indexOf('class="composer-status"'))
+  })
+  it.each(['codex', 'claude'] as const)('the store-bound surfaces name a %s conversation agent (#1656)', agent => {
+    const timelines = createConversationTimelineStore()
+    timelines.getState().dispatchFor('a', { type: 'banner', ...report })
+    vi.spyOn(conversationTimelineStore, 'getInitialState').mockReturnValue(timelines.getState())
+    const conversation = { id: 'a', cwd: '', name: 'A', is_promoted: false, last_used_at: '', workspace_label: null }
+    vi.spyOn(activeConversationStore, 'getInitialState').mockReturnValue({
+      ...activeConversationStore.getInitialState(), activeConversation: conversation
+    })
+    vi.spyOn(sessionStore, 'getInitialState').mockReturnValue({
+      ...sessionStore.getInitialState(), statuses: new Map([['s', {
+        type: 'connected', ack: { protocol_version: '1', server_id: 's', conn_id: 'c', capabilities: [] }
+      }]])
+    })
+    const row = { ...conversation, serverId: 's', is_archived: false, last_message_ts: '', agent }
+    vi.spyOn(conversationListStore, 'getInitialState').mockReturnValue({
+      ...conversationListStore.getInitialState(), conversations: [row], byServer: new Map([['s', [row]]])
+    })
+    const html = renderToStaticMarkup(<ConversationScreen />)
+    const name = agent === 'codex' ? 'Codex' : 'Claude'
+    expect(html).toContain(`role="status">${name}: hook blocked</div>`)
+    expect(html.includes('Codex:')).toBe(agent === 'codex')
   })
 })

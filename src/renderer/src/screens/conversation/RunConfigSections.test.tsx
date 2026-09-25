@@ -890,6 +890,16 @@ describe('RunConfigView — Context window', () => {
       )
     }
   })
+
+  it('names the conversation agent in the YOLO caption and the explainer (#1656)', () => {
+    const codex = renderToStaticMarkup(<RunConfigView {...base} agent="codex" {...NO_USAGE} />)
+    expect(codex).toContain('Codex runs commands without asking for confirmation. Use carefully.')
+    expect(codex).toContain('When full, oldest messages get dropped from codex&#x27;s view ')
+    expect(codex).not.toContain('Claude runs commands')
+    expect(codex).not.toContain('claude&#x27;s view')
+    expect(renderToStaticMarkup(<RunConfigView {...base} agent="claude" {...NO_USAGE} />))
+      .toBe(renderToStaticMarkup(<RunConfigView {...base} {...NO_USAGE} />))
+  })
 })
 
 // #257: the interactive toggle — the SAME view is inert (#188's read-only markup) with no `onChange`

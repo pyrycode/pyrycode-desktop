@@ -185,6 +185,30 @@ The [event channel](daemon-event-channel.md#run-configuration-report) carries th
 report as `effectiveEffort`. Renderer snapshots, visible selection and remembered
 choices belong to [#1549](https://github.com/pyrycode/pyrycode-desktop/issues/1549).
 
+### Optional session capability flags
+
+`SessionSettingsPayload.capabilities?: SessionCapabilitiesPayload` reports whether
+the resolved session answers slash-command, MCP-status and context-breakdown
+requests (pyrycode#2646/#2670) — true for a Claude session, false for a Codex one.
+`parseSessionSettingsPayload` follows the `effective_effort` optional-field pattern
+above: absent `capabilities` stays `undefined`; present is narrowed by
+`parseSessionCapabilities` (\#1654), which rejects outright when the value is not a
+record and otherwise reads `slash_commands`, `mcp_servers` and
+`context_usage_detail` independently through `requireBoolean` — each absent flag
+stays `undefined` (distinct from `false`), and a present non-boolean rejects the
+whole frame before it is logged. The parser returns a fresh literal of the three
+flags only; the object's other upstream keys (`interrupt`, `mid_turn_input`,
+`effort_levels`, `permission_modes`, `attachment_types`, `models`) are deliberately
+never decoded.
+
+`capabilities` only ever reaches a client that advertised `multi_agent`, and only
+when the reply resolved a session — this app doesn't advertise `multi_agent` yet,
+so the key will not arrive in production until it does. The decode is ready ahead
+of that; the flags carry no display or control behaviour on their own.
+
+The [event channel](daemon-event-channel.md#run-configuration-report) carries the
+three flags as flat `slashCommands`/`mcpServers`/`contextUsageDetail` booleans.
+
 ## Testing
 
 In `inboundMessage.test.ts`, wrap malformed array payloads in object rows such as

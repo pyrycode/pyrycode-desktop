@@ -55,10 +55,13 @@ describe('pushConfirmingDelivery', () => {
     expect(app.sends).toBe(1)
   })
 
+  // The only case whose outcome depends on elapsed time: under a loaded suite two 5 ms sleeps can
+  // outlast FAST's 40 ms window and trigger a second send. The window is only an upper bound, so a
+  // generous one costs nothing when the tile shows on the third read.
   it('does not send again when the tile shows on a later poll inside the window', async () => {
     const app = pusher(new Error(TRANSIENT))
     const tiles = probe(false, false, true)
-    await pushConfirmingDelivery(app.push, tiles.delivered, FAST)
+    await pushConfirmingDelivery(app.push, tiles.delivered, { confirmWithinMs: 10_000, pollIntervalMs: 5 })
     expect(app.sends).toBe(1)
     expect(tiles.reads).toBe(3)
   })

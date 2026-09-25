@@ -22,6 +22,8 @@ function task(overrides: Partial<HeldBackgroundTask> = {}): HeldBackgroundTask {
     description: 'npm run build',
     truncatedFields: null,
     latestUpdate: null,
+    status: null,
+    summary: null,
     ...overrides
   }
 }
@@ -606,19 +608,20 @@ describe('BackgroundTaskPanelView — the #580 list drawing (#1635)', () => {
       <BackgroundTaskPanelView entry={mixed} finishedTaskIds={new Set(['r1', 'f1', 'r2'])} onClose={noop} />
     )
     expect(allFinished).toContain('Finished · 3')
-    expect(allFinished).not.toContain('Running')
+    // The header only: a finished row with no status word still wears the Running tag (#1639).
+    expect(allFinished).not.toContain('Running ·')
   })
 
-  it('tags running rows Running and finished rows with the neutral Finished tag (AC2)', () => {
+  it('tags a row Running until a status word arrives, whichever group it sits in (#1639 AC1)', () => {
     const markup = renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry([task({ taskId: 'r1' }), task({ taskId: 'f1' })])}
+        entry={entry([task({ taskId: 'r1' }), task({ taskId: 'f1', status: 'completed' })])}
         finishedTaskIds={new Set(['f1'])}
         onClose={noop}
       />
     )
     expect(markup).toMatch(/background-task-panel__tag--running"><span[^>]*><\/span>Running</)
-    expect(markup).toMatch(/background-task-panel__tag--stopped"><span[^>]*><\/span>Finished</)
+    expect(markup).toMatch(/background-task-panel__tag--completed"><span[^>]*><\/span>Completed</)
     expect(markup.match(/background-task-panel__tag--/g)?.length ?? 0).toBe(2)
   })
 
@@ -729,5 +732,103 @@ describe('drawerClosesOnKeyDown — one Escape does one thing (#1634 AC3)', () =
       .toBe(false)
     expect(drawerClosesOnKeyDown({ ...esc, isComposing: true }, { inComposerStop: false, turnRunning: false }))
       .toBe(false)
+  })
+})
+
+// #1639: the status word the tag draws and the summary a finished row shows. The group still comes from
+// `finishedTaskIds` alone; the word only chooses the tag, by exact match against client constants.
+describe('BackgroundTaskPanelView — status tag and summary (#1639)', () => {
+  const tagOf = (status: string | null, finished: boolean): string =>
+    renderToStaticMarkup(
+      <BackgroundTaskPanelView
+        entry={entry([task({ taskId: 't', status })])}
+        finishedTaskIds={finished ? new Set(['t']) : null}
+        onClose={noop}
+      />
+    )
+
+  it('maps completed, failed and stopped to their own tags, Failed in the error style (AC1)', () => {
+    expect(tagOf('completed', true)).toMatch(/background-task-panel__tag--completed"><span[^>]*><\/span>Completed</)
+    expect(tagOf('failed', true)).toMatch(/background-task-panel__tag--failed"><span[^>]*><\/span>Failed</)
+    expect(tagOf('stopped', true)).toMatch(/background-task-panel__tag--stopped"><span[^>]*><\/span>Stopped</)
+    expect(tagOf(null, false)).toMatch(/background-task-panel__tag--running"><span[^>]*><\/span>Running</)
+    // Exact match only: a near miss is an unknown word, never a borrowed Completed or Failed style.
+    expect(tagOf('Failed', false)).toMatch(/background-task-panel__tag--stopped"><span[^>]*><\/span>Failed</)
+  })
+
+  it('draws an unknown word raw and escaped in the Stopped style, inside the Running group (AC1)', () => {
+    const markup = tagOf('<b>paused</b>', false)
+    expect(markup).toContain('Running · 1')
+    expect(markup).not.toContain('Finished')
+    expect(markup).toMatch(
+      /background-task-panel__tag--stopped"><span[^>]*><\/span>&lt;b&gt;paused&lt;\/b&gt;</
+    )
+    expect(markup).not.toContain('<b>')
+    // The word is a text child only: never a class, never any other attribute value.
+    expect(markup).not.toMatch(/="[^"]*paused/)
+    expect(markup.match(/background-task-panel__tag--/g)?.length ?? 0).toBe(1)
+  })
+
+  it('shows a finished row its summary under the description, with the chip when summary was cut (AC2)', () => {
+    const markup = renderToStaticMarkup(
+      <BackgroundTaskPanelView
+        entry={entry([
+          task({
+            taskId: 'f1',
+            description: 'DESCONE',
+            status: 'failed',
+            summary: { text: 'SUMMARYONE', truncatedFields: ['summary'] }
+          }),
+          task({
+            taskId: 'f2',
+            status: 'completed',
+            summary: { text: 'SUMMARYTWO', truncatedFields: ['patch'] }
+          })
+        ])}
+        finishedTaskIds={new Set(['f1', 'f2'])}
+        onClose={noop}
+      />
+    )
+    expect(markup).toMatch(/DESCONE<\/span><span class="background-task-panel__summary">SUMMARYONE<\/span><span class="background-task-panel__cut-summary">Truncated by the daemon</)
+    expect(markup).toContain('<span class="background-task-panel__summary">SUMMARYTWO</span>')
+    // Only the summary a frame named as cut gets the chip.
+    expect(markup.match(/background-task-panel__cut-summary/g)?.length ?? 0).toBe(1)
+  })
+
+  it('shows no line for an empty summary and never a summary on a running row (AC2)', () => {
+    const empty = renderToStaticMarkup(
+      <BackgroundTaskPanelView
+        entry={entry([task({ taskId: 'f1', status: 'stopped', summary: { text: '', truncatedFields: null } })])}
+        finishedTaskIds={new Set(['f1'])}
+        onClose={noop}
+      />
+    )
+    expect(empty).not.toContain('background-task-panel__summary')
+    const running = renderToStaticMarkup(
+      <BackgroundTaskPanelView
+        entry={entry([
+          task({ taskId: 'r1', status: 'paused', summary: { text: 'SUMMARYHIDDEN', truncatedFields: ['summary'] } })
+        ])}
+        finishedTaskIds={null}
+        onClose={noop}
+      />
+    )
+    expect(running).not.toContain('SUMMARYHIDDEN')
+    expect(running).not.toContain('background-task-panel__summary')
+    expect(running).not.toContain('background-task-panel__cut-summary')
+  })
+
+  it('keeps a markup-shaped summary inert (AC2)', () => {
+    const hostile = '<img src=x onerror="alert(1)">'
+    const markup = renderToStaticMarkup(
+      <BackgroundTaskPanelView
+        entry={entry([task({ taskId: 'f1', status: hostile, summary: { text: hostile, truncatedFields: null } })])}
+        finishedTaskIds={new Set(['f1'])}
+        onClose={noop}
+      />
+    )
+    expect(markup).toContain('<span class="background-task-panel__summary">&lt;img')
+    expect(markup).not.toContain('<img')
+    expect(markup).not.toMatch(/\son[a-z]+="/)
   })
 })

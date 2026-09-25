@@ -190,7 +190,7 @@ describe('translateBackgroundTaskStarted', () => {
 })
 
 describe('translateBackgroundTaskUpdated', () => {
-  it('maps a backgroundTaskUpdated event to its five-field snapshot (the owned arm)', () => {
+  it('maps a backgroundTaskUpdated event to its six-field snapshot (the owned arm)', () => {
     const event: DaemonEvent = {
       type: 'backgroundTaskUpdated',
       conversationId: 'c1',
@@ -202,16 +202,16 @@ describe('translateBackgroundTaskUpdated', () => {
     }
     const snapshot = translateBackgroundTaskUpdated(event)
 
-    // FIVE fields: no toolCallId, no description, no taskType; it gains `patch` and `status` (#1561).
-    // `summary` is deliberately NOT copied — untrusted model-authored text, unread until #1246.
+    // SIX fields: no toolCallId, no description, no taskType; it gains `patch`, `status` (#1561) and
+    // `summary` (#1639), which the panel draws on a finished row as inert escaped text.
     expect(snapshot).toEqual({
       conversationId: 'c1',
       taskId: 't1',
       patch: '{"is_backgrounded":true}',
       status: 'completed',
+      summary: 'SENTINELSUMMARY',
       truncatedFields: ['patch']
     })
-    expect(JSON.stringify(snapshot)).not.toContain('SENTINELSUMMARY')
     // Same posture as both neighbours: a fresh named-field literal, never `return event`, never a
     // spread — a spread would carry the `type` tag into a write unit that never agreed to hold it.
     expect(snapshot).not.toBe(event)
@@ -437,6 +437,7 @@ describe('subscribeBackgroundTaskRoster', () => {
       taskId: 't1',
       patch: 'p',
       status: '',
+      summary: '',
       truncatedFields: ['patch']
     })
     expect(setRoster).not.toHaveBeenCalled()
@@ -585,7 +586,9 @@ describe('subscribeBackgroundTaskRoster', () => {
         taskType: 'local_bash',
         description: 'grep -rn "a<b&c" .',
         truncatedFields: null,
-        latestUpdate: null
+        latestUpdate: null,
+        status: null,
+        summary: null
       })
     })
 
@@ -604,7 +607,9 @@ describe('subscribeBackgroundTaskRoster', () => {
         taskType: 'local_bash',
         description: fullDescription,
         truncatedFields: null,
-        latestUpdate: null
+        latestUpdate: null,
+        status: null,
+        summary: null
       })
     })
 
@@ -660,6 +665,23 @@ describe('subscribeBackgroundTaskRoster', () => {
       })
       expect(heldTask(store, 'c1', 't1')?.description).toBe('newer label')
       expect(heldTask(store, 'c1', 't1')?.taskType).toBe('remote_agent')
+    })
+
+    it('a terminal update lands its status word and summary on the held task (#1639 end-to-end)', () => {
+      const { bridge, store } = seam()
+      bridge.emit(roster('c1', [noCut]))
+      bridge.emit({
+        type: 'backgroundTaskUpdated',
+        conversationId: 'c1',
+        taskId: 't1',
+        patch: '',
+        status: 'failed',
+        summary: 'exit 1',
+        truncatedFields: null
+      })
+
+      expect(heldTask(store, 'c1', 't1')?.status).toBe('failed')
+      expect(heldTask(store, 'c1', 't1')?.summary).toEqual({ text: 'exit 1', truncatedFields: null })
     })
 
     it('a connected edge clears recorded patches too (#573 AC5 end-to-end)', () => {

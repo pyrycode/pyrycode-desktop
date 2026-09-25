@@ -73,10 +73,20 @@ const BACKGROUND_TASK_PANEL_UNOBSERVED_SUPPORT =
 const BACKGROUND_TASK_PANEL_EMPTY_SUPPORT =
   'Claude has nothing running in the background for this conversation.'
 
-// #1635: the two group headers and the two tags. A finished row wears the Stopped style under a neutral
-// "Finished" label until #1639 maps the status word to Completed, Failed or Stopped.
+// #1635: the two group headers. Running is also the tag of a task no status word has reached (#1639).
 const BACKGROUND_TASK_PANEL_RUNNING_LABEL = 'Running'
 const BACKGROUND_TASK_PANEL_FINISHED_LABEL = 'Finished'
+
+// #1639: the three status words claude reports for a finished task, each with its client-owned tag
+// label and class. The daemon word is the lookup NEEDLE, compared with `===` by `Map.get`, and never
+// becomes a class: an unknown word falls out to the Stopped class below with the word as its text.
+const TASK_STATUS_TAGS: ReadonlyMap<string, { label: string; className: string }> = new Map([
+  ['completed', { label: 'Completed', className: 'background-task-panel__tag background-task-panel__tag--completed' }],
+  ['failed', { label: 'Failed', className: 'background-task-panel__tag background-task-panel__tag--failed' }],
+  ['stopped', { label: 'Stopped', className: 'background-task-panel__tag background-task-panel__tag--stopped' }]
+])
+const TASK_TAG_RUNNING_CLASS = 'background-task-panel__tag background-task-panel__tag--running'
+const TASK_TAG_UNKNOWN_CLASS = 'background-task-panel__tag background-task-panel__tag--stopped'
 const BACKGROUND_TASK_PANEL_UPDATE_LABEL = 'Latest update'
 
 // #1635: the one task type whose description is a shell command, so the drawing sets it in mono. The
@@ -129,6 +139,8 @@ const CUT_FIELD_TASK_TYPE = 'task_type' // held as `taskType`; the WIRE name is 
 // `description` enjoys), so the trap available here is the OTHER one: passing the wrong LIST. Keeping it
 // beside its siblings as a named constant is what makes the three call sites read as three pairings.
 const CUT_FIELD_PATCH = 'patch'
+// #1639: the terminal frame's vocabulary too, matched against `summary.truncatedFields` only.
+const CUT_FIELD_SUMMARY = 'summary'
 
 /** #582: has the daemon reported cutting this wire field on this task? `null` ("nothing was cut"), `[]`
  *  and an unrecognised name all fall out as `false` without a branch of their own.
@@ -317,7 +329,8 @@ function TaskGroup({
 }
 
 /** #1635: one task as the drawn card: the type line with its status tag, the description, then the
- *  latest update. Every daemon field is an auto-escaped child of its own element. */
+ *  latest update; a finished card adds its summary under the description (#1639). Every daemon field is an
+ *  auto-escaped child of its own element. */
 function TaskRow({ task, finished }: { task: HeldBackgroundTask; finished: boolean }): JSX.Element {
   const descriptionClass =
     task.taskType === TASK_TYPE_SHELL
@@ -335,7 +348,7 @@ function TaskRow({ task, finished }: { task: HeldBackgroundTask; finished: boole
           from the app's own claim. The field NAMES are matched, never displayed. */}
       <div className="background-task-panel__head">
         <span className="background-task-panel__type">{task.taskType}</span>
-        <TaskStatusTag finished={finished} />
+        <TaskStatusTag status={task.status} />
       </div>
       {wasCut(task.truncatedFields, CUT_FIELD_TASK_TYPE) && (
         <span className="background-task-panel__cut-type">{BACKGROUND_TASK_PANEL_CUT_COPY}</span>
@@ -343,6 +356,17 @@ function TaskRow({ task, finished }: { task: HeldBackgroundTask; finished: boole
       <span className={descriptionClass}>{task.description}</span>
       {wasCut(task.truncatedFields, CUT_FIELD_DESCRIPTION) && (
         <span className="background-task-panel__cut-description">{BACKGROUND_TASK_PANEL_CUT_COPY}</span>
+      )}
+      {/* #1639: the summary claude sent with the terminal status, on a finished row only — the group,
+          not the held record, decides that, so a running row never shows one. An empty summary draws
+          no line, and its cut chip follows it straight after, reading the SUMMARY's own list. */}
+      {finished && task.summary !== null && task.summary.text !== '' && (
+        <>
+          <span className="background-task-panel__summary">{task.summary.text}</span>
+          {wasCut(task.summary.truncatedFields, CUT_FIELD_SUMMARY) && (
+            <span className="background-task-panel__cut-summary">{BACKGROUND_TASK_PANEL_CUT_COPY}</span>
+          )}
+        </>
       )}
       {/* #583: the latest change claude reported about this task, under its label in a code block.
 
@@ -379,19 +403,18 @@ function TaskRow({ task, finished }: { task: HeldBackgroundTask; finished: boole
   )
 }
 
-/** #1635: the drawn Task status tag (Figma 563:1054). Running on a running row; on a finished row the
- *  Stopped style under the neutral "Finished" label. Client copy only — #1639 owns the status word. */
-function TaskStatusTag({ finished }: { finished: boolean }): JSX.Element {
+/** #1635: the drawn Task status tag (Figma 563:1054), mapped from the held status word (#1639). No word
+ *  yet reads Running; `completed` / `failed` / `stopped` read their own client label and style; any other
+ *  non-empty word reads as itself, an auto-escaped child, in the Stopped style. The class is always one
+ *  of the four constants above, so the word never reaches an attribute. It chooses the tag only: which
+ *  group a row sits in is `finishedTaskIds`'s call, so an unknown word stays in Running. */
+function TaskStatusTag({ status }: { status: string | null }): JSX.Element {
+  const known = status === null ? undefined : TASK_STATUS_TAGS.get(status)
+  const className = status === null ? TASK_TAG_RUNNING_CLASS : (known?.className ?? TASK_TAG_UNKNOWN_CLASS)
   return (
-    <span
-      className={
-        finished
-          ? 'background-task-panel__tag background-task-panel__tag--stopped'
-          : 'background-task-panel__tag background-task-panel__tag--running'
-      }
-    >
+    <span className={className}>
       <span className="background-task-panel__tag-dot" aria-hidden="true" />
-      {finished ? BACKGROUND_TASK_PANEL_FINISHED_LABEL : BACKGROUND_TASK_PANEL_RUNNING_LABEL}
+      {status === null ? BACKGROUND_TASK_PANEL_RUNNING_LABEL : (known?.label ?? status)}
     </span>
   )
 }

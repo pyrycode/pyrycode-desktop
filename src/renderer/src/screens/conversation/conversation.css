@@ -5657,6 +5657,18 @@ button.top-overlay-pill {
   color: var(--color-on-secondary-container);
 }
 
+/* #1639: Completed is the Success label on a 16% Success tint (the drawn rgba(47,192,56,0.16)); Failed
+   is the error container pair. An unknown status word takes the Stopped rule above. */
+.background-task-panel__tag--completed {
+  background: color-mix(in srgb, var(--color-success) 16%, transparent);
+  color: var(--color-success);
+}
+
+.background-task-panel__tag--failed {
+  background: var(--color-error-container);
+  color: var(--color-on-error-container);
+}
+
 .background-task-panel__tag-dot {
   width: 6px;
   height: 6px;
@@ -5687,11 +5699,26 @@ button.top-overlay-pill {
   color: var(--color-on-surface-variant);
 }
 
+/* #1639: a finished card's terminal summary, under the description: body-small in On Surface Variant,
+   never mono. The drawn 17px line takes the scale's 16, as the description's 18 does. overflow-wrap
+   breaks an unbroken daemon token, like the description's. */
+.background-task-panel__summary {
+  align-self: stretch;
+  min-width: 0;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-small-weight);
+  overflow-wrap: anywhere;
+}
+
 /* The cut marker (Figma 563:1055): a dashed Tertiary chip on its own line straight after the cut field.
-   One rule for the three; the classes stay separate so a test can prove which field was marked. */
+   One rule for the four; the classes stay separate so a test can prove which field was marked. */
 .background-task-panel__cut-description,
 .background-task-panel__cut-type,
-.background-task-panel__cut-patch {
+.background-task-panel__cut-patch,
+.background-task-panel__cut-summary {
   padding: 1px 6px;
   border: 1px dashed var(--color-tertiary);
   border-radius: 4px;

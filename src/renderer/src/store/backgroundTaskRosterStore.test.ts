@@ -51,7 +51,9 @@ const heldNoCut: HeldBackgroundTask = {
   taskType: 'local_bash',
   description: 'grep -rn "a<b&c" .',
   truncatedFields: null,
-  latestUpdate: null
+  latestUpdate: null,
+  status: null,
+  summary: null
 }
 const heldCutDescription: HeldBackgroundTask = {
   taskId: 't2',
@@ -59,7 +61,9 @@ const heldCutDescription: HeldBackgroundTask = {
   taskType: 'local_bash',
   description: 'npm test -- src/renderer',
   truncatedFields: ['description'],
-  latestUpdate: null
+  latestUpdate: null,
+  status: null,
+  summary: null
 }
 
 /** A `background_task_started` write unit for `t1` — same task as `noCut`, but with the `toolCallId`
@@ -78,8 +82,8 @@ function started(
   }
 }
 
-/** A `background_task_updated` write unit for `t1` — four fields, not six: no `toolCallId`, no
- *  `description`, no `taskType`, and it gains `patch`. */
+/** A `background_task_updated` write unit for `t1` — the two ids plus four fields: no `toolCallId`,
+ *  no `description`, no `taskType`, and it gains `patch`, `status` and `summary`. */
 function updated(
   overrides: Partial<BackgroundTaskUpdatedSnapshot> = {}
 ): BackgroundTaskUpdatedSnapshot {
@@ -88,6 +92,7 @@ function updated(
     taskId: 't1',
     patch: '{"is_backgrounded":true}',
     status: '',
+    summary: '',
     truncatedFields: null,
     ...overrides
   }
@@ -180,7 +185,9 @@ describe('backgroundTaskRosterStore', () => {
         taskType: 'local_bash',
         description: 'grep -rn "a<b&c" . --include="*.ts" --color=never',
         truncatedFields: null,
-        latestUpdate: null
+        latestUpdate: null,
+        status: null,
+        summary: null
       })
     })
 
@@ -207,7 +214,9 @@ describe('backgroundTaskRosterStore', () => {
         taskType: 'local_bash',
         description: 'grep -rn "a<b&c" . --include="*.ts" --color=never',
         truncatedFields: null,
-        latestUpdate: { patch: '{"is_backgrounded":true}', truncatedFields: ['patch'] }
+        latestUpdate: { patch: '{"is_backgrounded":true}', truncatedFields: ['patch'] },
+        status: null,
+        summary: null
       })
       expect(heldFor(store, 'c1')?.droppedTasks).toBe(1)
       // Moved, not copied: the hold is gone once a roster has spoken for the conversation.
@@ -314,7 +323,9 @@ describe('backgroundTaskRosterStore', () => {
       taskType: 'local_bash',
       description: 'grep -rn "a<b&c" . --include="*.ts" --color=never',
       truncatedFields: null,
-      latestUpdate: null
+      latestUpdate: null,
+      status: null,
+      summary: null
     })
   })
 
@@ -349,7 +360,9 @@ describe('backgroundTaskRosterStore', () => {
       taskType: 'local_bash',
       description: 'grep -rn "a<b&c" . --include="*.ts" --color=never',
       truncatedFields: null,
-      latestUpdate: null
+      latestUpdate: null,
+      status: null,
+      summary: null
     })
     // A roster-sourced peer in the same frame is still rebuilt from its row.
     expect(heldTask(store, 'c1', 't2')).toEqual(heldCutDescription)
@@ -549,7 +562,9 @@ describe('backgroundTaskRosterStore', () => {
       taskType: 'remote_agent',
       description: 'newer label',
       truncatedFields: [],
-      latestUpdate: { patch: '{"is_backgrounded":true}', truncatedFields: ['patch'] }
+      latestUpdate: { patch: '{"is_backgrounded":true}', truncatedFields: ['patch'] },
+      status: null,
+      summary: null
     })
   })
 
@@ -576,7 +591,9 @@ describe('backgroundTaskRosterStore', () => {
       taskType: 'local_bash',
       description: 'grep -rn "a<b&c" . --include="*.ts" --color=never',
       truncatedFields: null,
-      latestUpdate: { patch: '{"is_backgrounded":true}', truncatedFields: null }
+      latestUpdate: { patch: '{"is_backgrounded":true}', truncatedFields: null },
+      status: null,
+      summary: null
     })
   })
 
@@ -1161,5 +1178,103 @@ describe('selectFinishedTasksFor — the panel grouping read (#1635)', () => {
     store.getState().setUpdatedTask(updated({ conversationId: 'c2', status: 'completed' }))
     expect(finished(store)).toBe(before)
     expect(finished(store, 'c2')).not.toBe(before)
+  })
+})
+
+// #1639: the held status word and terminal summary the panel's tag and summary line read. Both ride on
+// the record, so every setter that rebuilds a record has to carry them, and each rebuild site has its
+// own test here: dropping either field from one literal compiles clean and breaks nothing else.
+describe('status word and terminal summary (#1639)', () => {
+  it('holds the latest non-empty status word and keeps it across a later empty status (AC1)', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    expect(heldTask(store, 'c1', 't1')?.status).toBeNull()
+    store.getState().setUpdatedTask(updated({ status: '' }))
+    expect(heldTask(store, 'c1', 't1')?.status).toBeNull()
+    store.getState().setUpdatedTask(updated({ status: 'completed', summary: 'done' }))
+    store.getState().setUpdatedTask(updated({ status: '' }))
+    expect(heldTask(store, 'c1', 't1')?.status).toBe('completed')
+  })
+
+  it('holds an unknown word while the task stays counted as running (AC1)', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    store.getState().setUpdatedTask(updated({ status: 'paused', summary: 'not terminal' }))
+    expect(heldTask(store, 'c1', 't1')?.status).toBe('paused')
+    // A non-terminal frame records no summary, whatever it carried.
+    expect(heldTask(store, 'c1', 't1')?.summary).toBeNull()
+    expect(selectLiveTaskCountFor('c1')(store.getState())).toBe(1)
+    expect(selectFinishedTasksFor('c1')(store.getState())).toBeNull()
+  })
+
+  it('records the terminal frame summary with its own cut report, null passed straight across (AC2)', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut, cutDescription], droppedTasks: 0 })
+    store.getState().setUpdatedTask(updated({ status: 'completed', summary: 'built in 38s' }))
+    store.getState().setUpdatedTask(
+      updated({ taskId: 't2', status: 'failed', summary: 'exit 1', truncatedFields: ['summary'] })
+    )
+    expect(heldTask(store, 'c1', 't1')?.summary).toEqual({ text: 'built in 38s', truncatedFields: null })
+    expect(heldTask(store, 'c1', 't2')?.summary).toEqual({ text: 'exit 1', truncatedFields: ['summary'] })
+    // An empty summary is a recorded value, not an absence: the view decides it draws no line.
+    store.getState().setUpdatedTask(updated({ status: 'stopped', summary: '' }))
+    expect(heldTask(store, 'c1', 't1')?.summary).toEqual({ text: '', truncatedFields: null })
+  })
+
+  it('keeps the summary across a later non-terminal frame', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    store.getState().setUpdatedTask(updated({ status: 'completed', summary: 'done' }))
+    store.getState().setUpdatedTask(updated({ status: '', summary: '' }))
+    expect(heldTask(store, 'c1', 't1')?.summary?.text).toBe('done')
+  })
+
+  it('carries both across a roster that lists a roster-sourced task again (AC1)', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    store.getState().setUpdatedTask(updated({ status: 'failed', summary: 'exit 1' }))
+    store.getState().setRoster({ conversationId: 'c1', tasks: [{ ...noCut, description: 'newer' }], droppedTasks: 0 })
+    const held = heldTask(store, 'c1', 't1')
+    expect(held?.description).toBe('newer')
+    expect(held?.status).toBe('failed')
+    expect(held?.summary?.text).toBe('exit 1')
+  })
+
+  it('carries both across a roster that lists a started-sourced task again', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    store.getState().setStartedTask(started())
+    store.getState().setUpdatedTask(updated({ status: 'stopped', summary: 'stopped by user' }))
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    expect(heldTask(store, 'c1', 't1')?.status).toBe('stopped')
+    expect(heldTask(store, 'c1', 't1')?.summary?.text).toBe('stopped by user')
+  })
+
+  it('carries both across a start that arrives after the update', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    store.getState().setUpdatedTask(updated({ status: 'completed', summary: 'done' }))
+    store.getState().setStartedTask(started())
+    expect(heldTask(store, 'c1', 't1')?.toolCallId).toBe('tc-1')
+    expect(heldTask(store, 'c1', 't1')?.status).toBe('completed')
+    expect(heldTask(store, 'c1', 't1')?.summary?.text).toBe('done')
+  })
+
+  it('records both on an unlisted hold and moves them in with the listing', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setStartedTask(started())
+    store.getState().setUpdatedTask(updated({ status: 'failed', summary: 'exit 2' }))
+    expect(store.getState().unlistedStarts.get('c1')?.get('t1')?.status).toBe('failed')
+    store.getState().setStartedTask(started())
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    expect(heldTask(store, 'c1', 't1')?.status).toBe('failed')
+    expect(heldTask(store, 'c1', 't1')?.summary).toEqual({ text: 'exit 2', truncatedFields: null })
+  })
+
+  it('records nothing for an update naming a task held nowhere', () => {
+    const store = createBackgroundTaskRosterStore()
+    const before = store.getState()
+    store.getState().setUpdatedTask(updated({ status: 'completed', summary: 'done' }))
+    expect(store.getState()).toBe(before)
   })
 })

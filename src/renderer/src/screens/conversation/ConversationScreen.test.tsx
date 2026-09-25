@@ -19,6 +19,7 @@ import {
   RESETTING_COPY,
   RESETTING_WRAPPING_UP_COPY,
   RESETTING_RESTARTING_COPY,
+  RESETTING_RESTARTING_CODEX_COPY,
   HANDOFF_WRITTEN_COPY,
   HANDOFF_SKIPPED_COPY,
   UNRECOGNIZED_COPY,
@@ -3173,6 +3174,70 @@ describe('the resetting label — the rows sixth state (#1517)', () => {
     }
   })
 
+  // #1653: a Codex conversation resets through the same path, so the restarting phase names Codex. The
+  // agent SELECTS a constant exactly as the two wire tokens do; it is never interpolated.
+  const RESET_PHASES = ['wrapping_up', 'restarting', ''] as const
+  const RESET_HANDOFFS = ['pending', 'written', 'skipped', ''] as const
+  const resetLabel = (
+    resetting: { phase: (typeof RESET_PHASES)[number]; handoff: (typeof RESET_HANDOFFS)[number] },
+    agent?: 'claude' | 'codex'
+  ): string =>
+    renderToStaticMarkup(
+      <ThinkingIndicator
+        state="resetting"
+        toolName={null}
+        retry={null}
+        resetting={resetting}
+        thinkingTokens={null}
+        agent={agent}
+      />
+    )
+
+  it('names codex in the restarting phase of a Codex conversation (#1653)', () => {
+    expect(RESETTING_RESTARTING_CODEX_COPY).toBe('Resetting: restarting codex…')
+    expect(resetLabel({ phase: 'restarting', handoff: 'pending' }, 'codex')).toContain(
+      '>Resetting: restarting codex…</span>'
+    )
+    expect(resetLabel(RESTARTING_WRITTEN, 'codex')).toContain(
+      `>${RESETTING_RESTARTING_CODEX_COPY} ${HANDOFF_WRITTEN_COPY}</span>`
+    )
+    expect(resetLabel(RESTARTING_SKIPPED, 'codex')).toContain(
+      `>${RESETTING_RESTARTING_CODEX_COPY} ${HANDOFF_SKIPPED_COPY}</span>`
+    )
+    // The other phases carry no agent name and stay as they are.
+    expect(resetLabel(WRAPPING, 'codex')).toContain(`>${RESETTING_WRAPPING_UP_COPY}</span>`)
+    expect(resetLabel({ phase: '', handoff: '' }, 'codex')).toContain(`>${RESETTING_COPY}</span>`)
+  })
+
+  it('keeps every Claude phase byte-identical to the agent-less render (#1653)', () => {
+    // Pinned against the literal as well as the prop-less render, so a drift in the constant itself
+    // fails here rather than moving both sides together.
+    expect(RESETTING_RESTARTING_COPY).toBe('Resetting: restarting claude…')
+    for (const phase of RESET_PHASES) {
+      for (const handoff of RESET_HANDOFFS) {
+        expect(resetLabel({ phase, handoff }, 'claude')).toBe(resetLabel({ phase, handoff }))
+      }
+    }
+  })
+
+  it('draws only client-owned constants on a Codex conversation too (#1653)', () => {
+    const allowed = new Set([
+      RESETTING_COPY,
+      RESETTING_WRAPPING_UP_COPY,
+      RESETTING_RESTARTING_CODEX_COPY,
+      `${RESETTING_RESTARTING_CODEX_COPY} ${HANDOFF_WRITTEN_COPY}`,
+      `${RESETTING_RESTARTING_CODEX_COPY} ${HANDOFF_SKIPPED_COPY}`
+    ])
+    for (const phase of RESET_PHASES) {
+      for (const handoff of RESET_HANDOFFS) {
+        const label = resetLabel({ phase, handoff }, 'codex')
+          .replace(/^<span class="[^"]*">/, '')
+          .replace(/<\/span>$/, '')
+        expect(allowed.has(label)).toBe(true)
+      }
+    }
+  })
+
   it('outranks an open tool name and keeps reset copy in one truncating text run', () => {
     // The reset modifier bounds long copy without changing the row's primary colour or typography.
     const markup = renderToStaticMarkup(
@@ -3194,7 +3259,12 @@ describe('the resetting label — the rows sixth state (#1517)', () => {
   it('keeps every reset constant apostrophe-free and on the U+2026 ellipsis', () => {
     // renderToStaticMarkup escapes `'` → `&#x27;` (the standing desktop lesson), and three dots are
     // not the character the five sibling constants use.
-    for (const copy of [RESETTING_COPY, RESETTING_WRAPPING_UP_COPY, RESETTING_RESTARTING_COPY]) {
+    for (const copy of [
+      RESETTING_COPY,
+      RESETTING_WRAPPING_UP_COPY,
+      RESETTING_RESTARTING_COPY,
+      RESETTING_RESTARTING_CODEX_COPY
+    ]) {
       expect(copy).not.toContain("'")
       expect(copy).not.toContain('...')
       expect(copy.endsWith('…')).toBe(true)

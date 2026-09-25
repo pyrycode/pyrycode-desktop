@@ -64,7 +64,11 @@ own is preserved verbatim on the merged view) — and, new in [#1314](https://gi
 `thinkingTokens: number | null` (also a bare number, same guarantee). The reset record also rides a
 required `resetting: ResettingStatus | null` prop; its closed phase/outcome tokens select client-owned
 copy (see the [status row](conversation-shell-composer-status-row.md#composer-status-row-796)).
-All four are required for
+[#1653](https://github.com/pyrycode/pyrycode-desktop/issues/1653) later added a fifth,
+optional `agent?: WireAgent` prop (defaulting to `'claude'`) that only chooses which
+agent name the reset's restarting phase says — the one deliberate exception to "all
+required" below, because an absent agent already means Claude on the wire.
+All four original props are required for
 `toolName`'s own recorded reason: an optional prop lets the container silently omit it, and nothing in
 this repo could catch that since every container test renders the initial store, so `tsc` is the only
 available detector and the type must be the one that fails. **#1314 paid that reason's cost in full**: the

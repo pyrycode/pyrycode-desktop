@@ -1830,14 +1830,21 @@ export interface UnrecognizedMessagePayload {
 export type WireSessionTransitionReason = 'clear' | 'idle_evict' | 'workspace_change'
 
 /**
- * The four places the daemon's stream parser can meet claude output it has no mapping for. A closed
+ * The places the daemon's stream parser can meet agent output it has no mapping for. A closed
  * wire enum like WireSessionTransitionReason, so the decoder compares against literals rather than
  * accepting any string. `line_type` is a whole top-level message; `assistant_block` / `user_block` are
  * one content block of an otherwise-fine message; `undecodable` is a line or block that would not
  * JSON-decode at all, and is the one value for which `message_type` is empty (nothing decoded, so no
- * type was ever read).
+ * type was ever read). `codex_method` is an unmapped Codex notification (such as `error` or `warning`)
+ * and `codex_item` an unmapped Codex item (such as a web search).
  */
-export type WireUnrecognizedSite = 'line_type' | 'assistant_block' | 'user_block' | 'undecodable'
+export type WireUnrecognizedSite =
+  | 'line_type'
+  | 'assistant_block'
+  | 'user_block'
+  | 'undecodable'
+  | 'codex_method'
+  | 'codex_item'
 
 /**
  * Inbound `session_transition` marker (daemon → client). Mirrors the daemon's SessionTransitionPayload

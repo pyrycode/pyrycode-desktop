@@ -10,6 +10,8 @@ const items: DurableThreadItem[] = [
   { kind: 'turnBoundary', turnId: 'turn', stopReason: 'done', outcome: 'complete', isError: false, terminalReason: 'finished', errorCategory: '' },
   { kind: 'sessionBoundary', reason: 'clear', workspaceCwd: null, occurredAt: 'date' },
   { kind: 'unrecognizedMessage', site: 'undecodable', messageType: '', raw: '<script>', truncated: true },
+  { kind: 'unrecognizedMessage', site: 'codex_method', messageType: 'warning', raw: '{}', truncated: false },
+  { kind: 'unrecognizedMessage', site: 'codex_item', messageType: 'webSearch', raw: '{}', truncated: false },
   { kind: 'compactionBoundary', failed: false, manual: true, preTokens: null, postTokens: 123 },
   { kind: 'banner', level: 'warning', text: 'report', stopsTurn: false, truncated: false },
   { kind: 'modelRefusal', refusal: { type: 'modelRefusalFallback', originalModel: 'old', fallbackModel: 'new', scope: 'session', refusalCategory: 'policy', banner: 'fallback', truncatedFields: null, droppedFields: ['detail'] } },
@@ -62,6 +64,7 @@ describe('chat history records and requests', () => {
   })
   it.each([null, [], {}, { ...timeline, version: 2 }, { ...timeline, prependedRows: -1 },
     { ...timeline, items: [{ kind: 'assistantText', text: 2 }] }, { ...timeline, coverage: { status: 'requested' } },
+    { ...timeline, items: [{ ...items[5], site: 'codex_event' }] },
     { ...timeline, coverage: { status: 'received', cursor: '', atStart: 'yes' } },
     { ...timeline, items: [{ ...items[2], result: { isError: false } }] },
     { ...timeline, items: [{ ...items[0], createdAt: NaN }] },

@@ -1,8 +1,9 @@
-// The renderer data path feeding the background-task store: it observes THREE typed daemon events — the
+// The renderer data path feeding the background-task store: it observes FOUR typed daemon events — the
 // `backgroundTaskRoster` aggregate (#566's transport half decodes the `background_task_roster`
 // snapshot: `conversationId` plus the live rows and the drop count), the `backgroundTaskStarted`
 // scalar (#564: the six fields that open one task, `toolCallId` among them) and the
-// `backgroundTaskUpdated` scalar (#565: four fields — the latest patch and its own cut report) — and
+// `backgroundTaskUpdated` scalar (#565: four fields — the latest patch and its own cut report) — the `backgroundTaskProgress` scalar
+// (#1640: a running task's latest report) — and
 // lands each in the app-singleton `backgroundTaskRosterStore` the panel slice (#568) will read, where
 // they are JOINED on `conversationId` + `taskId`. Reactive-only — like queueBridge and sessionIdBridge,
 // the daemon PUSHES all three unsolicited, so there is NO request half: no command sent, no
@@ -20,6 +21,7 @@ import type { DaemonEvent } from '@shared/ipc/events'
 import {
   backgroundTaskRosterStore,
   type BackgroundTaskRosterSnapshot,
+  type BackgroundTaskProgressSnapshot,
   type BackgroundTaskStartedSnapshot,
   type BackgroundTaskUpdatedSnapshot
 } from './backgroundTaskRosterStore'
@@ -154,6 +156,34 @@ export function translateBackgroundTaskUpdated(
 }
 
 /**
+ * The progress filter (#1640) — the fourth sibling, same posture: one owned arm, a fresh named-field
+ * literal of all nine fields, `default: null`, React-free. The counters are copied as received, never
+ * summed or diffed, and `truncatedFields: null` passes through as `null`. `currentActivity`,
+ * `subagentType` and `lastToolName` are untrusted text naming the operator's files; nothing here reads
+ * them, and the panel draws them as inert escaped text on a running row.
+ */
+export function translateBackgroundTaskProgress(
+  event: DaemonEvent
+): BackgroundTaskProgressSnapshot | null {
+  switch (event.type) {
+    case 'backgroundTaskProgress':
+      return {
+        conversationId: event.conversationId,
+        taskId: event.taskId,
+        currentActivity: event.currentActivity,
+        subagentType: event.subagentType,
+        lastToolName: event.lastToolName,
+        totalTokens: event.totalTokens,
+        toolUses: event.toolUses,
+        durationMs: event.durationMs,
+        truncatedFields: event.truncatedFields
+      }
+    default:
+      return null
+  }
+}
+
+/**
  * Subscribe via the injected `onDaemonEvent`. A `connected` event is the (re)handshake edge (#573's
  * AC5): it resets and returns, so tasks from the reconnecting server's previous connection never
  * appear.
@@ -205,8 +235,8 @@ export function translateBackgroundTaskUpdated(
  * filtering rather than truthiness — a snapshot object is truthy even when its `tasks` are empty, so the
  * way an empty roster gets dropped is a `length === 0` check at the translator, not here. Keeping the
  * guards on `!== null` and the translators unconditional is what makes the observed-empty case survive
- * the whole path. The three arms are mutually exclusive, so branch ORDER is a readability choice rather
- * than a correctness one and each matched branch returns. Injected `onDaemonEvent` + the four writers
+ * the whole path. The four arms are mutually exclusive, so branch ORDER is a readability choice rather
+ * than a correctness one and each matched branch returns. Injected `onDaemonEvent` + the five writers
  * keep this React-free and unit-testable with plain spies. The listener only translates + dispatches —
  * it never throws into React.
  */
@@ -215,7 +245,8 @@ export function subscribeBackgroundTaskRoster(
   setRoster: (snapshot: BackgroundTaskRosterSnapshot) => void,
   resetRostersForServer: (origin: ConversationListOrigin) => void,
   setStartedTask: (snapshot: BackgroundTaskStartedSnapshot) => void,
-  setUpdatedTask: (snapshot: BackgroundTaskUpdatedSnapshot) => void
+  setUpdatedTask: (snapshot: BackgroundTaskUpdatedSnapshot) => void,
+  setTaskProgress: (snapshot: BackgroundTaskProgressSnapshot) => void
 ): () => void {
   return onDaemonEvent((event) => {
     if (event.type === 'connected') {
@@ -233,7 +264,12 @@ export function subscribeBackgroundTaskRoster(
       return
     }
     const updated = translateBackgroundTaskUpdated(event)
-    if (updated !== null) setUpdatedTask(updated)
+    if (updated !== null) {
+      setUpdatedTask(updated)
+      return
+    }
+    const progress = translateBackgroundTaskProgress(event)
+    if (progress !== null) setTaskProgress(progress)
   })
 }
 
@@ -279,7 +315,8 @@ export function BackgroundTaskRosterData(): null {
           .getState()
           .resetRostersFor(selectConversationIdsFor(origin)(conversationListStore.getState())),
       (snapshot) => backgroundTaskRosterStore.getState().setStartedTask(snapshot),
-      (snapshot) => backgroundTaskRosterStore.getState().setUpdatedTask(snapshot)
+      (snapshot) => backgroundTaskRosterStore.getState().setUpdatedTask(snapshot),
+      (snapshot) => backgroundTaskRosterStore.getState().setTaskProgress(snapshot)
     )
   }, [])
 

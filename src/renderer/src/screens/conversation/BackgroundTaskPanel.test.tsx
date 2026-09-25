@@ -24,6 +24,7 @@ function task(overrides: Partial<HeldBackgroundTask> = {}): HeldBackgroundTask {
     latestUpdate: null,
     status: null,
     summary: null,
+    progress: null,
     ...overrides
   }
 }

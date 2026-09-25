@@ -12,6 +12,7 @@ import {
   translateBackgroundTaskRoster,
   translateBackgroundTaskStarted,
   translateBackgroundTaskUpdated,
+  translateBackgroundTaskProgress,
   subscribeBackgroundTaskRoster,
   BackgroundTaskRosterData
 } from './backgroundTaskRosterBridge'
@@ -257,6 +258,71 @@ describe('translateBackgroundTaskUpdated', () => {
   })
 })
 
+/** A `backgroundTaskProgress` event for `t1` (#1640), every field set so a dropped one shows. */
+const progressEvent: DaemonEvent = {
+  type: 'backgroundTaskProgress',
+  conversationId: 'c1',
+  taskId: 't1',
+  currentActivity: 'Reading alpha.txt',
+  subagentType: 'general-purpose',
+  lastToolName: 'Read',
+  totalTokens: 18000,
+  toolUses: 4,
+  durationMs: 161000,
+  truncatedFields: ['description']
+}
+
+describe('translateBackgroundTaskProgress (#1640)', () => {
+  it('maps a backgroundTaskProgress event to its nine-field snapshot, a fresh literal', () => {
+    const snapshot = translateBackgroundTaskProgress(progressEvent)
+    expect(snapshot).toEqual({
+      conversationId: 'c1',
+      taskId: 't1',
+      currentActivity: 'Reading alpha.txt',
+      subagentType: 'general-purpose',
+      lastToolName: 'Read',
+      totalTokens: 18000,
+      toolUses: 4,
+      durationMs: 161000,
+      truncatedFields: ['description']
+    })
+    expect(snapshot).not.toBe(progressEvent)
+    expect(snapshot).not.toHaveProperty('type')
+  })
+
+  it('passes truncatedFields: null through as null', () => {
+    const snapshot = translateBackgroundTaskProgress({ ...progressEvent, truncatedFields: null })
+    expect(snapshot?.truncatedFields).toBeNull()
+  })
+
+  it('returns null for the three sibling arms and unrelated events', () => {
+    const others: DaemonEvent[] = [
+      { type: 'connected', ack },
+      { type: 'messageReceived', message },
+      { type: 'backgroundTaskRoster', conversationId: 'c1', tasks: [noCut], droppedTasks: 0 },
+      {
+        type: 'backgroundTaskStarted',
+        conversationId: 'c1',
+        taskId: 't1',
+        toolCallId: 'tc-1',
+        taskType: 'local_bash',
+        description: 'ls',
+        truncatedFields: null
+      },
+      {
+        type: 'backgroundTaskUpdated',
+        conversationId: 'c1',
+        taskId: 't1',
+        patch: '',
+        status: '',
+        summary: '',
+        truncatedFields: null
+      }
+    ]
+    for (const event of others) expect(translateBackgroundTaskProgress(event)).toBeNull()
+  })
+})
+
 describe('subscribeBackgroundTaskRoster', () => {
   // A fake onDaemonEvent that captures the listener and hands back an off spy.
   function fakeBridge(): {
@@ -340,13 +406,13 @@ describe('subscribeBackgroundTaskRoster', () => {
 
   it('subscribes exactly once', () => {
     const bridge = fakeBridge()
-    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, vi.fn(), vi.fn(), vi.fn(), vi.fn())
+    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn())
     expect(bridge.subscribeCalls()).toBe(1)
   })
 
   it('returns the off handle from onDaemonEvent as the cleanup', () => {
     const bridge = fakeBridge()
-    const cleanup = subscribeBackgroundTaskRoster(bridge.onDaemonEvent, vi.fn(), vi.fn(), vi.fn(), vi.fn())
+    const cleanup = subscribeBackgroundTaskRoster(bridge.onDaemonEvent, vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn())
     cleanup()
     expect(bridge.off).toHaveBeenCalledTimes(1)
   })
@@ -362,7 +428,8 @@ describe('subscribeBackgroundTaskRoster', () => {
       setRoster,
       resetRostersForServer,
       setStartedTask,
-      setUpdatedTask
+      setUpdatedTask,
+      vi.fn()
     )
 
     bridge.emit(roster('c1', [noCut, cutDescription], 1))
@@ -380,7 +447,7 @@ describe('subscribeBackgroundTaskRoster', () => {
   it('writes an empty roster too — the !== null guard, not truthiness (AC5)', () => {
     const bridge = fakeBridge()
     const setRoster = vi.fn()
-    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, setRoster, vi.fn(), vi.fn(), vi.fn())
+    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, setRoster, vi.fn(), vi.fn(), vi.fn(), vi.fn())
 
     bridge.emit(roster('c1', []))
     expect(setRoster).toHaveBeenCalledTimes(1)
@@ -398,7 +465,8 @@ describe('subscribeBackgroundTaskRoster', () => {
       setRoster,
       resetRostersForServer,
       setStartedTask,
-      setUpdatedTask
+      setUpdatedTask,
+      vi.fn()
     )
 
     bridge.emit(taskStarted('c1', 't1'))
@@ -427,7 +495,8 @@ describe('subscribeBackgroundTaskRoster', () => {
       setRoster,
       resetRostersForServer,
       setStartedTask,
-      setUpdatedTask
+      setUpdatedTask,
+      vi.fn()
     )
 
     bridge.emit(taskUpdated('c1', 't1', 'p', ['patch']))
@@ -445,6 +514,31 @@ describe('subscribeBackgroundTaskRoster', () => {
     expect(resetRostersForServer).not.toHaveBeenCalled()
   })
 
+  it('writes the progress snapshot on a progress event, and nothing else (#1640)', () => {
+    const bridge = fakeBridge()
+    const setRoster = vi.fn()
+    const resetRostersForServer = vi.fn()
+    const setStartedTask = vi.fn()
+    const setUpdatedTask = vi.fn()
+    const setTaskProgress = vi.fn()
+    subscribeBackgroundTaskRoster(
+      bridge.onDaemonEvent,
+      setRoster,
+      resetRostersForServer,
+      setStartedTask,
+      setUpdatedTask,
+      setTaskProgress
+    )
+
+    bridge.emit(progressEvent)
+    expect(setTaskProgress).toHaveBeenCalledTimes(1)
+    expect(setTaskProgress).toHaveBeenCalledWith(translateBackgroundTaskProgress(progressEvent))
+    expect(setRoster).not.toHaveBeenCalled()
+    expect(setStartedTask).not.toHaveBeenCalled()
+    expect(setUpdatedTask).not.toHaveBeenCalled()
+    expect(resetRostersForServer).not.toHaveBeenCalled()
+  })
+
   it('resets on a connected event, without writing either snapshot (AC5)', () => {
     const bridge = fakeBridge()
     const setRoster = vi.fn()
@@ -456,7 +550,8 @@ describe('subscribeBackgroundTaskRoster', () => {
       setRoster,
       resetRostersForServer,
       setStartedTask,
-      setUpdatedTask
+      setUpdatedTask,
+      vi.fn()
     )
 
     bridge.emit(taskStarted('c1', 't1'))
@@ -479,6 +574,7 @@ describe('subscribeBackgroundTaskRoster', () => {
       bridge.onDaemonEvent,
       vi.fn(),
       resetRostersForServer,
+      vi.fn(),
       vi.fn(),
       vi.fn()
     )
@@ -503,6 +599,7 @@ describe('subscribeBackgroundTaskRoster', () => {
       vi.fn(),
       resetRostersForServer,
       vi.fn(),
+      vi.fn(),
       vi.fn()
     )
 
@@ -525,7 +622,8 @@ describe('subscribeBackgroundTaskRoster', () => {
       setRoster,
       resetRostersForServer,
       setStartedTask,
-      setUpdatedTask
+      setUpdatedTask,
+      vi.fn()
     )
 
     bridge.emit({ type: 'disconnected' })
@@ -558,7 +656,8 @@ describe('subscribeBackgroundTaskRoster', () => {
         (origin) =>
           store.getState().resetRostersFor(selectConversationIdsFor(origin)(list.getState())),
         (s) => store.getState().setStartedTask(s),
-        (s) => store.getState().setUpdatedTask(s)
+        (s) => store.getState().setUpdatedTask(s),
+        (s) => store.getState().setTaskProgress(s)
       )
       return { bridge, store }
     }
@@ -588,7 +687,8 @@ describe('subscribeBackgroundTaskRoster', () => {
         truncatedFields: null,
         latestUpdate: null,
         status: null,
-        summary: null
+        summary: null,
+        progress: null
       })
     })
 
@@ -609,7 +709,8 @@ describe('subscribeBackgroundTaskRoster', () => {
         truncatedFields: null,
         latestUpdate: null,
         status: null,
-        summary: null
+        summary: null,
+        progress: null
       })
     })
 

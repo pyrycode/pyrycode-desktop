@@ -3150,14 +3150,18 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // This is the deterministic net that bounds the wire to exactly is_promoted / name / cwd,
       // ignoring any renderer-smuggled extra field the structural-minimum guard let through (#236's
       // fresh-literal posture). Shares the one monotonic nextEnvelopeId with send / requestConversations —
-      // no second counter — so ids stay unique across interleaved calls.
+      // no second counter — so ids stay unique across interleaved calls. The optional agent / model /
+      // effort (#1652) are copied in only when present, so a create without them stays byte-identical.
       const bytes = buildCreateConversation({
         id: envelopeId,
         ts: now(),
         payload: {
           is_promoted: payload.is_promoted,
           name: payload.name,
-          cwd: payload.cwd
+          cwd: payload.cwd,
+          ...(payload.agent === undefined ? {} : { agent: payload.agent }),
+          ...(payload.model === undefined ? {} : { model: payload.model }),
+          ...(payload.effort === undefined ? {} : { effort: payload.effort })
         }
       })
       nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id

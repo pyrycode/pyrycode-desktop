@@ -1019,6 +1019,38 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand({ type: 'createConversation', payload: populated })).toBe(true)
   })
 
+  it('accepts a createConversation carrying either agent, a model and an effort (#1652)', () => {
+    const base = { is_promoted: true, name: 'design review', cwd: '/home/user/project' }
+    const t = 'createConversation'
+    expect(isRendererCommand({ type: t, payload: { ...base, agent: 'claude' } })).toBe(true)
+    expect(isRendererCommand({ type: t, payload: { ...base, agent: 'codex' } })).toBe(true)
+    expect(isRendererCommand({ type: t, payload: { ...base, model: 'opus' } })).toBe(true)
+    expect(isRendererCommand({ type: t, payload: { ...base, effort: 'high' } })).toBe(true)
+    const all: CreateConversationPayload = { ...base, agent: 'codex', model: 'gpt-5', effort: 'low' }
+    expect(isRendererCommand({ type: t, payload: all })).toBe(true)
+    // Structured clone keeps an undefined property; it is an absent value, not a wrong one.
+    expect(
+      isRendererCommand({ type: t, payload: { ...base, agent: undefined, model: undefined, effort: undefined } })
+    ).toBe(true)
+  })
+
+  it('refuses a createConversation with an unknown agent (#1652)', () => {
+    const base = { is_promoted: null, name: null, cwd: null }
+    const t = 'createConversation'
+    for (const agent of ['gpt', 'Codex', 'CLAUDE', '', null, 1, {}]) {
+      expect(isRendererCommand({ type: t, payload: { ...base, agent } })).toBe(false)
+    }
+  })
+
+  it('refuses a createConversation whose model or effort is not a string (#1652)', () => {
+    const base = { is_promoted: null, name: null, cwd: null }
+    const t = 'createConversation'
+    for (const bad of [null, 42, true, {}, ['opus']]) {
+      expect(isRendererCommand({ type: t, payload: { ...base, model: bad } })).toBe(false)
+      expect(isRendererCommand({ type: t, payload: { ...base, effort: bad } })).toBe(false)
+    }
+  })
+
   it('rejects a createConversation with a missing/null payload (#241)', () => {
     expect(isRendererCommand({ type: 'createConversation' })).toBe(false)
     expect(isRendererCommand({ type: 'createConversation', payload: null })).toBe(false)

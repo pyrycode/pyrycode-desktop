@@ -15,11 +15,14 @@ both pieces unchanged; its first caller was the new-discussion FAB, later delete
 ## The wire contract
 
 ```ts
-// request (client → daemon) — all three fields server-defaultable, null = daemon default
+// request (client → daemon) — two kinds of key, see below
 export interface CreateConversationPayload {
   is_promoted: boolean | null
   name: string | null
   cwd: string | null
+  agent?: WireAgent   // 'claude' | 'codex' — pyrycode#2647
+  model?: string       // pyrycode#2665
+  effort?: string      // pyrycode#2665
 }
 
 // reply (daemon → client) — its OWN 5-field shape, NOT ConversationSummary
@@ -33,10 +36,23 @@ export interface ConversationCreatedPayload {
 ```
 
 **Nullable-and-present, not optional.** The daemon's Go struct uses `*T` fields *without*
-`omitempty`, so each request key is always on the wire with an explicit `null` — the deliberate
-*opposite* of the `Envelope.in_reply_to?` "never emit null" convention elsewhere in the wire types.
-`CreateConversationPayload`'s three fields are `T | null` (present, nullable), not `T | undefined`
-(optional/omitted) — do not "fix" them to `?:`.
+`omitempty`, so each of the original three request keys is always on the wire with an explicit
+`null` — the deliberate *opposite* of the `Envelope.in_reply_to?` "never emit null" convention
+elsewhere in the wire types. `is_promoted`, `name` and `cwd` are `T | null` (present, nullable),
+not `T | undefined` (optional/omitted) — do not "fix" them to `?:`.
+
+**`agent`, `model` and `effort` are the opposite: optional, not nullable.** [#1652](https://github.com/pyrycode/pyrycode-desktop/issues/1652)
+added them because the daemon's own new pointers (`agent` from pyrycode#2647, `model`/`effort` from
+pyrycode#2665) carry `omitempty` rather than the plain-pointer treatment the original three fields
+get. An absent key keeps the daemon's own default; a request built before these fields existed, or
+one that omits them, encodes byte-identically to today's three-field frame. `isCreateConversationPayload`
+accepts no key or an explicit `undefined` value for each (structured clone keeps an `undefined`
+property rather than dropping it) — but refuses `null`, since these keys are omitted rather than
+nulled. Once present, `agent` must be exactly `'claude'` or `'codex'`, and `model`/`effort` must be
+strings; the client checks only the type, and the daemon validates the values against the resolved
+agent's model/effort vocabulary. `createConversation` in `daemonConnection.ts` and `requestNewChannel`'s
+optional `choice` argument both copy each field in only when `!== undefined`, so a call that supplies
+none of the three still sends exactly the original literal.
 
 `ConversationCreatedPayload` is deliberately **not** a reuse of the existing 7-field
 `ConversationSummary` ([conversation list fetch](conversation-list-fetch.md)): the daemon does not
@@ -249,6 +265,13 @@ Focused `daemonConnection.test.ts` coverage drives actual over-cap builds and th
 drivers, checks the host stamp and content-free diagnostics, then delivers a later error
 for the attempted envelope id. That later error must not produce a second create
 rejection: a failure test checking only the first event would miss a phantom pending entry.
+
+Asserting that a byte-identical frame has exactly `{is_promoted, name, cwd}` and nothing
+more ([#1652](https://github.com/pyrycode/pyrycode-desktop/issues/1652)'s coverage for the
+optional `agent`/`model`/`effort` above) cannot use `Object.keys` on the decoded payload:
+`decodeEnvelope(...).payload` is typed `unknown`, so that fails typecheck, and Vitest does
+not typecheck — only `npm run build` catches it. Compare `JSON.stringify(payload)` against
+an exact string instead; that also pins the key order.
 
 ## The success reply stays uncorrelated; the rejection, since #1307, does not
 

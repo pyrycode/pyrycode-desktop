@@ -102,6 +102,45 @@ describe('requestNewChannel', () => {
       payload: { is_promoted: true, name: 'Release notes', cwd }
     })
   })
+
+  // #1652 — the optional choice lands inside `payload`, one key per present member, never a sibling.
+  it('carries a chosen agent, model and effort inside the payload', () => {
+    const sendCommand = vi.fn()
+    requestNewChannel(sendCommand, 'Release notes', '/home/pyry/project', 'pyrybox', {
+      agent: 'codex',
+      model: 'gpt-5',
+      effort: 'low'
+    })
+    expect(sendCommand).toHaveBeenCalledWith({
+      type: 'createConversation',
+      payload: {
+        is_promoted: true,
+        name: 'Release notes',
+        cwd: '/home/pyry/project',
+        agent: 'codex',
+        model: 'gpt-5',
+        effort: 'low'
+      },
+      serverId: 'pyrybox'
+    })
+  })
+
+  it('sends only the members a partial choice names, and no key for an absent one', () => {
+    const sendCommand = vi.fn()
+    requestNewChannel(sendCommand, 'Release notes', '/home/pyry/project', undefined, { model: 'opus' })
+    const command = sendCommand.mock.calls[0][0]
+    expect(command).toEqual({
+      type: 'createConversation',
+      payload: { is_promoted: true, name: 'Release notes', cwd: '/home/pyry/project', model: 'opus' }
+    })
+    expect(Object.keys(command.payload)).toEqual(['is_promoted', 'name', 'cwd', 'model'])
+  })
+
+  it('sends no choice key at all without a choice', () => {
+    const sendCommand = vi.fn()
+    requestNewChannel(sendCommand, 'Release notes', '/home/pyry/project')
+    expect(Object.keys(sendCommand.mock.calls[0][0].payload)).toEqual(['is_promoted', 'name', 'cwd'])
+  })
 })
 
 // #1308 — the third fixed shape: the FAB's payload plus the top-level routing key. Single-literal

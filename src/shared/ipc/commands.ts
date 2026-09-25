@@ -765,7 +765,11 @@ function isRefuseQuestionsPayload(value: unknown): value is RefuseQuestionsComma
  *  TYPE, so a literal `null` is accepted (the daemon-default signal) while a missing/`undefined` key is
  *  rejected (the `in` check makes "present" explicit and narrows for TS). Structural minimum — a
  *  smuggled extra field is not rejected here; the main-side sender's fresh-literal construction bounds
- *  the wire to exactly these three fields. Pure; never throws. */
+ *  the wire to exactly these three fields. Pure; never throws.
+ *
+ *  The optional `agent`, `model` and `effort` (#1652) may be absent or `undefined` (structured clone
+ *  keeps an undefined property). Otherwise `agent` must be exactly `claude` or `codex`, and `model` and
+ *  `effort` must be strings — `null` is refused, since these keys are omitted rather than nulled. */
 function isCreateConversationPayload(value: unknown): value is CreateConversationPayload {
   if (typeof value !== 'object' || value === null) return false
   return (
@@ -774,7 +778,13 @@ function isCreateConversationPayload(value: unknown): value is CreateConversatio
     'name' in value &&
     (typeof value.name === 'string' || value.name === null) &&
     'cwd' in value &&
-    (typeof value.cwd === 'string' || value.cwd === null)
+    (typeof value.cwd === 'string' || value.cwd === null) &&
+    (!('agent' in value) ||
+      value.agent === undefined ||
+      value.agent === 'claude' ||
+      value.agent === 'codex') &&
+    (!('model' in value) || value.model === undefined || typeof value.model === 'string') &&
+    (!('effort' in value) || value.effort === undefined || typeof value.effort === 'string')
   )
 }
 

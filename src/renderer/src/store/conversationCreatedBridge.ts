@@ -8,7 +8,7 @@
 import { useEffect, useRef } from 'react'
 import type { RendererCommand } from '@shared/ipc/commands'
 import type { DaemonEvent } from '@shared/ipc/events'
-import type { ConversationCreatedPayload } from '@shared/wire/types'
+import type { ConversationCreatedPayload, WireAgent } from '@shared/wire/types'
 
 /**
  * Fire the `createConversation` command (#241 wired the main side through to the daemon). An inline
@@ -57,16 +57,27 @@ export function requestNewConversation(
  *
  * Fire-and-forget, like its twin: `sendCommand` is `void`, no result to await. Navigation to the new
  * channel is decoupled and event-driven, through `useConversationCreatedNav` below.
+ *
+ * `choice` (#1652) names the agent, model and effort the channel starts on. Each present member lands
+ * INSIDE `payload`, and an absent one adds no key, so a call without a choice sends today's literal.
  */
 export function requestNewChannel(
   sendCommand: (command: RendererCommand) => void,
   name: string,
   cwd: string,
-  serverId?: string
+  serverId?: string,
+  choice?: { agent?: WireAgent; model?: string; effort?: string }
 ): void {
   sendCommand({
     type: 'createConversation',
-    payload: { is_promoted: true, name: name.trim(), cwd },
+    payload: {
+      is_promoted: true,
+      name: name.trim(),
+      cwd,
+      ...(choice?.agent === undefined ? {} : { agent: choice.agent }),
+      ...(choice?.model === undefined ? {} : { model: choice.model }),
+      ...(choice?.effort === undefined ? {} : { effort: choice.effort })
+    },
     ...(serverId === undefined ? {} : { serverId })
   })
 }

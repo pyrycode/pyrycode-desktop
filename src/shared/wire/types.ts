@@ -3253,11 +3253,19 @@ export interface RecentWorkspacesPayload {
  * (optional/omitted). This is the deliberate OPPOSITE of the `Envelope.in_reply_to?` convention above
  * ("never emit null"): here the daemon contract REQUIRES `null` on the wire, and CLAUDE.md no-drift
  * wins. Do NOT "fix" these to `?:` — an omission would drop the key and change the wire meaning.
+ *
+ * `agent` (pyrycode#2647), `model` and `effort` (pyrycode#2665) are the opposite: OPTIONAL, because
+ * the daemon's pointers carry `omitempty`. An absent key keeps the daemon's choice, and a request
+ * without them encodes byte-identically to one sent before they existed (#1652). The daemon checks
+ * `model` and `effort` against the resolved agent's vocabulary, so the client only checks their type.
  */
 export interface CreateConversationPayload {
   is_promoted: boolean | null
   name: string | null
   cwd: string | null
+  agent?: WireAgent
+  model?: string
+  effort?: string
 }
 
 /**

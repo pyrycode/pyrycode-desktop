@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   MARKDOWN_COPIED_NOTICE,
+  MARKDOWN_OPEN_IN_APP_FAILED_NOTICE,
+  MARKDOWN_SAVE_FAILED_NOTICE,
   MARKDOWN_OPEN_FAILED_NOTICE,
   MarkdownReaderView,
   markdownFileName,
@@ -79,7 +81,7 @@ describe('markdownFileName (#1627)', () => {
 describe('MarkdownReaderView (#1627)', () => {
   const view = (state: Exclude<MarkdownReaderState, { type: 'closed' }>): string =>
     renderToStaticMarkup(
-      <MarkdownReaderView state={state} copied={false} onBack={() => {}} onRefresh={() => {}} onCopy={() => {}} />
+      <MarkdownReaderView state={state} copied={false} openInAppFailed={false} saveFailed={false} onBack={() => {}} onRefresh={() => {}} onCopy={() => {}} onOpenInApp={() => {}} onSave={() => {}} />
     )
 
   it('draws the top bar with a named back control and the file name while the first fetch is in flight', () => {
@@ -234,22 +236,45 @@ describe('markdownHtml (#1630)', () => {
 })
 
 describe('MarkdownReaderView menu (#1630)', () => {
-  const render = (state: Exclude<MarkdownReaderState, { type: 'closed' }>, copied = false): string =>
+  const render = (
+    state: Exclude<MarkdownReaderState, { type: 'closed' }>,
+    copied = false,
+    openInAppFailed = false,
+    saveFailed = false
+  ): string =>
     renderToStaticMarkup(
-      <MarkdownReaderView state={state} copied={copied} onBack={() => {}} onRefresh={() => {}} onCopy={() => {}} />
+      <MarkdownReaderView
+        state={state}
+        copied={copied}
+        openInAppFailed={openInAppFailed}
+        saveFailed={saveFailed}
+        onBack={() => {}}
+        onRefresh={() => {}}
+        onCopy={() => {}}
+        onOpenInApp={() => {}}
+        onSave={() => {}}
+      />
     )
   const loadedState = (notice = false): MarkdownReaderState & { type: 'loaded' } => ({
     type: 'loaded', requestKey: 'k', path: 'notes/Plan.md', text: 'Body', refreshKey: null, notice
   })
 
-  it('lists the four items in the decided order, and only Refresh is available until the content has loaded', () => {
-    const labels = ['Copy as markdown', 'Copy as plain text', 'Copy as HTML', 'Refresh']
+  it('lists the six items in the decided order, and only Refresh is available until the content has loaded', () => {
+    // #1631: Open in another app sits directly below Refresh. #1632: Save to device is last.
+    const labels = [
+      'Copy as markdown',
+      'Copy as plain text',
+      'Copy as HTML',
+      'Refresh',
+      'Open in another app',
+      'Save to device'
+    ]
     const loading = markdownReaderMenuOptions({ type: 'loading', requestKey: 'k', path: 'notes/Plan.md' })
     expect(loading.map((option) => option.label)).toEqual(labels)
-    expect(loading.map((option) => option.unavailable)).toEqual([true, true, true, false])
+    expect(loading.map((option) => option.unavailable)).toEqual([true, true, true, false, true, true])
     const loaded = markdownReaderMenuOptions(loadedState())
     expect(loaded.map((option) => option.label)).toEqual(labels)
-    expect(loaded.map((option) => option.unavailable)).toEqual([false, false, false, false])
+    expect(loaded.map((option) => option.unavailable)).toEqual([false, false, false, false, false, false])
   })
 
   it('puts the menu trigger at the end of the bar in both states', () => {
@@ -269,6 +294,20 @@ describe('MarkdownReaderView menu (#1630)', () => {
     )
     expect(render(loadedState(), true)).toContain(
       `<p class="markdown-reader__copied" role="status">${MARKDOWN_COPIED_NOTICE}</p>`
+    )
+  })
+
+  it('shows the open-in-another-app failure notice from state alone (#1631)', () => {
+    expect(render(loadedState())).not.toContain(MARKDOWN_OPEN_IN_APP_FAILED_NOTICE)
+    expect(render(loadedState(), false, true)).toContain(
+      `<p class="conversation__banner markdown-reader__notice" role="status">${MARKDOWN_OPEN_IN_APP_FAILED_NOTICE}</p>`
+    )
+  })
+
+  it('shows the save failure notice from state alone (#1632)', () => {
+    expect(render(loadedState())).not.toContain(MARKDOWN_SAVE_FAILED_NOTICE)
+    expect(render(loadedState(), false, false, true)).toContain(
+      `<p class="conversation__banner markdown-reader__notice" role="status">${MARKDOWN_SAVE_FAILED_NOTICE}</p>`
     )
   })
 })

@@ -461,6 +461,36 @@ the combined list again exceeded the size cap.
   `assertNever` guard makes a new arm a compile error — and it is not a formality: it would otherwise
   stringify the whole event, the claude-authored filename included, into an `Error` message and a crash
   reporter.
+- **`backgroundTaskProgress{conversationId,taskId,currentActivity,subagentType,lastToolName,
+  totalTokens,toolUses,durationMs,truncatedFields}`** ([#1638](https://github.com/pyrycode/pyrycode-desktop/issues/1638))
+  is the background-task family's fourth frame — `backgroundTaskStarted`/`backgroundTaskUpdated`/
+  `backgroundTaskRoster` are its three siblings, joined on `taskId` — reporting that a running task is
+  still working, and what it is doing right now. Wired from the same `case 'message'` choke point,
+  placed directly after `background-task-roster`. **All nine decoded fields cross, copied by name from
+  the already-validated payload, never a spread** — the `attachmentOffered`/`resetting` precedent.
+  **`conversationId` is kept**, the same in-family reason as its three siblings: the frame carries no
+  `turn_id` and opens/closes no turn, so it is daemon state, not a turn-stream item.
+
+  **`currentActivity` IS THE WIRE `description`, RENAMED ON PURPOSE.** On this frame it is the task's
+  current activity ("Reading alpha.txt"); on `backgroundTaskStarted` the same wire name is the task's
+  opening description, a different fact. The distinct event-field name keeps a consumer from ever
+  joining or overwriting one with the other. The three counters are claude's own readings, cumulative
+  per task but **not guaranteed monotonic**, and cross exactly as received — no accumulation, diff or
+  bound, the `thinkingProgress` posture. `truncatedFields: null` means nothing was cut, distinct from
+  `[]`.
+
+  SECURITY: `currentActivity`, `subagentType` and `lastToolName` are untrusted model- and tool-authored
+  text, and the current activity names a file on the operator's host in every captured frame. Render
+  them as inert plain text only — never `innerHTML`/`dangerouslySetInnerHTML`, an attribute, a URL, a
+  filename, a path, a cache key or a log. Nothing decoded reaches a log on this leg: `emitDaemonEvent`
+  is log-free by construction and the decode-side line is content-free by test.
+
+  Shipped **dormant** across all four exhaustive bridges — `daemonEventBridge`, `modalBridge`,
+  `questionBridge` and `timelineBridge` each no-op it, an ordinary compile-forced case in each. Not
+  compile-forced at the decode side (`daemonConnection`'s inbound switch has no `assertNever`) — the
+  round-trip test guards this emit. `backgroundTaskRosterBridge` needed **no** arm at all: unlike the
+  four exhaustive bridges, its own switch ends in `default: null`, not `assertNever`.
+  [#1640](https://github.com/pyrycode/pyrycode-desktop/issues/1640) is the first consumer.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.

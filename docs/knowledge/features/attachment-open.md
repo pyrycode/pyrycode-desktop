@@ -390,3 +390,7 @@ Electron canonicalizes macOS `/var` temporary paths to `/private/var`.
 - [#868](https://github.com/pyrycode/pyrycode-desktop/issues/868) — the thumbnail, and
   [#869](conversation-shell-message-bubble-attachments.md#the-attachment-image-thumbnail-1045) — the click that
   calls this channel. Both shipped.
+- [Conversation shell — markdown reader § Open in another app](conversation-shell-markdown-reader.md#open-in-another-app-1631) —
+  #1631, the closest sibling outside the attachment family: same injected-directory/never-rejects/
+  temp-file-plus-rename shape, but one invoke channel rather than this module's send/push pair, since its
+  request carries no correlation key.

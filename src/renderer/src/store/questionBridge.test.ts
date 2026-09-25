@@ -298,6 +298,18 @@ describe('translateQuestionEvent — every other arm returns null (the inverse f
         truncatedFields: ['patch']
       },
       {
+        type: 'backgroundTaskProgress',
+        conversationId: 'conv-1',
+        taskId: 'task_01ABC',
+        currentActivity: 'Reading beta.txt',
+        subagentType: 'general-purpose',
+        lastToolName: 'Read',
+        totalTokens: 16246,
+        toolUses: 2,
+        durationMs: 4546,
+        truncatedFields: null
+      },
+      {
         type: 'backgroundTaskRoster',
         conversationId: 'conv-1',
         tasks: [
@@ -456,8 +468,8 @@ describe('translateQuestionEvent — every other arm returns null (the inverse f
     ]
 
     // The count is asserted so a future arm silently dropped from this table cannot pass unnoticed:
-    // 49 union arms minus the 3 owned above.
-    expect(others).toHaveLength(46)
+    // 50 union arms minus the 3 owned above.
+    expect(others).toHaveLength(47)
     for (const event of others) expect(translateQuestionEvent(event)).toBeNull()
   })
 })

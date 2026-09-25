@@ -3551,6 +3551,133 @@ describe('createDaemonConnection — background_task_updated stream (#565)', () 
   })
 })
 
+describe('createDaemonConnection — background_task_progress stream (#1638)', () => {
+  /** The daemon's golden fixture (pyrycode#2246). `description` is the CURRENT ACTIVITY. */
+  const PROGRESS = {
+    conversation_id: 'conv-1',
+    task_id: 'a8eec1cd5e109aa38',
+    description: 'Reading beta.txt',
+    subagent_type: 'general-purpose',
+    last_tool_name: 'Read',
+    total_tokens: 16246,
+    tool_uses: 2,
+    duration_ms: 4546,
+    truncated_fields: null
+  }
+
+  function progressPlaintext(payload: unknown): Uint8Array {
+    return encodeEnvelope({ id: 812, type: 'background_task_progress', ts: FIXED_TS, payload })
+  }
+
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('emits exactly one backgroundTaskProgress carrying every field, the activity renamed', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: progressPlaintext(PROGRESS) })
+
+    const events = emitted(sink).slice(before)
+    expect(events).toEqual([
+      {
+        type: 'backgroundTaskProgress',
+        conversationId: 'conv-1',
+        taskId: 'a8eec1cd5e109aa38',
+        currentActivity: 'Reading beta.txt',
+        subagentType: 'general-purpose',
+        lastToolName: 'Read',
+        totalTokens: 16246,
+        toolUses: 2,
+        durationMs: 4546,
+        truncatedFields: null
+      }
+    ])
+    // The wire `description` never crosses under that name, so it cannot be joined with the opening
+    // description `backgroundTaskStarted` carries.
+    expect(events[0]).not.toHaveProperty('description')
+  })
+
+  it('carries a truncated_fields list as received', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: progressPlaintext({ ...PROGRESS, truncated_fields: ['description'] })
+    })
+
+    const events = emitted(sink).slice(before) as Array<{ truncatedFields?: unknown }>
+    expect(events).toHaveLength(1)
+    expect(events[0].truncatedFields).toEqual(['description'])
+  })
+
+  it('accumulates nothing: a lower reading after a higher one is emitted as received', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: progressPlaintext(PROGRESS) })
+    drivers[0].emit({
+      type: 'message',
+      plaintext: progressPlaintext({ ...PROGRESS, total_tokens: 10, tool_uses: 1, duration_ms: 5 })
+    })
+
+    const events = emitted(sink).slice(before) as Array<{
+      totalTokens?: number
+      toolUses?: number
+      durationMs?: number
+    }>
+    expect(events.map((e) => [e.totalTokens, e.toolUses, e.durationMs])).toEqual([
+      [16246, 2, 4546],
+      [10, 1, 5]
+    ])
+  })
+
+  it('never copies an unknown key across IPC', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: progressPlaintext({ ...PROGRESS, summary: 'must-not-cross', smuggled: 'must-not-cross' })
+    })
+
+    const events = emitted(sink).slice(before)
+    expect(Object.keys(events[0]).sort()).toEqual([
+      'conversationId',
+      'currentActivity',
+      'durationMs',
+      'lastToolName',
+      'subagentType',
+      'taskId',
+      'toolUses',
+      'totalTokens',
+      'truncatedFields',
+      'type'
+    ])
+    expect(JSON.stringify(events)).not.toContain('must-not-cross')
+  })
+
+  it('drops a malformed background_task_progress without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+    const missingKey: Record<string, unknown> = { ...PROGRESS }
+    delete missingKey.subagent_type
+
+    for (const payload of [missingKey, { ...PROGRESS, tool_uses: '2' }]) {
+      expect(() =>
+        drivers[0].emit({ type: 'message', plaintext: progressPlaintext(payload) })
+      ).not.toThrow()
+    }
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
 describe('createDaemonConnection — background_task_roster stream (#566)', () => {
   /** The daemon's canonical fixture — two rows whose `truncated_fields` shapes DIFFER, every field on
    *  every row a distinct value, and a non-zero dropped_tasks (#566). */

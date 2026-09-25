@@ -25,6 +25,7 @@ import type {
   WireResetHandoff,
   BackgroundTaskStartedPayload,
   BackgroundTaskUpdatedPayload,
+  BackgroundTaskProgressPayload,
   BackgroundTask,
   BackgroundTaskRosterPayload,
   ModelAnnouncedPayload,
@@ -722,6 +723,43 @@ describe('background-task-updated wire vocabulary (#565)', () => {
     // `truncated_fields` may now name the two new fields as well.
     const cut: BackgroundTaskUpdatedPayload = { ...finished, truncated_fields: ['status', 'summary'] }
     expect(cut.truncated_fields).toEqual(['status', 'summary'])
+  })
+})
+
+describe('background-task-progress wire vocabulary (#1638)', () => {
+  it('admits the background_task_progress inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType.
+    const progress: EnvelopeType = 'background_task_progress'
+    expect(progress).toBe('background_task_progress')
+  })
+
+  it('shapes BackgroundTaskProgressPayload as its NINE fields — no summary, patch or ambient', () => {
+    // The daemon's golden fixture verbatim (pyrycode#2246).
+    const payload: BackgroundTaskProgressPayload = {
+      conversation_id: 'c1',
+      task_id: 'a8eec1cd5e109aa38',
+      description: 'Reading beta.txt',
+      subagent_type: 'general-purpose',
+      last_tool_name: 'Read',
+      total_tokens: 16246,
+      tool_uses: 2,
+      duration_ms: 4546,
+      truncated_fields: null
+    }
+    expect(Object.keys(payload)).toEqual([
+      'conversation_id',
+      'task_id',
+      'description',
+      'subagent_type',
+      'last_tool_name',
+      'total_tokens',
+      'tool_uses',
+      'duration_ms',
+      'truncated_fields'
+    ])
+    // @ts-expect-error — the frame carries no `summary`.
+    const withSummary: BackgroundTaskProgressPayload = { ...payload, summary: '' }
+    expect(withSummary).toBeDefined()
   })
 })
 

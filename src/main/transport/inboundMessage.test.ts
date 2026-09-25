@@ -10692,6 +10692,7 @@ describe('parseInboundMessage — history entry payload decode (#1227)', () => {
     'background_task_started',
     'background_task_updated',
     'background_task_roster',
+    'background_task_progress',
     'model_announced',
     'model_list',
     'slash_command_list',
@@ -11621,4 +11622,201 @@ describe('update-required rejection classification', () => {
       expect(result).toMatchObject({ kind: 'daemon-error' })
       expect(result?.kind === 'daemon-error' && result.updateRequired).toBeUndefined()
     })
+})
+
+/** A `background_task_progress` envelope's plaintext bytes, wrapping an arbitrary payload (#1638). */
+function encodeBackgroundTaskProgress(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 812, type: 'background_task_progress', ts: FIXED_TS, payload })
+}
+
+/** The daemon's golden fixture VERBATIM (internal/protocol/testdata/background_task_progress.json,
+ *  pyrycode#2246). `description` is the task's CURRENT ACTIVITY, and it names a file. */
+const BACKGROUND_TASK_PROGRESS = {
+  conversation_id: 'c1',
+  task_id: 'a8eec1cd5e109aa38',
+  description: 'Reading beta.txt',
+  subagent_type: 'general-purpose',
+  last_tool_name: 'Read',
+  total_tokens: 16246,
+  tool_uses: 2,
+  duration_ms: 4546,
+  truncated_fields: null
+}
+
+describe('parseInboundMessage — background_task_progress recognition (#1638)', () => {
+  it('narrows the golden fixture into { kind: background-task-progress } carrying all nine fields', () => {
+    const decoded = parseInboundMessage(encodeBackgroundTaskProgress(BACKGROUND_TASK_PROGRESS))
+    expect(decoded).toEqual({
+      kind: 'background-task-progress',
+      backgroundTaskProgress: BACKGROUND_TASK_PROGRESS
+    })
+    // `null` means nothing was cut; it is never collapsed into [].
+    expect(
+      (decoded as { backgroundTaskProgress: { truncated_fields: unknown } }).backgroundTaskProgress
+        .truncated_fields
+    ).toBeNull()
+  })
+
+  it('carries a truncated_fields list, and an empty list, as received', () => {
+    for (const truncated_fields of [['description', 'last_tool_name'], []]) {
+      const payload = { ...BACKGROUND_TASK_PROGRESS, truncated_fields }
+      expect(parseInboundMessage(encodeBackgroundTaskProgress(payload))).toEqual({
+        kind: 'background-task-progress',
+        backgroundTaskProgress: payload
+      })
+    }
+  })
+
+  it('carries each counter as received — zero, and a reading lower than an earlier one', () => {
+    // The counters are cumulative per task but NOT guaranteed monotonic, and the daemon computes
+    // nothing. A client-side "only grows" or "positive" rule would fail-close ordinary traffic.
+    const zero = { ...BACKGROUND_TASK_PROGRESS, total_tokens: 0, tool_uses: 0, duration_ms: 0 }
+    const restarted = { ...BACKGROUND_TASK_PROGRESS, total_tokens: 12, tool_uses: 1, duration_ms: 3 }
+    for (const payload of [zero, restarted]) {
+      expect(parseInboundMessage(encodeBackgroundTaskProgress(payload))).toEqual({
+        kind: 'background-task-progress',
+        backgroundTaskProgress: payload
+      })
+    }
+  })
+
+  it('carries empty strings as values, not absences', () => {
+    const payload = { ...BACKGROUND_TASK_PROGRESS, description: '', subagent_type: '', last_tool_name: '' }
+    expect(parseInboundMessage(encodeBackgroundTaskProgress(payload))).toEqual({
+      kind: 'background-task-progress',
+      backgroundTaskProgress: payload
+    })
+  })
+
+  it('tolerates unknown keys but does not copy them through — no summary, patch or ambient', () => {
+    const withExtras = {
+      ...BACKGROUND_TASK_PROGRESS,
+      summary: 'must-not-cross',
+      patch: '{"x":1}',
+      ambient: true,
+      turn_id: 't1'
+    }
+    expect(parseInboundMessage(encodeBackgroundTaskProgress(withExtras))).toEqual({
+      kind: 'background-task-progress',
+      backgroundTaskProgress: BACKGROUND_TASK_PROGRESS
+    })
+  })
+})
+
+describe('parseInboundMessage — background_task_progress fail-closed (#1638)', () => {
+  const strings = [
+    'conversation_id',
+    'task_id',
+    'description',
+    'subagent_type',
+    'last_tool_name'
+  ] as const
+  const numbers = ['total_tokens', 'tool_uses', 'duration_ms'] as const
+
+  it('throws when any field is absent', () => {
+    for (const field of [...strings, ...numbers, 'truncated_fields']) {
+      const payload: Record<string, unknown> = { ...BACKGROUND_TASK_PROGRESS }
+      delete payload[field]
+      expect(() => parseInboundMessage(encodeBackgroundTaskProgress(payload))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  it('throws when a string field is not a string', () => {
+    for (const field of strings) {
+      for (const value of [42, null, { a: 1 }, ['a']]) {
+        const payload = { ...BACKGROUND_TASK_PROGRESS, [field]: value }
+        expect(() => parseInboundMessage(encodeBackgroundTaskProgress(payload))).toThrow(
+          WireDecodeError
+        )
+      }
+    }
+  })
+
+  it('throws when a counter is not a number — a JSON-string number included', () => {
+    for (const field of numbers) {
+      for (const value of ['2', null, true, [2], { n: 2 }]) {
+        const payload = { ...BACKGROUND_TASK_PROGRESS, [field]: value }
+        expect(() => parseInboundMessage(encodeBackgroundTaskProgress(payload))).toThrow(
+          WireDecodeError
+        )
+      }
+    }
+  })
+
+  it('throws when truncated_fields is neither an array of strings nor null', () => {
+    const bad: unknown[] = ['description', 7, true, { description: true }, ['description', 7], [null]]
+    for (const value of bad) {
+      const payload = { ...BACKGROUND_TASK_PROGRESS, truncated_fields: value }
+      expect(() => parseInboundMessage(encodeBackgroundTaskProgress(payload))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  it('throws when the payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeBackgroundTaskProgress('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeBackgroundTaskProgress(['a']))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeBackgroundTaskProgress(null))).toThrow(WireDecodeError)
+  })
+
+  it('names no value in the error message', () => {
+    const SECRET = 'Reading /Users/secret/diary.txt'
+    const payload = { ...BACKGROUND_TASK_PROGRESS, description: SECRET, tool_uses: 'secret-count' }
+    let message = ''
+    try {
+      parseInboundMessage(encodeBackgroundTaskProgress(payload))
+    } catch (err) {
+      message = (err as Error).message
+    }
+    expect(message).not.toBe('')
+    expect(message).not.toContain(SECRET)
+    expect(message).not.toContain('secret-count')
+  })
+})
+
+describe('parseInboundMessage — background_task_progress diagnostic log (#1638)', () => {
+  it('logs content-free: never the activity, the agent, the tool, the counters or the ids', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONV = 'secret-conversation-id'
+    const SECRET_TASK = 'secret-task-id'
+    // The current activity names a file on the operator's host.
+    const SECRET_ACTIVITY = 'Reading /Users/secret/diary.txt'
+    const SECRET_AGENT = 'secret-subagent-kind'
+    const SECRET_TOOL = 'SecretToolName'
+    const plaintext = encodeBackgroundTaskProgress({
+      ...BACKGROUND_TASK_PROGRESS,
+      conversation_id: SECRET_CONV,
+      task_id: SECRET_TASK,
+      description: SECRET_ACTIVITY,
+      subagent_type: SECRET_AGENT,
+      last_tool_name: SECRET_TOOL,
+      total_tokens: 987654321
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('background_task_progress')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    for (const secret of [SECRET_CONV, SECRET_TASK, SECRET_ACTIVITY, SECRET_AGENT, SECRET_TOOL, '987654321']) {
+      expect(lines[0]).not.toContain(secret)
+    }
+  })
+
+  it('does NOT log on a malformed background_task_progress throw path', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(
+        encodeBackgroundTaskProgress({ ...BACKGROUND_TASK_PROGRESS, duration_ms: '4546' }),
+        log
+      )
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
 })

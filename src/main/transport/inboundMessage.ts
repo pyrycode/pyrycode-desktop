@@ -40,6 +40,7 @@ import type {
   CompactionBoundaryPayload,
   BackgroundTaskStartedPayload,
   BackgroundTaskUpdatedPayload,
+  BackgroundTaskProgressPayload,
   BackgroundTask,
   BackgroundTaskRosterPayload,
   ModelAnnouncedPayload,
@@ -876,6 +877,7 @@ export type InboundDaemonMessage =
   | { kind: 'background-task-started'; backgroundTaskStarted: BackgroundTaskStartedPayload }
   | { kind: 'background-task-updated'; backgroundTaskUpdated: BackgroundTaskUpdatedPayload }
   | { kind: 'background-task-roster'; backgroundTaskRoster: BackgroundTaskRosterPayload }
+  | { kind: 'background-task-progress'; backgroundTaskProgress: BackgroundTaskProgressPayload }
   | ({ kind: 'unrecognized-message'; unrecognized: UnrecognizedMessagePayload } & FrameTimestamp)
   | ({ kind: 'session-transition'; sessionTransition: SessionTransitionPayload } & FrameTimestamp)
   | {
@@ -2162,6 +2164,49 @@ function parseBackgroundTaskUpdatedPayload(payload: unknown): BackgroundTaskUpda
   const summary = optionalString(payload, 'summary') ?? ''
   const truncated_fields = requireStringArrayOrNull(payload, 'truncated_fields')
   return { conversation_id, task_id, patch, status, summary, truncated_fields }
+}
+
+/**
+ * Narrow an opaque payload into a BackgroundTaskProgressPayload (#1638). Fail-closed like its three
+ * siblings over nine fields: five required strings, three requireNumber counters and `truncated_fields`
+ * through the same requireStringArrayOrNull (a literal `null` means nothing was cut; an omitted key
+ * fails closed, since the Go field has no `omitempty`).
+ *
+ * The counters get NO range, integer or monotonicity check — parseThinkingProgressPayload's posture, for
+ * the same reason: they are cumulative but not monotonic, so "only grows" or "never negative" would
+ * fail-close ordinary traffic. requireNumber checks the type, never truthiness, so a `0` is carried and a
+ * JSON-string number throws. No closed-set narrowing of `subagent_type`, `last_tool_name` or the
+ * `truncated_fields` names, and no per-field length check (the daemon caps each string at construction;
+ * the frame-level MAX_PLAINTEXT_BYTES guard covers the oversized case).
+ *
+ * Returns a fresh nine-field literal, so unknown keys — a `summary`, `patch` or `ambient` this frame must
+ * never have — are tolerated but not copied through, which also makes it prototype-pollution-safe. Its
+ * messages name the failure category only: `description` can name a file on the operator's host.
+ */
+function parseBackgroundTaskProgressPayload(payload: unknown): BackgroundTaskProgressPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed background_task_progress payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const task_id = requireString(payload, 'task_id')
+  const description = requireString(payload, 'description')
+  const subagent_type = requireString(payload, 'subagent_type')
+  const last_tool_name = requireString(payload, 'last_tool_name')
+  const total_tokens = requireNumber(payload, 'total_tokens')
+  const tool_uses = requireNumber(payload, 'tool_uses')
+  const duration_ms = requireNumber(payload, 'duration_ms')
+  const truncated_fields = requireStringArrayOrNull(payload, 'truncated_fields')
+  return {
+    conversation_id,
+    task_id,
+    description,
+    subagent_type,
+    last_tool_name,
+    total_tokens,
+    tool_uses,
+    duration_ms,
+    truncated_fields
+  }
 }
 
 /**
@@ -4367,6 +4412,21 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'background-task-roster', backgroundTaskRoster }
+    }
+    case 'background_task_progress': {
+      // Narrow BEFORE logging so a malformed frame (an absent field, a JSON-string counter, an omitted
+      // `truncated_fields`) throws first and leaves no record. NOTHING decoded is logged — least of all
+      // `description`, the current activity, which names a file on the operator's host; nor the
+      // counters, a side-channel on the operator's work (the thinking_progress posture). Only the
+      // frame's byte length + one-way hash under a static code literal.
+      const backgroundTaskProgress = parseBackgroundTaskProgressPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'background_task_progress',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'background-task-progress', backgroundTaskProgress }
     }
     case 'unrecognized_message': {
       // Narrow BEFORE logging so a malformed frame (an unknown `site`, an absent `raw`, a non-boolean

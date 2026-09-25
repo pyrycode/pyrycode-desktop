@@ -435,9 +435,13 @@ export function ConversationScreen({
         <MarkdownReaderView
           state={reader.state}
           copied={reader.copied}
+          openInAppFailed={reader.openInAppFailed}
+          saveFailed={reader.saveFailed}
           onBack={reader.back}
           onRefresh={reader.refresh}
           onCopy={reader.copy}
+          onOpenInApp={reader.openInApp}
+          onSave={reader.save}
         />
       )}
       <div className="conversation__covered" data-covered={readerOpen ? 'true' : undefined}>

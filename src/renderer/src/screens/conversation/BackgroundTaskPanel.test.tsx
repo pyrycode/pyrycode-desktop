@@ -686,6 +686,14 @@ describe('BackgroundTaskPanelView — the #580 list drawing (#1635)', () => {
     expect(unobserved).toContain('<p class="background-task-panel__unobserved">No background-task report yet</p>')
   })
 
+  it('names the conversation agent in the empty support line (#1656)', () => {
+    const codex = renderToStaticMarkup(<BackgroundTaskPanelView entry={entry([])} agent="codex" onClose={noop} />)
+    expect(codex).toContain('Codex has nothing running in the background for this conversation.')
+    expect(codex).not.toContain('Claude')
+    expect(renderToStaticMarkup(<BackgroundTaskPanelView entry={entry([])} agent="claude" onClose={noop} />))
+      .toBe(renderToStaticMarkup(<BackgroundTaskPanelView entry={entry([])} onClose={noop} />))
+  })
+
   it('keeps every daemon string inert across both groups, the tags and the code block (AC3)', () => {
     const hostile = '<img src=x onerror="alert(1)">'
     const markup = renderToStaticMarkup(

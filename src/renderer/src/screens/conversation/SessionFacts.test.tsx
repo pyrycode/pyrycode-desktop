@@ -40,6 +40,13 @@ describe('Channel info Session', () => {
     expect(markup).toContain('Not reported')
     expect(markup.match(/Truncated/g)).toHaveLength(2)
   })
+  it('labels the version row with the conversation agent (#1656)', () => {
+    const codex = renderToStaticMarkup(<ChannelInfoSheetView conversation={conversation} agent="codex" onClose={() => {}} />)
+    expect(codex).toContain('<span class="channel-info__row-label">Codex version</span>')
+    expect(codex).not.toContain('Claude version')
+    expect(renderToStaticMarkup(<ChannelInfoSheetView conversation={conversation} agent="claude" onClose={() => {}} />))
+      .toBe(renderToStaticMarkup(<ChannelInfoSheetView conversation={conversation} onClose={() => {}} />))
+  })
   it('preserves the no-conversation placeholder', () => {
     const markup = renderToStaticMarkup(<ChannelInfoSheetView conversation={null} onClose={() => {}} sessionFacts={report} />)
     expect(markup).toContain('No conversation details yet')

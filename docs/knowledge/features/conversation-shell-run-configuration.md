@@ -330,6 +330,14 @@ from it — a null id or an unattributable owner answers Claude. `RunConfigView`
 through a new `agent?: WireAgent` prop (absent = Claude, so every pre-#1651 view test is the Claude
 path unchanged) to `RunningModelSection`, `ModelSection` and `EffortSection` alike.
 
+**\#1656 threads the same `agent` value into `YoloSection` and `ContextWindowSection` too, but for copy,
+not filtering.** The YOLO caption ("Claude runs commands without asking for confirmation. Use
+carefully.") and the context-window explainer ("dropped from claude's view…") each pick their agent
+name from a local `agent === 'codex' ? 'Codex' : 'Claude'` ternary — the explainer keeps it lowercase
+("codex's view"), matching the Claude copy's existing case. Both props are required, not optional,
+because `RunConfigView` already resolves `agent` for the sections above and simply forwards it — there
+is no pre-#1651 call site left to keep optional.
+
 **The React `key` is the array index, deliberately.** `display_name` and `value` are both
 claude-authored text a key would turn into a lookup path — the store's own header assigns this slice
 that obligation. There is also no cross-frame identity to preserve: each frame replaces the

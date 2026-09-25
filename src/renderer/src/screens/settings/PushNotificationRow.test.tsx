@@ -16,7 +16,7 @@ describe('PushNotificationRowView', () => {
     const markup = render(true)
     expect(markup).toContain('role="switch"')
     expect(markup).toContain('aria-checked="true"')
-    expect(markup).toContain('Push notifications when claude responds') // the label names the control (AC4)
+    expect(markup).toContain('Push notifications when an agent responds') // the label names the control (AC4)
     expect(markup).toContain('settings__switch--on') // the on-position knob/track (Figma 17:68)
   })
 
@@ -24,7 +24,7 @@ describe('PushNotificationRowView', () => {
     const markup = render(false)
     expect(markup).toContain('role="switch"')
     expect(markup).toContain('aria-checked="false"')
-    expect(markup).toContain('Push notifications when claude responds') // label present in both states (AC4)
+    expect(markup).toContain('Push notifications when an agent responds') // label present in both states (AC4)
     expect(markup).not.toContain('settings__switch--on') // off keeps the base switch class only
   })
 

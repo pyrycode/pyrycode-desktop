@@ -381,9 +381,9 @@ export function PushNotificationRowControl(): JSX.Element
 // usePushNotificationPrefStore(selectPushNotificationsEnabled) → <PushNotificationRowView>
 ```
 
-`PushNotificationRowView` renders a text column holding the Figma-verbatim label "Push notifications
-when claude responds" (17:66 — a module-level `PUSH_TOGGLE_LABEL` constant, the `SERVER_ROW_LABEL`
-idiom, never a daemon string) beside a trailing native `<button type="button" role="switch">` (Figma
+`PushNotificationRowView` renders a text column holding the label "Push notifications when an agent
+responds" (a module-level `PUSH_TOGGLE_LABEL` constant, the `SERVER_ROW_LABEL` idiom, never a daemon
+string) beside a trailing native `<button type="button" role="switch">` (Figma
 17:67 track / 17:68 knob) carrying `aria-checked={enabled}` and a decorative `aria-hidden` knob
 child. `onClick={() => onToggle(!enabled)}` is the switch's only interaction wiring — no
 `onKeyDown` needed, because a native `<button>` already fires `onClick` on both Space and Enter.
@@ -397,6 +397,12 @@ Because the switch button is a *sibling* of the label `<p>` (not its parent) and
 computes its accessible name from the author rather than from sibling content, the button also
 carries an explicit `aria-label={PUSH_TOGGLE_LABEL}` — the same constant the visible label renders,
 so the accessible name can never drift from the visible copy.
+
+**\#1656 made the label agent-neutral.** Every other Claude-named client string in the app was changed
+to name the conversation's agent (Claude or Codex), but this row sits in Settings, which has no open
+conversation to read an agent from — so the fix is not a ternary but a rewrite to the agent-neutral
+"…when an agent responds". Figma 17:66 still draws the original "claude" wording; the ticket changed
+only that one word, ahead of the frame.
 
 `PushNotificationRowControl` reads `usePushNotificationPrefStore(selectPushNotificationsEnabled)`
 and hands the boolean straight to the view, wiring `onToggle` to

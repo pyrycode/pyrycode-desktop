@@ -15,9 +15,10 @@ import {
 // picker sheet (unlike DefaultWorkspaceRow) — this row is a pure read + one interaction-time write.
 
 // Client-owned copy — a module-level constant (the SERVER_ROW_LABEL / DEFAULT_WORKSPACE_ROW_LABEL idiom),
-// never a daemon string. Figma-verbatim (17:66): lowercase "claude", apostrophe-free so renderToStaticMarkup
-// leaves it untouched (the standing desktop lesson).
-const PUSH_TOGGLE_LABEL = 'Push notifications when claude responds'
+// never a daemon string. Apostrophe-free so renderToStaticMarkup leaves it untouched (the standing desktop
+// lesson). #1656: agent-neutral, because Settings has no conversation to name Claude or Codex from; the
+// Figma (17:66) still reads "claude", and only that word changed.
+const PUSH_TOGGLE_LABEL = 'Push notifications when an agent responds'
 
 /**
  * The pure, exported, props-in/markup-out view (the ServerRow/ArchivedCountRow tested seam) — the storage-row

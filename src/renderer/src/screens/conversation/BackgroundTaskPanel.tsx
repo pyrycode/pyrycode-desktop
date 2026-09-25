@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from 'react'
+import type { WireAgent } from '@shared/wire/types'
 import { shouldInterruptOnKeyDown, type ComposerKeyEvent } from './composerSend'
 import {
   useBackgroundTaskRosterStore,
@@ -71,8 +72,11 @@ const BACKGROUND_TASK_PANEL_EMPTY_COPY = 'No background tasks'
 // the heading, never inside it, so the heading element still holds the heading copy alone.
 const BACKGROUND_TASK_PANEL_UNOBSERVED_SUPPORT =
   'The daemon has not reported on this conversation since the app connected.'
+// #1656: the observed-empty line names the conversation's agent, selected by it and never interpolated.
 const BACKGROUND_TASK_PANEL_EMPTY_SUPPORT =
   'Claude has nothing running in the background for this conversation.'
+const BACKGROUND_TASK_PANEL_EMPTY_SUPPORT_CODEX =
+  'Codex has nothing running in the background for this conversation.'
 
 // #1635: the two group headers. Running is also the tag of a task no status word has reached (#1639).
 const BACKGROUND_TASK_PANEL_RUNNING_LABEL = 'Running'
@@ -220,10 +224,13 @@ function wasCut(truncatedFields: readonly string[] | null, wireFieldName: string
 export function BackgroundTaskPanelView({
   entry,
   finishedTaskIds = null,
+  agent = 'claude',
   onClose
 }: {
   entry: BackgroundTaskRosterEntry | null
   finishedTaskIds?: ReadonlySet<string> | null
+  /** #1656 — the conversation's agent; absent reads Claude. */
+  agent?: WireAgent
   onClose: () => void
 }): JSX.Element {
   return (
@@ -293,7 +300,7 @@ export function BackgroundTaskPanelView({
               <ReadingRing variant="solid" />
               <p className="background-task-panel__empty">{BACKGROUND_TASK_PANEL_EMPTY_COPY}</p>
               <p className="background-task-panel__reading-support">
-                {BACKGROUND_TASK_PANEL_EMPTY_SUPPORT}
+                {agent === 'codex' ? BACKGROUND_TASK_PANEL_EMPTY_SUPPORT_CODEX : BACKGROUND_TASK_PANEL_EMPTY_SUPPORT}
               </p>
             </div>
           ) : (
@@ -505,10 +512,12 @@ function ReadingRing({ variant }: { variant: 'dashed' | 'solid' }): JSX.Element 
 function BackgroundTaskPanel({
   conversationId,
   turnRunning,
+  agent,
   onClose
 }: {
   conversationId: string | null
   turnRunning: boolean
+  agent?: WireAgent
   onClose: () => void
 }): JSX.Element {
   // A useMemo-stable selector per id (`ConversationScreen`'s `selectOpenBacklog`) so a fresh closure per render does not
@@ -537,7 +546,7 @@ function BackgroundTaskPanel({
     document.addEventListener('keydown', onKeyDown, true)
     return () => document.removeEventListener('keydown', onKeyDown, true)
   }, [onClose, turnRunning])
-  return <BackgroundTaskPanelView entry={entry} finishedTaskIds={finishedTaskIds} onClose={onClose} />
+  return <BackgroundTaskPanelView entry={entry} finishedTaskIds={finishedTaskIds} agent={agent} onClose={onClose} />
 }
 
 // #1634: the two elements that carry #1072's Escape-stops-the-turn binding — the message box and the

@@ -127,7 +127,7 @@ owns only their display.
                 ├── "About" section-header
                 ├── .channel-info__row × 2          Workspace (mono, cwd) / Last activity  — or —
                 ├── .channel-info__empty            "No conversation details yet" (conversation === null)
-                ├── "Session" + two detail rows     Claude version / Reported permission mode (conversation !== null)
+                ├── "Session" + two detail rows     Claude/Codex version / Reported permission mode (conversation !== null)
                 ├── McpServersSection                #1490, conversation !== null only — see [linked doc](conversation-shell-channel-info-mcp.md)
                 ├── SystemPromptSection              #1078, conversation !== null only — see below
                 ├── "Actions" section-header
@@ -198,13 +198,24 @@ design and patterns established.
 ### Session reports
 
 For an identified conversation, **Session** sits after About and before System prompt, reusing the
-desktop sheet's section heading and detail rows. **Claude version** and **Reported permission mode**
-show **Not reported** before a report arrives or when that field is an empty string. Unknown mode
-names and non-semver version strings display verbatim as escaped React text, bounded to 256 Unicode
-code points per field and allowed to wrap. **Truncated** appears separately beneath a value when
-`truncated_fields` names its wire field (`claude_code_version` or `permission_mode`), or when the local
-display cap cuts it. An empty reported field can therefore show both Not reported and Truncated.
+desktop sheet's section heading and detail rows. **Claude version** (or **Codex version**, since
+[#1656](#1656-the-version-row-names-the-conversations-agent) — the label alone changes) and **Reported
+permission mode** show **Not reported** before a report arrives or when that field is an empty string.
+Unknown mode names and non-semver version strings display verbatim as escaped React text, bounded to
+256 Unicode code points per field and allowed to wrap. **Truncated** appears separately beneath a value
+when `truncated_fields` names its wire field (`claude_code_version` or `permission_mode`), or when the
+local display cap cuts it. An empty reported field can therefore show both Not reported and Truncated.
 With no conversation, the existing placeholder remains and Session is omitted.
+
+#### #1656: the version row names the conversation's agent
+
+The row's **label** — "Claude version" or "Codex version" — now comes from `ChannelInfoSheetView`'s new
+`agent?: WireAgent` prop (default `'claude'`), resolved by the `ChannelInfoSheet` container through
+`useConversationAgent(conversation?.id ?? null)` (the #1651 hook, exported from `RunConfigSections.tsx`).
+The row's **field key** stays `claude_code_version` unconditionally — it is the wire's own truncation
+key (`truncated_fields` names fields, not labels), not client copy, so it does not follow the agent.
+The **Cost (Claude's estimate)** row below stays Claude-only wording; #1656 did not touch it (see § Session
+running cost above).
 
 These are reported claims, never permission controls: they do not change the selected permission
 setting or approval behavior. A `session_facts` frame neither starts a turn nor identifies a session,

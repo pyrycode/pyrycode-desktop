@@ -380,8 +380,8 @@ export function RunConfigView({
         error={errorField === 'effort'}
         busy={pending?.effort}
       />
-      <YoloSection yolo={yolo} onToggle={onYolo} error={errorField === 'yolo'} busy={pending?.yolo} />
-      <ContextWindowSection usedTokens={usedTokens} windowTokens={windowTokens} />
+      <YoloSection yolo={yolo} onToggle={onYolo} error={errorField === 'yolo'} busy={pending?.yolo} agent={agent} />
+      <ContextWindowSection usedTokens={usedTokens} windowTokens={windowTokens} agent={agent} />
     </>
   )
 }
@@ -716,13 +716,17 @@ function YoloSection({
   yolo,
   onToggle,
   error,
-  busy
+  busy,
+  agent
 }: {
   yolo: boolean
   onToggle?: (next: boolean) => void
   error?: boolean
   busy?: boolean
+  agent: WireAgent
 }): JSX.Element {
+  // #1656: the caption names the conversation's agent, a client-owned name the agent selects.
+  const agentName = agent === 'codex' ? 'Codex' : 'Claude'
   return (
     <>
       <p className="status-sheet__section-header">YOLO mode</p>
@@ -730,7 +734,7 @@ function YoloSection({
         <div className="run-config__yolo-text">
           <p className="run-config__yolo-title">Auto-accept tool calls</p>
           <p className="run-config__yolo-caption">
-            Claude runs commands without asking for confirmation. Use carefully.
+            {`${agentName} runs commands without asking for confirmation. Use carefully.`}
           </p>
         </div>
         {/* role="switch" + aria-checked reflects state honestly. onToggle present ⇒ #257 makes it live:
@@ -781,12 +785,16 @@ function abbreviateTokens(n: number): string {
 // an over-full session reads "100% used" and the fill never overflows its track. See contextUsage.ts.
 function ContextWindowSection({
   usedTokens,
-  windowTokens
+  windowTokens,
+  agent
 }: {
   usedTokens: number
   windowTokens: number
+  agent: WireAgent
 }): JSX.Element {
   const pct = contextUsagePercent(usedTokens, windowTokens)
+  // #1656: the explainer writes the agent's name in lowercase, as the Claude copy always has.
+  const agentName = agent === 'codex' ? 'codex' : 'claude'
   return (
     <>
       <p className="status-sheet__section-header">Context window</p>
@@ -813,8 +821,8 @@ function ContextWindowSection({
           <p className="run-config__context-unavailable">Context usage unavailable</p>
         )}
         <p className="run-config__context-explainer">
-          When full, oldest messages get dropped from claude&apos;s view (delimiter still shows; old
-          messages stay in your scroll).
+          {`When full, oldest messages get dropped from ${agentName}'s view (delimiter still shows; old ` +
+            'messages stay in your scroll).'}
         </p>
       </div>
     </>

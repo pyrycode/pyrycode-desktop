@@ -43,6 +43,11 @@ export interface RunConfigSnapshot {
   permissionMode: string
   usedTokens: number
   windowTokens: number
+  /** The session's capability flags (#1655, decoded by #1654): omission is "not reported", read as
+   *  supported by `sessionSupports`. Only an explicit `false` withdraws a surface. */
+  slashCommands?: boolean
+  mcpServers?: boolean
+  contextUsageDetail?: boolean
 }
 
 /** The whole run-config state. `snapshot: null` is the distinct "not yet loaded" state; a received
@@ -103,3 +108,24 @@ export function useRunConfigStore<T>(selector: (s: RunConfigStore) => T): T {
  *  there is no third; the first is invoked only by the subscription wiring and the second only by the
  *  conversation-lifetime helpers, never two-way-bound from a component. */
 export const selectSnapshot = (s: RunConfigState): RunConfigSnapshot | null => s.snapshot
+
+export type SessionCapability = 'slashCommands' | 'mcpServers' | 'contextUsageDetail'
+
+/**
+ * Whether the open conversation's session offers a surface (#1655). False ONLY for the daemon's explicit
+ * `false`: a snapshot not yet arrived, an older daemon's absent flag and `true` all read as supported, so
+ * those sessions look exactly as they did before the flags existed. Keyed on the daemon's statement of
+ * support, never on the agent name.
+ */
+export function sessionSupports(
+  snapshot: RunConfigSnapshot | null,
+  capability: SessionCapability
+): boolean {
+  return snapshot?.[capability] !== false
+}
+
+/** Boolean slices, so a snapshot change that leaves the flag alone re-renders nothing. */
+export const selectSlashCommandsSupported = (s: RunConfigState): boolean =>
+  sessionSupports(s.snapshot, 'slashCommands')
+export const selectMcpServersSupported = (s: RunConfigState): boolean =>
+  sessionSupports(s.snapshot, 'mcpServers')

@@ -105,7 +105,12 @@ import {
 } from './ComposerAttach'
 import { useSlashCommandTypeAhead } from './ComposerSlashCommandTypeAhead'
 import { contextUsagePercent, contextUsageStep } from './contextUsage'
-import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
+import {
+  useRunConfigStore,
+  selectSnapshot,
+  selectMcpServersSupported,
+  sessionSupports
+} from '../../store/runConfigStore'
 import { runSettingsWriteStore, useRunSettingsWriteStore, selectError } from '../../store/runSettingsWriteStore'
 import { sessionIdStore, useSessionIdStore, selectSessionId } from '../../store/sessionIdStore'
 import { changeSetting, isAddressableSessionId } from './runSettingsControls'
@@ -3374,6 +3379,9 @@ function ChannelInfoSheet({
   )
   const sessionFacts = useSessionFactsStore(selectSessionFactsFor(conversation?.id ?? null))
   const agent = useConversationAgent(conversation?.id ?? null)
+  // #1655: a session that reports no MCP status (a Codex session) gets no MCP section, rather than one
+  // showing its unavailable line forever. The snapshot is the open conversation's, which this sheet is.
+  const mcpServers = useRunConfigStore(selectMcpServersSupported)
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameName, setRenameName] = useState('')
   // #377: the Delete confirm's per-interaction state — the `renameOpen` twin (transient UI state →
@@ -3443,7 +3451,9 @@ function ChannelInfoSheet({
           )
         }
         mcpServersSection={
-          conversation === null ? undefined : <McpServersSection conversationId={conversation.id} />
+          conversation === null || !mcpServers ? undefined : (
+            <McpServersSection conversationId={conversation.id} />
+          )
         }
       />
       {/* #1431: the channel arm of the one pill. Split on the SAME `is_promoted` the label above reads,
@@ -4860,11 +4870,11 @@ function ContextUsageControl({ conversationId }: { conversationId: string | null
   const reported = useReportedContextStore(selectReported)
   const tokens = contextTokenSource(reported, snapshot)
   if (contextUsagePercent(tokens.usedTokens, tokens.windowTokens) === null) return null
-  return (
-    <ContextBreakdownPopover reading={reported}>
-      <ContextUsageReading usedTokens={tokens.usedTokens} windowTokens={tokens.windowTokens} />
-    </ContextBreakdownPopover>
-  )
+  const reading = <ContextUsageReading usedTokens={tokens.usedTokens} windowTokens={tokens.windowTokens} />
+  // #1655: a session with no context-usage breakdown (a Codex session) keeps the reading but not the
+  // button — the panel would say a reading arrives after the next turn, forever.
+  if (!sessionSupports(snapshot, 'contextUsageDetail')) return reading
+  return <ContextBreakdownPopover reading={reported}>{reading}</ContextBreakdownPopover>
 }
 
 // #330: the two-dot Relay/Pyrycode connection-status indicator — the persistent at-a-glance state that

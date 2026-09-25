@@ -89,11 +89,24 @@ function bubbleCount(markup: string): number {
 // #1421: seed the run-config snapshot's token pair alone, leaving its other fields at their empty
 // defaults — the reading's two consumers read nothing else off it. A getInitialState spy, for the standing
 // reason: zustand v5 reads getInitialState() under renderToStaticMarkup, so a setState seed is invisible.
-function seedRunConfigTokens(usedTokens: number, windowTokens: number): MockInstance {
+// #1655 adds the optional capability flags, spread onto the snapshot only when a case names one.
+function seedRunConfigTokens(
+  usedTokens: number,
+  windowTokens: number,
+  capabilities: { contextUsageDetail?: boolean } = {}
+): MockInstance {
   const initial = runConfigStore.getInitialState()
   return vi.spyOn(runConfigStore, 'getInitialState').mockReturnValue({
     ...initial,
-    snapshot: { model: '', effort: '', yolo: false, permissionMode: 'default', usedTokens, windowTokens }
+    snapshot: {
+      model: '',
+      effort: '',
+      yolo: false,
+      permissionMode: 'default',
+      usedTokens,
+      windowTokens,
+      ...capabilities
+    }
   })
 }
 
@@ -5099,6 +5112,29 @@ describe('ConversationScreen — store binding', () => {
       expect(markup).not.toContain('73%')
     } finally {
       reported.mockRestore()
+      runConfig.mockRestore()
+      restore()
+    }
+  })
+
+  // #1655: a session that reports no context-usage breakdown (a Codex session) keeps its reading but loses
+  // the button — nothing would ever fill the panel. Absent and true keep today's trigger.
+  it.each([
+    ['false', false, false],
+    ['true', true, true],
+    ['absent', undefined, true]
+  ] as const)('with contextUsageDetail %s, the reading is a breakdown trigger: %s', (_case, flag, trigger) => {
+    const restore = stageOpenConnection(CONNECTED)
+    const runConfig = seedRunConfigTokens(
+      50000,
+      200000,
+      flag === undefined ? {} : { contextUsageDetail: flag }
+    )
+    try {
+      const markup = renderToStaticMarkup(<ConversationScreen />)
+      expect(markup).toContain('<span class="composer__context">Context: 25%</span>')
+      expect(markup.includes('composer__context-trigger')).toBe(trigger)
+    } finally {
       runConfig.mockRestore()
       restore()
     }

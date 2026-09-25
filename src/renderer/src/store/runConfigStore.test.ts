@@ -3,6 +3,9 @@ import {
   createRunConfigStore,
   initialRunConfigState,
   selectSnapshot,
+  sessionSupports,
+  selectSlashCommandsSupported,
+  selectMcpServersSupported,
   type RunConfigSnapshot
 } from './runConfigStore'
 
@@ -250,4 +253,44 @@ it('replaces a previous applied reading with null or omission and clears on exit
   expect(Object.prototype.hasOwnProperty.call(store.getState().snapshot, 'effectiveEffort')).toBe(false)
   store.getState().clearSnapshot()
   expect(store.getState().snapshot).toBeNull()
+})
+
+// #1655: a surface is withdrawn only on the daemon's explicit `false`. No snapshot yet, an older daemon's
+// absent flag, and `true` all read as supported, so those sessions look exactly as before.
+describe('sessionSupports (#1655)', () => {
+  const BASE: RunConfigSnapshot = {
+    model: '', effort: '', yolo: false, permissionMode: 'default', usedTokens: 0, windowTokens: 0
+  }
+  const CAPABILITIES = ['slashCommands', 'mcpServers', 'contextUsageDetail'] as const
+
+  it.each(CAPABILITIES)('reads %s as supported before any snapshot arrives', (capability) => {
+    expect(sessionSupports(null, capability)).toBe(true)
+  })
+
+  it.each(CAPABILITIES)('reads an absent %s as supported', (capability) => {
+    expect(sessionSupports(BASE, capability)).toBe(true)
+  })
+
+  it.each(CAPABILITIES)('follows an explicit %s both ways', (capability) => {
+    expect(sessionSupports({ ...BASE, [capability]: true }, capability)).toBe(true)
+    expect(sessionSupports({ ...BASE, [capability]: false }, capability)).toBe(false)
+  })
+
+  it('reads each flag on its own', () => {
+    const snapshot = { ...BASE, slashCommands: false }
+    expect(sessionSupports(snapshot, 'mcpServers')).toBe(true)
+    expect(sessionSupports(snapshot, 'contextUsageDetail')).toBe(true)
+  })
+
+  it('backs the two selectors', () => {
+    const store = createRunConfigStore()
+    expect(selectSlashCommandsSupported(store.getState())).toBe(true)
+    expect(selectMcpServersSupported(store.getState())).toBe(true)
+    store.getState().setSnapshot({ ...BASE, slashCommands: false, mcpServers: false })
+    expect(selectSlashCommandsSupported(store.getState())).toBe(false)
+    expect(selectMcpServersSupported(store.getState())).toBe(false)
+    store.getState().setSnapshot({ ...BASE, slashCommands: true })
+    expect(selectSlashCommandsSupported(store.getState())).toBe(true)
+    expect(selectMcpServersSupported(store.getState())).toBe(true)
+  })
 })

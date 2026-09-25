@@ -66,8 +66,8 @@ test('every default-tier Electron launch goes through the shared module', async 
   const e2eDir = __dirname
 
   // `fixtures/desktopIsolation.ts` owns the default tier's launch. `fixtures/realDaemon.ts` is the
-  // `real-*` tier, which #1067 leaves alone on purpose — those runs are operator-supervised by nature,
-  // and routing them through here would put a change provable without a live daemon behind a live gate.
+  // `real-*` tier, which keeps its own launch on purpose — routing it through here would put a change
+  // provable without a live daemon behind a live gate. It applies the same isolation itself (#1672).
   // This spec is excluded from its own scan because the needle appears in its own source, below.
   const ALLOWED = ['fixtures/desktopIsolation.ts', 'fixtures/realDaemon.ts']
   const SELF = 'desktop-isolation.spec.ts'

@@ -16,6 +16,8 @@ import {
   type FakeRoutingRelay
 } from '../../src/main/transport/fakeRoutingRelay'
 import { decideCapabilityGate, readDaemonCapabilities } from './daemonCapabilityGate'
+import { expectDesktopIsolated, RENDERER_THROTTLING_SWITCHES } from './desktopIsolation'
+import { HIDDEN_WINDOW_ENV_FLAG } from '../../src/main/windowPresentation'
 import { LOOPBACK_RELAY_ENV_FLAG } from '../../src/main/relayPolicy'
 import { TEST_SECRET_BACKEND_ENV_FLAG } from '../../src/main/secretBackend'
 import type { QrPayload } from '../../src/shared/wire/types'
@@ -543,6 +545,10 @@ export async function withIsolatedElectronApp(
   delete env.ELECTRON_RENDERER_URL
   env[LOOPBACK_RELAY_ENV_FLAG] = '1'
   env[TEST_SECRET_BACKEND_ENV_FLAG] = '1'
+  // The same desktop isolation as the default tier (#1067, #1672): the dispatcher runs this tier
+  // unattended on the operator's machine, so a launch must neither show and focus a window nor be
+  // throttled when the operator works in another one.
+  env[HIDDEN_WINDOW_ENV_FLAG] = '1'
   const userDataDir = await mkdtemp(join(tmpdir(), 'pyry-e2e-realclaude-'))
   let current: ElectronApplication | null = null
   let relaunching = false
@@ -554,9 +560,13 @@ export async function withIsolatedElectronApp(
     }).toBe(true)
   }
   const launch = async (): Promise<IsolatedElectronApp> => {
-    const app = await electron.launch({ args: ['.', `--user-data-dir=${userDataDir}`], env })
+    const app = await electron.launch({
+      args: ['.', `--user-data-dir=${userDataDir}`, ...RENDERER_THROTTLING_SWITCHES.map((name) => `--${name}`)],
+      env
+    })
     current = app
     const page = await app.firstWindow()
+    await expectDesktopIsolated(app)
     return {
       app, page, userDataDir,
       async relaunch() {

@@ -739,6 +739,25 @@ export interface SessionSettingsPayload {
   used_tokens: number
   /** Context-window size (200000 today); `0` = usage seam unwired — do NOT render a percentage. */
   window_tokens: number
+  /**
+   * What the resolved session supports (pyrycode#2646). Absent unless the client advertised
+   * `multi_agent` and the reply resolved a session. Only the three flags below are decoded (#1654).
+   */
+  capabilities?: SessionCapabilitiesPayload
+}
+
+/**
+ * The decoded subset of the daemon's `SessionCapabilities` (pyrycode#2670): whether the session answers
+ * slash-command, MCP-status and context-breakdown requests at all — true for Claude, false for Codex.
+ * Upstream always writes them on a present object, but a daemon predating #2670 does not, so each is
+ * optional: absent = not reported, which is distinct from `false`. Support is not permission; the
+ * daemon re-checks every request. The object's other keys (`interrupt`, `mid_turn_input`,
+ * `effort_levels`, `permission_modes`, `attachment_types`, `models`) are deliberately not modelled.
+ */
+export interface SessionCapabilitiesPayload {
+  slash_commands?: boolean
+  mcp_servers?: boolean
+  context_usage_detail?: boolean
 }
 
 /**

@@ -61,6 +61,7 @@ import type {
   UnrecognizedMessagePayload,
   SessionTransitionPayload,
   SessionSettingsPayload,
+  SessionCapabilitiesPayload,
   SessionPromptStatus,
   SystemPromptPayload,
   SessionSettingsUpdatedPayload,
@@ -1342,6 +1343,9 @@ function parseDebugBundleDonePayload(payload: unknown): { total: number } {
  * `effective_effort` is optional and independent of saved `effort`: absence stays undefined, null
  * means no effort parameter, and strings (including empty/unknown values) pass through unchanged.
  * Present malformed values reject the complete frame before logging, using requireStringOrNull.
+ *
+ * `capabilities` (#1654) is optional the same way: absent stays undefined, present is narrowed by
+ * parseSessionCapabilities, and a present malformed value rejects the complete frame.
  */
 function parseSessionSettingsPayload(payload: unknown): SessionSettingsPayload {
   if (!isRecord(payload)) {
@@ -1357,7 +1361,31 @@ function parseSessionSettingsPayload(payload: unknown): SessionSettingsPayload {
   const permission_mode = requireString(payload, 'permission_mode')
   const used_tokens = requireNumber(payload, 'used_tokens')
   const window_tokens = requireNumber(payload, 'window_tokens')
-  return { session_id, model, effort, effective_effort, yolo, permission_mode, used_tokens, window_tokens }
+  const capabilities = payload.capabilities === undefined
+    ? undefined
+    : parseSessionCapabilities(payload.capabilities)
+  return {
+    session_id, model, effort, effective_effort, yolo, permission_mode, used_tokens, window_tokens, capabilities
+  }
+}
+
+/**
+ * Narrow a present `session_settings.capabilities` into its three decoded flags (#1654). A non-object
+ * rejects; each flag is optional (absent = not reported, distinct from `false`) but a present
+ * non-boolean rejects through requireBoolean. Returns a fresh literal of the three flags only, so the
+ * object's other upstream keys are never copied.
+ */
+function parseSessionCapabilities(value: unknown): SessionCapabilitiesPayload {
+  if (!isRecord(value)) {
+    throw new WireDecodeError('malformed session_settings capabilities')
+  }
+  const optionalBoolean = (field: string): boolean | undefined =>
+    value[field] === undefined ? undefined : requireBoolean(value, field)
+  return {
+    slash_commands: optionalBoolean('slash_commands'),
+    mcp_servers: optionalBoolean('mcp_servers'),
+    context_usage_detail: optionalBoolean('context_usage_detail')
+  }
 }
 
 /**

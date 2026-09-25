@@ -379,6 +379,15 @@ type BaseDaemonEvent =
       permissionMode: string
       used_tokens: number
       window_tokens: number
+      /**
+       * The session's capability flags (#1654, pyrycode#2670): whether it answers slash-command,
+       * MCP-status and context-breakdown requests — true for Claude, false for Codex. undefined = not
+       * reported (no `capabilities` on the reply, or a daemon predating the flag), distinct from false.
+       * A statement of support, not a permission: the daemon re-checks every request.
+       */
+      slashCommands?: boolean
+      mcpServers?: boolean
+      contextUsageDetail?: boolean
     }
   // The two v2 interactive-stream arms (#199). `text` IS the render payload (#203) and crosses IPC
   // deliberately — the boundary defended upstream is the fail-closed decode, not this internal

@@ -10138,6 +10138,50 @@ describe('parseInboundMessage — session_settings recognition (#491)', () => {
     }
   )
 
+  it.each([
+    ['a Claude reply', { slash_commands: true, mcp_servers: true, context_usage_detail: true }],
+    ['a Codex reply', { slash_commands: false, mcp_servers: false, context_usage_detail: false }]
+  ])('carries the three capability flags of %s and ignores the other keys (#1654)', (_label, flags) => {
+    const decoded = parseInboundMessage(encodeSessionSettings({
+      ...RUN_CONFIG,
+      capabilities: { interrupt: true, mid_turn_input: false, ...flags, effort_levels: ['low'], models: [], evil: 'x' }
+    }))
+    expect(decoded).toEqual({
+      kind: 'session-settings',
+      sessionSettings: { ...RUN_CONFIG, capabilities: flags },
+      inReplyTo: 812
+    })
+    if (decoded?.kind !== 'session-settings') throw new Error('expected session settings')
+    expect(Object.keys(decoded.sessionSettings.capabilities ?? {}).sort())
+      .toEqual(['context_usage_detail', 'mcp_servers', 'slash_commands'])
+  })
+
+  it('leaves capabilities undefined when the reply carries none (#1654)', () => {
+    const decoded = parseInboundMessage(encodeSessionSettings(RUN_CONFIG))
+    if (decoded?.kind !== 'session-settings') throw new Error('expected session settings')
+    expect(decoded.sessionSettings.capabilities).toBeUndefined()
+  })
+
+  it.each(['slash_commands', 'mcp_servers', 'context_usage_detail'])(
+    'leaves a missing %s undefined, distinct from false, and keeps the others (#1654)', (missing) => {
+      const flags: Record<string, boolean> = { slash_commands: false, mcp_servers: false, context_usage_detail: false }
+      delete flags[missing]
+      const decoded = parseInboundMessage(encodeSessionSettings({ ...RUN_CONFIG, capabilities: flags }))
+      if (decoded?.kind !== 'session-settings') throw new Error('expected session settings')
+      const capabilities: Record<string, unknown> = { ...decoded.sessionSettings.capabilities }
+      expect(capabilities[missing]).toBeUndefined()
+      for (const [key, value] of Object.entries(flags)) expect(capabilities[key]).toBe(value)
+    }
+  )
+
+  it('decodes an empty capabilities object with every flag undefined (#1654)', () => {
+    const decoded = parseInboundMessage(encodeSessionSettings({ ...RUN_CONFIG, capabilities: {} }))
+    if (decoded?.kind !== 'session-settings') throw new Error('expected session settings')
+    expect(decoded.sessionSettings.capabilities?.slash_commands).toBeUndefined()
+    expect(decoded.sessionSettings.capabilities?.mcp_servers).toBeUndefined()
+    expect(decoded.sessionSettings.capabilities?.context_usage_detail).toBeUndefined()
+  })
+
   it('narrows a full session_settings into { kind: session-settings } with all seven fields', () => {
     expect(parseInboundMessage(encodeSessionSettings(RUN_CONFIG))).toEqual({
       kind: 'session-settings',
@@ -10232,6 +10276,28 @@ describe('parseInboundMessage — session_settings fail-closed (#491)', () => {
       }), log)
       expect(decode).toThrow(WireDecodeError)
       expect(decode).toThrow('missing required field: effective_effort')
+      expect(lines).toEqual([])
+    }
+  )
+
+  it.each([null, true, 0, 'private-capabilities', [], [true]].map((capabilities) => ({ capabilities })))(
+    'rejects a non-object capabilities $capabilities without logging content (#1654)', ({ capabilities }) => {
+      const { log, lines } = captureLog()
+      const decode = (): unknown => parseInboundMessage(encodeSessionSettings({ ...RUN_CONFIG, capabilities }), log)
+      expect(decode).toThrow(WireDecodeError)
+      expect(decode).toThrow('malformed session_settings capabilities')
+      expect(lines).toEqual([])
+    }
+  )
+
+  it.each(['slash_commands', 'mcp_servers', 'context_usage_detail'].flatMap((flag) =>
+    ['true', 1, 0, null, {}, []].map((value) => ({ flag, value }))))(
+    'rejects a non-boolean $flag $value without logging content (#1654)', ({ flag, value }) => {
+      const { log, lines } = captureLog()
+      const capabilities = { slash_commands: true, mcp_servers: true, context_usage_detail: true, [flag]: value }
+      const decode = (): unknown => parseInboundMessage(encodeSessionSettings({ ...RUN_CONFIG, capabilities }), log)
+      expect(decode).toThrow(WireDecodeError)
+      expect(decode).toThrow(`missing required field: ${flag}`)
       expect(lines).toEqual([])
     }
   )

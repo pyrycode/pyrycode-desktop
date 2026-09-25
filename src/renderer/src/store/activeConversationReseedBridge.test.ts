@@ -103,6 +103,29 @@ describe('reseededActiveConversation', () => {
     })
   }
 
+  // #1649: the created reply and a clicked row carry `agent`, so a re-list that moves another field must
+  // keep it, a re-list that moves only the agent must re-seed, and an untagged row must re-seed to the
+  // exact six-key literal it did before.
+  it('keeps a tagged row agent when another field moved (#1649)', () => {
+    const renamed = row({ name: 'Renamed', agent: 'codex' })
+    expect(reseededActiveConversation([renamed], active({ agent: 'codex' }))).toStrictEqual({
+      ...active({ agent: 'codex' }),
+      name: 'Renamed'
+    })
+  })
+
+  it('re-seeds when ONLY the agent moved (#1649)', () => {
+    expect(
+      reseededActiveConversation([row({ agent: 'codex' })], active({ agent: 'claude' }))
+    ).toStrictEqual(active({ agent: 'codex' }))
+  })
+
+  it('re-seeds an untagged row to the exact untagged literal, with no agent key (#1649)', () => {
+    const reseeded = reseededActiveConversation([row({ name: 'Renamed' })], active())
+    expect(reseeded).toStrictEqual({ ...active(), name: 'Renamed' })
+    expect(reseeded !== null && 'agent' in reseeded).toBe(false)
+  })
+
   it('keeps the id of the conversation already open — a re-seed can never re-target it', () => {
     // The invariant that makes this path non-destructive: the Channel info sheet sends `id` back with
     // Archive and Delete, and the only row this function can map is one already carrying that id.

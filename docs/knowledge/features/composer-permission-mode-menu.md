@@ -112,6 +112,14 @@ const hidesAuto = row !== undefined && row.supports_auto_mode === false
 - **`AUTO_PERMISSION_MODE = 'auto'`** is the one new exported constant, module-level. Both the filter and
   the two test tiers name it rather than each typing their own copy of the string, and a unit assertion
   pins `SETTABLE_PERMISSION_MODES` containing it, so a rename cannot silently disable the filter.
+- **Since #1651, the join is also on the conversation's own agent.** `publishedRowFor` took a required
+  `agent: WireAgent` third argument (`composerPermissionModeMenuModel` itself gained a fourth, defaulted
+  `agent: WireAgent = 'claude'`, resolved by the container through `useConversationAgent`), so a Claude
+  row that happens to share a `value` with a Codex session's model can no longer hide `auto` on that
+  session, and vice versa — the hiding rule itself (`row.supports_auto_mode === false`) is unmoved; only
+  which row can answer it changed. `supports_auto_mode` reaching `true` on Codex rows once
+  pyrycode/pyrycode#2667 lands needs no client change here: this control already reads the flag off
+  whichever row the join resolves, not off the agent.
 
 No render sink is added: the newly-read field is a `boolean`, and the entry labels still route through
 `permissionModeLabel` over the client-owned `SETTABLE_PERMISSION_MODES` — `display_name`, the

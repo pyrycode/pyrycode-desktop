@@ -174,6 +174,40 @@ This is the panel's first consumer to pass a non-null `currentId` (`ComposerActi
 branch. See above for what `currentId` resolves against since #1053 (the session layers, never the
 announcement).
 
+## Per-agent filtering (#1651)
+
+Once the daemon advertises `multi_agent`, `model_list` is one merged list — Claude's rows, then one Codex
+row per family — and a model of the other agent is refused on a session. `composerModelMenuModel` gained a
+third argument, `agent: WireAgent = 'claude'` (defaulted so the ~40 existing untagged-list calls in
+`ComposerModelMenu.test.tsx` stay byte-identical), and every lookup and the options list now go through it:
+`options` is `modelRowsFor(models, agent)` — the entry's rows whose own `agent` (absent counts as Claude,
+the [Conversation list store](conversation-list-store.md#which-agent-runs-a-conversation-since-1649) wire
+rule) matches — mapped through a newly exported `composerModelRowLabel(row)`. That function is keyed on the
+**row's** agent, not the conversation's: a Claude row keeps #1095's family-over-`value` rule, a Codex row
+returns `display_name` **verbatim** — no Codex name is ever built on the client, from `value`, `family` or
+anything else. The container reads the conversation's agent through
+[`useConversationAgent`](conversation-shell-run-configuration.md#run-configuration-model-section-daemon-published-rows-975).
+
+**Codex is its own branch, not a filtered pass through the Claude rules above.** There is no
+inherited-default row to resolve for an unset model on Codex — `effortRowFor`'s `default` substitution is
+Claude's alone (see [Composer effort menu](composer-effort-menu.md#composereffortmenumodel-one-pure-function-deciding-all-three-renderings))
+— so once a snapshot says the model is unset (`shown === '' && layers.stored !== null`), the trigger reads
+the client-owned `COMPOSER_MODEL_DEFAULT_LABEL = 'Default'`, marks nothing (`currentId: null`), and still
+opens against the Codex rows already resolved into `options` — deliberately not the `null` (absent-row)
+rendering the Claude branch would reach in the equivalent state, since a Codex conversation's menu should
+stay operable with no model chosen. With no snapshot at all (`layers.stored === null`), it is still `null`,
+matching the Claude branch's own no-snapshot reading. On a hit or a miss, the trigger and the marking follow
+the Claude branch's own miss rule (`row ? row.display_name : shown`) — never `modelFamily`, anywhere on this
+path.
+
+`publishedRowFor` and `effortRowFor` both took `agent` as a **required**, not optional, third parameter —
+deliberate, so no caller can join across agents by omission; every production call site (this menu, the
+[effort](composer-effort-menu.md) and [permission-mode](composer-permission-mode-menu.md) menus, the run
+configuration sheet's three sections and `EffortDefaultData`) passes the conversation's own agent and the
+typecheck enforces it. See [Conversation shell — run
+configuration](conversation-shell-run-configuration.md#run-configuration-model-section-daemon-published-rows-975)
+for the sheet's own filtering and `useConversationAgent`'s resolution.
+
 ## The write
 
 The container supplies optional `onSelect` only for an addressable session whose

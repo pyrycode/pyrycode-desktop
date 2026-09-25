@@ -56,8 +56,11 @@ uses the inert span described in [The write](#the-write).
 the inherited-default model lookup below. Levels arriving after mount make the label operable
 without selecting a value or sending a setting. The label remains visible without levels.
 An omitted or empty reading with a selection has the static tooltip “Selected effort; applied effort
-is unavailable.” Without a selection, it says “Claude default; applied effort is unavailable.”
-Explicit null instead says “Claude reports no model effort parameter.” Null never falls back to a
+is unavailable.” Without a selection, it says “Claude default; applied effort is unavailable” — since
+\#1651, the conversation's agent name (`agentName = agent === 'codex' ? 'Codex' : 'Claude'`, a two-way
+ternary rather than an exhaustive map, per the verifier's own NIT on the PR) substitutes for `Claude` in
+this string and the null one below, so a Codex conversation reads “Codex default…”. Explicit null instead
+says “Claude reports no model effort parameter” (Codex: “Codex reports…”). Null never falls back to a
 saved choice. No state invents a default level or uses another conversation's reading. These descriptions are
 client-owned text; daemon readings never enter the `title` attribute.
 
@@ -91,6 +94,15 @@ drew permanently before #1168 — measured against a live daemon, that was the c
 unconfigured chat, not an edge one. With no `default` row published, or no `model_list` frame received at
 all, `effortRowFor` still returns `undefined` and this control keeps either the applied level or
 the unselected **Effort** label read-only.
+**Since #1651, the row is also the conversation's own agent's row.** `composerEffortMenuModel` gained a
+fourth argument, `agent: WireAgent = 'claude'` (defaulted, so it is invisible to every pre-#1651 caller and
+test), and `effortRowFor`'s `agent` parameter is required rather than optional — no caller can join across
+agents by omission, since a model of the other agent is refused on a session. **The `default` substitution
+above is Claude's alone**: on Codex, an empty model resolves no row (a new Codex conversation starts with no
+model), so this control offers no levels and, per [The default apply](#the-default-apply-1169) below,
+recalls nothing. The tooltip's two agent-naming descriptions substitute the conversation's agent for
+`Claude` — see § The write below — while every Claude string stays byte-identical.
+
 `RunningModelSection` and `ModelSection` keep calling `publishedRowFor` directly and are unmoved — in
 particular [the permission-mode menu](composer-permission-mode-menu.md#the-auto-hiding-join-1022)
 deliberately did not follow, since its `supports_auto_mode` read would otherwise start hiding `auto` on
@@ -244,10 +256,18 @@ Six rules, in order, each returning `null` unless every one clears:
    restated) → nothing to write to. This is also the cross-chat guard: between #1167's clear on a switch
    and the new chat's reply, this rule stops a default being written into the session the operator just
    left.
-6. The remembered level is not among `effortRowFor(models, model)?.effort_levels ?? []`, checked by
+6. The remembered level is not among `effortRowFor(models, model, agent)?.effort_levels ?? []`, checked by
    `Array.prototype.includes` — an equality scan, never an object keyed by daemon text — → AC4's second
    arm. Levels are published per model; a level carried over from one model may not exist for the next.
    No fallback, no repair, no normalisation, per this document's own "no fallback, ever" above.
+
+**Since #1651, `EffortDefaultInput` carries an optional `agent?: WireAgent`** (absent = Claude, so the
+twenty existing input literals in `EffortDefaultData.test.tsx` are unchanged), read by the container
+through the same `useConversationAgent` hook the menus use and added to the effect's dependency array.
+Rule 6 is where it bites: on Codex, an unset model resolves no row through `effortRowFor` (the `default`
+substitution is Claude's alone), so the level list is empty and no remembered effort is ever applied to a
+fresh Codex conversation — the same "no fallback, ever" posture, reached through the agent argument rather
+than a new rule.
 
 **Rules 3 and 4 are different fabric, and together they are what stops a self-inflicted write loop
 against the daemon over the relay.** Rule 4 is the store's composed explicit choice — the

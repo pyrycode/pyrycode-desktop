@@ -268,6 +268,11 @@ answer yet," only on "which agent." Unlike `selectExclusiveConversationIdsFor`, 
 `useConversationListStore` read surface: it returns a primitive (`WireAgent`), not a fresh `Set` per
 call, so a component can subscribe to it directly without memoizing the result itself.
 
+[#1651](composer-model-menu.md#per-agent-filtering-1651) is the second consumer: `RunConfigSections.tsx`'s
+`useConversationAgent` hook resolves the owning host itself (`serverIdForOpenConversation`, the same
+resolution `useSessionSettingsConnected` uses) and reads this selector from it, rather than adding a
+second per-conversation agent lookup that could disagree with this one.
+
 ### The data path (`src/renderer/src/store/conversationListBridge.ts`)
 
 ```ts

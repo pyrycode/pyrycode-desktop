@@ -926,14 +926,16 @@ describe('unrecognized-message wire vocabulary', () => {
     expect(payload).not.toHaveProperty('turn_id')
   })
 
-  it('closes the site enum over exactly the four drop sites', () => {
+  it('closes the site enum over exactly the six drop sites', () => {
     const sites: WireUnrecognizedSite[] = [
       'line_type',
       'assistant_block',
       'user_block',
-      'undecodable'
+      'undecodable',
+      'codex_method',
+      'codex_item'
     ]
-    expect(sites).toHaveLength(4)
+    expect(sites).toHaveLength(6)
   })
 
   it('admits an empty message_type — the undecodable site read no type at all', () => {

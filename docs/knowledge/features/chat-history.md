@@ -138,7 +138,7 @@ at all:
 | `toolCall` | `turnId`, `toolUseId`, `parentToolUseId?`, `name`, `inputSummary`, `input?`, `result`, `denial?`, `elapsedSeconds?` |
 | `turnBoundary` | `turnId`, `stopReason`, `outcome?`, `isError?`, `terminalReason?`, `errorCategory?` |
 | `sessionBoundary` | `reason` (`clear`, `idle_evict` or `workspace_change`), nullable `workspaceCwd`, `occurredAt` |
-| `unrecognizedMessage` | `site` (`line_type`, `assistant_block`, `user_block` or `undecodable`), `messageType`, `raw`, `truncated` |
+| `unrecognizedMessage` | `site` (`line_type`, `assistant_block`, `user_block`, `undecodable`, `codex_method` or `codex_item`), `messageType`, `raw`, `truncated` |
 | `compactionBoundary` | `failed`, `manual`, nullable optional `preTokens?` and `postTokens?` |
 | `banner` | `level`, `text`, `stopsTurn`, `truncated` |
 | `modelRefusal` | `refusal`, containing the shared `ModelRefusalEvent` report |

@@ -5537,6 +5537,8 @@ describe('the unrecognized-message timeline row', () => {
     expect(unrecognizedSiteLabel('assistant_block')).toBe('assistant block')
     expect(unrecognizedSiteLabel('user_block')).toBe('user block')
     expect(unrecognizedSiteLabel('undecodable')).toBe('could not be decoded')
+    expect(unrecognizedSiteLabel('codex_method')).toBe('Codex notification')
+    expect(unrecognizedSiteLabel('codex_item')).toBe('Codex item')
   })
 
   it('renders one row per repeat, never collapsing them', () => {

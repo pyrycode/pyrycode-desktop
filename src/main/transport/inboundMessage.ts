@@ -2336,7 +2336,9 @@ function parseUnrecognizedMessagePayload(payload: unknown): UnrecognizedMessageP
     site !== 'line_type' &&
     site !== 'assistant_block' &&
     site !== 'user_block' &&
-    site !== 'undecodable'
+    site !== 'undecodable' &&
+    site !== 'codex_method' &&
+    site !== 'codex_item'
   ) {
     throw new WireDecodeError('missing required field: site')
   }

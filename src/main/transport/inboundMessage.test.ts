@@ -5451,8 +5451,8 @@ describe('parseInboundMessage — unrecognized_message recognition', () => {
     expect(result).toEqual({ kind: 'unrecognized-message', unrecognized: UNRECOGNIZED, ts: FIXED_TS })
   })
 
-  it('accepts every one of the four drop sites', () => {
-    for (const site of ['line_type', 'assistant_block', 'user_block', 'undecodable']) {
+  it('accepts every one of the six drop sites, the two Codex sites included', () => {
+    for (const site of ['line_type', 'assistant_block', 'user_block', 'undecodable', 'codex_method', 'codex_item']) {
       const result = parseInboundMessage(encodeUnrecognized({ ...UNRECOGNIZED, site }))
       expect(result).toMatchObject({ kind: 'unrecognized-message', unrecognized: { site }, ts: FIXED_TS })
     }
@@ -5492,6 +5492,8 @@ describe('parseInboundMessage — unrecognized_message fail-closed', () => {
     const bad: unknown[] = [
       { ...UNRECOGNIZED, site: undefined },
       { ...UNRECOGNIZED, site: 'a_site_invented_later' },
+      { ...UNRECOGNIZED, site: 'codex_event' },
+      { ...UNRECOGNIZED, site: 'CODEX_ITEM' },
       { ...UNRECOGNIZED, site: '' },
       { ...UNRECOGNIZED, site: 42 },
       { ...UNRECOGNIZED, site: null }

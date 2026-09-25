@@ -218,12 +218,19 @@ export interface ConversationScreenProps {
   // shell-only chrome. The PairedShell-mounted thread wires it to a nav dispatch; nothing inside this
   // screen calls it any more.
   onBack?: () => void
+  // #1634: the background-task drawer's open state, owned by PairedShell ABOVE this screen's per-conversation
+  // remount so an open drawer stays open across a switch. Optional as a pair: a bare `<ConversationScreen />`
+  // passes neither and the screen keeps its own state, which is what leaves every existing render unchanged.
+  backgroundTasksOpen?: boolean
+  onBackgroundTasksOpenChange?: (open: boolean) => void
 }
 
 export function ConversationScreen({
   savedTimelineTarget,
   onRepairHost,
-  onBack
+  onBack,
+  backgroundTasksOpen,
+  onBackgroundTasksOpenChange
 }: ConversationScreenProps = {}): JSX.Element {
   // The current conversation snapshot feeds the top-bar name, Channel Info, edit dialogs and task panel.
   // PairedShell's useActiveConversationReseed updates it from list replies, including renames and
@@ -381,7 +388,11 @@ export function ConversationScreen({
   // that drawing lands; the panel reads the roster store itself
   // and needs only the active conversation's id, derived from the `activeConversation` slice already held
   // above (no second subscription). One overlay at a time in normal use.
-  const [panelOpen, setPanelOpen] = useState(false)
+  // #1634: the drawer no longer takes focus, so it must survive a conversation switch, and a switch remounts
+  // this screen. The shell's props win when present; the local state is the bare-screen fallback only.
+  const [localPanelOpen, setLocalPanelOpen] = useState(false)
+  const panelOpen = backgroundTasksOpen ?? localPanelOpen
+  const setPanelOpen = onBackgroundTasksOpenChange ?? setLocalPanelOpen
   // #1627: the markdown reader, screen-local like the three overlays above, so a conversation switch (a
   // remount under PairedShell's key) closes it, drops its notice and ignores any late answer.
   const reader = useMarkdownReader(openConversationId)
@@ -509,6 +520,19 @@ export function ConversationScreen({
         } : undefined}
       />}
       <TopOverlayControl onRepairHost={onRepairHost} />
+      {/* #581: the background-task panel, reading the roster store itself, so only the conversation id goes
+          down; with no active conversation the id is null and the panel reads "never observed". It mounts
+          no data path — the roster bridge is already app-wide in App.tsx.
+          #1634: a non-modal drawer pinned over the right of THIS region (Figma 565:2966 spans exactly the
+          message area), the last child so it paints above the Top overlay. `turnRunning` is the stop
+          control's own gate, so the drawer yields exactly the Escape the composer will act on. */}
+      {panelOpen && (
+        <BackgroundTaskPanel
+          conversationId={activeConversation?.id ?? null}
+          turnRunning={isTurnRunning(phase)}
+          onClose={() => setPanelOpen(false)}
+        />
+      )}
       </div>
       {/* #962/#967: the region between the thread and the status area is EMPTY, and that emptiness is the
           design (Figma 102:4 stacks the message area straight onto the input area). #493's api-retry,
@@ -573,11 +597,12 @@ export function ConversationScreen({
             isRunning={isStatusIconTurning(phase, indicatorState)}
             trailing={
               /* #1435: the slot's last reading is the open conversation's background-task count, and the
-                 pill opens the SAME overlay the overflow menu's Background-tasks item does — this setter,
-                 verbatim. The control reads the roster itself, so only the callback goes down. */
+                 pill opens the SAME overlay the overflow menu's Background-tasks item does. #1634: the pill
+                 now TOGGLES it and shows whether it is open; the menu item still only opens. */
               <ComposerErrorSlotControl
                 onCommand={sendText}
-                onOpenBackgroundTasks={() => setPanelOpen(true)}
+                backgroundTasksOpen={panelOpen}
+                onToggleBackgroundTasks={() => setPanelOpen(!panelOpen)}
                 onOpenChannelInfo={openChannelInfo}
               />
             }
@@ -624,17 +649,6 @@ export function ConversationScreen({
           // #1567: scanned only while the sheet is mounted; `items` is the open conversation's thread.
           sessionCostUsd={latestSessionCostUsd(items)}
           onClose={() => setChannelInfoOpen(false)}
-        />
-      )}
-      {/* #581: the background-task panel — the ChannelInfoSheet twin, overlaying the conversation
-          surface with the tasks the daemon holds alive for the open conversation. It reads the roster store
-          itself, so only the conversation id goes down; with no active conversation the id is null and the
-          panel reads "never observed", which is the correct reading. It mounts no data path — the roster
-          bridge is already app-wide in App.tsx. Opened from the trigger beside the status row. */}
-      {panelOpen && (
-        <BackgroundTaskPanel
-          conversationId={activeConversation?.id ?? null}
-          onClose={() => setPanelOpen(false)}
         />
       )}
       </div>
@@ -3784,7 +3798,9 @@ function Composer({
     // closed, key not consumed — reaches here. Every other Escape claimant on this screen takes focus when
     // it opens and mounts its `document` listener only while open, so while one is open this handler is not
     // on the event's path at all; that is why binding inside the composer needs no open-state and no
-    // listener ordering. NO preventDefault(): Escape has no default action in a textarea, so there is
+    // listener ordering. #1634's background-task drawer is the one exception: it takes no focus, so its
+    // capture listener sees this press first and DEFERS to it through `drawerClosesOnKeyDown`, which asks
+    // this same `shouldInterruptOnKeyDown` — a press that stops the turn leaves the drawer open. NO preventDefault(): Escape has no default action in a textarea, so there is
     // nothing to suppress. The gate is isTurnRunning(phase) ALONE, the stop button's gate and for its
     // reason (#650's localSendPending would arm an interrupt for a turn the daemon has not started), and
     // `window.pyry` is dereferenced HERE, at interaction time, never during render.
@@ -4307,13 +4323,23 @@ export function ComposerErrorChip({ status }: { status: ConnectionStatus }): JSX
 // discipline). No copy constant for two strings with one call site each: this module's copy constants
 // exist for strings asserted across FILES or that must be provably free of daemon text, and neither
 // applies (ContextUsageReading's ruling, verbatim).
-export function ComposerTaskCount({ count, onOpen }: {
+//
+// #1634: the pill TOGGLES the drawer, and wears the design's Primary outline (the `--open` modifier) and
+// `aria-expanded` only while it is open. `open` defaults to closed and both attributes are absent when
+// closed, so the closed render is byte-identical to the one every pre-existing site asserts.
+export function ComposerTaskCount({ count, onToggle, open = false }: {
   count: number
-  onOpen: () => void
+  onToggle: () => void
+  open?: boolean
 }): JSX.Element | null {
   if (count <= 0) return null
   return (
-    <button type="button" className="composer-status__tasks" onClick={onOpen}>
+    <button
+      type="button"
+      className={open ? 'composer-status__tasks composer-status__tasks--open' : 'composer-status__tasks'}
+      aria-expanded={open ? true : undefined}
+      onClick={onToggle}
+    >
       {count === 1 ? '1 task running' : `${count} tasks running`}
     </button>
   )
@@ -4436,14 +4462,16 @@ export function ComposerHistoryFailure({ retryable, onRetry }: {
 // #1435 threads ONE callback down and nothing else: this control already reads the open conversation for
 // the usage reading, so the roster it needs is a store read here rather than a prop, and the panel the
 // pill opens is the screen's own overlay — the same `setPanelOpen` the More actions item calls, so that
-// entry point and the panel itself are untouched.
+// entry point and the panel itself are untouched. #1634 adds the open reading the pill's outline needs.
 function ComposerErrorSlotControl({
   onCommand,
-  onOpenBackgroundTasks,
+  backgroundTasksOpen,
+  onToggleBackgroundTasks,
   onOpenChannelInfo
 }: {
   onCommand: (command: string) => boolean
-  onOpenBackgroundTasks: () => void
+  backgroundTasksOpen: boolean
+  onToggleBackgroundTasks: () => void
   onOpenChannelInfo: () => void
 }): JSX.Element | null {
   const status = useOpenConnectionStatus()
@@ -4592,7 +4620,7 @@ function ComposerErrorSlotControl({
          `historyFailure === null` line above exists for exactly this reason. The view guards too, which
          is what makes it total and its absent arm assertable. */
       taskCount={taskCount === 0 ? null :
-        <ComposerTaskCount count={taskCount} onOpen={onOpenBackgroundTasks} />}
+        <ComposerTaskCount count={taskCount} open={backgroundTasksOpen} onToggle={onToggleBackgroundTasks} />}
     />
   )
 }

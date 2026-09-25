@@ -3974,7 +3974,7 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
 // number is a prop.
 describe('ComposerTaskCount — the background-task reading in the status row (#1435)', () => {
   it('reads "n tasks running" for a count above one (AC1)', () => {
-    const markup = renderToStaticMarkup(<ComposerTaskCount count={6} onOpen={() => {}} />)
+    const markup = renderToStaticMarkup(<ComposerTaskCount count={6} onToggle={() => {}} />)
     expect(markup).toContain('6 tasks running')
   })
 
@@ -3982,7 +3982,7 @@ describe('ComposerTaskCount — the background-task reading in the status row (#
   // directions: "1 tasks running" is the failure this catches and it contains the singular as a
   // substring, which a one-directional check would pass on.
   it('reads "1 task running" for exactly one task (AC1)', () => {
-    const markup = renderToStaticMarkup(<ComposerTaskCount count={1} onOpen={() => {}} />)
+    const markup = renderToStaticMarkup(<ComposerTaskCount count={1} onToggle={() => {}} />)
     expect(markup).toContain('1 task running')
     expect(markup).not.toContain('1 tasks running')
   })
@@ -3991,21 +3991,21 @@ describe('ComposerTaskCount — the background-task reading in the status row (#
   // rendered-but-empty pill, which is precisely the criterion's failure mode — and it is why the
   // container creates no element at a zero count either (the `??` chain does not filter one).
   it('renders nothing at all at a zero count — not an empty element (AC2)', () => {
-    expect(renderToStaticMarkup(<ComposerTaskCount count={0} onOpen={() => {}} />)).toBe('')
+    expect(renderToStaticMarkup(<ComposerTaskCount count={0} onToggle={() => {}} />)).toBe('')
   })
 
   // The count reaches this view as `tasks.size + droppedTasks`, and `dropped_tasks` decodes through a
   // plain requireNumber — so a hostile or buggy daemon can drive the sum negative. It reads as absent,
   // never as "-3 tasks running".
   it('renders nothing at all at a negative count', () => {
-    expect(renderToStaticMarkup(<ComposerTaskCount count={-3} onOpen={() => {}} />)).toBe('')
+    expect(renderToStaticMarkup(<ComposerTaskCount count={-3} onToggle={() => {}} />)).toBe('')
   })
 
   // AC5's class half, in both directions: a task count is not an error and must not wear the error
   // pair's treatment. The base class is what carries the Pill's ground, ink and 24px box, so a render
   // that dropped it would still pass every copy assertion above.
   it('wears the neutral Pill class and not the error chip treatment (AC5)', () => {
-    const markup = renderToStaticMarkup(<ComposerTaskCount count={6} onOpen={() => {}} />)
+    const markup = renderToStaticMarkup(<ComposerTaskCount count={6} onToggle={() => {}} />)
     expect(markup).toContain('composer-status__tasks')
     expect(markup).not.toContain('composer-status__error')
     expect(markup).not.toContain('button-small')
@@ -4015,8 +4015,20 @@ describe('ComposerTaskCount — the background-task reading in the status row (#
   // focus ring and the accessible name all come from the element rather than from the class. The name is
   // the visible text, so there is no aria-label to drift from it and no hidden prefix — the copy says
   // what it is in plain words (the ComposerUsageLimitNotice ruling).
+  // #1634: the pill toggles the drawer and wears the design's Primary outline only while it is open. The
+  // closed render is byte-identical to the pre-#1634 pill, which is what keeps every other site unchanged.
+  it('wears the open modifier and aria-expanded only while the drawer is open (#1634 AC2)', () => {
+    const closed = renderToStaticMarkup(<ComposerTaskCount count={2} onToggle={() => {}} />)
+    expect(closed).toContain('class="composer-status__tasks"')
+    expect(closed).not.toContain('composer-status__tasks--open')
+    expect(closed).not.toContain('aria-expanded')
+    const open = renderToStaticMarkup(<ComposerTaskCount count={2} open onToggle={() => {}} />)
+    expect(open).toContain('class="composer-status__tasks composer-status__tasks--open"')
+    expect(open).toContain('aria-expanded="true"')
+  })
+
   it('is a real button whose accessible name is its visible text (AC4)', () => {
-    const markup = renderToStaticMarkup(<ComposerTaskCount count={6} onOpen={() => {}} />)
+    const markup = renderToStaticMarkup(<ComposerTaskCount count={6} onToggle={() => {}} />)
     expect(markup).toContain('<button')
     expect(markup).toContain('type="button"')
     expect(markup).not.toContain('aria-label')

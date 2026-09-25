@@ -298,18 +298,30 @@ count](background-task-roster-store-internals.md#the-pills-count-selectlivetaskc
 surface counting live background tasks cannot silently disagree with this pill about what counts as
 finished.
 
-**`ComposerTaskCount({ count, onOpen })`** is a new pure, exported view in `ConversationScreen.tsx`,
-a prop rather than a store read — the same discipline `TopOverlay` follows for the usage pill it moved
-out of this file — because zustand v5's `useStore` reads `getInitialState()` under `renderToStaticMarkup`,
-so a container test can otherwise reach only one arm. Returns `null` at `count <= 0` (`<=` rather than
-`===`, since `droppedTasks` decodes through a plain `requireNumber` and a hostile or buggy daemon can drive
-the sum negative); otherwise a real `<button type="button" className="composer-status__tasks">` holding
-`'1 task running'` or `` `${count} tasks running` `` — a two-way conditional over two client-owned literals,
-no copy module (unlike #1321's `usageLimitNotice.ts`: one number and one word need no pinning module of
-their own). No
+**`ComposerTaskCount({ count, onToggle, open = false })`** is a pure, exported view in
+`ConversationScreen.tsx`, a prop rather than a store read — the same discipline `TopOverlay` follows for
+the usage pill it moved out of this file — because zustand v5's `useStore` reads `getInitialState()` under
+`renderToStaticMarkup`, so a container test can otherwise reach only one arm. Returns `null` at
+`count <= 0` (`<=` rather than `===`, since `droppedTasks` decodes through a plain `requireNumber` and a
+hostile or buggy daemon can drive the sum negative); otherwise a real
+`<button type="button" className="composer-status__tasks">` holding `'1 task running'` or
+`` `${count} tasks running` `` — a two-way conditional over two client-owned literals, no copy module
+(unlike #1321's `usageLimitNotice.ts`: one number and one word need no pinning module of their own). No
 `aria-label`, no live region — the visible text is already the accessible name, and a count that moves
-every turn would announce on each one. Activating it calls `onOpen`, which the screen wires to the same
-`setPanelOpen(true)` the More actions item already calls, so the panel and its menu entry are untouched.
+every turn would announce on each one.
+
+**[#1634](https://github.com/pyrycode/pyrycode-desktop/issues/1634) made the pill a toggle, not only an
+opener**, once the [background-task panel](conversation-shell-background-tasks.md) became a non-modal
+drawer that stays open across a conversation switch. `ConversationScreen` wires `onToggle` to
+`setPanelOpen(!panelOpen)`, where `setPanelOpen` is `PairedShell`'s lifted state when present (see
+[Background-task panel § Open state lifted](conversation-shell-background-tasks.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583)).
+The new `open` prop, defaulted to `false`, adds a `composer-status__tasks--open` class — an inset 1px
+`--color-primary` box-shadow, the design's Primary outline, chosen over the CSS `outline` property so the
+UA focus ring stays free — and an `aria-expanded="true"` attribute only while the drawer is open; at
+`open = false` both are absent, so the closed markup stays byte-identical to what every pre-#1634 test
+site already asserted — the five existing `ComposerTaskCount` test sites needed only the `onOpen` →
+`onToggle` rename, nothing else. The overflow menu's `Background tasks` item is unchanged: it still only
+opens, via the same `setPanelOpen`, and never toggles closed.
 
 **The count is a plain `number` all the way to the DOM**, which is the whole trust boundary: the roster
 also holds untrusted, model-influenced task `description` and `latestUpdate.patch`, and this slice reads
@@ -348,8 +360,13 @@ the row yields to the window, the way the unshrinkable usage-limit notice did no
   arrive on one ordered channel, so the pill reaching zero afterward proves the earlier no-op frame was
   processed and not merely unsent or dropped.
 
-Tested in `ConversationScreen.test.tsx` (vitest only — nothing under `e2e/` sends roster frames): the
+Tested in `ConversationScreen.test.tsx` (vitest only — nothing under `e2e/` sent roster frames until
+[#1634](https://github.com/pyrycode/pyrycode-desktop/issues/1634)'s `background-task-drawer.spec.ts`): the
 count copy and its singular/plural split, the exact-empty absence at zero and at "never observed", the
-markup carrying `composer-status__tasks` and never `composer-status__error`, and the full `ComposerErrorSlot`
-precedence matrix with the pill yielding to every occupant above it in both directions. See
+markup carrying `composer-status__tasks` and never `composer-status__error`, the open/closed modifier and
+`aria-expanded` pair (#1634 AC2), and the full `ComposerErrorSlot` precedence matrix with the pill yielding
+to every occupant above it in both directions. The e2e spec drives `background_task_roster` frames for two
+conversations on one host and covers the toggle and its outline, typing and sending with the drawer open,
+Escape against the options overlay and against a running turn, and the drawer surviving a conversation
+switch — see [Background-task panel](conversation-shell-background-tasks.md). See
 [#1435](https://github.com/pyrycode/pyrycode-desktop/issues/1435).

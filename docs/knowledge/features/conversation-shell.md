@@ -62,7 +62,10 @@ express, without adding a single row to the timeline. The store's three `selectR
 (never-observed, observed-with-nothing-alive, populated) render as three structurally distinct
 outputs. This slice is the shell: chrome, the trigger, the three-way branch, and one row per task
 showing `description` + `taskType` only. Split from #568 alongside #582 (truncation/cap reports) and
-\#583 (latest patch, shipped); visual design is #580's. See [Background-task panel](conversation-shell-background-tasks.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583)
+\#583 (latest patch, shipped); visual design is #580's. [#1634](https://github.com/pyrycode/pyrycode-desktop/issues/1634)
+landed that design: a non-modal drawer beside the thread, in place of the interim `.status-sheet__*`
+overlay, toggled by a Primary-outlined composer pill and by the overflow-menu item, its open state
+surviving a conversation switch. See [Background-task panel](conversation-shell-background-tasks.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583)
 below.
 
 Permission and trust requests use the open chat's bottom input panel since

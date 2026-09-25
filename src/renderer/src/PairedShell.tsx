@@ -302,6 +302,11 @@ export function PairedShellView(props: {
    *  not optional: forgetting to wire it is the exact regression it exists to prevent, so it is a compile
    *  error rather than a silent `undefined`. See the container's `paneKey` state for why it is a prop. */
   paneKey: string | null
+  /** #1634: the background-task drawer's open state, held by the container beside `paneKey` because the
+   *  pane's key remounts ConversationScreen on every switch and an open drawer must stay open across one.
+   *  Optional as a pair: a view render that omits both gets the screen's own fallback state. */
+  backgroundTasksOpen?: boolean
+  onBackgroundTasksOpenChange?: (open: boolean) => void
   savedTimelineTarget?: { serverId: string; conversationId: string }
   onOpen: (conversation: ConversationSummary) => void
   onOpenSettings: () => void
@@ -362,6 +367,8 @@ export function PairedShellView(props: {
                   key={props.paneKey}
                   onRepairHost={props.onRepairHost}
                   onBack={props.onBack}
+                  backgroundTasksOpen={props.backgroundTasksOpen}
+                  onBackgroundTasksOpenChange={props.onBackgroundTasksOpenChange}
                 />
               ) : null}
             </div>
@@ -423,6 +430,11 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // it on the way out. In-app pairing now preserves the background subtree, so
   // this identity and all transient pane controls survive idle cancellation.
   const [paneKey, setPaneKey] = useState<string | null>(null)
+  // #1634: whether the background-task drawer is open. It sits HERE, above the `paneKey` remount, because
+  // the drawer is non-modal: the operator switches chats with it open, and it follows them, showing the
+  // new chat's tasks. Screen-local for the same ADR 0006 reasons as `paneKey`; unpairing unmounts the
+  // shell and closes it.
+  const [backgroundTasksOpen, setBackgroundTasksOpen] = useState(false)
   const cancelCreatedInitialization = useRef<(() => void) | null>(null)
   useEffect(() => () => cancelCreatedInitialization.current?.(), [])
   // #1303 — WHERE CANCELLING THE PAIRING FLOW PUTS THE OPERATOR BACK: the route this shell was on when
@@ -622,6 +634,8 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
       savedTimelineTarget={savedTimelineTarget}
       pairingOrigin={pairServerReturn}
       paneKey={paneKey}
+      backgroundTasksOpen={backgroundTasksOpen}
+      onBackgroundTasksOpenChange={setBackgroundTasksOpen}
       recoveryServerId={recoveryServerId}
       recoveryLabel={hostRowLabel(recoveryLabel)}
       recoveryRejected={recoveryStatus?.type === 'error' && recoveryStatus.error.code === 'pairing-rejected'}

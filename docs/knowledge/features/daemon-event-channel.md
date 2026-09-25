@@ -181,6 +181,21 @@ replace the remembered choice. Carriage currently ends at IPC; renderer snapshot
 footer selection and remembered-choice handling belong to
 [#1549](https://github.com/pyrycode/pyrycode-desktop/issues/1549).
 
+`runConfigReceived` also carries three flat optional booleans —
+`slashCommands`, `mcpServers`, `contextUsageDetail` (pyrycode#2670, decoded at
+[inbound message decode](inbound-message-decode.md#optional-session-capability-flags),
+\#1654) — the daemon's own statement of which Claude-only features the resolved
+session answers: true for Claude, false for Codex. `undefined` means not reported
+(no `capabilities` on the reply, or a daemon predating the flags), distinct from
+`false`; check `=== undefined`, the same posture as `effectiveEffort` above. Each
+is copied by name from `inbound.sessionSettings.capabilities?.<flag>` — flat
+rather than nested, so there is no partially-populated `capabilities` object for a
+consumer to interpret. This is a statement of support, not a permission: the
+daemon re-checks every request regardless of what these flags say. Ships dormant —
+this app doesn't advertise `multi_agent` yet, so the flags won't arrive in
+production until it does; [#1655](https://github.com/pyrycode/pyrycode-desktop/issues/1655)
+is the first consumer.
+
 ### Stopped-turn metadata
 
 Both `DaemonEvent.turnEnd` and `HistoryTimelineEvent.turnEnd` carry optional

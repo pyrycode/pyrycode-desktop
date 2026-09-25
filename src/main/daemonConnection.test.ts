@@ -8794,6 +8794,93 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     }
   )
 
+  const BASE_EVENT = {
+    type: 'runConfigReceived',
+    conversationId: CONV,
+    sessionId: 'sess-a',
+    model: 'claude-opus-4-8',
+    effort: 'high',
+    effectiveEffort: 'medium',
+    yolo: true,
+    permissionMode: 'bypassPermissions',
+    used_tokens: 12480,
+    window_tokens: 200000
+  }
+
+  it.each([
+    ['a Claude reply', true],
+    ['a Codex reply', false]
+  ])('maps the capability flags of %s onto runConfigReceived (#1654)', async (_label, flag) => {
+    const { sink, drivers, replyTo } = await requested()
+    const capabilities = {
+      interrupt: true, mid_turn_input: true, slash_commands: flag, mcp_servers: flag, context_usage_detail: flag,
+      effort_levels: ['low'], permission_modes: ['default'], attachment_types: ['*/*'], models: ['private-model']
+    }
+    drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, capabilities }, replyTo) })
+
+    const events = emitted(sink).filter((e) => e.type === 'runConfigReceived')
+    expect(events).toEqual([{ ...BASE_EVENT, slashCommands: flag, mcpServers: flag, contextUsageDetail: flag }])
+    expect(events[0]).not.toHaveProperty('capabilities')
+    expect(events[0]).not.toHaveProperty('slash_commands')
+    expect(events[0]).not.toHaveProperty('interrupt')
+    expect(events[0]).not.toHaveProperty('models')
+  })
+
+  it('carries no flag value when the reply has no capabilities (#1654)', async () => {
+    const { sink, drivers, replyTo } = await requested()
+    drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG, replyTo) })
+
+    const event = emitted(sink).find((e) => e.type === 'runConfigReceived')
+    expect(event).toEqual(BASE_EVENT)
+    if (event?.type !== 'runConfigReceived') throw new Error('expected runConfigReceived')
+    expect(event.slashCommands).toBeUndefined()
+    expect(event.mcpServers).toBeUndefined()
+    expect(event.contextUsageDetail).toBeUndefined()
+  })
+
+  it.each([
+    ['slash_commands', 'slashCommands'],
+    ['mcp_servers', 'mcpServers'],
+    ['context_usage_detail', 'contextUsageDetail']
+  ] as const)('carries no value for a missing %s, distinct from false (#1654)', async (wire, ipc) => {
+    const { sink, drivers, replyTo } = await requested()
+    const capabilities: Record<string, boolean> = { slash_commands: false, mcp_servers: false, context_usage_detail: false }
+    delete capabilities[wire]
+    drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, capabilities }, replyTo) })
+
+    const event = emitted(sink).find((e) => e.type === 'runConfigReceived')
+    if (event?.type !== 'runConfigReceived') throw new Error('expected runConfigReceived')
+    const flags = { slashCommands: event.slashCommands, mcpServers: event.mcpServers, contextUsageDetail: event.contextUsageDetail }
+    expect(flags[ipc]).toBeUndefined()
+    expect(Object.values(flags).filter((v) => v === false)).toHaveLength(2)
+  })
+
+  it.each([
+    { capabilities: null },
+    { capabilities: 'private-capabilities' },
+    { capabilities: [] },
+    { capabilities: { slash_commands: 'true', mcp_servers: true, context_usage_detail: true } },
+    { capabilities: { slash_commands: true, mcp_servers: 1, context_usage_detail: true } },
+    { capabilities: { slash_commands: true, mcp_servers: true, context_usage_detail: null } }
+  ])('drops a malformed capabilities $capabilities without consuming correlation or logging (#1654)', async ({ capabilities }) => {
+    const { log, records } = captureLog()
+    const { sink, drivers, replyTo } = await requested(CONV, log)
+    const beforeEvents = stampedEvents(sink).length
+    records.length = 0
+    drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, capabilities }, replyTo) })
+    expect(stampedEvents(sink)).toHaveLength(beforeEvents)
+    expect(records).toEqual([])
+    drivers[0].emit({
+      type: 'message',
+      plaintext: sessionSettingsPlaintext({
+        ...RUN_CONFIG, capabilities: { slash_commands: true, mcp_servers: false, context_usage_detail: true }
+      }, replyTo)
+    })
+    expect(stampedEvents(sink).filter((e) => e.type === 'runConfigReceived')).toEqual([
+      expect.objectContaining({ slashCommands: true, mcpServers: false, contextUsageDetail: true, conversationId: CONV })
+    ])
+  })
+
   it('decodes an inbound session_settings into runConfigReceived with the applied effort report', async () => {
     const { sink, drivers, replyTo } = await requested()
 

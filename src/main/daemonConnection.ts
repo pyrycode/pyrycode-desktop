@@ -1467,7 +1467,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               yolo: inbound.sessionSettings.yolo,
               permissionMode: inbound.sessionSettings.permission_mode,
               used_tokens: inbound.sessionSettings.used_tokens,
-              window_tokens: inbound.sessionSettings.window_tokens
+              window_tokens: inbound.sessionSettings.window_tokens,
+              // The three capability flags only (#1654), by name; the wire object itself never crosses.
+              slashCommands: inbound.sessionSettings.capabilities?.slash_commands,
+              mcpServers: inbound.sessionSettings.capabilities?.mcp_servers,
+              contextUsageDetail: inbound.sessionSettings.capabilities?.context_usage_detail
             })
             return
           }

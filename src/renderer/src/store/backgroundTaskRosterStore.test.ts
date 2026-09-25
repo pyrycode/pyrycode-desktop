@@ -6,6 +6,7 @@ import {
   selectLiveTaskCountFor,
   selectRosterFor,
   type BackgroundTaskRosterEntry,
+  type BackgroundTaskProgressSnapshot,
   type BackgroundTaskStartedSnapshot,
   type BackgroundTaskUpdatedSnapshot,
   type HeldBackgroundTask
@@ -53,7 +54,8 @@ const heldNoCut: HeldBackgroundTask = {
   truncatedFields: null,
   latestUpdate: null,
   status: null,
-  summary: null
+  summary: null,
+  progress: null
 }
 const heldCutDescription: HeldBackgroundTask = {
   taskId: 't2',
@@ -63,7 +65,8 @@ const heldCutDescription: HeldBackgroundTask = {
   truncatedFields: ['description'],
   latestUpdate: null,
   status: null,
-  summary: null
+  summary: null,
+  progress: null
 }
 
 /** A `background_task_started` write unit for `t1` — same task as `noCut`, but with the `toolCallId`
@@ -187,7 +190,8 @@ describe('backgroundTaskRosterStore', () => {
         truncatedFields: null,
         latestUpdate: null,
         status: null,
-        summary: null
+        summary: null,
+        progress: null
       })
     })
 
@@ -216,7 +220,8 @@ describe('backgroundTaskRosterStore', () => {
         truncatedFields: null,
         latestUpdate: { patch: '{"is_backgrounded":true}', truncatedFields: ['patch'] },
         status: null,
-        summary: null
+        summary: null,
+        progress: null
       })
       expect(heldFor(store, 'c1')?.droppedTasks).toBe(1)
       // Moved, not copied: the hold is gone once a roster has spoken for the conversation.
@@ -325,7 +330,8 @@ describe('backgroundTaskRosterStore', () => {
       truncatedFields: null,
       latestUpdate: null,
       status: null,
-      summary: null
+      summary: null,
+      progress: null
     })
   })
 
@@ -362,7 +368,8 @@ describe('backgroundTaskRosterStore', () => {
       truncatedFields: null,
       latestUpdate: null,
       status: null,
-      summary: null
+      summary: null,
+      progress: null
     })
     // A roster-sourced peer in the same frame is still rebuilt from its row.
     expect(heldTask(store, 'c1', 't2')).toEqual(heldCutDescription)
@@ -564,7 +571,8 @@ describe('backgroundTaskRosterStore', () => {
       truncatedFields: [],
       latestUpdate: { patch: '{"is_backgrounded":true}', truncatedFields: ['patch'] },
       status: null,
-      summary: null
+      summary: null,
+      progress: null
     })
   })
 
@@ -593,7 +601,8 @@ describe('backgroundTaskRosterStore', () => {
       truncatedFields: null,
       latestUpdate: { patch: '{"is_backgrounded":true}', truncatedFields: null },
       status: null,
-      summary: null
+      summary: null,
+      progress: null
     })
   })
 
@@ -1276,5 +1285,102 @@ describe('status word and terminal summary (#1639)', () => {
     const before = store.getState()
     store.getState().setUpdatedTask(updated({ status: 'completed', summary: 'done' }))
     expect(store.getState()).toBe(before)
+  })
+})
+
+/** A `background_task_progress` write unit for `t1` (#1640): the two ids plus the running report. */
+function progress(
+  overrides: Partial<BackgroundTaskProgressSnapshot> = {}
+): BackgroundTaskProgressSnapshot {
+  return {
+    conversationId: 'c1',
+    taskId: 't1',
+    currentActivity: 'Reading alpha.txt',
+    subagentType: 'general-purpose',
+    lastToolName: 'Read',
+    totalTokens: 18000,
+    toolUses: 4,
+    durationMs: 161000,
+    truncatedFields: null,
+    ...overrides
+  }
+}
+
+describe('latest progress report (#1640)', () => {
+  it('holds the report on a listed task, truncatedFields: null straight across', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    store.getState().setTaskProgress(progress())
+    expect(heldTask(store, 'c1', 't1')?.progress).toEqual({
+      currentActivity: 'Reading alpha.txt',
+      subagentType: 'general-purpose',
+      lastToolName: 'Read',
+      totalTokens: 18000,
+      toolUses: 4,
+      durationMs: 161000,
+      truncatedFields: null
+    })
+    expect(heldTask(store, 'c1', 't1')?.progress?.truncatedFields).toBeNull()
+  })
+
+  it('replaces an older report with a newer one, counters as received (never summed)', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    store.getState().setTaskProgress(progress())
+    store.getState().setTaskProgress(
+      progress({ currentActivity: 'Writing beta.txt', toolUses: 3, truncatedFields: ['description'] })
+    )
+    const held = heldTask(store, 'c1', 't1')?.progress
+    expect(held?.currentActivity).toBe('Writing beta.txt')
+    expect(held?.toolUses).toBe(3)
+    expect(held?.truncatedFields).toEqual(['description'])
+  })
+
+  it('keeps the report across a later roster and a later started frame for the task', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    store.getState().setTaskProgress(progress())
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    expect(heldTask(store, 'c1', 't1')?.progress?.currentActivity).toBe('Reading alpha.txt')
+    store.getState().setStartedTask(started())
+    expect(heldTask(store, 'c1', 't1')?.toolCallId).toBe('tc-1')
+    expect(heldTask(store, 'c1', 't1')?.progress?.currentActivity).toBe('Reading alpha.txt')
+    // …and a roster after the start keeps the started record whole, report included.
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    expect(heldTask(store, 'c1', 't1')?.progress?.currentActivity).toBe('Reading alpha.txt')
+  })
+
+  it('records a report on an unlisted hold and moves it in with the listing', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setStartedTask(started())
+    store.getState().setTaskProgress(progress())
+    expect(heldFor(store, 'c1')).toBeNull()
+    expect(store.getState().unlistedStarts.get('c1')?.get('t1')?.progress?.lastToolName).toBe('Read')
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    expect(heldTask(store, 'c1', 't1')?.progress?.lastToolName).toBe('Read')
+  })
+
+  it('creates nothing for a report naming a task or a conversation the store does not hold', () => {
+    const store = createBackgroundTaskRosterStore()
+    const empty = store.getState()
+    store.getState().setTaskProgress(progress())
+    expect(store.getState()).toBe(empty)
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    const before = store.getState()
+    store.getState().setTaskProgress(progress({ taskId: 'nope' }))
+    store.getState().setTaskProgress(progress({ conversationId: 'c9' }))
+    expect(store.getState()).toBe(before)
+  })
+
+  it('leaves the finished set, the count and the latest update alone', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    store.getState().setUpdatedTask(updated({ status: 'completed' }))
+    const finished = store.getState().finishedTasks
+    store.getState().setTaskProgress(progress())
+    expect(store.getState().finishedTasks).toBe(finished)
+    expect(selectLiveTaskCountFor('c1')(store.getState())).toBe(0)
+    expect(heldTask(store, 'c1', 't1')?.latestUpdate?.patch).toBe('{"is_backgrounded":true}')
+    expect(heldTask(store, 'c1', 't1')?.status).toBe('completed')
   })
 })

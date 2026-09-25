@@ -5,7 +5,8 @@ import {
   selectRosterFor,
   selectFinishedTasksFor,
   type BackgroundTaskRosterEntry,
-  type HeldBackgroundTask
+  type HeldBackgroundTask,
+  type HeldBackgroundTaskProgress
 } from '../../store/backgroundTaskRosterStore'
 
 // #581: the background-task panel — the first reader of backgroundTaskRosterStore (#573), which has been
@@ -133,6 +134,8 @@ function partialListCopy(droppedTasks: number): string {
 // matches, and fails no other test — the same silent-collapse family as the null-vs-[] distinction, which
 // is why the pairing is pinned here as named constants rather than inlined at the two call sites.
 const CUT_FIELD_DESCRIPTION = 'description' // wire name === held name here — coincidence, not a rule
+// …and NOT on the progress report (#1640), whose `description` is held as `currentActivity`: the same
+// constant, matched against `progress.truncatedFields`, is what marks a cut activity.
 const CUT_FIELD_TASK_TYPE = 'task_type' // held as `taskType`; the WIRE name is what the list carries
 // #583: the UPDATE's vocabulary, not the task's — matched against `latestUpdate.truncatedFields` and
 // against nothing else. No casing trap on this one (wire name === held name again, the same coincidence
@@ -141,6 +144,31 @@ const CUT_FIELD_TASK_TYPE = 'task_type' // held as `taskType`; the WIRE name is 
 const CUT_FIELD_PATCH = 'patch'
 // #1639: the terminal frame's vocabulary too, matched against `summary.truncatedFields` only.
 const CUT_FIELD_SUMMARY = 'summary'
+
+/** #1640: the client-built half of a running row's meta line, after the tool name: tool count, tokens
+ *  and elapsed time, e.g. `4 tools · 18k tokens · 2m 41s`. Numbers only, so no daemon string reaches it,
+ *  and each counter is shown as received — never summed with or diffed against an earlier report.
+ *
+ *  Elapsed pads the seconds under an hour (`1m 05s`, as the drawing sets it) and drops them from an
+ *  hour on (`1h 2m`). A nonsense counter (a negative, say) prints as an odd number, not an error. */
+export function formatTaskProgressCounts(
+  progress: Pick<HeldBackgroundTaskProgress, 'toolUses' | 'totalTokens' | 'durationMs'>
+): string {
+  const tools = progress.toolUses === 1 ? '1 tool' : `${progress.toolUses} tools`
+  const tokens =
+    progress.totalTokens < 1000
+      ? `${progress.totalTokens} tokens`
+      : `${Math.round(progress.totalTokens / 1000)}k tokens`
+  return `${tools} · ${tokens} · ${formatElapsed(progress.durationMs)}`
+}
+
+function formatElapsed(durationMs: number): string {
+  const seconds = Math.floor(durationMs / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ${String(seconds % 60).padStart(2, '0')}s`
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+}
 
 /** #582: has the daemon reported cutting this wire field on this task? `null` ("nothing was cut"), `[]`
  *  and an unrecognised name all fall out as `false` without a branch of their own.
@@ -368,6 +396,15 @@ function TaskRow({ task, finished }: { task: HeldBackgroundTask; finished: boole
           )}
         </>
       )}
+      {/* #1640: the running task's latest progress report, between the description and the latest
+          update. The group, not the held record, decides "running", so a finished row never shows one,
+          whatever it still holds. The activity's cut chip reads the REPORT's own list, with the wire
+          name `description` — the task's own list names the opening description, a different field.
+
+          The activity is one ellipsised line and there is deliberately no `title=` carrying the full
+          text: it names a file on the operator's host, and an attribute is not a place for daemon text.
+          The tool name is its own element, so it is never fused with the client's counts in one node. */}
+      {!finished && task.progress !== null && <TaskProgress progress={task.progress} />}
       {/* #583: the latest change claude reported about this task, under its label in a code block.
 
           The branch is on `latestUpdate !== null`, and the empty patch is a reading BENEATH it — never
@@ -400,6 +437,28 @@ function TaskRow({ task, finished }: { task: HeldBackgroundTask; finished: boole
         </div>
       )}
     </li>
+  )
+}
+
+function TaskProgress({ progress }: { progress: HeldBackgroundTaskProgress }): JSX.Element {
+  const counts = formatTaskProgressCounts(progress)
+  return (
+    <div className="background-task-panel__progress">
+      <span className="background-task-panel__activity">{progress.currentActivity}</span>
+      {wasCut(progress.truncatedFields, CUT_FIELD_DESCRIPTION) && (
+        <span className="background-task-panel__cut-activity">{BACKGROUND_TASK_PANEL_CUT_COPY}</span>
+      )}
+      <span className="background-task-panel__progress-meta">
+        {progress.lastToolName === '' ? (
+          counts
+        ) : (
+          <>
+            <span className="background-task-panel__progress-tool">{progress.lastToolName}</span>
+            {` · ${counts}`}
+          </>
+        )}
+      </span>
+    </div>
   )
 }
 

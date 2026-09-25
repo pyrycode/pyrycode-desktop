@@ -281,5 +281,52 @@ renders the `.background-task-panel__no-change` "No change reported" block even 
 rows show none. This predates #1639 (#583/#1635) and is outside this ticket's acceptance criteria; noted
 in the PR as a candidate for a follow-up ticket rather than fixed here.
 
+## Progress block (#1640)
+
+The per-row progress lines #1635's Populated and Capped Figma frames drew, but did not build, land here:
+between a running row's description (or, on a finished row, its summary) and its Latest update block,
+`TaskRow` draws `TaskProgress` whenever `!finished && task.progress !== null`. A finished row never draws
+one — the running-only test that must contain none of `completed|failed|...` (see [List
+redraw](#list-redraw-1635)) covers this block too. `task.progress` is `HeldBackgroundTaskProgress`, the
+latest [`backgroundTaskProgress` report](background-task-roster-store-model.md) held on the task record
+— see [Internals § How it works](background-task-roster-store-internals.md#how-it-works).
+
+The block holds two lines: the current activity, one line with an ellipsis
+(`.background-task-panel__activity`), followed by the cut chip
+(`.background-task-panel__cut-activity`) when `wasCut(task.progress.truncatedFields, CUT_FIELD_DESCRIPTION)`
+— reading the **report's own** list, not the task's. `CUT_FIELD_DESCRIPTION` (`'description'`) now names
+two different held fields depending on which list it is matched against: the task's own list names the
+opening description, the progress report's list names `currentActivity` under the same wire word. Reading
+`currentActivity` against the task's list, or `description` against the report's, compiles clean and
+never matches — the same crossover trap #583 and #1639 each name once for their own field pair, one more
+instance of it. Under that, `.background-task-panel__progress-meta` draws the meta line: when
+`lastToolName !== ''` the tool name is its own `.background-task-panel__progress-tool` span followed by
+`' · '`, then the client-built counts string from the exported pure `formatTaskProgressCounts`. An empty
+tool name drops both the span and the separator, leaving only the counts.
+
+`formatTaskProgressCounts({ toolUses, totalTokens, durationMs })` — pure, unit-tested by table:
+
+- Tools: `'1 tool'`, otherwise `` `${n} tools` ``.
+- Tokens: under 1000 the plain number (`'850 tokens'`), otherwise `Math.round(n / 1000)` plus `k`
+  (`'18k tokens'`).
+- Elapsed, from whole seconds (`Math.floor(durationMs / 1000)`): under a minute `'41s'`; under an hour
+  `` `${m}m ${String(s % 60).padStart(2, '0')}s` `` — seconds padded to two digits, e.g. `'1m 05s'`, the
+  Figma reading; from an hour on `` `${h}h ${m % 60}m` ``, seconds dropped. The ticket's prose and the
+  Figma disagreed on padding below the hour mark; the architect resolved it toward the Figma (padded) and
+  kept the ticket's literal hour form.
+
+**SECURITY.** `currentActivity`, `subagentType` and `lastToolName` are untrusted, model- and
+tool-authored text — `currentActivity` in particular can name a file on the operator's host, the same
+class as `description`. All three render only as auto-escaped React children. The one-line ellipsis on
+the activity is deliberately **not** paired with a `title=` tooltip carrying the full text — an attribute
+is not a place for daemon text, however tempting for a cut-off line — and the tool name is kept in its
+own span so it is never fused with the client-built counts into one text node. Panel tests render a
+markup-shaped activity and tool name and assert no `<b` element and no `title` attribute anywhere in the
+markup. Architect self-review PASS (security-sensitive label); verifier PASS with no blocking findings.
+
+No prop, type, store or bridge change was needed beyond what #1638/#1640 already added to
+`backgroundTaskRosterStore`/`backgroundTaskRosterBridge` — `entry` was already `selectRosterFor`'s return
+type, widened to carry `progress`.
+
 See [#581 codebase notes](../codebase/581.md) for the shell's full design, test posture, and
 code-review record.

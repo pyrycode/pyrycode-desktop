@@ -53,6 +53,20 @@ either source held verbatim:
   tasks § Status tag and summary](conversation-shell-background-tasks.md#status-tag-and-summary-1639).
   `summary` is untrusted model-authored text, the same class as `description` and `patch`, rendered only
   as inert escaped text.
+- A `backgroundTaskProgress` frame (#1638 decodes it, #1640 reads it) **records a running task's latest
+  progress report** — joined the same way `backgroundTaskUpdated` is, on `conversationId` + `taskId` and
+  never on arrival order, checking the listed task first and then the unlisted hold. Latest wins, one
+  record per task (`HeldBackgroundTask.progress`), and it rides across a later roster or started rebuild
+  the same way `latestUpdate`/`status`/`summary` already do, since neither a roster row nor a started
+  frame can report it. A report for a task held in neither place is silently dropped, the same
+  `Object.is`-provable miss `setUpdatedTask` already has: a report never opens a task. It is **not** a
+  finish signal — it never touches `finishedTasks` or a roster's `droppedTasks` — and its three counters
+  (`totalTokens`, `toolUses`, `durationMs`) are claude's cumulative readings, held exactly as received,
+  never summed or diffed and not guaranteed monotonic; the frame is rate-bounded, so a gap between reports
+  says nothing about a stall. `currentActivity`, `subagentType` and `lastToolName` are untrusted model-
+  and tool-authored text, the same class as `description`/`patch`/`summary` — the activity in particular
+  names a file on the operator's host. See [Conversation shell — background tasks § Progress
+  block](conversation-shell-background-tasks.md#progress-block-1640) for the reader.
 
 Deliberately **not** a [session store](session-store.md) or [timeline store](conversation-timeline-store.md)
 facet: like `queue_state`, this family is daemon *state* (SSOT pyrycode #720), not part of claude's turn

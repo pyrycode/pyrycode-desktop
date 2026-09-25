@@ -5713,12 +5713,49 @@ button.top-overlay-pill {
   overflow-wrap: anywhere;
 }
 
+/* #1640: a running card's Progress block (Figma 564:2248), between the description and the latest
+   update: the current activity on one ellipsised line, then an Outline meta line. The drawn 2px gap is
+   below the spacing scale's first step, so it stays a literal, like the cut chip's padding. The
+   activity's drawn 17px line takes the scale's 16, as the summary's does. */
+.background-task-panel__progress {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  align-self: stretch;
+  min-width: 0;
+}
+
+.background-task-panel__activity {
+  align-self: stretch;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+.background-task-panel__progress-meta {
+  max-width: 100%;
+  color: var(--color-outline);
+  font-size: var(--text-label-small-size);
+  line-height: var(--text-label-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+  overflow-wrap: anywhere;
+}
+
 /* The cut marker (Figma 563:1055): a dashed Tertiary chip on its own line straight after the cut field.
-   One rule for the four; the classes stay separate so a test can prove which field was marked. */
+   One rule for the five; the classes stay separate so a test can prove which field was marked. */
 .background-task-panel__cut-description,
 .background-task-panel__cut-type,
 .background-task-panel__cut-patch,
-.background-task-panel__cut-summary {
+.background-task-panel__cut-summary,
+.background-task-panel__cut-activity {
   padding: 1px 6px;
   border: 1px dashed var(--color-tertiary);
   border-radius: 4px;

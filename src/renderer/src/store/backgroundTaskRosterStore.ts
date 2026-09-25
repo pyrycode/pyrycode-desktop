@@ -130,6 +130,28 @@ export interface HeldBackgroundTaskSummary {
   truncatedFields: readonly string[] | null
 }
 
+/** The latest progress report claude sent about a RUNNING task (#1640): the whole
+ *  `backgroundTaskProgress` arm minus its join keys. Latest wins and no history is kept, for the reason
+ *  `HeldBackgroundTaskUpdate` gives. The three counters are claude's cumulative readings, held exactly as
+ *  received: never summed across reports and not guaranteed monotonic. The frames are rate-bounded, so
+ *  the time since the last report says nothing about a stall.
+ *
+ *  `truncatedFields` is this report's own cut list, straight across (`null` is never collapsed into
+ *  `[]`). Its contents are WIRE names, so a cut current activity is named `description`.
+ *
+ *  SECURITY: `currentActivity`, `subagentType` and `lastToolName` are UNTRUSTED model- and tool-authored
+ *  text, and the current activity names a file on the operator's host. Inert escaped text only: never an
+ *  attribute (not even a `title` tooltip for the ellipsised line), a class name, a key, a path or a log. */
+export interface HeldBackgroundTaskProgress {
+  currentActivity: string
+  subagentType: string
+  lastToolName: string
+  totalTokens: number
+  toolUses: number
+  durationMs: number
+  truncatedFields: readonly string[] | null
+}
+
 /** ONE background task as this app holds it — the join of what the three frames each report, mapped to
  *  renderer-side camelCase from whichever source last spoke about it.
  *
@@ -187,7 +209,10 @@ export interface HeldBackgroundTaskSummary {
  *  it unchanged. It stays the open string the daemon sent, never narrowed to a union, and it never decides
  *  grouping or the count. `summary` is the terminal frame's (see `HeldBackgroundTaskSummary`); `null`
  *  means no terminal frame has arrived. Required and nullable, like `latestUpdate`, so every construction
- *  site has to state them. */
+ *  site has to state them.
+ *
+ *  `progress` (#1640) is the latest running report (see `HeldBackgroundTaskProgress`), the same
+ *  rides-across kind; `null` means no report has matched the task. */
 export interface HeldBackgroundTask {
   taskId: string
   toolCallId: string | null
@@ -197,6 +222,7 @@ export interface HeldBackgroundTask {
   latestUpdate: HeldBackgroundTaskUpdate | null
   status: string | null
   summary: HeldBackgroundTaskSummary | null
+  progress: HeldBackgroundTaskProgress | null
 }
 
 /** The held value for ONE conversation: the tasks currently believed alive, keyed by `taskId`, plus the
@@ -253,6 +279,20 @@ export interface BackgroundTaskUpdatedSnapshot {
   truncatedFields: readonly string[] | null
 }
 
+/** The progress write unit (#1640) — the `backgroundTaskProgress` daemon-event arm minus its `type` tag,
+ *  flat like its siblings; `setTaskProgress` assembles the nested held record. */
+export interface BackgroundTaskProgressSnapshot {
+  conversationId: string
+  taskId: string
+  currentActivity: string
+  subagentType: string
+  lastToolName: string
+  totalTokens: number
+  toolUses: number
+  durationMs: number
+  truncatedFields: readonly string[] | null
+}
+
 /** The whole state: each conversation's held task set, keyed by `conversationId`. A key ABSENT from
  *  `rosters` means "NO roster has arrived for that conversation" and is a DISTINCT state from a present
  *  entry holding an empty `tasks` map ("observed, nothing alive") — see `selectRosterFor`, which
@@ -279,8 +319,8 @@ export interface BackgroundTaskRosterState {
   finishedTasks: ReadonlyMap<string, ReadonlySet<string>>
 }
 
-/** Store shape = state + the five mutation entry points: record one conversation's roster, record one
- *  started task, record one task's latest patch, drop the reconnecting server's rosters on the
+/** Store shape = state + the six mutation entry points: record one conversation's roster, record one
+ *  started task, record one task's latest patch, record one task's latest progress report (#1640), drop the reconnecting server's rosters on the
  *  `connected` edge (#573's AC5, scoped by #1139), and drop EVERY conversation's at a pairing boundary
  *  (#1139). Still named setters, not a discriminated-union action set — that would be ceremony for
  *  five operations. */
@@ -288,6 +328,7 @@ export type BackgroundTaskRosterStore = BackgroundTaskRosterState & {
   setRoster: (snapshot: BackgroundTaskRosterSnapshot) => void
   setStartedTask: (snapshot: BackgroundTaskStartedSnapshot) => void
   setUpdatedTask: (snapshot: BackgroundTaskUpdatedSnapshot) => void
+  setTaskProgress: (snapshot: BackgroundTaskProgressSnapshot) => void
   resetRostersFor: (conversationIds: ReadonlySet<string>) => void
   clearAllRosters: () => void
 }
@@ -517,7 +558,9 @@ export function createBackgroundTaskRosterStore(
                   latestUpdate: held?.latestUpdate ?? null,
                   // The status word and summary ride across for the same reason (#1639).
                   status: held?.status ?? null,
-                  summary: held?.summary ?? null
+                  summary: held?.summary ?? null,
+                  // …and the running report (#1640).
+                  progress: held?.progress ?? null
                 }
           )
         }
@@ -556,7 +599,8 @@ export function createBackgroundTaskRosterStore(
           // an update that arrived before it (claude's ordering, not the daemon's) is not thrown away.
           latestUpdate: prior?.latestUpdate ?? null,
           status: prior?.status ?? null,
-          summary: prior?.summary ?? null
+          summary: prior?.summary ?? null,
+          progress: prior?.progress ?? null
         }
         if (existing === undefined || listed === undefined) {
           // No roster lists this task, so it is held where no surface reads it (#1563): `rosters` is
@@ -619,6 +663,38 @@ export function createBackgroundTaskRosterStore(
         // `droppedTasks` PRESERVED: an update reports nothing about roster truncation.
         next.set(snapshot.conversationId, { tasks, droppedTasks: existing.droppedTasks })
         return { rosters: next, finishedTasks }
+      }),
+    // #1640: the same join as `setUpdatedTask` — the listed task first, else the unlisted hold — and the
+    // same silent same-reference miss, so a report never opens a task. A hit replaces `progress` whole
+    // and touches nothing else: a report is not a finish, so `finishedTasks` and the count stay put.
+    setTaskProgress: (snapshot) =>
+      set((s) => {
+        const progress: HeldBackgroundTaskProgress = {
+          currentActivity: snapshot.currentActivity,
+          subagentType: snapshot.subagentType,
+          lastToolName: snapshot.lastToolName,
+          totalTokens: snapshot.totalTokens,
+          toolUses: snapshot.toolUses,
+          durationMs: snapshot.durationMs,
+          truncatedFields: snapshot.truncatedFields
+        }
+        const existing = s.rosters.get(snapshot.conversationId)
+        const held = existing?.tasks.get(snapshot.taskId)
+        if (existing === undefined || held === undefined) {
+          const holds = s.unlistedStarts.get(snapshot.conversationId)
+          const pending = holds?.get(snapshot.taskId)
+          if (holds === undefined || pending === undefined) return s
+          const nextHolds = new Map(holds)
+          nextHolds.set(snapshot.taskId, { ...pending, progress })
+          const unlistedStarts = new Map(s.unlistedStarts)
+          unlistedStarts.set(snapshot.conversationId, nextHolds)
+          return { unlistedStarts }
+        }
+        const tasks = new Map(existing.tasks)
+        tasks.set(snapshot.taskId, { ...held, progress })
+        const next = new Map(s.rosters)
+        next.set(snapshot.conversationId, { tasks, droppedTasks: existing.droppedTasks })
+        return { rosters: next }
       }),
     resetRostersFor: (conversationIds) =>
       set((s) => {

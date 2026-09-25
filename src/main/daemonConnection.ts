@@ -90,6 +90,7 @@ import type { PairedServerStore } from './pairedServerStore'
 import {
   MAX_FRAME_BYTES,
   CAPABILITY_INTERACTIVE,
+  CAPABILITY_MULTI_AGENT,
   type HelloAckPayload,
   type SendMessagePayload,
   type CreateConversationPayload,
@@ -2799,7 +2800,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // — the mounted render pipeline (timeline + modal bridges) draws them. `interactive` is the
       // whole vocabulary, so this turns on everything a paired interactive client gets. The daemon
       // echoes the accepted intersection back in hello_ack.capabilities (surfaced on `connected`).
-      capabilities: [CAPABILITY_INTERACTIVE]
+      // Advertise `multi_agent` too (#1657): without it the daemon withholds Codex conversations,
+      // their frames and Codex model rows, all of which the window now decodes per agent (#1649).
+      capabilities: [CAPABILITY_INTERACTIVE, CAPABILITY_MULTI_AGENT]
     })
     return {
       connection: {

@@ -12,6 +12,8 @@ export const NOISE_PROTOCOL = 'Noise_IK_25519_ChaChaPoly_BLAKE2s' as const
 
 export const PROTOCOL_VERSION = 'v2' as const
 export const CAPABILITY_INTERACTIVE = 'interactive' as const
+/** Tells the daemon this client understands more than one agent, so it sends Codex conversations (#1657). */
+export const CAPABILITY_MULTI_AGENT = 'multi_agent' as const
 
 /** Which agent runs a conversation or offers a model row (#1649). */
 export type WireAgent = 'claude' | 'codex'

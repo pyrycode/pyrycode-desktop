@@ -671,7 +671,7 @@ describe('createDaemonConnection', () => {
     expect(payload.device_name).toBe('my-desktop')
   })
 
-  it('advertises the interactive capability in the client hello (#179 AC1)', async () => {
+  it('advertises the interactive and multi_agent capabilities in the client hello (#179 AC1, #1657)', async () => {
     const { connection, drivers } = build()
     connection.start()
     await tick()
@@ -680,7 +680,7 @@ describe('createDaemonConnection', () => {
     // buildClientHello in isolation, so this pins the production wiring, not the codec default.
     const envelope = decodeEnvelope(drivers[0].config.session.hello)
     const payload = envelope.payload as Record<string, unknown>
-    expect(payload.capabilities).toEqual(['interactive'])
+    expect(payload.capabilities).toEqual(['interactive', 'multi_agent'])
   })
 
   it('decodes server_static_pubkey to the raw 32-byte key', async () => {

@@ -3,7 +3,9 @@ import { shouldInterruptOnKeyDown, type ComposerKeyEvent } from './composerSend'
 import {
   useBackgroundTaskRosterStore,
   selectRosterFor,
-  type BackgroundTaskRosterEntry
+  selectFinishedTasksFor,
+  type BackgroundTaskRosterEntry,
+  type HeldBackgroundTask
 } from '../../store/backgroundTaskRosterStore'
 
 // #581: the background-task panel — the first reader of backgroundTaskRosterStore (#573), which has been
@@ -42,9 +44,9 @@ import {
 // (not even `title=`), never an `href`/`src`, never a React key, never parsed, never executed or re-shelled.
 // The rows are deliberately non-interactive — a `<button>` row would advertise an affordance that does not
 // exist and would be the natural place for a "run this" handler to grow later. And the LIST shape is not an
-// invitation: `entry.tasks` is iterated once, inline, into `<li>` children, and nothing is derived from it —
-// no join, no clipboard, no export, no `data-*` attribute carrying a task field (the obligation the store's
-// own header, backgroundTaskRosterStore.ts:47-55, names this ticket as inheriting).
+// invitation: `entry.tasks` is iterated once into `<li>` children, and the only thing derived from it is
+// #1635's Running / Finished partition by id — no join, no clipboard, no export, no `data-*` attribute
+// carrying a task field (the obligation the store's own header names this ticket as inheriting).
 //
 // #583: `latestUpdate.patch` is the SAME class of untrusted text under a structured-looking shape, and is
 // rendered under every rule above — and "never parsed" is load-bearing for it specifically. The wire
@@ -64,6 +66,22 @@ const BACKGROUND_TASK_PANEL_TITLE = 'Background tasks'
 // "must not collapse into one another" is the copy, the other half is the distinct class below.
 const BACKGROUND_TASK_PANEL_UNOBSERVED_COPY = 'No background-task report yet'
 const BACKGROUND_TASK_PANEL_EMPTY_COPY = 'No background tasks'
+// #1635: each reading's support line, drawn under its heading (Figma 565:2341 and 565:2327). A sibling of
+// the heading, never inside it, so the heading element still holds the heading copy alone.
+const BACKGROUND_TASK_PANEL_UNOBSERVED_SUPPORT =
+  'The daemon has not reported on this conversation since the app connected.'
+const BACKGROUND_TASK_PANEL_EMPTY_SUPPORT =
+  'Claude has nothing running in the background for this conversation.'
+
+// #1635: the two group headers and the two tags. A finished row wears the Stopped style under a neutral
+// "Finished" label until #1639 maps the status word to Completed, Failed or Stopped.
+const BACKGROUND_TASK_PANEL_RUNNING_LABEL = 'Running'
+const BACKGROUND_TASK_PANEL_FINISHED_LABEL = 'Finished'
+const BACKGROUND_TASK_PANEL_UPDATE_LABEL = 'Latest update'
+
+// #1635: the one task type whose description is a shell command, so the drawing sets it in mono. The
+// daemon string is compared against this constant to choose a client-owned class; it never becomes one.
+const TASK_TYPE_SHELL = 'local_bash'
 
 // #582: the marker shown beside a field the daemon cut. Deliberately echoes UNRECOGNIZED_TRUNCATED_COPY's
 // vocabulary (ConversationScreen.tsx:500) so the app says the same thing the same way about the same
@@ -155,11 +173,17 @@ function wasCut(truncatedFields: readonly string[] | null, wireFieldName: string
 // logged on any branch either: a "no roster for conversation X" line is exactly where daemon-influenced
 // content starts leaking into a file (the content-free diagnostics rule, #126) — which is why the store's
 // own setters are silent about their misses.
+//
+// #1635: `finishedTaskIds` is `selectFinishedTasksFor`'s return type. It only splits the populated arm into
+// a Running and a Finished group, so the three-way branch above is unchanged. Optional, with `null`
+// meaning "nothing finished", the same reading the pill's count takes when the key is absent.
 export function BackgroundTaskPanelView({
   entry,
+  finishedTaskIds = null,
   onClose
 }: {
   entry: BackgroundTaskRosterEntry | null
+  finishedTaskIds?: ReadonlySet<string> | null
   onClose: () => void
 }): JSX.Element {
   return (
@@ -205,118 +229,186 @@ export function BackgroundTaskPanelView({
               notice" rather than to "Partial list (-1 not shown)". That is a comparison choice, not a
               validation branch — nothing has been observed producing one, so none is added. */}
           {entry !== null && entry.droppedTasks > 0 && (
-            <p className="background-task-panel__partial">{partialListCopy(entry.droppedTasks)}</p>
+            // #1635: the drawn notice — a filled chip with a dot, at the top of the body, before either
+            // group. The dot is decoration, so the notice still reads as its one sentence.
+            <p className="background-task-panel__partial">
+              <span className="background-task-panel__partial-dot" aria-hidden="true" />
+              {partialListCopy(entry.droppedTasks)}
+            </p>
           )}
           {entry === null ? (
-            <p className="background-task-panel__unobserved">
-              {BACKGROUND_TASK_PANEL_UNOBSERVED_COPY}
-            </p>
+            // #1635: each reading is the drawn centred column — ring, heading, support line — and they
+            // stay apart in copy, class AND ring: dashed for never reported, solid for observed empty.
+            <div className="background-task-panel__reading">
+              <ReadingRing variant="dashed" />
+              <p className="background-task-panel__unobserved">
+                {BACKGROUND_TASK_PANEL_UNOBSERVED_COPY}
+              </p>
+              <p className="background-task-panel__reading-support">
+                {BACKGROUND_TASK_PANEL_UNOBSERVED_SUPPORT}
+              </p>
+            </div>
           ) : entry.tasks.size === 0 ? (
-            <p className="background-task-panel__empty">{BACKGROUND_TASK_PANEL_EMPTY_COPY}</p>
+            <div className="background-task-panel__reading">
+              <ReadingRing variant="solid" />
+              <p className="background-task-panel__empty">{BACKGROUND_TASK_PANEL_EMPTY_COPY}</p>
+              <p className="background-task-panel__reading-support">
+                {BACKGROUND_TASK_PANEL_EMPTY_SUPPORT}
+              </p>
+            </div>
           ) : (
-            // A <ul>/<li>, the honest semantics for "one entry per task" — and NOT interactive rows:
-            // there is no action on a task in this slice. Display order is roster order and needs no
-            // sort; the held Map preserves insertion order and setRoster rebuilds it in row order.
-            // A ReadonlyMap's .values() is an iterator, so spread it rather than calling .map on it.
-            <ul className="background-task-panel__list">
-              {[...entry.tasks.values()].map((task) => (
-                // key = taskId: unique by map-key construction, and carried in the VALUE precisely so
-                // this iteration needs no entry keys threaded alongside it (HeldBackgroundTask:141-142).
-                // The description is never a key — a key is not a place for untrusted text.
-                <li key={task.taskId} className="background-task-panel__row">
-                  {/* Exactly two fields, each as auto-escaped React children. No terminal state is
-                      shown or inferred: the daemon reports no finish event, so a task simply leaves
-                      the list when it stops appearing in the roster.
-
-                      #582: each cut marker sits IMMEDIATELY AFTER the field it describes, so position
-                      carries the attribution — no id / aria-describedby pair built from `taskId`, which
-                      is a daemon string and is a React key (never rendered), not a rendered attribute.
-                      The row is flex-direction: column, so each marker lands on its own line for free.
-
-                      The marker is a SIBLING ELEMENT holding a client-owned constant, never text
-                      concatenated into the field span: `{task.description}{cut && ' (truncated)'}` would
-                      fuse client copy and daemon text into one node, so a description ending in those
-                      same words would be indistinguishable from the app's own claim. And nothing here
-                      slices, measures, re-joins or re-sinks the field to produce the marker — it marks
-                      text that is already rendered inertly and stays inert itself.
-
-                      The field NAMES are matched, never displayed: no `truncatedFields` element reaches
-                      the markup (a `.join(', ')` display is the obvious first design and is forbidden on
-                      both counts — it renders daemon strings, and it breaks the shell's sentinel test). */}
-                  <span className="background-task-panel__description">{task.description}</span>
-                  {wasCut(task.truncatedFields, CUT_FIELD_DESCRIPTION) && (
-                    <span className="background-task-panel__cut-description">
-                      {BACKGROUND_TASK_PANEL_CUT_COPY}
-                    </span>
-                  )}
-                  <span className="background-task-panel__type">{task.taskType}</span>
-                  {wasCut(task.truncatedFields, CUT_FIELD_TASK_TYPE) && (
-                    <span className="background-task-panel__cut-type">
-                      {BACKGROUND_TASK_PANEL_CUT_COPY}
-                    </span>
-                  )}
-                  {/* #583: the latest change claude reported about this task. Last in the row, so the
-                      identity fields stay at the top and each marker keeps sitting immediately after
-                      the field it describes.
-
-                      The branch is on `latestUpdate !== null`, and the empty patch is a reading BENEATH
-                      it — never `{task.latestUpdate?.patch && …}` or any other truthiness test on the
-                      patch. `patch: ''` is a VALUE ("claude reported no change"; the wire field has no
-                      omitempty), so a truthiness test renders it EXACTLY as a never-updated task: it
-                      compiles, type-checks, and breaks no test. That is #582's `{entry.droppedTasks &&
-                      …}` trap one field over and quieter — `0` at least printed a visible bare `0`,
-                      whereas `''` renders as nothing at all, leaving the collapse no trace in the markup.
-
-                      Three readings, and the never-updated one renders NOTHING — a deliberate divergence
-                      from the branch above, where each reading has its own element because the branch IS
-                      the whole panel body and null would read as broken. A row still shows a description
-                      and a type, so absence is legible here, and a per-row "not updated yet" line would
-                      be noise on the ordinary case. What must not happen is the COLLAPSE, not the
-                      absence: the empty-patch reading renders an element the never-updated one does not.
-
-                      The cut marker is a SIBLING of the two arms, inside the null guard rather than
-                      inside the non-empty arm — the same placement rule #582's notice carries, for the
-                      same reason: the cut report is a property of the update RECORD, not of the patch's
-                      emptiness. A recorded `{ patch: '', truncatedFields: ['patch'] }` is unreachable
-                      daemon-side today (the 4 KiB cap never cuts to zero length) but is directly
-                      constructible against a pure view, and a marker written inside the non-empty arm
-                      would be invisible in exactly that state — the panel would claim "no change
-                      reported" while the daemon said it cut the patch. Presenting an incomplete thing as
-                      complete is what AC3 forbids, and "unreachable daemon-side" is not an answer for a
-                      pure function of its prop.
-
-                      It reads `task.latestUpdate.truncatedFields` and the description / type markers
-                      above read `task.truncatedFields`, and the crossover is the silent mis-wiring here:
-                      both lists are `readonly string[] | null`, so either swap compiles, type-checks and
-                      never matches, because neither list names the other's fields. Nothing here reads the
-                      patch TEXT to produce the marker either — no slice, no measure, no ellipsis, no
-                      re-join — and the cut report is never cross-checked against the patch in either
-                      direction: it reports the cap cut ONLY, while the daemon also scrubs invalid UTF-8
-                      by deletion, so the two genuinely can disagree (types.ts:474-477). */}
-                  {task.latestUpdate !== null && (
-                    <>
-                      {task.latestUpdate.patch === '' ? (
-                        <span className="background-task-panel__no-change">
-                          {BACKGROUND_TASK_PANEL_NO_CHANGE_COPY}
-                        </span>
-                      ) : (
-                        <span className="background-task-panel__patch">
-                          {task.latestUpdate.patch}
-                        </span>
-                      )}
-                      {wasCut(task.latestUpdate.truncatedFields, CUT_FIELD_PATCH) && (
-                        <span className="background-task-panel__cut-patch">
-                          {BACKGROUND_TASK_PANEL_CUT_COPY}
-                        </span>
-                      )}
-                    </>
-                  )}
-                </li>
-              ))}
-            </ul>
+            <TaskGroups tasks={[...entry.tasks.values()]} finishedTaskIds={finishedTaskIds} />
           )}
       </div>
     </section>
+  )
+}
+
+/** #1635: the populated arm — a Running group, then a Finished group, each in roster order. A row is
+ *  finished when its id is in the conversation's finished set. The partition is the only thing derived
+ *  from the list: no task field is read to make it, and each count is the number of rows drawn, so a
+ *  dropped task (which has no row) is counted by the partial-list notice alone. An empty group renders
+ *  nothing, header included. */
+function TaskGroups({
+  tasks,
+  finishedTaskIds
+}: {
+  tasks: readonly HeldBackgroundTask[]
+  finishedTaskIds: ReadonlySet<string> | null
+}): JSX.Element {
+  const isFinished = (task: HeldBackgroundTask): boolean => finishedTaskIds?.has(task.taskId) === true
+  const running = tasks.filter((task) => !isFinished(task))
+  const finished = tasks.filter(isFinished)
+  return (
+    <div className="background-task-panel__groups">
+      {running.length > 0 && (
+        <TaskGroup label={BACKGROUND_TASK_PANEL_RUNNING_LABEL} tasks={running} finished={false} />
+      )}
+      {finished.length > 0 && (
+        <TaskGroup label={BACKGROUND_TASK_PANEL_FINISHED_LABEL} tasks={finished} finished={true} />
+      )}
+    </div>
+  )
+}
+
+function TaskGroup({
+  label,
+  tasks,
+  finished
+}: {
+  label: string
+  tasks: readonly HeldBackgroundTask[]
+  finished: boolean
+}): JSX.Element {
+  return (
+    <section className="background-task-panel__group">
+      <h3 className="background-task-panel__group-header">{`${label} · ${tasks.length}`}</h3>
+      {/* A <ul>/<li>, the honest semantics for "one entry per task" — and NOT interactive rows: there is
+          no action on a task. */}
+      <ul className="background-task-panel__list">
+        {tasks.map((task) => (
+          // key = taskId: unique by map-key construction. The description is never a key — a key is not
+          // a place for untrusted text.
+          <TaskRow key={task.taskId} task={task} finished={finished} />
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+/** #1635: one task as the drawn card: the type line with its status tag, the description, then the
+ *  latest update. Every daemon field is an auto-escaped child of its own element. */
+function TaskRow({ task, finished }: { task: HeldBackgroundTask; finished: boolean }): JSX.Element {
+  const descriptionClass =
+    task.taskType === TASK_TYPE_SHELL
+      ? 'background-task-panel__description background-task-panel__description--mono'
+      : 'background-task-panel__description'
+  return (
+    <li className={finished ? 'background-task-panel__row background-task-panel__row--finished' : 'background-task-panel__row'}>
+      {/* #582: each cut marker sits IMMEDIATELY AFTER the field it describes, so position carries the
+          attribution — no id / aria-describedby pair built from `taskId`, which is a daemon string. The
+          type's marker follows the type-and-tag line, since the tag shares the type's line.
+
+          The marker is a SIBLING ELEMENT holding a client-owned constant, never text concatenated into
+          the field span: `{task.description}{cut && ' (truncated)'}` would fuse client copy and daemon
+          text into one node, so a description ending in those same words would be indistinguishable
+          from the app's own claim. The field NAMES are matched, never displayed. */}
+      <div className="background-task-panel__head">
+        <span className="background-task-panel__type">{task.taskType}</span>
+        <TaskStatusTag finished={finished} />
+      </div>
+      {wasCut(task.truncatedFields, CUT_FIELD_TASK_TYPE) && (
+        <span className="background-task-panel__cut-type">{BACKGROUND_TASK_PANEL_CUT_COPY}</span>
+      )}
+      <span className={descriptionClass}>{task.description}</span>
+      {wasCut(task.truncatedFields, CUT_FIELD_DESCRIPTION) && (
+        <span className="background-task-panel__cut-description">{BACKGROUND_TASK_PANEL_CUT_COPY}</span>
+      )}
+      {/* #583: the latest change claude reported about this task, under its label in a code block.
+
+          The branch is on `latestUpdate !== null`, and the empty patch is a reading BENEATH it — never
+          `{task.latestUpdate?.patch && …}` or any other truthiness test on the patch. `patch: ''` is a
+          VALUE ("claude reported no change"; the wire field has no omitempty), so a truthiness test
+          renders it EXACTLY as a never-updated task, and `''` leaves the collapse no trace in the markup.
+          A never-updated task renders no block at all (the design notes say so).
+
+          The cut marker is a SIBLING of the block, inside the null guard rather than inside the
+          non-empty arm: the cut report is a property of the update RECORD, not of the patch's
+          emptiness, so a recorded `{ patch: '', truncatedFields: ['patch'] }` still shows it.
+
+          It reads `task.latestUpdate.truncatedFields` and the markers above read
+          `task.truncatedFields`, and the crossover is the silent mis-wiring here: both lists are
+          `readonly string[] | null`, so either swap compiles, type-checks and never matches. Nothing
+          reads the patch TEXT to produce the marker, and the text is never parsed: the block is CSS. */}
+      {task.latestUpdate !== null && (
+        <div className="background-task-panel__update">
+          <span className="background-task-panel__update-label">{BACKGROUND_TASK_PANEL_UPDATE_LABEL}</span>
+          <div className="background-task-panel__update-block">
+            {task.latestUpdate.patch === '' ? (
+              <span className="background-task-panel__no-change">{BACKGROUND_TASK_PANEL_NO_CHANGE_COPY}</span>
+            ) : (
+              <span className="background-task-panel__patch">{task.latestUpdate.patch}</span>
+            )}
+          </div>
+          {wasCut(task.latestUpdate.truncatedFields, CUT_FIELD_PATCH) && (
+            <span className="background-task-panel__cut-patch">{BACKGROUND_TASK_PANEL_CUT_COPY}</span>
+          )}
+        </div>
+      )}
+    </li>
+  )
+}
+
+/** #1635: the drawn Task status tag (Figma 563:1054). Running on a running row; on a finished row the
+ *  Stopped style under the neutral "Finished" label. Client copy only — #1639 owns the status word. */
+function TaskStatusTag({ finished }: { finished: boolean }): JSX.Element {
+  return (
+    <span
+      className={
+        finished
+          ? 'background-task-panel__tag background-task-panel__tag--stopped'
+          : 'background-task-panel__tag background-task-panel__tag--running'
+      }
+    >
+      <span className="background-task-panel__tag-dot" aria-hidden="true" />
+      {finished ? BACKGROUND_TASK_PANEL_FINISHED_LABEL : BACKGROUND_TASK_PANEL_RUNNING_LABEL}
+    </span>
+  )
+}
+
+/** #1635: the empty readings' 28px ring, drawn inline like the close glyph so the markup carries no
+ *  `<img>`. The stroke and its dashes come from the stylesheet. */
+function ReadingRing({ variant }: { variant: 'dashed' | 'solid' }): JSX.Element {
+  return (
+    <svg
+      className={`background-task-panel__ring background-task-panel__ring--${variant}`}
+      viewBox="0 0 28 28"
+      width="28"
+      height="28"
+      aria-hidden="true"
+    >
+      <circle cx="14" cy="14" r="11" />
+    </svg>
   )
 }
 
@@ -343,6 +435,10 @@ function BackgroundTaskPanel({
   // copies, or derives from the result, which is what keeps that true.
   const selectRoster = useMemo(() => selectRosterFor(conversationId ?? ''), [conversationId])
   const entry = useBackgroundTaskRosterStore(selectRoster)
+  // #1635: the finished ids that split the list into groups — the held set or null, so it too leaves
+  // this component alone on a write for another conversation.
+  const selectFinished = useMemo(() => selectFinishedTasksFor(conversationId ?? ''), [conversationId])
+  const finishedTaskIds = useBackgroundTaskRosterStore(selectFinished)
   useEffect(() => {
     // #1634: a CAPTURE listener on `document`, which runs before React's root listener and before any
     // bubble-phase document listener. A press the drawer takes is stopped right here, so the options
@@ -359,7 +455,7 @@ function BackgroundTaskPanel({
     document.addEventListener('keydown', onKeyDown, true)
     return () => document.removeEventListener('keydown', onKeyDown, true)
   }, [onClose, turnRunning])
-  return <BackgroundTaskPanelView entry={entry} onClose={onClose} />
+  return <BackgroundTaskPanelView entry={entry} finishedTaskIds={finishedTaskIds} onClose={onClose} />
 }
 
 // #1634: the two elements that carry #1072's Escape-stops-the-turn binding — the message box and the

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   createBackgroundTaskRosterStore,
   initialBackgroundTaskRosterState,
+  selectFinishedTasksFor,
   selectLiveTaskCountFor,
   selectRosterFor,
   type BackgroundTaskRosterEntry,
@@ -1127,5 +1128,38 @@ describe('selectLiveTaskCountFor — terminal status leaves the count (#1561)', 
     store.setState({ finishedTasks: new Map([['c1', new Set(['t1'])]]) })
     store.getState().resetRostersFor(new Set(['c1']))
     expect(store.getState().finishedTasks.size).toBe(0)
+  })
+})
+
+// #1635: the panel's read of one conversation's finished ids, which splits its list into Running and
+// Finished. It hands back the HELD set, so the panel re-renders only when this conversation's
+// membership changes.
+describe('selectFinishedTasksFor — the panel grouping read (#1635)', () => {
+  const finished = (store: Store, conversationId = 'c1'): ReadonlySet<string> | null =>
+    selectFinishedTasksFor(conversationId)(store.getState())
+
+  it('reads null while nothing has finished', () => {
+    const store = createBackgroundTaskRosterStore()
+    expect(finished(store)).toBeNull()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    expect(finished(store)).toBeNull()
+  })
+
+  it('reads the finished ids after a terminal status', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut, cutDescription], droppedTasks: 0 })
+    store.getState().setUpdatedTask(updated({ taskId: 't2', status: 'failed' }))
+    expect([...(finished(store) ?? [])]).toEqual(['t2'])
+  })
+
+  it('returns the same held set across a write for another conversation', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    store.getState().setUpdatedTask(updated({ status: 'completed' }))
+    const before = finished(store)
+    store.getState().setRoster({ conversationId: 'c2', tasks: [noCut], droppedTasks: 0 })
+    store.getState().setUpdatedTask(updated({ conversationId: 'c2', status: 'completed' }))
+    expect(finished(store)).toBe(before)
+    expect(finished(store, 'c2')).not.toBe(before)
   })
 })

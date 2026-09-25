@@ -19,6 +19,15 @@ export interface HeldBackgroundTaskSummary {                   // the terminal f
   text: string                                                  // untrusted model-authored text; inert escaped text only
   truncatedFields: readonly string[] | null
 }
+export interface HeldBackgroundTaskProgress {                  // the latest running report, join keys stripped (#1640)
+  currentActivity: string         // untrusted; names a file on the operator's host for local_bash
+  subagentType: string
+  lastToolName: string            // '' drops its segment and separator in the meta line
+  totalTokens: number             // claude's CUMULATIVE reading, held exactly as received — never summed/diffed
+  toolUses: number
+  durationMs: number
+  truncatedFields: readonly string[] | null   // WIRE names — a cut activity is named `description`, not `currentActivity`
+}
 export interface HeldBackgroundTask {                          // per-task, renderer-side camelCase (#576)
   taskId: string
   toolCallId: string | null       // null = roster-sourced; only a started frame ever reports one
@@ -28,6 +37,7 @@ export interface HeldBackgroundTask {                          // per-task, rend
   latestUpdate: HeldBackgroundTaskUpdate | null   // null = no update has ever matched this task (#577)
   status: string | null           // latest NON-EMPTY status word any update reported; '' leaves it unchanged (#1639)
   summary: HeldBackgroundTaskSummary | null   // set only from a HIT whose status is terminal (#1639)
+  progress: HeldBackgroundTaskProgress | null   // null = no progress report has ever matched this task (#1640)
 }
 export interface BackgroundTaskRosterEntry {
   tasks: ReadonlyMap<string, HeldBackgroundTask>   // keyed by taskId, built at WRITE time; insertion order = roster order
@@ -54,6 +64,17 @@ export interface BackgroundTaskUpdatedSnapshot {               // update write u
   summary: string                                                // open string (#1560); copied verbatim (#1639), held only from a terminal HIT
   truncatedFields: readonly string[] | null
 }
+export interface BackgroundTaskProgressSnapshot {              // progress write unit (#1640) — NINE fields, flat like its siblings
+  conversationId: string
+  taskId: string
+  currentActivity: string
+  subagentType: string
+  lastToolName: string
+  totalTokens: number
+  toolUses: number
+  durationMs: number
+  truncatedFields: readonly string[] | null
+}
 export interface BackgroundTaskRosterState {
   rosters: ReadonlyMap<string, BackgroundTaskRosterEntry>          // key absent = no roster has arrived (#1563)
   unlistedStarts: ReadonlyMap<string, ReadonlyMap<string, HeldBackgroundTask>>   // conv -> taskId -> started-sourced hold no roster has listed yet (#1563); no surface reads it
@@ -63,6 +84,7 @@ export type BackgroundTaskRosterStore = BackgroundTaskRosterState & {
   setRoster: (snapshot: BackgroundTaskRosterSnapshot) => void
   setStartedTask: (snapshot: BackgroundTaskStartedSnapshot) => void   // #576
   setUpdatedTask: (snapshot: BackgroundTaskUpdatedSnapshot) => void   // #577; also files finishedTasks since #1561
+  setTaskProgress: (snapshot: BackgroundTaskProgressSnapshot) => void   // #1640; never touches finishedTasks or droppedTasks
   resetRostersFor: (conversationIds: ReadonlySet<string>) => void   // connected edge, scoped (#1139)
   clearAllRosters: () => void                                       // pairing-boundary drop, nullary (#1139)
 }
@@ -78,10 +100,12 @@ selectFinishedTasksFor(conversationId)(state)   // selector FACTORY — the pane
 Keyed by `conversationId`, not a flat slot, for the same reason [`queueStore`](queue-store.md) is: the
 daemon fans these frames out to every interactive connection and each carries `conversation_id`, so
 frames for *different* conversations can arrive back-to-back and a flat "hold the latest" slot would let
-one clobber another. **Five named setters** (`setRoster`, `setStartedTask`, `setUpdatedTask`,
-`resetRostersFor`, `clearAllRosters`), not a reducer — five operations still don't justify a
-discriminated-union action set; #1561 added no sixth setter, only a third state field (`finishedTasks`)
-three of the five setters also maintain. Mirrors `queueStore`'s DI-factory → singleton → hook → selector structure
+one clobber another. **Six named setters** (`setRoster`, `setStartedTask`, `setUpdatedTask`,
+`setTaskProgress`, `resetRostersFor`, `clearAllRosters`), not a reducer — six operations still don't
+justify a discriminated-union action set; #1561 added no extra setter, only a third state field
+(`finishedTasks`) three of the setters also maintain, and #1640's `setTaskProgress` is a fourth "record"
+setter beside `setRoster`/`setStartedTask`/`setUpdatedTask`, not a fourth state field — its report lives
+on `HeldBackgroundTask` itself. Mirrors `queueStore`'s DI-factory → singleton → hook → selector structure
 and its `ReadonlyMap` copy-on-write idiom throughout: clone the outer map, clone the inner map, replace;
 never mutate `s.rosters`, an entry, or an entry's `tasks` in place — and, since #1563, never mutate
 `s.unlistedStarts` or one of its per-conversation inner maps in place either, a rule #1561 extends to
@@ -101,7 +125,9 @@ and that fresh literal carries `latestUpdate: held?.latestUpdate ?? null` — a 
 the rebuild **individually**, deliberately *not* folded into the `toolCallId !== null` provenance
 predicate that gates keeping the whole record. Since #1639, `status` and `summary` ride across the same
 way (`held?.status ?? null`, `held?.summary ?? null`): no roster row can report either, so a rebuilt
-roster-sourced record must not lose the tag word or the finished summary a prior update already recorded. Folding it in would freeze a patched roster-sourced task's
+roster-sourced record must not lose the tag word or the finished summary a prior update already recorded.
+Since #1640, `progress` rides across the same way (`held?.progress ?? null`) for the same reason: no
+roster row reports it. Folding it in would freeze a patched roster-sourced task's
 label/type/own cut report at whatever they were when the patch arrived, since the rebuild branch would
 then never run again for that task; leaving it out of the fresh literal entirely would drop the patch at
 the very next roster. Both mistakes compile clean and break no other test — see [#577's codebase
@@ -145,7 +171,8 @@ first place. A held `latestUpdate` is likewise **preserved**, in either place �
 patch, so it must not silently erase one recorded before it arrived. Since #1639, `status` and `summary`
 are preserved the same way, from the listed record or the hold, whichever the task is found in — a
 started frame reports neither, so an update that already tagged or finished the task must survive an
-upgrade that arrives after it.
+upgrade that arrives after it. Since #1640, `progress` is preserved the same way — a started frame reports
+no running report either.
 
 `setUpdatedTask` (#577, new; #1563 widened where it looks) records **one task's latest patch and its own
 cut report**, joined on `conversationId` + `taskId` and never on arrival order — an update can arrive
@@ -197,6 +224,16 @@ main-side decode helper) admits `''` as a valid `tool_call_id`, so a truthiness 
 demote a task whose id happens to be `''` back to roster-sourced and let the next roster overwrite its
 fuller label. `latestUpdate`'s presence is *not* a second provenance signal — a roster-sourced task can be
 patched too, and still refreshes from later roster rows exactly as an unpatched one would.
+
+`setTaskProgress` (#1640, new) records **one task's latest progress report**, joined on
+`conversationId` + `taskId` exactly like `setUpdatedTask` — the listed `tasks` map first, then
+`unlistedStarts` — and it is the second setter that can **miss**: a report naming a task held in
+neither place returns the state object **itself** unchanged, the same `Object.is`-provable silent
+no-op `setUpdatedTask` already has. On a hit it replaces `progress` wholesale (latest-wins, never a
+history) and touches nothing else — not `latestUpdate`, `status`, `summary`, `droppedTasks`, or
+`finishedTasks`: a progress report is not a finish signal and carries no patch. The three counters
+(`totalTokens`, `toolUses`, `durationMs`) are written exactly as received, since the daemon's readings
+are cumulative but not guaranteed monotonic and this store never sums or diffs them.
 
 **The one place the `queueStore` precedent is deliberately *not* cloned.** `queueStore.selectBacklogFor`
 returns `s.backlogs.get(id) ?? EMPTY_BACKLOG`, collapsing "never observed" and "observed, empty" into the
@@ -316,14 +353,18 @@ translateBackgroundTaskStarted(event: DaemonEvent): BackgroundTaskStartedSnapsho
 translateBackgroundTaskUpdated(event: DaemonEvent): BackgroundTaskUpdatedSnapshot | null   // #577, third sibling translator
 // switch (event.type) { case 'backgroundTaskUpdated': return { conversationId, taskId, patch, status, summary, truncatedFields }; default: return null }   // status added #1561, summary added #1639
 
+translateBackgroundTaskProgress(event: DaemonEvent): BackgroundTaskProgressSnapshot | null   // #1640, fourth sibling translator
+// switch (event.type) { case 'backgroundTaskProgress': return { conversationId, taskId, currentActivity, subagentType, lastToolName, totalTokens, toolUses, durationMs, truncatedFields }; default: return null }
+
 originOf(event: DaemonEvent): ConversationListOrigin   // since #1139 — reads #1068's stamp, never event.ack
 
-subscribeBackgroundTaskRoster(onDaemonEvent, setRoster, resetRostersForServer, setStartedTask, setUpdatedTask): () => void   // fifth param, #577; third param re-typed by #1139
+subscribeBackgroundTaskRoster(onDaemonEvent, setRoster, resetRostersForServer, setStartedTask, setUpdatedTask, setTaskProgress): () => void   // sixth param, #1640; fifth param since #577; third param re-typed by #1139
 // onDaemonEvent(event => {
 //   if (event.type === 'connected') { resetRostersForServer(originOf(event)); return }
 //   const roster = translateBackgroundTaskRoster(event); if (roster !== null) { setRoster(roster); return }
 //   const started = translateBackgroundTaskStarted(event); if (started !== null) { setStartedTask(started); return }
-//   const updated = translateBackgroundTaskUpdated(event); if (updated !== null) setUpdatedTask(updated)
+//   const updated = translateBackgroundTaskUpdated(event); if (updated !== null) { setUpdatedTask(updated); return }
+//   const progress = translateBackgroundTaskProgress(event); if (progress !== null) setTaskProgress(progress)
 // })
 
 BackgroundTaskRosterData(): null
@@ -332,20 +373,22 @@ BackgroundTaskRosterData(): null
 // calls backgroundTaskRosterStore.getState().resetRostersFor(ids) — see below
 ```
 
-Reactive-only — like `queueBridge` and `sessionIdBridge`, the daemon pushes all three frames unsolicited,
+Reactive-only — like `queueBridge` and `sessionIdBridge`, the daemon pushes all four frames unsolicited,
 so there is no request half. Each translator is a pure single-arm filter, unconditional: there is
 deliberately no `if (event.tasks.length === 0) return null` on the roster side, since an empty roster is
 the frame's payoff signal (AC5, ex-AC4), not "no news"; there is likewise no `if (event.patch)` on the
 update side, since `patch: ''` always arrives on the wire (no `omitempty`) and is a value meaning "claude
 sent no change". The guards downstream are all `!== null`, which pin *filtering*, not *truthiness* (a
 snapshot object is truthy even when its `tasks` are empty or its `patch` is `''`). `default: null` on all
-three, not `assertNever`: this is an independent subscriber in the `queueBridge`/`sessionIdBridge`
-posture, not one of the three typecheck-gating exhaustive bridges — which already no-op all three arms
-from #564/#565/#566. `translateBackgroundTaskRoster` is behaviourally unchanged by the #576/#577 reshapes
+four, not `assertNever`: this is an independent subscriber in the `queueBridge`/`sessionIdBridge`
+posture, not one of the three typecheck-gating exhaustive bridges — which already no-op all four arms
+from #564/#565/#566/#1638. `translateBackgroundTaskRoster` is behaviourally unchanged by the #576/#577 reshapes
 — the row → `HeldBackgroundTask` mapping happens inside `setRoster`, not the translator, because that is
-where the prior state the join needs lives. The three arms are mutually exclusive, so the subscriber's
-branches short-circuit in order (`connected` → roster → started → updated) and each matched branch
-returns; order is a readability choice, not a correctness one.
+where the prior state the join needs lives. The four arms are mutually exclusive, so the subscriber's
+branches short-circuit in order (`connected` → roster → started → updated → progress) and each matched
+branch returns; order is a readability choice, not a correctness one. `translateBackgroundTaskProgress`
+(#1640) copies all nine fields verbatim, the same posture as its three siblings, and reads `truncatedFields`
+straight across (`null` never collapses into `[]`).
 
 **The `connected` reset enforces half of a security requirement (#573's AC5); the other half moved to
 `clearAllRosters` ([#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139)).** Until #1139 this
@@ -416,6 +459,16 @@ daemon → background_task_updated frame → parseBackgroundTaskUpdatedPayload �
     task.status/task.summary per row, #1639)
   → selectLiveTaskCountFor(openId) / useBackgroundTaskRosterStore   (the pill's read, #1561 — excludes a
     finished id from the count; the panel's list is untouched)
+
+daemon → background_task_progress frame → parseBackgroundTaskProgressPayload → backgroundTaskProgress DaemonEvent [#1638]
+  → DAEMON_EVENT_CHANNEL → subscribeBackgroundTaskRoster listener (roster + started + updated translators return null first)
+    → translateBackgroundTaskProgress → { conversationId, taskId, currentActivity, subagentType, lastToolName, totalTokens, toolUses, durationMs, truncatedFields }   [#1640]
+    → backgroundTaskRosterStore.setTaskProgress(snapshot)
+      [joins on conversationId + taskId like setUpdatedTask; miss on unknown conversation OR unknown
+       taskId returns state unchanged, silently; on a hit replaces progress wholesale and touches nothing
+       else — not latestUpdate, status, summary, droppedTasks or finishedTasks]
+  → selectRosterFor(openId) / useBackgroundTaskRosterStore   (the panel's read — now also reads
+    task.progress per running row, #1640)
 
 relay (re)handshake → daemonConnection.ts emits connected DaemonEvent, stamped with its origin (#1068)
   → DAEMON_EVENT_CHANNEL (in-order) → subscribeBackgroundTaskRoster listener

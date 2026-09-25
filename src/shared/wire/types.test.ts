@@ -6,7 +6,8 @@ import {
   ATTACHMENT_CHUNK_DATA_BYTES,
   ATTACHMENT_ID_MAX_BYTES,
   ATTACHMENT_FILENAME_MAX_BYTES,
-  ATTACHMENT_MIME_TYPE_MAX_BYTES
+  ATTACHMENT_MIME_TYPE_MAX_BYTES,
+  agentFromWire
 } from './types'
 import type {
   EnvelopeType,
@@ -2541,5 +2542,17 @@ describe('new-session wire vocabulary (#1217)', () => {
     // what reddens if someone tries: a required field makes the empty literal a TS2741.
     const bare: NewSessionPayload = {}
     expect(bare.conversation_id).toBeUndefined()
+  })
+})
+
+describe('agentFromWire (#1649)', () => {
+  it('holds only the exact string codex as Codex', () => {
+    expect(agentFromWire('codex')).toBe('codex')
+  })
+
+  it('holds every other string, and an absent agent, as Claude', () => {
+    for (const raw of ['claude', 'Codex', 'codex ', ' codex', '', 'gemini', undefined]) {
+      expect(agentFromWire(raw)).toBe('claude')
+    }
   })
 })

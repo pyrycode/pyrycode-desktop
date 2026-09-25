@@ -4,6 +4,7 @@ import {
   createConversationListStore,
   initialConversationListState,
   selectArchivedCount,
+  selectConversationAgentFor,
   selectConversations,
   selectConversationIdsFor,
   selectConversationsFor,
@@ -258,6 +259,34 @@ describe('selectConversationsFor', () => {
     ])
     expect(selectConversationsFor(null)(s)).toEqual([stamped(null, { id: 'no-record' })])
     expect(selectConversationsFor(undefined)(s)).toEqual([stamped(undefined, { id: 'unbound' })])
+  })
+})
+
+// selectConversationAgentFor (#1649) — which agent runs one conversation, read from the rows of the
+// client-held origin it is called with.
+describe('selectConversationAgentFor', () => {
+  it('answers codex for a codex row and claude for a claude row', () => {
+    const s = state([
+      ['srv-a', [stamped('srv-a', { id: 'a1', agent: 'codex' }), stamped('srv-a', { id: 'a2', agent: 'claude' })]]
+    ])
+    expect(selectConversationAgentFor('srv-a', 'a1')(s)).toBe('codex')
+    expect(selectConversationAgentFor('srv-a', 'a2')(s)).toBe('claude')
+  })
+
+  it('answers claude for an absent agent, an unknown id and an unloaded server', () => {
+    const s = state([['srv-a', [stamped('srv-a', { id: 'a1' })]]])
+    expect(selectConversationAgentFor('srv-a', 'a1')(s)).toBe('claude')
+    expect(selectConversationAgentFor('srv-a', 'missing')(s)).toBe('claude')
+    expect(selectConversationAgentFor('srv-b', 'a1')(s)).toBe('claude')
+  })
+
+  it('never reads a same-id row filed under another server', () => {
+    const s = state([
+      ['srv-a', [stamped('srv-a', { id: 'shared' })]],
+      ['srv-b', [stamped('srv-b', { id: 'shared', agent: 'codex' })]]
+    ])
+    expect(selectConversationAgentFor('srv-a', 'shared')(s)).toBe('claude')
+    expect(selectConversationAgentFor('srv-b', 'shared')(s)).toBe('codex')
   })
 })
 

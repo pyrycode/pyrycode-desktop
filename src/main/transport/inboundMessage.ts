@@ -24,8 +24,13 @@
 // sibling #133). Absent a logger the module is silent; behaviour is otherwise identical.
 import { blake2s } from '@noble/hashes/blake2'
 import { decodeEnvelope, base64StdDecode, WireDecodeError } from './codec'
-import { ATTACHMENT_FILENAME_MAX_BYTES, MAX_PLAINTEXT_BYTES } from '../../shared/wire/types'
+import {
+  ATTACHMENT_FILENAME_MAX_BYTES,
+  MAX_PLAINTEXT_BYTES,
+  agentFromWire
+} from '../../shared/wire/types'
 import type {
+  WireAgent,
   BannerPayload,
   MessagePayload,
   MessageChunkPayload,
@@ -3063,6 +3068,8 @@ function parseQueueStatePayload(payload: unknown): QueueStatePayload {
  * field omits it, and its rows must keep notifying, so an absent key decodes as `false` (the
  * conversation_updated.is_archived lesson). A present non-boolean still fails the row closed. The
  * decoder always emits a boolean here, although the type marks the field optional.
+ *
+ * `agent` (#1649) is optional the other way: an absent key stays absent, through optionalAgent.
  */
 function parseConversationSummary(payload: unknown): ConversationSummary {
   if (!isRecord(payload)) {
@@ -3086,8 +3093,19 @@ function parseConversationSummary(payload: unknown): ConversationSummary {
     cwd,
     last_message_ts,
     last_used_at,
-    workspace_label
+    workspace_label,
+    ...optionalAgent(payload)
   }
+}
+
+/**
+ * The `agent` tag a `multi_agent` client receives (#1649), shared by the conversations row, the create
+ * reply and the model row. An absent key yields no key at all, so an untagged frame decodes to exactly
+ * the literal it did before; a present one must be a string and is held through agentFromWire, so the
+ * daemon's own string never is; a non-string fails the frame closed.
+ */
+function optionalAgent(payload: Record<string, unknown>): { agent?: WireAgent } {
+  return payload.agent === undefined ? {} : { agent: agentFromWire(requireString(payload, 'agent')) }
 }
 
 /**
@@ -3151,7 +3169,7 @@ function parseRecentWorkspacesPayload(payload: unknown): RecentWorkspace[] {
  * string on the same contract. Returns only the six known fields; unknown server-added keys (e.g. a
  * spurious is_archived/last_message_ts) are tolerated (forward-compat) but NOT copied through. Its
  * messages name the failure category only — a `name` / `cwd` / `workspace_label` could echo a title, a
- * workspace path or a workspace name.
+ * workspace path or a workspace name. An optional `agent` (#1649) rides beside them through optionalAgent.
  */
 function parseConversationCreatedPayload(payload: unknown): ConversationCreatedPayload {
   if (!isRecord(payload)) {
@@ -3163,7 +3181,7 @@ function parseConversationCreatedPayload(payload: unknown): ConversationCreatedP
   const name = requireStringOrNull(payload, 'name')
   const last_used_at = requireString(payload, 'last_used_at')
   const workspace_label = requireStringOrNull(payload, 'workspace_label')
-  return { id, is_promoted, cwd, name, last_used_at, workspace_label }
+  return { id, is_promoted, cwd, name, last_used_at, workspace_label, ...optionalAgent(payload) }
 }
 
 /**
@@ -3619,7 +3637,10 @@ function parseModelOption(payload: unknown): WireModelOption {
     display_name,
     effort_levels,
     supports_auto_mode,
-    truncated_fields
+    truncated_fields,
+    ...optionalAgent(payload),
+    // `family` (#1649) is kept as sent — daemon text, compared by equality only downstream.
+    ...(payload.family === undefined ? {} : { family: requireString(payload, 'family') })
   }
 }
 

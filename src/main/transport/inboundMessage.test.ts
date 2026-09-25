@@ -11820,3 +11820,93 @@ describe('parseInboundMessage — background_task_progress diagnostic log (#1638
     expect(lines).toHaveLength(0)
   })
 })
+
+// #1649 — the agent tag a `multi_agent` client receives. Absent keys stay absent (the untagged frame
+// decodes exactly as before), `codex` holds as Codex, any other string holds as Claude so the raw daemon
+// string is never kept, and a non-string fails the frame closed.
+describe('parseInboundMessage — agent and family tags (#1649)', () => {
+  const conversationsOf = (row: unknown) => {
+    const result = parseInboundMessage(encodeConversations({ conversations: [row] }))
+    if (result?.kind !== 'conversations') throw new Error('expected a conversations result')
+    return result.conversations[0]
+  }
+  const createdOf = (reply: unknown) => {
+    const result = parseInboundMessage(encodeConversationCreated(reply))
+    if (result?.kind !== 'conversation-created') throw new Error('expected a conversation-created result')
+    return result.conversationCreated
+  }
+  const modelOf = (row: unknown) => {
+    const result = parseInboundMessage(encodeModelList({ ...MODEL_LIST, models: [row] }))
+    if (result?.kind !== 'model-list') throw new Error('expected a model-list result')
+    return result.modelList.models[0]
+  }
+  const NON_STRINGS: unknown[] = [1, null, true, {}, ['codex']]
+
+  it('holds a conversations row agent as codex or claude, never the raw string', () => {
+    expect(conversationsOf({ ...CONV_NAMED, agent: 'codex' }).agent).toBe('codex')
+    expect(conversationsOf({ ...CONV_NAMED, agent: 'claude' }).agent).toBe('claude')
+    for (const agent of ['gemini', 'Codex', 'codex ', '']) {
+      expect(conversationsOf({ ...CONV_NAMED, agent }).agent).toBe('claude')
+    }
+  })
+
+  it('leaves an absent conversations row agent absent, decoding exactly as before', () => {
+    const untagged = conversationsOf(CONV_NAMED)
+    expect(untagged).toStrictEqual(CONV_NAMED)
+    expect('agent' in untagged).toBe(false)
+  })
+
+  it('fails a conversations reply closed on a non-string agent', () => {
+    for (const agent of NON_STRINGS) {
+      expect(() =>
+        parseInboundMessage(encodeConversations({ conversations: [{ ...CONV_NAMED, agent }] }))
+      ).toThrow(WireDecodeError)
+    }
+  })
+
+  it('holds a conversation_created agent and leaves an absent one absent', () => {
+    expect(createdOf({ ...CREATED_NAMED, agent: 'codex' }).agent).toBe('codex')
+    expect(createdOf({ ...CREATED_NAMED, agent: 'other' }).agent).toBe('claude')
+    expect(createdOf(CREATED_NAMED)).toStrictEqual(CREATED_NAMED)
+    for (const agent of NON_STRINGS) {
+      expect(() =>
+        parseInboundMessage(encodeConversationCreated({ ...CREATED_NAMED, agent }))
+      ).toThrow(WireDecodeError)
+    }
+  })
+
+  it('decodes a conversation_updated carrying agent exactly as one without it', () => {
+    for (const agent of ['codex', 'claude']) {
+      expect(
+        parseInboundMessage(encodeConversationUpdated({ ...UPDATED_NAMED, agent }))
+      ).toStrictEqual(parseInboundMessage(encodeConversationUpdated(UPDATED_NAMED)))
+    }
+  })
+
+  it('holds a model_list row agent and family, family as sent', () => {
+    const row = modelOf({ ...MODEL_LIST.models[0], agent: 'codex', family: 'gpt-5' })
+    expect(row.agent).toBe('codex')
+    expect(row.family).toBe('gpt-5')
+    expect(modelOf({ ...MODEL_LIST.models[0], agent: 'openai', family: '' })).toMatchObject({
+      agent: 'claude',
+      family: ''
+    })
+  })
+
+  it('leaves a model_list row without agent or family decoding exactly as today', () => {
+    const row = modelOf(MODEL_LIST.models[0])
+    expect(row).toStrictEqual(MODEL_LIST.models[0])
+    expect('agent' in row || 'family' in row).toBe(false)
+  })
+
+  it('fails a model_list frame closed on a non-string agent or family', () => {
+    for (const value of NON_STRINGS) {
+      for (const key of ['agent', 'family']) {
+        const models = [{ ...MODEL_LIST.models[0], [key]: value }]
+        expect(() => parseInboundMessage(encodeModelList({ ...MODEL_LIST, models }))).toThrow(
+          WireDecodeError
+        )
+      }
+    }
+  })
+})

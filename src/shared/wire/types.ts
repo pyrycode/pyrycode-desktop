@@ -13,6 +13,18 @@ export const NOISE_PROTOCOL = 'Noise_IK_25519_ChaChaPoly_BLAKE2s' as const
 export const PROTOCOL_VERSION = 'v2' as const
 export const CAPABILITY_INTERACTIVE = 'interactive' as const
 
+/** Which agent runs a conversation or offers a model row (#1649). */
+export type WireAgent = 'claude' | 'codex'
+
+/**
+ * The one mapping from a daemon agent string to a held agent (#1649): the exact string `codex` is Codex,
+ * anything else — an unknown agent, a case variant, an absent key — is Claude. The raw string never
+ * survives it, so no daemon agent text is ever held or rendered.
+ */
+export function agentFromWire(raw: string | undefined): WireAgent {
+  return raw === 'codex' ? 'codex' : 'claude'
+}
+
 /**
  * v2 outer WebSocket frame cap, in bytes (256 KiB). A v2 Noise transport message is at most
  * 65535 bytes; base64-std of that plus the InnerFrameV2 JSON envelope stays well under this,
@@ -2653,6 +2665,11 @@ export interface WireModelOption {
   effort_levels: string[]
   supports_auto_mode: boolean
   truncated_fields: string[] | null
+  /** Which agent offers this row (#1649), held through `agentFromWire`; absent counts as Claude. */
+  agent?: WireAgent
+  /** The model family as the daemon sent it (#1649): daemon text, compared by equality only — never an
+   *  object key, a lookup path or a log. */
+  family?: string
 }
 
 /**
@@ -3174,6 +3191,11 @@ export type ListConversationsPayload = Record<string, never>
  * so absence means NOT muted. The decoder normalises an absent key to `false`; the field is optional
  * in this type so a row built elsewhere (the saved-list cache of an older build, a test fixture)
  * carries the same meaning by omission. Read it as `row.is_muted === true`.
+ *
+ * `agent` (#1649, daemon pyrycode#2643) is which agent runs this conversation, sent only to a client
+ * that advertised `multi_agent` — so absent for this app today and for an old daemon. Held through
+ * `agentFromWire`, never as the daemon's own string; read it through `agentFromWire` too, so an absent
+ * key counts as Claude.
  */
 export interface ConversationSummary {
   id: string
@@ -3181,6 +3203,7 @@ export interface ConversationSummary {
   is_promoted: boolean
   is_archived: boolean
   is_muted?: boolean
+  agent?: WireAgent
   cwd: string
   last_message_ts: string
   last_used_at: string
@@ -3245,6 +3268,9 @@ export interface CreateConversationPayload {
  * `workspace_label` (#1287) joins the shape with ConversationSummary's contract verbatim — required,
  * nullable, no `omitempty`, untrusted opaque display text that nothing parses. A created row lands in a
  * workspace group like any other, so it has to carry the group's name for that group to keep it.
+ *
+ * `agent` (#1649) is `ConversationSummary.agent`'s contract verbatim: optional, held through
+ * `agentFromWire`.
  */
 export interface ConversationCreatedPayload {
   id: string
@@ -3253,6 +3279,7 @@ export interface ConversationCreatedPayload {
   name: string | null
   last_used_at: string
   workspace_label: string | null
+  agent?: WireAgent
 }
 
 /**

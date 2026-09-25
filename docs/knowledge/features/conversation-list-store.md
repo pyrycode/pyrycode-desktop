@@ -61,6 +61,7 @@ selectConversations(state)             // the flat union — unchanged name and 
 selectConversationsFor(origin)(state)  // one server's slot (#1086), defaulting a missing one to `null`
 selectConversationIdsFor(origin)(state) // one server's conversation ids as a Set (#1138), see below
 selectExclusiveConversationIdsFor(origin)(state) // origin's ids claimed by NO other slot (#1196), see below
+selectConversationAgentFor(origin, conversationId)(state) // Claude or Codex for one row (#1649), see below
 EMPTY_CONVERSATION_IDS: ReadonlySet<string>  // stable empty-Set reference both selectors above return
 ```
 
@@ -241,6 +242,31 @@ collision cannot occur and the exclusive set equals the full set. Called from ex
 [`clearServerScopedState`](unpair-channel.md#the-two-renderer-callers)'s `serverScopedClearDeps`, and —
 like its sibling — not a `useConversationListStore` read surface (a non-empty result is a fresh `Set`
 per call).
+
+### Which agent runs a conversation, since #1649
+
+[#1649](https://github.com/pyrycode/pyrycode-desktop/issues/1649) decoded and held an optional `agent`
+on each row (`ConversationSummary.agent?: WireAgent`, held through `agentFromWire` — see [Model-list
+wire types](model-list-wire-types.md) for the shared helper and its `WireModelOption.agent`/`family`
+twins), and `selectConversationAgentFor(origin, conversationId)` is the one read surface for it:
+
+```ts
+export const selectConversationAgentFor =
+  (origin: ConversationListOrigin, conversationId: string) =>
+  (s: ConversationListState): WireAgent =>
+    agentFromWire(selectConversationsFor(origin)(s)?.find((row) => row.id === conversationId)?.agent)
+```
+
+Built on `selectConversationsFor`, not a second read of `byServer` — the
+[`pushNotifyBridge`](push-notifications.md) precedent (`byServer.get(origin)?.find(...)`) for a
+single-row, server-scoped lookup, and it inherits that selector's "call it with a client-held id" rule:
+a same-id row filed under another paired server's slot is never read, so a conversation id collision
+across two paired machines cannot leak one server's agent tag onto another's row. `agentFromWire`
+collapses three cases to one answer — an absent `agent`, an unknown id, and an unloaded slot (`null`
+from `selectConversationsFor`) all read `'claude'` — so the caller never branches on "do I have an
+answer yet," only on "which agent." Unlike `selectExclusiveConversationIdsFor`, this **is** a
+`useConversationListStore` read surface: it returns a primitive (`WireAgent`), not a fresh `Set` per
+call, so a component can subscribe to it directly without memoizing the result itself.
 
 ### The data path (`src/renderer/src/store/conversationListBridge.ts`)
 

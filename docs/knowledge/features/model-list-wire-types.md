@@ -45,6 +45,8 @@ export interface WireModelOption {
   effort_levels: string[]
   supports_auto_mode: boolean
   truncated_fields: string[] | null
+  agent?: WireAgent    // #1649, multi_agent clients only — see below
+  family?: string       // #1649, multi_agent clients only — see below
 }
 
 export interface ModelListPayload {
@@ -59,6 +61,17 @@ two structs, so `dropped_models: 0` and an empty `display_name` are real values 
 ones. The key set is a deliberate **subset** of claude's per-entry vocabulary: `description` and
 `supportsFastMode` are not carried because neither has a named consumer, and `supportsEffort` is
 subsumed by `effort_levels`.
+
+**`agent` and `family` are the one deliberate exception to "every field required," added by
+[#1649](https://github.com/pyrycode/pyrycode-desktop/issues/1649).** Both are genuinely optional, not
+required-with-omitempty: the daemon sends them only to a client that advertised the `multi_agent`
+capability (this app does not yet — see [Conversation list store § Which agent runs a
+conversation](conversation-list-store.md#which-agent-runs-a-conversation-since-1649)), so an old daemon
+and this app today both omit the keys entirely. `agent` is narrowed through `agentFromWire` (also in
+`types.ts`) at every decode site — the exact string `'codex'` maps to `'codex'`, anything else including
+`undefined` maps to `'claude'` — so a `WireModelOption.agent` never holds the daemon's own string.
+`family` is kept as sent: daemon text, compared by equality only, never an object key, a lookup path or
+a log (the same posture `display_name` already has, stated in full above).
 
 ## How it works
 
@@ -344,6 +357,9 @@ radius.
 
 ## Related
 
+- [Conversation list store § Which agent runs a conversation](conversation-list-store.md#which-agent-runs-a-conversation-since-1649)
+  — `WireAgent` and `agentFromWire` (#1649), shared with `ConversationSummary.agent` and
+  `ConversationCreatedPayload.agent`, and the selector that answers a conversation's agent.
 - [Daemon connection — methods](daemon-connection-methods.md) — the `requestModelList(conversationId)`
   connection method (#1165) that sends the outbound ask above, and its `requestSessionSettings` twin
   the required-vs-optional id divergence is stated against.

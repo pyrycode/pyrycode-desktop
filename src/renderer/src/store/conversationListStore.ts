@@ -1,7 +1,7 @@
 // Host-scoped received and restored lists; connection and navigation state stay separate.
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
-import type { ConversationSummary } from '@shared/wire/types'
+import { agentFromWire, type ConversationSummary, type WireAgent } from '@shared/wire/types'
 
 /**
  * Which slot a reply is filed under (#1086) — the same three-case domain as `relayLinkStore`'s
@@ -301,6 +301,18 @@ export const selectConversationsFor =
   (origin: ConversationListOrigin) =>
   (s: ConversationListState): readonly ServerConversationSummary[] | null =>
     s.byServer.get(origin) ?? null
+
+/**
+ * WHICH AGENT RUNS ONE CONVERSATION (#1649) — Claude or Codex, read from `origin`'s own rows through
+ * `selectConversationsFor`, so its "CALL IT WITH A CLIENT-HELD ID" rule carries forward: a same-id row
+ * filed under another server is never read. An absent agent, an unknown id and an unloaded slot all
+ * answer Claude, through `agentFromWire`. A primitive, so it is a stable `useConversationListStore`
+ * read surface.
+ */
+export const selectConversationAgentFor =
+  (origin: ConversationListOrigin, conversationId: string) =>
+  (s: ConversationListState): WireAgent =>
+    agentFromWire(selectConversationsFor(origin)(s)?.find((row) => row.id === conversationId)?.agent)
 
 /** A module-level stable reference for the empty resolution below, so a not-loaded or loaded-empty
  *  server answers the same set every time (the `EMPTY_BACKLOG` idiom). `ReadonlySet` is the only guard

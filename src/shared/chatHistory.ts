@@ -1,4 +1,4 @@
-import type { ConversationSummary } from './wire/types'
+import { agentFromWire, type ConversationSummary } from './wire/types'
 import type { ModelRefusalEvent } from './ipc/events'
 import { MAX_SERVER_ID_LENGTH } from './ipc/unpair'
 
@@ -194,7 +194,9 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
         id: id(c.id), name: nullable(c.name, string), is_promoted: bool(c.is_promoted),
         is_archived: bool(c.is_archived), cwd: string(c.cwd), last_message_ts: string(c.last_message_ts),
         last_used_at: string(c.last_used_at), workspace_label: nullable(c.workspace_label, string),
-        is_muted: optional(c.is_muted, bool)
+        is_muted: optional(c.is_muted, bool),
+        // An untagged row restores with no key at all, as before #1649.
+        ...(c.agent === undefined ? {} : { agent: agentFromWire(string(c.agent)) })
       }
     })
     if (new Set(conversations.map((c) => c.id)).size !== conversations.length) return invalid()

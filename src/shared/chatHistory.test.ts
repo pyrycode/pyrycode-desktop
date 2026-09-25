@@ -50,6 +50,16 @@ describe('chat history records and requests', () => {
     expect(rows.map((row) => row.is_muted)).toEqual([true, false, undefined])
     for (const is_muted of ['true', 1, null]) expect(() => parseChatHistorySnapshot(list([{ ...summary, is_muted }]))).toThrow()
   })
+  it('carries a list row agent through as codex or claude, restores an untagged row without one, and rejects a non-string', () => {
+    const list = (rows: unknown[]) => ({ version: 1, kind: 'list', serverId: 'host', conversations: rows })
+    const parsed = parseChatHistorySnapshot(list([
+      { ...summary, agent: 'codex' }, { ...summary, id: 'b', agent: 'claude' }, { ...summary, id: 'c', agent: 'other' }, { ...summary, id: 'd' }
+    ]))
+    const rows = parsed.kind === 'list' ? parsed.conversations : []
+    expect(rows.map((row) => row.agent)).toEqual(['codex', 'claude', 'claude', undefined])
+    expect('agent' in rows[3]).toBe(false)
+    for (const agent of [1, null, {}]) expect(() => parseChatHistorySnapshot(list([{ ...summary, agent }]))).toThrow()
+  })
   it.each([null, [], {}, { ...timeline, version: 2 }, { ...timeline, prependedRows: -1 },
     { ...timeline, items: [{ kind: 'assistantText', text: 2 }] }, { ...timeline, coverage: { status: 'requested' } },
     { ...timeline, coverage: { status: 'received', cursor: '', atStart: 'yes' } },

@@ -259,9 +259,10 @@ export function reseededActiveConversation(
   const matches = conversations.filter((conversation) => conversation.id === active.id)
   if (matches.length !== 1) return null
   const row = matches[0]
-  if (/* all five mutable fields === active's */) return null
+  if (/* all six mutable fields === active's, agent since #1649 */) return null
   return { id: row.id, is_promoted: row.is_promoted, cwd: row.cwd, name: row.name,
-           last_used_at: row.last_used_at, workspace_label: row.workspace_label }
+           last_used_at: row.last_used_at, workspace_label: row.workspace_label,
+           ...(row.agent === undefined ? {} : { agent: row.agent }) }
 }
 ```
 
@@ -277,7 +278,8 @@ export function reseededActiveConversation(
   comparison (it is equal by construction, not compared) and the mapper can only ever run on a row
   already carrying the open chat's id. That is what keeps the reconcile non-destructive: the sheet sends
   `id` back with Archive and Delete, and no re-seed can retarget those actions.
-- **A closed six-field reconstruction, never the row passed through.** `ConversationSummary` is a
+- **A closed six-field reconstruction (seven with a tagged row's `agent`, #1649), never the row passed
+  through.** `ConversationSummary` is a
   structural superset of `ConversationCreatedPayload` — a sidebar `onOpen` hands the clicked row straight
   to the store (see [Workspace chip § `activeConversationStore.ts`](conversation-shell-workspace-chip-and-picker.md#workspace-chip-278)
   for that store's writer history) — but a fresh six-field literal here cannot carry an unknown key from
@@ -285,8 +287,8 @@ export function reseededActiveConversation(
   a reply moving only those is an unchanged refresh by the rule above.
 - **The equality guard is the re-render guard.** `setActiveConversation` replaces the whole value, so an
   unconditional write on every routine list refresh would hand every `activeConversation` subscriber a
-  new object identity. Comparing all five mutable fields with `===` (all primitives) before writing means
-  a routine refresh that changes nothing costs nothing.
+  new object identity. Comparing all six mutable fields (`agent` since #1649) with `===` (all primitives)
+  before writing means a routine refresh that changes nothing costs nothing.
 - **`conversationUpdated` is deliberately not consumed**, even though its payload carries every field the
   snapshot holds and reading it would be one line shorter. That frame is the daemon's *announcement*; the
   `conversations` reply is its *authoritative answer*, decoded through the same main-side path every

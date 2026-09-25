@@ -53,9 +53,11 @@ import { translateConversationsEvent } from './conversationListBridge'
  * and Delete, and the only row this function can map is one already carrying the open chat's id, so no
  * re-seed can re-target those actions. The other five are compared with `===` because all five are
  * primitives (`string`, `boolean`, or `string | null`, where `null` is a distinct value and never an
- * absence).
+ * absence). The optional `agent` (#1649) is compared the same way, so a re-list that only switches the
+ * agent still re-seeds.
  *
- * The result is a CLOSED SIX-FIELD RECONSTRUCTION, never the row passed through. `ConversationSummary` is
+ * The result is a CLOSED SIX-FIELD RECONSTRUCTION (seven with a tagged row's `agent`), never the row
+ * passed through. `ConversationSummary` is
  * a structural superset of `ConversationCreatedPayload` — PairedShell's `onOpen` relies on exactly that
  * and hands a clicked row straight to the store — but a fresh literal cannot carry an unknown key from a
  * daemon row into the snapshot four surfaces read, which is `stampRows`' spread-order concern one layer
@@ -78,18 +80,22 @@ export function reseededActiveConversation(
     row.cwd === active.cwd &&
     row.name === active.name &&
     row.last_used_at === active.last_used_at &&
-    row.workspace_label === active.workspace_label
+    row.workspace_label === active.workspace_label &&
+    row.agent === active.agent
   ) {
     return null
   }
   // Wire order (`ConversationCreatedPayload`'s own), so a reader can diff this literal against the type.
+  // `agent` (#1649) is already narrowed to `WireAgent` by `parseConversationSummary`, and rides only when
+  // the row carries it, so an untagged row re-seeds to exactly the six-key literal it always did.
   return {
     id: row.id,
     is_promoted: row.is_promoted,
     cwd: row.cwd,
     name: row.name,
     last_used_at: row.last_used_at,
-    workspace_label: row.workspace_label
+    workspace_label: row.workspace_label,
+    ...(row.agent === undefined ? {} : { agent: row.agent })
   }
 }
 

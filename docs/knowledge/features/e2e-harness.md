@@ -223,7 +223,14 @@ absolute expectation — "the strip now holds *n* tiles" — never a before/afte
 before-count taken inside the helper could credit a previous push's late-rendering tile to
 the current one and skip a resend that was actually needed. `e2e/fixtures/confirmedPush.test.ts`
 covers this the way `mainProcessRead.test.ts` covers reads: stubbed `push`/`delivered`, no
-Electron, since the race itself does not reproduce on demand.
+Electron, since the race itself does not reproduce on demand. Six of its seven cases use a
+shared shrunk-timing options object so real sleeps stay fast; the one case whose outcome
+depends on elapsed time — delivery showing on a later poll, inside the window — flaked under
+a loaded full suite (\#1647) because the shrunk window and the real poll sleeps were close
+enough that load could push the sleeps past the deadline. Fixed by giving that one test its
+own options with a seconds-long window instead of switching to fake timers: the window is
+only an upper bound, paid when delivery never shows, so a generous one costs nothing when the
+probe still turns true on an early read.
 
 `readAuthentication` keeps its own private copy of the same tolerance.
 

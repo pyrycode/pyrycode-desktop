@@ -3,6 +3,7 @@ import { promisify } from 'node:util'
 import { type Page } from '@playwright/test'
 import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/realDaemon'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
+import { daemonIdentity } from './fixtures/daemonVersion'
 import type { DaemonEvent } from '../src/shared/ipc/events'
 
 // The bootstrap turn populates the daemon's model-list fallback for never-messaged conversations.
@@ -71,12 +72,11 @@ async function refresh(page: Page, proof: Awaited<ReturnType<typeof observe>>): 
 
 test('applied effort, confirmed preference, restart and recall in chats and channels', async ({ relay, daemon }, testInfo) => {
   test.setTimeout(480_000)
-  // Read the actual binary's embedded source revision; never claim an unversioned daemon passed.
+  // Read the actual binary's revision or release version; never claim an unversioned daemon passed.
   const { stdout } = await promisify(execFile)(process.env.PYRY_BIN || 'pyry', ['version'], { timeout: 10_000 })
-  const revision = /^pyry (?:dev-)?([a-f0-9]{7,40})\s*$/.exec(stdout)?.[1]
-  expect(revision, 'the tested daemon must carry a source revision').toBeTruthy()
-  testInfo.annotations.push({ type: 'daemon-revision', description: revision! })
-  await testInfo.attach('daemon-revision', { body: Buffer.from(revision!), contentType: 'text/plain' })
+  const revision = daemonIdentity(stdout)
+  testInfo.annotations.push({ type: 'daemon-revision', description: revision })
+  await testInfo.attach('daemon-revision', { body: Buffer.from(revision), contentType: 'text/plain' })
 
   await withIsolatedElectronApp(async ({ page: initialPage, relaunch }) => {
     let page = initialPage

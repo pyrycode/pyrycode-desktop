@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path'
 import type { DaemonEvent } from '../src/shared/ipc/events'
 import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
+import { daemonIdentity } from './fixtures/daemonVersion'
 
 // Preserve the operator-owned stdio approval surface when launching in bypass.
 // Run with operator or dispatcher credentials; a prerequisite skip is not acceptance.
@@ -22,10 +23,9 @@ type DriveWindow = typeof window & { permissionProof: Proof }
 test('operator bypass stays confirmed through a no-op write, then the menu returns to bypass and Manual approval enforces Read', async ({ relay, daemon, page }, testInfo) => {
   test.setTimeout(360_000)
   const { stdout } = await promisify(execFile)(process.env.PYRY_BIN || 'pyry', ['version'], { timeout: 10_000 })
-  const revision = /^pyry (?:dev-)?([a-f0-9]{7,40})\s*$/.exec(stdout)?.[1]
-  expect(revision, 'tested daemon must identify its source revision').toBeTruthy()
-  testInfo.annotations.push({ type: 'daemon-revision', description: revision! })
-  await testInfo.attach('daemon-revision', { body: Buffer.from(revision!), contentType: 'text/plain' })
+  const revision = daemonIdentity(stdout)
+  testInfo.annotations.push({ type: 'daemon-revision', description: revision })
+  await testInfo.attach('daemon-revision', { body: Buffer.from(revision), contentType: 'text/plain' })
   // sessions.settingsFromEntry normalizes absent permission_mode + false/absent yolo to default.
   const registry = JSON.parse(await readFile(join(dirname(daemon.workdir), '.pyry/test/sessions.json'), 'utf8'))
   expect(registry.sessions[0].yolo ?? false).toBe(false)

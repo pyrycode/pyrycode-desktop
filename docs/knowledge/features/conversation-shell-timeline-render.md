@@ -87,7 +87,10 @@ Without a meaningful terminal reason, `error_max_turns` and `error_max_budget_us
 use the corresponding limit/budget labels; then a nonempty category selects API-error
 wording, then an unknown outcome uses `Stopped: <value>`. An unknown terminal reason
 also uses that form; an error with no detail uses `Stopped: error`. Every nonempty
-category appends `(Claude reported: <value>)` to the chosen label.
+category appends `(Claude reported: <value>)` to the chosen label — since
+[#1656](conversation-shell-composer-status.md#claude-stopping-reports), the credited name is the
+conversation's own agent (`(Codex reported: …)` on a Codex conversation), read through an optional
+second `agent: WireAgent = 'claude'` parameter on `stoppedTurnText`.
 
 The formatter rechecks each report's 256-byte UTF-8 bound, discards overlong strings,
 and strips Unicode controls, format characters and line/paragraph separators before

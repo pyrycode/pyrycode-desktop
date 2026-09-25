@@ -84,6 +84,14 @@ takes a second, sibling `useMemo`-stable read the same way —
 — and passes the result down as `finishedTaskIds`; the view stays a pure function of its props and does not
 read the store itself.
 
+**\#1656 named the conversation's agent in the `entry.tasks.size === 0` support line.** "Claude has
+nothing running in the background for this conversation." became a Claude/Codex pair
+(`BACKGROUND_TASK_PANEL_EMPTY_SUPPORT` / `_EMPTY_SUPPORT_CODEX`), chosen by a new `agent?: WireAgent`
+prop on `BackgroundTaskPanelView` and `BackgroundTaskPanel` (default `'claude'`). `ConversationScreen`
+passes its `openAgent` straight through, the same value `<Timeline>` gets. The `entry === null`
+"No background-task report yet" support line is unaffected — it does not name an agent — so the
+three-way branch above keeps its shape.
+
 **Open state lifted into `PairedShell` by #1634.** The drawer is non-modal and takes no focus, so it has
 to survive the conversation switch that remounts `ConversationScreen` under `PairedShell`'s `paneKey`. The
 boolean moved one level up, beside `paneKey`, and reaches the screen as an optional

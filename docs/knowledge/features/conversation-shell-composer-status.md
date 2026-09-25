@@ -141,10 +141,20 @@ above, regardless of level; even `info`, hidden in the timeline, appears here.
 Higher-priority messages hide the report without retiring it.
 
 `ComposerBannerReport` reuses the error treatment with `role="status"` and the shared
-`Claude:` plain-text formatter. Terminal escapes/non-layout controls are removed;
+`bannerDisplayText` formatter. Terminal escapes/non-layout controls are removed;
 line breaks and tabs survive, markup and URLs stay inert, and `…` is appended only
 when the producer reports truncation. No second text cap applies. Its shrinkable
 `pre-wrap`/`overflow-wrap: anywhere` styling lets the row grow at the 800px minimum.
+
+**\#1656 made the `Claude:`/`(Claude reported: …)` prefixes name the conversation's agent.**
+`bannerDisplayText(report, agent?)` and `stoppedTurnText(item, agent?)` (both in
+`ConversationScreen.tsx`) pick `agent === 'codex' ? 'Codex' : 'Claude'`; a client-owned name, the
+raw `agent` value is never rendered. `ComposerErrorSlotControl` reads its agent through
+`useConversationAgent(open?.id ?? null)` (the #1651 hook, exported from `RunConfigSections.tsx`) and
+passes it to `ComposerBannerReport`; the timeline's own banner and stopped-turn rows read the same
+`WireAgent` threaded down from `ConversationScreen`'s `openAgent` through `Timeline` and `TimelineRow`.
+Every new prop or parameter defaults to `'claude'`, so a Claude conversation, a conversation with no
+agent, and every pre-#1656 test are byte-identical to before.
 
 The next accepted typed or slash send inserts an optimistic user row and clears
 only this transient report. Empty/blocked attempts, daemon activity, trailing idle,

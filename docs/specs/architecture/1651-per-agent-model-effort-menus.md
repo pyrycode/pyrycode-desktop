@@ -90,3 +90,8 @@ None named by the ticket. Pending for the documentation stage: fold the per-agen
 ## Open questions
 
 - Should the Codex trigger on an announcement miss fall back to the session row's `display_name`? Decision for now: no — the verbatim shown string, matching Claude's miss rule, and no client-built name.
+
+## Revisions
+
+- **2026-09-25, during implementation.** `useConversationAgent` is a thin `useMemo` wrapper over an exported pure selector, `selectAgentForConversation(conversationId)(state)`, that does both steps (owner via `serverIdForOpenConversation`, then `selectConversationAgentFor`) in one subscription. Reason: the server renderer reads a zustand store's initial state, so a seeded container render cannot prove the hook. The selector is unit-tested against a real `createConversationListStore` instead. The contract is unchanged: a primitive `WireAgent`, Claude for a null id, an unknown id or an unattributable owner.
+- **Open question resolved.** The Codex trigger on a miss shows the shown string verbatim, as planned; no fallback to the session row.

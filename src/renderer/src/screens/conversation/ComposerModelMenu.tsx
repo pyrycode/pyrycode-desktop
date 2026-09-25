@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import type { WireAgent, WireModelOption } from '@shared/wire/types'
 import { ComposerOptionsMenu, type ComposerOptionsPanelOption } from './ComposerOptionsPanel'
 import { useModelListStore, selectModelListFor, type ModelListEntry } from '../../store/modelListStore'
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
@@ -8,6 +9,8 @@ import { useAnnouncedModelStore, selectAnnouncedModelFor } from '../../store/ann
 import {
   publishedRowFor,
   effortRowFor,
+  modelRowsFor,
+  useConversationAgent,
   useSessionSettingsConnected,
   changeConnectedSetting
 } from './RunConfigSections'
@@ -154,6 +157,20 @@ function modelFamily(identifier: string): string {
   return head.charAt(0).toUpperCase() + head.slice(1)
 }
 
+/** #1651 — the trigger's label on a Codex conversation with no model set. Client-owned, and the same word a
+ *  Claude conversation shows there, where it derives from the daemon's `default` row: Codex publishes no
+ *  such row, so the client names the state rather than a model. */
+export const COMPOSER_MODEL_DEFAULT_LABEL = 'Default'
+
+/** #1651 — one row's label in the menu, keyed on the ROW's own agent. A Claude row keeps #1095's family
+ *  rule over its `value`, falling back to `display_name`. A Codex row shows `display_name` exactly as the
+ *  daemon sends it: no Codex name is ever built on the client, from `value`, `family` or anything else. */
+export function composerModelRowLabel(row: WireModelOption): string {
+  if (row.agent === 'codex') return row.display_name
+  const rowFamily = modelFamily(row.value)
+  return rowFamily === '' ? row.display_name : rowFamily
+}
+
 /** What the trigger shows and what the menu offers.
  *
  *  `options` EMPTY is AC4's inert arm and is a different thing from a menu with rows: it never reaches
@@ -228,9 +245,31 @@ export interface ComposerModelMenuModel {
  */
 export function composerModelMenuModel(
   models: ModelListEntry | null | undefined,
-  layers: ComposerModelLayers
+  layers: ComposerModelLayers,
+  agent: WireAgent = 'claude'
 ): ComposerModelMenuModel | null {
   const shown = firstShown(layers.picked, layers.announced, layers.stored)
+  // #1651: only the conversation's own agent's rows, in the daemon's order, each through the row label.
+  const options = modelRowsFor(models, agent).map((published) => ({
+    id: published.value,
+    label: composerModelRowLabel(published)
+  }))
+  // #1651 — CODEX IS ITS OWN PATH, and it derives nothing. There is no inherited-default row to resolve for
+  // an unset model, so once a snapshot says the model is unset the trigger reads Default, marks nothing and
+  // still opens. A hit shows the row's `display_name`; a miss shows the shown string verbatim, the same
+  // fallback Claude's path keeps under its family rule.
+  if (agent === 'codex') {
+    if (shown === '') {
+      return layers.stored === null ? null : { label: COMPOSER_MODEL_DEFAULT_LABEL, currentId: null, options }
+    }
+    const codexRow = publishedRowFor(models, shown, agent)
+    const codexSessionRow = publishedRowFor(models, firstShown(layers.picked, layers.stored), agent)
+    return {
+      label: codexRow ? codexRow.display_name : shown,
+      currentId: codexSessionRow ? codexSessionRow.value : null,
+      options
+    }
+  }
   // #1423 — the INHERITED-DEFAULT branch, and the one input that reaches it is ''. `effortRowFor` is
   // publishedRowFor with that single substitution, so nothing else about the lookup widens: the comparing
   // is still one `===` on raw strings, and ' ', 'Default' and 'default-x' miss exactly the rows they
@@ -248,15 +287,15 @@ export function composerModelMenuModel(
   // Only the first has a row behind it. `=== null` rather than a truthiness test, which would fold '' into
   // the not-known reading and stop this branch firing at all — the near-miss cases below pin the
   // substitution's exactness from the other side and this guard is the same kind of claim.
-  const inherited = shown === '' && layers.stored !== null ? effortRowFor(models, shown) : undefined
+  const inherited = shown === '' && layers.stored !== null ? effortRowFor(models, shown, agent) : undefined
   if (shown === '' && inherited === undefined) return null
-  const row = inherited ?? publishedRowFor(models, shown)
+  const row = inherited ?? publishedRowFor(models, shown, agent)
   // The SESSION's model, which is the only thing a row may be marked current by. Exact equality stays the
   // whole rule here too. PRECEDENCE, since #1423: an empty session model resolves the inherited-default
   // row and consults no other, so a daemon that published a row whose `value` is literally '' no longer
   // has that row marked on such a session — the same one-rule-one-answer posture effortRowFor's docblock
   // states for the effort surfaces, which this control now shares instead of contradicting.
-  const sessionRow = inherited ?? publishedRowFor(models, firstShown(layers.picked, layers.stored))
+  const sessionRow = inherited ?? publishedRowFor(models, firstShown(layers.picked, layers.stored), agent)
   // #1095's SOURCE CHAIN for the trigger: on a hit the row's `resolved_model`, then that same row's
   // `value`; on a miss the shown string itself. `resolved_model` leads because the trigger's job is to
   // name what RUNS, and it is the one field naming the concrete identifier behind an alias. The `value`
@@ -280,11 +319,8 @@ export function composerModelMenuModel(
     // `resolved_model` it would wear the label of the row it resolves to, and the panel would show two
     // identical rows submitting different values. From `value` it reads the daemon's own word capitalised.
     // Two rows deriving to one label are both shown and each still submits its own `value`; `id` is
-    // untouched, so nothing about the write changes.
-    options: (models?.models ?? []).map((published) => {
-      const rowFamily = modelFamily(published.value)
-      return { id: published.value, label: rowFamily === '' ? published.display_name : rowFamily }
-    })
+    // untouched, so nothing about the write changes. #1651 moved the rule into composerModelRowLabel.
+    options
   }
 }
 
@@ -321,13 +357,16 @@ export function composerModelMenuModel(
 export function ComposerModelMenuView({
   layers,
   models,
+  agent = 'claude',
   onSelect
 }: {
   layers: ComposerModelLayers
   models: ModelListEntry | null
+  /** #1651 — the conversation's agent; absent reads Claude. */
+  agent?: WireAgent
   onSelect?: (value: string) => void
 }): JSX.Element | null {
-  const menu = composerModelMenuModel(models, layers)
+  const menu = composerModelMenuModel(models, layers, agent)
   if (menu === null) return null
 
   // AC4. Not `options={[]}` through the shared menu, which would advertise a popup and open an empty
@@ -419,6 +458,7 @@ export function ComposerModelMenu({ conversationId }: { conversationId: string |
     [conversationId]
   )
   const models = useModelListStore(selectModels)
+  const agent = useConversationAgent(conversationId)
 
   // THE PICK ALONE: the pending optimistic overlay over the client-confirmed override, with NO daemon
   // base under it — which is what a null snapshot means to selectEffectiveSettings, by its own documented
@@ -447,6 +487,7 @@ export function ComposerModelMenu({ conversationId }: { conversationId: string |
         stored: snapshot?.model ?? null
       }}
       models={models}
+      agent={agent}
       // An arrow, so `window.pyry` is dereferenced at INTERACTION time and never during render — hoisting
       // it (or the deps object) would move the dereference into the render path, where window.pyry does
       // not exist under renderToStaticMarkup and every container smoke test would throw

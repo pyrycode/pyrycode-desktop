@@ -32,3 +32,29 @@ AC3 (the live gate executes the five tests on `pyry 0.27.0`) is the dispatcher's
 ## Documentation handoff (pending — documentation stage)
 
 `docs/knowledge/features/live-e2e-runbook.md` § Current real-claude gate state: record that the live specs accept a release build and log its version as `daemon-revision`, and that the gate host has run `pyry 0.27.0` since 2026-09-25.
+
+## Revisions
+
+### 2026-09-27 — validate before requesting an Electron page
+
+The verifier found that the permission-mode test's `page` fixture calls
+`withIsolatedElectronApp` before entering the test body. The original plan's
+“before any page use” claim therefore did not guarantee validation before launch.
+Remove `page` from that test's fixture dependencies and wrap its page-driven work
+in `withIsolatedElectronApp` after `daemonIdentity` succeeds, retaining listener
+cleanup inside the application's lifetime. The effort and queue tests already
+use this ordering.
+
+Add a Vitest regression that loads the actual permission-mode test with mocked
+registration and version-command boundaries. Invalid stdout must throw the shared
+rejection message without requesting the eager page fixture or calling the explicit
+app launcher. This test requires neither Electron nor Claude. Run it RED before
+changing the spec, then run both affected unit files and the build; the dispatcher
+still owns live execution of the five affected tests.
+
+The refreshed overlap check still finds #1544; its permission-flow rewrite is
+already represented in this checkout, and this local launch-order correction
+needs no additional interface from that branch. The rework remains one deliverable:
+0 production files, approximately 180 additional written lines including the
+reindented test body, 0 new exported types/components/stores, 1 consumer, 3 original
+acceptance criteria and 1 existing rejection branch. No open design questions.

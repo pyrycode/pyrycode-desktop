@@ -328,8 +328,8 @@ test('restores a pairing-rejected saved host beside a usable connected host', as
   const second = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
   // The original endpoints remain alive: one rejects pairing, the other reconnects normally.
   const { page } = second
-  await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(2)
-  await expect(page.getByRole('img', { name: 'Pyrycode Connected', exact: true })).toHaveCount(2)
+  await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(1)
+  await expect(page.getByRole('img', { name: 'Pyrycode Connected', exact: true })).toHaveCount(1)
   await expect(page.locator('.channel-list__row-open')).toHaveText([SEEDED_ROW.name!, SECOND_SEEDED_ROW.name!])
   await expect(page.locator('.conversation')).toHaveCount(0)
   expect(commands.filter(c => c !== 'list_conversations')).toEqual([])

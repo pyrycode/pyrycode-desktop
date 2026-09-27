@@ -1334,27 +1334,7 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   section](features/conversation-shell-session-and-channel-info.md#system-prompt-section-1078)** is the
   first reader.
 
-- [Channel List — the section header's pair-new-host control (#1303, #1304)](features/channel-list-section-header-pair-control.md) —
-  both the Channels and Chats section headers now carry a 16px plus, drawn at rest and filled
-  `--color-primary` (unlike every other trailing control in this tree, which reveals only on hover), that
-  opens the same `pairServer` route Settings' "Pair another server" row already opens. The accessible
-  name (`aria-label="Pair new host"`) is a module-level constant, never a prop — `HostRow`'s ruling, since
-  there is no `label` field for interpolated untrusted text to arrive in. The substance is routing, not
-  the button: `pairServer` now has two entries, so `pairServerCancelled` gained the union's one payload,
-  `returnTo: PairedRoute`, and its destination became origin-dependent instead of the fixed `'settings'`
-  literal it used to be — recorded in a new `PairedShell` screen-local cell, `pairServerReturn`, written
-  once at the single site both entries share. See [Paired shell —
-  routing](features/paired-shell-routing.md#the-pair-new-host-plus-and-origin-aware-cancel-1303) for that
-  mechanism. Builder self-review PASS; the spec's Revisions section records that `PairedShell.test.tsx`
-  needed one edit after all (not the predicted zero) and that the e2e drive was falsified before being
-  trusted, against a hardcoded `'settings'`. **#1304** then gave that plus its own hover/focus name pill,
-  the fourth control in the sidebar to wear `.channel-list__control-name` — a deviation from the three
-  shipped instances' band-centred placement, moved to `top: 100%` after measurement showed the sticky
-  `.channel-list__actions` cluster's `top` resolves against the scrollport's *content* box and so overhangs
-  the header by `--space-1` more than flow arithmetic predicts. The moved-down pill now paints under the
-  first host row's own trailing furniture rather than over anything, a fact worth reading before #1190
-  gives that row its own pill. Verifier PASS, two non-blocking SHOULD FIXes (a click-through comment's
-  rationale and a missing paint-order paragraph, both prose-only — addressed here).
+- [Channel List — the toolbar's pair-new-host control](features/channel-list-section-header-pair-control.md): single fixed pairing entry, toolbar geometry, shared name pills, origin-aware cancel and CSP-safe SVG paint checks.
 
 - [Windows packaging (electron-builder)](features/windows-packaging.md) — `npm run dist:win` (`npm run
   build` then `electron-builder --win`), producing an unsigned NSIS installer from `electron-builder.yml`.

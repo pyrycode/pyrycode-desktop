@@ -393,20 +393,10 @@ const treesOf = (markup: string): { channels: string; chats: string } => {
 // document-scoped for that helper's stated reason: `aria-label` legitimately appears elsewhere in the
 // same render (the gear, Archive), so a document-wide assertion would be plain wrong. Hoisted
 // with `treesOf` by #1179, which slices the same tags out of a single tree at a time.
-// #1303 — the section-header plus's accessible name, and the opening tags of the two buttons that wear
-// it. Both headers carry the SAME name by design, so this is a two-match marker everywhere and never a
-// per-tree discriminator. The class shares no token with `__row`, `__row-open`, `__section-header`,
-// `__workspace` or `__host`, which is what keeps it out of every shipped locator's match set.
+// Static names remain independent of daemon-supplied row and workspace text.
 const PAIR_NEW_HOST_MARKER = 'aria-label="Pair new host"'
-
-// #1304 — the name pill that control shows on its own hover or focus, as ONE marker: the class, the
-// position AFTER the closing `</svg>`, the `aria-hidden` and the text together. `create.label`'s treatment
-// on the workspace plus, and the same reason for the leading `</svg>` — a child appended after the glyph
-// leaves the marker above and every opening tag `pairTagsIn` slices byte-identical, which is what lets
-// this ticket add an element without touching a single shipped count. The TEXT is the same client-owned
-// constant the `aria-label` reads, so a drift between the spoken name and the drawn one fails here.
 const PAIR_NEW_HOST_PILL_MARKER =
-  '</svg><span class="channel-list__control-name" aria-hidden="true">Pair new host</span>'
+  '<span class="channel-list__control-name" aria-hidden="true">Pair new host</span>'
 
 const pairTagsIn = (markup: string): string[] => {
   const tags: string[] = []
@@ -473,14 +463,14 @@ describe('ChannelListView', () => {
     expect(markup).not.toContain('No conversations yet')
   })
 
-  it('loaded-but-empty ([]) with a machine paired: both headers and its two host rows (#1070 AC2)', () => {
+  it('loaded-but-empty ([]) with a machine paired: its two host rows without global headers (#1070 AC2)', () => {
     // The amendment, in its purest form: a freshly paired machine with no conversations at all. It used
     // to render the `No conversations yet` paragraph and nothing else, which left it no route to its
     // first chat — the host row is where the plus that starts one lives (#1185, #1189), and the floating
     // button refuses to create while more than one server is paired (#1120).
     const markup = render([])
-    expect(markup).toContain('>Channels<')
-    expect(markup).toContain('>Chats<')
+    expect(markup).not.toContain('>Channels<')
+    expect(markup).not.toContain('>Chats<')
     expect(markup).toContain('channel-list__divider')
     expect(countOf(markup, HOST_ROW_MARKER)).toBe(2)
     // Nothing under either row.
@@ -512,30 +502,25 @@ describe('ChannelListView', () => {
     expect(markup).not.toContain(HOST_ROW_MARKER)
   })
 
-  it('both sections present: both headers, a divider, rows in array order (AC2)', () => {
+  it('both sections present: a divider, rows in array order (AC2)', () => {
     const markup = render([
       row({ id: 'c1', name: 'kitchenclaw refactor', is_promoted: true }),
       row({ id: 'c2', name: 'leaky-faucet', is_promoted: true }),
       row({ id: 'd1', name: 'Help me debug auth flow', is_promoted: false })
     ])
-    expect(markup).toContain('Channels')
-    expect(markup).toContain('Chats')
+    expect(markup).not.toContain('Channels')
+    expect(markup).not.toContain('Chats')
     expect(markup).toContain('channel-list__divider')
     // Array order preserved within the channels section.
     expect(markup.indexOf('kitchenclaw refactor')).toBeLessThan(markup.indexOf('leaky-faucet'))
   })
 
-  it('one populated section still draws BOTH headers and the divider (#1070 AC2)', () => {
-    // Until #1070 each header was gated on its own section holding a row and the divider on both holding
-    // one, so this input rendered one header and no divider. Both cases below assert the inversion, and
-    // between them they cover a rows-in-Channels-only and a rows-in-Chats-only sidebar.
+  it('one populated section still retains both host trees and the divider (#1070 AC2)', () => {
+    // Removing global titles must not remove the empty complementary host/workspace tree.
     for (const promoted of [true, false]) {
       const markup = render([row({ id: 'only', name: 'the one row', is_promoted: promoted })])
-      // Anchored, not bare: `toContain('Chats')` would also pass against a header reading "Recent Chats",
-      // so it could not fail in the direction this cares about. `renderToStaticMarkup` emits no comment
-      // markers around a single static text child, so `>Chats<` pins the header's exact rendered text.
-      expect(markup).toContain('>Channels<')
-      expect(markup).toContain('>Chats<')
+      expect(markup).not.toContain('>Channels<')
+      expect(markup).not.toContain('>Chats<')
       expect(markup).toContain('channel-list__divider')
       // One host row per tree, and since #1485 one workspace row per tree too: the single row's workspace
       // mirrors into the empty section as a head row with nothing beneath it. The ROW count is what still
@@ -794,9 +779,9 @@ describe('ChannelListView', () => {
       expect(countOf(render([row({ id: 'd1', is_promoted: false })]), HOST_ROW_MARKER)).toBe(2)
     })
 
-    it('sits below its section label and above that tree conversation rows (AC1)', () => {
+    it('sits inside the tree and above its conversation rows (AC1)', () => {
       const markup = bothTrees()
-      expect(markup.indexOf('>Channels<')).toBeLessThan(markup.indexOf(HOST_ROW_MARKER))
+      expect(markup.indexOf('class="channel-list__tree"')).toBeLessThan(markup.indexOf(HOST_ROW_MARKER))
       expect(markup.indexOf(HOST_ROW_MARKER)).toBeLessThan(markup.indexOf(ROW_MARKER))
     })
 
@@ -810,11 +795,9 @@ describe('ChannelListView', () => {
       expect(countOf(render([]), HOST_ROW_MARKER)).toBe(2)
     })
 
-    it('leaves each section label singly selectable (AC4)', () => {
+    it('keeps host labels independent of the removed global headings (AC4)', () => {
       const markup = bothTrees()
-      // The invariant #709's spec parked for this ticket: still exactly two section-header elements, so
-      // the promote specs' `.channel-list__section-header` + hasText locators stay single-match.
-      expect(countOf(markup, SECTION_HEADER_MARKER)).toBe(2)
+      expect(countOf(markup, SECTION_HEADER_MARKER)).toBe(0)
       // The independent second guard: Playwright's `hasText` with a string matches substrings
       // case-INsensitively, so the shipped label must contain neither section label's text either way.
       const labels = hostLabelsIn(markup)
@@ -1109,7 +1092,7 @@ describe('ChannelListView', () => {
 
       // #1190 — the name pill each control shows on its own hover or keyboard focus, the same
       // `.channel-list__control-name` the row's trailing controls (#1172), the workspace row's pair
-      // (#1180/#1181) and the section header's plus (#1304) wear. Only the MARKUP is assertable here: the
+      // (#1180/#1181) and the toolbar pairing plus wear. Only the MARKUP is assertable here: the
       // reveal, the drawing and the box all need a layout engine and live in
       // e2e/sidebar-host-row-control-name-pill.spec.ts.
       //
@@ -1220,16 +1203,16 @@ describe('ChannelListView', () => {
       // fails here at 2, and one that kept #1199's single row fails at 2 as well but with no workspace
       // rows under the second machine — the count below separates those.
       expect(countOf(markup, HOST_ROW_MARKER)).toBe(4)
-      expect(countOf(markup, SECTION_HEADER_MARKER)).toBe(2)
+      expect(countOf(markup, SECTION_HEADER_MARKER)).toBe(0)
     })
 
     it('puts each server’s own rows under that server’s row, in pairing order (AC1)', () => {
       const markup = twoServers()
-      // Document order IS the assertion: header, machine 1's row, machine 1's conversations, machine 2's
+      // Document order IS the assertion: machine 1's row, machine 1's conversations, machine 2's
       // row, machine 2's conversations. Read as indices so a row appearing under the wrong machine — the
       // misattribution the client-held join direction exists to prevent — fails rather than passing on a
       // count that is right in the wrong order.
-      const secondHostAt = markup.indexOf(HOST_ROW_MARKER, markup.lastIndexOf('>Chats<'))
+      const secondHostAt = markup.indexOf(HOST_ROW_MARKER, markup.indexOf('channel-list__divider'))
       const nextHostAt = markup.indexOf(HOST_ROW_MARKER, secondHostAt + 1)
       expect(markup.indexOf('kitchenclaw refactor')).toBeGreaterThan(secondHostAt)
       expect(markup.indexOf('kitchenclaw refactor')).toBeLessThan(nextHostAt)
@@ -1254,10 +1237,10 @@ describe('ChannelListView', () => {
 
     it('gives a machine with nothing in a section its row alone (AC2)', () => {
       // The freshly-paired machine, in the section where it has nothing. Both host rows render under the
-      // Channels header even though every row in this render is a Chat.
+      // first tree boundary even though every row in this render is a Chat.
       const markup = twoServers()
       const channelsPart = markup.slice(
-        markup.indexOf('>Channels<'),
+        markup.indexOf('class="channel-list__tree"'),
         markup.indexOf('channel-list__divider')
       )
       expect(countOf(channelsPart, HOST_ROW_MARKER)).toBe(2)
@@ -1328,7 +1311,7 @@ describe('ChannelListView', () => {
       const markup = twoServers()
       expect(countOf(markup, ROW_MARKER)).toBe(2)
       expect(countOf(markup, ROW_OPEN_MARKER)).toBe(2)
-      expect(countOf(markup, SECTION_HEADER_MARKER)).toBe(2)
+      expect(countOf(markup, SECTION_HEADER_MARKER)).toBe(0)
     })
   })
 
@@ -1365,7 +1348,7 @@ describe('ChannelListView', () => {
 
     it('sits below its tree host row and above that group conversation rows (AC1)', () => {
       const markup = bothTrees()
-      expect(markup.indexOf('>Channels<')).toBeLessThan(markup.indexOf(HOST_ROW_MARKER))
+      expect(markup.indexOf('class="channel-list__tree"')).toBeLessThan(markup.indexOf(HOST_ROW_MARKER))
       expect(markup.indexOf(HOST_ROW_MARKER)).toBeLessThan(markup.indexOf(WORKSPACE_ROW_MARKER))
       expect(markup.indexOf(WORKSPACE_ROW_MARKER)).toBeLessThan(markup.indexOf(ROW_MARKER))
     })
@@ -1385,7 +1368,7 @@ describe('ChannelListView', () => {
       const markup = bothTrees()
       expect(countOf(markup, ROW_MARKER)).toBe(2)
       expect(countOf(markup, ROW_OPEN_MARKER)).toBe(2)
-      expect(countOf(markup, SECTION_HEADER_MARKER)).toBe(2)
+      expect(countOf(markup, SECTION_HEADER_MARKER)).toBe(0)
       expect(countOf(markup, HOST_ROW_MARKER)).toBe(2)
     })
 
@@ -1810,7 +1793,7 @@ describe('ChannelListView', () => {
       const markup = render([row({ id: 'd1', name: 'x', is_promoted: false, cwd: '/home/me/alpha' })])
       expect(workspaceLabelsIn(markup)).toEqual(['alpha', 'alpha'])
       const channelsPart = markup.slice(
-        markup.indexOf('>Channels<'),
+        markup.indexOf('class="channel-list__tree"'),
         markup.indexOf('channel-list__divider')
       )
       expect(countOf(channelsPart, WORKSPACE_ROW_MARKER)).toBe(1)
@@ -1822,7 +1805,7 @@ describe('ChannelListView', () => {
 
     it('draws a channel-only workspace in the Chats tree, with its plus and its pen (AC2)', () => {
       const markup = render([row({ id: 'c1', name: 'x', is_promoted: true, cwd: '/home/me/alpha' })])
-      const chatsPart = markup.slice(markup.indexOf('>Chats<'))
+      const chatsPart = markup.slice(markup.indexOf('channel-list__divider'))
       expect(countOf(chatsPart, WORKSPACE_ROW_MARKER)).toBe(1)
       expect(countOf(chatsPart, CREATE_CHAT_MARKER)).toBe(1)
       expect(editTagsIn(chatsPart)).toHaveLength(1)
@@ -1838,7 +1821,7 @@ describe('ChannelListView', () => {
         row({ id: 'd2', name: 'y', is_promoted: false, cwd: '/home/me/alpha' })
       ])
       const channelsPart = markup.slice(
-        markup.indexOf('>Channels<'),
+        markup.indexOf('class="channel-list__tree"'),
         markup.indexOf('channel-list__divider')
       )
       expect(countOf(channelsPart, WORKSPACE_ROW_MARKER)).toBe(1)
@@ -1846,7 +1829,7 @@ describe('ChannelListView', () => {
       expect(channelsPart).not.toContain(COLLAPSED_MARKER)
       expect(countOf(channelsPart, ROW_MARKER)).toBe(0)
       // Both rows stayed in the tree that holds them — the mirror took keys and labels, never rows.
-      expect(countOf(markup.slice(markup.indexOf('>Chats<')), ROW_MARKER)).toBe(2)
+      expect(countOf(markup.slice(markup.indexOf('channel-list__divider')), ROW_MARKER)).toBe(2)
     })
 
     it('never mirrors the unknown-workspace bucket into the other tree (AC4)', () => {
@@ -1858,7 +1841,7 @@ describe('ChannelListView', () => {
       expect(workspaceLabelsIn(markup)).toEqual([UNKNOWN_WORKSPACE_LABEL])
       expect(
         countOf(
-          markup.slice(markup.indexOf('>Channels<'), markup.indexOf('channel-list__divider')),
+          markup.slice(markup.indexOf('class="channel-list__tree"'), markup.indexOf('channel-list__divider')),
           WORKSPACE_ROW_MARKER
         )
       ).toBe(0)
@@ -1920,7 +1903,7 @@ describe('ChannelListView', () => {
       // could carry the origin's key in a data- attribute to correlate the two" from shipping.
       const markup = render([row({ id: 'd1', name: 'x', is_promoted: false, cwd: HOSTILE })])
       const channelsPart = markup.slice(
-        markup.indexOf('>Channels<'),
+        markup.indexOf('class="channel-list__tree"'),
         markup.indexOf('channel-list__divider')
       )
       for (const tag of [
@@ -2002,86 +1985,29 @@ describe('ChannelListView', () => {
     })
   })
 
-  describe('the section headers’ pair-new-host plus (#1303)', () => {
-    // Both headers carry the SAME control, so every count here is two — there is no per-tree difference
-    // to state, unlike the two workspace plusses above. The default fixture is enough: the headers render
-    // unconditionally in every drawn state since #1070.
-    const drawn = (): string =>
-      render([row({ id: 'c1', name: 'kitchenclaw refactor', is_promoted: true })])
-
-    it('draws the plus on BOTH section headers, keyboard-reachable at rest (AC1/AC2)', () => {
-      const markup = drawn()
-      expect(countOf(markup, PAIR_NEW_HOST_MARKER)).toBe(2)
-      // Real <button>s, so they are in the accessibility tree and tab-reachable — the half AC2 asks for
-      // that a class name alone would not prove. The control is drawn at rest, so unlike the row and
-      // host-row controls there is no reveal rule for a hover to satisfy first.
-      const tags = pairTagsIn(markup)
-      expect(tags).toHaveLength(2)
-      for (const tag of tags) {
-        expect(tag.startsWith('<button ')).toBe(true)
-        expect(tag).toContain('type="button"')
-        expect(tag).toContain(PAIR_NEW_HOST_MARKER)
+  describe('the toolbar pairing control', () => {
+    it('keeps one named native button before the tree in every list state', () => {
+      for (const markup of [render(null, null, []), render(null), render([]),
+        render([], null, []), render([row({ id: 'c1', is_promoted: true })])]) {
+        expect(countOf(markup, PAIR_NEW_HOST_MARKER)).toBe(1)
+        expect(countOf(markup, PAIR_NEW_HOST_PILL_MARKER)).toBe(1)
+        expect(countOf(markup, SECTION_HEADER_MARKER)).toBe(0)
+        const tags = pairTagsIn(markup)
+        expect(tags).toHaveLength(1)
+        expect(tags[0]).toContain('<button type="button"')
+        expect(tags[0]).not.toContain('disabled')
+        expect(markup.indexOf('aria-label="Settings"')).toBeLessThan(markup.indexOf('aria-label="Archive"'))
+        expect(markup.indexOf('aria-label="Archive"')).toBeLessThan(markup.indexOf(PAIR_NEW_HOST_MARKER))
+        expect(markup.indexOf(PAIR_NEW_HOST_MARKER)).toBeLessThan(markup.indexOf('class="channel-list__tree"'))
+        expect(markup).toContain('class="channel-list__pair-icon" aria-hidden="true"')
       }
     })
 
-    it('leaves each header’s own class attribute exactly as it shipped (AC5)', () => {
-      // `SECTION_HEADER_MARKER` is a quote-anchored substring that five specs across this file count, so
-      // a second class on the <header> would redden all of them. The button is a CHILD; the header's own
-      // attribute run is untouched.
-      const markup = drawn()
-      expect(countOf(markup, SECTION_HEADER_MARKER)).toBe(2)
-      expect(markup).toContain('<header class="channel-list__section-header">Channels<button ')
-      expect(markup).toContain('<header class="channel-list__section-header">Chats<button ')
-    })
-
-    it('draws the design’s 16px glyph inside it (AC1)', () => {
-      // The whole opening run, not a width alone — the #1178 discipline: one marker fixes the class, the
-      // viewBox, both box dimensions, the currentColor fill and the aria-hidden together.
-      expect(drawn()).toContain(
-        '<svg class="channel-list__pair-icon" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">'
-      )
-    })
-
-    it('gives each plus its own name pill, after the glyph and out of the a11y tree (#1304 AC1/AC2)', () => {
-      // One pill per header, so two — the same two-match shape as the name above, since both headers
-      // carry the same control. Everything the static tier can see about this pill is in the marker;
-      // the colours, the placement and the hover itself are the fake Playwright tier's, `vitest.config.ts`
-      // being `environment: 'node'` with no layout and no pointer.
-      const markup = drawn()
-      expect(countOf(markup, PAIR_NEW_HOST_PILL_MARKER)).toBe(2)
-      // And the accessible name is untouched by the added child: `aria-label` still overrides child text,
-      // the span is `aria-hidden`, and this count is what says the pill's text minted no second name.
-      expect(countOf(markup, PAIR_NEW_HOST_MARKER)).toBe(2)
-    })
-
-    it('renders both header pills before the first list', () => {
-      expect(countOf(render(null), PAIR_NEW_HOST_PILL_MARKER)).toBe(2)
-    })
-
-    it('renders both header plusses before the first list', () => {
-      expect(countOf(render(null), PAIR_NEW_HOST_MARKER)).toBe(2)
-    })
-
-    it('carries no untrusted text in any attribute of either control', () => {
-      // The accessible name is a compile-time constant and NOT a prop (`HostRow`'s ruling), so no row
-      // name, workspace path or host label can reach these attributes. Asserted against a row whose name
-      // and `cwd` are both hostile.
-      const markup = render([
-        row({
-          id: 'd1',
-          name: '<img src=x onerror=boom>',
-          is_promoted: false,
-          cwd: '/home/me/<img src=x onerror=boom>'
-        })
-      ])
-      const tags = pairTagsIn(markup)
-      expect(tags).toHaveLength(2)
-      for (const tag of tags) {
-        expect(tag).not.toContain('img')
-        expect(tag).not.toContain('onerror')
-        expect(tag).not.toContain('boom')
-        expect(tag).not.toContain('title=')
-      }
+    it('keeps daemon text out of pairing control attributes', () => {
+      const tags = pairTagsIn(render([row({ id: 'd1', name: '<img src=x onerror=boom>',
+        cwd: '/home/me/<img src=x onerror=boom>' })]))
+      expect(tags).toHaveLength(1)
+      expect(tags[0]).not.toMatch(/img|onerror|boom|title=/)
     })
   })
 
@@ -2407,7 +2333,7 @@ describe('ChannelListView', () => {
       expect(countOf(markup, SAVE_MARKER)).toBe(2)
       expect(countOf(markup, EDIT_CHANNEL_MARKER)).toBe(1)
       expect(countOf(markup, HOST_ROW_MARKER)).toBe(2)
-      expect(countOf(markup, SECTION_HEADER_MARKER)).toBe(2)
+      expect(countOf(markup, SECTION_HEADER_MARKER)).toBe(0)
       expect(hostDotTagsIn(markup)).toHaveLength(4)
     })
 
@@ -2969,8 +2895,8 @@ describe('HostConnectionDots (#718)', () => {
 it('renders every saved host in both trees before the first list', () => {
   const markup = render(null, null, [DEFAULT_SERVER, SECOND_SERVER])
   expect(markup.split('class="channel-list__host"').length - 1).toBe(4)
-  expect(markup).toContain('Channels')
-  expect(markup).toContain('Chats')
+  expect(markup).not.toContain('Channels')
+  expect(markup).not.toContain('Chats')
   expect(markup).not.toContain('channel-list__row-open')
 })
 

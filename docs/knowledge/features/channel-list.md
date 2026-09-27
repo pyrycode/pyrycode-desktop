@@ -23,15 +23,15 @@ the host, separate from connection dots and repair; see [local read failures](ch
 - Reads saved `serverIds` independently of `useConversationListStore(selectConversations)`.
   Every saved host renders in both trees even before a conversation list arrives. `renderBody`
   partitions `conversations ?? []` for display only: the store keeps `null` as **not-yet-loaded**.
-  **Nothing to draw** (no saved server *and* no active row) yields the wrapper only; otherwise
-  both section headers and the divider render.
+  **Nothing to draw** (no saved server *and* no active row) leaves the toolbar and its rule
+  above an empty tree; otherwise both host trees and the section divider render.
   The `"No conversations yet"` empty state was retired by
   [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070) — a paired app always has at
   least a host row to draw (§ below).
 - Splits rows by `is_promoted`, preserving the store's array order within each section (the daemon's
   order is authoritative — no client-side sort), then within each section by **server, then
   workspace** (§ Server grouping below, [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070)).
-  Both headers and the divider render whenever anything is paired; a paired machine with nothing in
+  Both host trees and the divider render whenever anything is paired; a paired machine with nothing in
   a section shows its host row there with nothing under it, rather than the section disappearing.
 - Each row shows only a title (`name`, or `'Untitled'` when `name` is `null`/blank — never a blank
   row) — a trailing last-activity time until
@@ -39,22 +39,22 @@ the host, separate from connection dots and repair; see [local read failures](ch
   itself survives for its three other callers (§ Why the row carries no message preview below).
 - Every row's click opens the shell's single active conversation (`onOpen`) — not that specific row's
   conversation. See § Edge cases.
-- A [Settings](settings-screen.md) entry button (`aria-label="Settings"`, [#333](../codebase/333.md))
-  and an [Archive](archive-screen.md) entry button (`aria-label="Archive"`, [#347](../codebase/347.md))
-  lead the card's Top bar ([#1443](https://github.com/pyrycode/pyrycode-desktop/issues/1443)): gear
-  first, archive 52px right, both 24×24, `--color-primary`, no hover fill, over a 1px rule at 60%
-  opacity. Before #1443, 48px round buttons sat sticky top-right in `.channel-list__actions`; the class
-  token stays, outside the scrollport — nothing in the sidebar is sticky (#1426 deleted the FAB).
-  Present in all three states.
-- Each section header ("Channels" and "Chats") now carries its own plus, `aria-label="Pair new host"`,
-  drawn at rest and filled `--color-primary` — unlike every other trailing control in this tree, which
-  reveals only on hover. It opens the same pairing flow Settings' "Pair another server" row opens, and
-  since [#1303](https://github.com/pyrycode/pyrycode-desktop/issues/1303) cancelling that flow returns
-  the operator to wherever they launched it from (the open thread, the list, or Settings) rather than
-  always to Settings. See [the section header's pair-new-host
-  control](channel-list-section-header-pair-control.md) for the control's markup, geometry and testing,
-  and [Paired shell — routing](paired-shell-routing.md#the-pair-new-host-plus-and-origin-aware-cancel-1303)
-  for the origin-aware cancel.
+- The fixed toolbar contains [Settings](settings-screen.md), then [Archive](archive-screen.md)
+  at the left and exactly one **Pair new host** button at the right, including while loading
+  or empty. All three retain native keyboard activation, accessible names, visible focus and
+  the shared hover/focus name pill. At the 400px sidebar width, the card has 20px side and
+  24px top padding; 24×24px controls sit 4px down inside a 28px wrapper, with 20px between
+  the left controls. A 1px primary-colour rule at 60% opacity follows 16px below the wrapper;
+  list content starts 24px below the rule. Toolbar and rule remain outside the scrollport.
+- The global Channels/Chats title rows and their two pairing buttons are gone
+  ([#1678](../../specs/architecture/1678-sidebar-pairing-toolbar.md)). The existing section,
+  server and workspace grouping and divider remain; host-first grouping belongs to #1679.
+  The single toolbar pairing entry opens the same flow as Settings' Pair another server row.
+  Cancel and Escape restore the originating list, thread or Settings screen and trigger focus,
+  preserving an open conversation's draft. See [the toolbar pairing
+  control](channel-list-section-header-pair-control.md) for geometry, wiring and tests, and
+  [origin-aware cancellation](paired-shell-routing.md#the-pair-new-host-plus-and-origin-aware-cancel-1303)
+  for the modal lifetime.
 - Each Recent (unpromoted) row carries a trailing [Save-as-channel](save-as-channel-dialog.md)
   affordance; saved Channel rows carry none. Added by [#274](../codebase/274.md) — see § The row's
   save affordance below.
@@ -65,9 +65,8 @@ the host, separate from connection dots and repair; see [local read failures](ch
   Recent row carries this same pen shape too, reading **Edit chat** and opening the [Edit chat
   dialog](rename-conversation-dialog.md) instead, alongside its own Save-as-channel chevron — so the
   two trailing-control sets are no longer disjoint by section. See § The row's save affordance below.
-- Each section now draws **one host row per paired server**, in pairing order, directly below the
-  section label and above that machine's own conversation rows (Figma `106:3094` repeated per
-  machine in `103:2959`). Both the row and its subtree repeat once per section on purpose — the two
+- Each section now draws **one host row per paired server**, in pairing order, above that machine's own
+  conversation rows (Figma `106:3094` repeated per machine in `103:2959`). Both the row and its subtree repeat once per section on purpose — the two
   sections are not deduplicated into a shared tree. It renders a 12px server-rack glyph beside the
   operator's stored host label, falling back to the client-owned word `'Server'` with no usable
   label (never stored, unreadable, or settling), and ends with two trailing connection dots
@@ -338,7 +337,7 @@ the [thread and composer's hidden-scrollbar policy](conversation-shell-chrome.md
 bar at rest and during scrolling, including with an always-visible OS scrollbar preference.
 `overflow-y: auto` preserves native wheel, trackpad and focus scrolling. Keep the negative
 `--space-5` right margin and matching padding: the scrollport extends through the card's 20px
-right inset while the content retains its existing inset and row positions. The 28px top
+right inset while the content retains its existing inset and row positions. The 24px top
 padding scrolls with the tree; see [tree geometry](channel-list-tree-inset.md).
 
 [`e2e/sidebar-scrollbar.spec.ts`](../../../e2e/sidebar-scrollbar.spec.ts) seeds 20 channels and
@@ -380,9 +379,8 @@ min-content *contribution* to an ancestor is still content-derived. See [Paired 
 fix, landed as its own commit so it stayed independently reviewable.
 
 **`.channel-list` paints no background of its own since #1058**, and gained `position: relative` there
-too — not for layout but to lift its subtree above the sidebar wrapper's own `::before` wash, which
-would otherwise paint over the unpositioned section headers and host row while leaving the
-already-`position: relative` rows untouched. See [Paired shell § the pane
+too, lifting its subtree above the sidebar wrapper's own `::before` wash. Keeping `z-index: auto`
+avoids creating a stacking context that traps fixed name pills. See [Paired shell § the pane
 card](paired-shell-routing.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670) for the
 wash itself and the stacking reasoning.
 
@@ -431,17 +429,11 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   [#333](../codebase/333.md) as its own pinned button, since ChannelList still has no top app bar.) A
   screenshot of this screen will not match the full Figma frame 15-8 for this reason — fidelity is
   scoped to the two-section list body only.
-- **Section headers are sibling `<header>` elements, not `<h2>`** — flagged in code review as a
-  non-blocking future a11y improvement (real headings would give screen readers navigable landmarks).
-- **Both section headers and the divider render unconditionally whenever anything is paired**, since
-  [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070) — they no longer track whether
-  their section holds a row. This retired the two mutually-exclusive-header proxy `save-as-channel-promote.spec.ts`
-  and `real-daemon-promote.spec.ts` used to prove "the row moved sections" (a zero-row section used
-  to render no header). Both re-proxy on the row's own affordance instead — `.channel-list__save`
-  present and `.channel-list__rename` absent before a promote, the reverse after — which is disjoint
-  by construction (`Row` is passed one or the other, never both) and still reddens on a promote that
-  never lands. Worth the general habit: when a gate becomes unconditional, grep for what was reading
-  its absence.
+- **Global section headers are absent; the divider remains whenever there is anything to draw.**
+  Tests must identify partitions by tree/divider boundaries or row behavior, not by the old
+  Channels/Chats labels. Header absence cannot prove a promotion moved a row; check its
+  destination or promotion-specific affordance instead. Both sections now share an edit pen,
+  so pen presence alone also cannot distinguish them.
 - **The host row shows the label and connection state of the specific server it names**, not a
   singleton — closed by [#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199); see
   [the host row and its connection dots](channel-list-host-row.md) for the full detail. Recovery keeps
@@ -504,10 +496,9 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
 - [Channel List — the row's status dot](channel-list-status-dot.md) — the full detail behind § The
   row's status dot above: #799/#800/#801's three-part split, #874's fourth `input-required` subscription,
   and the wiring/testing lessons.
-- [Channel List — the section header's pair-new-host control](channel-list-section-header-pair-control.md)
-  (#1303) — the plus each section header now carries, drawn at rest; opens the same `pairServer` route
-  Settings' "Pair another server" row opens, and made cancelling it origin-dependent — see [Paired shell —
-  routing](paired-shell-routing.md#the-pair-new-host-plus-and-origin-aware-cancel-1303) for that half.
+- [Channel List — the toolbar's pair-new-host control](channel-list-section-header-pair-control.md)
+  — the single fixed entry, shared tooltip treatment, origin-aware cancellation and the
+  public SVG mask's CSP/paint verification.
 - [#1097 spec](../../specs/architecture/1097-desktop-24px-sidebar-row.md) — converged the row on the
   desktop 24px node (103:2968): the derived height, the body-small label, the deleted last-activity
   time, the shrunk affordances, and the settled status-dot centring.

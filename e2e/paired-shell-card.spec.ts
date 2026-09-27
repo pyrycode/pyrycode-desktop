@@ -200,20 +200,16 @@ test('paired shell: both panes draw the card, the backdrop draws the glow, and n
   expect(backdrop.image).toContain('radial-gradient')
   expect(backdrop.image).toContain(glow)
 
-  // --- 4. Nothing in the sidebar is dimmed (AC3), and nothing moved (AC4). The three unpositioned
-  // descendants are the ones at risk — .channel-list__row is already position: relative and the sticky
-  // FAB and actions cluster are at z-index: 1, so an unfixed wash would dim the headers and host rows and
-  // leave the chat rows bright, which is worse than the defect being fixed. The chat row is asserted
-  // alongside them precisely because AC3 is a statement about them reading at the SAME strength. ---
-  const sectionHeader = page.locator('.channel-list__section-header').first()
+  // Toolbar, host and conversation content must paint above the card wash.
+  const toolbar = page.locator('.channel-list__actions')
   const host = page.locator('.channel-list__host').first()
   const row = page.locator('.channel-list__row-open').first()
-  await expect(sectionHeader).toBeVisible()
+  await expect(toolbar).toBeVisible()
   await expect(host).toBeVisible()
   await expect(row).toBeVisible()
 
-  expect(await hitAtCentreOf(page, sectionHeader, '.channel-list__section-header')).toBe(
-    '.channel-list__section-header'
+  expect(await hitAtCentreOf(page, toolbar, '.channel-list__actions')).toBe(
+    '.channel-list__actions'
   )
   expect(await hitAtCentreOf(page, host, '.channel-list__host')).toBe('.channel-list__host')
   expect(await hitAtCentreOf(page, row, '.channel-list__row-open')).toBe('.channel-list__row-open')

@@ -146,8 +146,8 @@ import {
 // previews, top app bar, and "See all" link are deferred to other tickets.
 //
 // #1426 deleted the new-discussion FAB (#242) that used to float over this list. The sidebar's one route
-// to a new chat is now the workspace row's own plus (#1178/#1185/#1189), which mints in the clicked row's
-// directory on that row's host rather than in a Settings-chosen default on the sole paired one.
+// to a new chat is now the workspace row's own plus (#1178/#1185/#1189), which opens confirmation
+// for that row's host; the daemon then chooses its default folder.
 //
 // #1097 converged that row on the DESKTOP node (103:2968): a 24px row carrying a body-small label and
 // nothing else. The trailing last-activity time the mobile node drew is gone — deleted, not hidden —
@@ -203,7 +203,7 @@ export function ChannelList({
   const conversations = useConversationListStore(selectConversations)
   // #1426 — the client-owned default workspace (#403) is NO LONGER READ HERE. The FAB was its only reader
   // in this file and it closed over the current value so #404 would re-render the container; with the FAB
-  // gone the plus carries the clicked row's own `cwd`, so the setting reaches no create path and this
+  // gone the plus targets the clicked row's host with `cwd: null`, so the setting reaches no create path and this
   // container has one fewer store slice to wake on. The store and its Settings row are untouched — whether
   // that row stays is a separate decision, tracked in the project's Open Questions.
   //
@@ -952,7 +952,7 @@ function ArchiveButton({ onClick }: { onClick: () => void }): JSX.Element {
 // silently removed because the sidebar card (103:2959) never drew a floating button, and because the
 // deletion is what the three comments above — SettingsButton's, ArchiveButton's and the actions
 // cluster's — used to cite as the shape they cloned. Its replacement was already shipped: the workspace
-// row's plus (#1178/#1185/#1189) mints in the clicked row's directory on that row's host, so every paired
+// row's plus (#1178/#1185/#1189) confirms on the clicked row's host with the daemon's default folder, so every paired
 // machine keeps a route to a first chat and no create depends on a client-side default any more.
 
 // What the host row shows when there is NO usable operator label (#834) — a client-owned module-level

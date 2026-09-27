@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Modal } from '../../components/Modal'
 import { requestNewConversation } from '../../store/conversationCreatedBridge'
 import { selectStatusFor, sessionStore } from '../../store/sessionStore'
@@ -8,7 +8,32 @@ export function CreateChatDialogView({ error, onCancel, onCreate }: {
   onCancel: () => void
   onCreate: () => void
 }): JSX.Element {
-  return <div className="create-chat-overlay">
+  const overlayRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const overlay = overlayRef.current
+    if (overlay === null) return
+    const invoker = document.activeElement
+    overlay.querySelector<HTMLButtonElement>('.modal__action--cancel')?.focus()
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Tab') return
+      const buttons = Array.from(overlay.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))
+      const first = buttons[0]
+      const last = buttons[buttons.length - 1]
+      if (event.shiftKey && (document.activeElement === first || !overlay.contains(document.activeElement))) {
+        event.preventDefault()
+        last?.focus()
+      } else if (!event.shiftKey && (document.activeElement === last || !overlay.contains(document.activeElement))) {
+        event.preventDefault()
+        first?.focus()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown, true)
+      if (invoker instanceof HTMLElement && invoker.isConnected) invoker.focus()
+    }
+  }, [])
+  return <div className="create-chat-overlay" ref={overlayRef}>
     <div className="create-chat-overlay__scrim" aria-hidden="true" />
     <Modal title="Create chat" onClose={onCancel}
       cancelAction={{ label: 'Cancel', onClick: onCancel }}

@@ -48,3 +48,7 @@ Pending for documentation stage: update `docs/knowledge/features/channel-list.md
 ## Open questions
 
 - Existing browser specs for workspace editing and Add workspace assert behavior this ticket removes. During implementation, distinguish retired sidebar entry behavior from still-supported daemon commands and other screens; keep meaningful latter coverage.
+
+## Revisions
+
+- The workspace-only browser specs were retired with their sidebar controls. Conversation creation, host repair, channel promotion, status, and edit coverage remain in focused browser specs. The `mintChatInWorkspace` fixture now confirms creation through the host's Chats section; its callers use the paired daemon workspace default.

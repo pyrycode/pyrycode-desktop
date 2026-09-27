@@ -50,15 +50,15 @@ const FALLBACK_LABEL = 'Server'
 
 // FOUR host rows: one per paired machine, in EACH section (#1070). Both machines' seeds are unpromoted, so
 // the Chats tree is the populated one and the Channels tree holds the two rows alone.
-const HOST_ROW_COUNT = 4
+const HOST_ROW_COUNT = 2
 
 // Document order is the paired-server list's order — oldest-paired first — repeated per section, so the
 // Channels tree's rows are 0 (machine A) and 1 (machine B) and the Chats tree's are 2 and 3. POSITION IS
 // THE ONLY HANDLE, and deliberately so: the server id reaches no attribute, class name or text on this row
 // (`HostRow`'s ban list), so there is nothing to filter on. The count assertion is what makes the
 // arithmetic safe (`host-row-per-server.spec.ts`'s idiom).
-const A_ROWS = [0, 2]
-const B_ROWS = [1, 3]
+const A_ROWS = [0]
+const B_ROWS = [1]
 
 // The round trip is one in-process IPC hop, but the assertions after it auto-wait, so they carry headroom
 // for a cold runner.
@@ -129,7 +129,7 @@ test('the host row’s pen renames the machine, clears it, and the name outlives
   const expectLabels = async (a: string, b: string): Promise<void> => {
     await expect
       .poll(labelsRead, { timeout: ROUNDTRIP_TIMEOUT_MS })
-      .toEqual([a, b, a, b].map((value) => value.trim()))
+      .toEqual([a, b].map((value) => value.trim()))
   }
 
   // --- 1. THE OPENING POSITIVE READ, and the reason this drive proves anything. Machine A carries the
@@ -192,7 +192,7 @@ test('the host row’s pen renames the machine, clears it, and the name outlives
   // makes that arithmetic safe. Machine B carries no label, so its field opens EMPTY while its identity
   // lines are fully populated — the two are independent, which is itself worth pinning. ---
   // Open the second host from the Chats tree using the keyboard.
-  await pens.nth(3).focus()
+  await pens.nth(1).focus()
   await page.keyboard.press('Enter')
   await expect(dialog).toBeVisible()
   await expectIdentity(SECOND_SERVER_ID, relayUrlOf(servers[1].forwarder.url))

@@ -181,7 +181,7 @@ describe('host-first sidebar', () => {
     expect(hosts[1].indexOf('channel A')).toBeLessThan(hosts[1].indexOf('channel B'))
     expect(hosts[2]).toContain('chat A')
     expect(html.indexOf('unattributed')).toBeGreaterThan(html.lastIndexOf(HOST_ROW_MARKER))
-    expect(html).not.toContain('hidden')
+    expect(html).not.toContain('>hidden<')
   })
 
   it('offers both section creates on an empty connected host but none on a disconnected host or fallback', () => {

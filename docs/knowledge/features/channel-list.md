@@ -3,8 +3,8 @@
 The paired region's [`list` route](paired-shell.md) — since [#670](../codebase/670.md) also the
 always-mounted sidebar of the two-pane desktop shell, shown alongside `thread` rather than only on
 `list` — a pure render slice over the already-shipped
-[conversation list store](conversation-list-store.md), splitting the daemon's conversations into
-**Channels** (saved, `is_promoted === true`) above **Chats** (ad-hoc,
+[conversation list store](conversation-list-store.md), splitting each saved host's conversations into
+**Channels** (saved, `is_promoted === true`) and **Chats** (ad-hoc,
 `is_promoted === false`; labelled "Recent discussions" until the desktop-design relabel,
 [#709](../codebase/709.md)), each row showing its title alone at the desktop node's compact 24px
 height — a trailing last-activity time until
@@ -17,92 +17,33 @@ transport, or new store/wire code, so not security-sensitive.
 
 ## What it does
 
-Saved lists also populate these trees offline. Host-local read errors appear below
-the host, separate from connection dots and repair; see [local read failures](chat-history.md#results-and-failure-preservation).
+The sidebar shows each saved host once, in paired-server order, including a host with no
+conversations. Under each host are fixed **Channels** and **Chats** sections. Channels holds active
+promoted rows; Chats holds active unpromoted rows. Each partition keeps daemon list order. Archived
+rows belong only in [Archive](archive-screen.md). A missing or unpaired server stamp remains visible
+in an unattributed section after the hosts, without host actions; it is never assigned to another
+host. Two paired daemon workspaces on one machine remain two hosts.
 
-- Reads saved `serverIds` independently of `useConversationListStore(selectConversations)`.
-  Every saved host renders in both trees even before a conversation list arrives. `renderBody`
-  partitions `conversations ?? []` for display only: the store keeps `null` as **not-yet-loaded**.
-  **Nothing to draw** (no saved server *and* no active row) leaves the toolbar and its rule
-  above an empty tree; otherwise both host trees and the section divider render.
-  The `"No conversations yet"` empty state was retired by
-  [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070) — a paired app always has at
-  least a host row to draw (§ below).
-- Splits rows by `is_promoted`, preserving the store's array order within each section (the daemon's
-  order is authoritative — no client-side sort), then within each section by **server, then
-  workspace** (§ Server grouping below, [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070)).
-  Both host trees and the divider render whenever anything is paired; a paired machine with nothing in
-  a section shows its host row there with nothing under it, rather than the section disappearing.
-- Each row shows only a title (`name`, or `'Untitled'` when `name` is `null`/blank — never a blank
-  row) — a trailing last-activity time until
-  [#1097](https://github.com/pyrycode/pyrycode-desktop/issues/1097) deleted it; `formatLastActivity`
-  itself survives for its three other callers (§ Why the row carries no message preview below).
-- Every row's click opens the shell's single active conversation (`onOpen`) — not that specific row's
-  conversation. See § Edge cases.
-- The fixed toolbar contains [Settings](settings-screen.md), then [Archive](archive-screen.md)
-  at the left and exactly one **Pair new host** button at the right, including while loading
-  or empty. All three retain native keyboard activation, accessible names, visible focus and
-  the shared hover/focus name pill. At the 400px sidebar width, the card has 20px side and
-  24px top padding; 24×24px controls sit 4px down inside a 28px wrapper, with 20px between
-  the left controls. A 1px primary-colour rule at 60% opacity follows 16px below the wrapper;
-  list content starts 24px below the rule. Toolbar and rule remain outside the scrollport.
-- The global Channels/Chats title rows and their two pairing buttons are gone
-  ([#1678](../../specs/architecture/1678-sidebar-pairing-toolbar.md)). The existing section,
-  server and workspace grouping and divider remain; host-first grouping belongs to #1679.
-  The single toolbar pairing entry opens the same flow as Settings' Pair another server row.
-  Cancel and Escape restore the originating list, thread or Settings screen and trigger focus,
-  preserving an open conversation's draft. See [the toolbar pairing
-  control](channel-list-section-header-pair-control.md) for geometry, wiring and tests, and
-  [origin-aware cancellation](paired-shell-routing.md#the-pair-new-host-plus-and-origin-aware-cancel-1303)
-  for the modal lifetime.
-- Each Recent (unpromoted) row carries a trailing [Save-as-channel](save-as-channel-dialog.md)
-  affordance; saved Channel rows carry none. Added by [#274](../codebase/274.md) — see § The row's
-  save affordance below.
-- Each saved (promoted) Channel row carries a trailing pen opening the [Edit channel
-  dialog](edit-channel-dialog.md), reading **Edit channel** since
-  [#1476](edit-channel-dialog.md) (**Rename** before it). Added by [#360](../codebase/360.md). Since
-  [#1441](channel-list-row-hover-control.md#1441-a-chats-row-now-carries-both-controls-not-one) a
-  Recent row carries this same pen shape too, reading **Edit chat** and opening the [Edit chat
-  dialog](rename-conversation-dialog.md) instead, alongside its own Save-as-channel chevron — so the
-  two trailing-control sets are no longer disjoint by section. See § The row's save affordance below.
-- Each section now draws **one host row per paired server**, in pairing order, above that machine's own
-  conversation rows (Figma `106:3094` repeated per machine in `103:2959`). Both the row and its subtree repeat once per section on purpose — the two
-  sections are not deduplicated into a shared tree. It renders a 12px server-rack glyph beside the
-  operator's stored host label, falling back to the client-owned word `'Server'` with no usable
-  label (never stored, unreadable, or settling), and ends with two trailing connection dots
-  reporting that named server's own daemon and relay legs. Added by [#710](../codebase/710.md); the
-  operator-typed label shipped in [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834);
-  both the label and the dots read by server id since
-  [#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199); the loop drawing one row per
-  paired server, rather than only the first, shipped in
-  [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070) (§ Server grouping below). Per
-  the 2026-09-06 operator ruling, every paired machine's row renders in both sections whether or not
-  it has conversations there — the row is meant to carry the plus that starts a chat in a new
-  workspace, so a freshly paired machine still needs a route to its first chat. [#1185](channel-list-host-row.md#the-rows-pen-and-plus-on-hover-1185)
-  drew that plus (and an edit pen) as a hover-revealed pair in the dots' own slot, but shipped no
-  caller. [#1299](channel-list-host-row.md#the-edit-host-dialog-1299) (split from #1187) wired the
-  pen — every host row now opens an Edit host dialog on click, renaming the machine — and the plus is
-  still #1189's. See [the host row and its connection dots](channel-list-host-row.md) for the full
-  detail.
-- A failed host keeps its row and held workspace/conversation subtree. Its server glyph and label
-  use the error color, with an always-visible, keyboard-operable `Repair host` button beside the
-  separate daemon and relay dots. Pairing rejection is announced as `Pyrycode Pairing rejected`;
-  ordinary offline and connecting states keep their own labels, and the relay leg stays independent.
-  Repair opens [the host's recovery pane](paired-shell-routing.md#host-recovery-and-navigation-lifetime)
-  beside the sidebar without a selected conversation. Opening or cancelling it removes nothing;
-  explicit host removal remains in Settings. This retains already-held chats; restoring saved chats
-  on a fresh launch is separate work in #1339.
-- Below each host row, that machine's own rows group by **workspace** — one group per distinct
-  `cwd`, each headed by a 28px workspace row one indent deeper than the host row (Figma `106:3098`).
-  A workspace is a conversation's `cwd`; there is no separate wire concept for it. Both sections
-  group independently, so a workspace with rows in both appears in both; since #1070 this is also
-  true across servers — two machines sharing an identical `cwd` render as two separate groups, never
-  merged (§ Server grouping below). Groups render expanded (collapse is #704). Added by
-  [#703](../codebase/703.md).
-- Every row in both trees now leads with a [status dot](conversation-status-dot.md), resolved from
-  that row's **own** conversation id — a chat that has never been opened still shows its working or
-  unread state, not just the currently-open one. Added by
-  [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801); see § The row's status dot below.
+The host and both sections begin expanded and fold independently, including on an empty host.
+Folding preserves the selected conversation and composer draft. The host keeps its daemon and relay
+status indicators when offline or reconnecting. A failed host keeps repair available and reveals its
+sections even if it was folded before failure. See [host and section folds](channel-list-host-fold.md).
+
+Connected hosts have a trailing plus on each section. **Create channel** and **Create chat** open
+their respective confirmation dialogs, including on an empty host. Confirmation targets the clicked
+host with `cwd: null`, letting that daemon workspace choose its default folder; Cancel sends no
+create. Disconnected hosts cannot create. The section labels are fixed and have no rename action.
+The host hover control is **Edit host**; the sidebar has no Add workspace or Edit workspace action.
+The [toolbar](channel-list-section-header-pair-control.md) still holds Settings, Archive and Pair
+new host above a fixed rule, outside the scrollport.
+
+Conversation rows retain their title, status dot, selection, edit and
+[Save-as-channel](save-as-channel-dialog.md) controls. The Channels pen opens
+[Edit channel](edit-channel-dialog.md); the Chats pen opens
+[Edit chat](rename-conversation-dialog.md). The row's own identity, stored `cwd` and daemon
+contract are unchanged. The 400px card uses the [host-first geometry](channel-list-tree-inset.md).
+There are no sidebar workspace rows, global Channels/Chats trees or divider. Apps rows and
+actions are absent.
 
 ## Why the row carries no message preview
 
@@ -167,7 +108,7 @@ the store:
   calls, runtime-identical either way, and every existing caller still infers
   `T = ConversationSummary`.
 - `groupByServer(serverIds, rows)` — the level [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070)
-  added above `groupByWorkspace` (§ Server grouping below).
+  added for host attribution (§ Server grouping below).
 - `formatLastActivity(iso: string, now: number): string` — `now` is **injected**, not `Date.now()`
   inside, so the function stays pure and deterministic under test. Bucket contract:
 
@@ -188,20 +129,18 @@ the store:
 `ChannelListView`. The view keeps a stable `<section className="channel-list"
 aria-label="Conversations">` root, including under static server rendering.
 
-Sidebar mutations require the clicked row/group/host's status to be `connected`;
-missing, connecting, disconnected and error entries fail closed. This covers chat/channel
-creation, conversation rename, save-as-channel, workspace rename and Add-workspace.
-The open chat never determines availability. The global New discussion button requires
-exactly one paired, connected host. Held rows remain selectable, groups expandable, and
-local host labeling and explicit pairing repair available.
+Sidebar mutations require the clicked row or host's status to be `connected`;
+missing, reconnecting, disconnected and error entries fail closed. This covers chat/channel
+creation, conversation rename and Save as channel. The open chat never determines
+availability. Held rows remain selectable; host and section folds remain usable. The
+existing workspace dialog state has no sidebar entry point.
 
-Creation retains both `cwd` and `serverId`; successful host-scoped commands carry that id
-at the top level, while rename/promotion retain the clicked `conversation_id`. Submission
-checks the live store immediately before sending. Disconnect clears rename, create-channel,
-workspace-edit and save-as-channel targets synchronously: merely hiding them would let
-reconnect restore a stale draft over another host's dialog. Add-workspace disables offline
-submission. [Save-as-channel](save-as-channel-dialog.md#what-it-does) also abandons its pending
-folder continuation across reconnect.
+Section creation retains the clicked `serverId` and sends `cwd: null` on confirmation,
+so the daemon selects that host's default folder. Rename and promotion retain the clicked
+`conversation_id`. Submission checks the live store before sending. Disconnect clears
+open creation and conversation-action targets, preventing a stale draft from reappearing
+on reconnect. [Save as channel](save-as-channel-dialog.md#what-it-does) also abandons
+its pending folder continuation across reconnect.
 
 Each row's title renders as `<span className="channel-list__title">{titleFor(row.name)}</span>` — an
 auto-escaped React child (never `dangerouslySetInnerHTML`), the #203/#218 untrusted-string posture,
@@ -223,8 +162,7 @@ channel** since [#1476](edit-channel-dialog.md) (**Rename** before it) and opens
 dialog](edit-channel-dialog.md) through its own `onEditChannel` handler; a Chats row's pen reads
 **Edit chat** and opens the [Edit chat dialog](rename-conversation-dialog.md) through `onRename`,
 which now serves the Chats tree alone. Both pens draw from one `RowPenControl` shape (label,
-class tokens, handler) built per tree at `renderBody`'s two `renderServerTrees` call sites — the one
-level that tells the trees apart — see [the row's hover-revealed
+class tokens, handler) built in `renderBody` for the two row partitions — see [the row's hover-revealed
 control](channel-list-row-hover-control.md) for the shared markup.
 
 Since #1441 the two trailing-control sets are **not** disjoint by section: a Recent row carries both
@@ -254,72 +192,28 @@ from the wire, so a second paired machine's status can no longer steer this row'
 
 ### Server grouping (`channelListViewModel.ts` / `ChannelList.tsx`, added by [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070))
 
-The level Figma `103:2959` has always drawn — section, then server, then workspace — but the app
-never rendered, because the host row was drawn from a single global (`servers[0]`) rather than a
-loop. Two things make the server level load-bearing rather than cosmetic: `groupByWorkspace`'s key
-is the raw `cwd`, and a path is unique only *within* one machine, so two servers both holding
-`/home/user/project` would silently merge into one workspace group holding both machines'
-conversations unless the server level sits above it; and the 2026-09-06 operator ruling gives every
-paired machine a host row in both sections whether or not it has conversations there.
+`groupByServer(serverIds, rows): { servers, unattributed }` remains the pure attribution
+boundary. The container reads saved ids in `pairedServerStore.list()` order and passes them to
+`ChannelListView`. `renderBody` partitions active rows once, groups each partition by server,
+then renders one keyed `CollapsibleHostGroup` per saved id with Channels and Chats beneath it.
+No path grouping or normalization occurs in this active render. A host's key is its saved server
+id, so reordering cannot transfer fold state to a different host. Each section preserves its
+partition's list order.
 
-`groupByServer(serverIds, rows): { servers, unattributed }` is a new pure export, generic and
-**structurally** constrained (`{ readonly serverId?: string | null }`) rather than importing
-`conversationListStore`'s `ServerConversationSummary` — this module stays framework- and store-free
-so every derivation unit-tests without React or zustand. `serverIds` is the client's own
-`serverInfoStore` list (`selectServers`, in `pairedServerStore.list()` order — oldest-paired first),
-read in the `ChannelList` **container** and passed down as a prop rather than read inside a row:
-the same `openConversationId` ruling applies — zustand v5 serves `getInitialState()` under
-`renderToStaticMarkup`, so a row reading the list itself could only ever render the empty launch
-frame, and the whole of "one row per server" would fall to e2e. `renderServerTrees` (`ChannelList.tsx`)
-splits a section's rows by server *before* handing each machine's rows to `groupByWorkspace`
-unchanged, rather than re-keying that grouper on a composite `serverId + cwd` — the smaller change,
-and the correct one: React scopes keys per sibling list, so wrapping each server's subtree in its
-own keyed `<Fragment key={serverId}>` already makes the raw-`cwd` group keys collision-free across
-servers, and it buys per-server workspace-fold independence for free (a `cwd` shared by two machines
-gets two `CollapsibleWorkspaceGroup` instances, two separate booleans).
+The join iterates client-owned saved ids and tests row stamps against them. A stamp can select a
+saved host but cannot create one. Rows stamped with `null`, `undefined` or an unpaired id land
+in the unattributed Channels or Chats fallback after all hosts. They gain neither a host row nor
+a create control. Dropping such a row would hide a real conversation; placing it under the first
+host would claim an identity the client cannot establish. The helper uses a `Map`, avoiding
+plain-object `__proto__` behavior for string ids. Server ids are React reconciliation keys and
+comparison operands, never rendered as labels or attributes.
 
-**The join direction is the security property.** `groupByServer` iterates the client's own
-`serverIds` and only ever *tests* a row's stamp against those buckets — a stamp can select among
-existing keys and can never mint one, so the worst a confused or hostile daemon reaches is its own
-rows under its own host row. This is the read-side twin of the rule
-[`selectConversationsFor`](conversation-list-store.md)'s docblock states as a condition of its
-signature: a wire-sourced lookup key would let one server's conversations appear under another
-server's name.
+### Workspace data
 
-**A `Map`, never a `Record<string, T[]>`** — load-bearing, not stylistic, and written down at the
-declaration for that reason: on a plain object a `__proto__` stamp resolves `Object.prototype`, a
-truthy non-array whose `.push` corrupts or throws. Client-set stamps make this unreachable today
-(the free second fabric), which is exactly why it must not be "simplified" away. A `__proto__`
-regression test pins it.
-
-**Where an unstamped or unpaired-server row goes.** `ConversationListOrigin` admits `null` and
-`undefined`, and a stamp naming a machine that isn't paired is a third shape; #1068 stamps every
-daemon event main-side so none of the three is reachable in production, but the type allows them and
-a server-keyed tree has to answer. Such a row lands in `unattributed` and renders last in its
-section, grouped by workspace like any other row, with **no host row above it**. Dropping the row
-was rejected (it hides a real conversation); filing it under the first paired server was rejected
-too (it would put the row under a machine's name on no evidence — the same misattribution the join
-direction above exists to prevent, arrived at by omission instead of by a hostile stamp). Rendering
-it unattributed is the only outcome that names no machine while keeping the row reachable.
-
-**The React-key exception.** `HostRow`'s header bans the server id from seven sinks — attribute,
-class name, React key, title, URL, lookup path, log line. The keyed fragment above needs exactly the
-one it bans, so the ban list is amended rather than quietly broken: the other six all reach the DOM
-or reach persistence, where a React key is reconciliation identity alone — never serialised, never
-emitted by `renderToStaticMarkup`, unobservable to the page. An index key would have been strictly
-worse, cross-wiring fold state and per-row component instances between machines whenever the paired
-list reorders. A unit test pins a sentinel server id appearing nowhere in the rendered markup.
-
-No log line is added for the `unattributed` bucket: any useful form of one carries the row's `cwd`,
-name, or stamp, which ADR 0007's content-free rule and CLAUDE.md both forbid.
-
-### Workspace grouping (`channelListViewModel.ts` / `ChannelList.tsx`, added by #703)
-
-Split out to its own page: [workspace grouping](channel-list-workspace-grouping.md) — the
-server-then-workspace derivation (`workspaceLabelFor`/`groupByWorkspace`), the daemon-label-vs-key
-split added by #1287, the workspace-scoped create controls, the Add-workspace dialog's creation path,
-how a group leaves both trees (added by #1439's Archive workspace button), and the
-`conversationStateFake` one-label-per-`cwd` fixture model.
+The [workspace data and sidebar grouping](channel-list-workspace-grouping.md) page distinguishes
+surviving `cwd`/label helpers and dialog code from the active host-first render. Creation from a
+section uses the clicked daemon workspace's default folder. The old workspace grouping and sidebar
+workspace controls have no rendered entry point.
 
 ### The row's status dot (`ChannelList.tsx`, added by #801, wired to `input-required` by #874)
 
@@ -397,62 +291,19 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
 
 ## Edge cases and limitations
 
-- **Every row opens the single active conversation, not that row's conversation.** Per-row
-  select-and-load needs a transport path that doesn't exist yet (a select-and-load ticket, not yet
-  filed as of #141). The seam is already the row — a future ticket changes only what `onClick` passes.
-- **Since [#670](../codebase/670.md), a row click while a different conversation's thread is already
-  open is a real switch, not just an `open` nav.** Because the sidebar is now permanently mounted, this
-  click no longer necessarily passes through `list` — it's the interaction the two-pane shell exists to
-  enable, and it drives [the paired shell's `paneKey`
-  re-key](paired-shell-routing.md#the-conversation-switch-remount-bug-and-the-panekey-fix) so
-  `ConversationScreen` remounts instead of carrying the old conversation's screen-local state over.
-- **Archived rows are filtered out.** `renderBody` partitions via `partitionActive`, which drops
-  `is_archived` rows before the promotion split — archived conversations render only in the
-  [Archive screen](archive-screen.md), never here. Fixed by [#469](../codebase/469.md); before that fix,
-  every row the store held rendered here regardless of `is_archived` (a latent #366 regression, "Gap B"
-  in [#440](../codebase/440.md)/[#452](../codebase/452.md)). Since
-  [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070) the "nothing to draw" guard is
-  `serverIds.length === 0 && channels.length === 0 && discussions.length === 0` — both halves matter:
-  a store holding only archived rows still contributes zero to the row half, but a paired server with
-  literally nothing in either partition still draws its host rows, because the server half of the
-  guard is what a paired app answers on now (§ Server grouping above). The old loaded-zero
-  `"No conversations yet"` paragraph and its `.channel-list__empty` rule are deleted, not hidden — a
-  paired app is never truly empty any more.
-- **A row whose server stamp names no paired machine renders unattributed** — last in its section,
-  grouped by workspace, with no host row above it (§ Server grouping above). Unreachable in
-  production since #1068 stamps every daemon event main-side; the type still admits it.
-- **Deferred visual elements** (documented as intentionally absent, not missing): the top app bar
-  (logo/"Pyrycode" title), monogram avatars, and the "See all discussions (N)" collapse. (A
-  new-discussion FAB, once deferred here, shipped in [#242](../codebase/242.md), was never in the
-  drawing (103:2959), and was deleted in #1426 — see [its retired doc](new-discussion-fab.md); the
-  settings gear, also once deferred here as "inside a future top app bar," instead shipped in
-  [#333](../codebase/333.md) as its own pinned button, since ChannelList still has no top app bar.) A
-  screenshot of this screen will not match the full Figma frame 15-8 for this reason — fidelity is
-  scoped to the two-section list body only.
-- **Global section headers are absent; the divider remains whenever there is anything to draw.**
-  Tests must identify partitions by tree/divider boundaries or row behavior, not by the old
-  Channels/Chats labels. Header absence cannot prove a promotion moved a row; check its
-  destination or promotion-specific affordance instead. Both sections now share an edit pen,
-  so pen presence alone also cannot distinguish them.
-- **The host row shows the label and connection state of the specific server it names**, not a
-  singleton — closed by [#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199); see
-  [the host row and its connection dots](channel-list-host-row.md) for the full detail. Recovery keeps
-  the sidebar mounted, so a successful confirmation explicitly refreshes saved-host order.
-- **The relay leg's not-yet-known state.** Closed by [#719](../codebase/719.md): `relayLeg(null)` returns
-  a fourth category, `unknown`/`Relay Unknown`, instead of being collapsed into `down`/`Relay Offline`.
-  See [the host row and its connection dots](channel-list-host-row.md) for how this screen's dots
-  consume it.
-- **Two workspaces whose last path segment matches render two identically-labelled groups.**
-  Deliberately deferred to #716 — a display question, not a trust one, since the groups keep
-  distinct `cwd` keys and are never merged.
-- **Workspace groups are collapsible per tree, per group, and unpersisted.** [#704](../codebase/704.md)
-  turned each `WorkspaceRow` into a real `<button>` disclosure control (`aria-expanded`, click
-  withdraws that group's rows and nothing else); the fold survives opening a conversation and
-  coming back (component-local state under the sidebar's stable mount position, ADR 0006) but is
-  gone on every fresh app start — every group renders expanded by default, and there is no store,
-  disk, or wire involvement.
-- **Every idle row's status dot is still announced.** See [the row's status
-  dot](channel-list-status-dot.md) for the detail and the cheap fix, if wanted.
+- Archived rows are excluded by `partitionActive` before either section is grouped.
+  A paired host still renders when it has no active rows. If there are neither paired
+  hosts nor active rows, the tree body is empty while the toolbar remains.
+- Missing or unpaired server stamps render in an unattributed Channels or Chats
+  section after the hosts. These sections have no create control. Host attribution
+  never falls back to the first saved host.
+- A host's two section folds survive closing and reopening the host because the
+  hidden section components stay mounted. A failed host reveals both sections and
+  repair even if it was closed earlier. Recovery restores its held host fold.
+- Apps rows and actions are absent. Workspace names, folder paths and
+  `workspace_label` are retained as data but do not produce sidebar rows.
+- The relay leg's unknown state remains distinct from offline; see
+  [host connection dots](channel-list-host-row.md).
 
 ## Related
 
@@ -477,62 +328,13 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
 - [Archive screen](archive-screen.md) / [#469 codebase notes](../codebase/469.md) — `partitionActive`,
   the dual of `partitionArchived`, fixing archived rows leaking into this list.
 - [#141 codebase notes](../codebase/141.md) · Spec: `docs/specs/architecture/141-channel-list-screen.md`
-- [#709 codebase notes](../codebase/709.md) — relabelled the non-promoted section header from the
-  mobile-era "Recent discussions" to the desktop design's "Chats" (Figma `106:3258`); the code-level
-  `discussions` partition, CSS classes and store fields kept their names.
-- [Channel List — the host row and its connection dots](channel-list-host-row.md) — the full detail
-  behind § The host row and its connection dots above: #710/#718's original build, #834's operator-typed
-  label, and #1199's per-server-id keying of both the label and the two dots.
-- [Channel List — the workspace row's own nest and its create-chat plus](channel-list-workspace-row-nest.md)
-  (#1178) — the Chats-tree workspace plus, the `renderServerTrees` create seam [workspace
-  grouping](channel-list-workspace-grouping.md) now threads.
-- [Create-channel dialog](create-channel-dialog.md) (#1179) — the Channels-tree workspace plus and the
-  dialog it opens; the first path to a channel that skips [Save-as-channel](save-as-channel-dialog.md)'s
-  promotion.
-- [#703 codebase notes](../codebase/703.md) — added the workspace grouping level between each
-  host row and its conversation rows (Figma `106:3098`), grouping on the daemon's `cwd`.
-- [#704 codebase notes](../codebase/704.md) — turned each workspace row into a per-group, per-tree
-  disclosure control; renderer-only and unpersisted.
-- [Channel List — the row's status dot](channel-list-status-dot.md) — the full detail behind § The
-  row's status dot above: #799/#800/#801's three-part split, #874's fourth `input-required` subscription,
-  and the wiring/testing lessons.
-- [Channel List — the toolbar's pair-new-host control](channel-list-section-header-pair-control.md)
-  — the single fixed entry, shared tooltip treatment, origin-aware cancellation and the
-  public SVG mask's CSP/paint verification.
-- [#1097 spec](../../specs/architecture/1097-desktop-24px-sidebar-row.md) — converged the row on the
-  desktop 24px node (103:2968): the derived height, the body-small label, the deleted last-activity
-  time, the shrunk affordances, and the settled status-dot centring.
-  [#1098](https://github.com/pyrycode/pyrycode-desktop/issues/1098) then filled the open row. See
-  [the row's desktop geometry](channel-list-desktop-row-geometry.md).
-- [#1070 spec](../../specs/architecture/1070-sidebar-grouped-by-server.md) — the server-then-workspace
-  grouping design: `groupByServer`'s join-direction security property, the `Map`-not-`Record`
-  reasoning, the unattributed-row decision, and the 2026-09-06 always-render-both-sections ruling.
-- [#1287 spec](../../specs/architecture/1287-workspace-row-daemon-label.md) — the daemon-held
-  workspace label: `workspace_label` on the three inbound payloads, the label/key source split as a
-  security property, the fallback-group and verbatim-blank-label rulings, and the `conversationStateFake`
-  one-label-per-`cwd` fixture model [workspace grouping](channel-list-workspace-grouping.md) now describes.
-- [#1288 spec](../../specs/architecture/1288-inbound-workspace-updated-relist.md) — the inbound
-  `workspace_updated` re-list: why a bare rename needs its own trigger arm, why the frame carries no
-  `inReplyTo`, and the `renameWorkspace` fixture seam [workspace grouping § Fixture
-  note](channel-list-workspace-grouping.md#fixture-note) now describes. See
-  [conversation list store](conversation-list-store.md) for the trigger's own writeup.
-- [#1289 spec](../../specs/architecture/1289-rename-workspace-command.md) — the outbound
-  `renameWorkspace` verb this section's `conversationStateFake` writeup now describes; see
-  [Conversation workspace change § Workspace rename](conversation-workspace-change.md#workspace-rename-label-change-1289)
-  for the full wire contract and the six-piece transport it ships.
-- [Edit workspace dialog](edit-workspace-dialog.md) (#1180) — the hover pen beside the create plus on
-  every workspace row, and the dialog it opens: a shared modal for an optional name, with the path hidden and the clicked host retained
-  for `renameWorkspace`. Its documentation records the multi-host re-list limitation (#1363). Since
-  #1439 the same dialog also carries an Archive workspace button that empties a group by archiving
-  every active row it groups — see [workspace grouping](channel-list-workspace-grouping.md) for how the
-  group then leaves both trees.
-- [Channel List — workspace grouping](channel-list-workspace-grouping.md) — the full detail behind §
-  Workspace grouping above: `workspaceLabelFor`/`groupByWorkspace`, the daemon-label-vs-key split, the
-  workspace-scoped create controls and the Add-workspace creation path, how a group leaves both trees,
-  and the `conversationStateFake` fixture model.
-- Deferred: a future daemon+wire ticket (message-body preview text), a future select-and-load ticket
-  (per-row open), #716 (same-last-segment workspace label ambiguity — narrower since
-  [#1287](https://github.com/pyrycode/pyrycode-desktop/issues/1287): two workspaces can now be told
-  apart by giving them distinct daemon labels, settable by this client since
-  [#1180](edit-workspace-dialog.md) shipped the Edit-workspace dialog), a possible follow-up to
-  suppress the idle dot's announced label (see [the row's status dot](channel-list-status-dot.md)).
+- [Host row and connection dots](channel-list-host-row.md) — saved host identity,
+  status, edit and repair.
+- [Host and section folds](channel-list-host-fold.md) — independent state and failure reveal.
+- [Workspace data and sidebar grouping](channel-list-workspace-grouping.md) — retained
+  path and label data, and the retired workspace entry points.
+- [Host-first tree geometry](channel-list-tree-inset.md) — measured insets, heights and spacing.
+- [Create channel](create-channel-dialog.md) and
+  [Create chat](conversation-create.md) — section confirmation dialogs.
+- [Conversation status dot](channel-list-status-dot.md) — per-row state.
+- [Host-first architecture](../../specs/architecture/1683-host-first-sidebar.md) — design decisions.

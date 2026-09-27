@@ -328,8 +328,8 @@ test('restores a pairing-rejected saved host beside a usable connected host', as
   const second = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
   // The original endpoints remain alive: one rejects pairing, the other reconnects normally.
   const { page } = second
-  await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(2)
-  await expect(page.getByRole('img', { name: 'Pyrycode Connected', exact: true })).toHaveCount(2)
+  await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(1)
+  await expect(page.getByRole('img', { name: 'Pyrycode Connected', exact: true })).toHaveCount(1)
   await expect(page.locator('.channel-list__row-open')).toHaveText([SEEDED_ROW.name!, SECOND_SEEDED_ROW.name!])
   await expect(page.locator('.conversation')).toHaveCount(0)
   expect(commands.filter(c => c !== 'list_conversations')).toEqual([])
@@ -422,10 +422,10 @@ test('local list read failures stay beside the saved host', async ({ launchPaire
     ipcMain.handle('pyry:chat-history', () => ({ status: 'error', code: 'unreadable' }))
   })
   await page.reload()
-  await expect(page.locator('.channel-list__local-read-error')).toHaveCount(2)
+  await expect(page.locator('.channel-list__local-read-error')).toHaveCount(1)
   await expect(page.locator('.channel-list__local-read-error').first())
     .toHaveText('Could not read saved chats on this device.')
-  await expect(page.locator('.channel-list__host')).toHaveCount(2)
+  await expect(page.locator('.channel-list__host')).toHaveCount(1)
   await expect(page.locator('.channel-list__row-open')).toHaveCount(0)
   await expect(page.locator('.conversation')).toHaveCount(0)
   await page.setViewportSize({ width: 800, height: 800 })

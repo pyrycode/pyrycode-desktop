@@ -72,26 +72,18 @@ test('the host row reports the server it names, and the other machine dropping d
   await page.locator('.channel-list__row-open').filter({ hasText: FIRST_ROW_NAME }).click()
   await expect(page.locator('.conversation')).toBeVisible()
 
-  // FOUR host rows since #1070: one per paired machine, in EACH section. Both seeds are unpromoted, so
-  // the Chats tree is the populated one and the Channels tree holds the two rows alone — the amendment's
-  // "a machine with nothing in a section still shows its row" in the same render. It read 1 until #1070,
-  // when the sidebar drew a single row from the first paired server.
-  //
-  // Asserted rather than assumed, because the positional reads below are only meaningful against a known
-  // count: `nth()` addressing the wrong row would still produce two labels to compare and would compare
-  // the wrong ones.
+  // Each paired machine has one row, ordered by the saved host list.
   const hostRows = page.locator('.channel-list__host')
-  await expect(hostRows).toHaveCount(4)
+  await expect(hostRows).toHaveCount(2)
 
   // POSITION IS THE ONLY HANDLE, and deliberately so: the server id reaches no attribute, class name or
   // text on this row (`HostRow`'s ban list), so there is nothing to filter on. Document order is the
-  // paired-server list's order — oldest-paired first — repeated per section, so the Chats tree's rows are
-  // index 2 (machine A) and 3 (machine B). The count assertion above is what makes that arithmetic safe.
+  // paired-server list's order — oldest-paired first.
   const dotsOf = (index: number) => hostRows.nth(index).locator('.channel-list__host-dot')
   const labelsOf = (index: number): Promise<(string | null)[]> =>
     dotsOf(index).evaluateAll((nodes) => nodes.map((node) => node.getAttribute('aria-label')))
-  const rowA = 2
-  const rowB = 3
+  const rowA = 0
+  const rowB = 1
 
   // The BASELINE, taken while both machines are live. Machine A's legs are asserted CONNECTED rather than
   // merely recorded: if its row were already reporting an outage here, the "did not move" assertion below
@@ -137,9 +129,6 @@ test('the host row reports the server it names, and the other machine dropping d
   // Both dots, so a regression on either leg reddens: the daemon leg is the one server B's close writes,
   // and the relay leg is its twin through `selectRelayLinkStatusFor`.
   expect(await labelsOf(rowA)).toEqual(baselineA)
-  // The same row in the OTHER section, which reads the same two keyed cells and must agree with it. A
-  // tree that resolved a section's rows against the wrong machine would separate these two.
-  expect(await labelsOf(0)).toEqual(baselineA)
 })
 
 // AC3's naming half: server 1 was named at pairing and server 2 was not, so the two rows must READ
@@ -162,8 +151,7 @@ test('each host row shows the label stored for the machine IT names', async ({ l
   // gets throughout (it sits directly below the pairing-code field, and a mis-pasted payload into it is
   // an anticipated mistake).
   //
-  // The ARRAY FORM is what makes this AC3 rather than a weaker claim: it pins the count at four, each
-  // row's answer, AND the order — machine 1, machine 2, machine 1, machine 2 down the two sections. A row
+  // The ARRAY FORM pins the count at two, each row's answer, and saved host order. A row
   // reading the app-wide "most recently stored" answer would show the fallback everywhere (server 2
   // paired second and stored nothing), and a tree that named every row after the first machine would show
   // the typed length everywhere; both fail here, in opposite directions.
@@ -173,5 +161,5 @@ test('each host row shows the label stored for the machine IT names', async ({ l
         .locator('.channel-list__host-label')
         .evaluateAll((nodes) => nodes.map((node) => (node.textContent ?? '').trim().length))
     )
-    .toEqual([HOST_LABEL.length, FALLBACK_LABEL_LENGTH, HOST_LABEL.length, FALLBACK_LABEL_LENGTH])
+    .toEqual([HOST_LABEL.length, FALLBACK_LABEL_LENGTH])
 })

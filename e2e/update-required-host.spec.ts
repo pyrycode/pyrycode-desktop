@@ -10,9 +10,9 @@ test('a host that rejects the app as too old stops re-dialling alone and reconne
 }) => {
   const { page, servers } = await launchPairedApp({}, { secondServer: {} })
   const hosts = page.locator('.channel-list__host')
-  await expect(hosts).toHaveCount(4)
-  const firstDot = hosts.nth(2).locator('.channel-list__host-dot').first()
-  const rejectedDot = hosts.nth(3).locator('.channel-list__host-dot').first()
+  await expect(hosts).toHaveCount(2)
+  const firstDot = hosts.nth(0).locator('.channel-list__host-dot').first()
+  const rejectedDot = hosts.nth(1).locator('.channel-list__host-dot').first()
   await expect(rejectedDot).toHaveAttribute('aria-label', 'Pyrycode Connected')
 
   servers[1].forwarder.closeClientLeg(UPDATE_REQUIRED_CLOSE_CODE)

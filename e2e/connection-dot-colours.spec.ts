@@ -34,10 +34,8 @@ test('the four connection-dot colour bindings paint four distinct colours (AC3)'
   // the same count assertion about the row's geometry; here it is the precondition that gives the colour
   // reading someone to matter to, and it also waits out the sidebar's arrival before the probe runs.
   //
-  // FOUR since #1070, from one paired machine: both sections draw that machine's host row whether or not
-  // they hold any of its conversations, so the single-seed launch this fixture gives is two rows of two
-  // dots. It read 2 while a zero-row section rendered nothing at all.
-  await expect(page.locator('.channel-list__host-dot')).toHaveCount(4)
+  // One paired host renders one row with two connection dots.
+  await expect(page.locator('.channel-list__host-dot')).toHaveCount(2)
 
   // One probe per category, appended to the live document so it inherits the same cascade the real dots
   // do, read, then removed. Nothing is asserted inside the page — the colours come back out and the

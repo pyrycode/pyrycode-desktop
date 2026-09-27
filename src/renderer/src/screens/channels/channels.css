@@ -157,6 +157,15 @@
   margin-top: 0;
 }
 
+/* Preserve section component state while a host is folded without adding a layout box. */
+.channel-list__host-content {
+  display: contents;
+}
+
+.channel-list__host-content[hidden] {
+  display: none;
+}
+
 /* THE ROW'S DISCLOSURE (#1507, Figma Host 399:1366) — the button that folds one machine's whole subtree.
    It holds the glyph, the label and the chevron; the pen, the plus, the repair control and the two dots
    stay SIBLINGS of it inside the row, because an interactive control cannot nest inside a button (#274).
@@ -1042,6 +1051,90 @@
   line-height: var(--text-label-large-line);
   letter-spacing: var(--text-label-large-tracking);
   font-weight: var(--text-label-large-weight);
+}
+
+/* Each host owns two fixed sections. The section folder begins four pixels inside
+   the content edge; conversation rows keep their existing twelve-pixel inset. */
+.channel-list__section {
+  display: flex;
+  position: relative;
+  margin-left: var(--space-1);
+}
+
+.channel-list__section-disclosure {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: calc(var(--space-1) + 2px);
+  padding: var(--space-1) calc(var(--space-8) + var(--space-5)) var(--space-1)
+    calc(var(--space-7) + 2px);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+}
+
+.channel-list__section-disclosure:focus-visible,
+.channel-list__section-create:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.channel-list__section-icon {
+  position: absolute;
+  left: var(--space-2);
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.channel-list__section-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+.channel-list__section-chevron {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.channel-list__section-disclosure[aria-expanded='false'] .channel-list__section-chevron {
+  transform: rotate(-90deg);
+}
+
+.channel-list__section-create {
+  position: absolute;
+  right: 0;
+  top: var(--space-1);
+  width: var(--space-5);
+  height: var(--space-5);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-primary);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.channel-list__section:hover .channel-list__section-create,
+.channel-list__section-create:focus-visible {
+  opacity: 1;
+}
+
+.channel-list__section-create:hover .channel-list__control-name,
+.channel-list__section-create:focus-visible .channel-list__control-name {
+  display: block;
 }
 
 /* One row (Figma 103:2968) — a flex wrapper holding the open action and the optional Save-as-channel

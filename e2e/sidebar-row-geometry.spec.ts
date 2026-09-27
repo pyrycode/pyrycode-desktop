@@ -334,16 +334,16 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   // TWO workspace rows since #1485: both conversations are chats, so the Channels tree draws the same
   // workspace as an empty mirror above the divider. The count is still an exact number rather than a
   // `.first()` — one group per tree is the claim, and three would mean the two chats had split.
-  await expect(page.locator('.channel-list__workspace')).toHaveCount(2)
+  await expect(page.locator('.channel-list__section')).toHaveCount(2)
 
   const firstRow = await boxOf(row.nth(0), 'first sidebar row')
   const secondRow = await boxOf(row.nth(1), 'second sidebar row')
   // `.nth(1)` is the CHATS tree's group — the one these rows sit under. The Channels mirror renders
   // first, above the divider, and boxing it would measure the gap to nothing.
-  const workspaceRow = await boxOf(page.locator('.channel-list__workspace').nth(1), 'workspace row')
+  const sectionRow = await boxOf(page.locator('.channel-list__section').nth(1), 'Chats section')
 
   expectAbout(gapBetween(firstRow, secondRow), ROW_GAP_PX)
-  expectAbout(gapBetween(workspaceRow, firstRow), 0)
+  expectAbout(gapBetween(sectionRow, firstRow), 0)
   // Both rows kept the height, so the pitch really is 24-on-28 and not one row that grew — and both did
   // so with the fill present on one of them, which is what makes this the live detector for a wrapper
   // that grew a padding or a border to carry that fill (#1098's most likely regression).

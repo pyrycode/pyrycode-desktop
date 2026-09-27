@@ -40,8 +40,7 @@ test('pre-opened mutation dialogs cannot submit by keyboard after disconnection'
     // `renameConversation` (the helper is reused verbatim), and a `New label` fill always differs from the
     // seeded title, so the send is armed exactly as before and the offline case still has one to suppress.
     ['.channel-list__rename', '.edit-channel__input', 'OK', 'renameConversation'],
-    ['.channel-list__workspace-create', '.create-channel__input', 'OK', 'createConversation'],
-    ['.channel-list__workspace-edit', '.edit-workspace__input', 'OK', 'renameWorkspace']
+    ['.channel-list__section-create', '.create-channel__input', 'OK', 'createConversation']
   ]
   for (const [entry, input, confirm, commandType] of cases) {
     await page.locator(entry).first().click({ force: true })
@@ -114,8 +113,8 @@ test('sidebar ownership follows the target in both open-chat directions', async 
     // TWO of each since #1485 — the connected host's group is drawn in BOTH trees now, so it carries a
     // plus and a pen in each. The claim is unchanged and is still exact: the DISCONNECTED host's two
     // groups carry neither, which is what these numbers not being four says.
-    await expect(page.locator('.channel-list__workspace-create')).toHaveCount(2)
-    await expect(page.locator('.channel-list__workspace-edit')).toHaveCount(2)
+    await expect(page.locator('.channel-list__section-create')).toHaveCount(2)
+    await expect(page.locator('.channel-list__workspace-edit')).toHaveCount(0)
     await expect(page.locator('.channel-list__rename')).toHaveCount(1)
     // #1426 deleted the assertion that stood here: the global create was inert while two hosts were
     // paired. The plus that replaced it is per-row and carries no such state — it is withheld entirely
@@ -123,7 +122,7 @@ test('sidebar ownership follows the target in both open-chat directions', async 
     await commands.clear()
     // `.first()` is the CHANNELS tree's plus — that tree renders above the divider — which is the one
     // that opens `.create-channel__input`. The Chats mirror's plus opens chat confirmation.
-    await page.locator('.channel-list__workspace-create').first().click({ force: true })
+    await page.locator('.channel-list__section-create').first().click({ force: true })
     await page.locator('.create-channel__input').fill('Owned channel')
     await page.getByRole('button', { name: 'OK', exact: true }).click()
     await expect.poll(async () => (await commands.read()).filter(c => c.type === 'createConversation').length).toBe(1)
@@ -181,11 +180,11 @@ test('failed-host local controls remain usable', async ({ launchPairedApp }) => 
   await host.getByRole('button', { name: 'Edit host' }).click()
   await expect(page.getByRole('dialog')).toHaveCount(1)
   await page.getByRole('button', { name: 'Cancel', exact: true }).click()
-  const workspace = page.locator('.channel-list__workspace').first()
-  await workspace.click()
-  await expect(workspace).toHaveAttribute('aria-expanded', 'false')
-  await workspace.click()
-  await expect(workspace).toHaveAttribute('aria-expanded', 'true')
+  const section = page.locator('.channel-list__section-disclosure').first()
+  await section.click()
+  await expect(section).toHaveAttribute('aria-expanded', 'false')
+  await section.click()
+  await expect(section).toHaveAttribute('aria-expanded', 'true')
   await expect(page.getByRole('button', { name: 'Pair new host' })).toHaveCount(1)
   await host.hover()
   await page.screenshot({ path: '/tmp/builder-1379-failed-host.png', animations: 'disabled' })

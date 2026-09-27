@@ -111,7 +111,7 @@ test('real daemon creates a promoted, named channel in its default workspace ove
   await pairFromUnpairedLaunch(page, payload)
 
   const rows = page.locator('.channel-list__row')
-  const workspaceLabels = page.locator('.channel-list__workspace-label')
+  const sections = page.locator('.channel-list__section')
   const renameControl = page.locator('.channel-list__rename')
   const saveControl = page.locator('.channel-list__save')
   const createChannel = page.getByRole('button', { name: CREATE_CHANNEL_NAME })
@@ -130,7 +130,8 @@ test('real daemon creates a promoted, named channel in its default workspace ove
   // names its OWN control — the mirror wears "Create chat", never a second "Create channel" (the older
   // reason given here, that a promoted-only list leaves the Chats tree without a group at all, is the very
   // claim #1485 retired); and no Save control, the promoted seed's half of the affordance split. ---
-  await expect(workspaceLabels).toHaveText([WORKSPACE_LABEL, WORKSPACE_LABEL])
+  await expect(sections).toHaveCount(2)
+  await expect(page.locator('.channel-list__workspace')).toHaveCount(0)
   expect(WORKSPACE_LABEL).not.toBe(DAEMON_DEFAULT_LABEL)
   await expect(rows).toHaveCount(1)
   await expect(createChannel).toHaveCount(1)
@@ -172,9 +173,7 @@ test('real daemon creates a promoted, named channel in its default workspace ove
 
   // The second group is the daemon's default path, not the clicked workspace. The initial two labels
   // above establish the before state; this read cannot pass before the round trip.
-  await expect(workspaceLabels).toHaveText([
-    WORKSPACE_LABEL, DAEMON_DEFAULT_LABEL, WORKSPACE_LABEL, DAEMON_DEFAULT_LABEL
-  ])
+  await expect(sections).toHaveCount(2)
 
   // --- The dialog closed on Create (AC1). Ordered last: it is about to be gone anyway, so it proves
   // nothing on its own — it is here to catch a dialog that stayed open behind the created row. ---

@@ -35,6 +35,7 @@ import type {
 } from './transport/noiseRelayDriver'
 import type { DiagnosticEvent, DiagnosticLog } from './diagnosticLog'
 import { base64StdEncode, base64StdDecode, encodeEnvelope, decodeEnvelope } from './transport/codec'
+import { sessionSettingsGoldenFixtures } from './transport/sessionSettingsGoldenFixtures'
 import type { BundleConsumer, BundleFailReason } from './transport/bundleReassembler'
 import { createDebugBundleDownload, type DebugBundleDownload } from './debugBundleDownload'
 import {
@@ -8647,8 +8648,7 @@ describe('createDaemonConnection — newSession (kill-and-respawn claude in one 
 })
 
 describe('createDaemonConnection — requestSessionSettings (run-config request/reply, #491)', () => {
-  // Reports from pyrycode/internal/protocol/testdata/session_settings_memory_*.json.
-  const MEMORY_REPORTS = [
+  const MEMORY_CASES = [
     { name: 'available', report: { availability: 'available', providers: [
       { id: 'qmd', display_name: 'QMD', installed: true, enabled: true, availability: 'available' }
     ] } },
@@ -8656,8 +8656,17 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
       { id: 'memsearch', display_name: 'Memsearch', installed: true, enabled: false, availability: 'unavailable' }
     ] } },
     { name: 'absent', report: { availability: 'absent', providers: [] } },
-    { name: 'unknown', report: { availability: 'unknown', providers: [] } }
-  ]
+    { name: 'unknown', report: { availability: 'unknown', providers: [] } },
+    { name: 'omitted', report: undefined }
+  ] as const
+
+  // The daemon fixtures omit in_reply_to; add only the request correlation for this event path.
+  function correlatedGoldenFixture(name: keyof typeof sessionSettingsGoldenFixtures, replyTo: number): Uint8Array {
+    return encodeEnvelope({
+      ...decodeEnvelope(Buffer.from(sessionSettingsGoldenFixtures[name])),
+      in_reply_to: replyTo
+    })
+  }
   const RUN_CONFIG = {
     session_id: 'sess-a',
     model: 'claude-opus-4-8',
@@ -8706,13 +8715,9 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     return { ...ctx, replyTo: lastRequestId(ctx) }
   }
 
-  it.each(MEMORY_REPORTS)('carries the daemon $name memory report to the stamped event', async ({ report }) => {
+  it.each(MEMORY_CASES)('carries the daemon $name memory report to the stamped event', async ({ name, report }) => {
     const ctx = await requested()
-    ctx.drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext({
-      session_id: 'sess-a', model: 'opus', effort: 'high', yolo: false,
-      permission_mode: 'default', used_tokens: 12480, window_tokens: 200000,
-      memory_search: report
-    }, ctx.replyTo) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: correlatedGoldenFixture(name, ctx.replyTo) })
     const events = stampedEvents(ctx.sink).filter((e) => e.type === 'runConfigReceived')
     expect(events).toHaveLength(1)
     expect(events[0]).toMatchObject({ conversationId: CONV, serverId: 'server-config',
@@ -8724,7 +8729,7 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
 
   it('keeps an older or malformed memory report from becoming confirmed status', async () => {
     const ctx = await requested()
-    ctx.drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG, ctx.replyTo) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: correlatedGoldenFixture('omitted', ctx.replyTo) })
     ctx.connection.requestSessionSettings(CONV)
     ctx.drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext({
       ...RUN_CONFIG, memory_search: { availability: 'available', providers: [{}] }
@@ -8744,24 +8749,22 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     const first = lastRequestId(ctx)
     ctx.connection.requestSessionSettings('conv-second')
     const second = lastRequestId(ctx)
-    const available = { ...RUN_CONFIG, memory_search: MEMORY_REPORTS[0].report }
-    const absent = { ...RUN_CONFIG, memory_search: MEMORY_REPORTS[2].report }
-    ctx.drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(absent, second) })
-    ctx.drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(available, first) })
-    ctx.drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(available, first) })
-    ctx.drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(available, first + 100) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: correlatedGoldenFixture('absent', second) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: correlatedGoldenFixture('available', first) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: correlatedGoldenFixture('available', first) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: correlatedGoldenFixture('available', first + 100) })
     expect(stampedEvents(ctx.sink).filter((e) => e.type === 'runConfigReceived')
       .map((e) => ({ conversationId: e.conversationId, serverId: e.serverId,
         memorySearch: e.memorySearch }))).toEqual([
-      { conversationId: 'conv-second', serverId: 'server-config', memorySearch: MEMORY_REPORTS[2].report },
-      { conversationId: 'conv-first', serverId: 'server-config', memorySearch: MEMORY_REPORTS[0].report }
+      { conversationId: 'conv-second', serverId: 'server-config', memorySearch: MEMORY_CASES[2].report },
+      { conversationId: 'conv-first', serverId: 'server-config', memorySearch: MEMORY_CASES[0].report }
     ])
     ctx.connection.requestSessionSettings('conv-abandoned')
     const abandoned = lastRequestId(ctx)
     ctx.connection.reconnect()
     await tick()
     ctx.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
-    ctx.drivers[1].emit({ type: 'message', plaintext: sessionSettingsPlaintext(available, abandoned) })
+    ctx.drivers[1].emit({ type: 'message', plaintext: correlatedGoldenFixture('available', abandoned) })
     expect(stampedEvents(ctx.sink).filter((e) => e.type === 'runConfigReceived')).toHaveLength(2)
   })
 

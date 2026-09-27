@@ -5,6 +5,7 @@ import {
   type DecodedHistoryPage
 } from './inboundMessage'
 import { encodeEnvelope, base64StdEncode, WireDecodeError } from './codec'
+import { sessionSettingsGoldenFixtures } from './sessionSettingsGoldenFixtures'
 import { createDiagnosticLog, type DiagnosticLog, type DiagnosticEvent } from '../diagnosticLog'
 import {
   MAX_PLAINTEXT_BYTES,
@@ -10126,14 +10127,11 @@ describe('parseInboundMessage — secret-safety / log-free', () => {
 })
 
 describe('parseInboundMessage — session_settings recognition (#491)', () => {
-  // Payloads copied from pyrycode/internal/protocol/testdata/session_settings_memory_{available,disabled,absent,unknown}.json
-  // and the older session_settings.json fixture. The daemon fixtures have no in_reply_to; the
-  // local envelope helper supplies it for the correlation-capable desktop decoder.
   const memoryFixtureBase = {
     session_id: 'sess-a', model: 'opus', effort: 'high', yolo: false,
     permission_mode: 'default', used_tokens: 12480, window_tokens: 200000
   }
-  const memoryFixtureReports = [
+  it.each([
     { name: 'available', report: { availability: 'available', providers: [
       { id: 'qmd', display_name: 'QMD', installed: true, enabled: true, availability: 'available' }
     ] } },
@@ -10142,19 +10140,18 @@ describe('parseInboundMessage — session_settings recognition (#491)', () => {
     ] } },
     { name: 'absent', report: { availability: 'absent', providers: [] } },
     { name: 'unknown', report: { availability: 'unknown', providers: [] } }
-  ]
-
-  it.each(memoryFixtureReports)('decodes the daemon $name memory-search fixture', ({ report }) => {
-    const decoded = parseInboundMessage(encodeSessionSettings({ ...memoryFixtureBase, memory_search: report }))
+  ] as const)('decodes the daemon $name memory-search fixture', ({ name, report }) => {
+    const decoded = parseInboundMessage(Buffer.from(sessionSettingsGoldenFixtures[name]))
     if (decoded?.kind !== 'session-settings') throw new Error('expected session settings')
     expect(decoded.sessionSettings.memory_search).toEqual(report)
     expect(decoded.sessionSettings).toMatchObject(memoryFixtureBase)
   })
 
   it('keeps the older daemon session_settings fixture without a memory report', () => {
-    const decoded = parseInboundMessage(encodeSessionSettings(memoryFixtureBase))
+    const decoded = parseInboundMessage(Buffer.from(sessionSettingsGoldenFixtures.omitted))
     if (decoded?.kind !== 'session-settings') throw new Error('expected session settings')
     expect(decoded.sessionSettings.memory_search).toBeUndefined()
+    expect(decoded.sessionSettings).toMatchObject(memoryFixtureBase)
   })
 
   it('preserves both false provider booleans without inferring aggregate absence', () => {

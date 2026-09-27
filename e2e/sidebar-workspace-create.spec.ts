@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { decodeEnvelope } from '../src/main/transport/codec'
 import type { ConversationSummary } from '../src/shared/wire/types'
 import type { Locator } from '@playwright/test'
 
@@ -14,12 +15,9 @@ import type { Locator } from '@playwright/test'
 // placement and takes this ticket's geometry half. Both of those must pass with their existing
 // assertions untouched (AC5), so the control's own behaviour gets its own launch.
 //
-// ⭐ THE SEED'S cwd IS DELIBERATELY NOT THE FAKE'S OWN CREATE DEFAULT, and that is what makes the drive
-// non-vacuous. `conversationStateFake` mints a created row at `payload.cwd ?? DEFAULT_CREATED_CWD`, and
-// that default is `/fake/workspace` — the path every other fixture seeds. A plus that sent `null` (or
-// nothing) would therefore still land its row under a workspace group and still open a thread; only the
-// GROUP COUNT tells the two apart. Seeded at another path, a correct plus keeps one group and a broken
-// one mints a second. That count is the assertion this file turns on.
+// The seed path differs from the fake daemon's default. A null-cwd request creates a second group;
+// a request that mistakenly sends the clicked workspace path leaves one. The fake's held response also
+// lets this drive prove that confirmation sends once and navigation waits for the daemon reply.
 //
 // SECRET HYGIENE (the sibling specs' posture). Every assertion reads a number, a computed string, or the
 // client-owned "Untitled" placeholder. The seed's name and its cwd are never asserted on and never
@@ -81,7 +79,7 @@ const expectAbout = (actual: number, expected: number): void => {
   expect(actual).toBeLessThanOrEqual(expected + GEOMETRY_TOLERANCE_PX)
 }
 
-test('the workspace row’s plus hides at rest, shows on hover and on focus, and starts a chat in that workspace', async ({
+test('the workspace row’s plus reveals on hover and focus, then confirms a daemon-default chat', async ({
   launchPairedApp
 }) => {
   // ONE launch, ONE continuous drive (the sibling specs' shape): each launch pays a full handshake, and
@@ -91,8 +89,19 @@ test('the workspace row’s plus hides at rest, shows on hover and on focus, and
   // The stateful fake owns the list, so this seed fully replaces the fixture's default one. ONE row, so
   // `launchPairedApp`'s strict `.channel-list__row-open` click still resolves; unpromoted, so it renders
   // under Chats — the only tree that hands a create callback down today.
-  const buildReplyFrames = conversationStateFake({ conversations: [seed({})] })
-  const { page } = await launchPairedApp({ buildReplyFrames })
+  const fake = conversationStateFake({ conversations: [seed({})] })
+  const creates: ReturnType<typeof decodeEnvelope>[] = []
+  let held: Uint8Array[] = []
+  const { page, servers } = await launchPairedApp({ buildReplyFrames: (inbound) => {
+    const request = decodeEnvelope(inbound)
+    const replies = fake(inbound)
+    if (request.type === 'create_conversation') {
+      creates.push(request)
+      held = replies
+      return []
+    }
+    return replies
+  } })
 
   const rows = page.locator('.channel-list__row')
   const head = page.locator('.channel-list__workspace-head')
@@ -164,31 +173,77 @@ test('the workspace row’s plus hides at rest, shows on hover and on focus, and
   await expect(create).toBeFocused()
   expect(await computed(create, 'opacity')).toBe(SHOWN_OPACITY)
 
-  // --- 7. AC4: clicking the plus creates a chat IN THIS WORKSPACE. The fold's state is captured before
-  // the click so the "did not change" claim below compares against a value read from the same run. ---
+  // --- 7. Opening, cancelling and closing are read before any create frame is released. ---
   expect(await chatsWorkspaceRow.getAttribute('aria-expanded')).toBe('true')
   await create.click()
+  const dialog = page.getByRole('dialog', { name: 'Create chat', exact: true })
+  await expect(dialog).toBeVisible()
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.screenshot({ path: '/tmp/builder-1682-create-chat-1280.png', animations: 'disabled' })
+  await page.setViewportSize({ width: 800, height: 600 })
+  await page.screenshot({ path: '/tmp/builder-1682-create-chat-800.png', animations: 'disabled' })
+  expect(creates).toHaveLength(0)
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  expect(creates).toHaveLength(0)
+  await create.click()
+  await dialog.getByRole('button', { name: 'Close dialog' }).click()
+  await expect(dialog).toHaveCount(0)
+  expect(creates).toHaveLength(0)
+  await create.click()
+  await dialog.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect.poll(() => creates.length).toBe(1)
+  expect(creates[0]).toMatchObject({ type: 'create_conversation',
+    payload: { name: null, is_promoted: false, cwd: null } })
+  await expect(dialog).toHaveCount(0)
+  // The request does not navigate optimistically; release the daemon's held confirmation first.
+  await expect(page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText('Seeded row')
+  held.forEach(frame => servers[0].daemon.pushFrame(frame))
 
-  // THE POSITIVE, AUTO-WAITING READ COMES FIRST. Everything after it is an unchanged-state assertion,
-  // and each of those would pass before the round trip even resolved if it led (the #1123 rule): the
-  // group count is 1 at launch and `aria-expanded` is already "true".
   await expect(rows).toHaveCount(2, { timeout: ROUNDTRIP_TIMEOUT_MS })
-  // ...and the created thread opened, which is the other half of AC4. The new chat is minted with
-  // `name: null`, so the open row is the one showing the client's own placeholder — the fill moved off
-  // the seeded row exactly as it does after the FAB.
   await expect(page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText(UNTITLED)
 
-  // ⭐ THE `cwd` ASSERTION, AND THE ONLY ONE THAT CAN SEE IT. Both rows are in ONE group, so the create
-  // carried this group's key rather than `null` — which the fake would have resolved to its own
-  // `/fake/workspace` default, minting a SECOND group. Row count and thread-opening are both blind to
-  // that difference; this count is not.
-  // TWO, not four: the created row joined the SEED's group rather than minting a second one. The claim
-  // is unchanged by #1485's mirror — a null cwd resolved to `/fake/workspace` would have produced FOUR
-  // here (two groups, each mirrored), which is still the difference row count and navigation are blind to.
-  await expect(workspaceRow).toHaveCount(2)
-  await expect(head).toHaveCount(2)
+  // The fake resolves null to `/fake/workspace`, distinct from the clicked seed path. Both trees mirror
+  // the two groups, so a broken send of the clicked path would leave only two workspace heads.
+  await expect(workspaceRow).toHaveCount(4)
+  await expect(head).toHaveCount(4)
 
   // AC4's last clause: the plus is a SIBLING of the disclosure button, never a child, so the click never
   // reached the fold's handler.
   expect(await chatsWorkspaceRow.getAttribute('aria-expanded')).toBe('true')
+})
+
+test('the Create chat dialog keeps the clicked host when hosts share a workspace path', async ({ launchPairedApp }) => {
+  const capture = (id: string) => {
+    const fake = conversationStateFake({ conversations: [seed({ id })] })
+    const creates: ReturnType<typeof decodeEnvelope>[] = []
+    return { creates, reply: (inbound: Uint8Array): Uint8Array[] => {
+      const request = decodeEnvelope(inbound)
+      const frames = fake(inbound)
+      if (request.type === 'create_conversation') {
+        creates.push(request)
+        return []
+      }
+      return frames
+    } }
+  }
+  const first = capture('host-one-seed')
+  const second = capture('host-two-seed')
+  const { page } = await launchPairedApp({ buildReplyFrames: first.reply },
+    { secondServer: { buildReplyFrames: second.reply } })
+  const plus = page.getByRole('button', { name: 'Create chat', exact: true })
+  const dialog = page.getByRole('dialog', { name: 'Create chat', exact: true })
+  await expect(plus).toHaveCount(2)
+  await plus.nth(0).click()
+  await dialog.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect.poll(() => first.creates.length).toBe(1)
+  expect(second.creates).toHaveLength(0)
+  expect(first.creates[0]).toMatchObject({ type: 'create_conversation',
+    payload: { is_promoted: false, name: null, cwd: null } })
+  await plus.nth(1).click()
+  await dialog.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect.poll(() => second.creates.length).toBe(1)
+  expect(first.creates).toHaveLength(1)
+  expect(second.creates[0]).toMatchObject({ type: 'create_conversation',
+    payload: { is_promoted: false, name: null, cwd: null } })
 })

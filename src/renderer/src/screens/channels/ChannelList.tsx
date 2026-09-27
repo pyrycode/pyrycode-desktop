@@ -13,7 +13,6 @@ import {
   useConversationListStore,
   selectConversations
 } from '../../store/conversationListStore'
-import { requestNewConversation } from '../../store/conversationCreatedBridge'
 // #1199 reads BOTH legs per server. The app-wide `selectStatus` / `selectRelayLinkStatus` cells are
 // untouched in name, signature and value; the host row is simply no longer a reader of either.
 // `selectStatus` keeps four other consumers (the composer status row, the connection banner, the repair
@@ -97,6 +96,7 @@ import { EditChatDialogView, requestRenameConversation } from './EditChatDialog'
 // already trims, so the retitle costs no second command constructor and no second wire path.
 import { EditChannelDialog } from './EditChannelDialog'
 import { CreateChannelDialog } from './CreateChannelDialog'
+import { CreateChatDialog } from './CreateChatDialog'
 // #1180 — the view and its send helper travel together, unlike #1179's split: this verb has exactly
 // one sender and no shipped twin to sit beside, which is `EditChatDialog`'s shape.
 import {
@@ -276,13 +276,10 @@ export function ChannelList({
   // third cell would be one more thing to clear on host loss and one more thing to forget.
   const [editChannelRow, setEditChannelRow] = useState<SidebarRow | null>(null)
   const [editChannelName, setEditChannelName] = useState('')
-  // The Create-channel dialog's own per-interaction target (#1179), independent of the two above for
-  // their stated reason: an open dialog's fixed-inset overlay covers the window, so no two can be open
-  // at once and no mutual-exclusion logic is needed. The target retains the host and workspace to
-  // create in — the group key the clicked plus closed over — and holding it here is what keeps that
-  // daemon-asserted path out of the dialog view entirely. The mounted dialog owns its draft,
-  // seeded EMPTY on every open (there is no current name to seed from, this being a create).
-  const [createChannelTarget, setCreateChannelTarget] = useState<{ cwd: string; serverId: string } | null>(null)
+  // The selected host stays fixed through each dialog, independent of workspace path. Both creations
+  // ask the daemon to choose its default folder; mounting a fresh dialog resets its local draft.
+  const [createChatServerId, setCreateChatServerId] = useState<string | null>(null)
+  const [createChannelTarget, setCreateChannelTarget] = useState<{ serverId: string } | null>(null)
   // The Edit-workspace dialog's own per-interaction pair (#1180), independent of the three above for
   // their stated reason: an open dialog's fixed-inset overlay covers the window, so no two can be open
   // at once. Hold the exact path and clicked host together until dismissal.
@@ -340,6 +337,7 @@ export function ChannelList({
     // #1476: AC3's host-loss close, HERE rather than in a second effect — one subscription clears every
     // dialog's target, so a disconnect can never leave one of them holding a stale row.
     if (editChannelRow && unavailable(editChannelRow.serverId)) setEditChannelRow(null)
+    if (createChatServerId && unavailable(createChatServerId)) setCreateChatServerId(null)
     if (createChannelTarget && unavailable(createChannelTarget.serverId)) setCreateChannelTarget(null)
     // #1439: the arm goes with the target on the host-loss path (AC2), in the same statement — a reset
     // written anywhere else is one an edit to this branch can forget.
@@ -347,7 +345,7 @@ export function ChannelList({
       setEditWorkspaceTarget(null)
       setEditWorkspaceArchive('idle')
     }
-  }), [saveRow, renameRow, editChannelRow, createChannelTarget, editWorkspaceTarget])
+  }), [saveRow, renameRow, editChannelRow, createChatServerId, createChannelTarget, editWorkspaceTarget])
   return (
     <>
       {/* #834: the headless one-shot that fills the host row's label, mounted HERE — the SettingsScreen
@@ -383,20 +381,16 @@ export function ChannelList({
         onOpenArchive={onOpenArchive}
         onPairNewHost={onPairNewHost}
         onRepairHost={onRepairHost}
-        // Retain the clicked workspace and its host through the synchronous send. Since #1426 this is the
-        // sidebar's ONLY direct create: `window.pyry` is dereferenced HERE, at interaction time, never
-        // during render, which is the discipline the deleted `onNewConversation` used to be named for.
-        onCreateChat={(cwd, serverId) => {
-          if (!canMutateHost(serverId)) return
-          requestNewConversation(window.pyry.sendCommand, cwd, serverId)
-        }}
-        // #1179 — the Channels-tree plus OPENS A DIALOG and sends nothing: the workspace is fixed by
-        // the row that was clicked, and the name still has to be typed. Both cells are seeded together
-        // so a reopen always starts from an empty field (the CreateFolderDialog reset, achieved by the
-        // seed rather than by a store, since there is no store here to reset).
-        onCreateChannel={(cwd, serverId) => {
+        // The current workspace row supplies the host, while the daemon chooses the default folder.
+        onCreateChat={(_cwd, serverId) => {
           if (!canMutateHost(serverId) || serverId === undefined) return
-          setCreateChannelTarget({ cwd, serverId })
+          setCreateChatServerId(serverId)
+          window.pyry.sendDiagnostic({ event: 'chat-create-state', code: 'opened' })
+        }}
+        // The Channels-tree plus opens its existing named draft for the clicked host.
+        onCreateChannel={(_cwd, serverId) => {
+          if (!canMutateHost(serverId) || serverId === undefined) return
+          setCreateChannelTarget({ serverId })
         }}
         // #1180 — the pen OPENS A DIALOG and sends nothing: the workspace is fixed by the row that was
         // clicked, and the new name still has to be typed. Both cells are seeded together, the field
@@ -553,14 +547,12 @@ export function ChannelList({
           }}
         />
       )}
-      {/* #1179 — gated on an explicit `!== null` and NEVER on truthiness: an empty-string `cwd` would
-          collapse into "no dialog open" under a truthy test (the trap `App.tsx`'s `openConversationId`
-          header names). It is unreachable today because `renderServerTrees` withholds the plus from the
-          unknown-workspace group, whose key IS the empty string — and writing the check this way is
-          what keeps that withhold load-bearing for one reason rather than two. */}
+      {createChatServerId !== null && connected(createChatServerId) && (
+        <CreateChatDialog serverId={createChatServerId}
+          onDismiss={() => setCreateChatServerId(null)} />
+      )}
       {createChannelTarget !== null && connected(createChannelTarget.serverId) && (
         <CreateChannelDialog
-          cwd={createChannelTarget.cwd}
           serverId={createChannelTarget.serverId}
           onDismiss={() => setCreateChannelTarget(null)}
         />
@@ -811,15 +803,9 @@ export function ChannelListView({
   // Required navigation callback for the always-visible toolbar entry.
   onPairNewHost: () => void
   onRepairHost?: (serverId: string) => void
-  // #1178 — start a chat in the named workspace, and since #1426 the sidebar's ONLY create that sends a
-  // command directly. REQUIRED rather than optional, `openConversationId`'s reasoning: the container must
-  // decide, and a defaulted prop would let a future caller silently render a sidebar with no route to a
-  // new chat at all. The `cwd` is the group's key and travels verbatim; this view never inspects it.
+  // The workspace-row plus opens confirmation for its host. The row's cwd is no longer a destination.
   onCreateChat: (cwd: string, serverId: string | undefined) => void
-  // #1179 — open the Create-channel dialog for the named workspace. REQUIRED for `onCreateChat`'s
-  // reason, and the symmetric one: a defaulted prop would let a future caller silently render a
-  // Channels tree whose plus opens nothing. It receives the group's `cwd` and does NOT send a command —
-  // the dialog's Create does, once a name has been typed.
+  // The Channels-tree workspace plus opens the named channel dialog for its host.
   onCreateChannel: (cwd: string, serverId: string | undefined) => void
   // #1180 — open the Edit-workspace dialog for the named workspace. REQUIRED for its two siblings'
   // reason: a defaulted prop would let a future caller silently render a sidebar whose pen opens
@@ -2153,8 +2139,8 @@ const CREATE_CHAT_CONTROL_LABEL = 'Create chat'
 
 // #1179 — its Channels-tree counterpart, and the reason the plus now travels with a name. Same idiom,
 // same client-owned rule, and #1181's pill reads BOTH. The two words differ because the two trees
-// create different things: the Chats plus sends `is_promoted: false, name: null`, this one opens the
-// dialog that sends `is_promoted: true` and a typed name.
+// create different things: the Chats plus opens confirmation for an unnamed chat, while this one
+// opens the named-channel dialog. Both send only after confirmation.
 const CREATE_CHANNEL_CONTROL_LABEL = 'Create channel'
 
 /**
@@ -2263,10 +2249,9 @@ function renderServerTrees(
   const { servers, unattributed } = groupByServer(serverIds, rows)
   // #1485 — THE COMPLEMENT, SPLIT BY THE SAME HOSTS BEFORE IT REACHES `groupByWorkspace`, and that split is
   // the security property rather than tidiness. A workspace row's plus and pen route by the host the row is
-  // drawn under (`index.ts`: `servers.route(command.serverId)`), while the group key is a bare path that
-  // repeats across machines — so handing the whole other tree to the grouper would draw Pyrybox's directory
-  // under Macbook's host row and send that path to Macbook, a create in a directory the operator never
-  // chose on a machine never told it. `groupByServer` is called with the SAME client-held `serverIds`, so
+  // drawn under, while the group key is a bare path that repeats across machines. Handing the whole
+  // other tree to the grouper would draw one machine's directory under another; its create control
+  // could then target the wrong host. `groupByServer` is called with the SAME client-held `serverIds`, so
   // its docblock's join direction holds here unchanged: a row's stamp can select among existing keys and
   // can never mint one.
   //
@@ -2297,17 +2282,9 @@ function renderServerTrees(
       <CollapsibleWorkspaceGroup
         key={group.key}
         label={group.label}
-        // THE GROUP'S KEY IS ITS `cwd` (`groupByWorkspace`), passed VERBATIM: not normalised, not
-        // trimmed, no `path` module, no local resolution. It is daemon-asserted text making its first
-        // trip back OUT as a command field, so the only safe handling is to echo exactly what was
-        // received — main re-validates it at the untrusted IPC boundary and rebuilds a fresh three-field
-        // literal before it reaches the wire.
-        //
-        // The unknown group is skipped: its key is `UNKNOWN_WORKSPACE_KEY`, the empty string, which
-        // names no directory and is NOT the `null` "take the daemon default" signal the payload keeps
-        // distinct. Decided on the KEY, never on the label — a real directory named "Unknown workspace"
-        // is an ordinary group and keeps its plus. Since #1179 that withhold covers BOTH trees, and it
-        // is what keeps the empty string from ever reaching either create.
+        // The plus remains under a workspace row until #1683 relocates it, but the container uses only
+        // the clicked host; both creates send `cwd: null`. Keep the unknown-workspace group and
+        // disconnected hosts without a plus in the current hierarchy.
         create={
           create === undefined || group.key === UNKNOWN_WORKSPACE_KEY || serverId === undefined || statuses.get(serverId)?.type !== 'connected'
             ? undefined

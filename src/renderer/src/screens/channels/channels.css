@@ -2058,7 +2058,8 @@
 }
 
 /* Create and Save-as-channel placement; shared Modal owns the panel, header and actions. */
-.create-channel-overlay {
+.create-channel-overlay,
+.create-chat-overlay {
   position: fixed;
   inset: 0;
   z-index: 2;
@@ -2068,11 +2069,16 @@
   padding: var(--space-4);
 }
 
-.create-channel-overlay__scrim {
+.create-channel-overlay__scrim,
+.create-chat-overlay__scrim {
   position: absolute;
   inset: 0;
   background: var(--color-scrim);
   opacity: 0.4;
+}
+
+.create-chat__detail {
+  margin: 0;
 }
 
 .create-channel__field {

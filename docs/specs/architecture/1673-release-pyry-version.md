@@ -58,3 +58,42 @@ needs no additional interface from that branch. The rework remains one deliverab
 0 production files, approximately 180 additional written lines including the
 reindented test body, 0 new exported types/components/stores, 1 consumer, 3 original
 acceptance criteria and 1 existing rejection branch. No open design questions.
+
+### 2026-09-27 — attribute the live-gate failures
+
+No implementation change is warranted by the returned gate. Dispatcher log
+`2026-09-27T10-03-05-547Z_real-claude-gate_#1673.log` tested `ffb4c2dc7c`
+against base `a5da4876a6`: 23 executed, 19 passed, 4 failed, 1 skipped.
+All five tests required by this ticket executed and annotated `daemon-revision`
+as `0.27.0`. Permission-mode and all three queue-delivery cases passed. Effort-default
+passed identity validation and failed later at the existing unscoped Create chat
+locator in its chat/channel recall loop, which resolved to two buttons.
+
+The other failures were permission-modal's `create` cwd-equality assertion,
+system-prompt's `createChat` resolving two Create chat buttons, and create-channel's
+workspace-label assertion receiving four identical labels instead of two.
+These three specs and `realDaemon` are byte-identical to the gate's base;
+effort-default's recall loop is also unchanged. The fixture seeds `/tmp` paths
+while pyry canonicalises created conversation paths to `/private/tmp`, the
+already tracked scope of #1674. No assertions are weakened or skipped here.
+
+Independent evidence: dispatcher log
+`2026-09-27T10-17-14-265Z_real-claude-gate_#1674.log` tested `8d61632302`
+against the same base, with #1674's canonical-path correction. Permission-modal,
+the active system-prompt case and create-channel all passed. Its five failures
+were the old version checks fixed here. This is a neighbouring-branch comparison,
+not a same-tree rerun or a pristine-base run. Effort-default's duplicate-button
+failure fits the same workspace split, but that attribution still needs a live
+run containing both fixes: #1674 alone rejects its release version first.
+
+The ticket-specific live requirement (all five execute without version rejection)
+is evidenced. The full live suite is still red. Keep `needs-real-claude`; the
+dispatcher must validate a tree containing both #1673 and #1674 and record its
+revision, daemon version and executed/pass/fail/skip counts. Rerunning either
+branch alone reproduces the other's known failure and does not establish a new
+regression. Documentation handoff above remains pending.
+
+This rework adds only this evidence entry (0 production files, types, consumers
+or rejection branches). Codegraph was unavailable, so file reads and Git diffs
+supplied the comparison. The refreshed branch check still finds only #1544
+overlapping the permission-mode spec; no implementation edits are needed.

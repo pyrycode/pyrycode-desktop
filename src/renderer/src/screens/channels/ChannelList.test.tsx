@@ -1341,24 +1341,22 @@ describe('CollapsibleHostGroup (#1507)', () => {
     expect(markup).toContain(PROBE)
   })
 
-  it('withdraws the subtree but KEEPS the host row when collapsed (AC1)', () => {
+  it('hides the mounted subtree but KEEPS the host row when collapsed (AC1)', () => {
     const markup = renderGroup(false)
     // The half a naive implementation gets wrong: the row IS the control, so folding it away with its
     // subtree would leave nothing to click back.
     expect(countOf(markup, HOST_ROW_MARKER)).toBe(1)
     expect(countOf(markup, HOST_DISCLOSURE_MARKER)).toBe(1)
     expect(hostDisclosureTagsIn(markup)[0]).toContain(COLLAPSED_MARKER)
-    // Genuinely gone from the markup, not hidden by a class — the tool-row body precedent.
-    expect(markup).not.toContain(PROBE)
+    // Keeping the subtree mounted preserves each section's local fold state on reopen.
+    expect(markup).toContain('<div class="channel-list__host-content" hidden="">')
+    expect(markup).toContain(PROBE)
   })
 
-  it('emits no element of its own (AC4)', () => {
-    // The rendered sequence under `.channel-list` stays the flat run of siblings every
-    // `.channel-list__row`'s ancestry depends on across 28 e2e specs, and the section-header adjacency
-    // rule that carries AC4's vertical rhythm stays exact. A wrapper <div> would break both at once.
+  it('leaves the host row at the tree root and keeps its content wrapper open (AC4)', () => {
     const markup = renderGroup()
     expect(markup.slice(0, markup.indexOf('>') + 1)).toBe('<div class="channel-list__host">')
-    expect(markup.endsWith(`<span>${PROBE}</span>`)).toBe(true)
+    expect(markup).toContain('<div class="channel-list__host-content"><span>' + PROBE + '</span></div>')
   })
 
   it('shows the host mark even when sections have no conversations', () => {

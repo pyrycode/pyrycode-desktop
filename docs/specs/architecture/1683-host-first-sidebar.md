@@ -52,3 +52,4 @@ Pending for documentation stage: update `docs/knowledge/features/channel-list.md
 ## Revisions
 
 - The workspace-only browser specs were retired with their sidebar controls. Conversation creation, host repair, channel promotion, status, and edit coverage remain in focused browser specs. The `mintChatInWorkspace` fixture now confirms creation through the host's Chats section; its callers use the paired daemon workspace default.
+- Verifier rework (2026-09-27): `CollapsibleHostGroup` must retain mounted `HostSection` children while visually hiding a closed host. Conditional removal reset each section's local fold state on reopen. The browser fold spec now closes a section, closes and reopens its host, and asserts that the section remains closed. Restore the fixed toolbar and tall-list scroll checks in the host-first geometry spec; those behaviors remain part of the sidebar.

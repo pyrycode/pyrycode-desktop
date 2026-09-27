@@ -157,6 +157,15 @@
   margin-top: 0;
 }
 
+/* Preserve section component state while a host is folded without adding a layout box. */
+.channel-list__host-content {
+  display: contents;
+}
+
+.channel-list__host-content[hidden] {
+  display: none;
+}
+
 /* THE ROW'S DISCLOSURE (#1507, Figma Host 399:1366) — the button that folds one machine's whole subtree.
    It holds the glyph, the label and the chevron; the pen, the plus, the repair control and the two dots
    stay SIBLINGS of it inside the row, because an interactive control cannot nest inside a button (#274).

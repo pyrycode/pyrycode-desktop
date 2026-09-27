@@ -42,15 +42,15 @@ test('hosts and sections fold independently; an empty host creates in its defaul
   await expect(page.locator('.channel-list__section-chevron').nth(0)).toHaveCSS(
     'transform', 'matrix(0, -1, 1, 0, 0, 0)'
   )
-  await sections.nth(0).click()
-  await expect(rows).toHaveCount(2)
-
   await hosts.nth(0).click()
-  await expect(sections).toHaveCount(2)
+  await expect(page.locator('.channel-list__section-disclosure:visible')).toHaveCount(2)
   await expect(rows).toHaveCount(1)
   await expect(composer).toHaveValue('draft remains here')
   await hosts.nth(0).click()
   await expect(sections).toHaveCount(4)
+  await expect(sections.nth(0)).toHaveAttribute('aria-expanded', 'false')
+  await expect(rows).toHaveCount(1)
+  await sections.nth(0).click()
   await expect(rows).toHaveCount(2)
 
   app.servers[1].daemon.pushFrame(encodeEnvelope({ id: 101, type: 'conversations',

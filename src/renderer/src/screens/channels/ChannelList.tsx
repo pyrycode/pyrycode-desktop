@@ -1479,11 +1479,8 @@ function HostRowControl({
  * component happens to be holding — otherwise a host folded before it errored is stranded, its chevron gone
  * with the fold that hid it and no control left to re-open it short of restarting the app.
  *
- * Returns a shorthand fragment, emitting NO element of its own — exactly like the keyed <Fragment> it
- * replaced, and like `CollapsibleWorkspaceGroup` below it. The rendered sequence under `.channel-list` stays
- * the FLAT run of siblings (header, host, workspace, rows, …), which is what keeps the section-header
- * adjacency rule exact, keeps each workspace head a sibling of its host row, and leaves the ancestry 28 e2e
- * specs walk unchanged.
+ * The contents wrapper keeps its children mounted while the host is folded, so each section retains its
+ * own local fold state. `display: contents` keeps the open host's row geometry unchanged.
  */
 export function CollapsibleHostGroup({
   serverId,
@@ -1525,14 +1522,9 @@ export function CollapsibleHostGroup({
         onAddWorkspace={onAddWorkspace}
         onRepairHost={onRepairHost}
       />
-      {/* The whole of AC1: this machine's workspace GROUPS are withdrawn from the DOM, the row above is
-          not, and nothing else happens — no navigation, no command, no store dispatch, no
-          active-conversation change. The handler's entire body is the state flip.
-
-          `|| failed` is the stranding guard, not a second state: while a host is failed its row draws no
-          disclosure, so the boolean it is holding must not be allowed to withhold anything. The fold is
-          kept rather than reset, so a machine that recovers returns to the state the operator left it in. */}
-      {(expanded || failed) && children}
+      {/* Keep section state mounted across host folds. A failed host still exposes its contents even if
+          it was closed before failure; recovery returns to the saved host fold. */}
+      <div className="channel-list__host-content" hidden={!expanded && !failed}>{children}</div>
     </>
   )
 }

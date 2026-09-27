@@ -38,15 +38,13 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 //
 // The assertion is `toHaveText([…])` on the whole ordered label list, NOT a count, and the shape is
 // deliberately self-diagnosing: a defaulted create fails with `work` in the diff (the daemon ignored the
-// payload), while a daemon that canonicalised the path would fail with the SAME label FOUR times (one
+// payload), while a non-canonical fixture seed fails with the SAME label FOUR times (one
 // workspace split into two groups, each mirrored). A bare count reports every one of them as a number.
 //
-// This rests on a read of the daemon rather than a guess: `CreateConversation` resolves `cwd := defaultCwd`
-// and overwrites it with `*p.Cwd` when the payload sets one, recording that string byte-for-byte — no
-// cleaning, no `filepath.Abs`, no symlink resolution — and the client's `groupByWorkspace` keys on the raw
-// `cwd` string. So the seed's registry path and the created row's path are the same key. `resolveSpawnDir`
-// does validate the REQUESTED dir (confine to $HOME after symlink resolution, create if missing,
-// trust-mark), and the seed sits inside the daemon's own workdir, so it is confined by construction.
+// pyry 0.27.0 canonicalises a created conversation's cwd, while the client's `groupByWorkspace` keys
+// on the supplied string. The fixture therefore seeds a canonical path too, so the seed and created row
+// share the same key. The seed remains a distinct subdirectory of the daemon's canonical workdir:
+// canonicalisation must not hide a create that ignores the requested cwd and uses the default.
 //
 // A SINGLE PROMOTED SEED, not the second seeded workspace the ticket sketches: one seed already separates
 // the two outcomes, and a second would add a second KEY — two groups per tree, four labels — to reason

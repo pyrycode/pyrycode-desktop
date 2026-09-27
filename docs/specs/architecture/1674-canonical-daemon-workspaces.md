@@ -58,3 +58,15 @@ This is deterministic guard evidence, not a credentialed baseline rerun. The new
 still omits the executed daemon version. Fresh install, 5 fixture launch unit tests
 and build passed. No code or assertion changes; the existing dispatcher and documentation
 handoffs remain pending, with the full live gate awaiting #1673 before another run.
+
+### 2026-09-27 — third live-gate attribution; design unchanged
+
+Inspected `2026-09-27T10-43-26-203Z_real-claude-gate_#1674.log` at `d8f2e6b183`
+against `a5da4876a6`: 23 executed / 18 passed / 5 failed / 1 skipped, no flaky results.
+The three required active tests passed; the existing system-prompt fixme remains excluded.
+All five failures are again the revision guards tracked by #1673. The affected specs
+are byte-identical on base, gated commit and HEAD; each tree's exact guards reject the
+dedicated binary's current `pyry 0.27.0` output. This is a deterministic prerequisite
+comparison, not a credentialed baseline run. The log still omits the executed version.
+No code or assertions changed. The dispatcher must wait for #1673 before another live
+gate and record the executed binary version and counts; documentation handoff is unchanged.

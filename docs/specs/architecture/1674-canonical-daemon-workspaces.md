@@ -45,3 +45,16 @@ parser failures; no fixture change or weakened assertion is warranted here.
 Rework checks: fixture launch unit tests 5 passed; `npm run build` passed. Dispatcher handoff:
 rerun the credentialed gate after #1673 lands, retaining `needs-real-claude`, and record the
 executed binary version with the new counts. Documentation handoff remains pending as above.
+
+### 2026-09-27 — second live-gate attribution; design unchanged
+
+The newer log `2026-09-27T10-17-14-265Z_real-claude-gate_#1674.log`, at `8d61632302`
+against the same base, again records 23 executed / 18 passed / 5 failed / 1 skipped.
+All three required active tests passed; only the existing system-prompt fixme was excluded.
+All five failures again occur in source-revision guards owned by #1673. Rechecking the
+three specs confirms byte-identical contents on base, gated commit and current HEAD;
+their exact guards reject the dedicated binary's current `pyry 0.27.0` output on each.
+This is deterministic guard evidence, not a credentialed baseline rerun. The new log
+still omits the executed daemon version. Fresh install, 5 fixture launch unit tests
+and build passed. No code or assertion changes; the existing dispatcher and documentation
+handoffs remain pending, with the full live gate awaiting #1673 before another run.

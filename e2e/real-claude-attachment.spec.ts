@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/realDaemon'
+import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { COMPOSER_ATTACH_LABEL } from '../src/renderer/src/screens/conversation/ComposerAttach'
 
@@ -168,7 +169,7 @@ test('an attached image reaches claude, which describes it back (#1055 AC4)', as
       await expect(page.locator('.channel-list__row-open')).toBeVisible({
         timeout: HANDSHAKE_TIMEOUT_MS
       })
-      await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
+      await confirmCreateChat(page)
       await expect(conversation).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
       await expect(sendButton).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
 

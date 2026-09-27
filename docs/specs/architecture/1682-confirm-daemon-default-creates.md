@@ -72,3 +72,7 @@ None. The ticket fixes the daemon-default signal, same-host dismissal behavior, 
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-27
+
+## Revisions
+
+- 2026-09-27, verifier regression findings on PR #1684: existing fake-transport and real-Claude drives that pressed the Chats plus now pass through the new confirmation. Their create assertions use `cwd: null`; a shared Playwright helper keeps the gesture consistent. The fake suite also exposed that the new chat dialog's actions sat beneath an already open Channel info sheet. Raise only `.create-chat-overlay` above that sheet, preserving the existing sheet-reset coverage in `conversation-switch-remount.spec.ts`.

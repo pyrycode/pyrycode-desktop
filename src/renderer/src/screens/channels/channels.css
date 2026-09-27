@@ -2069,6 +2069,11 @@
   padding: var(--space-4);
 }
 
+/* The chat confirm can open while Channel info is showing; its actions must stay above that sheet. */
+.create-chat-overlay {
+  z-index: 3;
+}
+
 .create-channel-overlay__scrim,
 .create-chat-overlay__scrim {
   position: absolute;

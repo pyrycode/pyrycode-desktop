@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type {
   Envelope,
@@ -205,7 +206,7 @@ test('an idle-eviction marker for another chat never steers this chat’s settin
   // drives the nav, so B is the open chat and A is the one left idle in the background — the defect's
   // exact state. Answer B's own ask with a DIFFERENT session id, and push B's model list so B's effort
   // control is operable. ---
-  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
+  await confirmCreateChat(page)
   await expect
     .poll(() => requests.find((r) => r.conversationId !== SEED.id)?.envelopeId, {
       timeout: ROUNDTRIP_TIMEOUT_MS
@@ -367,7 +368,7 @@ test('a reset that finishes while another chat is open draws its separator in th
 
   // --- 2. Open B while A's `resetting` phase runs. The create round trip drives the nav, and B's own
   // run-configuration ask is the positive proof that B is the chat on screen. ---
-  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
+  await confirmCreateChat(page)
   await expect
     .poll(() => requests.find((r) => r.conversationId !== SEED.id)?.conversationId, {
       timeout: ROUNDTRIP_TIMEOUT_MS

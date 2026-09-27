@@ -33,11 +33,10 @@ existing structure for free, and reading it is correct rather than merely cheap,
 holds one label per `cwd`. `null` on the first row falls back to `workspaceLabelFor(cwd)` exactly
 as it did before #1287. The `key` a group is created and looked up under never changes — still
 `workspaceLabelFor(row.cwd) === null ? UNKNOWN_WORKSPACE_KEY : row.cwd`, computed from `cwd` alone.
-Keying on the label instead would be a security regression, not just a display one: `WorkspaceRow`'s
-trailing create-plus control (below) sends `group.key` back *out* to the daemon as a
-`create_conversation` `cwd`, so a daemon-asserted workspace *name* would make the round trip out
-again as a *directory path*. A unit test pins `key === row.cwd` on a labelled row specifically, so a
-future "the label is the nicer identity" refactor reddens instead of shipping.
+Keying on the label instead would change which workspace rows group together and which exact path
+the Edit workspace control targets. A unit test pins `key === row.cwd` on a labelled row so a
+future "the label is the nicer identity" refactor reddens instead of shipping. The create pluses
+no longer send this key as a destination; they retain only the clicked host.
 
 Two rules narrow the label further. The **fallback group** (`UNKNOWN_WORKSPACE_KEY`) is always
 labelled `UNKNOWN_WORKSPACE_LABEL`, whatever its rows carry — it's a bucket, not a workspace, and
@@ -88,13 +87,25 @@ fallback-key trap and selector-hazard writeup.
 
 Since [#1178](channel-list-workspace-row-nest.md)
 and [#1179](create-channel-dialog.md), each `WorkspaceRow` optionally draws a trailing create
-control keyed on this same `group.key` — a "Create chat" plus on a Chats-tree row, a "Create
-channel" plus opening a dialog on a Channels-tree row — withheld on both trees from the
-`UNKNOWN_WORKSPACE_KEY` fallback group and groups without a connected owning host.
-A channel is no longer only reachable by [promoting an existing chat](save-as-channel-dialog.md); see [Create-channel dialog](create-channel-dialog.md)
-for the direct path.
+control — "Create chat" in Chats and "Create channel" in Channels — withheld from the
+`UNKNOWN_WORKSPACE_KEY` fallback group and groups without a connected owning host. Each plus
+opens a confirmation dialog and sends nothing until OK. The dialogs retain the clicked host,
+including when another host has the same path, but neither offers a folder choice: chat sends an
+unnamed, unpromoted create and channel sends a named, promoted create, both with `cwd: null` so
+the daemon chooses that host's default folder. Cancel or close sends no create. Navigation waits
+for the daemon's `conversationCreated` event. Channel rejection permits a retry and its optional
+system prompt is written only after a same-host promoted/name-matched confirmation; see
+[Create-channel dialog](create-channel-dialog.md). Ticket #1683 will relocate these controls to
+the host's Channels and Chats sections without changing this create contract.
 
-Both of those are creators *within* an existing group. [#1308](channel-list-host-row.md#the-add-workspace-dialog-1308)
+The Create chat overlay must sit above an already open Channel info sheet. At the sheet's old
+stacking level the dialog was visible but its OK button could not be clicked. A static markup test
+could not expose that; the fake-transport interaction opens the dialog over the sheet. The chat
+modal also moves keyboard focus to Cancel, contains Tab in its controls and restores the invoking
+plus on dismissal, which the keyboard interaction covers.
+
+The two workspace-row pluses are currently *located* in an existing group, but their new rows
+land in the daemon default group. [#1308](channel-list-host-row.md#the-add-workspace-dialog-1308)
 added a **third**, one level up on the host row, that creates a group that has never existed: since this
 whole tree is derived from the conversation list alone, a workspace is drawn under a host only while a live
 conversation sits in it somewhere under that host, so a folder gets a row here for the first time the
@@ -140,12 +151,10 @@ let a spec seed a state — two rows of one `cwd` disagreeing — the daemon can
 label from that map too, so a row moved between workspaces takes its new workspace's name rather
 than carrying the old one. [`e2e/workspace-label.spec.ts`](https://github.com/pyrycode/pyrycode-desktop/issues/1287)
 is the spec this fixes for, and rides the same both-trees idiom to prove it. `e2e/fixtures/mintChatRow.ts`'s
-`mintChatInWorkspace` still uses the host row's Add-workspace plus rather than a workspace row's own
-"Create chat" plus, but not for the reason once written there: before #1485 a tree drew a group — and
-therefore a plus — only for a workspace already holding a row in *that* tree, so a spec seeding one
-promoted row had no Chats-tree plus to press. The union closed that gap; the helper is now needed only
-because a workspace with no row in *either* tree still has no group anywhere, so minting into a
-brand-new folder still has no plus to press but the host row's.
+`mintChatInWorkspace` uses the host row's Add-workspace plus: workspace-row creates now send
+`cwd: null`, so that control is the path for minting into a named folder. Before #1485 a tree
+drew a group — and therefore a plus — only for a workspace already holding a row in *that*
+tree; the union closed that visibility gap but did not turn either plus into a folder picker.
 
 **Touching this derivation moves counts across most of the sidebar's e2e tier, and the two failure
 shapes are different (#1485).** Every spec asserting an exact count or an exhaustive list of

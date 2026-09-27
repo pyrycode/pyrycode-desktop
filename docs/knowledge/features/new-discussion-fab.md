@@ -36,7 +36,7 @@ One module, twin of [`conversationListBridge.ts`](conversation-list-store.md#the
 requestNewConversation(sendCommand: (c: RendererCommand) => void, defaultCwd: string | null, serverId?: string): void
 // sendCommand({ type: 'createConversation', payload: { is_promoted: false, name: null, cwd: defaultCwd }, ...serverId })
 // inline literal, no builder — the requestConversationList precedent. Sole caller today: the Chats-tree
-// workspace row's "Create chat" plus, passing that group's own cwd (#1178) — not the FAB's Settings default.
+// workspace row's "Create chat" confirmation, passing null for the clicked host's daemon default.
 
 translateConversationCreated(event: DaemonEvent): ConversationCreatedPayload | null
 // switch (event.type) { case 'conversationCreated': return event.conversation; default: return null }
@@ -85,8 +85,9 @@ subscription tears down; on re-pair a fresh shell mounts a fresh subscription.
 ### Data flow
 
 ```
-Chats-tree "Create chat" plus (#1178) → requestNewConversation(window.pyry.sendCommand, cwd, serverId)
-  → sendCommand({serverId, type:'createConversation', payload:{is_promoted:false,name:null,cwd}})
+Chats-tree "Create chat" plus (#1178) → confirmation dialog → OK
+  → requestNewConversation(window.pyry.sendCommand, null, serverId)
+  → sendCommand({serverId, type:'createConversation', payload:{is_promoted:false,name:null,cwd:null}})
   → [#241, already shipped] COMMAND_CHANNEL → createConversation(payload) → daemon
 
 daemon → conversation_created frame → [#241] → conversationCreated DaemonEvent

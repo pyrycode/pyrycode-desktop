@@ -62,6 +62,8 @@ import type {
   SessionTransitionPayload,
   SessionSettingsPayload,
   SessionCapabilitiesPayload,
+  MemorySearchPayload,
+  MemorySearchAvailability,
   SessionPromptStatus,
   SystemPromptPayload,
   SessionSettingsUpdatedPayload,
@@ -1364,8 +1366,49 @@ function parseSessionSettingsPayload(payload: unknown): SessionSettingsPayload {
   const capabilities = payload.capabilities === undefined
     ? undefined
     : parseSessionCapabilities(payload.capabilities)
+  const memory_search = Object.hasOwn(payload, 'memory_search')
+    ? parseMemorySearchReport(payload.memory_search)
+    : undefined
   return {
-    session_id, model, effort, effective_effort, yolo, permission_mode, used_tokens, window_tokens, capabilities
+    session_id, model, effort, effective_effort, yolo, permission_mode, used_tokens, window_tokens,
+    capabilities, memory_search
+  }
+}
+
+/** A malformed present report is unknown as a whole; no partial provider can confirm availability. */
+function parseMemorySearchReport(value: unknown): MemorySearchPayload {
+  const unknown: MemorySearchPayload = { availability: 'unknown', providers: [] }
+  if (!isRecord(value) || !Array.isArray(value.providers)) return unknown
+  const availability = memorySearchAvailability(value.availability)
+  if (availability === null) return unknown
+
+  const providers: MemorySearchPayload['providers'] = []
+  for (const provider of value.providers) {
+    if (!isRecord(provider) ||
+      typeof provider.id !== 'string' ||
+      typeof provider.display_name !== 'string' ||
+      typeof provider.installed !== 'boolean' ||
+      typeof provider.enabled !== 'boolean') return unknown
+    const providerAvailability = memorySearchAvailability(provider.availability)
+    if (providerAvailability === null) return unknown
+    providers.push({
+      id: provider.id,
+      display_name: provider.display_name,
+      installed: provider.installed,
+      enabled: provider.enabled,
+      availability: providerAvailability
+    })
+  }
+  return { availability, providers }
+}
+
+function memorySearchAvailability(value: unknown): MemorySearchAvailability | null {
+  switch (value) {
+    case 'available': return 'available'
+    case 'unavailable': return 'unavailable'
+    case 'absent': return 'absent'
+    case 'unknown': return 'unknown'
+    default: return null
   }
 }
 

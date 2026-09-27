@@ -209,6 +209,23 @@ of that; the flags carry no display or control behaviour on their own.
 The [event channel](daemon-event-channel.md#run-configuration-report) carries the
 three flags as flat `slashCommands`/`mcpServers`/`contextUsageDetail` booleans.
 
+### Optional memory-search report
+
+`SessionSettingsPayload.memory_search?: MemorySearchPayload` is the daemon's
+resolved-session search status. A complete report has aggregate `availability`
+(`available`, `unavailable`, `absent` or `unknown`) and a `providers` array. Every
+provider requires `id`, `display_name`, Boolean `installed` and `enabled`, and its
+own availability from the same four values. The decoder retains `false` and an
+empty provider array; the aggregate, not array length, states absence.
+
+Omission leaves `memory_search` undefined, meaning no reading was supplied. A
+present report with any missing or mistyped field, or an unfamiliar aggregate or
+provider availability, becomes `{ availability: 'unknown', providers: [] }` as a
+whole. It cannot confirm status from a partial provider list, and valid model,
+effort, permission and usage settings still decode. An explicit daemon `unknown`
+is a valid complete report. The [event channel](daemon-event-channel.md#run-configuration-report)
+carries the result as `memorySearch`.
+
 ## Testing
 
 In `inboundMessage.test.ts`, wrap malformed array payloads in object rows such as
@@ -220,6 +237,11 @@ use the same object-row shape to exercise rejection through the IPC boundary.
 Construct oversized inbound fixtures with `Buffer.from(JSON.stringify(...))`.
 Using `encodeEnvelope` can reject the fixture at its outbound size guard before
 `parseInboundMessage` runs, so it cannot prove the inbound guard works.
+
+For `session_settings` contract coverage, use the daemon's golden envelopes from
+`internal/protocol/testdata/`: equivalent inline payloads can pass while the daemon
+examples drift. The correlated event-path tests add only `in_reply_to`, which those
+fixtures omit.
 
 ## Security properties
 

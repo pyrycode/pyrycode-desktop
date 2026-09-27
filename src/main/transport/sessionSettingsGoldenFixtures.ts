@@ -1,0 +1,9 @@
+// Verbatim daemon envelopes from pyrycode/internal/protocol/testdata/. These copies keep the
+// decoder and event-path tests independent of a sibling checkout at test time.
+export const sessionSettingsGoldenFixtures = {
+  available: '{"id":704,"type":"session_settings","ts":"2026-07-27T10:00:03Z","payload":{"session_id":"sess-a","model":"opus","effort":"high","yolo":false,"permission_mode":"default","used_tokens":12480,"window_tokens":200000,"memory_search":{"availability":"available","providers":[{"id":"qmd","display_name":"QMD","installed":true,"enabled":true,"availability":"available"}]}}}\n',
+  disabled: '{"id":704,"type":"session_settings","ts":"2026-07-27T10:00:03Z","payload":{"session_id":"sess-a","model":"opus","effort":"high","yolo":false,"permission_mode":"default","used_tokens":12480,"window_tokens":200000,"memory_search":{"availability":"unavailable","providers":[{"id":"memsearch","display_name":"Memsearch","installed":true,"enabled":false,"availability":"unavailable"}]}}}\n',
+  absent: '{"id":704,"type":"session_settings","ts":"2026-07-27T10:00:03Z","payload":{"session_id":"sess-a","model":"opus","effort":"high","yolo":false,"permission_mode":"default","used_tokens":12480,"window_tokens":200000,"memory_search":{"availability":"absent","providers":[]}}}\n',
+  unknown: '{"id":704,"type":"session_settings","ts":"2026-07-27T10:00:03Z","payload":{"session_id":"sess-a","model":"opus","effort":"high","yolo":false,"permission_mode":"default","used_tokens":12480,"window_tokens":200000,"memory_search":{"availability":"unknown","providers":[]}}}\n',
+  omitted: '{"id":704,"type":"session_settings","ts":"2026-07-27T10:00:03Z","payload":{"session_id":"sess-a","model":"opus","effort":"high","yolo":false,"permission_mode":"default","used_tokens":12480,"window_tokens":200000}}\n'
+} as const

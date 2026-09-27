@@ -1471,7 +1471,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               // The three capability flags only (#1654), by name; the wire object itself never crosses.
               slashCommands: inbound.sessionSettings.capabilities?.slash_commands,
               mcpServers: inbound.sessionSettings.capabilities?.mcp_servers,
-              contextUsageDetail: inbound.sessionSettings.capabilities?.context_usage_detail
+              contextUsageDetail: inbound.sessionSettings.capabilities?.context_usage_detail,
+              memorySearch: inbound.sessionSettings.memory_search
             })
             return
           }

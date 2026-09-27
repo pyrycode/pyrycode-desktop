@@ -35,6 +35,7 @@ import type {
 } from './transport/noiseRelayDriver'
 import type { DiagnosticEvent, DiagnosticLog } from './diagnosticLog'
 import { base64StdEncode, base64StdDecode, encodeEnvelope, decodeEnvelope } from './transport/codec'
+import { sessionSettingsGoldenFixtures } from './transport/sessionSettingsGoldenFixtures'
 import type { BundleConsumer, BundleFailReason } from './transport/bundleReassembler'
 import { createDebugBundleDownload, type DebugBundleDownload } from './debugBundleDownload'
 import {
@@ -8647,6 +8648,25 @@ describe('createDaemonConnection — newSession (kill-and-respawn claude in one 
 })
 
 describe('createDaemonConnection — requestSessionSettings (run-config request/reply, #491)', () => {
+  const MEMORY_CASES = [
+    { name: 'available', report: { availability: 'available', providers: [
+      { id: 'qmd', display_name: 'QMD', installed: true, enabled: true, availability: 'available' }
+    ] } },
+    { name: 'disabled', report: { availability: 'unavailable', providers: [
+      { id: 'memsearch', display_name: 'Memsearch', installed: true, enabled: false, availability: 'unavailable' }
+    ] } },
+    { name: 'absent', report: { availability: 'absent', providers: [] } },
+    { name: 'unknown', report: { availability: 'unknown', providers: [] } },
+    { name: 'omitted', report: undefined }
+  ] as const
+
+  // The daemon fixtures omit in_reply_to; add only the request correlation for this event path.
+  function correlatedGoldenFixture(name: keyof typeof sessionSettingsGoldenFixtures, replyTo: number): Uint8Array {
+    return encodeEnvelope({
+      ...decodeEnvelope(Buffer.from(sessionSettingsGoldenFixtures[name])),
+      in_reply_to: replyTo
+    })
+  }
   const RUN_CONFIG = {
     session_id: 'sess-a',
     model: 'claude-opus-4-8',
@@ -8694,6 +8714,59 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     ctx.connection.requestSessionSettings(conversationId)
     return { ...ctx, replyTo: lastRequestId(ctx) }
   }
+
+  it.each(MEMORY_CASES)('carries the daemon $name memory report to the stamped event', async ({ name, report }) => {
+    const ctx = await requested()
+    ctx.drivers[0].emit({ type: 'message', plaintext: correlatedGoldenFixture(name, ctx.replyTo) })
+    const events = stampedEvents(ctx.sink).filter((e) => e.type === 'runConfigReceived')
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ conversationId: CONV, serverId: 'server-config',
+      sessionId: 'sess-a', model: 'opus', effort: 'high', yolo: false,
+      permissionMode: 'default', used_tokens: 12480, window_tokens: 200000,
+      memorySearch: report })
+    expect(events[0]).not.toHaveProperty('memory_search')
+  })
+
+  it('keeps an older or malformed memory report from becoming confirmed status', async () => {
+    const ctx = await requested()
+    ctx.drivers[0].emit({ type: 'message', plaintext: correlatedGoldenFixture('omitted', ctx.replyTo) })
+    ctx.connection.requestSessionSettings(CONV)
+    ctx.drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext({
+      ...RUN_CONFIG, memory_search: { availability: 'available', providers: [{}] }
+    }, lastRequestId(ctx)) })
+    const events = stampedEvents(ctx.sink).filter((e) => e.type === 'runConfigReceived')
+    expect(events).toHaveLength(2)
+    expect(events[0].memorySearch).toBeUndefined()
+    expect(events[1].memorySearch).toEqual({ availability: 'unknown', providers: [] })
+    expect(events[1]).toMatchObject({ model: RUN_CONFIG.model, effort: RUN_CONFIG.effort,
+      permissionMode: RUN_CONFIG.permission_mode, used_tokens: RUN_CONFIG.used_tokens,
+      window_tokens: RUN_CONFIG.window_tokens })
+  })
+
+  it('attributes out-of-order memory reports by request and drops unmatched or abandoned replies', async () => {
+    const ctx = await connected()
+    ctx.connection.requestSessionSettings('conv-first')
+    const first = lastRequestId(ctx)
+    ctx.connection.requestSessionSettings('conv-second')
+    const second = lastRequestId(ctx)
+    ctx.drivers[0].emit({ type: 'message', plaintext: correlatedGoldenFixture('absent', second) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: correlatedGoldenFixture('available', first) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: correlatedGoldenFixture('available', first) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: correlatedGoldenFixture('available', first + 100) })
+    expect(stampedEvents(ctx.sink).filter((e) => e.type === 'runConfigReceived')
+      .map((e) => ({ conversationId: e.conversationId, serverId: e.serverId,
+        memorySearch: e.memorySearch }))).toEqual([
+      { conversationId: 'conv-second', serverId: 'server-config', memorySearch: MEMORY_CASES[2].report },
+      { conversationId: 'conv-first', serverId: 'server-config', memorySearch: MEMORY_CASES[0].report }
+    ])
+    ctx.connection.requestSessionSettings('conv-abandoned')
+    const abandoned = lastRequestId(ctx)
+    ctx.connection.reconnect()
+    await tick()
+    ctx.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    ctx.drivers[1].emit({ type: 'message', plaintext: correlatedGoldenFixture('available', abandoned) })
+    expect(stampedEvents(ctx.sink).filter((e) => e.type === 'runConfigReceived')).toHaveLength(2)
+  })
 
   it('drops superseded reads of the same conversation', async () => {
     const ctx = await requested()

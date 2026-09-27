@@ -25,3 +25,23 @@ Dispatcher live acceptance remains pending under `needs-real-claude`: execute th
 ## Documentation handoff
 
 No documentation-only acceptance requirement was specified. Pending for the documentation stage: record the canonical-path fixture contract in `docs/knowledge/features/live-e2e-runbook.md` § Known limitations and gotchas, and the dispatcher’s eventual version and counts in § Current real-claude gate state.
+
+## Revisions
+
+### 2026-09-27 — live-gate attribution; design unchanged
+
+The dispatcher log `2026-09-27T09-49-35-031Z_real-claude-gate_#1674.log` records
+23 executed, 18 passed, 5 failed and 1 skipped at `a0777e4fe4` against base `a5da4876a6`.
+All three required active tests passed (3 executed, 3 passed, 0 failed); the system-prompt
+reset-session fixme was the one excluded test. The log does not record a daemon version.
+
+All five failures reject the version before exercising effort, permission mode or queue delivery.
+The three failing spec files are byte-identical to that base. Evaluating their exact revision
+guards against the dedicated test binary's current `pyry 0.27.0` output rejects it on both trees.
+This is a deterministic prerequisite comparison, not a credentialed base-suite rerun.
+Existing [#1673](https://github.com/pyrycode/pyrycode-desktop/issues/1673) owns these release-version
+parser failures; no fixture change or weakened assertion is warranted here.
+
+Rework checks: fixture launch unit tests 5 passed; `npm run build` passed. Dispatcher handoff:
+rerun the credentialed gate after #1673 lands, retaining `needs-real-claude`, and record the
+executed binary version with the new counts. Documentation handoff remains pending as above.

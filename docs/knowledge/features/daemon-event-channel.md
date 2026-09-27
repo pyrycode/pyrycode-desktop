@@ -196,6 +196,22 @@ this app doesn't advertise `multi_agent` yet, so the flags won't arrive in
 production until it does; [#1655](https://github.com/pyrycode/pyrycode-desktop/issues/1655)
 is the first consumer.
 
+`runConfigReceived.memorySearch?` carries the optional
+[daemon memory-search report](inbound-message-decode.md#optional-memory-search-report)
+by name from decoded `memory_search`. It retains aggregate availability and each
+provider's `id`, `display_name`, `installed`, `enabled` and availability; `false`
+flags and an empty provider array survive. An omitted report is `undefined` (no
+reading), while a malformed or future report is a present whole-report
+`{ availability: 'unknown', providers: [] }`. Neither an empty array nor missing
+data establishes absence. This descriptive status adds no client command.
+
+The existing pending `in_reply_to` request gate applies to this report too:
+`conversationId` is the requesting conversation and `serverId` the connection's
+host stamp. Out-of-order replies keep their own identities; unmatched, duplicate
+and abandoned replies emit no `runConfigReceived`. Carriage ends at the event;
+renderer storage and presentation belong to
+[#1687](https://github.com/pyrycode/pyrycode-desktop/issues/1687).
+
 ### Stopped-turn metadata
 
 Both `DaemonEvent.turnEnd` and `HistoryTimelineEvent.turnEnd` carry optional

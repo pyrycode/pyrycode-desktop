@@ -1,5 +1,6 @@
 import { type Page } from '@playwright/test'
 import { test, expect, encodePairingPayload, type SpawnedDaemon } from './fixtures/realDaemon'
+import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 // A NON-BYPASS CHILD, AND THAT IS THE WHOLE PRECONDITION. The daemon hands claude its own MCP config with
@@ -58,7 +59,6 @@ test.use({ skipPermissions: false, interactiveRunner: 'stream-json' })
 // The daemon's own servers — the same client-owned constants McpServersSection.tsx filters on.
 const BUILT_IN_SERVERS = ['pyry_approve', 'pyry_files'] as const
 const CHANNEL_INFO_ROW = 'Channel info'
-const CREATE_CHAT_LABEL = 'Create chat'
 const SHOW_BUILT_IN = 'Show built-in'
 
 const ASSISTANT_ROW = '[data-thread-role="assistant"]'
@@ -144,7 +144,7 @@ async function pairAndConnect(
 
 /** Mint a chat through the operator flow and wait for its empty thread. */
 async function createChat(page: Page): Promise<void> {
-  await page.getByRole('button', { name: CREATE_CHAT_LABEL, exact: true }).click({ force: true })
+  await confirmCreateChat(page)
   await expect(page.locator('.conversation__empty')).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
   await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
 }

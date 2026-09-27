@@ -2,6 +2,7 @@ import { type Page } from '@playwright/test'
 import type { DaemonEvent } from '../src/shared/ipc/events'
 import type { WireModelOption } from '../src/shared/wire/types'
 import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 // Tier-3 real-claude e2e (#928) — the question vertical proven by a RUN rather than by fakes. Everything
@@ -309,7 +310,7 @@ test('real claude changes model during a question and resumes with the original 
   await expect(page.locator('.channel-list__row-open')).toBeVisible({
     timeout: HANDSHAKE_TIMEOUT_MS
   })
-  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
+  await confirmCreateChat(page)
   await expect(conversation).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
   await expect(sendButton).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
 

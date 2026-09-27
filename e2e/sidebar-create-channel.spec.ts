@@ -85,7 +85,7 @@ async function open(app: PairedApp, index = 0) {
 
 // Real fake-transport round trips prove the outgoing host and payload; injected main events probe
 // renderer-only origin/stage guards that the transport would normally filter before delivery.
-test('creation uses the exact workspace, keeps the name, retries rejection and opens confirmation', async ({ launchPairedApp }) => {
+test('creation uses the daemon default, keeps the name, retries rejection and opens confirmation', async ({ launchPairedApp }) => {
   const fake = controlled('first-seed')
   const app = await launchPairedApp({ buildReplyFrames: fake.reply })
   const dialog = await open(app)
@@ -112,7 +112,7 @@ test('creation uses the exact workspace, keeps the name, retries rejection and o
   await ok.press('Enter')
   await expect.poll(() => fake.requests.length).toBe(1)
   expect(fake.requests[0]).toMatchObject({ type: 'create_conversation',
-    payload: { cwd: CWD, name: 'Release planning', is_promoted: true } })
+    payload: { cwd: null, name: 'Release planning', is_promoted: true } })
   await expect(nameField(dialog)).toBeDisabled()
   await expect(ok).toBeDisabled()
   await ok.evaluate(button => { (button as HTMLButtonElement).click(); (button as HTMLButtonElement).click() })
@@ -136,6 +136,7 @@ test('creation uses the exact workspace, keeps the name, retries rejection and o
   await expect(ok).toBeEnabled()
   await ok.click()
   await expect.poll(() => fake.requests.length).toBe(2)
+  await expect(dialog.getByRole('alert')).toHaveCount(0)
   fake.release(app)
   await expect(dialog).toHaveCount(0)
   await expect(app.page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText('Release planning')
@@ -146,28 +147,24 @@ test('creation addresses the clicked host in both directions', async ({ launchPa
   const second = controlled('second-seed')
   const app = await launchPairedApp({ buildReplyFrames: first.reply },
     { secondServer: { buildReplyFrames: second.reply } })
-  // Each fake's generated IDs start at created-1; separate launches keep the navigation
-  // assertion independent of artificial cross-host ID collisions.
+  // Both hosts seed the same path. Keep the first reply held so its daemon-default workspace cannot
+  // insert another plus ahead of the second host's original plus while this routing test is running.
   const dialog = await open(app, 0)
   await nameField(dialog).fill('First host channel')
   await dialog.getByRole('button', { name: 'OK', exact: true }).click()
   await expect.poll(() => first.requests.length).toBe(1)
   expect(first.requests[0]).toMatchObject({ type: 'create_conversation',
-    payload: { cwd: CWD, name: 'First host channel', is_promoted: true } })
+    payload: { cwd: null, name: 'First host channel', is_promoted: true } })
   expect(second.requests).toHaveLength(0)
-  first.release(app)
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(dialog).toHaveCount(0)
-  await expect(app.page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText('First host channel')
-  // The other direction, inherited from the deleted dedicated test: the second host's workspace row
-  // addresses the second host with its own workspace. The reply is deliberately NOT released — both
-  // fakes mint `created-1`, and a second navigation in this launch would ride an artificial ID
-  // collision rather than proving routing.
+  // The second host's workspace row still occupies the next plus, despite sharing the same path.
   const other = await open(app, 1)
   await nameField(other).fill('Second host channel')
   await other.getByRole('button', { name: 'OK', exact: true }).click()
   await expect.poll(() => second.requests.length).toBe(1)
   expect(second.requests[0]).toMatchObject({ type: 'create_conversation',
-    payload: { cwd: CWD, name: 'Second host channel', is_promoted: true } })
+    payload: { cwd: null, name: 'Second host channel', is_promoted: true } })
   expect(first.requests).toHaveLength(1)
 })
 
@@ -209,6 +206,8 @@ test('dismissal and disconnect abandon pending continuations, and a fresh openin
   await event(app, { type: 'conversationCreateRejected', serverId: FIRST_SERVER_ID })
   expect(fake.requests).toHaveLength(4)
   await expect(dialog).toHaveCount(0)
+  const reopened = await open(app)
+  await reopened.getByRole('button', { name: 'Cancel', exact: true }).click()
 })
 
 // #1428: the prompt is a SECOND step. `set_system_prompt` takes an EXISTING conversation id, so the
@@ -306,4 +305,16 @@ test('a typed prompt is written to the confirmed channel, and to no other', asyn
     'create_conversation', 'create_conversation', 'create_conversation',
     'set_system_prompt', 'create_conversation'
   ])
+
+  // A same-host unpromoted reply also dismisses the wait, but cannot receive the prompt.
+  dialog = await open(app)
+  await nameField(dialog).fill('Not a promoted channel')
+  await promptField(dialog).fill(PROMPT)
+  await ok().click()
+  await expect.poll(() => fake.requests.length).toBe(6)
+  await event(app, { type: 'conversationCreated', serverId: FIRST_SERVER_ID, conversation: {
+    id: 'unpromoted', name: 'Not a promoted channel', is_promoted: false, cwd: '/fake/workspace',
+    workspace_label: null, last_used_at: '2026-09-13T00:00:00Z' } })
+  await expect(dialogOf(app)).toHaveCount(0)
+  expect(fake.writes()).toHaveLength(1)
 })

@@ -2,6 +2,7 @@ import { test, expect, FIRST_SERVER_ID, SECOND_SERVER_ID, SEEDED_ROW, SECOND_SEE
 import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
 import type { RendererCommand } from '../src/shared/ipc/commands'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { confirmCreateChat } from './fixtures/confirmCreateChat'
 
 async function event(app: PairedApp, value: object): Promise<void> {
   await app.app.evaluate(({ BrowserWindow }, { channel, value }) => {
@@ -121,13 +122,13 @@ test('sidebar ownership follows the target in both open-chat directions', async 
     // for a host that is not connected, which the three counts above already read.
     await commands.clear()
     // `.first()` is the CHANNELS tree's plus — that tree renders above the divider — which is the one
-    // that opens `.create-channel__input`. The Chats mirror's plus creates a chat with no dialog.
+    // that opens `.create-channel__input`. The Chats mirror's plus opens chat confirmation.
     await page.locator('.channel-list__workspace-create').first().click({ force: true })
     await page.locator('.create-channel__input').fill('Owned channel')
     await page.getByRole('button', { name: 'OK', exact: true }).click()
     await expect.poll(async () => (await commands.read()).filter(c => c.type === 'createConversation').length).toBe(1)
     expect((await commands.read()).find(c => c.type === 'createConversation')).toMatchObject({
-      serverId: online, payload: { cwd: onlineRow.cwd, is_promoted: true }
+      serverId: online, payload: { cwd: null, is_promoted: true }
     })
     await page.getByRole('button', { name: onlineRow.name!, exact: true }).click()
     const offlineHeld = page.locator('.channel-list__row').filter({ hasText: offlineRow.name! })
@@ -148,10 +149,10 @@ test('chat creation and promotion address the connected sidebar host while anoth
   const commands = await observeCommands(app)
   await connection(app, FIRST_SERVER_ID, 'disconnected')
   await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
-  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
+  await confirmCreateChat(page)
   await expect.poll(async () => (await commands.read()).filter(c => c.type === 'createConversation').length).toBe(1)
   expect((await commands.read()).find(c => c.type === 'createConversation')).toMatchObject({
-    serverId: SECOND_SERVER_ID, payload: { cwd: SECOND_SEEDED_ROW.cwd, is_promoted: false }
+    serverId: SECOND_SERVER_ID, payload: { cwd: null, is_promoted: false }
   })
   await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
   const secondRow = page.locator('.channel-list__row').filter({ hasText: SECOND_SEEDED_ROW.name! })

@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { type Page } from '@playwright/test'
 import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/realDaemon'
+import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { daemonIdentity } from './fixtures/daemonVersion'
 import type { DaemonEvent } from '../src/shared/ipc/events'
@@ -99,7 +100,7 @@ test('applied effort, confirmed preference, restart and recall in chats and chan
     // Pool.mintSettings copies the bootstrap's saved effort into new sessions. Keep that seed
     // unset: choosing there would make later chats explicit already, so recall must not run.
     const beforeCreate = proof.readings.length
-    await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
+    await confirmCreateChat(page)
     const unset = await showFresh(page, proof, beforeCreate)
     expect(unset.conversationId).not.toBe(inherited.conversationId)
     expect(unset.effort).toBe('')
@@ -153,7 +154,7 @@ test('applied effort, confirmed preference, restart and recall in chats and chan
       const before = proof.readings.length
       const ackBefore = proof.confirmations()
       if (kind === 'chat') {
-        await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
+        await confirmCreateChat(page)
       } else {
         await page.getByRole('button', { name: 'Create channel', exact: true }).click({ force: true })
         await page.locator('.create-channel__input').fill('Effort recall channel')

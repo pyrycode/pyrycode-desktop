@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { bubbleTextExactly } from './fixtures/bubbleText'
 import type { ConversationSummary } from '../src/shared/wire/types'
 import type { Page } from '@playwright/test'
@@ -102,7 +103,7 @@ test("switching away from a chat and back shows that chat's own thread", async (
   // live event — AC3. The seeded thread's row must NOT be borrowed into it; before #758 this step passed
   // for the wrong reason (the flat store had just been reset out from under the screen). The auto-wait
   // covers the whole create round trip. ---
-  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
+  await confirmCreateChat(page)
   await expect(userRows).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(page.locator('.conversation__empty')).toBeVisible()
 

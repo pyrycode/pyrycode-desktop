@@ -1,5 +1,6 @@
 import { type Page } from '@playwright/test'
 import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 // #483/T9 — exercise the stream-json interactive runner, matching production (the Mac daemon runs
@@ -135,7 +136,7 @@ test('real claude streams a reply into a UI-created conversation for two consecu
   // which also records the created conversation as active. The composer then sends under THAT real id;
   // a client regression to a placeholder id gets `send_message unknown conversation` from the real
   // daemon and no reply ever streams (the exact live failure #448 fixed).
-  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
+  await confirmCreateChat(page)
   await expect(conversation).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
   await expect(sendButton).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
 

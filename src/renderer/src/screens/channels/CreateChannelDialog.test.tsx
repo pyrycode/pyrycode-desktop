@@ -123,15 +123,15 @@ describe('systemPromptOverLimit', () => {
 })
 
 describe('confirmsPending', () => {
-  const asked = { type: 'channel', name: 'Release planning', cwd: '/home/alex/demo',
+  const asked = { type: 'channel', name: 'Release planning',
     systemPrompt: 'Answer only in haiku.' } as const
   const created = (over: Partial<ConversationCreatedPayload> = {}): ConversationCreatedPayload => ({
     id: 'created-1', is_promoted: true, cwd: '/home/alex/demo', name: 'Release planning',
     last_used_at: '2026-09-15T00:00:00Z', workspace_label: null, ...over
   })
 
-  it('confirms the create this dialog asked for', () => {
-    expect(confirmsPending(created(), asked)).toBe(true)
+  it('accepts the daemon-resolved default path for the named promoted create', () => {
+    expect(confirmsPending(created({ cwd: '/home/alex/default' }), asked)).toBe(true)
   })
 
   // AC2: a same-host confirmation whose payload does not match what this dialog sent is somebody
@@ -139,7 +139,6 @@ describe('confirmsPending', () => {
   it.each([
     ['a different name', { name: 'Someone else' }],
     ['a null name', { name: null }],
-    ['a different cwd', { cwd: '/home/alex/other' }],
     ['an unpromoted conversation', { is_promoted: false }]
   ])('rejects a confirmation with %s', (_label, over) => {
     expect(confirmsPending(created(over), asked)).toBe(false)

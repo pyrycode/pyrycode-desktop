@@ -1,5 +1,6 @@
 import { type Page } from '@playwright/test'
 import { test, expect, encodePairingPayload, type SpawnedDaemon } from './fixtures/realDaemon'
+import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 // Match production: the Mac daemon runs interactive_runner: stream-json, and a real v2 daemon fans the
@@ -123,7 +124,6 @@ const ACTIONS_LABEL = 'Actions'
 // Renamed by #1496 — see real-claude-new-session.spec.ts, whose selectors this file copies verbatim.
 const NEW_SESSION_ROW = 'Reset session'
 const CHANNEL_INFO_ROW = 'Channel info'
-const CREATE_CHAT_LABEL = 'Create chat'
 
 // --- Timeouts ---------------------------------------------------------------------------------------
 const HANDSHAKE_TIMEOUT_MS = 45_000
@@ -275,7 +275,7 @@ async function takeTurn(page: Page, message: string, baseline: number): Promise<
  *  its empty thread. `.conversation__empty` is what proves the pane switched rather than kept the
  *  previous conversation's rows, which is what makes a later reply count unambiguous. */
 async function createChat(page: Page): Promise<void> {
-  await page.getByRole('button', { name: CREATE_CHAT_LABEL, exact: true }).click({ force: true })
+  await confirmCreateChat(page)
   await expect(page.locator('.conversation')).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
   await expect(
     page.locator('.conversation__empty'),

@@ -2,6 +2,7 @@ import { type Page } from '@playwright/test'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 // Retained drop-only regression on the production stream-json runner. Successful follow-up
@@ -205,7 +206,7 @@ test('real claude enqueues a mid-turn send, drops it before drain, and runs no t
   await expect(page.locator('.channel-list__row-open')).toBeVisible({
     timeout: HANDSHAKE_TIMEOUT_MS
   })
-  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
+  await confirmCreateChat(page)
   await expect(conversation).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
   await expect(sendButton).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
 

@@ -1,6 +1,7 @@
 import type { Page } from '@playwright/test'
 import { test, expect } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { ConversationSummary, SendMessagePayload } from '../src/shared/wire/types'
 
@@ -56,7 +57,7 @@ test('drafts survive create/sidebar switches and screen exits while transient pa
   const emptyHeight = await composer.evaluate(el => el.getBoundingClientRect().height)
   await composer.fill(FIRST)
   await openInfo(page)
-  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
+  await confirmCreateChat(page)
   await expect(composer).toHaveValue('')
   await expect(page.locator('.status-sheet')).toHaveCount(0)
   // Draft before the created chat appears in a list: ownership comes from the create event.

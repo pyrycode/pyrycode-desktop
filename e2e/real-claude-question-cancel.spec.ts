@@ -1,6 +1,7 @@
 import { type Locator, type Page } from '@playwright/test'
 import { readdir } from 'node:fs/promises'
 import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 // Tier-3 real-claude e2e (#929) — the REFUSAL arm of the question vertical, and the twin of #928's
@@ -347,7 +348,7 @@ test('real claude raises a clarifying question that refusing through Cancel stop
   await expect(page.locator('.channel-list__row-open')).toBeVisible({
     timeout: HANDSHAKE_TIMEOUT_MS
   })
-  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
+  await confirmCreateChat(page)
   await expect(conversation).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
   await expect(sendButton).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
 

@@ -6,6 +6,7 @@ import { promisify } from 'node:util'
 import type { Page } from '@playwright/test'
 import { COMMAND_CHANNEL, type RendererCommand } from '../src/shared/ipc/commands'
 import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/realDaemon'
+import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { daemonIdentity } from './fixtures/daemonVersion'
 import { createQueueTurnEvidence } from './fixtures/queueTurnEvidence'
@@ -65,7 +66,7 @@ for (const scenario of [
       try {
         await pairFromUnpairedLaunch(page, encodePairingPayload({ ...daemon.pairFields, relay: `${relay.url}/v1/client` }))
         await expect(page.locator('.channel-list__row-open')).toBeVisible({ timeout: 45_000 })
-        await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
+        await confirmCreateChat(page)
         await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled({ timeout: 45_000 })
         await expect.poll(async () => (await readEvidence(page, expected)).conversationId.length).toBeGreaterThan(0)
         await composer.fill(first)

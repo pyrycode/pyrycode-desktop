@@ -38,8 +38,12 @@ Sizing recheck: one deliverable, two production source files plus one SVG; appro
 
 ## Documentation handoff
 
-Pending documentation stage: no explicit documentation requirement appears in the ticket. Update the owning channel-list overview's “What it does” and pairing-control topic's geometry/wiring descriptions to reflect the single toolbar entry and removed global headers.
+Pending documentation stage: no explicit documentation requirement appears in the ticket. Update `docs/knowledge/features/channel-list.md` § “What it does” and `docs/knowledge/features/channel-list-section-header-pair-control.md` § “Geometry” / “Wiring” to reflect the single toolbar entry and removed global headers.
 
 ## Open questions
 
 None.
+
+## Revisions
+
+- Visual review found the imported CSS mask was inlined by Vite and blocked by the renderer's existing CSP. Store the unchanged Figma SVG at `src/renderer/public/sidebar-pair-host.svg`, following the existing public repair glyph, and reference `/sidebar-pair-host.svg`. This keeps the mask app-local without changing CSP or build configuration. The geometry test now requires the mask image to decode at its native 24×24 dimensions; button bounding boxes alone had passed with the glyph absent.

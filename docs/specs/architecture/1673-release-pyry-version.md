@@ -97,3 +97,32 @@ This rework adds only this evidence entry (0 production files, types, consumers
 or rejection branches). Codegraph was unavailable, so file reads and Git diffs
 supplied the comparison. The refreshed branch check still finds only #1544
 overlapping the permission-mode spec; no implementation edits are needed.
+
+### 2026-09-27 — answer the repeated gate at b551c4a390
+
+The newer dispatcher log `2026-09-27T10-30-16-329Z_real-claude-gate_#1673.log`
+again reports 23 executed, 19 passed, 4 failed and 1 skipped. All five required
+tests annotate `daemon-revision: 0.27.0`; permission-mode and the three queue
+cases pass, while effort-default reaches the same duplicate Create chat failure.
+The four failure messages are identical to the earlier #1673 log. Git comparison
+of `ffb4c2dc7c` and `b551c4a390` shows only this plan changed: the two dispatcher
+runs repeat the same executable code, although neither is a pristine-base run.
+
+The newer neighbouring log `2026-09-27T10-43-26-203Z_real-claude-gate_#1674.log`
+again passes permission-modal, active system-prompt and create-channel, with
+only the five old version rejections failing (23 executed, 18 passed, 5 failed,
+1 skipped). This confirms the earlier evidence; effort-default's workspace
+attribution still needs the combined tree. No test or implementation changes
+are warranted, and #1674's fixture repair remains outside this ticket's scope.
+
+Dispatcher handoff remains a live run containing both fixes. The four failing
+spec paths listed above can be passed directly as Playwright file filters if a
+focused diagnostic run is needed; their human-readable titles need no parsing.
+The full combined gate must still record its commit, executed daemon version and
+executed/pass/fail/skip counts. Retain `needs-real-claude`; no full-suite pass or
+combined validation is claimed. Documentation handoff remains pending.
+
+This rework only appends evidence to the plan (0 production files, exported
+types, consumers or rejection branches). The refreshed overlap check still
+finds #1544 only. Scoped parser/preflight tests pass (6 tests), and
+`npm run build` passes.

@@ -109,10 +109,10 @@ no live Claude run.
 Makes the thread overflow menu's **Channel info** item (#276, previously a live no-op) open a new
 bottom sheet (Figma node 20-48), reusing the Run-configuration `StatusSheet`'s `.status-sheet__*`
 chrome verbatim — the second sheet to do so. Renders the active conversation's **About** detail
-(Workspace `cwd` + Last activity), read-only **Session** facts (#1241), a read-only **MCP servers**
-list (#1490), a **System prompt** section (#1078), **Actions**, and a monospace **Channel ID** footer.
-The Session report and the MCP report both arrive through the validated daemon event path; the sheet
-owns only their display.
+(Workspace `cwd` + Last activity), read-only **Session** facts (#1241), the daemon's **Memory search**
+report, a read-only **MCP servers** list (#1490), a **System prompt** section (#1078), **Actions**,
+and a monospace **Channel ID** footer. The reports arrive through the validated daemon event path;
+the sheet owns only their display.
 
 ```
 .conversation
@@ -128,6 +128,7 @@ owns only their display.
                 ├── .channel-info__row × 2          Workspace (mono, cwd) / Last activity  — or —
                 ├── .channel-info__empty            "No conversation details yet" (conversation === null)
                 ├── "Session" + two detail rows     Claude/Codex version / Reported permission mode (conversation !== null)
+                ├── "Memory search" + status row    daemon aggregate + reported providers (conversation !== null)
                 ├── McpServersSection                #1490, conversation !== null AND the session's mcpServers capability flag is not false (#1655) — see [linked doc](conversation-shell-channel-info-mcp.md)
                 ├── SystemPromptSection              #1078, conversation !== null only — see below
                 ├── "Actions" section-header
@@ -139,7 +140,9 @@ owns only their display.
 `useState(false)` in `ConversationScreen` — the `sheetOpen` precedent (ADR 0006) — flipped by the
 overflow menu's `onChannelInfo` handler. Since [#1579](https://github.com/pyrycode/pyrycode-desktop/issues/1579)
 that same handler also sends one MCP-status request naming the conversation the sheet is about to show
-— see § MCP servers section below. This is a deliberate divergence from
+— see § MCP servers section below. It now also requests fresh session settings for that conversation
+to update Memory search; see [snapshot lifetime](run-config-store.md#scoped-to-the-open-chat-since-1167).
+This is a deliberate divergence from
 \#276's original design: #276 shipped a speculative `ConversationScreenProps.onChannelInfo?` seam
 assuming the sheet would live *above* `ConversationScreen` (opened by `PairedShell`). #365 retired that
 prop instead (removed from the interface and the destructure) because the sheet's trigger, data
@@ -178,8 +181,9 @@ omitted entirely (there is no id to show). `conversation.name === null` (an unna
 is a separate, narrower case — the title falls back to `UNNAMED_CONVERSATION_LABEL` — distinct from no
 conversation at all.
 
-**Deferred, not invented:** Figma 20-48 also shows Created / Total sessions / Total messages rows and a
-Memory section — none has a field on the desktop `ConversationCreatedPayload`, so none is built. The
+**Deferred, not invented:** Figma 20-48 also shows Created / Total sessions / Total messages rows;
+none has a field on the desktop `ConversationCreatedPayload`, so none is built. Its Memory example
+predates the daemon's search report and does not establish knowledge capture or an Install action. The
 Channel ID footer ships at the app's `body-small` (12px) mono token rather than Figma's 11px — a
 type-scale simplification (the app's fixed vocabulary is the fidelity ceiling, not a literal Figma
 pixel match), not drift.
@@ -281,6 +285,33 @@ position between the Session header and Actions. `e2e/channel-info-session-cost.
 opens the sheet before any turn (no row), sends three messages whose `turn_end` frames report 0.10, then
 0.42, then none, and confirms the sheet shows exactly `$0.42 est.` — never a summed `$0.52` — under the
 Claude-attributed label.
+
+### Memory search report
+
+For an active conversation, the sheet reads `memorySearch` from the
+[run-configuration snapshot](run-config-store.md#scoped-to-the-open-chat-since-1167), independently
+of MCP status. The daemon's aggregate `available` shows **Memory search available**;
+`unavailable` shows **Memory search unavailable**; `absent` shows **No memory-search provider
+detected**. An explicit `unknown`, an omitted report, and a snapshot not yet loaded all show
+**Memory search status unknown**. Neither an empty provider array nor a missing MCP server implies
+absence. These labels report search availability; they do not claim previous messages were captured,
+saved, or recoverable after a session reset.
+
+Every provider in a present report appears by its daemon display name, including providers outside
+MCP and ones marked `installed: false`. Its state reflects the explicit flags: **Not installed**,
+**Installed, disabled**, or, when installed and enabled, **Installed, enabled**, **Installed,
+unavailable**, **Installed, search absent**, or **Installed, status unknown** according to provider
+availability. A disabled provider stays visible even when the aggregate is available; an unavailable
+aggregate never gets available copy. Names are capped at 256 Unicode code points and rendered as
+escaped React text in the existing detail rows. No state shows an installation prompt or starts an
+installation workflow.
+
+Opening Channel info requests session settings for its active conversation alongside the MCP refresh.
+Conversation activation and reconnect also refresh the settings report. Switching conversations,
+reconnecting, resetting, or replacing a session removes the old memory reading until a current
+correlated reply arrives; a late reply for another conversation cannot populate this sheet. See
+[snapshot lifetime](run-config-store.md#scoped-to-the-open-chat-since-1167) and the
+[optional wire report](inbound-message-decode.md#optional-memory-search-report).
 
 ### MCP servers section ([#1490](https://github.com/pyrycode/pyrycode-desktop/issues/1490))
 

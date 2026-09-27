@@ -7,6 +7,7 @@ import type { Page } from '@playwright/test'
 import { COMMAND_CHANNEL, type RendererCommand } from '../src/shared/ipc/commands'
 import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/realDaemon'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
+import { daemonIdentity } from './fixtures/daemonVersion'
 import { createQueueTurnEvidence } from './fixtures/queueTurnEvidence'
 
 // The dispatcher owns credentialed execution. Keep the old drop-only case alongside these
@@ -29,9 +30,8 @@ for (const scenario of [
     test.setTimeout(540_000)
     // The fixture resolves this same executable. Read the binary, not a checkout that may be newer.
     const { stdout } = await promisify(execFile)(process.env.PYRY_BIN || 'pyry', ['version'], { timeout: 10_000 })
-    const revision = /^pyry (?:dev-)?([a-f0-9]{7,40})\s*$/.exec(stdout)?.[1]
-    expect(Boolean(revision), 'live acceptance requires a daemon built with its source revision').toBe(true)
-    testInfo.annotations.push({ type: 'daemon-revision', description: revision! })
+    const revision = daemonIdentity(stdout)
+    testInfo.annotations.push({ type: 'daemon-revision', description: revision })
 
     await withIsolatedElectronApp(async ({ app, page }) => {
       const nonce = Date.now()

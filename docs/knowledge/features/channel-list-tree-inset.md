@@ -21,8 +21,10 @@ Sidebar 132:3902 and fixed directly, five declarations in one stylesheet:
   half-landed — the cluster became the card's own Top bar and the already-deleted FAB (#1426) left
   nothing else sticky, but the inset that arrived is 24 top / 20 sides / 20 bottom, not the uniform 20
   predicted here. Only the bottom pair matches.
-- **The section header drops its horizontal and top padding and keeps 12 below** (103:2984, 103:2966
-  gap-[12px]). Its box is the bare 20px line, so the host row lands 32px under the header's top.
+- **Global section headers are removed by the [revised toolbar](channel-list-section-header-pair-control.md#geometry-channelscss).**
+  The first host begins 24px below the fixed rule at scroll top, at sidebar-relative y=93.
+  The first host in each section has no extra top margin; the section divider retains its
+  28px margins. This replaces the former 20px header line plus 12px header-to-host gap.
 - **The host row's right padding goes to 0**, so the two connection dots sit flush with the content edge.
   #718 had kept them 16px in, reading the design's absolute dot coordinates as artefacts of a 360-wide
   design row against a 400-wide shipped one; with the row now 360 wide they read literally, 1px from the

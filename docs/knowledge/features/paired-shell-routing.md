@@ -93,7 +93,7 @@ only the derived target label and rejection flag. The modal rejection notice app
 
 ### The pair-new-host plus and origin-aware cancel (#1303)
 
-The Channels/Chats header plus and Settings' Pair another server row share
+The sidebar toolbar's single Pair new host button and Settings' Pair another server row share
 `onOpenPairServer`. These entries and explicit host recovery use the same two-step
 [Pair modal](pairing-input-screen.md#in-app-modal-presentation). Onboarding remains
 owned by `App` and uses the default full-page presentation.

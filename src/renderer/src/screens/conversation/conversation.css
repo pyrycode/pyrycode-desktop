@@ -6758,6 +6758,15 @@ button.top-overlay-pill {
   line-height: var(--text-label-small-line);
 }
 
+.channel-info__memory-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.channel-info__memory-state {
+  flex-shrink: 0;
+}
+
 /* Reuse the session label while keeping reported values inside the thread width. */
 .stopped-turn {
   overflow: hidden;

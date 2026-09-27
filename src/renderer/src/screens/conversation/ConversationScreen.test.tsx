@@ -4568,12 +4568,49 @@ describe('ChannelInfoSheetView — the Channel Info sheet (#365)', () => {
     const markup = renderToStaticMarkup(
       <ChannelInfoSheetView conversation={createdPayload()} onClose={noop} />
     )
-    // Created / Total sessions / Total messages / Memory are Figma 20-48 content with no field on
-    // ConversationCreatedPayload — deferred, not fabricated.
+    // Created / Total sessions / Total messages have no desktop field — deferred, not fabricated.
     expect(markup).not.toContain('Created')
     expect(markup).not.toContain('Total sessions')
     expect(markup).not.toContain('Total messages')
-    expect(markup).not.toContain('Memory')
+    expect(markup).toContain('Memory search status unknown')
+  })
+
+  it('shows daemon memory search availability and bounded, escaped providers', () => {
+    const markup = renderToStaticMarkup(<ChannelInfoSheetView conversation={createdPayload()} onClose={noop}
+      memorySearch={{ availability: 'available', providers: [
+        { id: 'local', display_name: '<Local index>', installed: true, enabled: true, availability: 'available' },
+        { id: 'disabled', display_name: 'D'.repeat(300), installed: true, enabled: false, availability: 'unavailable' }
+      ] }} />)
+    expect(markup).toContain('Memory search available')
+    expect(markup).toContain('&lt;Local index&gt;')
+    expect(markup).toContain('Installed, disabled')
+    expect(markup).not.toContain('D'.repeat(300))
+    expect(markup).not.toContain('<Local index>')
+    expect(markup).not.toContain('Install</')
+  })
+
+  it.each([
+    [{ availability: 'absent' as const, providers: [] }, 'No memory-search provider detected'],
+    [{ availability: 'unavailable' as const, providers: [] }, 'Memory search unavailable'],
+    [{ availability: 'unknown' as const, providers: [] }, 'Memory search status unknown']
+  ])('renders report %j as %s without an installation nag', (memorySearch, expected) => {
+    const markup = renderToStaticMarkup(<ChannelInfoSheetView conversation={createdPayload()} onClose={noop} memorySearch={memorySearch} />)
+    expect(markup).toContain(expected)
+    expect(markup).not.toContain('Install</')
+    expect(markup).not.toContain('0 plugins')
+    expect(markup).not.toContain('>None<')
+  })
+
+  it('keeps unavailable and unknown provider readings distinct', () => {
+    const markup = renderToStaticMarkup(<ChannelInfoSheetView conversation={createdPayload()} onClose={noop}
+      memorySearch={{ availability: 'unavailable', providers: [
+        { id: 'offline', display_name: 'Offline index', installed: true, enabled: true, availability: 'unavailable' },
+        { id: 'unclear', display_name: 'Unclear index', installed: true, enabled: true, availability: 'unknown' }
+      ] }} />)
+    expect(markup).toContain('Memory search unavailable')
+    expect(markup).toContain('Installed, unavailable')
+    expect(markup).toContain('Installed, status unknown')
+    expect(markup).not.toContain('Memory search available')
   })
 
   // #368: the rename action fills the Actions slot #365 left empty. It is gated on the `onRename`

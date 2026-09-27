@@ -17,6 +17,7 @@
 // two-way-bound from a component.
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
+import type { MemorySearchPayload } from '@shared/wire/types'
 
 /** The session-settings fields the sheet displays. Fields are plain `string`/`boolean`, so an
  *  empty model, an empty effort (inherited default), or `yolo: false` (permissions enforced) are
@@ -48,6 +49,8 @@ export interface RunConfigSnapshot {
   slashCommands?: boolean
   mcpServers?: boolean
   contextUsageDetail?: boolean
+  /** Optional daemon report; omission is unknown, and explicit provider flags stay verbatim. */
+  memorySearch?: MemorySearchPayload
 }
 
 /** The whole run-config state. `snapshot: null` is the distinct "not yet loaded" state; a received

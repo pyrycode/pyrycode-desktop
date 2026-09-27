@@ -21,7 +21,7 @@ import { AssistantMarkdown } from './AssistantMarkdown'
 import { MARKDOWN_OPEN_FAILED_NOTICE, MarkdownReaderView, useMarkdownReader } from './MarkdownReader'
 import { PyryMark } from '../../theme/PyryMark'
 import type { Message } from './messageViewModel'
-import type { QueuedItem, ConversationCreatedPayload, WireResetHandoff, WireAgent } from '@shared/wire/types'
+import type { QueuedItem, ConversationCreatedPayload, WireResetHandoff, WireAgent, MemorySearchPayload } from '@shared/wire/types'
 import type { ModelRefusalEvent, RelayLinkStatus } from '@shared/ipc/events'
 import { sessionStore, useSessionStore, initialSessionState, selectStatusFor, type ConnectionStatus } from '../../store/sessionStore'
 import { canRespondToPromptNow, usePromptResponseAvailability } from './promptResponseAvailability'
@@ -118,6 +118,7 @@ import { isAtBottom, isNearTop } from './threadScrollPosition'
 import { toolHeadlineRuns } from './toolHeadline'
 import { listedInputFields, shellCommandBlock } from './toolBody'
 import { serverIdForOpenConversation } from './unpairAction'
+import { requestRunConfigSnapshot } from './runConfigSnapshot'
 import { selectDraft, useComposerDraftStore } from '../../store/composerDraftStore'
 import {
   conversationListStore,
@@ -443,6 +444,7 @@ export function ConversationScreen({
   const openChannelInfo = (): void => {
     setChannelInfoOpen(true)
     requestMcpStatus(window.pyry.sendCommand, activeConversation?.id ?? null)
+    requestRunConfigSnapshot(window.pyry.sendCommand, activeConversation?.id ?? null)
   }
   // #1627: an open reader covers the whole pane, composer included; the sidebar is PairedShell's. The
   // thread and the Composer stay MOUNTED beneath it, hidden, never unmounted: the Composer's pending
@@ -3113,6 +3115,26 @@ const CHANNEL_INFO_SHEET_TITLE_ID = 'channel-info-sheet-title'
 // The daemon strings (name / cwd / id) reach the DOM only as auto-escaped React children — never
 // dangerouslySetInnerHTML, never path/markup interpretation (the toolCall / sessionBoundary posture). They
 // are already rendered elsewhere in this file, so no new trust boundary.
+function memorySearchStatus(report: MemorySearchPayload | undefined): string {
+  switch (report?.availability) {
+    case 'available': return 'Memory search available'
+    case 'unavailable': return 'Memory search unavailable'
+    case 'absent': return 'No memory-search provider detected'
+    default: return 'Memory search status unknown'
+  }
+}
+
+function memoryProviderStatus(provider: MemorySearchPayload['providers'][number]): string {
+  if (!provider.installed) return 'Not installed'
+  if (!provider.enabled) return 'Installed, disabled'
+  switch (provider.availability) {
+    case 'available': return 'Installed, enabled'
+    case 'unavailable': return 'Installed, unavailable'
+    case 'absent': return 'Installed, search absent'
+    case 'unknown': return 'Installed, status unknown'
+  }
+}
+
 export function ChannelInfoSheetView({
   conversation,
   now = Date.now(),
@@ -3125,6 +3147,7 @@ export function ChannelInfoSheetView({
   onDeleteCancel,
   systemPromptSection,
   mcpServersSection,
+  memorySearch,
   sessionFacts = null,
   sessionCostUsd = null,
   agent = 'claude'
@@ -3159,6 +3182,7 @@ export function ChannelInfoSheetView({
   systemPromptSection?: ReactNode
   // #1490: the MCP servers section, a slot supplied only for a non-null conversation like the one above.
   mcpServersSection?: ReactNode
+  memorySearch?: MemorySearchPayload
 }): JSX.Element {
   // Title: the daemon name when present; the client-owned unnamed label when `name === null` (a distinct
   // "unnamed scratch conversation", not an empty string); the fallback when there is no conversation.
@@ -3245,6 +3269,25 @@ export function ChannelInfoSheetView({
                   <span className="channel-info__row-value">{formatSessionCost(sessionCostUsd)}</span>
                 </div>
               )}
+            </>
+          )}
+          {conversation !== null && (
+            <>
+              <p className="status-sheet__section-header">Memory search</p>
+              <div className="channel-info__row">
+                <span className="channel-info__row-label">Status</span>
+                <span className="channel-info__row-value">{memorySearchStatus(memorySearch)}</span>
+              </div>
+              {memorySearch?.providers.map((provider, index) => (
+                <div className="channel-info__row" key={index}>
+                  <span className="channel-info__row-label channel-info__memory-name">
+                    {boundMcpText(provider.display_name)}
+                  </span>
+                  <span className="channel-info__row-value channel-info__memory-state">
+                    {memoryProviderStatus(provider)}
+                  </span>
+                </div>
+              ))}
             </>
           )}
           {mcpServersSection}
@@ -3382,6 +3425,7 @@ function ChannelInfoSheet({
   // #1655: a session that reports no MCP status (a Codex session) gets no MCP section, rather than one
   // showing its unavailable line forever. The snapshot is the open conversation's, which this sheet is.
   const mcpServers = useRunConfigStore(selectMcpServersSupported)
+  const memorySearch = useRunConfigStore(selectSnapshot)?.memorySearch
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameName, setRenameName] = useState('')
   // #377: the Delete confirm's per-interaction state — the `renameOpen` twin (transient UI state →
@@ -3404,6 +3448,7 @@ function ChannelInfoSheet({
         sessionFacts={sessionFacts}
         sessionCostUsd={sessionCostUsd}
         agent={agent}
+        memorySearch={memorySearch}
         now={now}
         onClose={onClose}
         // Supply onRename ONLY for a non-null conversation — a null active conversation yields no button

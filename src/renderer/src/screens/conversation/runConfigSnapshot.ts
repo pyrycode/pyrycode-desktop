@@ -50,7 +50,8 @@ export function toRunConfigSnapshot(event: DaemonEvent): RunConfigSnapshot | nul
         ...(event.mcpServers === undefined ? {} : { mcpServers: event.mcpServers }),
         ...(event.contextUsageDetail === undefined
           ? {}
-          : { contextUsageDetail: event.contextUsageDetail })
+          : { contextUsageDetail: event.contextUsageDetail }),
+        ...(event.memorySearch === undefined ? {} : { memorySearch: event.memorySearch })
       }
     default:
       return null

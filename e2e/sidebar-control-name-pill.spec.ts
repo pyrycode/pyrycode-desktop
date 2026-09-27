@@ -91,8 +91,8 @@ const SIDEBAR_WIDTH_PX = 400
 // Sub-pixel tolerance, the sibling specs' EPSILON.
 const EPSILON_PX = 1.5
 
-// Enough promoted rows that the Channels tree alone (a 28px pitch under a header, a host row and a
-// workspace row) overruns the 800px window the app opens at, so the tree really scrolls and the
+// Enough promoted rows that the Channels section alone (a 28px pitch under a host and section row)
+// overruns the 800px window the app opens at, so the tree really scrolls and the
 // first and last rows are at genuinely different scroll positions. Deliberately not tuned to the exact
 // overflow: a taller window must still scroll here.
 const PROMOTED_ROW_COUNT = 40
@@ -102,8 +102,7 @@ const PROMOTED_ROW_COUNT = 40
 // list's pill total counts on top of one-per-promoted-row.
 const CHAT_ROW_CONTROLS = 2
 
-// One workspace for every row — the fixture's own, so the pushed rows land in the SAME group as the
-// seeded one and the tree is one host row over one workspace row rather than a forest.
+// Keep the fixture's directory on every row; the sidebar no longer groups by that value.
 const WORKSPACE_CWD = SEEDED_ROW.cwd
 
 // Names carrying no substring of either control name, so a `hasText`-shaped mistake in this file could not
@@ -231,12 +230,8 @@ test('a row control names itself in a pill that follows the pointer, clear of th
 
   const tree = page.locator('.channel-list__tree')
   const rows = page.locator('.channel-list__row')
-  // ⭐ SCOPED TO `.channel-list__row` SINCE #1181, which gave the WORKSPACE row's plus the same pill
-  // class. That control lives in `.channel-list__workspace-head`, not in a row, so this scope restores
-  // every count and every `first()` / `last()` below to exactly the element it was written for — and
-  // without it the breakage is worse than arithmetic: the workspace head precedes its group's rows in
-  // document order, so `pills.first()` would silently stop being the first row's Rename pill. Nothing
-  // else in this file moved; the workspace pills are `e2e/sidebar-workspace-plus-name-pill.spec.ts`'s.
+  // Scope to conversation rows so section-create and host controls cannot change the counts or which
+  // pill `first()` and `last()` select when their own name pills are shown.
   const pills = page.locator('.channel-list__row .channel-list__control-name')
   const renames = page.locator('.channel-list__rename')
   const save = page.locator('.channel-list__save')
@@ -442,8 +437,8 @@ test('a row control names itself in a pill that follows the pointer, clear of th
   await allHidden(pills, pillCount)
 
   // --- ...and on THE HIGHEST ROW A POINTER CAN REACH, mid-scroll — the case an above-the-row placement
-  // clips, and the one no unscrolled read gets near: at `scrollTop: 0` the first row sits a header, a host
-  // row and a workspace row below the top edge, with room above it for a pill that does not belong there.
+  // clips, and the one no unscrolled read gets near: at `scrollTop: 0` the first row sits below a host
+  // and section row, with room above it for a pill that does not belong there.
   //
   // ⭐ "HIGHEST REACHABLE" IS FLUSH WITH THE SCROLLER'S TOP EDGE SINCE #1443, and it was not before. Until
   // then the row flush with the top edge had no hoverable control at all: `.channel-list__actions` was
@@ -456,12 +451,11 @@ test('a row control names itself in a pill that follows the pointer, clear of th
   // flush with it. The post-hover re-read below still proves it stayed there: that guard is about
   // `hover()`'s relocation, which is unchanged, and it is what would catch a future overlay arriving here.
   //
-  // THE ROW IS SCROLLED INTO POSITION RATHER THAN SEARCHED FOR. A third draft picked the topmost visible
-  // row out of the laid-out rects; it selected the LAST row, because a divider, a second section header, a
-  // host row and a workspace row sit between the two trees, so DOM order and visible order do not agree
-  // the way that search assumed. Scrolling a KNOWN row to a known y is exact whatever the window height or
-  // the tree's shape, and states the arrangement it wants instead of hunting for it. ---
-  const HIGH_ROW_INDEX = 20
+  // THE ROW IS SCROLLED INTO POSITION RATHER THAN SEARCHED FOR. A known Channels row can reach the
+  // scroller's top edge while leaving enough content below it to scroll there. Index 20 used to work
+  // with the taller workspace tree, but the host-first layout leaves it 35px below the edge even at
+  // maximum scroll. Index 18 retains the clip-edge case without relying on a retired workspace row. ---
+  const HIGH_ROW_INDEX = 18
   // ONE reading where there used to be two. The second was the row's gap below the sticky cluster, and
   // there is no cluster inside this scroller to read against any more — the bar is the padded column's
   // child, a level up. What is left is the reading that actually defines the case: the row's distance from

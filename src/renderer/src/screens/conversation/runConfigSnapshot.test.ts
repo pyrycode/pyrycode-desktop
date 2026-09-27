@@ -26,6 +26,17 @@ const message: MessagePayload = {
 }
 
 describe('toRunConfigSnapshot', () => {
+  it('preserves the optional memory search report and explicit disabled flags', () => {
+    const base: DaemonEvent = {
+      type: 'runConfigReceived', conversationId: OPEN, sessionId: 'session', model: '',
+      effort: '', yolo: false, permissionMode: '', used_tokens: 0, window_tokens: 0
+    }
+    expect(toRunConfigSnapshot(base)).not.toHaveProperty('memorySearch')
+    const memorySearch = { availability: 'available' as const, providers: [
+      { id: 'local', display_name: 'Local index', installed: true, enabled: false, availability: 'unavailable' as const }
+    ] }
+    expect(toRunConfigSnapshot({ ...base, memorySearch })?.memorySearch).toEqual(memorySearch)
+  })
   it('maps a runConfigReceived to the five display fields verbatim, including empty/false (AC5)', () => {
     // Input carries the two usage ints (#191); #192 widens the OUTPUT to also carry them, mapping the
     // wire snake_case (used_tokens / window_tokens) to the store's camelCase.

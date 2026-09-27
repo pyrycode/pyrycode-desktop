@@ -47,6 +47,10 @@ Unavailable and unknown are report outcomes, not inferred failures or installati
 
 - Whether a provider with `installed: false` in an unavailable aggregate should be listed. Resolve from the daemon contract and record any design change under Revisions.
 
+## Revisions
+
+- During implementation, resolved the provider question: display every provider the daemon reports, including one marked not installed, so the sheet preserves the daemon's full report. This does not derive provider detection from the MCP list or offer installation.
+
 ## Documentation handoff
 
 Pending for the documentation stage: update `docs/knowledge/features/run-config-store.md` under snapshot lifetime and `docs/knowledge/features/conversation-shell-session-and-channel-info.md` under “Channel Info sheet” to describe search-report states, refresh/invalidation and the distinction from knowledge capture.

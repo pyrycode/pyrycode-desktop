@@ -27,7 +27,10 @@ export function subscribeConfirmedRunConfig(deps: {
   const invalidate = () => {
     stop(); pending.clear(); awaiting = false
     const snapshot = deps.config.getState().snapshot
-    if (snapshot !== null) deps.config.getState().setSnapshot({ ...snapshot, permissionMode: '' })
+    if (snapshot !== null) {
+      const { memorySearch: _memorySearch, ...retained } = snapshot
+      deps.config.getState().setSnapshot({ ...retained, permissionMode: '' })
+    }
     deps.log('invalidated')
   }
   const offContext = deps.subscribeContext(() => {

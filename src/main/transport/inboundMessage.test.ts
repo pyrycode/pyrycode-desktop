@@ -10126,6 +10126,64 @@ describe('parseInboundMessage — secret-safety / log-free', () => {
 })
 
 describe('parseInboundMessage — session_settings recognition (#491)', () => {
+  // Payloads copied from pyrycode/internal/protocol/testdata/session_settings_memory_{available,disabled,absent,unknown}.json
+  // and the older session_settings.json fixture. The daemon fixtures have no in_reply_to; the
+  // local envelope helper supplies it for the correlation-capable desktop decoder.
+  const memoryFixtureBase = {
+    session_id: 'sess-a', model: 'opus', effort: 'high', yolo: false,
+    permission_mode: 'default', used_tokens: 12480, window_tokens: 200000
+  }
+  const memoryFixtureReports = [
+    { name: 'available', report: { availability: 'available', providers: [
+      { id: 'qmd', display_name: 'QMD', installed: true, enabled: true, availability: 'available' }
+    ] } },
+    { name: 'disabled', report: { availability: 'unavailable', providers: [
+      { id: 'memsearch', display_name: 'Memsearch', installed: true, enabled: false, availability: 'unavailable' }
+    ] } },
+    { name: 'absent', report: { availability: 'absent', providers: [] } },
+    { name: 'unknown', report: { availability: 'unknown', providers: [] } }
+  ]
+
+  it.each(memoryFixtureReports)('decodes the daemon $name memory-search fixture', ({ report }) => {
+    const decoded = parseInboundMessage(encodeSessionSettings({ ...memoryFixtureBase, memory_search: report }))
+    if (decoded?.kind !== 'session-settings') throw new Error('expected session settings')
+    expect(decoded.sessionSettings.memory_search).toEqual(report)
+    expect(decoded.sessionSettings).toMatchObject(memoryFixtureBase)
+  })
+
+  it('keeps the older daemon session_settings fixture without a memory report', () => {
+    const decoded = parseInboundMessage(encodeSessionSettings(memoryFixtureBase))
+    if (decoded?.kind !== 'session-settings') throw new Error('expected session settings')
+    expect(decoded.sessionSettings.memory_search).toBeUndefined()
+  })
+
+  it('preserves both false provider booleans without inferring aggregate absence', () => {
+    const report = { availability: 'unavailable', providers: [
+      { id: 'qmd', display_name: 'QMD', installed: false, enabled: false, availability: 'unavailable' }
+    ] }
+    const decoded = parseInboundMessage(encodeSessionSettings({ ...memoryFixtureBase, memory_search: report }))
+    if (decoded?.kind !== 'session-settings') throw new Error('expected session settings')
+    expect(decoded.sessionSettings.memory_search).toEqual(report)
+  })
+
+  it.each([
+    null, [], {}, { availability: 'available' }, { availability: 'future', providers: [] },
+    { availability: 'absent', providers: [{}] },
+    { availability: 'available', providers: [
+      { id: 'qmd', display_name: 'QMD', installed: true, enabled: false, availability: 'future' }
+    ] },
+    { availability: 'available', providers: [
+      { id: 'qmd', display_name: 'QMD', installed: false, enabled: null, availability: 'available' }
+    ] }
+  ].map((report) => ({ report })))(
+    'maps incomplete or future memory report $report to unknown without losing settings', ({ report }) => {
+      const decoded = parseInboundMessage(encodeSessionSettings({ ...memoryFixtureBase, memory_search: report }))
+      if (decoded?.kind !== 'session-settings') throw new Error('expected session settings')
+      expect(decoded.sessionSettings.memory_search).toEqual({ availability: 'unknown', providers: [] })
+      expect(decoded.sessionSettings).toMatchObject(memoryFixtureBase)
+    }
+  )
+
   it.each([undefined, null, 'low', '', '  future-effort <report>  '])(
     'preserves effective_effort %j independently of saved effort', (effectiveEffort) => {
       const decoded = parseInboundMessage(encodeSessionSettings({

@@ -36,6 +36,7 @@ import type {
   ContextUsageMCPTool,
   MCPServerStatus,
   ContextUsageMemoryFile,
+  MemorySearchPayload,
   WireResetPhase,
   WireResetHandoff
 } from '../wire/types'
@@ -388,6 +389,8 @@ type BaseDaemonEvent =
       slashCommands?: boolean
       mcpServers?: boolean
       contextUsageDetail?: boolean
+      /** Daemon-owned memory-search status; undefined when omitted by an older daemon. */
+      memorySearch?: MemorySearchPayload
     }
   // The two v2 interactive-stream arms (#199). `text` IS the render payload (#203) and crosses IPC
   // deliberately — the boundary defended upstream is the fail-closed decode, not this internal

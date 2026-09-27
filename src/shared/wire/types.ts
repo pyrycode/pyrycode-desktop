@@ -744,6 +744,22 @@ export interface SessionSettingsPayload {
    * `multi_agent` and the reply resolved a session. Only the three flags below are decoded (#1654).
    */
   capabilities?: SessionCapabilitiesPayload
+  /** Optional daemon memory-search report; omission means no reading was supplied. */
+  memory_search?: MemorySearchPayload
+}
+
+export type MemorySearchAvailability = 'available' | 'unavailable' | 'absent' | 'unknown'
+
+/** A complete daemon report, including explicit false flags and an optionally empty provider list. */
+export interface MemorySearchPayload {
+  availability: MemorySearchAvailability
+  providers: {
+    id: string
+    display_name: string
+    installed: boolean
+    enabled: boolean
+    availability: MemorySearchAvailability
+  }[]
 }
 
 /**

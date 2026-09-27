@@ -29,68 +29,8 @@
  * The mobile 15-8 mirroring above now describes only the empty state.
  */
 
-/* The padded card column — and since #1443 ONLY that, the scrolling having moved one level in to
-   `.channel-list__tree`. Since #670 this <section> is the child of `.paired-shell__sidebar`, the shell's
-   fixed 400px flex item — so it fills that column with height:100% (mirroring .conversation), which is
-   also what it did as a direct child of the block-level #root before the two-pane shell. It carries no
-   width rule of its own, so the sidebar's 400px is the single place that width is decided.
-   box-sizing:border-box keeps the padding inside that 100% so the surface fills edge-to-edge and the
-   tree's own flex box, not the window, is what long lists scroll inside.
-
-   The HORIZONTAL padding is the desktop card's inset (Figma "Channels and chats" 103:2959, px-[20px]).
-   Every level of the tree — section header, host row, workspace row, channel row, divider — is laid out
-   against this 360px content box, which is exactly the width the design draws them in, so the node's own
-   x coordinates transfer without translation (`.channel-list__host-status` below relies on that).
-
-   ⭐ THE VERTICAL PAIR IS THE NODE'S OWN AT LAST — pt-[24px] pb-[20px] — AND IT IS NOT THE PAIR THIS
-   RULE USED TO PREDICT. The old 4 was the sticky cluster's rest position and the old 24 the deleted
-   FAB's sticky offset, and the paragraph standing here said that when the cluster moved "the vertical
-   pair becomes --space-5 too". It does not: the drawing puts the Top bar at y 24 INSIDE the card, so the
-   top is --space-6 and only the bottom is --space-5. Rewritten rather than followed.
-
-   The card's 28px column gap (103:2959 gap-[28px]) is NOT set here. It rides on `.channel-list__tree` as
-   that wrapper's top padding, so the Channels header scrolls away with its rows rather than pinning
-   under the rule; `.channel-list__divider` carries the same 28 as its own margins further down.
-   e2e/sidebar-tree-geometry.spec.ts pins every offset this inset produces, including the 97 it puts
-   between the card's top edge and the Channels header.
-
-   #1058 — NO background. This used to paint --color-surface, the same colour .paired-shell paints behind
-   it, which is precisely why the sidebar never read as a pane; the card now lives on
-   .paired-shell__sidebar as a wash, and a background here would paint straight over it. That deletion is
-   the blocker #670 named when it deferred the card, and it is paid. This class has exactly one mount site
-   (ChannelList.tsx, inside the shell's sidebar wrapper), so there is nowhere it can render without a card
-   behind it.
-
-   `position: relative` is #1058's only other edit here, and it is a STACKING fix, not decoration. An
-   absolutely positioned ::before at z-index: auto paints in step 6 of the painting order — above every
-   non-positioned descendant, which is steps 3 and 5. .channel-list__row — and, since #1178,
-   .channel-list__workspace-head, since #1185 .channel-list__host, and since #1303
-   .channel-list__section-header — are already relative. Without this one declaration
-   the tree would sit UNDER a 30% black wash while the chat rows stayed bright: a worse
-   defect than the flat sheet it replaces. MEASURED, not predicted — deleting this line and rebuilding
-   turned e2e/paired-shell-card.spec.ts's hit-test on the host row from `.channel-list__host` to
-   `blocked by .paired-shell__sidebar`.
-
-   ⭐ THE ARGUMENT USED TO REST ON THE SECTION HEADER BEING THE LAST UNPOSITIONED LEVEL, and #1303 ended
-   that: the header takes `position: relative` to be the containing block for its pair-new-host plus, so
-   every level of this tree is now positioned and no descendant is the element the argument turns on any
-   more. Nothing broke and nothing had to move — the declaration on THIS element is what lifts the whole
-   subtree into step 6 regardless of what its descendants do, which is what the measurement above
-   actually established. It stays load-bearing all the same: the headers' text is a text node, not an
-   element, so it has no position of its own to be lifted by, and deleting this line would still put it
-   under the wash. Lifting this element into step 6 takes the whole subtree with it,
-   and tree order puts it after the wrapper's ::before. The same idiom, for the same reason, as
-   .composer__input over .composer__row::before and .pairing-field__row.
-
-   DELIBERATELY NO z-index: with z-index auto this does not become a stacking context. That used to be
-   stated as protecting the sticky cluster's positive-z layer; #1443 unpinned the bar and #1426 deleted
-   the FAB, so there is no positive-z child left in this subtree and the declaration's remaining job is
-   simply not to trap the four fixed overlays. `relative` is not one of the properties that makes an
-   ancestor a containing block for FIXED descendants, so .save-as-channel-overlay,
-   .rename-conversation-overlay, (since #1179) .create-channel-overlay, (since #1308)
-   .add-workspace-overlay and (since #1476) .edit-channel-overlay still escape this column and cover the
-   window. Do not "simplify" this to
-   isolation: isolate + z-index: -1; that form appears nowhere in this repo. */
+/* The shell owns the 400px sidebar width. This padded column keeps the toolbar outside
+   the scrollport. Relative positioning lifts it above the card wash without trapping fixed overlays. */
 .channel-list {
   height: 100%;
   box-sizing: border-box;
@@ -102,36 +42,15 @@
   font-family: var(--font-sans);
 }
 
-/* THE SCROLLPORT (#1443) — the half of the old `.channel-list` that still scrolls. The tree wrapper takes
-   `renderBody`'s whole output and nothing else, so the bar and its rule above it stay put while the rows
-   pass under them. `flex: 1 1 auto` with `min-height: 0` is the pair that makes that work in a column
-   flex container: without the floor lifted, a flex item's automatic minimum size is its CONTENT's, so a
-   long tree would grow this box past the card instead of scrolling inside it.
-
-   `overflow-y: auto` also forces `overflow-x` off `visible`, so this box clips on BOTH axes — which is
-   what every name-pill containment argument in this file now rests on, and why each of them names this
-   element rather than `.channel-list`.
-
-   The scrollbar is hidden with the same standard property and WebKit fallback as
-   `.conversation__thread`. Native overflow remains enabled for wheel, trackpad and focus scrolling.
-   Keep the negative right margin and matching padding: the scrollport extends through the card's
-   right inset while the content retains its existing inset and row positions.
-
-   The top padding is the card's own 28px column gap (103:2959 gap-[28px]), carried HERE rather than as a
-   bottom margin on the rule so the Channels header scrolls away with its rows. It is what puts that
-   header's top at the drawn 97 from the card's top edge: --space-6 + 24 + --space-5 + 1 + --space-7.
-
-   NO left padding, no bottom padding and no position of its own: the card's inset is the column's, the
-   rows are laid out against the same 360px content box they always were, and every positioned control in
-   the tree still resolves against its own row. The right padding is not a second inset either — it is
-   the column's own 20, borrowed back by the negative margin. */
+/* Only the tree scrolls. Borrow the right inset for the hidden scrollbar while keeping
+   rows at the card content edge. The first content begins 24px below the fixed rule. */
 .channel-list__tree {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   scrollbar-width: none;
   margin-right: calc(-1 * var(--space-5));
-  padding-top: var(--space-7);
+  padding-top: var(--space-6);
   padding-right: var(--space-5);
 }
 
@@ -139,61 +58,12 @@
   display: none;
 }
 
-/* Section header (Figma 103:2984) — muted label-large at 85% (opacity, not a color literal). No
-   horizontal padding: the card's inset on `.channel-list` is the header's x. The 12px below is the
-   section's header→hosts gap (103:2966 gap-[12px]); the header's own box is the bare 20px line, so the
-   first host row lands 32px under the header's top, as drawn. No top padding either: the Chats header's
-   distance from the divider is the divider's own margin, and the Channels header's distance from the top
-   bar's rule is `.channel-list__tree`'s own top padding — the card's 28px column gap, which since #1443
-   is carried by the scroller so this header scrolls away with its rows.
-
-   `position: relative` (z-index auto) is #1303's only edit to this rule and the reason the plus below can
-   be positioned at all: `.channel-list` is itself relative for the stacking reason its own rule states,
-   so without a nearer containing block the control would pin itself to the SCROLL COLUMN rather than to
-   its own header. `.channel-list__row`'s idiom exactly, and `.channel-list__host`'s. It adds no box, no
-   size and no offset, so the header's 20px line, its 12px bottom padding and the 32px it puts between
-   itself and the first host row are all untouched — which is what AC5 pins and what
-   e2e/sidebar-tree-geometry.spec.ts reads back. The file's head paragraph tracks what it does to the
-   painting order. */
-.channel-list__section-header {
-  padding: 0 0 var(--space-3);
-  position: relative;
-  color: var(--color-on-surface-variant);
-  opacity: 0.85;
-  font-size: var(--text-label-large-size);
-  line-height: var(--text-label-large-line);
-  letter-spacing: var(--text-label-large-tracking);
-  font-weight: var(--text-label-large-weight);
-}
-
-/* THE PAIR-NEW-HOST PLUS (#1303, Figma "Icon Edgeless" I405:7885;399:1461 in `Sidebar header` 405:7885,
-   and the identical instance 405:7896 under Chats) — `.channel-list__host-add`'s block with one number
-   changed and one rule deleted.
-
-   THE BOX IS 20 × 20 AND THE GLYPH IS 16 × 16, WHICH REPRODUCES THE DRAWING WITH NO 2px LITERAL. The
-   node places its 16px box at `right: 2px`, centred on the header's 20px line. A `--space-5` box at
-   `right: 0` centring a `--space-4` glyph lands that glyph at right 2 — the box's 4px of slack, halved —
-   and the header's content line is EXACTLY 20px (`--text-label-large-line`), so the box is `top: 0`
-   rather than the rows' `--space-1` offset and the glyph is centred on the line for free. It is out of
-   the flow entirely, so the header's own 32px box is untouched.
-
-   Its box sits directly over the column of trailing marks the host row's plus, the workspace row's plus
-   and the conversation rows' controls already end at: all of them flush with the card's content edge.
-
-   ⭐ DRAWN AT REST — the one place `.channel-list__host-add`'s block must NOT be copied. That control and
-   the workspace pair are `opacity: 0` and revealed by their row's hover; the drawing shows this one
-   filled `--color-primary` in every state it draws, so there is no reveal rule here at all and no
-   `:has()`-guarded swap to write. The `:focus-visible` outline stays, per the file convention; it no
-   longer doubles as the reveal, because there is nothing to reveal.
-
-   No background, no hover circle, no radius — the drawing draws none, exactly as on the other trailing
-   controls, and #1304 (blocked on this ticket) is what adds the hover pill. */
+/* The toolbar pairing entry is visible at rest and aligned to the trailing content edge. */
 .channel-list__pair {
-  position: absolute;
-  right: 0;
-  top: 0;
-  width: var(--space-5);
-  height: var(--space-5);
+  flex: 0 0 auto;
+  margin-left: auto;
+  width: var(--space-6);
+  height: var(--space-6);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -208,37 +78,22 @@
   outline: 1px solid var(--color-outline);
 }
 
-/* #1304 — THE PLUS'S NAME PILL, the same `.channel-list__control-name` the row's two trailing controls
-   (#1172) and the workspace row's plus (#1181) wear; its block far below draws it, and these two rules are
-   only the trigger and one placement override. Written beside this control rather than joined onto either
-   of those selector lists, which is #1181's convention: each rule names the elements that can carry a
-   pill, so the set stays readable where the control is.
-
-   THE CONTROL'S OWN `:hover`, NEVER THE HEADER'S — the whole of "hovering the header's label alone shows
-   no pill". Unlike the two rules above it there is no glyph reveal here to be a different scope from: this
-   control is drawn at rest (#1303), so the header has no hover rule at all and this is the only one.
-   `:focus-visible` and not `:focus`, matching the outline rule directly above, so the keyboard case cannot
-   half-fire. */
 .channel-list__pair:hover .channel-list__control-name,
-.channel-list__pair:focus-visible .channel-list__control-name {
+.channel-list__pair:focus-visible .channel-list__control-name,
+.channel-list__settings:hover .channel-list__control-name,
+.channel-list__settings:focus-visible .channel-list__control-name,
+.channel-list__archive:hover .channel-list__control-name,
+.channel-list__archive:focus-visible .channel-list__control-name {
   display: block;
 }
 
-/* #1427 DELETED THIS CONTROL'S PLACEMENT OVERRIDE, and the note is left because a reader who finds five
-   sibling controls and no deviation here should know there was one rather than re-derive it.
-
-   The rule was `top: 100%; transform: none`, hanging the pill under the plus instead of centring it on the
-   plus's band the way the other six did. It was taken because `.channel-list__actions` was then
-   `position: sticky` INSIDE the scroller and its bottom edge landed 4px inside this header, so a
-   band-centred pill painted 6px underneath a cluster at `z-index: 1`. #1443 moved the bar out of the
-   scroller entirely and retired the reason without retiring the placement; #1427 retired the placement
-   itself, for every control at once. The shared block is now pointer-relative and there is nothing left
-   here to override. */
-
-
-/* `display: block` is the file's icon convention (__save-icon / __settings-icon). */
+/* Figma Add button's 24px export, coloured with the existing theme token. */
 .channel-list__pair-icon {
   display: block;
+  width: var(--space-6);
+  height: var(--space-6);
+  background: currentColor;
+  mask: url('/sidebar-pair-host.svg') center / contain no-repeat;
 }
 
 /* The host row heading each tree (#710, Figma 106:3094; redrawn by #1185 as Host 399:1366) — the machine
@@ -296,11 +151,9 @@
   margin-top: var(--space-4);
 }
 
-/* ...and the FIRST host row of each section takes none of it: its distance from the header is the
-   header's own 12px bottom padding (see that rule). Adjacency is exact rather than approximate — the
-   fragments above emit no DOM, so a section's first host row is always the header's next element
-   sibling — which is what leaves single-server geometry byte-identical to what shipped before #1070. */
-.channel-list__section-header + .channel-list__host {
+/* Each section's first host has no extra margin after the tree padding or divider. */
+.channel-list__tree > .channel-list__host:first-child,
+.channel-list__divider + .channel-list__host {
   margin-top: 0;
 }
 
@@ -1771,49 +1624,27 @@
   opacity: 0.6;
 }
 
-/* The Top bar's rule sits --space-5 under the button row (115:3693 gap-[20px]) and spans the card's full
-   360px content box. `flex: 0 0 auto` keeps a 1px box 1px tall in the column — a flex item's default
-   `flex-shrink: 1` would let it be rounded away under pressure. It is OUTSIDE the scroller, so unlike
-   every other full-width element in this file a classic scrollbar does not move its trailing edge. */
+/* The rule stays fixed, 16px below the 28px button wrapper. */
 .channel-list__actions-rule {
   flex: 0 0 auto;
-  margin-top: var(--space-5);
+  margin-top: var(--space-4);
 }
 
 /* The section divider spans the same content box and carries the design's 28px on both sides (the
-   "Channels and chats" column gap, 103:2959 gap-[28px]); the Chats header below has no top padding of
+   "Channels and chats" column gap, 103:2959 gap-[28px]); the next host below has no top margin of
    its own, so this margin is the whole gap. It lives INSIDE the tree, so it scrolls with the rows and a
    classic scrollbar does move its trailing edge — the one way the two rules differ. */
 .channel-list__divider {
   margin: var(--space-7) 0;
 }
 
-/* THE TOP BAR (#1443, Figma Top bar 115:3693) — the Settings (#333) and Archive (#347) entries, in that
-   order, as the card's own first row. It is the FIRST child of the column and kept in-flow (no portal —
-   the #177 "overlay inside the screen container" precedent), and it is no longer positioned at all: the
-   cluster this replaces was `position: sticky; top: --space-1` with `align-self: flex-end`, `z-index: 1`
-   and a `margin-right`, floating over the rows at the scroller's top-RIGHT. All five declarations are
-   deleted, not overridden. What replaces them is ordinary flow above `.channel-list__tree`, which is the
-   whole of "the bar does not scroll": the tree scrolls under the rule and the bar never moves.
-
-   WHY NOT STICKY INSIDE THE SCROLLER. A bar floating over the rows needs an opaque ground to hide what
-   passes behind it, and this card has none — #1058 deleted this column's background so the wash on
-   `.paired-shell__sidebar::before` could show through, and the drawing gives the bar no fill either.
-   Taking it out of the scroller is what makes the absence of a fill correct rather than a defect.
-
-   THE GAP IS THE 52 THE NODE DRAWS, DERIVED RATHER THAN WRITTEN. The drawing's `Buttons` frame (497:1874)
-   is 76 wide with `justify-between`, which lands the second 24px box's left edge 52 in. `--space-7`
-   between two `--space-6` boxes lands it in exactly the same place with no spacing literal, which is
-   what this file asks for. The row's own height is the boxes', so no height declaration is needed.
-
-   It still stretches to the full 360px content box (the column's default `align-items: stretch`), which
-   is not decoration: three specs park the pointer on this wrapper as a neutral spot away from every
-   control, and the 264px of bar to the right of the archive box is what they land on. */
+/* Figma Top bar: 4px above the 24px controls, with 20px between the left pair. */
 .channel-list__actions {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: var(--space-7);
+  gap: var(--space-5);
+  padding-top: var(--space-1);
 }
 
 /* The Settings entry (115:3834) — the LEADING member since #1443, the drawing putting the gear first.

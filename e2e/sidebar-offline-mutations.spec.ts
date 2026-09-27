@@ -185,7 +185,7 @@ test('failed-host local controls remain usable', async ({ launchPairedApp }) => 
   await expect(workspace).toHaveAttribute('aria-expanded', 'false')
   await workspace.click()
   await expect(workspace).toHaveAttribute('aria-expanded', 'true')
-  await expect(page.getByRole('button', { name: 'Pair new host' })).toHaveCount(2)
+  await expect(page.getByRole('button', { name: 'Pair new host' })).toHaveCount(1)
   await host.hover()
   await page.screenshot({ path: '/tmp/builder-1379-failed-host.png', animations: 'disabled' })
   await host.getByRole('button', { name: 'Repair host' }).click()

@@ -759,9 +759,9 @@ export function ChannelList({
 /**
  * The pure view. Always returns a stable `aria-label="Conversations"` root (the test hook, present in
  * every state); content varies with the conversation store's tri-state AND the paired-server list:
- *  - `conversations === null` (not-yet-loaded) → saved hosts and headers, with no conversation rows.
- *  - loaded, but nothing to draw — no paired server AND no active row → the wrapper only.
- *  - anything to draw → BOTH section headers and the divider, unconditionally, each header followed by
+ *  - `conversations === null` (not-yet-loaded) → saved hosts, with no conversation rows.
+ *  - loaded, but nothing to draw — no paired server AND no active row → the toolbar only.
+ *  - anything to draw → two trees separated by the divider, each with
  *    one host row per paired server in pairing order (#1070).
  *
  * The loaded-zero empty state is GONE since #1070, deleted rather than hidden: a paired app always has a
@@ -793,8 +793,8 @@ export function ChannelListView({
   // #1070 — the paired servers to draw a subtree for, in pairing order (oldest-paired first). REQUIRED
   // rather than optional, `openConversationId`'s reasoning: the container must decide, and a defaulted
   // prop would let a future caller silently render a sidebar with no host row at all. An EMPTY array is
-  // the real launch state — the paired-server one-shot has not settled — and is what makes the two
-  // headers wait rather than flashing above nothing.
+  // the real launch state — the paired-server one-shot has not settled — and is what makes the host trees
+  // wait rather than flashing above nothing.
   //
   // Ids and not `ServerInfoValue`s: this view has no business with a relay URL, and the narrower prop is
   // also the one the unit tier can inject in one literal.
@@ -808,11 +808,7 @@ export function ChannelListView({
   onOpen: (row: ConversationSummary) => void
   onOpenSettings: () => void
   onOpenArchive: () => void
-  // #1303 — open the pairing flow, drawn on BOTH section headers. REQUIRED rather than optional, the
-  // reasoning its four siblings below already carry: the container must decide, and a defaulted prop
-  // would let a future caller silently render a sidebar whose headers show a plus that opens nothing.
-  // It travels one hop further than `onOpenSettings` — which stops here — because `renderBody` is what
-  // draws the headers and hands it to each of them.
+  // Required navigation callback for the always-visible toolbar entry.
   onPairNewHost: () => void
   onRepairHost?: (serverId: string) => void
   // #1178 — start a chat in the named workspace, and since #1426 the sidebar's ONLY create that sends a
@@ -859,37 +855,19 @@ export function ChannelListView({
 }): JSX.Element {
   return (
     <section className="channel-list" aria-label="Conversations">
-      {/* #1443, Figma Top bar 115:3693 — the card's own bar, drawn at last where #333/#347 could only
-          invent: the gear at the content edge and the Archive entry 28 to its right, under a rule. Both
-          the ALIGNMENT and the ORDER flip here — this was an archive-then-gear cluster pinned top-RIGHT,
-          sticky inside the scroller, and the drawing puts the gear first at the left. Still present in
-          all three list states (AC1), because it is still a sibling of the list body rather than part of
-          it. The wrapper keeps `.channel-list__actions` as its class token although it is no longer a
-          cluster and no longer sticky: three specs park the pointer on it and nothing in the redraw
-          needs a new name. It is no longer the list's only sticky child either — since #1426 deleted the
-          FAB and this ticket unpinned the bar, the sidebar has no sticky child at all. */}
+      {/* The toolbar and rule stay outside the list scrollport. */}
       <div className="channel-list__actions">
         <SettingsButton onClick={onOpenSettings} />
         <ArchiveButton onClick={onOpenArchive} />
+        <PairNewHostButton onClick={onPairNewHost} />
       </div>
-      {/* The rule (497:1852) — 20 under the bar and drawn in the same 1px, same colour, same 60% as the
-          section divider below, which is what the node draws. A sibling element rather than the bar's
-          own border: the 60% is carried by `opacity`, this file family's de-emphasis device, and a
-          border would fade the two glyphs with it. */}
       <div className="channel-list__actions-rule" />
-      {/* THE SCROLLPORT, and the structural half of #1443. `.channel-list` used to be both the padded
-          card column and the scroller; the bar cannot both sit still and live inside a scroller that has
-          no ground of its own to hide rows behind (#1058 deleted this column's background so the card
-          wash could show through), so the tree moved into its own wrapper and `.channel-list` kept only
-          the padding. The card's 28px column gap rides here as the wrapper's top padding rather than on
-          the bar, so the Channels header scrolls away with its rows instead of pinning under the rule. */}
       <div className="channel-list__tree">
         {renderBody(
           conversations,
           statuses,
           serverIds,
           openConversationId,
-          onPairNewHost,
           onOpen,
           onCreateChat,
           onCreateChannel,
@@ -930,6 +908,7 @@ function SettingsButton({ onClick }: { onClick: () => void }): JSX.Element {
       className="channel-list__settings"
       aria-label="Settings"
       onClick={onClick}
+      {...controlNamePlacement}
     >
       <svg
         className="channel-list__settings-icon"
@@ -941,6 +920,7 @@ function SettingsButton({ onClick }: { onClick: () => void }): JSX.Element {
       >
         <path d="M8.3569 1.125C8.48641 0.472059 9.05191 0 9.70806 0H12.2895C12.9457 0 13.5112 0.472059 13.6407 1.125L14.2666 4.21324C14.8753 4.47794 15.4451 4.81765 15.9631 5.21912L18.8899 4.22647C19.5115 4.01471 20.1936 4.27941 20.5217 4.86176L21.8124 7.14706C22.1405 7.72941 22.0239 8.46176 21.5318 8.90735L19.2309 10.9985C19.2698 11.325 19.2871 11.6603 19.2871 12C19.2871 12.3397 19.2655 12.675 19.2309 13.0015L21.5361 15.0971C22.0282 15.5426 22.1405 16.2794 21.8167 16.8574L20.526 19.1426C20.1979 19.7206 19.5158 19.9897 18.8942 19.7779L15.9674 18.7853C15.4451 19.1868 14.8753 19.5221 14.2709 19.7912L13.6493 22.875C13.5155 23.5324 12.95 24 12.2981 24H9.7167C9.06054 24 8.49504 23.5279 8.36553 22.875L7.74391 19.7912C7.13524 19.5265 6.56974 19.1868 6.04741 18.7853L3.10766 19.7779C2.48604 19.9897 1.80399 19.725 1.47591 19.1426L0.185184 16.8574C-0.142893 16.275 -0.0263396 15.5426 0.465776 15.0971L2.77095 13.0015C2.7321 12.675 2.71483 12.3397 2.71483 12C2.71483 11.6603 2.73642 11.325 2.77095 10.9985L0.465776 8.90294C-0.0263396 8.45735 -0.138577 7.72059 0.185184 7.14265L1.47591 4.85735C1.80399 4.275 2.48604 4.01029 3.10766 4.22206L6.03446 5.21471C6.55679 4.81324 7.12661 4.47794 7.73096 4.20882L8.3569 1.125ZM10.9988 15.5294C12.9068 15.5206 14.4479 13.9368 14.4393 11.9868C14.4306 10.0368 12.8809 8.46176 10.9729 8.47059C9.06486 8.47941 7.52376 10.0632 7.53239 12.0132C7.54102 13.9632 9.09076 15.5382 10.9988 15.5294Z" />
       </svg>
+      <span className="channel-list__control-name" aria-hidden="true">Settings</span>
     </button>
   )
 }
@@ -963,6 +943,7 @@ function ArchiveButton({ onClick }: { onClick: () => void }): JSX.Element {
       className="channel-list__archive"
       aria-label="Archive"
       onClick={onClick}
+      {...controlNamePlacement}
     >
       <svg
         className="channel-list__archive-icon"
@@ -974,6 +955,7 @@ function ArchiveButton({ onClick }: { onClick: () => void }): JSX.Element {
       >
         <path d="M0 1.5C0 0.670312 0.670312 0 1.5 0H22.5C23.3297 0 24 0.670312 24 1.5V3C24 3.82969 23.3297 4.5 22.5 4.5H1.5C0.670312 4.5 0 3.82969 0 3V1.5ZM1.5 6.75H22.5V18C22.5 19.6547 21.1547 21 19.5 21H4.5C2.84531 21 1.5 19.6547 1.5 18V6.75ZM8.625 9.75C8.00156 9.75 7.5 10.2516 7.5 10.875C7.5 11.4984 8.00156 12 8.625 12H15.375C15.9984 12 16.5 11.4984 16.5 10.875C16.5 10.2516 15.9984 9.75 15.375 9.75H8.625Z" />
       </svg>
+      <span className="channel-list__control-name" aria-hidden="true">Archive</span>
     </button>
   )
 }
@@ -2386,91 +2368,23 @@ function renderServerTrees(
   )
 }
 
-// The pair-new-host control's accessible name (#1303) — a client-owned module-level constant in the
-// ADD_WORKSPACE_CONTROL_LABEL / EDIT_HOST_CONTROL_LABEL idiom, and a compile-time constant rather than a
-// prop for `HostRow`'s stated security reason: with no `label` field there is no slot for a caller to
-// pass `Pair new host on ${label}` and interpolate untrusted operator or daemon text into an attribute —
-// the exact shape #696's review made a MUST FIX. BOTH headers carry the SAME name by design (the drawing
-// places one component under each), so the e2e locator for it is two-match and is indexed rather than
-// differentiated; `ChannelList.test.tsx` pins the count of two.
+// Client-owned copy supplies both the accessible name and the visible tooltip.
 const PAIR_NEW_HOST_CONTROL_LABEL = 'Pair new host'
 
-/**
- * One section header and the plus that opens the pairing flow (#1303, Figma `Sidebar header` 405:7885
- * under Channels and 405:7896 under Chats — the same component instance, so neither is a special case).
- *
- * THE <header>'S OWN `class` ATTRIBUTE IS EXACTLY WHAT IT WAS, and that is a constraint rather than an
- * accident: `ChannelList.test.tsx`'s `SECTION_HEADER_MARKER` is a quote-anchored
- * `class="channel-list__section-header"` substring count read by five specs, and
- * `e2e/sidebar-tree-geometry.spec.ts` and `e2e/paired-shell-card.spec.ts` both locate on that class. The
- * button is a CHILD; nothing about the header's own attribute run moves. The header gains
- * `position: relative` in `channels.css` — the containing block the absolutely positioned button needs —
- * and its box, its 20px line and the 12px below it are untouched, which is what preserves the 32px
- * header-to-first-host rhythm AC5 pins.
- *
- * THE CLASS SHARES NO TOKEN with `channel-list__row`, `__row-open`, `__section-header`, `__workspace` or
- * `__host`. Playwright runs locators in strict mode, so an element JOINING an existing locator's match
- * set raises a strict-mode violation rather than an assertion failure, and 28+ specs ride
- * `launchPairedApp`'s unfiltered `.channel-list__row-open` click. This guard needs no edit under `e2e/`.
- *
- * `label` is one of two client-owned literals from `renderBody` ('Channels' / 'Chats') and reaches the
- * text child alone. The plus is the drawn control from #1178's workspace row with two deviations the
- * ticket names: it is painted `--color-primary` and DRAWN AT REST — there is no hover reveal here, so
- * unlike the row and host-row controls it needs no `:has()`-guarded swap and no pointer to appear.
- *
- * `onPairNewHost` is nullary, `HostRow`'s handler shape: the caller closes over nothing per-header, so
- * there is no argument for a future caller to come to depend on, and `() => void` refuses a function
- * declaring a parameter so React's synthetic event cannot reach one either.
- */
-function SectionHeader({
-  label,
-  onPairNewHost
-}: {
-  label: string
-  onPairNewHost: () => void
-}): JSX.Element {
+function PairNewHostButton({ onClick }: { onClick: () => void }): JSX.Element {
   return (
-    <header className="channel-list__section-header">
-      {label}
-      <button
-        type="button"
-        className="channel-list__pair"
-        aria-label={PAIR_NEW_HOST_CONTROL_LABEL}
-        onClick={onPairNewHost}
-        {...controlNamePlacement}
-      >
-        {/* The drawing's `399:1045` "Icon Edgeless" plus — the same glyph #1178 shipped for the
-            workspace row, so `.channel-list__workspace-create-icon`'s 16-unit path is reused verbatim
-            rather than re-exported. `aria-hidden` because the button's `aria-label` is the name. */}
-        <svg
-          className="channel-list__pair-icon"
-          viewBox="0 0 16 16"
-          width="16"
-          height="16"
-          fill="currentColor"
-          aria-hidden="true"
-        >
-          <path d="M6.28571 14.2857V9.71429H1.71429C0.764286 9.71429 0 8.95 0 8C0 7.05 0.764286 6.28571 1.71429 6.28571H6.28571V1.71429C6.28571 0.764286 7.05 0 8 0C8.95 0 9.71429 0.764286 9.71429 1.71429V6.28571H14.2857C15.2357 6.28571 16 7.05 16 8C16 8.95 15.2357 9.71429 14.2857 9.71429H9.71429V14.2857C9.71429 15.2357 8.95 16 8 16C7.05 16 6.28571 15.2357 6.28571 14.2857Z" />
-        </svg>
-        {/* #1304 — the control's NAME, in the pill the row's trailing controls (#1172) and the workspace
-            row's plus (#1181) already wear. APPENDED AFTER THE GLYPH, never before it: `ChannelList.test.tsx`
-            pins the <svg>'s whole opening run and counts `aria-label="Pair new host"`, and a child after
-            the closing tag leaves both byte-identical — the pill's text is a bare text node, not an
-            attribute.
-
-            `PAIR_NEW_HOST_CONTROL_LABEL` and nothing else, which is the whole of "one definition": the
-            same constant supplies the `aria-label` above, so the spoken name and the drawn one cannot
-            drift, and there is still no slot anywhere in this component for a caller to interpolate
-            operator or daemon text into either.
-
-            `aria-hidden` is belt-and-braces rather than the mechanism — the `aria-label` already overrides
-            child text for the accessible name — which is why the unit tier pins the count of names at two
-            beside the count of pills. */}
-        <span className="channel-list__control-name" aria-hidden="true">
-          {PAIR_NEW_HOST_CONTROL_LABEL}
-        </span>
-      </button>
-    </header>
+    <button
+      type="button"
+      className="channel-list__pair"
+      aria-label={PAIR_NEW_HOST_CONTROL_LABEL}
+      onClick={onClick}
+      {...controlNamePlacement}
+    >
+      <span className="channel-list__pair-icon" aria-hidden="true" />
+      <span className="channel-list__control-name" aria-hidden="true">
+        {PAIR_NEW_HOST_CONTROL_LABEL}
+      </span>
+    </button>
   )
 }
 
@@ -2484,11 +2398,6 @@ function renderBody(
   // and stays a comparison operand, never a class-name interpolation, an attribute value, a title, an
   // object key or a log line (`ConversationStatusDotControl`'s condition on the same value).
   openConversationId: string | null,
-  // #1303 — open the pairing flow. Handed to BOTH headers, which is the whole of the wiring: the drawing
-  // places the same `Sidebar header` component under Channels and under Chats, so neither is a special
-  // case and there is no per-tree difference to carry. It leads the row callbacks because it is the one
-  // handler this function consumes ITSELF rather than passing to `renderServerTrees`.
-  onPairNewHost: () => void,
   onOpen: (row: ConversationSummary) => void,
   // #1178 — start a chat in a named workspace. Handed to the `discussions` tree ALONE, which — with
   // its #1179 sibling below — is the one place the two trees are told apart now that
@@ -2527,7 +2436,7 @@ function renderBody(
   // as zero (the check the empty state already made).
   //
   // The server half is what the paired app answers on: a machine paired with no conversations at all
-  // renders both headers and its two host rows, because that row carries the plus that starts its first
+  // renders its two host rows, because that row carries the plus that starts its first
   // chat (#1185, #1189). The ROW half is not redundant with it — it covers the frames after the daemon's
   // list arrives but before the paired-server one-shot settles, where the rows would otherwise be
   // withheld from a sidebar that has them in hand. They render unattributed there, and the host rows
@@ -2535,13 +2444,6 @@ function renderBody(
   if (serverIds.length === 0 && channels.length === 0 && discussions.length === 0) return null
   return (
     <>
-      {/* Both headers and the divider render UNCONDITIONALLY inside the gate above (operator ruling,
-          2026-09-06). Until #1070 each was conditioned on its section holding a row, and the divider on
-          both holding one; a section is now a permanent home for one host row per paired machine, empty
-          or not, so there is nothing left for those conditions to express. `.channel-list__section-header`
-          therefore matches exactly two elements in every drawn state, which is what keeps the suite's
-          header locators single-match. */}
-      <SectionHeader label="Channels" onPairNewHost={onPairNewHost} />
       {/* Saved Channels are already promoted — they pass no onSaveAsChannel (that affordance is Recent-
           only), but they DO pass a pen, so each saved Channel row carries one (#360, AC1). Since #1441 a
           Recent row carries a pen too, so the PEN is no longer what tells the two sections apart — the
@@ -2579,10 +2481,7 @@ function renderBody(
         // module-local to this file.
         { label: EDIT_WORKSPACE_CONTROL_LABEL, onEdit: onEditWorkspace })}
       <div className="channel-list__divider" />
-      {/* The header reads "Chats" (#709, Figma 106:3258); the code-level partition is still `discussions`
-          — renaming that vocabulary was explicitly out of scope.
-
-          The two trees group independently (operator, 2026-08-21): the server and workspace levels repeat
+      {/* The two trees group independently (operator, 2026-08-21): the server and workspace levels repeat
           here rather than being shared, so a machine — and a workspace — appears in both. Since #1485 that
           holds for a workspace with rows in only ONE tree as well: the levels still repeat rather than
           being shared, and what the trees now share is the SET of keys per host, not the groups themselves
@@ -2591,7 +2490,6 @@ function renderBody(
           list from the Channels one above, so the same `cwd` in both yields two CollapsibleWorkspaceGroup
           instances holding two separate booleans. #1070 extends that property across servers by the same
           mechanism and with nothing to implement for it. */}
-      <SectionHeader label="Chats" onPairNewHost={onPairNewHost} />
       {/* #1485 — the complement, the other way round. This is the direction the Add-workspace dialog
           needed: it starts a CHAT, so its new folder landed here and the Channels tree above never learned
           of it. */}

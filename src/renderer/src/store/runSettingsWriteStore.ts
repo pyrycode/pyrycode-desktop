@@ -37,7 +37,7 @@ import type { RunConfigSnapshot } from './runConfigStore'
  *  daemon's `validPermissionMode` is the authority, it refuses `bypassPermissions` on this field (that
  *  escalation keeps one spelling, `yolo: true`), and nothing on this path maps between the two. */
 export type SettingsChange =
-  | { field: 'model'; value: string }
+  | { field: 'model'; value: string; source?: 'recall' }
   | { field: 'effort'; value: string }
   | { field: 'yolo'; value: boolean }
   | { field: 'permissionMode'; value: string }
@@ -181,7 +181,8 @@ function reduceRunSettingsWrite(
       if (change === undefined) return state
       const pending = new Map(state.pending)
       pending.delete(event.changeId)
-      return { ...state, pending, error: change.field }
+      return { ...state, pending, error: change.field === 'model' && change.source === 'recall'
+        ? state.error : change.field }
     }
     case 'reconnected': {
       // Nothing outstanding → the SAME reference, and this early-out is load-bearing rather than

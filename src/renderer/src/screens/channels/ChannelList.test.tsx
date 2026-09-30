@@ -2,19 +2,18 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactNode } from 'react'
 import type { SessionState, ConnectionStatus } from '../../store/sessionStore'
+import { initialSessionState } from '../../store/sessionStore'
 import type { ConversationSummary } from '@shared/wire/types'
 import {
   ChannelListView,
   CollapsibleHostGroup,
   CollapsibleWorkspaceGroup,
-  HostConnectionDots,
   HostRow,
   hostRowLabel,
   hostRowEditSeed
 } from './ChannelList'
 import { UNKNOWN_WORKSPACE_LABEL } from './channelListViewModel'
 import type { HostLabelValue } from '../../store/hostLabelStore'
-import type { ConnectionLeg } from '../conversation/ConversationScreen'
 import {
   createConversationActivityStore,
   type ConversationActivityStore
@@ -64,6 +63,17 @@ const lastReadStore = createConversationLastReadStore(lastReadMemory)
 const promptStore = createModalStore()
 // #1700's fifth read: a pending question batch lights the same input-required dot a prompt does.
 const questionStore = createQuestionBatchStore()
+
+let hostSessionState: SessionState | null = null
+vi.mock('../../store/sessionStore', async (importActual) => {
+  const actual = await importActual<typeof import('../../store/sessionStore')>()
+  return {
+    ...actual,
+    useSessionStore: <T,>(selector: (s: SessionState) => T): T =>
+      selector(hostSessionState ?? actual.initialSessionState)
+  }
+})
+afterEach(() => { hostSessionState = null })
 
 vi.mock('../../store/conversationActivityStore', async (importActual) => ({
   ...(await importActual<typeof import('../../store/conversationActivityStore')>()),
@@ -351,20 +361,6 @@ const HOST_CHEVRON_SVG =
 // true if a later ticket re-exports the art at another size.
 const HOST_CHEVRON_MARKER = 'class="channel-list__host-chevron"'
 
-// The two connection dots ending each host row (#718). These are the FULL attribute value, not the usual
-// one-class prefix: the dot wears the geometry class AND #330's shipped colour modifier, so
-// `class="channel-list__host-dot"` with its closing quote would silently match NOTHING — the quote follows
-// the LAST class. Pinning the whole value is the stronger assertion anyway, since one marker then fixes the
-// geometry class and the category → colour binding together. Four markers since #719 added the neutral
-// not-yet-known category.
-const DOT_UP_MARKER = 'class="channel-list__host-dot conn-dot--up"'
-const DOT_IN_PROGRESS_MARKER = 'class="channel-list__host-dot conn-dot--in-progress"'
-const DOT_DOWN_MARKER = 'class="channel-list__host-dot conn-dot--down"'
-const DOT_UNKNOWN_MARKER = 'class="channel-list__host-dot conn-dot--unknown"'
-
-// The pair's layout wrapper carries a sole class, so the file's usual exact-substring form applies to it.
-const DOT_WRAPPER_MARKER = 'class="channel-list__host-status"'
-
 // The row title, so "the dot LEADS the row" can be asserted as an ordering rather than as a presence.
 const TITLE_MARKER = 'class="channel-list__title"'
 
@@ -384,8 +380,7 @@ const STATUS_DOT_IDLE = 'class="conversation-status-dot conversation-status-dot-
 const STATUS_DOT_INPUT_REQUIRED =
   'class="conversation-status-dot conversation-status-dot--input-required"'
 
-// Counting dots regardless of status. The trailing SPACE is on purpose and is the `DOT_TAG_PREFIX`
-// treatment: the base class never appears alone, so this matches every dot and no other element.
+// Count conversation activity dots independently of their status modifiers.
 const STATUS_DOT_PREFIX = 'class="conversation-status-dot '
 
 const countOf = (markup: string, needle: string): number => markup.split(needle).length - 1
@@ -433,20 +428,6 @@ const hostDisclosureTagsIn = (markup: string): string[] => {
     const end = markup.indexOf('>', at)
     tags.push(markup.slice(markup.lastIndexOf('<', at), end + 1))
     at = markup.indexOf(HOST_DISCLOSURE_MARKER, end)
-  }
-  return tags
-}
-
-// The same tag-slicing treatment for the connection dots (#718), so each dot's role and accessible name
-// are read back OUT of the render rather than restated. The prefix keeps its trailing SPACE on purpose:
-// the geometry class never appears alone, so this can match neither the pair's wrapper nor a label.
-const DOT_TAG_PREFIX = 'class="channel-list__host-dot '
-const hostDotTagsIn = (markup: string): string[] => {
-  const tags: string[] = []
-  for (let at = markup.indexOf(DOT_TAG_PREFIX); at !== -1; ) {
-    const end = markup.indexOf('>', at)
-    tags.push(markup.slice(markup.lastIndexOf('<', at), end + 1))
-    at = markup.indexOf(DOT_TAG_PREFIX, end)
   }
   return tags
 }
@@ -539,14 +520,28 @@ const rowOpenTagsIn = (markup: string): string[] => {
   return tags
 }
 
-// One dot tag's accessible name. Scanning to the next `"` is exact rather than approximate: React escapes
-// a quote inside an attribute VALUE as `&quot;`, so no label can carry the delimiter into the slice.
-const ariaLabelOf = (tag: string): string => {
-  const at = tag.indexOf('aria-label="') + 'aria-label="'.length
-  return tag.slice(at, tag.indexOf('"', at))
-}
-
 describe('ChannelListView', () => {
+  it.each<{ name: string; status: ConnectionStatus | undefined }>([
+    { name: 'connected', status: { type: 'connected', ack: {} } as ConnectionStatus },
+    { name: 'connecting', status: { type: 'connecting' } },
+    { name: 'disconnected', status: { type: 'disconnected' } },
+    { name: 'unreported', status: undefined },
+    { name: 'failed', status: { type: 'error', error: { code: 'pairing-rejected', message: 'unused', retryable: false } } },
+    { name: 'update-required', status: { type: 'error', error: { code: 'update-required', message: 'unused', retryable: false } } }
+  ])('renders no host connection dots or wrapper for $name', ({ status }) => {
+    const statuses = new Map<string, ConnectionStatus>()
+    if (status) statuses.set(DEFAULT_SERVER, status)
+    hostSessionState = { ...initialSessionState, statuses }
+    const markup = render([row({})], null, [DEFAULT_SERVER], statuses)
+    expect(countOf(markup, 'class="channel-list__host')).toBeGreaterThan(0)
+    expect(markup).not.toContain('channel-list__host-dot')
+    expect(markup).not.toContain('channel-list__host-status')
+    expect(markup).toContain('aria-label="Edit host"')
+    expect(markup).toContain(HOST_LABEL_OPEN)
+    expect(markup).toContain(HOST_ICON_MARKER)
+    expect(markup.includes(HOST_DISCLOSURE_MARKER)).toBe(status?.type !== 'error')
+  })
+
   it('not-yet-loaded without saved hosts renders only the wrapper', () => {
     const markup = render(null, null, [])
     expect(markup).toContain('aria-label="Conversations"')
@@ -874,60 +869,6 @@ describe('ChannelListView', () => {
     })
   })
 
-  describe('the connection dots ending each host row (#718)', () => {
-    // The #710 shape verbatim — one row per tree — so the dot counts below are exactly twice the host-row
-    // counts that describe pins.
-    const bothTrees = (): string =>
-      render([
-        row({ id: 'c1', name: 'kitchenclaw refactor', is_promoted: true }),
-        row({ id: 'd1', name: 'Help me debug auth flow', is_promoted: false })
-      ])
-
-    it('ends every host row with one wrapper holding two dots (AC1)', () => {
-      const markup = bothTrees()
-      expect(countOf(markup, DOT_WRAPPER_MARKER)).toBe(1)
-      expect(hostDotTagsIn(markup)).toHaveLength(2)
-      // ONE PAIR PER HOST ROW is the invariant, and since #1070 that is a pair per section per machine
-      // rather than a pair per populated section: this input holds one Channels row and no Chats row, and
-      // both host rows are drawn, so both carry their dots. It read 1 and 2 until the amendment.
-      const single = render([row({ id: 'c1', is_promoted: true })])
-      expect(countOf(single, DOT_WRAPPER_MARKER)).toBe(1)
-      expect(hostDotTagsIn(single)).toHaveLength(2)
-      // Two machines, two sections: the pair follows the row wherever the row goes.
-      const twoServers = render([row({ id: 'c1' })], null, [DEFAULT_SERVER, SECOND_SERVER])
-      expect(countOf(twoServers, DOT_WRAPPER_MARKER)).toBe(2)
-      expect(hostDotTagsIn(twoServers)).toHaveLength(4)
-    })
-
-    it('names both legs from the two stores it reads, with no false green (AC2/AC3)', () => {
-      // The store-bound leaf hydrates to the two singletons' INITIAL values under `renderToStaticMarkup`
-      // — relay `null` and session `{ type: 'disconnected' }` — so this reads the shipped labels back
-      // out of the render rather than restating them (the `hostLabelsIn` treatment). It doubles as the
-      // regression guard on the leaf being server-renderable at all. Since #719 the relay's initial cell
-      // is "Relay Unknown": on the sidebar this IS the first frame of every launch, which is why that
-      // state stopped claiming an outage. The host leg keeps #330's "Pyrycode Offline" (#719 AC3).
-      const labels = hostDotTagsIn(bothTrees()).map(ariaLabelOf)
-      expect(labels).toEqual([
-        'Pyrycode Offline',
-        'Relay Unknown'
-      ])
-    })
-
-    it('renders the dots INSIDE the host row, ahead of that tree conversation rows (AC1)', () => {
-      const markup = bothTrees()
-      expect(markup.indexOf(HOST_ROW_MARKER)).toBeLessThan(markup.indexOf(DOT_WRAPPER_MARKER))
-      expect(markup.indexOf(DOT_WRAPPER_MARKER)).toBeLessThan(markup.indexOf(ROW_MARKER))
-    })
-
-    it('renders no dots where there is no host row (AC1)', () => {
-      // Tracks the host row's own two no-row states since #1070, which are the not-yet-loaded frame and a
-      // client with no machine paired — never a merely empty section, which now has a row and its dots.
-      expect(countOf(render(null, null, []), DOT_WRAPPER_MARKER)).toBe(0)
-      expect(countOf(render([], null, []), DOT_WRAPPER_MARKER)).toBe(0)
-      expect(countOf(render([]), DOT_WRAPPER_MARKER)).toBe(1)
-    })
-  })
-
   describe('the status dot leading every conversation row (#801)', () => {
     // THE ONE REAL TRAP IN THIS SUITE. The four stores are file-level instances shared by every case in
     // this describe, so a seed left standing silently colours a LATER case's render — an `--idle` row
@@ -1225,7 +1166,6 @@ describe('ChannelListView', () => {
       expect(countOf(markup, EDIT_CHANNEL_MARKER)).toBe(1)
       expect(countOf(markup, HOST_ROW_MARKER)).toBe(1)
       expect(countOf(markup, SECTION_HEADER_MARKER)).toBe(0)
-      expect(hostDotTagsIn(markup)).toHaveLength(2)
     })
 
     it('renders no dot where there is no row', () => {
@@ -1553,70 +1493,6 @@ describe('the open chat’s row (#1098)', () => {
     for (const id of ['c1', 'd1', 'd2']) expect(markup).not.toContain(id)
   })
 })
-
-describe('HostConnectionDots (#718)', () => {
-  // The `ConnectionStatusIndicator` seam: the component is exported PURELY so the full category × label
-  // matrix is reachable with injected legs — the container above can only ever render the two singletons'
-  // initial state, which is one cell of it.
-  const leg = (category: ConnectionLeg['category'], label: string): ConnectionLeg => ({ category, label })
-
-  const dots = (host: ConnectionLeg, relay: ConnectionLeg): string =>
-    renderToStaticMarkup(<HostConnectionDots host={host} relay={relay} />)
-
-  it('binds each category to its shipped colour modifier (AC2)', () => {
-    // One case per LegCategory, so the binding is pinned rather than sampled. A re-declared
-    // `.channel-list__host-dot--up` family — the second copy of the contract AC2 forbids, one level below
-    // the mapping — fails all four here.
-    expect(dots(leg('up', 'Pyrycode Connected'), leg('up', 'Relay Connected'))).toContain(DOT_UP_MARKER)
-    expect(dots(leg('in-progress', 'Pyrycode Connecting'), leg('up', 'Relay Reachable'))).toContain(
-      DOT_IN_PROGRESS_MARKER
-    )
-    expect(dots(leg('down', 'Pyrycode Offline'), leg('down', 'Relay Offline'))).toContain(DOT_DOWN_MARKER)
-    // #719's fourth category on the 6px sidebar dot — the one that reaches `.conn-dot--unknown` WITHOUT
-    // the `.conn-dot` base, so a fourth binding nested under that base (or re-declared in channels.css)
-    // would leave this dot with no background and go invisible silently.
-    expect(dots(leg('down', 'Pyrycode Offline'), leg('unknown', 'Relay Unknown'))).toContain(
-      DOT_UNKNOWN_MARKER
-    )
-  })
-
-  it('puts the HOST leg first and the relay leg second, the design order', () => {
-    // The assertion that catches a developer copying `ConnectionStatusIndicator(relay, daemon)`'s
-    // argument order, which is the REVERSE of this one: both props are a `ConnectionLeg`, so swapping
-    // them type-checks and renders silently.
-    const markup = dots(leg('up', 'Pyrycode Connected'), leg('down', 'Relay Offline'))
-    expect(markup.indexOf('Pyrycode Connected')).toBeLessThan(markup.indexOf('Relay Offline'))
-  })
-
-  it('renders the two legs independently, one category each (AC2)', () => {
-    // "Relay up, host down" renders as exactly that — neither leg is derived from the other.
-    const tags = hostDotTagsIn(dots(leg('down', 'Pyrycode Offline'), leg('up', 'Relay Connected')))
-    expect(tags).toHaveLength(2)
-    expect(tags[0]).toContain(DOT_DOWN_MARKER)
-    expect(tags[1]).toContain(DOT_UP_MARKER)
-  })
-
-  it('gives every dot an accessible name carrying its leg and its state (AC3)', () => {
-    const tags = hostDotTagsIn(
-      dots(leg('in-progress', 'Pyrycode Connecting'), leg('up', 'Relay Reachable'))
-    )
-    expect(tags.map(ariaLabelOf)).toEqual(['Pyrycode Connecting', 'Relay Reachable'])
-    for (const tag of tags) {
-      // `aria-label` on a bare <span> is DROPPED by the accessible-name computation — a name needs a role
-      // to land on, and `role="img"` is the ARIA-in-HTML-legal one for a non-interactive graphic. Without
-      // it AC3 would pass review and fail in a screen reader.
-      expect(tag).toContain('role="img"')
-    }
-  })
-
-  it('shows no visible text (AC4)', () => {
-    // Scoped to the pair's own render: the host row legitimately shows the glyph and the machine name, so
-    // a document-wide "no text" assertion would be plain wrong rather than strict.
-    const markup = dots(leg('up', 'Pyrycode Connected'), leg('up', 'Relay Connected'))
-    expect(markup.replace(/<[^>]*>/g, '')).toBe('')
-  })
-})
-
 
 it('renders every saved host once before the first list', () => {
   const markup = render(null, null, [DEFAULT_SERVER, SECOND_SERVER])

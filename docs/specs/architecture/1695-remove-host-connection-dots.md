@@ -50,3 +50,7 @@ Pending for documentation stage: update `docs/knowledge/features/channel-list-ho
 ## Open questions
 
 None.
+
+## Revisions
+
+2026-10-01: The implementation-wide string search also found retired dot observations in `e2e/update-required-host.spec.ts` and `e2e/host-conversation-list.spec.ts`. Replace them with positive failed-row/Repair observations and healthy disclosure checks; retain their reconnect, no-auto-redial and addressed-list assertions. Run these two focused specs as well. This is additional regression coverage for the same presentation removal; the two-production-file boundary and total estimate remain unchanged.

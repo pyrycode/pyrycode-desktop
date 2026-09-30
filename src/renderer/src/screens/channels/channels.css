@@ -12,8 +12,8 @@
  * #1097 converged the ROW on the desktop node (103:2968) — a 24px row with a body-small label, a 6px
  * corner and 4px between consecutive rows — and deleted the mobile node's trailing last-activity time.
  * The 2026-09-05 inset fix converged the TREE'S PLACEMENT on the desktop sidebar node (103:2959): the
- * card's 20px inset, the section header's spacing, the channel list's 20px indent, the host dots'
- * trailing edge and the divider's 28px margins.
+ * card's 20px inset, the section header's spacing, the channel list's 20px indent, the trailing controls'
+ * placement and the divider's 28px margins.
  *
  * ⭐ #1443 CONVERGED THE LAST OF IT AND ENDED THE MOBILE MIRRORING FOR THE CHROME. The two entries were
  * the mobile screen's surviving invention — 48px round buttons in a sticky top-RIGHT cluster with a
@@ -126,7 +126,7 @@
    argument one level down, and it arrives here for the same reason: padding the row at rest and widening
    it on hover would re-truncate a long label the moment the pointer arrived. Reserving the trailing 52
    unconditionally is what makes "no glyph of the label is painted under either control" true at rest as
-   well as on hover. Neither control is laid out in this padding — nor are the dots since #1185 — so the
+   well as on hover. Neither control is laid out in this padding, so the
    row's derived 28px height is untouched either way.
 
    It is deliberately NOT the component frame's own `pr-[28px]`: 28 reserves the drawn GLYPH's slot, 52
@@ -167,16 +167,16 @@
 }
 
 /* THE ROW'S DISCLOSURE (#1507, Figma Host 399:1366) — the button that folds one machine's whole subtree.
-   It holds the glyph, the label and the chevron; the pen, the plus, the repair control and the two dots
+   It holds the glyph, the label and the chevron; the pen, the plus and the repair control
    stay SIBLINGS of it inside the row, because an interactive control cannot nest inside a button (#274).
    A failed row draws none of this: `ChannelList.tsx` says why, and the markup it falls back to is exactly
    what shipped, which is what leaves `--failed`'s three rules below describing the same elements.
 
    ⭐ ITS OWN CLASS TOKEN, AND `.channel-list__host` DELIBERATELY LEFT ON THE ROW. This is the one
    structural call of the ticket and it was measured rather than assumed. Four families of rules in this
-   file reach the trailing controls THROUGH the row's class — the pen's and the plus's hover reveals, the
-   two-selector `:has()` guard that swaps the dots for them, and the failed row's pen inset — and 21 reads
-   across six e2e specs locate a control, a dot or a name pill as a DESCENDANT of it. Moving the class here
+   file reach the trailing controls through the row's class, including the hover reveals and failed
+   row's pen inset, and browser reads
+   across six e2e specs locate a control or a name pill as a DESCENDANT of it. Moving the class here
    for symmetry with `.channel-list__workspace-head` one level down would break every one of them at once.
    `paired-shell-card.spec.ts`'s hit test reads `closest()`, so a hit on this button still answers with the
    row.
@@ -246,7 +246,7 @@
    percentage centring included, and this is the same re-derivation #1487 made there.
 
    `left: 0` is the drawn 0, read against THE ROW's padding box. `.channel-list__host` is already
-   `position: relative` — for the dots since #718 and for the pen and the plus since #1185 — so the
+   `position: relative` for its trailing controls, so the
    containing block already exists and no element is added. The row carries no border, so that padding
    box starts at its border edge and the 0 reads as the card's content edge straight off: the glyph's x
    is the card's inset with nothing added to it.
@@ -282,13 +282,7 @@
    the min-width lifts the flexbox min-content floor and the default `flex-shrink: 1` then shrinks and
    ellipsizes the label.
 
-   STILL NOT the fourth thing that rule carries, `flex: 1 1 auto` — BUT THE REASON CHANGED IN #1185 and
-   the old one is gone, so do not cite it. It used to be that `flex-grow: 1` would absorb the row's free
-   space and render `.channel-list__host-status`'s `margin-left: auto` inert, replacing a shipped,
-   documented mechanism for pinning the dots with an implicit one. That mechanism no longer exists: the
-   dots are absolutely positioned, so grow has nothing left to render inert. It stays out because it now
-   buys nothing — the label already shrinks and ellipsizes inside the slot the row's 52px right padding
-   reserves, and growing its BOX to that padding edge would move no text and no dot. */
+   The label shrinks inside the row's reserved control slot without growing away from its chevron. */
 .channel-list__host-label {
   min-width: 0;
   overflow: hidden;
@@ -336,80 +330,6 @@
 
 .channel-list__host-disclosure[aria-expanded='false'] .channel-list__host-chevron {
   transform: rotate(-90deg);
-}
-
-/* The host row's two trailing connection dots (#718, Figma 110:3499 + 106:3114; the Idle variant of Host
-   399:1366 since #1185).
-
-   #1185 REPLACED `margin-left: auto` WITH ABSOLUTE POSITIONING, and the pair did not move by a pixel.
-   That rule was this block's whole point for two tickets — `.channel-list__host` had no trailing element
-   before #718, so riding its `gap` alone would have left the pair beside the label — and it expired the
-   moment the row grew a 52px right padding to reserve the controls' slot: an in-flow `margin-left: auto`
-   would have parked the dots at the PADDING edge, 52px in from where they are drawn. `right: 0` resolves
-   against the row's padding BOX, i.e. its right border edge, so the pair stays exactly where it was and
-   the row's own reservation cannot push it. `top: --space-1` over a 20px box centres it at 14 in the
-   28px row — where `align-items: center` had it — so the vertical position is unchanged too.
-
-   The pair sits FLUSH with that edge, which since the 2026-09-05 inset fix is also the channel rows'
-   trailing edge. #718 had inset it 16px on the row's padding, reasoning that the design's absolute x
-   coordinates (341 and 353) were measured in a 360-wide design row against a 400-wide shipped one. Now
-   that `.channel-list` carries the card's 20px inset the row IS 360 wide and those coordinates read
-   literally: the design floats the pair inside the row's px-16, 1px from its edge, and the 1px is below
-   the scale and the eye. The relative geometry is unchanged: 6px diameter, 6px gap, host leg first.
-   e2e/host-label-sidebar.spec.ts pins the flush edge and is what would catch a regression in any of it.
-
-   `opacity: 1` IS DECLARED RATHER THAN INHERITED FROM THE INITIAL VALUE, so the swap below reads as the
-   pair it is: at rest the dots are 1 and the two controls are 0, and a hover on a row that HAS controls
-   inverts both. */
-.channel-list__host-status {
-  position: absolute;
-  right: 0;
-  top: var(--space-1);
-  height: var(--space-5);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  opacity: 1;
-}
-
-/* ⭐ THE SWAP (#1185, Host Hover 399:1408) — the dots give way to the pen and the plus, and the guard is
-   the ticket rather than a detail.
-
-   THE `:has()` IS LOAD-BEARING AND MUST NOT BE "SIMPLIFIED" AWAY. Each control renders only when its
-   handler is passed, and #1185 SHIPPED NO CALLER: the Edit host dialog (#1187) and the Add workspace
-   dialog (#1189) pass them. So `.channel-list__host:hover .channel-list__host-status { opacity: 0 }` —
-   the obvious form — would blank the SHIPPED app's connection dots into an empty slot on every hover
-   for as long as those two tickets take. Keyed on the row CONTAINING a drawn control, a row with
-   neither handler hovers exactly as it did before this ticket.
-
-   WHICH GATE READS THAT BACK: `e2e/host-row-hover-controls.spec.ts`, which hovers the production host
-   row and asserts these dots still compute opacity 1. Nothing else can — the unit tier renders markup in
-   a node environment and sees no CSS at all. That spec hovers a WORKSPACE row first and watches its
-   plus appear, so a hover that silently failed to fire cannot pass it vacuously.
-
-   MEASURED, NOT PREDICTED: replacing this rule with the obvious form above and rebuilding fails that
-   spec at its dot-opacity read (expected "1", received "0"), with both workspace-plus calibration reads
-   still passing — so the red is the guard's, not a hover that never fired.
-
-   `:has()` rather than a `~` sibling combinator, which is the other way to write "a control is drawn".
-   `~` would state the condition as "a control PRECEDES the dots in DOM order", coupling this rule to an
-   order `ChannelList.tsx` picked on tab-order grounds and is free to change. `:has()` states the
-   condition that is meant. Its forgiving parsing is the cost, and it is why both class names are pinned
-   in `ChannelList.test.tsx`: a renamed control would drop out of the list here SILENTLY rather than
-   invalidating the rule. `.channel-list__row:has(> .channel-list__row-open[aria-current='true'])` is
-   this file's existing consumer; conversation.css has several; Electron 33 is Chromium 130.
-
-   `opacity` and never `display: none` / `visibility: hidden`, #1171's ruling — here it is the DOTS that
-   would vanish from the box tree, and `connection-dot-colours.spec.ts` and `host-label-sidebar.spec.ts`
-   both count and measure them without ever hovering. */
-.channel-list__host:not(.channel-list__host--failed):hover:has(> .channel-list__host-edit, > .channel-list__host-add)
-  .channel-list__host-status,
-.channel-list__host:not(.channel-list__host--failed):has(
-    > .channel-list__host-edit:focus-visible,
-    > .channel-list__host-add:focus-visible
-  )
-  .channel-list__host-status {
-  opacity: 0;
 }
 
 /* THE EDIT-HOST PEN (#1185, Figma "Icon Edgeless" I405:7920;399:1413 in the Hover variant) — the
@@ -502,9 +422,7 @@
 }
 
 /* THE ADD-WORKSPACE PLUS (#1185, Figma "Icon Edgeless" I405:7920;399:1414) — the pen's block above with
-   two numbers changed, sitting 10px to its right, IN THE DOTS' OWN SLOT. That last part is what makes
-   the drawing a swap rather than an addition: the node puts this 16px box at 342…358 in the 360 content
-   box and the dot pair occupies 341…359, so the plus lands on top of what it replaces.
+   two numbers changed, sitting 10px to its right in the trailing control slot.
 
    THE BOX IS 20 × 20 AND THE GLYPH IS 16 × 16, WHICH REPRODUCES THE DRAWING WITH NO 2px LITERAL. A 20px
    box at `right: 0`, offset `--space-1` from the top, centring a 16px glyph, lands that glyph at right 2
@@ -567,43 +485,8 @@
   display: block;
 }
 
-/* One dot. GEOMETRY ONLY — the colour is `.conn-dot--up` / `--in-progress` / `--down` / `--unknown`,
-   declared directly below, worn as a modifier WITHOUT a `.conn-dot` base. That reads as a mistake unless
-   said out loud, so: it is deliberate. The base carried the retired status row's 8px box and #962 deleted
-   it with the row; the split between colour and geometry classes is the seam #330 left for exactly this,
-   and it is what let the colour half survive its first consumer.
-
-   The four category → token bindings live HERE, in this file, and are still the renderer's SINGLE copy —
-   which is what #330's AC2 asks for. That is an inversion of what this comment said until #962: they used
-   to be in conversation.css and re-declaring them here would have been a second copy. Now this file is
-   the copy, so the contract reads the other way round: do not re-introduce them in conversation.css or
-   anywhere else, and a NEW category's binding belongs below beside its siblings.
-
-   Both 6px values are literals rather than tokens, the `.conn-dot { width: 8px }` precedent for structural
-   component geometry. For the gap that is load-bearing rather than stylistic: the design's 12px dot pitch
-   is diameter + gap, so the gap must EQUAL the diameter, and 6px sits exactly between --space-1 (4px) and
-   --space-2 (8px) with no tie-break available. Centring the 6px dot against the label's 20px line box
-   reproduces the design's 6×14 instance frame without a wrapper element (the #703 `Row icon` treatment). */
-.channel-list__host-dot {
-  width: 6px;
-  height: 6px;
-  flex: 0 0 auto;
-  border-radius: var(--radius-full);
-}
-
-/* The category → colour contract (mirrors mobile's ConnectionStatusLine): up = success green,
-   in-progress = warning amber (the daemon `connecting` state, #330 AC3), down = error peach, and since
-   #719 unknown = neutral outline grey.
-
-   These four moved here from conversation.css in #962, which retired the status row that used to host
-   them; `HostConnectionDots` above is their only consumer now, and it wears them flat, with no base
-   class of its own. Moving them rather than deleting them with the row is what the retired block's own
-   comment instructed, and why: the sidebar's dots would otherwise render as two 6px boxes with no
-   background and go invisible SILENTLY, since the unit tier asserts markup in a node environment and
-   never a computed colour. That is exactly the risk `e2e/connection-dot-colours.spec.ts` now reads back
-   from the shipped stylesheet. For the same reason a new category's binding belongs here flat beside its
-   siblings — nested under a base class it would be declared exactly once and still leave the 6px dot
-   unpainted. */
+/* Shared connection-category color bindings remain available independently of host-row presentation.
+   Keep them flat so callers need no base geometry class. */
 .conn-dot--up {
   background: var(--color-success);
 }
@@ -786,7 +669,7 @@
    restated as an inset. It also leaves the row's 28px height untouched, because the control is out of the
    flex flow entirely.
 
-   Its 16px box sits directly under the host row's two connection dots, so the column of trailing marks
+   Its 16px box shares the host row's trailing control edge, so the column of trailing marks
    lines up: both end flush with the card's content edge.
 
    SELF-CONTAINED AND NOT KEYED TO BEING THE ONLY CONTROL. #1180 adds a 14px pen at `right: 28px` beside
@@ -1147,7 +1030,7 @@
    `margin-left` is the channel-list indent — `--space-3` since #1506 read `Host container` 106:3104's
    own placements, DOWN from the 28 #1171 reached for that same frame and the 20 the first read of
    103:2985 gave. A row is 348 wide in the 360 content box, starts 32 from the card's edge, and still ends
-   flush with the host row's connection dots. The 12 is a sum the drawing makes twice over: `Channel list`
+   flush with the host row's trailing control edge. The 12 is a sum the drawing makes twice over: `Channel list`
    103:2985 sits at x 4 inside the `Workspace` wrapper, and insets its own rows a further 8 (its `Channel`
    instances read x 8, 348 wide). That wrapper's other half is `.channel-list__workspace-head`'s 4px nest,
    so the two levels stay 8px apart exactly as #1171 and #1178 had them at 20 + 8 — the relative step is
@@ -2389,8 +2272,7 @@
    `ConversationStatus`. The drawn instance is a 6px circle stroked 1px in #9DCBFC — exactly
    --color-primary — and #1174 read the redrawn Channel list frame (103:2985) as carrying that stroke in
    EVERY state, so the ring moved here onto the base rule and each status now contributes a fill alone.
-   The ring is still what separates this dot from the `.channel-list__host-dot` / `.conn-dot` family six
-   pixels above it in the same sidebar: those are filled discs with no stroke at all.
+   Its ring remains distinct from the shared connection-category background bindings.
 
    GEOMETRY IS IDENTICAL IN ALL FIVE STATES (#800's AC4, and #1174's AC2 restates it) — the horizontal
    advance is 6px whatever the status and whatever the row is doing, so a row's title never shifts. Both
@@ -2425,7 +2307,7 @@
 
    These bindings are this component's OWN and must not be swapped for `.conn-dot--up` — that family is the
    CONNECTION contract, deliberately kept to one copy in the renderer (which since #962 is in THIS file,
-   beside `.channel-list__host-dot`), and it reports whether a machine is reachable. This dot reports what
+   in this stylesheet), and it reports whether a machine is reachable. This dot reports what
    a conversation is DOING: a different concept, a different form, and a class whose substring two other
    test files already assert on.
 
@@ -2447,7 +2329,7 @@
 
    #1174 SETTLED THE RING-VS-DISC QUESTION THIS RULE USED TO TURN ON, and in the opposite direction to the
    one #873 wrote down. It reasoned that this dot had to stay a ring because `.conn-dot--in-progress`
-   (declared in this file since #962) is a FILLED dot in this same --color-warning amber six pixels above
+   (declared in this file since #962) binds the same --color-warning background.
    in the sidebar, and that the form was the whole of what kept "a conversation is waiting on you" apart
    from "a machine is still connecting". The drawing fills every painted state, so the form no longer
    separates them — the 1px primary ring this dot wears and that one does not is what does, in every state
@@ -2739,7 +2621,7 @@
   color: var(--color-error);
 }
 
-/* Local labeling remains available beside repair; reserve separate targets and keep both dots. */
+/* Local labeling remains available beside repair; reserve separate Edit and Repair targets. */
 .channel-list__host--failed {
   padding-right: calc(var(--space-7) + var(--space-6) + var(--space-5));
 }

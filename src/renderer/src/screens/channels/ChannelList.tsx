@@ -13,20 +13,7 @@ import {
   useConversationListStore,
   selectConversations
 } from '../../store/conversationListStore'
-// #1199 reads BOTH legs per server. The app-wide `selectStatus` / `selectRelayLinkStatus` cells are
-// untouched in name, signature and value; the host row is simply no longer a reader of either.
-// `selectStatus` keeps four other consumers (the composer status row, the connection banner, the repair
-// control, `composerSend`); `selectRelayLinkStatus` keeps NONE — this row was its last production
-// reader, and retiring it is deliberately out of scope here (its own header records that). Each
-// store's INITIAL cell is imported too —
-// it is the collapse target for a server that has reported nothing, so the launch frame is pinned to the
-// same constant it has always rendered rather than to a literal restated here.
-import { useSessionStore, sessionStore, selectStatusFor, initialSessionState, type SessionState, type ConnectionStatus } from '../../store/sessionStore'
-import {
-  useRelayLinkStore,
-  selectRelayLinkStatusFor,
-  initialRelayLinkState
-} from '../../store/relayLinkStore'
+import { useSessionStore, sessionStore, selectStatusFor, type SessionState, type ConnectionStatus } from '../../store/sessionStore'
 // #834's read path, shipped dormant by #833 and mounted here, re-keyed by server id in #1199.
 // `HostLabelData` is the headless one-shot invoke; the store binding + keyed selector feed the row.
 // Nothing else in this file touches either.
@@ -70,24 +57,7 @@ import { useQuestionBatchStore, selectBatchFor } from '../../store/questionBatch
 import { useActiveConversationStore } from '../../store/activeConversationStore'
 import { resolveConversationStatus } from '../../store/conversationStatus'
 import { isConversationUnread } from '../../store/conversationUnread'
-// #718 reuses #330's shipped two-leg mapping ACROSS SCREENS rather than growing a second copy of it —
-// two surfaces in the same window disagreeing about one leg is precisely the lie the dot pair exists to
-// prevent. Cross-screen import is this codebase's established idiom (ArchiveScreen and
-// WorkspacePickerSheet both import from `channels/channelListViewModel`; `settings/DefaultWorkspaceRow`
-// imports a component out of `conversation/`), and lifting the three symbols into a shared module first
-// would be adjacent refactoring for no behaviour change. No cycle: ConversationScreen reaches back into
-// this directory only for `channelListViewModel` and `EditChatDialog`, neither of which imports
-// this file.
-// #1439 takes a FOURTH symbol from this module, the per-conversation archive send, for the reason the
-// paragraph above gives: the verb already exists and a second copy of the `archiveConversation` literal
-// would be a second enumeration of one wire contract. It is bound into a one-argument closure at the
-// confirm site, so the Edit workspace dialog module imports nothing from the conversation screen.
-import {
-  relayLeg,
-  daemonLeg,
-  requestArchiveConversation,
-  type ConnectionLeg
-} from '../conversation/ConversationScreen'
+import { requestArchiveConversation } from '../conversation/ConversationScreen'
 import { SaveAsChannelDialog } from './SaveAsChannelDialog'
 // #1440 renamed this module for its new title. `requestRenameConversation` KEEPS its name: it owns the
 // `renameConversation` wire literal, and renaming the helper would drift it from the verb it sends.
@@ -225,8 +195,8 @@ export function ChannelList({
   // `renderToStaticMarkup`, so a store-reading row can only ever render `activeConversation: null` — the
   // renderer tier could prove the UNFILLED case and nothing else, leaving the whole marked state to e2e.
   // Read here, the state reaches `ChannelListView` as an injectable prop, which is the seam the unit tier
-  // already has a `render()` helper for — where this file's twice-shipped answer to the same problem
-  // (HostRow/HostRowControl, HostConnectionDots/HostConnectionDotsControl) costs a component and an
+  // already has a `render()` helper for — where this file's existing answer to the same problem
+  // (HostRow/HostRowControl) costs a component and an
   // export. The honest cost, stated rather than hidden: a switch re-renders the whole sidebar where a
   // per-row read would re-render two rows. Accepted — a switch already rebuilds the chat pane, and this
   // is the prop path #1097 freed by deleting `now`.
@@ -367,8 +337,8 @@ export function ChannelList({
           with the same lifetime. It renders null, so DOM order is immaterial, and it dereferences
           `window.pyry` only inside its effect. `HostLabelData` reads the list this fills, so the launch
           sequence is: this resolves → `serverInfoStore` fills → one keyed label read per paired server.
-          Every frame before that renders the fallback word and the two stores' initial dot pair, which
-          is exactly what the row shows at launch today (AC5). Settings and ConversationScreen each mount
+          Hosts use the fallback label until their keyed label reads resolve. Settings and
+          ConversationScreen each mount
           their own instance; a second one here is the established posture, not a duplicate — the store
           holds one list and each mount re-reads it. */}
       <ServerInfoData />
@@ -1043,25 +1013,15 @@ export function hostRowEditSeed(value: HostLabelValue): string {
 //
 // The row repeats in BOTH trees on purpose (operator, 2026-08-21); the trees are not deduplicated.
 //
-// The ROW is not interactive: a plain <div>, no onClick, no aria-label. The label carries the row's
-// meaning, so the glyph is aria-hidden — a second accessible name would be noise. The two connection dots
-// #672 reserved this row's trailing edge for landed in #718, as the store-bound leaf below; the row itself
-// stays non-interactive, and the dots are named individually rather than through the row.
+// The row wrapper is a plain <div>, with no onClick or aria-label. Healthy hosts put the glyph,
+// label and chevron in a disclosure button; failed hosts show the glyph and label directly and
+// retain Repair host. Edit host is a sibling control, so neither action nests inside the disclosure.
+// The glyph is aria-hidden because the label already names the host.
 //
-// ITS SUBTREE STOPPED BEING NON-INTERACTIVE IN #1185, which is why that paragraph now says "the row"
-// rather than "this". The row grew the pen and plus the drawing puts in the dots' slot on hover (Host
-// 399:1366, Hover 399:1408) — two <button> SIBLINGS of the label, never a wrapper around it and never
-// nested in each other, so the row's own tag is untouched and clicking the glyph or the name still does
-// nothing. `channels.css` owns the swap: the pair is `opacity: 0` at rest and the dots `opacity: 1`, and
-// a hover or a control's `:focus-visible` inverts both.
-//
-// ⭐ THE SWAP IS GUARDED ON A CONTROL BEING DRAWN, and that guard is the ticket rather than a detail.
-// Each control renders only when its handler is passed and THIS TICKET ADDS NO CALLER — the Edit host
-// dialog (#1187) and the Add workspace dialog (#1189) pass them, against the `serverId` this row already
-// carries. A hover rule keyed on the row alone would therefore blank the SHIPPED app's connection dots
-// into an empty slot for as long as those two take, so `channels.css`'s rule is keyed on the row
-// CONTAINING a control (`:has()`); a row drawn with neither handler hovers exactly as it does today.
-// `e2e/host-row-hover-controls.spec.ts` is what reads that back from the running window.
+// Host rows have no connection dots at rest, on hover or on focus. `channels.css` reveals Edit host
+// on hover or keyboard focus without moving its reserved target or the label; failed rows keep
+// Edit and Repair separately clickable. `e2e/host-row-hover-controls.spec.ts` proves the reveal and
+// fixed geometry in the running window.
 //
 // Nullary handlers, `WorkspaceRow`'s `onEdit` shape: the caller closes over the machine it is drawing, so
 // `serverId` never becomes an argument this view handles. `() => void` also refuses a function declaring
@@ -1094,13 +1054,8 @@ export function hostRowEditSeed(value: HostLabelValue): string {
 // Deliberate asymmetry: the STRUCTURAL naming stays "host" (the design's word, and what #672/#703 stack
 // onto) — class names are selectors, not copy. The `label` prop's VALUE is the one thing the user sees.
 //
-// #834 made this the PURE VIEW and put `HostRowControl` below it, mirroring `HostConnectionDots` /
-// `HostConnectionDotsControl` twenty lines down. EXPORTED for that neighbour's stated reason: a zustand
-// singleton seeded before a `renderToStaticMarkup` call is invisible to it (the server renderer reads
-// `getServerSnapshot()`, wired to the state captured at store CREATION), so the container can only ever
-// render the initial `loading` cell and this is the only seam the unit tier reaches the four-arm matrix
-// through. "Pure" in the same qualified sense its neighbour already is: it takes its own data as props;
-// its dot subtree reads two singletons.
+// `HostRow` takes its data as props so the static renderer can exercise every host presentation.
+// `HostRowControl` reads the label and status for the saved server identity.
 //
 // `label` is UNTRUSTED text off disk (`hostLabelHandler.ts:69-71` hands the "escaped text only"
 // obligation here) and it goes in as an auto-escaped React CHILD and NOWHERE else. Four sinks are
@@ -1119,28 +1074,8 @@ export function hostRowEditSeed(value: HostLabelValue): string {
 // The glyph is a sixth inline Material path in this file's existing idiom — the `dns` server-rack, sized
 // 12px per the Figma node rather than the 24px the interactive buttons use, so it reads as a level marker
 // rather than a control.
-// #1199 gave the row a `serverId`: WHICH machine it is about. The label arrives already resolved to text
-// (the container ran `hostRowLabel`), so the id is here for the dot subtree alone — pure pass-through,
-// rendered nowhere. It is a prop rather than a second store read inside the dots so the row's identity
-// is single-sourced, and it is the shape #1070's loop hands down now that this is one row per server.
-//
-// #1070 NARROWED IT FROM `string | null` TO `string`. The `null` arm meant "the paired-server list has
-// not resolved yet", which was reachable while the row rendered unconditionally; it is not any more,
-// because a host row now exists BECAUSE an id was in that list. The branch and its collapse are deleted
-// rather than left as a dead arm whose comment describes a frame that cannot occur.
-//
-// THE ID GETS THE LABEL'S FOUR-SINK TREATMENT, plus the one a keyed store invites: the KEY is the server
-// id and the VALUE is the label, never the reverse. It becomes no attribute, no class name, no title, no
-// URL, no lookup path and no log line, and its only use in this subtree is as an argument to the three
-// per-server selector factories.
-//
-// ONE SINK LEFT THAT LIST IN #1070: the React key. `renderBody` keys each server's subtree fragment by
-// this id, and the ban is amended rather than quietly broken. The distinction is not a concession — the
-// six sinks above all either reach the DOM or reach persistence, where a React key is reconciliation
-// identity alone: never serialised, never emitted by `renderToStaticMarkup`, unobservable to the page.
-// The alternative is worse than the doc edit: an index key would cross-wire fold state and per-row
-// instances between machines whenever the paired list reorders. `ChannelList.test.tsx` pins the claim by
-// rendering a sentinel id and asserting it appears nowhere in the markup.
+// Server identity stays in the container's keyed reads and callbacks; the existing `serverId`
+// prop contract is retained without rendering the id into the DOM.
 // #1427 — THE POINTER-RELATIVE PLACEMENT OF `.channel-list__control-name`, and the one part of it a
 // stylesheet cannot do: the pointer's position is not available to CSS. Eight controls in this file wear
 // that pill and all eight spread `controlNamePlacement`, so there is one handler set and no per-control
@@ -1204,7 +1139,6 @@ const EDIT_HOST_CONTROL_LABEL = 'Edit host'
 
 export function HostRow({
   label,
-  serverId,
   // #1507 — the row's own fold, as three required props on the pure view. Required rather than optional,
   // `WorkspaceRow`'s stated reason for `hasRows` one level down: every caller knows all three answers, and
   // a default would be a second way to draw a disclosure over nothing. `onToggle` is nullary, this file's
@@ -1266,17 +1200,7 @@ export function HostRow({
             {name}
           </>
         ) : (
-          // The disclosure. Its class is a DISTINCT TOKEN from the row's, which is the one structural call
-          // of this ticket: `.channel-list__host` matches whole class tokens, so leaving that class on the
-          // row above keeps the pen's and the plus's hover reveals, the two-selector `:has()` dot swap, the
-          // failed row's pen inset and 21 e2e reads addressing a control, a dot or a name pill as its
-          // DESCENDANT — all of which would break at once if the class moved here for symmetry with
-          // `.channel-list__workspace-head`. `paired-shell-card`'s hit test reads `closest()`, so a hit on
-          // this button still answers with the row.
-          //
-          // The pen, the plus, the repair control and the dots stay SIBLINGS of this button and never
-          // children of it: an interactive control cannot nest inside a button (#274), and the disclosure
-          // coming first is the tab order AC3 pins.
+          // Keep the disclosure separate from the sibling Edit and Repair controls.
           <button
             type="button"
             className="channel-list__host-disclosure"
@@ -1311,21 +1235,13 @@ export function HostRow({
             )}
           </button>
         )}
-        <HostConnectionDotsControl serverId={serverId} />
         {failed && onRepair && (
           <button type="button" className="channel-list__host-repair" aria-label="Repair host" onClick={onRepair}>
             <span className="channel-list__host-repair-icon" aria-hidden="true" />
           </button>
         )}
         {onEditHost && (
-          // The pen, APPENDED AFTER the dots and never before them: the elements above are byte-identical
-          // to what shipped, which is what leaves `HOST_ROW_MARKER`, `HOST_ICON_MARKER`, `HOST_LABEL_OPEN`
-          // and `DOT_WRAPPER_MARKER` matching and the five e2e specs AC5 names unedited. Icon-only, so
-          // `aria-label` supplies the accessible name — `.channel-list__workspace-edit`'s treatment one
-          // level up, and since #1190 its `.channel-list__control-name` pill as well.
-          //
-          // The glyph is `.channel-list__workspace-edit-icon`'s path in place, reused and NOT re-exported:
-          // the same 12-unit viewBox scaled to the drawing's 14 by the box.
+          // Icon-only control with a client-owned accessible name and a pointer/focus name pill.
           <button
             type="button"
             className="channel-list__host-edit"
@@ -1370,8 +1286,7 @@ export function HostRow({
   )
 }
 
-// The store-bound container (#834) — `HostConnectionDotsControl`'s posture one component up: read the
-// single shipped slice, pass it through the pure collapse, render the pure view. Nothing else.
+// The store-bound container reads the keyed host label and renders the pure view.
 //
 // THE ROW STILL READS AND NEVER WRITES, but the store no longer has one writer (#1299). It has two: the
 // loader mounted in `ChannelList` fills every slot on mount, and the Edit host dialog records main's answer
@@ -1527,115 +1442,6 @@ export function CollapsibleHostGroup({
           it was closed before failure; recovery returns to the saved host fold. */}
       <div className="channel-list__host-content" hidden={!expanded && !failed}>{children}</div>
     </>
-  )
-}
-
-/**
- * The host row's two trailing connection dots (#718, Figma 110:3499 + 106:3114) — the HOST leg first, the
- * relay leg second. The pure view: props in, markup out, no store, no `window.pyry`, no effects.
- *
- * EXPORTED for the same reason `CollapsibleWorkspaceGroup` is — it is the only seam through which the unit
- * tier reaches the full category × label matrix; the container below can only ever render the two
- * singletons' initial cell of it. #330's `ConnectionStatusIndicator` was exported on the same reasoning
- * until #962 retired it with the status row, leaving this the only two-dot view in the app.
- *
- * LEG ORDER is the design's and is the REVERSE of the retired `ConnectionStatusIndicator(relay, daemon)`'s,
- * whose argument order the container below still carries. Both props are a `ConnectionLeg`, so a swap
- * type-checks and renders silently — hence the ordering test.
- *
- * COLOUR comes from `.conn-dot--up` / `--in-progress` / `--down` / `--unknown`, worn WITHOUT any base class
- * of their own. #330 split colour from geometry into separate classes and that split is the seam this slice
- * reused; #962 then deleted the status row that held both halves, and the colour half MOVED into
- * `channels.css` beside `.channel-list__host-dot` rather than dying with it — these dots are its only
- * consumer now, and one copy in the renderer is still what #330's AC2 asks for. `.channel-list__host-dot`
- * carries the 6px geometry and no `background`. Nothing here reads a computed colour, so a lost binding
- * would blank these dots silently; `e2e/connection-dot-colours.spec.ts` is the tier that would catch it.
- *
- * `role="img"` is what makes `aria-label` land: on a bare <span> the accessible-name computation drops it,
- * so the dot would have no name at all (AC3 passing review while failing in a screen reader). Not
- * `role="status"` — that is a live region, and #330 deliberately declined one because the ConnectionBanner
- * (#279) already politely announces disconnects. The wrapper carries no role and no name of its own: the
- * host row renders twice and #670's two-pane layout shows the conversation status row at the same time, so
- * #330's `role="group" aria-label="Connection status"` shape would put three identically-named groups in
- * one window. AC3 asks for a name per dot, not per group.
- *
- * The dots carry NO text node (AC4) — the row shows the glyph, the machine name and the two dots only.
- */
-export function HostConnectionDots({
-  host,
-  relay
-}: {
-  host: ConnectionLeg
-  relay: ConnectionLeg
-}): JSX.Element {
-  return (
-    <span className="channel-list__host-status">
-      <span
-        className={`channel-list__host-dot conn-dot--${host.category}`}
-        role="img"
-        aria-label={host.label}
-      />
-      <span
-        className={`channel-list__host-dot conn-dot--${relay.category}`}
-        role="img"
-        aria-label={relay.label}
-      />
-    </span>
-  )
-}
-
-// The store-bound container — `ConnectionStatusIndicatorControl`'s body with the two legs REORDERED. Reads
-// each leg through its own shipped narrow selector, so a relay flap re-renders these four dots and not a
-// single conversation row; lifting the reads to `ChannelList` would couple the whole sidebar to both legs'
-// state, and would also thread two more arguments through `renderBody`'s already-six-positional signature
-// for a value no intermediate uses. (#1070 added `serverIds` and made it six; the argument against
-// lifting only got stronger, since each added positional raises the cost of the next.)
-//
-// The honest cost: `ChannelListView` is no longer strictly pure — its subtree now reads two singletons,
-// which deviates from this file's own container-reads / pure-view doc comment. It is safe under the unit
-// harness for the same reason `ConnectionStatusIndicatorControl` is: a zustand `useStore` read
-// server-renders fine, yielding each store's initial value (relay `null` → "Relay Unknown" since #719 —
-// not yet known rather than known-offline, since this row is the first frame of every launch; session
-// `{ type: 'disconnected' }` → "Pyrycode Offline" — no false green).
-//
-// The two legs are read INDEPENDENTLY and never cross-referenced (AC2): each mapping takes one status and
-// returns one leg, so "relay up, host down" renders as exactly that. `daemonLeg`'s label says "Pyrycode"
-// rather than the design's "Host" or the visible row's "Server" — deliberately, since any other word would
-// re-derive the label half of #330's contract, and this dot reports the pyry DAEMON SESSION, not the
-// machine: a machine can be up while the daemon is not, and this dot goes red in that case.
-//
-// #1199 BOUND BOTH READS TO ONE SERVER. `selectStatus` / `selectRelayLinkStatus` are "the most recently
-// written status across every connection", so with two machines paired this row reported whichever
-// connection last moved — the other machine's flap steering this machine's dots. Both per-server
-// selectors (#1133, #1134) shipped for exactly this consumer and are read here with a CLIENT-HELD id,
-// never a wire-supplied one, which is the rule `relayLinkStore`'s own header states.
-//
-// THE SILENT-SERVER COLLAPSE, and why it is written as two constants rather than two literals. Both
-// per-server selectors answer `undefined` for a server that has reported nothing yet — deliberately
-// undefaulted, so "not heard from" stays distinct from a reported state — while `daemonLeg` takes a
-// non-optional `ConnectionStatus` and `relayLeg` takes `RelayLinkStatus | null`. So this row has to
-// decide what a silent server's dots look like, and it lands them on each store's OWN INITIAL CELL:
-// `initialSessionState.status` (→ down, "Pyrycode Offline") and `initialRelayLinkState.status` (→
-// `null`, hence unknown, "Relay Unknown"). That is not a fifth category and not a guess — it is
-// literally the pair this row has rendered on every launch frame since #718, back when both reads were
-// app-wide and both stores were untouched. Reading the constants rather than restating `{ type:
-// 'disconnected' }` and `null` is what keeps that true if either store ever changes its initial cell.
-//
-// #1070 DELETED THE `null` GUARD that used to wrap both reads. It existed because a `null` serverId — the
-// frames before the paired-server one-shot resolved — must never reach a keyed selector: `StatusOrigin`
-// and `RelayLinkOrigin` both admit `null` as a REAL slot key (unstamped writes land there), so passing it
-// through would read someone else's cell rather than answering "not known". That frame no longer exists:
-// a host row is drawn because its id was in the paired list, so the id is always a real one. The silent-
-// server collapse below is untouched and is a DIFFERENT case — a paired server that has reported nothing
-// yet — which is still very much reachable.
-function HostConnectionDotsControl({ serverId }: { serverId: string }): JSX.Element {
-  const daemonStatus = useSessionStore(selectStatusFor(serverId))
-  const relayStatus = useRelayLinkStore(selectRelayLinkStatusFor(serverId))
-  return (
-    <HostConnectionDots
-      host={daemonLeg(daemonStatus ?? initialSessionState.status)}
-      relay={relayLeg(relayStatus ?? initialRelayLinkState.status)}
-    />
   )
 }
 
@@ -2468,7 +2274,7 @@ function renderBody(
  * unread composition lives. Here, per row, keyed by THE ROW'S OWN conversation id.
  *
  * Read the four narrow per-id slices, reduce them to one status, render the dot. That is the whole body.
- * It is `HostConnectionDotsControl`'s shape one level down — a store-bound `*Control` beside a store-free
+ * A store-bound `*Control` sits beside a store-free
  * leaf — and it lives HERE rather than in `ConversationStatusDot.tsx` because that file declares itself
  * store-free in its own header.
  *
@@ -2505,7 +2311,7 @@ function renderBody(
  *   - A `console.*` ON ANY PATH. Both source stores and both pure modules are log-free by construction,
  *     and there is no read miss to report — `null` is a defined reading, not an error.
  *
- * The honest cost, the same one HostConnectionDotsControl (:353-364) already took and recorded:
+ * The cost of these separate per-row reads:
  * `ChannelListView` drifts further from its "pure view" docstring, since its subtree now reads four more
  * singletons. Safe under `renderToStaticMarkup` in Node — the activity and timeline stores hydrate to
  * empty maps, the modal store hydrates to `initialModalState` with an empty `outstanding`

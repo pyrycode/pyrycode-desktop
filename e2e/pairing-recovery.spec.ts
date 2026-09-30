@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test'
+import type { Locator, Page } from '@playwright/test'
 import { test, expect, seedConversationsFrame, SEEDED_ROW, SECOND_SEEDED_ROW,
   type PairedServerHandle } from './fixtures/launchPairedApp'
 import { launchIsolatedApp, createLaunchFateLog, attachLaunchFate } from './fixtures/desktopIsolation'
@@ -11,6 +11,22 @@ const NOTICE = 'Your pairing has expired or is no longer valid. Enter a new pair
 const ts = '2026-09-12T00:00:00Z'
 const rejection = (): Uint8Array => encodeEnvelope({ id: 50, type: 'error', ts,
   payload: { code: 'auth.invalid_token', message: 'synthetic private detail', retryable: false } })
+
+const hostFor = (page: Page, label: string) => page.locator('.channel-list__host')
+  .filter({ has: page.getByText(label, { exact: true }) })
+
+async function expectFailedHost(host: Locator) {
+  await expect(host).toHaveClass(/channel-list__host--failed/)
+  await expect(host.getByRole('button', { name: 'Repair host', exact: true })).toBeVisible()
+  await expect(host.locator('.channel-list__host-disclosure')).toHaveCount(0)
+}
+
+async function expectConnectedHost(host: Locator) {
+  await expect(host.locator('.channel-list__host-disclosure')).toBeVisible()
+  await expect(host.locator(':scope + .channel-list__host-content')
+    .getByRole('button', { name: 'Create chat', exact: true })).toHaveCount(1)
+  await expect(host.getByRole('button', { name: 'Repair host', exact: true })).toHaveCount(0)
+}
 
 function freshCode(server: PairedServerHandle): string {
   return Buffer.from(JSON.stringify({ server: server.serverId, relay: `${server.forwarder.url}/v1/client`,
@@ -52,9 +68,8 @@ test('startup rejection before a list waits for manual repair, cancels and re-pa
     const recovery = page.getByRole('dialog', { name: 'Pair', exact: true })
     await expect(page.locator('.channel-list__host')).toHaveCount(1)
     await expect(page.locator('.channel-list__row-open')).toHaveText([SEEDED_ROW.name!])
-    await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(1)
+    await expectFailedHost(hostFor(page, 'Alpha'))
     expect(rejectedFrames).toBeGreaterThan(0)
-    await expect(page.getByRole('img', { name: 'Relay Connected', exact: true })).toHaveCount(1)
     await expect(recovery).toHaveCount(0)
     await expect(page.locator('.pairing')).toHaveCount(0)
     await expect(page.locator('.conversation')).toHaveCount(0)
@@ -89,7 +104,7 @@ test('startup rejection before a list waits for manual repair, cancels and re-pa
     await page.screenshot({ path: testInfo.outputPath('fingerprint-confirmation-800.png') })
     reject = false
     await page.getByRole('button', { name: 'Pair', exact: true }).click()
-    await expect(page.getByRole('img', { name: 'Pyrycode Connected', exact: true })).toHaveCount(1)
+    await expectConnectedHost(hostFor(page, 'Alpha'))
     await expect(page.locator('.channel-list__row-open')).toHaveCount(1)
     await expect(recovery).toHaveCount(0)
     await expect(page.getByText(NOTICE, { exact: true })).toHaveCount(0)
@@ -121,8 +136,11 @@ test('healthy host remains usable; last-host and repeated failures never navigat
   } })
   await page.setViewportSize({ width: 1280, height: 800 })
   const [a, b] = servers
+  const hostA = hostFor(page, 'Alpha')
+  const hostB = hostFor(page, 'Server')
   a.daemon.pushFrame(rejection())
-  await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(1)
+  await expectFailedHost(hostA)
+  await expectConnectedHost(hostB)
   await page.locator('.channel-list__row-open').filter({ hasText: 'Server two chat' }).click()
   await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
   // Nothing is saved locally for this chat, which since #1447 draws no notice at all — so the band is
@@ -149,7 +167,8 @@ test('healthy host remains usable; last-host and repeated failures never navigat
   await page.locator('.channel-list__row-open').filter({ hasText: 'Server two chat' }).click()
   await page.getByPlaceholder('Message…').fill('Keep the current draft')
   b.daemon.pushFrame(rejection())
-  await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(2)
+  await expectFailedHost(hostB)
+  await expectFailedHost(hostA)
   await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
   await expect(page.getByPlaceholder('Message…')).toHaveValue('Keep the current draft')
   await expect(page.locator('.bubble[data-thread-role="assistant"]')).toContainText('Healthy host reply')
@@ -168,13 +187,14 @@ test('healthy host remains usable; last-host and repeated failures never navigat
   await page.getByRole('textbox', { name: 'Pairing code', exact: true }).fill(freshCode(a))
   await page.getByRole('button', { name: 'Pair', exact: true }).click()
   await page.getByRole('button', { name: 'Pair', exact: true }).click()
-  await expect(page.getByRole('img', { name: 'Pyrycode Connected', exact: true })).toHaveCount(1)
-  await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(1)
+  await expectConnectedHost(hostA)
+  await expectFailedHost(hostB)
   await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
   await expect(page.locator('.channel-list__row-open')).toHaveCount(2)
   await expect(page.locator('.conversation')).toHaveCount(0)
   a.daemon.pushFrame(rejection())
-  await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(2)
+  await expectFailedHost(hostA)
+  await expectFailedHost(hostB)
   await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
   await expect(page.locator('.conversation')).toHaveCount(0)
   await expect(page.locator('.channel-list__row-open')).toHaveCount(2)
@@ -210,8 +230,12 @@ for (const pendingState of ['connecting', 'unreported'] as const) {
       ipcMain.once('test:restore-status-delivery', () => { contents.send = send })
     }, { channel: DAEMON_EVENT_CHANNEL, serverId: b.serverId })
     await page.reload()
-    await expect(page.getByRole('img', { name: 'Pyrycode Connected', exact: true })).toHaveCount(1)
-    await expect(page.getByRole('img', { name: 'Pyrycode Offline', exact: true })).toHaveCount(1)
+    const hostA = hostFor(page, 'Alpha')
+    const hostB = hostFor(page, 'Server')
+    await expectConnectedHost(hostA)
+    await expect(hostB.locator('.channel-list__host-disclosure')).toBeVisible()
+    await expect(hostB.locator(':scope + .channel-list__host-content')
+      .getByRole('button', { name: 'Create chat', exact: true })).toHaveCount(0)
     a.daemon.pushFrame(seedConversationsFrame({ ...SEEDED_ROW, name: 'Reload receipt barrier' }))
     await expect(page.locator('.channel-list__row-open').filter({ hasText: 'Reload receipt barrier' })).toBeVisible()
     await expect(page.locator('.channel-list__row-open').filter({ hasText: SECOND_SEEDED_ROW.name! })).toBeVisible()
@@ -221,11 +245,12 @@ for (const pendingState of ['connecting', 'unreported'] as const) {
         BrowserWindow.getAllWindows()[0].webContents.send(channel, { type: 'connecting', serverId })
       }
     }, { channel: DAEMON_EVENT_CHANNEL, serverId: b.serverId, pendingState })
-    if (pendingState === 'connecting') {
-      await expect(page.getByRole('img', { name: 'Pyrycode Connecting', exact: true })).toHaveCount(1)
-    }
+    // B's retained thread stays selectable while its host cannot create or send.
+    await page.getByRole('button', { name: SECOND_SEEDED_ROW.name!, exact: true }).click()
+    await expect(page.locator('.conversation')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
     a.daemon.pushFrame(rejection())
-    await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(1)
+    await expectFailedHost(hostA)
     const recovery = page.getByRole('dialog', { name: 'Pair', exact: true })
     await expect(recovery).toHaveCount(0)
     await page.locator('.channel-list__row-open').filter({ hasText: 'Reload receipt barrier' }).click()
@@ -237,7 +262,9 @@ for (const pendingState of ['connecting', 'unreported'] as const) {
     }, { channel: DAEMON_EVENT_CHANNEL, serverId: b.serverId })
     a.daemon.pushFrame(seedConversationsFrame({ ...SEEDED_ROW, name: 'Settled host barrier' }))
     await expect(page.locator('.channel-list__row-open').filter({ hasText: 'Settled host barrier' })).toBeVisible()
-    await expect(page.getByRole('img', { name: 'Pyrycode Offline', exact: true })).toHaveCount(1)
+    await expect(hostB.locator('.channel-list__host-disclosure')).toBeVisible()
+    await expect(hostB.locator(':scope + .channel-list__host-content')
+      .getByRole('button', { name: 'Create chat', exact: true })).toHaveCount(0)
     await expect(recovery).toHaveCount(0)
     await expect(page.getByPlaceholder('Message…')).toHaveValue('Keep this thread')
     await page.getByRole('button', { name: 'Repair host', exact: true }).first().click()
@@ -302,8 +329,9 @@ for (const destination of ['healthy thread', 'other recovery'] as const) {
     }
     // A's authorized save finishes even after leaving its flow. Its order is refreshed only
     // when the held confirmation reaches onPairServerPaired, providing a completion barrier.
-    await expect(page.getByRole('img', { name: 'Pyrycode Connected', exact: true })).toHaveCount(
-      destination === 'healthy thread' ? 2 : 1)
+    await expectConnectedHost(hostFor(page, 'Alpha'))
+    if (destination === 'healthy thread') await expectConnectedHost(hostFor(page, 'Server'))
+    else await expectFailedHost(hostFor(page, 'Server'))
     await expect(page.locator('.channel-list__host-label').first()).toHaveText('Alpha')
     await app.evaluate(({ ipcMain }) => { ipcMain.emit('test:release-confirmation') })
     await expect(page.locator('.channel-list__host-label').first()).toHaveText('Server')

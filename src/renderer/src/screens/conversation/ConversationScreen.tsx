@@ -4307,14 +4307,7 @@ export function QuestionPanelSlot({ batch }: { batch: QuestionBatch }): JSX.Elem
       selection={selection}
       onOptionChosen={(optionIndex) => dispatch(optionPickEventFor({ ...at, optionIndex }))}
       onOtherChosen={() => dispatch(otherPickEventFor(at))}
-      onOtherTextChanged={(text) =>
-        dispatch({
-          type: 'otherTextChanged',
-          questionBatchId: batch.questionBatchId,
-          questionIndex: activeIndex,
-          text
-        })
-      }
+      onOtherTextChanged={(text) => dispatch({ type: 'otherTextChanged', ...at, text })}
     />
   )
 }

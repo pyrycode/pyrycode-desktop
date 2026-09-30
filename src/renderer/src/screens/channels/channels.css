@@ -2306,8 +2306,8 @@
    stylesheet, no cascade).
 
    These bindings are this component's OWN and must not be swapped for `.conn-dot--up` — that family is the
-   CONNECTION contract, deliberately kept to one copy in the renderer (which since #962 is in THIS file,
-   in this stylesheet), and it reports whether a machine is reachable. This dot reports what
+   connection contract, deliberately kept to one copy in this stylesheet since #962.
+   It reports whether a machine is reachable. This dot reports what
    a conversation is DOING: a different concept, a different form, and a class whose substring two other
    test files already assert on.
 
@@ -2329,11 +2329,9 @@
 
    #1174 SETTLED THE RING-VS-DISC QUESTION THIS RULE USED TO TURN ON, and in the opposite direction to the
    one #873 wrote down. It reasoned that this dot had to stay a ring because `.conn-dot--in-progress`
-   (declared in this file since #962) binds the same --color-warning background.
-   in the sidebar, and that the form was the whole of what kept "a conversation is waiting on you" apart
-   from "a machine is still connecting". The drawing fills every painted state, so the form no longer
-   separates them — the 1px primary ring this dot wears and that one does not is what does, in every state
-   rather than in this one. Contrast is unaffected: #ffca45 reads 12.3:1 against --color-surface.
+   binds the same --color-warning background. Connection dots no longer appear on host rows;
+   conversation activity keeps its existing filled state and primary ring.
+   Contrast is unaffected: #ffca45 reads 12.3:1 against --color-surface.
 
    NO ANIMATION, and deliberately no `prefers-reduced-motion` entry below: the blink and its fallback belong
    to --working alone. A dot waiting on the operator has no reason to blink. */

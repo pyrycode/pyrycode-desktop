@@ -58,17 +58,8 @@ const SESSION_ID = 'session-988'
 // this note used to state: the trigger and the rows now DISPLAY a family derived from these strings, which
 // is why the locators below read families rather than display names.
 //
-// SINCE #1095 THE DERIVED FAMILIES ARE THE LOCATORS, so it is THEY that must be mutually non-substring:
-// `Default`, `Opus` and `Haiku` for the rows, plus `Sonnet` for the trigger once the list resolves the
-// baseline. The display names survive as the rows' published prose and as the fallback these values never
-// reach, but nothing locates by them any more.
-//
-// THE FIRST ROW IS `default`, AND IT IS WHAT MAKES THIS DRIVE'S MISS→HIT STEP FALSIFIABLE AT ALL. The
-// trigger derives from a matched row's `resolved_model` and from the shown string on a miss, so any row
-// whose two fields name the same family renders identically either side of the list's arrival and the step
-// proves nothing. `default` is the ONLY published value where they differ — every other alias matches its
-// own family by construction — and pyrycode#2124's captured `initialize` reply publishes it as an ordinary
-// row resolving to `claude-sonnet-5`, which is exactly the shape seeded here.
+// The internal default recommends Sonnet, which is deliberately unmatched in the visible rows.
+// Before the announcement it labels the trigger but marks nothing; Haiku then supersedes it.
 const MODEL_ROWS: WireModelOption[] = [
   {
     value: 'default',
@@ -99,20 +90,18 @@ const MODEL_ROWS: WireModelOption[] = [
 // The families the rows above derive to, stated by hand rather than by re-implementing the production rule
 // in the test: a row shows the family of its OWN `value`, and the trigger shows the family of the matched
 // row's `resolved_model`. They differ for exactly one row, which is the whole point of seeding it.
-const ROW_FAMILIES = ['Default', 'Opus', 'Haiku']
+const ROW_FAMILIES = ['Opus', 'Haiku']
 const BASELINE_TRIGGER_FAMILY = 'Sonnet'
 
-const BASELINE_MODEL = MODEL_ROWS[0]
 const HAPPY_MODEL = MODEL_ROWS[1]
 const REJECTED_MODEL = MODEL_ROWS[2]
 
-// The baseline the read request is answered with. Its model is the first row's PUBLISHED value verbatim,
-// so exact equality selects that row — and, before the list arrives, that same string is what the trigger
-// derives its family from.
+// An inherited model and a saved/applied effort disagreement exercise both shared decisions.
 const BASELINE_RUN_CONFIG: SessionSettingsPayload = {
   session_id: SESSION_ID,
-  model: BASELINE_MODEL.value,
+  model: '',
   effort: 'low',
+  effective_effort: 'high',
   yolo: false,
   // Required since #1020 — see the note on run-config-settings.spec.ts's baseline: a missing key is
   // decode-rejected at runtime and reads as the controls never mounting.
@@ -219,7 +208,7 @@ function settingsFramesMatching(captured: Envelope[], expected: SetSessionSettin
 
 test('composer footer: the model menu labels, offers, submits and reverts (AC1-AC4)', async ({
   launchPairedApp
-}) => {
+}, testInfo) => {
   const captured: Envelope[] = []
   const { page, daemon } = await launchPairedApp({ buildReplyFrames: capturingFake(captured) })
 
@@ -244,7 +233,7 @@ test('composer footer: the model menu labels, offers, submits and reverts (AC1-A
   // shows the family of the session's model derived from the shown string alone (#1095's miss arm) and is
   // INERT: no popup announced, and the footer still holds exactly one anchor (the Actions menu's). An
   // operable trigger over an empty panel would fail all three. ---
-  await expect(label).toHaveText(ROW_FAMILIES[0], { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(label).toHaveText('Model', { timeout: ROUNDTRIP_TIMEOUT_MS })
   // TWO rather than one since #682: the Actions menu's, plus the permission-mode control's. That one is
   // operable the moment a snapshot names a mode — its entries are a client-owned constant, so it has no
   // list to be waiting for — and this baseline names one. The claim being made here is still THIS
@@ -252,11 +241,7 @@ test('composer footer: the model menu labels, offers, submits and reverts (AC1-A
   await expect(page.locator('.composer__footer [aria-haspopup="menu"]')).toHaveCount(2)
   await expect(page.locator('.composer__footer .composer-options-anchor')).toHaveCount(2)
 
-  // --- The list arrives unsolicited (AC1), and this is the step #1095 had to re-anchor. Exact equality on
-  // `value` resolves the session's model to the first published row, and the trigger then reads that row's
-  // `resolved_model` instead of the shown string — so the label moves from `Default` to `Sonnet`. That
-  // move is the ONLY observable difference a row lookup still makes to this trigger, which is why the
-  // seeded first row must be one whose two fields name different families. ---
+  // The published recommendation supplies only the pre-announcement label.
   daemon.pushFrame(modelListFrame())
   await expect(label).toHaveText(BASELINE_TRIGGER_FAMILY, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
@@ -265,10 +250,7 @@ test('composer footer: the model menu labels, offers, submits and reverts (AC1-A
   // deliberately one no ROW wears — the two would otherwise be separated only by role. ---
   await trigger(BASELINE_TRIGGER_FAMILY).click()
   await expect(panel).toBeVisible()
-  // Exactly the published rows, one per entry, in the daemon's published order — toHaveText is exact and
-  // ordered, so a dropped, invented, reordered or deduped row fails here. Each row wears the family of its
-  // OWN `value` (#1095), which is why the first reads `Default` rather than the `Sonnet` its
-  // `resolved_model` would give: a row names a choice, and `default` is its own choice.
+  // Visible rows retain published order, labels and raw write values, with Default removed.
   await expect(panel.getByRole('menuitem')).toHaveText(ROW_FAMILIES)
   // The published prose is gone from the panel entirely — the half a derivation that only reached the
   // trigger would leave standing.
@@ -276,15 +258,39 @@ test('composer footer: the model menu labels, offers, submits and reverts (AC1-A
     await expect(panel.getByText(row.display_name, { exact: true })).toHaveCount(0)
   }
   // AC2's marking: the row AC1 matched is the current one, and it is the only one.
-  await expect(panel.locator('[aria-current="true"]')).toHaveText(ROW_FAMILIES[0])
+  await expect(panel.locator('[aria-current="true"]')).toHaveCount(0)
+  await expect(panel.getByRole('menuitem', { name: 'Default', exact: true })).toHaveCount(0)
+
+  await page.keyboard.press('Escape')
+  daemon.pushFrame(encodeEnvelope({ id: REPLY_ENVELOPE_ID, type: 'model_announced', ts: FIXED_TS,
+    payload: { conversation_id: SEEDED_ROW.id, model: 'claude-haiku-4-5-20251001', truncated: false } }))
+  await expect(label).toHaveText('Haiku')
+  await trigger('Haiku').click()
+  await expect(panel.locator('[aria-current="true"]')).toHaveText('Haiku')
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.composer__effort-label')).toHaveText('high')
+  const footerCapture = testInfo.outputPath('model-footer.png')
+  await page.screenshot({ path: footerCapture, animations: 'disabled' })
+  await testInfo.attach('model-footer', { path: footerCapture, contentType: 'image/png' })
+  await page.locator('.conversation__overflow-trigger').click()
+  await page.getByRole('menuitem', { name: 'Run configuration' }).click()
+  const sheet = page.getByRole('dialog', { name: 'Run configuration' })
+  await expect(sheet.locator('.run-config__model-name')).toHaveText(['Wide context', 'Quick tier'])
+  await expect(sheet.locator('.run-config__model-row').filter({ has: page.locator('[aria-label="Current model"]') })).toContainText('Quick tier')
+  await expect(sheet.locator('.run-config__effort [aria-current="true"]')).toHaveText('high')
+  const sheetCapture = testInfo.outputPath('run-config.png')
+  await page.screenshot({ path: sheetCapture, animations: 'disabled' })
+  await testInfo.attach('run-config', { path: sheetCapture, contentType: 'image/png' })
+  await sheet.getByRole('button', { name: 'Close', exact: true }).click()
+  await trigger('Haiku').click()
 
   // --- Pick (AC3). The label moves to the picked row AT ONCE — the optimistic overlay, asserted before
   // the confirm has any chance to matter — and exactly one set_session_settings goes out carrying only
   // the model field, with the row's `value` VERBATIM. That payload assertion is the one place #1095 must
   // not reach: the write still sends the raw published value, never the family the row displays. ---
-  await panel.getByRole('menuitem', { name: ROW_FAMILIES[1], exact: true }).click()
+  await panel.getByRole('menuitem', { name: ROW_FAMILIES[0], exact: true }).click()
   await expect(panel).toBeHidden()
-  await expect(label).toHaveText(ROW_FAMILIES[1])
+  await expect(label).toHaveText(ROW_FAMILIES[0])
   await expect
     .poll(() => settingsFramesMatching(captured, { session_id: SESSION_ID, model: HAPPY_MODEL.value }), {
       timeout: ROUNDTRIP_TIMEOUT_MS
@@ -294,9 +300,9 @@ test('composer footer: the model menu labels, offers, submits and reverts (AC1-A
   // --- Reject (AC3's second half), and the one drive that separates the OPTIMISTIC label from a
   // confirmed one: the fake withholds this reply, so the trigger sits on a value the daemon has not
   // agreed to. ---
-  await trigger(ROW_FAMILIES[1]).click()
-  await panel.getByRole('menuitem', { name: ROW_FAMILIES[2], exact: true }).click()
-  await expect(label).toHaveText(ROW_FAMILIES[2])
+  await trigger(ROW_FAMILIES[0]).click()
+  await panel.getByRole('menuitem', { name: ROW_FAMILIES[1], exact: true }).click()
+  await expect(label).toHaveText(ROW_FAMILIES[1])
 
   // The correlated rejection, addressed by the envelope id the app itself minted — read back off the
   // capture, which is the only place the test can learn it.
@@ -312,6 +318,6 @@ test('composer footer: the model menu labels, offers, submits and reverts (AC1-A
   // pick above, not to the baseline. The footer says nothing further about it: the row has a hard 20px
   // height with no slot for an error line, and the run-configuration sheet is where the rejection is
   // named.
-  await expect(label).toHaveText(ROW_FAMILIES[1], { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(label).toHaveText(ROW_FAMILIES[0], { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(page.locator('.composer__footer [role="alert"]')).toHaveCount(0)
 })

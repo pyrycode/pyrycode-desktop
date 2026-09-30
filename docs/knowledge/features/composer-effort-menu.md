@@ -103,17 +103,15 @@ model), so this control offers no levels and, per [The default apply](#the-defau
 recalls nothing. The tooltip's two agent-naming descriptions substitute the conversation's agent for
 `Claude` — see § The write below — while every Claude string stays byte-identical.
 
-`RunningModelSection` and `ModelSection` keep calling `publishedRowFor` directly and are unmoved — in
-particular [the permission-mode menu](composer-permission-mode-menu.md#the-auto-hiding-join-1022)
-deliberately did not follow, since its `supports_auto_mode` read would otherwise start hiding `auto` on
-every inherited-default chat. **[#1423](https://github.com/pyrycode/pyrycode-desktop/issues/1423) moved
-the model menu's *marking* lookup onto `effortRowFor` too, but on one input only** — the state where its
-label lookup already takes `''` (no pick, no announcement, no stored choice), where the marking lookup
-would take the identical `''` argument. Its other lookup, over the announced-vs-picked-vs-stored label
-string, is unmoved for every other input; see [Composer model
-menu](composer-model-menu.md#composermodelmenumodel-one-pure-function-deciding-all-three-renderings) for
-why one row can honestly answer both of that control's lookups in that one state, and for the case #1168's
-own tests pinned (an announcement with no session model, which still marks nothing) staying untouched.
+`RunningModelSection` retains its exact raw announcement-to-value `publishedRowFor` lookup, and
+[the permission-mode menu](composer-permission-mode-menu.md#the-auto-hiding-join-1022) keeps its own
+capability lookup without the empty-model substitution. Model marking on the footer and sheet instead
+shares `composerModelMenuModel`: inherited announcement matching and the pre-announcement recommendation
+rule are separate from effort offerings. It no longer calls `effortRowFor`. The internal Claude default
+row remains the source of offerings for an inherited effective model, even when the model surfaces hide
+that row and mark an announced running model. See [Composer model
+menu](composer-model-menu.md#composermodelmenumodel-one-pure-function-deciding-all-three-renderings) and
+[the sheet's Effort section](conversation-shell-run-configuration.md#run-configuration-effort-section-daemon-published-levels-976).
 
 **`truncated_fields` is deliberately not read.** The shared panel's option is `{ id, label }` with one
 text child, so a cut report here would need either a new prop on a component four tickets share

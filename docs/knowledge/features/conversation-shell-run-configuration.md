@@ -140,22 +140,19 @@ assertions also cover absent ownership.
 .status-sheet__body
 ├── RunConfigData                     (headless: requests + holds, renders null, #187)
 ├── RunConfigSections                 (container: reads store slice, coalesces null, #188)
-│   └── RunConfigView                  (pure: three primitive props in, markup out)
-│       ├── ModelSection                .status-sheet__section-header "Model" + 3-row radio list
-│       ├── EffortSection                .status-sheet__section-header "Effort" + 5-segment control
+│   └── RunConfigView                  (pure: props in, markup out)
+│       ├── ModelSection                .status-sheet__section-header "Model" + published model radios
+│       ├── EffortSection                .status-sheet__section-header "Effort" + published effort levels
 │       └── YoloSection                  .status-sheet__section-header "YOLO mode" + labelled switch
 └── LogDataSection                    (container: useReducer + one onDaemonEvent subscription, #72)
 ```
 
-The three sections the sheet's Model/Effort/YOLO controls needed, mounted between `RunConfigData`
-and `LogDataSection`. `RunConfigView` is the exported pure view — three primitive props
-(`model`/`effort`/`yolo`) in, markup out, no store read and no `window.pyry`, so it
-server-renders with no mock, the same seam `LogDataView`/`RunConfigData` use. `RunConfigSections` is
-the thin exported container: `useRunConfigStore(selectSnapshot)` reads one narrow slice and
-coalesces `snapshot ?? { model: '', effort: '', yolo: false }` before handing the triple to
-`RunConfigView` — so the store's pre-load `null` and a real all-defaults `screen_snapshot` render
-through the identical code path (both are AC4's blessed default: no radio filled, no segment marked,
-switch off).
+The Model/Effort/YOLO controls mount between `RunConfigData` and `LogDataSection`.
+`RunConfigView` is the exported pure props-in view: no store reads or `window.pyry`, so it
+server-renders without a mock. `RunConfigSections` supplies the effective model for effort offerings,
+the footer's model layers for marking, and `selectDisplayedEffort` for the marked effort. The stored
+model layer retains `null` for no snapshot, separately from inherited `''` or `'default'`.
+See the Model and Effort sections below for the current decisions.
 
 - **Model** — shipped at #188 as a static catalog (Opus 4.7 / Sonnet 4.6 / Haiku 4.5, each with a
   one-line descriptor) matched against the snapshot's `model` string via `matchedFamily`, a
@@ -192,7 +189,7 @@ paths [Run configuration write store](run-settings-write-store.md) already conve
 .status-sheet__body
 ├── RunConfigData                     (headless: requests + holds, renders null, #187)
 ├── RunConfigSections                 (container: reads store slice, coalesces null, #188/#192)
-│   └── RunConfigView                  (pure: five primitive props in, markup out)
+│   └── RunConfigView                  (pure: props in, markup out)
 │       ├── ModelSection
 │       ├── EffortSection
 │       ├── YoloSection
@@ -284,13 +281,10 @@ security review (PASS).
 
 ## Run configuration Model section, daemon-published rows (#975)
 
-The Model section stops guessing. `MODEL_CATALOG`, `ModelCatalogEntry`, its family tokens, its
-hand-written descriptors and the `matchedFamily` substring matcher are deleted outright — no model
-name and no family token is hardcoded in `RunConfigSections.tsx` anywhere. `ModelSection` renders
-one row per entry in [Model-list store](model-list-store.md)'s held [`ModelListEntry`](model-list-store.md)
-for the active conversation, in the daemon's published order, deriving nothing: `value` is not
-parseable (measured entries: `default`, `opus[1m]`, `claude-fable-5[1m]`, `sonnet`, `haiku`) and no
-family is split out of it.
+`ModelSection` renders the active conversation's agent-filtered, non-default rows from
+[Model-list store](model-list-store.md), in published order. It omits every raw `value === 'default'`
+row, while keeping the other rows' `display_name` and `resolved_model` text unchanged. No model catalog,
+descriptor or family vocabulary is maintained in the sheet.
 
 **`RunConfigSections` takes the conversation id as a prop, not a store read.** The container
 previously had only `sessionIdStore`'s *session* id in scope — a different identifier that keys
@@ -307,19 +301,33 @@ them apart as two different sentences in two different elements (`RUN_CONFIG_MOD
 `RUN_CONFIG_MODELS_EMPTY_COPY`), the [`BackgroundTaskPanel`](conversation-shell-question-panel.md)
 convention for the identical pair. Neither renders an empty control or a stale menu.
 
-**Selection is exact equality on `value`, full stop** — no `toLowerCase`, `includes`, `startsWith`,
-`trim` or regex anywhere on the path — and it round-trips: a row's `onClick` submits its `value`
-verbatim, the optimistic overlay ([Run configuration write store](run-settings-write-store.md))
-holds that same string, and the identical comparison re-selects the row it came from. The moment
-either side normalises, the two stop being the same string, which is why the guard `RunConfigSections.test.tsx:563`
-existed for (an announced identifier that is a *superstring* of a published `value` must not select
-that row) is re-anchored on a published row rather than dropped with the `matchedFamily` matcher it
-used to name.
+**Model marking shares the footer's decision.** `RunConfigView` calls `composerModelMenuModel` and
+passes its `currentId` to `ModelSection`. Production supplies `modelLayers` identical to the footer:
+pending-over-confirmed `picked`, `snapshot?.model ?? null` for `stored`, and the conversation's own
+announcement. The optional pure-view prop defaults to no pick, its `model` prop as stored, and its
+announcement prop; production supplies all layers explicitly.
+
+A pick, otherwise an explicit saved model other than `''` or `'default'`, marks by exact raw `value`.
+An unmatched explicit choice marks nothing. With no pick, saved `''` or `'default'` inherits: match the
+announcement by raw value, raw resolution, then non-empty value-family, in that order. One candidate wins,
+zero advances, and multiple candidates stop with nothing marked. Before an announcement, Claude marks
+only a unique non-default row whose resolution equals the usable internal default resolution; empty and
+`<unmeasured>` recommendations do not qualify. After an announcement, never fall back to the recommendation
+for marking. Codex shares the announcement tiers without the pre-announcement Claude fallback.
+No snapshot plus no pick or announcement marks nothing and leaves the footer trigger absent; a real
+inherited snapshot can render `Model`. Neither surface offers a Default row or empty-state Default label.
+See [Composer model menu](composer-model-menu.md#composermodelmenumodel-one-pure-function-deciding-all-three-renderings)
+for complete label rules and why Claude's `settings.json` can override the published recommendation.
+
+**Writes still round-trip the raw row value.** A click submits `row.value` verbatim; the optimistic
+write store holds that same string for exact explicit-choice marking. Announcement matching never
+changes the saved/picked model or writes an announced identifier. Existing pending, rejection and
+read-only behavior remains on the shared settings path above.
 
 **Since #1651, the rows are also filtered by agent.** Once the daemon advertises `multi_agent`,
-`model_list` is one merged list, and `ModelSection` renders only `modelRowsFor(entry, agent)` — the
-entry's rows whose own `agent` (absent counts as Claude) matches the conversation's, in the daemon's
-order. An agent with no rows reads the identical `RUN_CONFIG_MODELS_EMPTY_COPY` sentence the no-rows
+`model_list` is one merged list, and `ModelSection` renders `modelRowsFor(entry, agent)` with
+`value === 'default'` excluded. An absent row agent counts as Claude; the remaining rows retain the
+daemon's order. An agent with no rows reads the identical `RUN_CONFIG_MODELS_EMPTY_COPY` sentence the no-rows
 case already used; the frame-level partial notice still reports the whole entry's drops regardless of
 which agent they belong to. `RunConfigSections` (the container) resolves the agent through
 `useConversationAgent`, a `useMemo`-stable hook over an exported pure selector,
@@ -393,32 +401,40 @@ per model — measured live against claude 2.1.220 on 2026-08-21, Haiku publishe
 the other rows publish all five — so the fixed strip used to offer Haiku five choices it could not use
 and ask the daemon for something it would refuse.
 
-**The row is the session's model, not the running one.** `EffortSection` takes `model` and `models`
-props and resolves its row via `effortRowFor(models, model)` (`publishedRowFor` before #1168) — the same
-exact-equality-on-`value` rule `ModelSection` marks a row selected by. `RunningModelSection` joins a
-**different string** through the unwrapped `publishedRowFor`: `announced.model` (what claude announced
-for the running turn), never the session's `model`. Conflating the two inputs is the mistake the two
-names are meant to make visible.
+**Offerings use the effective saved/picked model, separately from the marked model.** `EffortSection`
+resolves its row through `effortRowFor(models, model, agent)`, where `model` is the effective model from
+`selectEffectiveSettings` (pending > confirmed > snapshot). It does not use the Model section's
+announcement-derived `currentId`. The independent `RunningModelSection` keeps its exact raw
+announcement-to-value `publishedRowFor` lookup, as does the permission-mode menu's own capability lookup.
 
-**Since #1168, an empty `model` — the wire's inherited daemon default, not an absence — resolves onto
-the row the daemon publishes for that default (`value: 'default'`) instead of matching nothing.**
-`effortRowFor` is `publishedRowFor` with only that lookup argument substituted; every other model, and
-every other `publishedRowFor` caller (`RunningModelSection`, `ModelSection`, and
-`composerPermissionModeMenuModel`), is unmoved. **Since
-[#1423](https://github.com/pyrycode/pyrycode-desktop/issues/1423), `effortRowFor` has a third caller
-outside the two effort surfaces:** the composer's model menu resolves its own empty-session-model state
-(no pick, no announcement, no stored choice) through the same helper, for the same reason — see [Composer
-model menu](composer-model-menu.md#composermodelmenumodel-one-pure-function-deciding-all-three-renderings).
-See [Composer effort
-menu](composer-effort-menu.md#composereffortmenumodel-one-pure-function-deciding-all-three-renderings)
-for the shared wrapper's docblock, which now states the rule for all three callers rather than two.
+For Claude, effective `model === ''` resolves to the internal `value: 'default'` row; saved `'default'`
+looks it up directly. Hiding that row on the model surfaces does not remove its effort levels. A chat can
+therefore mark the announced running row while offering the default row's levels. With no default row or
+no list, the existing unavailable reading remains. `composerModelMenuModel` no longer calls
+`effortRowFor`: recommendation-based model marking and effort offerings have distinct rules.
+See [Composer effort menu](composer-effort-menu.md#composereffortmenumodel-one-pure-function-deciding-all-three-renderings).
+
+**Effort marking uses the footer's displayed reading.** `RunConfigSections` passes
+`selectDisplayedEffort(snapshot, writeState)` from `ComposerEffortMenu.tsx`, rather than the effective
+saved effort. A pending effort choice wins; otherwise a non-empty applied `effectiveEffort` reading wins.
+When applied effort is omitted or empty, fall back to the confirmed client effort, then the snapshot's
+saved effort. An explicit null applied reading does not fall back: it marks no level unless a pending
+choice is present. `RunConfigView` accepts `string | null | undefined` for this reading and compares each
+published level with it by `===`; an unmatched reading marks nothing. This lets both surfaces mark the
+applied level when it differs from the saved choice while still taking offerings from the effective model.
+
+`modelSelection.test.tsx` gives both surfaces identical effort inputs with independently stated
+expectations for applied-versus-saved disagreement, pending priority, unavailable/empty saved fallback
+and explicit null. It also asserts that an announced marked model does not replace internal-default
+effort offerings. The [real inherited-model test](../../../e2e/real-claude-effort-default.spec.ts) observes
+fresh settings after a turn and asserts applied effort on both surfaces.
 
 **Since #1651, both `publishedRowFor` and `effortRowFor` take a required, not optional, `agent:
 WireAgent` third argument.** A merged `model_list` carries both agents' rows once the daemon advertises
 `multi_agent`, and a model of the other agent is refused on a session — required rather than optional so
-no caller can join across agents by omission; the typecheck enforces every production call site (this
-section, `ModelSection`, `RunningModelSection`, the three composer footer menus, and
-`EffortDefaultData`). **The `default`-row substitution stays Claude's alone**: `effortRowFor`'s empty-model
+no caller can join across agents by omission; the typecheck enforces every production call site
+(`RunningModelSection`, the composer footer menus, this effort section and `EffortDefaultData`).
+**The `default`-row substitution stays Claude's alone**: `effortRowFor`'s empty-model
 branch resolves the inherited-default row only when `agent === 'claude'`. A new Codex conversation starts
 with no model (pyrycode#2647), so on Codex an empty model returns `undefined` and this section offers no
 levels — the same `nothingKnown` first row of the four-input table above, reached for a different reason
@@ -429,17 +445,17 @@ is written down in code:
 
 | matched row | `effort_levels` | cut reported | renders |
 |---|---|---|---|
-| none (no list yet, or `model` matches no published row) | — | — | the session's current `effort` value, as plain text |
+| none (no list yet, or `model` matches no published row) | — | — | the displayed effort reading, as plain text (empty for null/unavailable) |
 | yes | non-empty | either | one segment per level, in published order |
 | yes | `[]` | no | `RUN_CONFIG_EFFORT_EMPTY_COPY`, "No effort levels offered" |
-| yes | `[]` | yes | the current-effort text — **not** the offers-none copy |
+| yes | `[]` | yes | the displayed-effort text — **not** the offers-none copy |
 
 The first and fourth rows render identically and that collapse is deliberate — the opposite posture to
 `ModelSection` directly above, which keeps "no frame has arrived" and "claude published an empty list"
 as different elements with different copy because it is arguing about a different field
 (`models: []` there is a *positive statement*). Here, no-list-yet and no-matching-row mean the
 identical thing to the client: it has not been told any level is accepted, so it offers none and
-states what the session is actually running instead of guessing. **The fourth row is a written
+states the shared displayed-effort reading instead of inventing accepted levels. **The fourth row is a written
 contract MUST, not an invented distinction**: `effort_levels` collapses absent/`null`/empty into one
 `[]` (see [Model-list wire types](model-list-wire-types.md)), so a `truncated_fields` naming
 `effort_levels` is the *only* signal separating "cut to nothing, or shortened" from "this model exposes
@@ -458,7 +474,7 @@ shortened non-empty list is not presented as complete, and an empty-because-cut 
 offering nothing.
 
 **Selection, keys and the round trip are unchanged in kind.** A segment is marked by exact equality
-against the session's `effort` value — no substring, prefix, case fold or trim; `high` is a substring
+against the shared displayed-effort reading — no substring, prefix, case fold or trim; `high` is a substring
 of `xhigh` and a row can publish both, which is why the guard is exact equality and nothing looser.
 Pressing a segment submits the published level **verbatim**, never repaired, so the optimistic overlay
 holds the same string the next render compares against — the existing pending/rejection/rollback

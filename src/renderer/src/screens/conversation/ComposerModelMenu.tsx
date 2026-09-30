@@ -8,7 +8,6 @@ import { useRunSettingsWriteStore, selectEffectiveSettings } from '../../store/r
 import { useAnnouncedModelStore, selectAnnouncedModelFor } from '../../store/announcedModelStore'
 import {
   publishedRowFor,
-  effortRowFor,
   modelRowsFor,
   useConversationAgent,
   useSessionSettingsConnected,
@@ -54,42 +53,14 @@ export const COMPOSER_MODEL_MENU_LABEL = 'Model'
 const CHEVRON_PATH =
   'M3.59822 0.146303C3.82044 -0.0482491 4.18133 -0.0482491 4.40356 0.146303L7.81689 3.13463C8.03911 3.32918 8.03911 3.64514 7.81689 3.83969C7.59467 4.03424 7.23378 4.03424 7.01156 3.83969L4 1.20311L0.988445 3.83813C0.766222 4.03268 0.405333 4.03268 0.183111 3.83813C-0.0391111 3.64358 -0.0391111 3.32763 0.183111 3.13307L3.59644 0.144747L3.59822 0.146303Z'
 
-/** #1053 — the three layers this control lays over one another, resolved in this order: a
- *  pending-or-confirmed PICK, then what claude ANNOUNCED for the running turn, then the snapshot's
- *  STORED choice, then nothing. The ticket settled that ordering and it is not re-litigated here: the
- *  announcement carries no ordering information relative to a pick (a held announcement has no sequence
- *  and no timestamp, which #1146's keying left true PER KEY), so ranking it above a CONFIRMED pick would
- *  let a stale announcement beat the pick at the moment the daemon confirms — making a confirm and a
- *  rejection look identical.
- *
- *  '' MEANS "NOTHING AT THIS LAYER", uniformly across all three. That is this control's existing posture
- *  rather than a new decision: it already drew nothing for an unset session model. It is also what lets
- *  the container collapse `AnnouncedModel | null` to a string — AC4 names "no announcement" and "an
- *  announcement whose model is the empty string" in one clause, because no rendering here could tell
- *  them apart. The store's null-vs-'' distinction stays intact where it was established and where the
- *  run-configuration sheet reads it. */
+/** The footer and sheet share these layers. Picks outrank announcements for explicit labels;
+ * inherited marking uses the announcement only until a client choice is made. */
 export interface ComposerModelLayers {
-  /** The pick made in this client: the pending optimistic value over the client-confirmed one. */
+  /** Pending optimistic choice over the client-confirmed choice; empty means no pick. */
   picked: string
-  /** claude's own identifier for the running turn, held verbatim. */
+  /** Running-turn identifier, held verbatim; empty means no announcement. */
   announced: string
-  /** The snapshot's stored explicit choice — '' on a session running the daemon's inherited default,
-   *  and `null` (#1495) when NO SNAPSHOT HAS ARRIVED for this chat at all.
-   *
-   *  THIS IS THE ONE LAYER THAT IS NOT A PLAIN STRING, and the exception is the point. `''` is uniformly
-   *  "nothing at this layer" across all four readings above, which is what lets the other two collapse a
-   *  store's null into it — but since #1423 an empty stored model is no longer nothing: it is a POSITIVE
-   *  reading the wire contract names (the daemon's inherited default) and this control resolves a row
-   *  for. `runConfigStore` has held that distinction one layer down since #1167 — its header calls
-   *  `snapshot: null` the distinct not-yet-loaded state, and `clearSnapshot` returns to it on every
-   *  activation — and the container was flattening it here, so a chat whose snapshot had not landed
-   *  resolved the inherited-default row the PREVIOUS chat may have been showing. `activateConversation`'s
-   *  clear exists so the controls say nothing instead of something false; this layer is what makes that
-   *  true of this one.
-   *
-   *  It is CLIENT-MINTED AND UNFORGEABLE. `parseSessionSettingsPayload` reads `model` through
-   *  requireString, so a missing or non-string model fails the frame closed and never reaches the store —
-   *  `null` here means only that this client has received nothing, never that a daemon said so. */
+  /** Saved choice; empty/default is inherited, null means no snapshot has arrived. */
   stored: string | null
 }
 
@@ -113,41 +84,8 @@ function firstShown(...values: readonly (string | null)[]): string {
  *  case fold exists anywhere on this path. */
 const CLAUDE_IDENTIFIER_PREFIX = 'claude-'
 
-/**
- * #1095 — the FAMILY of a model identifier, or '' when it names none.
- *
- * Juhana ruled on 2026-09-05 that the input footer shows the family and nothing else: no version, no date,
- * no context size. The version and the context window are always the newest, so on this surface they carry
- * no information — and the common case before this was a raw dated identifier, because claude announces an
- * identifier at least as specific as the one it was given. The FULL identifier stays in the
- * run-configuration sheet's Running model section, which this rule does not reach.
- *
- * THE WHOLE RULE: strip ONE leading `claude-` if present, take the leading run of ASCII letters,
- * upper-case its first letter and hold the rest as claude sent them. Exactly one `claude-` comes off — a
- * second is ordinary text and becomes the family, the rule answering honestly rather than looping.
- *
- * '' MEANS "NO FAMILY HERE", the same "nothing at this layer" firstShown already consumes, which is why
- * the source chain below composes with that helper instead of introducing a second nullability idiom. Its
- * callers turn '' into today's label, so an identifier this rule cannot read renders exactly as it renders
- * now.
- *
- * IT IS A VIEW-SIDE TRANSFORM ON A HELD-VERBATIM VALUE — the same tier as .composer__model-label's CSS
- * ellipsis one element up. It does not sanitize and does not claim to: the store still holds every string
- * verbatim, and the escaping is still React's at the one text position each label reaches. NOTHING FEEDS A
- * DERIVED LABEL BACK INTO A LOOKUP: publishedRowFor is still called with the raw string, `currentId` is
- * still a raw published `value`, and `onSelect` still dispatches a value a row carries. The only branch on
- * a derived label is `=== ''`, on this client's own answer.
- *
- * The regex is anchored, one character class, one greedy quantifier, no alternation and no nesting — so it
- * is linear on untrusted text with no backtracking, and the input is already bounded upstream. toUpperCase
- * rather than toLocaleUpperCase, on a character this same expression just proved to be [A-Za-z]: the fold
- * is locale-invariant by construction, so the Turkish-ı hazard cannot arise. It is display-only, and it
- * reaches no comparison — the MATCHING is still publishedRowFor's single `===` on raw strings, where "no
- * case fold, trim or split on this path" continues to hold in full.
- *
- * Unicode heads are deliberately out: a non-ASCII head yields '' and takes the verbatim fallback, which is
- * today's behaviour rather than a new refusal.
- */
+/** Strip one Claude prefix, then capitalize the leading ASCII-letter family.
+ * Used only for the designated inherited matching tier and escaped display labels. */
 function modelFamily(identifier: string): string {
   const bare = identifier.startsWith(CLAUDE_IDENTIFIER_PREFIX)
     ? identifier.slice(CLAUDE_IDENTIFIER_PREFIX.length)
@@ -156,11 +94,6 @@ function modelFamily(identifier: string): string {
   // charAt rather than [0] so the empty case needs no non-null assertion — '' returns '' from both halves.
   return head.charAt(0).toUpperCase() + head.slice(1)
 }
-
-/** #1651 — the trigger's label on a Codex conversation with no model set. Client-owned, and the same word a
- *  Claude conversation shows there, where it derives from the daemon's `default` row: Codex publishes no
- *  such row, so the client names the state rather than a model. */
-export const COMPOSER_MODEL_DEFAULT_LABEL = 'Default'
 
 /** #1651 — one row's label in the menu, keyed on the ROW's own agent. A Claude row keeps #1095's family
  *  rule over its `value`, falling back to `display_name`. A Codex row shows `display_name` exactly as the
@@ -183,145 +116,64 @@ export interface ComposerModelMenuModel {
   currentId: string | null
 }
 
-/**
- * The whole decision, as a pure function of the two inputs — so every rule below is unit-testable as
- * data rather than only through markup (the COMPOSER_ACTIONS property, adapted to entries that are the
- * daemon's rather than the client's).
- *
- * THREE RENDERINGS:
- *
- *   no layer has anything, and no row a snapshot resolves → null   nothing is known; draw nothing
- *   something to show, no usable rows                     → no options   AC4's inert label
- *   something to show and rows                            → the menu
- *
- * The first is not in #988's ACs and was a decision that slice took; #1053's AC4 widened its criterion
- * from "the session's model is unset" to "no layer has anything", #1423 NARROWED IT AGAIN by the clause
- * above, and #1495 gave back the part of it #1423 took too much of: the inherited-default row is resolved
- * only once a SNAPSHOT has said so, never while none has arrived. It stays reachable in the app's
- * ordinary startup window — with no pick, no announcement and no snapshot, none of the three layers has
- * anything to say, and since #1495 a model list the client happens to hold no longer answers in the
- * missing snapshot's place. Every other rendering would draw an empty gap where a label belongs. ContextUsageControl takes exactly this posture for its
- * own unavailable reading, and #811's no-placeholder rule points the same way.
- *
- * #1423 IS WHY IT IS NO LONGER WHERE AN UNCONFIGURED CHAT LIVES. An empty model is not an absence — the
- * wire contract calls it the daemon's INHERITED DEFAULT, and the daemon publishes an ordinary row for it,
- * so there is a name to draw after all and this control need invent none. #1053 answered the same state
- * by LAYERING, which only helps once claude has announced something; since pyrycode#2085 the child is
- * deferred to the first message while the session is minted at creation, so a new chat sits with no
- * announcement and no stored choice for exactly as long as nobody messages it — which is when its model
- * is most worth choosing. #1168 deliberately left this menu out of the substitution it made for the two
- * effort surfaces and pinned that omission with a test; this is that open question answered, and the
- * pinned case (an announcement over no session model) is untouched, because '' is never the shown string
- * there.
- *
- * TWO STRINGS COME OUT OF THE LAYERS AND THEY ARE NOT THE SAME STRING. The LABEL is the first layer with
- * something to show; the MARKING is the SESSION's model, which is the pick over the stored choice and
- * NEVER the announcement (#1053 AC5) — the daemon is set to what the session says, not to what claude
- * reported running. They collapse to one answer whenever a pick is in force, and again when NOTHING is
- * (#1423, where both take '' and the one inherited-default row serves both), and they differ exactly in
- * the state #1053 exists for, so they are two lookups rather than one.
- *
- * BOTH resolve by exact equality on `value` through publishedRowFor — the one home of the rule, which
- * #988 exported and which RunningModelSection joins the announced identifier by. A MISS IS ORDINARY, not
- * an error, and it is the COMMON case for an announcement, which claude reports at least as specific as
- * what it was given. NO SUBSTRING, PREFIX, CASE FOLD OR TRIM IS APPLIED ANYWHERE ON THIS PATH, here or in
- * publishedRowFor — #1095's derivation is downstream of every lookup and feeds none of them.
- *
- * SINCE #1095 NEITHER LABEL IS THE PUBLISHED PROSE. The trigger and each row show a FAMILY (modelFamily
- * above): the trigger walks the matched row's `resolved_model` then its `value`, or the shown string on a
- * miss; a row reads its own `value` and never its `resolved_model`. Both fall back to what they rendered
- * before — `row ? row.display_name : shown` for the trigger, `display_name` for a row — when no family
- * derives. That fallback keeps #988's own decision intact: `row ? row.display_name : shown` rather than
- * `row?.display_name ?? shown`, so a matched row publishing an EMPTY display name stays a hit, where the
- * `??` form would print the value instead and quietly re-decide what a match means.
- *
- * The entries are EXACTLY the published rows, in the daemon's order — nothing deduped, dropped,
- * reordered or synthesised, and the derivation did not change that: two rows deriving to ONE family are
- * both shown, each still submitting its own `value`. `id` is the row's `value`, so onSelect(id) submits it
- * with no lookup; ComposerOptionsPanelOption splits id from label for precisely this menu. Two rows
- * sharing a `value` are both carried and both wear aria-current: bounded (both submit the same value, so
- * the pick is still right) and accepted, because AC2's "exactly the published rows" outranks the tidier
- * list.
- */
+/** A unique match wins; ambiguity stops before a less precise tier can override it. */
+function inheritedModelRow(
+  rows: readonly WireModelOption[],
+  announced: string,
+  defaultResolution: string
+): WireModelOption | undefined {
+  if (announced === '') {
+    const candidates = defaultResolution === '' ? [] : rows.filter(row => row.resolved_model === defaultResolution)
+    return candidates.length === 1 ? candidates[0] : undefined
+  }
+  const family = modelFamily(announced)
+  const tiers = [
+    (row: WireModelOption): boolean => row.value === announced,
+    (row: WireModelOption): boolean => row.resolved_model === announced,
+    (row: WireModelOption): boolean => family !== '' && modelFamily(row.value) === family
+  ]
+  for (const matches of tiers) {
+    const candidates = rows.filter(matches)
+    if (candidates.length > 0) return candidates.length === 1 ? candidates[0] : undefined
+  }
+  return undefined
+}
+
+/** One selection decision for the footer and sheet. Effective settings still govern offerings. */
 export function composerModelMenuModel(
   models: ModelListEntry | null | undefined,
   layers: ComposerModelLayers,
   agent: WireAgent = 'claude'
 ): ComposerModelMenuModel | null {
+  if (layers.stored === null && layers.picked === '' && layers.announced === '') return null
+  const rows = modelRowsFor(models, agent).filter(row => row.value !== 'default')
+  const options = rows.map(row => ({ id: row.value, label: composerModelRowLabel(row) }))
+  const explicit = layers.picked !== '' || (layers.stored !== null && layers.stored !== '' && layers.stored !== 'default')
+  const resolution = agent === 'claude' ? publishedRowFor(models, 'default', agent)?.resolved_model ?? '' : ''
+  const defaultResolution = resolution === '<unmeasured>' ? '' : resolution
+  const sessionRow = explicit
+    ? rows.find(row => row.value === firstShown(layers.picked, layers.stored))
+    : inheritedModelRow(rows, layers.announced, defaultResolution)
   const shown = firstShown(layers.picked, layers.announced, layers.stored)
-  // #1651: only the conversation's own agent's rows, in the daemon's order, each through the row label.
-  const options = modelRowsFor(models, agent).map((published) => ({
-    id: published.value,
-    label: composerModelRowLabel(published)
-  }))
-  // #1651 — CODEX IS ITS OWN PATH, and it derives nothing. There is no inherited-default row to resolve for
-  // an unset model, so once a snapshot says the model is unset the trigger reads Default, marks nothing and
-  // still opens. A hit shows the row's `display_name`; a miss shows the shown string verbatim, the same
-  // fallback Claude's path keeps under its family rule.
+  const row = explicit ? publishedRowFor(models, shown, agent) : sessionRow
+  let label: string
   if (agent === 'codex') {
-    if (shown === '') {
-      return layers.stored === null ? null : { label: COMPOSER_MODEL_DEFAULT_LABEL, currentId: null, options }
-    }
-    const codexRow = publishedRowFor(models, shown, agent)
-    const codexSessionRow = publishedRowFor(models, firstShown(layers.picked, layers.stored), agent)
-    return {
-      label: codexRow ? codexRow.display_name : shown,
-      currentId: codexSessionRow ? codexSessionRow.value : null,
-      options
-    }
+    const codexShown = explicit ? shown : layers.announced
+    const codexRow = publishedRowFor(models, codexShown, agent)
+    label = codexShown === '' ? COMPOSER_MODEL_MENU_LABEL : codexRow ? codexRow.display_name : codexShown
+  } else if (explicit) {
+    const family = row ? firstShown(modelFamily(row.resolved_model), modelFamily(row.value)) : modelFamily(shown)
+    label = family || (row ? row.display_name : shown)
+  } else if (row) {
+    label = firstShown(modelFamily(row.resolved_model), modelFamily(row.value)) || row.display_name
+  } else {
+    label = firstShown(
+      modelFamily(layers.announced),
+      modelFamily(defaultResolution),
+      COMPOSER_MODEL_MENU_LABEL
+    )
   }
-  // #1423 — the INHERITED-DEFAULT branch, and the one input that reaches it is ''. `effortRowFor` is
-  // publishedRowFor with that single substitution, so nothing else about the lookup widens: the comparing
-  // is still one `===` on raw strings, and ' ', 'Default' and 'default-x' miss exactly the rows they
-  // missed before. With no such row published — or no model_list frame at all — this is still `undefined`
-  // and the function still returns null below, which is the rendering #988 shipped for this state.
-  //
-  // ONE ROW ANSWERS BOTH LOOKUPS HERE and that is a property of this state rather than a shortcut: a shown
-  // string of '' means every layer is nothing, so `firstShown(picked, stored)` is '' too and the marking
-  // would take the identical argument. If a fourth layer ever makes those two diverge at '', they must
-  // separate again. #1495 did not: a null stored layer is nothing at both, and the branch is not entered.
-  //
-  // #1495 ADDED THE SECOND HALF OF THE CONDITION and changed nothing else about the branch. A shown string
-  // of '' now has two causes and they are different sentences: the snapshot says the daemon's inherited
-  // default (`stored === ''`), or no snapshot has arrived and nothing is known yet (`stored === null`).
-  // Only the first has a row behind it. `=== null` rather than a truthiness test, which would fold '' into
-  // the not-known reading and stop this branch firing at all — the near-miss cases below pin the
-  // substitution's exactness from the other side and this guard is the same kind of claim.
-  const inherited = shown === '' && layers.stored !== null ? effortRowFor(models, shown, agent) : undefined
-  if (shown === '' && inherited === undefined) return null
-  const row = inherited ?? publishedRowFor(models, shown, agent)
-  // The SESSION's model, which is the only thing a row may be marked current by. Exact equality stays the
-  // whole rule here too. PRECEDENCE, since #1423: an empty session model resolves the inherited-default
-  // row and consults no other, so a daemon that published a row whose `value` is literally '' no longer
-  // has that row marked on such a session — the same one-rule-one-answer posture effortRowFor's docblock
-  // states for the effort surfaces, which this control now shares instead of contradicting.
-  const sessionRow = inherited ?? publishedRowFor(models, firstShown(layers.picked, layers.stored), agent)
-  // #1095's SOURCE CHAIN for the trigger: on a hit the row's `resolved_model`, then that same row's
-  // `value`; on a miss the shown string itself. `resolved_model` leads because the trigger's job is to
-  // name what RUNS, and it is the one field naming the concrete identifier behind an alias. The `value`
-  // step is an ORDINARY SECOND SOURCE rather than a guard against an unseen case: `resolved_model` is not
-  // reliably populated, and the captured fixture WireModelOption's docblock cites carries the literal
-  // `<unmeasured>` on four of its five rows.
-  const family = row
-    ? firstShown(modelFamily(row.resolved_model), modelFamily(row.value))
-    : modelFamily(shown)
-  // Today's label, kept as the fallback under the derivation rather than rewritten — so an identifier no
-  // family derives from renders exactly as it renders now. `row ? row.display_name : shown` rather than
-  // `row?.display_name ?? shown` for the reason above: a matched row publishing an EMPTY display name
-  // stays a hit.
-  const verbatim = row ? row.display_name : shown
-  return {
-    label: family === '' ? verbatim : family,
-    currentId: sessionRow ? sessionRow.value : null,
-    // A ROW READS ITS OWN `value`, NEVER ITS `resolved_model` (AC3), and that asymmetry with the trigger
-    // is the point rather than an oversight. `value` is claude's argument vocabulary — `default` names no
-    // family — and a row's job is to name a CHOICE. `default` IS its own choice: derived from
-    // `resolved_model` it would wear the label of the row it resolves to, and the panel would show two
-    // identical rows submitting different values. From `value` it reads the daemon's own word capitalised.
-    // Two rows deriving to one label are both shown and each still submits its own `value`; `id` is
-    // untouched, so nothing about the write changes. #1651 moved the rule into composerModelRowLabel.
-    options
-  }
+  return { label, currentId: sessionRow?.value ?? null, options }
 }
 
 /**
@@ -332,10 +184,8 @@ export function composerModelMenuModel(
  * SECURITY — this is a render boundary for claude-authored text. `display_name`, `value` and, since
  * #1053, the ANNOUNCED identifier crossed the subprocess trust boundary and DECODED IS NOT SANITIZED
  * (modelListStore's and announcedModelStore's headers): #972 made the SHAPE trusted and nothing more, and
- * the daemon bounds (256 bytes for the announcement) without sanitizing. The announcement is a REPORT,
- * NEVER A CONTROL INPUT: the only thing this file branches on is whether it is '', its only other use is
- * as a lookup ARGUMENT to publishedRowFor (a `find` with `===` over an array, never a plain-object
- * index), and `onSelect` still dispatches only a value a published ROW carries — a hostile daemon cannot
+ * the daemon bounds (256 bytes for the announcement) without sanitizing. The announcement is a REPORT used
+ * to locate the running row for marking; `onSelect` still dispatches only a value a published ROW carries — a hostile daemon cannot
  * make this control send a string it did not itself publish. Each reaches exactly one JSX TEXT
  * position, where React escapes it — never dangerouslySetInnerHTML, never an attribute, a URL, a
  * filename, a cache key, a lookup path or a log.

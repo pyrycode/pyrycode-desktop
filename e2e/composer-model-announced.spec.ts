@@ -41,19 +41,12 @@ const FIXED_TS = '2026-07-07T12:00:00.000Z'
 const SESSION_ID = 'session-1053'
 
 // SINCE #1095 THE DERIVED FAMILIES ARE THE LOCATORS, not the display names: the trigger and every row show
-// a family taken from the leading run of ASCII letters, so it is `Default`, `Opus`, `Haiku` and the
+// a family taken from the leading run of ASCII letters, so it is `Opus`, `Haiku` and the
 // trigger's `Sonnet` that must be mutually non-substring. The display names survive as the rows' published
 // prose and as the fallback these values never reach; nothing locates by them.
 //
-// THE FIRST ROW IS `default`, AND IT IS WHAT KEEPS THIS DRIVE'S JOIN STEP FALSIFIABLE. The trigger derives
-// from a matched row's `resolved_model` and from the shown string on a miss, so an announcement whose row
-// names the same family either side renders identically before and after the list arrives, and the join
-// step proves nothing. `default` is the ONLY published value whose two fields differ — every other alias
-// matches its own family by construction — so it is the only possible anchor. Announcing it is the same
-// liberty this spec already took by announcing the alias `sonnet` rather than a dated identifier: the
-// frame, its shape and its unsolicited arrival are all the daemon's, and only the VALUE is this test's.
-// pyrycode#2124's captured `initialize` reply publishes `default` as an ordinary row resolving to
-// `claude-sonnet-5`, which is the shape seeded here.
+// The default recommendation is internal. Announce its concrete resolution while the saved
+// explicit model disagrees, proving explicit label precedence without offering a Default choice.
 const MODEL_ROWS: WireModelOption[] = [
   {
     value: 'default',
@@ -84,7 +77,7 @@ const MODEL_ROWS: WireModelOption[] = [
 // The families the rows derive to, stated by hand rather than by re-implementing the production rule here:
 // a row shows the family of its OWN `value`, while the trigger shows the family of the matched row's
 // `resolved_model`. They differ for exactly the first row, which is the whole point of seeding it.
-const ROW_FAMILIES = ['Default', 'Opus', 'Haiku']
+const ROW_FAMILIES = ['Opus', 'Haiku']
 const ANNOUNCED_TRIGGER_FAMILY = 'Sonnet'
 
 // What claude announces for the running turn. Its `value` IS a published one, so the announcement joins a
@@ -215,7 +208,7 @@ test('composer footer: the announced model shows when nothing was chosen, and la
   // inert arm because no list has arrived to resolve it to a display name. Pinning that value is a
   // stronger AC4 than the absence it replaces — an implementation that ranked the stored choice above the
   // announcement would satisfy an emptiness check and is caught by the next step instead. ---
-  await expect(label).toHaveText(ROW_FAMILIES[1], { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(label).toHaveText(ROW_FAMILIES[0], { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(contextReading).toHaveCount(1)
 
   // --- AC1, and the state this ticket exists for. The announcement DISPLACES the stored choice the
@@ -224,16 +217,11 @@ test('composer footer: the announced model shows when nothing was chosen, and la
   // verbatim on the inert arm: no popup announced, and the footer holds the anchors of the two controls
   // that do not depend on the model — Actions, and the permission mode, which is operable here because
   // the on-open snapshot named a mode. ---
-  daemon.pushFrame(modelAnnouncedFrame(ANNOUNCED_MODEL.value))
-  await expect(label).toHaveText(ROW_FAMILIES[0], { timeout: ROUNDTRIP_TIMEOUT_MS })
+  daemon.pushFrame(modelAnnouncedFrame(ANNOUNCED_MODEL.resolved_model))
+  await expect(label).toHaveText(ANNOUNCED_TRIGGER_FAMILY, { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(page.locator('.composer__footer [aria-haspopup="menu"]')).toHaveCount(2)
 
-  // --- AC1's join, and the step #1095 had to re-anchor. The list arrives unsolicited and the announced
-  // identifier resolves through the published rows on exact `value` equality — the same rule the
-  // run-configuration sheet's Running model section uses. The trigger then reads that row's
-  // `resolved_model` rather than the announced string, so the label moves `Default` → `Sonnet`. That move
-  // is the ONLY observable difference the row lookup still makes here, which is why the announced row must
-  // be one whose two fields name different families. ---
+  // Publishing the rows makes the trigger operable without changing the announcement label.
   daemon.pushFrame(modelListFrame())
   await expect(label).toHaveText(ANNOUNCED_TRIGGER_FAMILY, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
@@ -255,22 +243,17 @@ test('composer footer: the announced model shows when nothing was chosen, and la
     .toBeGreaterThanOrEqual(2)
   await expect(label).toHaveText(ANNOUNCED_TRIGGER_FAMILY)
 
-  // --- AC5. The rows, and the MARKING — which is the session's model, never the announcement. This is
-  // the pair a single-string implementation cannot satisfy: the trigger names what is RUNNING while the
-  // panel marks what the daemon is SET TO. Under #1095 the two are still different strings (`Sonnet` on
-  // the trigger, `Opus` on the marked row), so the pair stays falsifiable. Each row wears the family of
-  // its own `value`, which is why the announced row reads `Default` in the panel while the trigger it
-  // opened reads `Sonnet`. ---
+  // The explicit saved choice marks Opus while the trigger retains the Sonnet announcement.
   await trigger(ANNOUNCED_TRIGGER_FAMILY).click()
   await expect(panel).toBeVisible()
   await expect(panel.getByRole('menuitem')).toHaveText(ROW_FAMILIES)
-  await expect(panel.locator('[aria-current="true"]')).toHaveText(ROW_FAMILIES[1])
+  await expect(panel.locator('[aria-current="true"]')).toHaveText(ROW_FAMILIES[0])
 
   // --- AC3. A pick outranks both, at once — the optimistic overlay, asserted before any reply could
   // matter — and it still sends exactly one single-field change carrying the row's `value` verbatim. ---
-  await panel.getByRole('menuitem', { name: ROW_FAMILIES[2], exact: true }).click()
+  await panel.getByRole('menuitem', { name: ROW_FAMILIES[1], exact: true }).click()
   await expect(panel).toBeHidden()
-  await expect(label).toHaveText(ROW_FAMILIES[2])
+  await expect(label).toHaveText(ROW_FAMILIES[1])
   await expect
     .poll(() => settingsFramesMatching(captured, { session_id: SESSION_ID, model: PICKED_MODEL.value }), {
       timeout: ROUNDTRIP_TIMEOUT_MS

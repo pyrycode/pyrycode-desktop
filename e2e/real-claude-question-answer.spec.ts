@@ -353,13 +353,19 @@ test('real claude changes model during a question and resumes with the original 
   const published = await page.evaluate(() => (window as unknown as EvidenceWindow).questionModelEvidence.models)
   const previous = await page.evaluate(() => (window as unknown as EvidenceWindow).questionModelEvidence.announced.at(-1))
   expect(Boolean(previous)).toBe(true)
-  const targetIndex = published.findIndex((row) => row.value !== '' &&
+  // The dropdown omits Default and other agents; published indices do not address its rows.
+  const visibleModels = published.filter((row) => (row.agent ?? 'claude') === 'claude' && row.value !== 'default')
+  const targetIndex = visibleModels.findIndex((row) => row.value !== '' &&
     row.value !== QUESTION_MODEL && row.resolved_model !== previous && row.value.startsWith('opus'))
   expect(targetIndex, 'daemon must publish a different non-empty Opus model').toBeGreaterThanOrEqual(0)
-  const target = published[targetIndex]
+  const target = visibleModels[targetIndex]
   const acceptedBefore = await page.evaluate(() => (window as unknown as EvidenceWindow).questionModelEvidence.accepted)
   await page.locator('.composer__footer:visible').getByRole('button').click()
-  await page.getByRole('menu', { name: 'Model', exact: true }).getByRole('menuitem').nth(targetIndex).click()
+  const modelMenu = page.getByRole('menu', { name: 'Model', exact: true })
+  await expect(modelMenu.getByRole('menuitem')).toHaveCount(visibleModels.length)
+  const targetItem = modelMenu.getByRole('menuitem').nth(targetIndex)
+  await expect(targetItem).toHaveText('Opus')
+  await targetItem.click()
   await expect.poll(() => page.evaluate(() =>
     (window as unknown as EvidenceWindow).questionModelEvidence.accepted
   ), { timeout: HANDSHAKE_TIMEOUT_MS }).toBeGreaterThan(acceptedBefore)

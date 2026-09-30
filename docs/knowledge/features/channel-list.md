@@ -19,9 +19,12 @@ transport, or new store/wire code, so not security-sensitive.
 
 The sidebar shows each saved host once, in paired-server order, including a host with no
 conversations. Under each host are fixed **Channels** and **Chats** sections. Channels holds active
-promoted rows; Chats holds active unpromoted rows. Each partition keeps daemon list order. Archived
-rows belong only in [Archive](archive-screen.md). A missing or unpaired server stamp remains visible
-in an unattributed section after the hosts, without host actions; it is never assigned to another
+promoted rows; Chats holds active unpromoted rows. Each host's Channels and Chats sort alphabetically
+by displayed title, separately; the unattributed Channels and Chats fallbacks after all hosts follow
+the same rule. A rename or daemon auto-name moves the row after the re-list; an unnamed chat sorts at
+its **Untitled** placeholder position until named. Displayed titles remain verbatim. Archived rows
+belong only in [Archive](archive-screen.md), which retains daemon list order. A missing or unpaired
+server stamp remains visible in a fallback without host actions; it is never assigned to another
 host. Two paired daemon workspaces on one machine remain two hosts.
 
 The host and both sections begin expanded and fold independently, including on an empty host.
@@ -83,7 +86,7 @@ New directory, `src/renderer/src/screens/channels/`:
 
 ```
 screens/channels/
-├── channelListViewModel.ts       # pure helpers: titleFor, partitionByPromotion, formatLastActivity
+├── channelListViewModel.ts       # pure helpers: titles, active sorting, partitions, grouping, time
 ├── channelListViewModel.test.ts
 ├── ChannelList.tsx               # container (ChannelList) + pure view (ChannelListView)
 ├── ChannelList.test.tsx
@@ -100,13 +103,11 @@ the store:
 - `partitionByPromotion(rows)` — two order-preserving `Array#filter`s on `is_promoted`. No sort. The
   neutral shared primitive both `partitionActive` (below) and [`archiveViewModel.partitionArchived`](archive-screen.md)
   wrap, each pre-filtering on `is_archived` from opposite ends before delegating to it.
-- `partitionActive(rows)` — filters `!r.is_archived` first, then delegates to `partitionByPromotion`.
-  The active list's row source since [#469](../codebase/469.md); the exact dual of
-  `archiveViewModel.partitionArchived`. Both partitions went generic
-  (`<T extends ConversationSummary>`) in [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070)
-  so a filter never erases the server stamp the sidebar's rows carry — both bodies are `filter`
-  calls, runtime-identical either way, and every existing caller still infers
-  `T = ConversationSummary`.
+- `partitionActive(rows)` — filters `!r.is_archived` first, delegates to `partitionByPromotion`, then
+  sorts fresh copies of both active partitions with the private `compareActiveRows` comparator.
+  Input arrays and rows are not mutated; row references and server stamps survive. Both helpers are
+  generic (`<T extends ConversationSummary>`) so their signatures preserve the caller's row type.
+  Keep sorting here: moving it into the shared primitive would also reorder Archive.
 - `groupByServer(serverIds, rows)` — the level [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070)
   added for host attribution (§ Server grouping below).
 - `formatLastActivity(iso: string, now: number): string` — `now` is **injected**, not `Date.now()`
@@ -122,6 +123,21 @@ the store:
   | `delta < 48h` | `'Yesterday'` |
   | `delta < 7d` | `N days ago` |
   | else | UTC-derived `Mon DD` (never `toLocaleDateString` — timezone-independent) |
+
+The active comparator uses `titleFor(row.name).trim()` as its label, so null, empty and
+whitespace-only names sort as `Untitled`. Its key is
+`label.normalize('NFKD').replace(/\p{Mn}/gu, '').toLowerCase()`: compatibility decomposition,
+removal of every nonspacing combining mark, then lowercase. Compare keys ascending with UTF-16
+code-unit `<` and `>`; equal keys compare trimmed labels, then `row.id`, with the same operators.
+Thus `Alpha` precedes `alpha`, and `Chat 10` precedes `Chat 2`. Never substitute `localeCompare`,
+`Intl.Collator` or natural-number ordering. Desktop and mobile share this comparison contract,
+using their own displayed placeholders (`Untitled` and `Untitled discussion`, respectively).
+
+Trimming and normalization affect comparison only; `titleFor` still displays a usable name verbatim.
+The worked order is `Alpha`, `alpha`, `beta`, `Émile`, `Untitled`, `zeta`. Each render derives fresh
+partitions from the latest list snapshot, so renamed and newly named rows move without cached sort
+state. View-model tests pin compatibility/accent/case folding, numeric and UTF-16 order, both
+tie-breaks, frozen input/reference identity, archive exclusion and the shared Archive input order.
 
 ### The container + pure view (`ChannelList.tsx`)
 
@@ -147,6 +163,14 @@ auto-escaped React child (never `dangerouslySetInnerHTML`), the #203/#218 untrus
 and since #1097 the row's only text. React key is `row.id` — a real stable per-conversation identity
 (unlike the timeline's array-index keying). The row itself is not a single button — see § The row's
 save affordance below for the wrapper/open-button/affordance split #274 introduced.
+
+Successive static renders in `ChannelList.test.tsx` prove sorting across renamed and newly named
+snapshots, including two hosts and both fallbacks; they cannot prove event delivery or action
+identity. [`e2e/sidebar-alphabetical-order.spec.ts`](../../../e2e/sidebar-alphabetical-order.spec.ts)
+renames an open chat across another row and checks that selection, a distinguishable working dot,
+Edit chat prefill and submitted ID, Save as channel and each host's section creates retain their
+targets after the re-list. Identical dots would conceal a status subscription attached to the wrong
+row.
 
 ### The row's save affordance (`ChannelList.tsx`, added by #274)
 
@@ -194,11 +218,13 @@ from the wire, so a second paired machine's status can no longer steer this row'
 
 `groupByServer(serverIds, rows): { servers, unattributed }` remains the pure attribution
 boundary. The container reads saved ids in `pairedServerStore.list()` order and passes them to
-`ChannelListView`. `renderBody` partitions active rows once, groups each partition by server,
+`ChannelListView`. `renderBody` partitions and sorts active rows once, groups each partition by server,
 then renders one keyed `CollapsibleHostGroup` per saved id with Channels and Chats beneath it.
-No path grouping or normalization occurs in this active render. A host's key is its saved server
-id, so reordering cannot transfer fold state to a different host. Each section preserves its
-partition's list order.
+No path grouping occurs in this active render. `groupByServer` preserves incoming row order, so
+each host's section and each unattributed fallback is a sorted subsequence of its active partition,
+using the same normalized-key, trimmed-label and ID tie-breaks. Sorting conversations never changes
+paired-host order or fallback placement. A host's key is its saved server id, so reordering cannot
+transfer fold state to a different host.
 
 The join iterates client-owned saved ids and tests row stamps against them. A stamp can select a
 saved host but cannot create one. Rows stamped with `null`, `undefined` or an unpaired id land

@@ -73,12 +73,14 @@ const MODEL_ROWS: WireModelOption[] = [
     effort_levels: ['low', 'high'],
     supports_auto_mode: true,
     truncated_fields: null
-  }
+  },
+  { value: 'sonnet', display_name: 'Sonnet tier', resolved_model: 'claude-sonnet-5',
+    effort_levels: ['low', 'high'], supports_auto_mode: true, truncated_fields: null }
 ]
 
 // What the two halves of the source chain derive to for the inherited-default row above.
 const TRIGGER_FAMILY = 'Sonnet'
-const ROW_FAMILY = 'Default'
+const ROW_FAMILY = 'Sonnet'
 
 // The snapshot delivered LATE, and its model is `''` — not an absence but the reading the wire contract
 // calls the daemon's inherited default, which #1423 resolves a row for and this ticket leaves untouched.

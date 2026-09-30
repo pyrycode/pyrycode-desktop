@@ -15,10 +15,16 @@ const ROUNDTRIP = 15_000
 const TURN = 120_000
 
 type Reading = Pick<Extract<DaemonEvent, { type: 'runConfigReceived' }>,
-  'conversationId' | 'effort' | 'effectiveEffort'>
+  'conversationId' | 'model' | 'effort' | 'effectiveEffort'>
 
 async function observe(page: Page) {
   const readings: Reading[] = []
+  const announcements: Extract<DaemonEvent, { type: 'modelAnnounced' }>[] = []
+  const models: Extract<DaemonEvent, { type: 'modelList' }>[] = []
+  await page.exposeFunction('recordModelProof', (event: Extract<DaemonEvent, { type: 'modelAnnounced' | 'modelList' }>) => {
+    if (event.type === 'modelAnnounced') announcements.push(event)
+    else models.push(event)
+  })
   let confirmations = 0
   await page.exposeFunction('recordEffortProof', (reading: Reading | null) => {
     if (reading === null) confirmations++
@@ -27,18 +33,21 @@ async function observe(page: Page) {
   await page.evaluate(() => {
     const target = window as unknown as {
       pyry: { onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void }
+      recordModelProof: (event: Extract<DaemonEvent, { type: 'modelAnnounced' | 'modelList' }>) => Promise<void>
       recordEffortProof: (reading: Reading | null) => Promise<void>
     }
     target.pyry.onDaemonEvent(event => {
       if (event.type === 'runConfigReceived') {
-        const { conversationId, effort, effectiveEffort } = event
-        void target.recordEffortProof({ conversationId, effort, effectiveEffort })
+        const { conversationId, model, effort, effectiveEffort } = event
+        void target.recordEffortProof({ conversationId, model, effort, effectiveEffort })
+      } else if (event.type === 'modelAnnounced' || event.type === 'modelList') {
+        void target.recordModelProof(event)
       } else if (event.type === 'sessionSettingsUpdated') {
         void target.recordEffortProof(null)
       }
     })
   })
-  return { readings, confirmations: () => confirmations }
+  return { readings, announcements, models, confirmations: () => confirmations }
 }
 
 async function assistantCount(page: Page): Promise<number> {
@@ -90,11 +99,65 @@ test('applied effort, confirmed preference, restart and recall in chats and chan
     await page.locator('.channel-list__row-open').click()
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
     await turn(page, 1)
+    const listsBeforeRefresh = proof.models.length
     const inherited = await refresh(page, proof)
+    expect(['', 'default']).toContain(inherited.model)
     expect(inherited.effort).toBe('')
     expect(inherited.effectiveEffort, 'live daemon must report applied effort after a turn').not.toBeUndefined()
     expect(inherited.effectiveEffort).not.toBeNull()
     expect(inherited.effectiveEffort).not.toBe('')
+    await expect.poll(() => proof.models.slice(listsBeforeRefresh).some(event => event.conversationId === inherited.conversationId), { timeout: ROUNDTRIP }).toBe(true)
+    await expect.poll(() => proof.announcements.some(event => event.conversationId === inherited.conversationId && event.model !== ''), { timeout: ROUNDTRIP }).toBe(true)
+    const announced = proof.announcements.filter(event => event.conversationId === inherited.conversationId).at(-1)
+    const freshModels = proof.models.slice(listsBeforeRefresh).filter(event => event.conversationId === inherited.conversationId).at(-1)
+    expect(announced).toBeDefined()
+    expect(freshModels).toBeDefined()
+    const rows = freshModels!.models.filter(row => (row.agent ?? 'claude') === 'claude' && row.value !== 'default')
+    // Independent oracle over observed wire data; no renderer decision or stores are imported.
+    const family = (raw: string): string => {
+      const word = /^[A-Za-z]+/.exec(raw.replace(/^claude-/, ''))?.[0] ?? ''
+      return word.charAt(0).toUpperCase() + word.slice(1)
+    }
+    const announcement = announced!.model
+    let expectedIndex = -1
+    for (const candidates of [
+      rows.filter(row => row.value === announcement),
+      rows.filter(row => row.resolved_model === announcement),
+      rows.filter(row => family(announcement) !== '' && family(row.value) === family(announcement))
+    ]) {
+      if (candidates.length === 0) continue
+      if (candidates.length === 1) expectedIndex = rows.indexOf(candidates[0])
+      break
+    }
+    const markedCount = expectedIndex < 0 ? 0 : 1
+    await expect(page.locator('.composer__model-label')).not.toHaveText('Default')
+    await page.locator('.composer__model').click()
+    const modelMenu = page.getByRole('menu', { name: 'Model', exact: true })
+    await expect(modelMenu.getByRole('menuitem')).toHaveCount(rows.length)
+    await expect(modelMenu.getByRole('menuitem', { name: 'Default', exact: true })).toHaveCount(0)
+    await expect(modelMenu.locator('[aria-current="true"]')).toHaveCount(markedCount)
+    if (expectedIndex >= 0) await expect(modelMenu.getByRole('menuitem').nth(expectedIndex)).toHaveAttribute('aria-current', 'true')
+    await page.keyboard.press('Escape')
+    await page.locator('.composer__effort').click()
+    const effortMenu = page.getByRole('menu', { name: 'Effort', exact: true })
+    await expect(effortMenu.locator('[aria-current="true"]')).toHaveText(inherited.effectiveEffort!)
+    await page.keyboard.press('Escape')
+    const settingsBeforeSheet = proof.readings.length
+    await page.locator('.conversation__overflow-trigger').click()
+    await page.getByRole('menuitem', { name: 'Run configuration', exact: true }).click()
+    await expect.poll(() => proof.readings.length, { timeout: ROUNDTRIP }).toBeGreaterThan(settingsBeforeSheet)
+    const sheetReading = proof.readings.at(-1)!
+    expect(sheetReading.conversationId).toBe(inherited.conversationId)
+    expect(sheetReading.model).toBe(inherited.model)
+    expect(sheetReading.effectiveEffort).toBe(inherited.effectiveEffort)
+    const sheet = page.getByRole('dialog', { name: 'Run configuration', exact: true })
+    await expect(sheet.locator('.run-config__model-name')).toHaveText(rows.map(row => row.display_name))
+    await expect(sheet.locator('.run-config__model-list')).not.toContainText('Default')
+    await expect(sheet.getByRole('img', { name: 'Current model', exact: true })).toHaveCount(markedCount)
+    if (expectedIndex >= 0) await expect(sheet.locator('.run-config__model-row').nth(expectedIndex).getByRole('img', { name: 'Current model', exact: true })).toBeVisible()
+    await expect(sheet.locator('.run-config__effort [aria-current="true"]')).toHaveText(sheetReading.effectiveEffort!)
+    await testInfo.attach('inherited-model-selection', { body: Buffer.from(JSON.stringify({ announcement, models: freshModels, settings: sheetReading, expectedIndex })), contentType: 'application/json' })
+    await sheet.getByRole('button', { name: 'Close', exact: true }).click()
     expect(await page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBeNull()
 
     // Pool.mintSettings copies the bootstrap's saved effort into new sessions. Keep that seed

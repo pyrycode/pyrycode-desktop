@@ -56,3 +56,8 @@ None. Optional pure-view inputs preserve existing callers while production uses 
 ## Documentation handoff
 
 Pending for documentation stage: update `docs/knowledge/features/composer-model-menu.md`, selection/label rules, with marking/label rules and the settings.json caveat; update `docs/knowledge/features/conversation-shell-run-configuration.md`, Model and Effort section rules.
+
+## Revisions
+
+- Implementation source check: `selectDisplayedEffort` is declared in `ComposerEffortMenu.tsx`, rather than the write-store module named in the reading list. Reuse that existing export; its contract and the plan's state model are unchanged.
+- Existing fake-transport announcement and snapshot-wait specs also pinned the removed row. Update these two local fixtures/assertions alongside the menu spec and verify each touched spec.

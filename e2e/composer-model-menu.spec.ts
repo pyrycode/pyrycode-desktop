@@ -208,7 +208,7 @@ function settingsFramesMatching(captured: Envelope[], expected: SetSessionSettin
 
 test('composer footer: the model menu labels, offers, submits and reverts (AC1-AC4)', async ({
   launchPairedApp
-}) => {
+}, testInfo) => {
   const captured: Envelope[] = []
   const { page, daemon } = await launchPairedApp({ buildReplyFrames: capturingFake(captured) })
 
@@ -269,14 +269,18 @@ test('composer footer: the model menu labels, offers, submits and reverts (AC1-A
   await expect(panel.locator('[aria-current="true"]')).toHaveText('Haiku')
   await page.keyboard.press('Escape')
   await expect(page.locator('.composer__effort-label')).toHaveText('high')
-  await page.screenshot({ path: '/tmp/1690-model-footer.png', animations: 'disabled' })
+  const footerCapture = testInfo.outputPath('model-footer.png')
+  await page.screenshot({ path: footerCapture, animations: 'disabled' })
+  await testInfo.attach('model-footer', { path: footerCapture, contentType: 'image/png' })
   await page.locator('.conversation__overflow-trigger').click()
   await page.getByRole('menuitem', { name: 'Run configuration' }).click()
   const sheet = page.getByRole('dialog', { name: 'Run configuration' })
   await expect(sheet.locator('.run-config__model-name')).toHaveText(['Wide context', 'Quick tier'])
   await expect(sheet.locator('.run-config__model-row').filter({ has: page.locator('[aria-label="Current model"]') })).toContainText('Quick tier')
   await expect(sheet.locator('.run-config__effort [aria-current="true"]')).toHaveText('high')
-  await page.screenshot({ path: '/tmp/1690-run-config.png', animations: 'disabled' })
+  const sheetCapture = testInfo.outputPath('run-config.png')
+  await page.screenshot({ path: sheetCapture, animations: 'disabled' })
+  await testInfo.attach('run-config', { path: sheetCapture, contentType: 'image/png' })
   await sheet.getByRole('button', { name: 'Close', exact: true }).click()
   await trigger('Haiku').click()
 

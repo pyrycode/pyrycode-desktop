@@ -71,6 +71,10 @@ function assertSurfaces(models: ModelListEntry, input: ComposerModelLayers, expe
     .filter(match => match[0].includes('aria-label="Current model"'))
     .map(match => /class="run-config__model-name">([^<]*)</.exec(match[0])?.[1])).toEqual(selected.map(id => `${id} published`))
   expect((panel.match(/aria-current="true"/g) ?? []).length).toBe(selected.length)
+  const visibleRows = models.models.filter(row => (row.agent ?? 'claude') === agent && row.value !== 'default')
+  const markedPositions = [...panel.matchAll(/<button\b[^>]*role="menuitem"[\s\S]*?<\/button>/g)]
+    .flatMap((match, index) => match[0].includes('aria-current="true"') ? [index] : [])
+  expect(markedPositions).toEqual(selected.map(id => visibleRows.findIndex(row => row.value === id)))
   expect(sheet).not.toContain('>default published<')
   expect(panel).not.toContain('>Default<')
   const trigger = renderToStaticMarkup(<ComposerModelMenuView models={models} layers={input} agent={agent} />)

@@ -218,9 +218,10 @@ workspace controls have no rendered entry point.
 ### The row's status dot (`ChannelList.tsx`, added by #801, wired to `input-required` by #874)
 
 Split out to its own page: [the row's status dot](channel-list-status-dot.md) — the
-`ConversationStatusDotControl` every row leads with, joining four per-id store reads through
+`ConversationStatusDotControl` every row leads with, joining five per-id store reads through
 `isConversationUnread`/`resolveConversationStatus` into the leaf `ConversationStatusDot`, and the
-placement/geometry/testing lessons from wiring it in.
+placement/geometry/testing lessons from wiring it in. An outstanding permission or trust prompt,
+or a pending question batch, shows the existing amber `input-required` dot.
 
 ### CSS (`channels.css`)
 

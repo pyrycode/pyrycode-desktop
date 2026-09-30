@@ -10,8 +10,9 @@ host row, workspace grouping, CSS) stays on the parent page.
 Split from #676, the last of the three ([#799](conversation-status.md)'s resolver,
 [#800](conversation-status-dot.md)'s leaf, and this ticket's wiring). A module-private, nullary-prop-free
 `ConversationStatusDotControl({ conversationId })`, mirroring `HostConnectionDotsControl`'s shape one level
-down: four narrow per-id subscriptions —
+down: five narrow per-id subscriptions —
 `useModalStore(selectHasOutstandingFor(id))`,
+`useQuestionBatchStore((s) => selectBatchFor(id)(s) !== undefined)`,
 `useConversationActivityStore(selectActivityFor(id))`, `useConversationTimelineStore(selectTimelineFor(id))`,
 `useConversationLastReadStore(selectLastReadFor(id))` — reduced through
 [`isConversationUnread`](conversation-unread.md) then [`resolveConversationStatus`](conversation-status.md)
@@ -33,6 +34,14 @@ held-reference stability does not transfer to it — the header now records that
 fourth read too, but for a different reason (a merged object would be freshly allocated regardless of what
 its fields are). No change to `Row`, to `resolveConversationStatus`, or to `ConversationStatusDot` — the
 join is entirely inside this control.
+
+The fifth subscription reads [question-batch state](question-batch-model.md). `inputRequired` is true
+when either an outstanding permission or trust prompt or a pending question batch belongs to this row
+([#1700](https://github.com/pyrycode/pyrycode-desktop/issues/1700)). A question alone therefore draws the
+existing amber waiting dot, even during a running turn. The question selector returns batch presence as
+a boolean, keeping its result `Object.is`-stable when batch content changes and keeping question text
+out of the row component. Answer and Cancel both dispatch `dismissed`, removing that batch; once no
+prompt or batch remains, the resolver falls back to working, new messages or idle from the other facts.
 
 **The one wrong answer a green typecheck hides.** `resolveConversationStatus(inputRequired, activity,
 unread)` takes `boolean` in both first and third position, so a call transposing them —
@@ -120,13 +129,18 @@ Zustand store under this repo's `environment: 'node'` renderer tier:
   no setter ever moves. Calling `conversationActivityStore.getState().setTurnRunning(id, true)` before
   rendering therefore renders as if nothing were seeded; the naive "seed the singleton, then
   `renderToStaticMarkup`" fixture shape (the one the architecture spec itself proposed) passes green while
-  asserting nothing. The fix is a `vi.mock` per test file that redirects only the three `useXStore` **React
+  asserting nothing. The fix is a `vi.mock` per test file that redirects only the five `useXStore` **React
   bindings** onto a fresh per-file `createXStore()` instance, keeping `...importActual` for everything else
   — the selectors, the predicate, the resolver — so the real logic under test stays real and only the
   binding that `renderToStaticMarkup` can't see gets swapped.
 - **An `indexOf`-based ordering assertion passes vacuously when the needle is absent**, since `-1` compares
   less than every real index. "The dot leads the row" cases must pin presence (`indexOf !== -1`) before
   they pin ordering, or a row that draws no dot at all reads as a passing test.
+
+The question-only case seeds `createQuestionBatchStore()` through the same binding redirect, then
+checks that only the matching row is input-required and that dismissal restores its working dot.
+Teardown dispatches `reconnected` to clear all held batches. These fresh static renders prove status
+composition, not live React subscription behavior.
 
 No new e2e spec: all four ACs are statically assertable in the unit tier with seeded stores (a per-row
 chunk sliced out of the markup by title, mirroring the file's existing `ROW_MARKER`/`ROW_OPEN_MARKER`
@@ -149,7 +163,7 @@ the cheap fix, if wanted, is `aria-hidden` on the dot's idle branch — a change
 - [Conversation status dot](conversation-status-dot.md) / [#800](https://github.com/pyrycode/pyrycode-desktop/issues/800)
   — the presentational leaf every row leads with; see § above for the #801/#874 call site.
 - [Conversation status resolver](conversation-status.md) / [#799](https://github.com/pyrycode/pyrycode-desktop/issues/799)
-  — the pure join `ConversationStatusDotControl` calls to reduce a row's four per-id facts to one status;
+  — the pure join `ConversationStatusDotControl` calls after composing the five per-id store reads;
   [#873](https://github.com/pyrycode/pyrycode-desktop/issues/873) added its leading `inputRequired`
   parameter.
 - [Conversation unread predicate](conversation-unread.md) / [#778](https://github.com/pyrycode/pyrycode-desktop/pull/795)
@@ -157,15 +171,17 @@ the cheap fix, if wanted, is `aria-hidden` on the dot's idle branch — a change
   composition lives.
 - [Conversation activity store](conversation-activity-store.md) / [#747](../codebase/747.md) and
   [conversation timeline holder](conversation-timeline-holder.md) / [conversation last-read
-  store](conversation-last-read-store.md) — three of the four per-id stores `ConversationStatusDotControl`
+  store](conversation-last-read-store.md) — three of the five per-id stores `ConversationStatusDotControl`
   subscribes to through their shipped selector factories.
 - [Modal-prompt model](modal-prompt-model.md) and [modal store bridge](modal-store-bridge.md) — the
   reducer and store `selectHasOutstandingFor(conversationId)` is defined on, re-exported from
   `modalStore.ts` and read as the fourth per-id subscription by
   [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874).
+- [Question-batch model](question-batch-model.md) — the fifth per-id source; `selectBatchFor` is
+  re-exported from `questionBatchStore.ts` and reduced to a presence boolean for the row.
 - [App icon attention badge](app-badge.md) / [#1592](https://github.com/pyrycode/pyrycode-desktop/issues/1592)
-  — a second consumer of this exact four-selector composition, copied verbatim so the app icon and the
-  sidebar dots can never disagree about which conversations need the operator.
+  — a second consumer of the same five-source status composition, counting each eligible conversation
+  once even when both a prompt and question batch are pending.
 - [#801 spec](../../specs/architecture/801-sidebar-row-status-dot.md) — the row's status dot.
 - [#874 spec](../../specs/architecture/874-input-required-dot-call-site.md) — the fourth subscription that
   composes the input-required status into it.

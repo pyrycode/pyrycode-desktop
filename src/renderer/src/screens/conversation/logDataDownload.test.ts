@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   reduceDownload,
   toDownloadAction,
+  bundleActionFor,
   downloadView,
   initialDownloadState,
   type DownloadState
@@ -85,6 +86,29 @@ describe('toDownloadAction', () => {
     for (const event of unrelated) {
       expect(toDownloadAction(event)).toBeNull()
     }
+  })
+})
+
+describe('bundleActionFor', () => {
+  // #1692: with two hosts paired, only the requested host's bundle events may move the section.
+  it('maps a bundle event from the requested server', () => {
+    expect(bundleActionFor({ type: 'debugBundleProgress', chunksReceived: 2, serverId: 'second' }, 'second'))
+      .toEqual({ type: 'progress', chunks: 2 })
+  })
+
+  it("ignores another server's bundle events", () => {
+    expect(bundleActionFor({ type: 'debugBundleProgress', chunksReceived: 2, serverId: 'first' }, 'second')).toBeNull()
+    expect(bundleActionFor({ type: 'debugBundleSaved', path: '/tmp/x.tar.gz', serverId: 'first' }, 'second')).toBeNull()
+    expect(bundleActionFor({ type: 'debugBundleFailed', reason: 'unavailable', serverId: null }, 'second')).toBeNull()
+  })
+
+  it('ignores every bundle event before a request', () => {
+    expect(bundleActionFor({ type: 'debugBundleProgress', chunksReceived: 2, serverId: 'second' }, null)).toBeNull()
+    expect(bundleActionFor({ type: 'debugBundleFailed', reason: 'unavailable', serverId: null }, null)).toBeNull()
+  })
+
+  it('ignores non-bundle events from the requested server', () => {
+    expect(bundleActionFor({ type: 'disconnected', serverId: 'second' }, 'second')).toBeNull()
   })
 })
 

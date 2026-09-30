@@ -1,8 +1,9 @@
 // The renderer push-notify trigger (#392) — a filter bridge in the mould of notificationActivatedBridge /
-// conversationCreatedBridge. It watches the already-decoded daemon-event channel for the two notify-worthy
-// moments (turn-end, permission/trust prompt) and, gated by the Settings push toggle (#408), sends the
-// MAIN-LOCAL `notify` command asking the background process to raise an OS notification (#391 owns the
-// unfocused-window gate + the static copy table). `notifyKindForEvent` is the pure filter;
+// conversationCreatedBridge. It watches the already-decoded daemon-event channel for the notify-worthy
+// moments (turn-end, permission/trust prompt, question batch) and, gated by the Settings push toggle
+// (#408), sends the MAIN-LOCAL `notify` command asking the background process to raise an OS
+// notification (#391 owns the unfocused-window gate + the static copy table). `notifyKindForEvent` is the
+// pure filter;
 // `subscribePushNotify` is the React-free injected data path (unit-testable with plain spies);
 // `usePushNotify` is the thin React glue. Nothing here touches keys, sockets, ipcRenderer, or raw frames —
 // it only subscribes through the preload bridge, reads a renderer-local boolean, and dispatches an
@@ -11,7 +12,8 @@
 // This is a `default:null`-style FILTER bridge (the notificationActivatedBridge shape), NOT an exhaustive
 // `assertNever` one: it introduces no new DaemonEvent arm, so it must not force a matching no-op case into
 // modalBridge, timelineBridge, AND daemonEventBridge. `default: null` is the intended, permanent behaviour —
-// this path deliberately consumes only its two arms (turnEnd, modalShown) and no-ops everything else.
+// this path deliberately consumes only its three arms (turnEnd, modalShown, questionShown) and no-ops
+// everything else.
 import { useEffect } from 'react'
 import type { NotifyKind, RendererCommand } from '@shared/ipc/commands'
 import type { DaemonEvent, StampedDaemonEvent } from '@shared/ipc/events'
@@ -23,11 +25,11 @@ import {
 import { pushNotificationPrefStore } from './pushNotificationPrefStore'
 
 /**
- * The filter: map the two owned arms to their `NotifyKind`, every other DaemonEvent to `null`. A
+ * The filter: map the three owned arms to their `NotifyKind`, every other DaemonEvent to `null`. A
  * `turnEnd` is a turn-complete; every `modalShown` is a permission/trust prompt (WireModalClass admits
  * exactly `'permission' | 'trust'`, ADR 0009 — no destructive class — so no class-narrowing filter is
- * needed). `default: null` — not an `assertNever` — because ignoring the rest is the intended, permanent
- * behaviour here (the translateConversationCreated precedent). Reads ONLY the discriminant `event.type`;
+ * needed), and a `questionShown` batch is a prompt too (#1691), as mobile alerts on it. `default: null`
+ * — not an `assertNever` — because ignoring the rest is the intended, permanent behaviour here (the translateConversationCreated precedent). Reads ONLY the discriminant `event.type`;
  * the returned value is always a closed `NotifyKind` literal, never a daemon-supplied field — the
  * `NotifyKind | null` return type makes it a compile-time guarantee that no widened daemon string can
  * escape (AC4).
@@ -37,6 +39,7 @@ export function notifyKindForEvent(event: DaemonEvent): NotifyKind | null {
     case 'turnEnd':
       return 'turn-complete'
     case 'modalShown':
+    case 'questionShown':
       return 'prompt'
     default:
       return null
@@ -45,7 +48,7 @@ export function notifyKindForEvent(event: DaemonEvent): NotifyKind | null {
 
 /**
  * Subscribe via the injected `onDaemonEvent`; for each event, filter to a `NotifyKind` first, then — only
- * for the two owned arms — consult the push toggle and, if enabled, send the `notify` command. An inline
+ * for the owned arms — consult the push toggle and, if enabled, send the `notify` command. An inline
  * `RendererCommand` literal (no `notifyCommand()` helper, the requestNewConversation precedent — keeps the
  * change renderer-contained). Returns the `onDaemonEvent` off handle so the React binding can use it as its
  * effect cleanup.
@@ -56,13 +59,14 @@ export function notifyKindForEvent(event: DaemonEvent): NotifyKind | null {
  * user who flips the toggle off in Settings mid-session must see the NEXT turn-end/prompt not fire. The
  * payload is a fresh literal built from the closed kind plus, since #1593, the looked-up conversation name
  * — no field of the event itself is copied in.
- * The listener only ever calls `sendCommand` inside the two owned arms and never throws into React.
+ * The listener only ever calls `sendCommand` inside the owned arms and never throws into React.
  *
  * #514: one OS notification per prompt, however many times the link re-handshakes. The daemon re-sends
  * every still-outstanding modal_shown after each handshake (#415 reconcile), so a prompt left unanswered
  * while the window is in the background used to earn a fresh notification per network flap. A
- * closure-local set of already-announced `modalId`s absorbs the re-delivery. Three properties it depends
- * on:
+ * closure-local set of already-announced `modalId`s absorbs the re-delivery; since #1691 it also holds
+ * question batch ids, each namespaced so a batch and a modal sharing an id never suppress each other.
+ * Three properties it depends on:
  *
  * - It must SURVIVE the reconnect edge. `connected` lands BEFORE the daemon's re-sent frames — that
  *   ordering is what modalBridge/modalPrompts' clear-then-repopulate reset is built on — so memory
@@ -83,7 +87,7 @@ export function notifyKindForEvent(event: DaemonEvent): NotifyKind | null {
  * main's focus gate (fireNotification.ts) drops it silently and the id is still recorded. Accepted —
  * `isWindowFocused()` is main-side, the payload carries no id, and there is no reply channel; a
  * focused window means the prompt was rendered in front of the user, and it stays on screen.
- * `turnEnd` is untouched: `modalId` is null for every other arm, so both the check and the record are
+ * `turnEnd` is untouched: `announceKey` is null for every other arm, so both the check and the record are
  * skipped for the whole rest of the union by construction.
  *
  * #1593: the notification's title names the conversation. Only for an event that will actually send,
@@ -113,20 +117,26 @@ export function subscribePushNotify(
   mintToken?: (target: NotificationTarget) => string,
   isMuted?: (serverId: string | null, conversationId: string) => boolean
 ): () => void {
-  const announcedModalIds = new Set<string>()
+  const announced = new Set<string>()
   return onDaemonEvent((event) => {
     const kind = notifyKindForEvent(event)
     if (kind === null) return
     // Narrowing on the discriminant is what makes `event.modalId` legal — no cast. This local is the
     // only new read of a daemon-supplied field and never leaves the listener. `!== null`, never
-    // truthiness: requireString admits '', and `if (modalId)` would treat an empty id as "not a modal"
-    // and skip both the check and the record.
-    const modalId = event.type === 'modalShown' ? event.modalId : null
-    if (modalId !== null && announcedModalIds.has(modalId)) return
+    // truthiness: requireString admits '', and `if (announceKey)` would treat an empty id as "not a
+    // prompt" and skip both the check and the record. #1691: the prefix keeps a question batch apart
+    // from a modal that happens to carry the same id (mobile keys the batch `batch:<questionBatchId>`).
+    const announceKey =
+      event.type === 'modalShown'
+        ? `modal:${event.modalId}`
+        : event.type === 'questionShown'
+          ? `batch:${event.questionBatchId}`
+          : null
+    if (announceKey !== null && announced.has(announceKey)) return
     if (!isPushEnabled()) return
-    // Re-narrowed for the compiler: `kind !== null` already means one of these two arms, and both carry
-    // the conversation id the name is looked up by.
-    if (event.type !== 'turnEnd' && event.type !== 'modalShown') return
+    // Re-narrowed for the compiler: `kind !== null` already means one of these three arms, and each
+    // carries the conversation id the name is looked up by.
+    if (event.type !== 'turnEnd' && event.type !== 'modalShown' && event.type !== 'questionShown') return
     if (isMuted?.(event.serverId, event.conversationId) === true) return
     const name = nameFor(event.serverId, event.conversationId)
     const token = mintToken?.({ serverId: event.serverId, conversationId: event.conversationId })
@@ -138,7 +148,7 @@ export function subscribePushNotify(
         ...(token === undefined ? {} : { token })
       }
     })
-    if (modalId !== null) announcedModalIds.add(modalId)
+    if (announceKey !== null) announced.add(announceKey)
   })
 }
 

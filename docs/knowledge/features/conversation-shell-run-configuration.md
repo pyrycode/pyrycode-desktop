@@ -525,15 +525,33 @@ The download state (`idle` / `downloading{chunks}` / `saved{path}` / `failed{rea
 **pure, total, phase-agnostic** reducer (`logDataDownload.ts`, the `composerSend.ts`/`pairingState.ts`
 idiom) driven by `useReducer` per [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md)
 — never the session store, since [`translateDaemonEvent`](daemon-event-bridge.md) already returns
-`null` for all three `debugBundle*` events. The container's single `onDaemonEvent` subscription filters
-those three events via `toDownloadAction` (the `translateDaemonEvent` analogue) and is torn down on
-unmount, so a sheet close/reopen nets exactly one live listener. Pressing Download sends the bare
-`requestDebugBundle` command and **optimistically** dispatches `requested` (not gated on the first
-daemon event — the `unavailable` failure path emits no progress at all). Single-in-flight is
-belt-and-suspenders: the button disables while busy and `onDownload` re-checks the phase, with the
-deterministic backstop being the [#169 orchestrator](debug-bundle-orchestrator.md)'s own `active`
-flag, not a second authoritative guard here. Failure text is drawn from a closed `reason → sentence`
-map — never the raw `DebugBundleFailure` token, an errno, or a stack (AC5).
+`null` for all three `debugBundle*` events.
+
+\#1692: with two hosts paired, a bare `requestDebugBundle` is refused by the router as
+`ambiguous-server` and nothing answers it, so the section used to hang on "Downloading…" forever.
+Pressing Download now resolves the open conversation's host with `connectedConversationHostNow` (the
+same resolve-at-the-act idiom as [attachment downloads](conversation-shell-message-bubble-attachments.md))
+and sends `{ type: 'requestDebugBundle', serverId }` (`requestDebugBundleFor`, exported from
+`LogDataSection.tsx` so the null-host path is unit-provable without a click). A null host —
+disconnected, unknown owner — sends nothing and the section stays idle; the button is additionally
+`disabled` (not only on `busy`) while `useConversationActionAvailability` reports the open
+conversation unavailable, so a disconnected host can no longer be pressed into hanging. `aria-busy`
+stays tied to `busy` only.
+
+The container's single `onDaemonEvent` subscription filters through `bundleActionFor`
+(`logDataDownload.ts`), which reaches `toDownloadAction` only for an event stamped with the server
+this mount actually requested (held in a `useRef`, never the reducer state) — another host's
+`debugBundle*` events leave the section untouched, and is torn down on unmount, so a sheet close/reopen
+nets exactly one live listener. Deliberate consequence: the ref starts `null` on every mount, so a
+sheet closed and reopened mid-download has made no request of its own and ignores the in-flight
+download's events until Download is pressed again; the [#169
+orchestrator](debug-bundle-orchestrator.md)'s in-flight gate drops that second press as a duplicate,
+and the mount's events then start matching. Before #1692 a bare `progress` rehydrated the view on
+reopen regardless of who asked; this is a narrowing in that one case, accepted as the cost of the
+per-server filter. Single-in-flight is otherwise belt-and-suspenders: the button disables while busy
+and `onDownload` re-checks the phase, with the deterministic backstop still the #169 orchestrator's
+own `active` flag, not a second authoritative guard here. Failure text is drawn from a closed
+`reason → sentence` map — never the raw `DebugBundleFailure` token, an errno, or a stack (AC5).
 
 Two more M3 tokens landed for the button: `--color-secondary-container` / `--color-on-secondary-container`
 (filled-tonal fill/text). See [#72 codebase notes](../codebase/72.md) for the full design, patterns,

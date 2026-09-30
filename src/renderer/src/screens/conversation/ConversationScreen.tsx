@@ -659,7 +659,7 @@ export function ConversationScreen({
           <RunConfigSections conversationId={activeConversation?.id ?? null} />
           {/* Log data is the last section ("beneath Context-window"); #182 prepends the
               Context-window section above it as it lands. */}
-          <LogDataSection />
+          <LogDataSection conversationId={openConversationId} available={actionsAvailable} />
         </StatusSheet>
       )}
       {/* #365: the Channel Info sheet — the StatusSheet twin, overlaying the conversation surface with the

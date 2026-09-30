@@ -52,7 +52,7 @@ notification and appear on a lock screen — it is impossible by construction, n
 | `case 'notify':` dispatch, incl. the `onClick` composition (#393) | `src/main/index.ts` (the single `onCommand` switch) |
 | `notificationActivated` `DaemonEvent` arm, nullary at #393, optional `token` since #1597 | `src/shared/ipc/events.ts` |
 | `notificationActivatedBridge.ts` (#393, re-validates the echoed token since #1597) | `src/renderer/src/store/notificationActivatedBridge.ts` |
-| `pushNotifyBridge.ts` — `notifyKindForEvent`, `subscribePushNotify`, `usePushNotify` (#392); `createNotificationTargets`, `notificationRowFor` (#1597); `conversationMutedIn` (#1607) | `src/renderer/src/store/pushNotifyBridge.ts` |
+| `pushNotifyBridge.ts` — `notifyKindForEvent`, `subscribePushNotify`, `usePushNotify` (#392, `questionShown` added #1691); `createNotificationTargets`, `notificationRowFor` (#1597); `conversationMutedIn` (#1607) | `src/renderer/src/store/pushNotifyBridge.ts` |
 | `isNotificationToken` guard + `NotifyPayload.token` (#1597) | `src/shared/ipc/commands.ts` |
 | `openConversation` — the shared sidebar-row/notification-click open steps (#1597) | `src/renderer/src/PairedShell.tsx` |
 
@@ -214,7 +214,7 @@ main still never learns a conversation or server id — only the posture changes
 
 [#392](../codebase/392.md) is the renderer half that decides *when* to send `notify`. A filter
 bridge, `src/renderer/src/store/pushNotifyBridge.ts`, watches the already-decoded `DaemonEvent`
-channel for exactly two arms:
+channel for three arms:
 
 ```ts
 export function notifyKindForEvent(event: DaemonEvent): NotifyKind | null {
@@ -222,6 +222,7 @@ export function notifyKindForEvent(event: DaemonEvent): NotifyKind | null {
     case 'turnEnd':
       return 'turn-complete'
     case 'modalShown':
+    case 'questionShown':
       return 'prompt'
     default:
       return null
@@ -230,10 +231,13 @@ export function notifyKindForEvent(event: DaemonEvent): NotifyKind | null {
 ```
 
 Every `modalShown` is a permission/trust prompt by construction (`WireModalClass` admits exactly
-`'permission' | 'trust'`, ADR 0009 — no destructive class), so no class-narrowing is needed. This is
-a `default: null` **filter**, not an `assertNever` exhaustive switch — it introduces no new
-`DaemonEvent` arm, so it doesn't force a matching no-op case into `modalBridge` / `timelineBridge` /
-`daemonEventBridge`, unlike the `notificationActivated` arm #393 added.
+`'permission' | 'trust'`, ADR 0009 — no destructive class), so no class-narrowing is needed, and a
+`questionShown` batch is a prompt too ([#1691](https://github.com/pyrycode/pyrycode-desktop/issues/1691),
+below) — mobile's `HostConversationSource` alerts on the same moment. This is a `default: null`
+**filter**, not an `assertNever` exhaustive switch — it introduces no new `DaemonEvent` arm (both
+`modalShown` and `questionShown` already existed on the union before this module read them), so it
+doesn't force a matching no-op case into `modalBridge` / `timelineBridge` / `daemonEventBridge`,
+unlike the `notificationActivated` arm #393 added.
 
 `subscribePushNotify(onDaemonEvent, sendCommand, isPushEnabled, nameFor)` is the React-free data
 path: filter first (short-circuits on the common case), then — only for the two owned arms — reads
@@ -291,20 +295,27 @@ Recording it anyway would mean a prompt unmuted while still outstanding would ne
 daemon re-sends it after the next reconnect — the same reasoning the toggle-drop case already
 established, applied to a second gate ahead of the same set.
 
-### Dedup across reconnects (#514)
+### Dedup across reconnects (#514, extended by #1691)
 
 The daemon deliberately re-sends every still-outstanding `modal_shown` after each re-handshake
 ([#415](../codebase/415.md) reconcile), so without further guarding a prompt left unanswered while the
 window was backgrounded earned a fresh OS notification per network flap or sleep/wake cycle.
 [#514](../codebase/514.md) closed this: `subscribePushNotify` opens a closure-local
-`announcedModalIds = new Set<string>()` once per subscription. On the `modalShown` arm only, it binds
-`const modalId = event.type === 'modalShown' ? event.modalId : null` (narrowed on the discriminant, the
-only new read of a daemon-supplied field, never leaving the listener), short-circuits before the
-toggle read if `modalId !== null && announcedModalIds.has(modalId)`, and — **only after** the
-`sendCommand` call — records `modalId` into the set. `turnEnd` is untouched by construction: `modalId`
-is `null` for every non-`modalShown` arm, so both the check and the record are skipped for the rest of
-the union without a second rule. `modalId` is never spread or interpolated into the payload (`{ kind }`
-or `{ kind, name }` since [#1593](https://github.com/pyrycode/pyrycode-desktop/issues/1593)).
+`announced = new Set<string>()` once per subscription (named `announcedModalIds` before
+[#1691](https://github.com/pyrycode/pyrycode-desktop/issues/1691), when it only ever held modal ids).
+On the two owned arms that carry an id, it binds a namespaced `announceKey` — `` `modal:${event.modalId}` ``
+for `modalShown`, `` `batch:${event.questionBatchId}` `` for `questionShown` (mobile's own
+`batch:<questionBatchId>` key in `HostConversationSource`), `null` for `turnEnd` — narrowed on the
+discriminant, the only new read of a daemon-supplied field, never leaving the listener. It
+short-circuits before the toggle read if `announceKey !== null && announced.has(announceKey)`, and —
+**only after** the `sendCommand` call — records `announceKey` into the set. `turnEnd` is untouched by
+construction: `announceKey` is `null` for every arm besides `modalShown`/`questionShown`, so both the
+check and the record are skipped for the rest of the union without a second rule. The `modal:`/`batch:`
+prefix is load-bearing, not decoration: a modal and a question batch that happen to share a raw id
+(unrelated id spaces on the wire) must announce independently rather than suppress each other; an
+unprefixed key would conflate them. Neither id is ever spread or interpolated into the payload (`{ kind }`
+or `{ kind, name }` since [#1593](https://github.com/pyrycode/pyrycode-desktop/issues/1593)) — the
+payload carries no batch field at all, not the id and not the question text.
 
 Two properties make this correct rather than a no-op:
 
@@ -425,12 +436,19 @@ navigating to the thread.
   `serverId`/`conversationId` pair and the click resolves through it — see [Resolving the click to its
   own conversation](#resolving-the-click-to-its-own-conversation-1597) above. Neither field is derived
   from the other, and main still never sees a conversation or server id, only the opaque string.
-- **One notification per prompt across reconnects, not per raised OS notification ([#514](../codebase/514.md)).**
-  The daemon re-sends every still-outstanding `modal_shown` after each re-handshake; the trigger now
-  dedupes on `modalId` in a closure-local `Set` that survives reconnects and dies on unpair. Dedup is
-  per *command sent*, not per *notification actually shown* — a first delivery the main-side focus gate
-  silently drops is still recorded as announced, so a later re-send while unfocused stays suppressed.
-  See [Dedup across reconnects (#514)](#dedup-across-reconnects-514) above.
+- **One notification per prompt across reconnects, not per raised OS notification ([#514](../codebase/514.md), [#1691](https://github.com/pyrycode/pyrycode-desktop/issues/1691)).**
+  The daemon re-sends every still-outstanding `modal_shown` after each re-handshake; the trigger
+  dedupes on a namespaced `modal:<modalId>` / `batch:<questionBatchId>` key in a closure-local `Set`
+  that survives reconnects and dies on unpair. Dedup is per *command sent*, not per *notification
+  actually shown* — a first delivery the main-side focus gate silently drops is still recorded as
+  announced, so a later re-send while unfocused stays suppressed. See [Dedup across reconnects (#514,
+  extended by #1691)](#dedup-across-reconnects-514-extended-by-1691) above.
+- **A muted or question-batch `questionShown` carries no batch content into the payload
+  ([#1691](https://github.com/pyrycode/pyrycode-desktop/issues/1691)).** Like `modalShown`, the event's
+  `questionBatchId` and its `questions` are read only to build the dedup key and are never spread into
+  `notify`'s payload; the notification body is the static `'prompt'` copy, and the title is the
+  conversation name via the same [#1593](https://github.com/pyrycode/pyrycode-desktop/issues/1593)
+  `nameFor` lookup — no per-question text ever reaches the OS notification.
 
 ## Related
 
@@ -466,3 +484,8 @@ navigating to the thread.
 - [#1607](https://github.com/pyrycode/pyrycode-desktop/issues/1607) — a conversation muted on its
   host sends neither `notify` kind; see [Muting suppresses the send](#muting-suppresses-the-send-1607)
   above. The [app icon badge](app-badge.md) drops the same rows from its count.
+- [#1691](https://github.com/pyrycode/pyrycode-desktop/issues/1691) — a `questionShown` batch now
+  maps to `'prompt'` too, the same way mobile's `HostConversationSource` alerts on one; the reconnect
+  dedup key gained a `modal:`/`batch:` namespace so a batch and a modal sharing a raw id announce
+  independently. See [The trigger (#392)](#the-trigger-392) and [Dedup across reconnects (#514,
+  extended by #1691)](#dedup-across-reconnects-514-extended-by-1691) above.

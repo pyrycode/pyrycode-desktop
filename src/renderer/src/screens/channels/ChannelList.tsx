@@ -1013,25 +1013,15 @@ export function hostRowEditSeed(value: HostLabelValue): string {
 //
 // The row repeats in BOTH trees on purpose (operator, 2026-08-21); the trees are not deduplicated.
 //
-// The ROW is not interactive: a plain <div>, no onClick, no aria-label. The label carries the row's
-// meaning, so the glyph is aria-hidden — a second accessible name would be noise. The two connection dots
-// #672 reserved this row's trailing edge for landed in #718, as the store-bound leaf below; the row itself
-// stays non-interactive, and the dots are named individually rather than through the row.
+// The row wrapper is a plain <div>, with no onClick or aria-label. Healthy hosts put the glyph,
+// label and chevron in a disclosure button; failed hosts show the glyph and label directly and
+// retain Repair host. Edit host is a sibling control, so neither action nests inside the disclosure.
+// The glyph is aria-hidden because the label already names the host.
 //
-// ITS SUBTREE STOPPED BEING NON-INTERACTIVE IN #1185, which is why that paragraph now says "the row"
-// rather than "this". The row grew the pen and plus the drawing puts in the dots' slot on hover (Host
-// 399:1366, Hover 399:1408) — two <button> SIBLINGS of the label, never a wrapper around it and never
-// nested in each other, so the row's own tag is untouched and clicking the glyph or the name still does
-// nothing. `channels.css` owns the swap: the pair is `opacity: 0` at rest and the dots `opacity: 1`, and
-// a hover or a control's `:focus-visible` inverts both.
-//
-// ⭐ THE SWAP IS GUARDED ON A CONTROL BEING DRAWN, and that guard is the ticket rather than a detail.
-// Each control renders only when its handler is passed and THIS TICKET ADDS NO CALLER — the Edit host
-// dialog (#1187) and the Add workspace dialog (#1189) pass them, against the `serverId` this row already
-// carries. A hover rule keyed on the row alone would therefore blank the SHIPPED app's connection dots
-// into an empty slot for as long as those two take, so `channels.css`'s rule is keyed on the row
-// CONTAINING a control (`:has()`); a row drawn with neither handler hovers exactly as it does today.
-// `e2e/host-row-hover-controls.spec.ts` is what reads that back from the running window.
+// Host rows have no connection dots at rest, on hover or on focus. `channels.css` reveals Edit host
+// on hover or keyboard focus without moving its reserved target or the label; failed rows keep
+// Edit and Repair separately clickable. `e2e/host-row-hover-controls.spec.ts` proves the reveal and
+// fixed geometry in the running window.
 //
 // Nullary handlers, `WorkspaceRow`'s `onEdit` shape: the caller closes over the machine it is drawing, so
 // `serverId` never becomes an argument this view handles. `() => void` also refuses a function declaring

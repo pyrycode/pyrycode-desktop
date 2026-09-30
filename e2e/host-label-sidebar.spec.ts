@@ -12,7 +12,7 @@ const boxOf = async (locator: Locator): Promise<Box> => {
   return box
 }
 
-test('the long host label truncates before the fixed disclosure and Edit control', async ({ launchPairedApp }) => {
+test('the long host label truncates before the fixed disclosure and Edit control', async ({ launchPairedApp }, testInfo) => {
   const { page } = await launchPairedApp({}, { hostLabel: HOST_LABEL })
   const hostRows = page.locator('.channel-list__host')
   await expect(hostRows).toHaveCount(1)
@@ -39,5 +39,5 @@ test('the long host label truncates before the fixed disclosure and Edit control
   await expect(host.locator('.channel-list__host-status, .channel-list__host-dot')).toHaveCount(0)
   await expect(page.locator('.channel-list__host[title], .channel-list__host [title]')).toHaveCount(0)
   await expect(page.locator('section[aria-label="Settings screen"]')).toHaveCount(0)
-  await page.screenshot({ path: '/tmp/builder-1695/host-long-label.png', animations: 'disabled' })
+  await page.screenshot({ path: testInfo.outputPath('host-long-label.png'), animations: 'disabled' })
 })

@@ -170,7 +170,7 @@ test('chat creation and promotion address the connected sidebar host while anoth
 // create any more, and its host-targeting claim is not lost — the sibling test above presses the plus and
 // asserts the resulting `createConversation` carries the right `serverId` and `cwd`. What survives is the
 // failed-host half, which is what this test is now named for.
-test('failed-host local controls remain usable', async ({ launchPairedApp }) => {
+test('failed-host local controls remain usable', async ({ launchPairedApp }, testInfo) => {
   const app = await launchPairedApp({ buildReplyFrames: conversationStateFake() })
   const { page } = app
   await connection(app, FIRST_SERVER_ID, 'failed')
@@ -207,7 +207,7 @@ test('failed-host local controls remain usable', async ({ launchPairedApp }) => 
   await expect(section).toHaveAttribute('aria-expanded', 'true')
   await expect(page.getByRole('button', { name: 'Pair new host' })).toHaveCount(1)
   await host.hover()
-  await page.screenshot({ path: '/tmp/builder-1695/host-failed.png', animations: 'disabled' })
+  await page.screenshot({ path: testInfo.outputPath('host-failed.png'), animations: 'disabled' })
   await host.getByRole('button', { name: 'Repair host' }).click()
   await expect(page.getByText('Repair pairing: Server', { exact: true })).toBeVisible()
 })

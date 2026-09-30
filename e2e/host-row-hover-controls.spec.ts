@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures/launchPairedApp'
 
-test('host rows have no dots at rest, hover or keyboard focus and retain Edit host', async ({ launchPairedApp }) => {
+test('host rows have no dots at rest, hover or keyboard focus and retain Edit host', async ({ launchPairedApp }, testInfo) => {
   const { page } = await launchPairedApp()
   const host = page.locator('.channel-list__host')
   const disclosure = host.locator('.channel-list__host-disclosure')
@@ -19,7 +19,7 @@ test('host rows have no dots at rest, hover or keyboard focus and retain Edit ho
   if (!rowBox || !disclosureBox || !editBox) throw new Error('host controls must have layout boxes')
   expect(disclosureBox.x + disclosureBox.width).toBeLessThanOrEqual(editBox.x)
   expect(rowBox.x + rowBox.width - editBox.x - editBox.width).toBe(25)
-  await page.screenshot({ path: '/tmp/builder-1695/host-rest.png', animations: 'disabled' })
+  await page.screenshot({ path: testInfo.outputPath('host-rest.png'), animations: 'disabled' })
 
   await host.hover()
   await expect(edit).toHaveCSS('opacity', '1')
@@ -27,7 +27,7 @@ test('host rows have no dots at rest, hover or keyboard focus and retain Edit ho
   expect(await host.boundingBox()).toEqual(rowBox)
   expect(await disclosure.boundingBox()).toEqual(disclosureBox)
   expect(await edit.boundingBox()).toEqual(editBox)
-  await page.screenshot({ path: '/tmp/builder-1695/host-hover.png', animations: 'disabled' })
+  await page.screenshot({ path: testInfo.outputPath('host-hover.png'), animations: 'disabled' })
   await edit.click()
   const dialog = page.getByRole('dialog', { name: 'Edit host' })
   await expect(dialog).toBeVisible()

@@ -224,9 +224,9 @@ describe('QuestionPanelView', () => {
     expect(count(markup, /checked=""/g)).toBe(2)
   })
 
-  it('holds Other text typed into an un-ticked row', () => {
-    // The store holds `otherText` INDEPENDENTLY of `otherTicked`, so typing into an un-ticked row is
-    // ordinary traffic and the view must render that pair rather than gate the value on the tick.
+  it('holds Other text in an un-ticked row', () => {
+    // The store holds `otherText` INDEPENDENTLY of `otherTicked`: typing ticks the row, but un-ticking it
+    // afterwards keeps the text, so the view must render that pair rather than gate the value on the tick.
     const markup = render(question(), selection({ otherText: 'Zig' }))
     expect(markup).toContain('value="Zig"')
     expect(markup).not.toContain('checked')

@@ -51,6 +51,7 @@ describe('createQuestionPicksStore — single-select arms (AC1, AC2)', () => {
     const store = createQuestionPicksStore()
     store.getState().dispatch({
       type: 'otherTextChanged',
+      multiSelect: false,
       questionBatchId: BATCH,
       questionIndex: 0,
       text: 'a third way'
@@ -87,6 +88,7 @@ describe('createQuestionPicksStore — single-select arms (AC1, AC2)', () => {
     })
     store.getState().dispatch({
       type: 'otherTextChanged',
+      multiSelect: false,
       questionBatchId: BATCH,
       questionIndex: 0,
       text: 'neither'
@@ -130,13 +132,14 @@ describe('createQuestionPicksStore — multi-select arms (AC1, AC2)', () => {
       questionIndex: 0,
       optionIndex: 1
     })
+    store.getState().dispatch({ type: 'otherToggled', questionBatchId: BATCH, questionIndex: 0 })
     store.getState().dispatch({
       type: 'otherTextChanged',
+      multiSelect: true,
       questionBatchId: BATCH,
       questionIndex: 0,
       text: 'and also this'
     })
-    store.getState().dispatch({ type: 'otherToggled', questionBatchId: BATCH, questionIndex: 0 })
 
     // Beside, not instead of — the multi-select half of AC2, and the opposite of `otherPicked`.
     expect(selectionAt(store, BATCH, 0)).toEqual({
@@ -171,27 +174,92 @@ describe('createQuestionPicksStore — multi-select arms (AC1, AC2)', () => {
   })
 })
 
-describe('createQuestionPicksStore — the Other text is held independently of the tick (AC2)', () => {
-  it('text can be typed with the row un-ticked, and survives a tick then an un-tick', () => {
+describe('createQuestionPicksStore — typing into Other ticks it, as on mobile (#1698)', () => {
+  it('single-select: typing replaces the picked option with Other, and a later pick keeps the text', () => {
     const store = createQuestionPicksStore()
     store.getState().dispatch({
-      type: 'otherTextChanged',
+      type: 'optionPicked',
       questionBatchId: BATCH,
       questionIndex: 0,
-      text: 'typed first'
+      optionIndex: 1
     })
+    store.getState().dispatch({
+      type: 'otherTextChanged',
+      multiSelect: false,
+      questionBatchId: BATCH,
+      questionIndex: 0,
+      text: 'typed'
+    })
+    // Radio semantics: Other and an option are mutually exclusive, so ticking one clears the other.
     expect(selectionAt(store, BATCH, 0)).toEqual({
       optionIndices: [],
-      otherText: 'typed first',
+      otherText: 'typed',
+      otherTicked: true
+    })
+
+    // Un-ticking Other by picking an option leaves the text, which is still held apart from the tick.
+    store.getState().dispatch({
+      type: 'optionPicked',
+      questionBatchId: BATCH,
+      questionIndex: 0,
+      optionIndex: 0
+    })
+    expect(selectionAt(store, BATCH, 0)).toEqual({
+      optionIndices: [0],
+      otherText: 'typed',
       otherTicked: false
+    })
+  })
+
+  it('multi-select: typing ticks Other beside the ticked options, and un-ticking keeps the text', () => {
+    const store = createQuestionPicksStore()
+    for (const optionIndex of [2, 0]) {
+      store
+        .getState()
+        .dispatch({ type: 'optionToggled', questionBatchId: BATCH, questionIndex: 0, optionIndex })
+    }
+    store.getState().dispatch({
+      type: 'otherTextChanged',
+      multiSelect: true,
+      questionBatchId: BATCH,
+      questionIndex: 0,
+      text: 'typed'
+    })
+    expect(selectionAt(store, BATCH, 0)).toEqual({
+      optionIndices: [0, 2],
+      otherText: 'typed',
+      otherTicked: true
     })
 
     store.getState().dispatch({ type: 'otherToggled', questionBatchId: BATCH, questionIndex: 0 })
-    store.getState().dispatch({ type: 'otherToggled', questionBatchId: BATCH, questionIndex: 0 })
-    expect(selectionAt(store, BATCH, 0).otherText).toBe('typed first')
+    expect(selectionAt(store, BATCH, 0)).toEqual({
+      optionIndices: [0, 2],
+      otherText: 'typed',
+      otherTicked: false
+    })
   })
 
-  it('a later otherTextChanged replaces the text without touching the tick or the picks', () => {
+  it('emptying the text leaves Other ticked, in both shapes', () => {
+    for (const multiSelect of [false, true]) {
+      const store = createQuestionPicksStore()
+      for (const text of ['typed', '']) {
+        store.getState().dispatch({
+          type: 'otherTextChanged',
+          multiSelect,
+          questionBatchId: BATCH,
+          questionIndex: 0,
+          text
+        })
+      }
+      expect(selectionAt(store, BATCH, 0)).toEqual({
+        optionIndices: [],
+        otherText: '',
+        otherTicked: true
+      })
+    }
+  })
+
+  it('multi-select: a later otherTextChanged replaces the text and keeps the tick and the picks', () => {
     const store = createQuestionPicksStore()
     store.getState().dispatch({
       type: 'optionToggled',
@@ -202,6 +270,7 @@ describe('createQuestionPicksStore — the Other text is held independently of t
     store.getState().dispatch({ type: 'otherToggled', questionBatchId: BATCH, questionIndex: 0 })
     store.getState().dispatch({
       type: 'otherTextChanged',
+      multiSelect: true,
       questionBatchId: BATCH,
       questionIndex: 0,
       text: 'revised'
@@ -266,6 +335,7 @@ describe('createQuestionPicksStore — keying (AC3)', () => {
     })
     store.getState().dispatch({
       type: 'otherTextChanged',
+      multiSelect: false,
       questionBatchId: BATCH,
       questionIndex: 0,
       text: 'operator text'
@@ -413,6 +483,7 @@ describe('createQuestionPicksStore — same-value writes and copy-on-write', () 
     const store = createQuestionPicksStore()
     store.getState().dispatch({
       type: 'otherTextChanged',
+      multiSelect: false,
       questionBatchId: BATCH,
       questionIndex: 0,
       text: 'same'
@@ -422,6 +493,7 @@ describe('createQuestionPicksStore — same-value writes and copy-on-write', () 
 
     store.getState().dispatch({
       type: 'otherTextChanged',
+      multiSelect: false,
       questionBatchId: BATCH,
       questionIndex: 0,
       text: 'same'
@@ -540,6 +612,7 @@ describe('selectBatchSelections (#922)', () => {
     })
     store.getState().dispatch({
       type: 'otherTextChanged',
+      multiSelect: false,
       questionBatchId: BATCH,
       questionIndex: 2,
       text: 'Zig'

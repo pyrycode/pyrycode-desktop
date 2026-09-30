@@ -265,24 +265,34 @@ export const NEW_SESSION_ACTION: ComposerOptionsPanelOption = {
 }
 export function composerActionRows(
   menu: SlashCommandListEntry | null,
-  slashCommands: boolean            // #1655 — see below
+  slashCommands: boolean            // #1655, greyed rather than dropped by #1697 — see below
 ): readonly ComposerOptionsPanelOption[] {
-  if (!slashCommands) return [NEW_SESSION_ACTION]
+  if (!slashCommands) {
+    return [NEW_SESSION_ACTION, ...COMPOSER_ACTIONS.map((action) => ({ ...action, unavailable: true }))]
+  }
   return [NEW_SESSION_ACTION, ...markUnavailableActions(COMPOSER_ACTIONS, menu)]
 }
 ```
 
-**A session whose capability list says it has no slash commands drops the two command rows
-outright (#1655), rather than greying them out.** `slashCommands` comes from [Run configuration
-store § Session capability flags](run-config-store.md#session-capability-flags-1655)
-(`selectSlashCommandsSupported`) — a Codex session publishes no `slash_command_list` at all, so
-`markUnavailableActions` (§ Grey-out above) reads the missing list as *unknown* and would leave
-both rows live, each reachable as a command that gets sent to Codex as prompt text. The early
-return is keyed on the flag alone, never on whether a menu was published or on the agent name, so
-the answer is the same with or without a published `slash_command_list`. `ComposerActionsMenuView`
-takes `slashCommands` as a required prop and the container reads the selector directly; `false`
-leaves the Actions trigger itself unchanged — only the panel's contents shrink to the single Reset
-session row.
+**A session whose capability list says it has no slash commands greys both command rows rather than
+dropping them.** #1655 shipped the drop; [#1697](https://github.com/pyrycode/pyrycode-desktop/issues/1697)
+replaced it with greying, mobile's `absentComposerActions` rule (pyrycode-mobile#1111), per the owner's
+2026-09-30 decision. `slashCommands` comes from [Run configuration store § Session capability
+flags](run-config-store.md#session-capability-flags-1655) (`selectSlashCommandsSupported`) — a Codex
+session publishes no `slash_command_list` at all, so `markUnavailableActions` (§ Grey-out above) would
+read the missing list as *unknown* and leave both rows live, each reachable as a command that gets sent
+to Codex as prompt text. #1697's arm sidesteps that reader rather than fixing it: instead of asking
+`markUnavailableActions` to judge an absent menu, it spreads every `COMPOSER_ACTIONS` row with
+`unavailable: true` directly — the same shape `markUnavailableActions` itself produces, so the panel's
+greyed-row rendering, `aria-disabled` and the unavailable note need no branch of their own. The early
+return is still keyed on the flag alone, never on whether a menu was published or on the agent name, so
+the answer is the same with or without a published `slash_command_list` — a menu that names every command
+is still overridden. `ComposerActionsMenuView` takes `slashCommands` as a required prop and the container
+reads the selector directly; `false` leaves the Actions trigger itself unchanged, and the panel still
+draws all three rows: Reset session live, Compact session and Knowledge capture greyed. Covered by
+`ComposerActionsMenu.test.tsx`'s `a session without slash commands (#1655, #1697)` describe and by
+`e2e/composer-actions-unavailable.spec.ts`'s `#1697` test, which proves a published menu naming `compact`
+still greys it and that a forced click and a focused Enter both send nothing.
 
 **`NEW_SESSION_ACTION` keeps its constant name and its `id` (`new-session`) across the #1496 rename —
 deliberately, not by oversight.** The id, the view's `onNewSession` prop, the `sendNewSession` helper, the

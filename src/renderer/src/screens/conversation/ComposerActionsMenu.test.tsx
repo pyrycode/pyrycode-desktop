@@ -303,18 +303,28 @@ describe('NEW_SESSION_ACTION (#1218, folded by #1496)', () => {
   })
 })
 
-// #1655 — a session whose capability list says it has no slash commands (a Codex session) is offered the
-// control row alone: no entry sends a Claude command to it as a prompt. Keyed on the flag, not on whether a
-// menu was published, so the answer is the same with or without one.
-describe('a session without slash commands (#1655)', () => {
+// #1655 — a session whose capability list says it has no slash commands (a Codex session) sends no Claude
+// command to the agent as a prompt. #1697 — the command rows are GREYED rather than dropped, mobile's
+// `absentComposerActions` rule: the control row stays live and both commands are marked unavailable. Keyed
+// on the flag, not on the published menu, so even a menu naming every command leaves them greyed.
+const NAMING_EVERY_COMMAND: SlashCommandListEntry = {
+  commands: [command({ name: 'compact' }), command({ name: 'knowledge-capture' })],
+  droppedCommands: 0
+}
+
+describe('a session without slash commands (#1655, #1697)', () => {
   it.each([
     ['no published menu', null],
-    ['a published menu', WITHOUT_KNOWLEDGE_CAPTURE]
-  ] as const)('offers only Reset session with %s', (_case, menu) => {
-    expect(composerActionRows(menu, false)).toStrictEqual([NEW_SESSION_ACTION])
+    ['a menu without one of them', WITHOUT_KNOWLEDGE_CAPTURE],
+    ['a menu naming every command', NAMING_EVERY_COMMAND]
+  ] as const)('offers Reset session, then every command greyed, with %s', (_case, menu) => {
+    expect(composerActionRows(menu, false)).toStrictEqual([
+      NEW_SESSION_ACTION,
+      ...COMPOSER_ACTIONS.map((action) => ({ ...action, unavailable: true }))
+    ])
   })
 
-  it('draws only the Reset session row in the panel', () => {
+  it('draws the command rows with the unavailable note, and Reset session without it', () => {
     const markup = renderToStaticMarkup(
       <ComposerOptionsPanel
         options={composerActionRows(null, false)}
@@ -324,9 +334,14 @@ describe('a session without slash commands (#1655)', () => {
         focusedIndex={0}
       />
     )
-    expect(rowCount(markup)).toBe(1)
-    expect(markup).toContain(`>${NEW_SESSION_ACTION.label}<`)
-    for (const action of COMPOSER_ACTIONS) expect(markup).not.toContain(`>${action.label}<`)
+    expect(rowCount(markup)).toBe(1 + COMPOSER_ACTIONS.length)
+    expect(markup).toContain(`class="composer-options__item">${NEW_SESSION_ACTION.label}</button>`)
+    expect(countOf(markup, COMPOSER_OPTIONS_UNAVAILABLE_NOTE)).toBe(COMPOSER_ACTIONS.length)
+    for (const action of COMPOSER_ACTIONS) {
+      expect(markup).toContain(
+        `>${action.label}<span class="composer-options__unavailable-note">${COMPOSER_OPTIONS_UNAVAILABLE_NOTE}</span>`
+      )
+    }
   })
 
   it('leaves the trigger unchanged', () => {

@@ -48,10 +48,16 @@ test('a session without slash commands, MCP status or a context breakdown shows 
   await expect(page.locator('.composer__context')).toHaveText('Context: 25%', { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(page.locator('.composer__context-trigger')).toHaveCount(0)
 
-  // The Actions menu offers the control row alone. `exact` because `More actions` also matches `Actions`.
+  // The Actions menu offers the control row live and both command rows greyed (#1697). `exact` because
+  // `More actions` also matches `Actions`. composer-actions-unavailable.spec.ts drives the greyed pick.
   await page.getByRole('button', { name: 'Actions', exact: true }).click()
   const panel = page.getByRole('menu', { name: 'Actions', exact: true })
-  await expect(panel.getByRole('menuitem')).toHaveText(['Reset session'])
+  await expect(panel.getByRole('menuitem')).toHaveText([
+    'Reset session',
+    /^Compact session/,
+    /^Knowledge capture/
+  ])
+  await expect(panel.locator('[aria-disabled="true"]')).toHaveCount(2)
   await page.keyboard.press('Escape')
   await expect(panel).toHaveCount(0)
 

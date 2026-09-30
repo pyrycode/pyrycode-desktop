@@ -1,4 +1,6 @@
 import { useMemo } from 'react'
+import { composerModelMenuModel, type ComposerModelLayers } from './ComposerModelMenu'
+import { selectDisplayedEffort } from './ComposerEffortMenu'
 import type { WireAgent, WireModelOption } from '@shared/wire/types'
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
 import { useSessionIdStore, selectSessionId, sessionIdStore } from '../../store/sessionIdStore'
@@ -189,21 +191,8 @@ const INHERITED_DEFAULT_MODEL_VALUE = 'default'
  * start hiding the `auto` entry on every inherited-default chat — a behaviour change to a third control,
  * invisible to every criterion #1168 was judged by. Both are pinned by tests in their own files.
  *
- * `composerModelMenuModel` WAS THE THIRD OF THOSE AND IS NOW A CALLER (#1423), which is why this docblock
- * no longer reads as three-against-two. #1168 held it out because widening its MARKING lookup outright
- * would claim a row was picked on a chat where nobody picked one, and #1053 had settled that state by
- * LAYERING — but layering only speaks once claude has announced something, and since pyrycode#2085 a new
- * chat has no announcement until it is messaged. It therefore takes this substitution on ONE state only:
- * no pick, no announcement and no stored choice, where the row it resolves is both what the trigger reads
- * and, honestly, what the session is set to. Its own docblock carries that reasoning; the case #1168
- * pinned (an announcement over an empty session model) still marks nothing and is still pinned.
- *
- * THE NAME NOW LAGS THE CALLERS, and #1423 declined the rename rather than overlooking it. The rule is
- * "the row a SESSION MODEL resolves to, the empty one being the daemon's inherited default", which is not
- * about effort at all — `publishedRowFor` above was named for its rule on exactly this occasion, its
- * second caller. Renaming would touch three further files plus an e2e comment and staleify five knowledge
- * documents for no behavioural gain, which is adjacent-refactor work a slice changing one call site does
- * not need. Recorded here so the next reader finds a decision rather than an accident.
+ * Model marking is decided separately by composerModelMenuModel. This helper keeps the saved/picked
+ * model's internal default resolution for effort offerings, regardless of the announced running row.
  *
  * IT IS A JOIN, NEVER A VOCABULARY. With no inherited-default row published, or no `model_list` frame
  * received, this returns `undefined` and both surfaces render exactly what they rendered before #1168 —
@@ -324,6 +313,7 @@ function RunConfigError({ field }: { field: SettingsChange['field'] }): JSX.Elem
  */
 export function RunConfigView({
   model,
+  modelLayers,
   effort,
   yolo,
   usedTokens,
@@ -336,7 +326,8 @@ export function RunConfigView({
   agent = 'claude'
 }: {
   model: string
-  effort: string
+  modelLayers?: ComposerModelLayers
+  effort: string | null | undefined
   yolo: boolean
   usedTokens: number
   windowTokens: number
@@ -348,6 +339,9 @@ export function RunConfigView({
   /** #1651 — the conversation's agent; absent reads Claude. */
   agent?: WireAgent
 }): JSX.Element {
+  const selectedModel = composerModelMenuModel(models, modelLayers ?? {
+    picked: '', stored: model, announced: announced?.model ?? ''
+  }, agent)?.currentId ?? null
   // #975/#976: the submitted string is a published row's `value` — or, for effort, a published level —
   // VERBATIM, never normalised on the way out, which is the half of the round-trip these lines own.
   const onModel = onChange ? (value: string): void => onChange({ field: 'model', value }) : undefined
@@ -364,7 +358,7 @@ export function RunConfigView({
           segmentFor chunk in the tests. */}
       <RunningModelSection announced={announced} models={models} agent={agent} />
       <ModelSection
-        model={model}
+        model={selectedModel}
         models={models}
         agent={agent}
         onSelect={onModel}
@@ -388,9 +382,7 @@ export function RunConfigView({
 
 // #560 — the running-model surface: what claude ANNOUNCED for the running turn (#587 decodes it off the
 // `system` / `init` line, #588 holds it), as opposed to the daemon's persisted OVERRIDE the Model rows
-// below display. On a daemon where nothing was overridden the override is '' and no row is marked, which
-// is honest but indistinguishable from broken; this section answers the question the operator is
-// actually asking. Header + column body, cloning the Context window idiom (Figma 20:149 / 20:151); the
+// below configure. Its exact lookup remains independent of the inherited radio selection rule. Header + column body, cloning the Context window idiom (Figma 20:149 / 20:151); the
 // design draws no running-model surface and no not-yet-known state.
 //
 // SECURITY — this is the render boundary for `announced.model`. It is untrusted, model-influenced text
@@ -456,9 +448,8 @@ function RunningModelSection({
 // field the operator was told is in flight.
 //
 // #975 — THE ROWS ARE THE DAEMON'S. The section renders one row per published entry, in the daemon's
-// order, and derives nothing: no family is parsed out of a `value` (it is not parseable — the measured
-// entries are `default`, `opus[1m]`, `claude-fable-5[1m]`, `sonnet`, `haiku`), no descriptor is
-// written here, and no row is invented, reordered, deduped or dropped.
+// order, excluding the internal default row. Labels and descriptors remain published text;
+// selection comes from the shared composerModelMenuModel decision.
 //
 // THREE READINGS, NEVER TWO. `null` (no frame has arrived, a normal and permanent state under
 // best-effort delivery) and a present entry holding `models: []` (claude published an empty list) are
@@ -485,7 +476,7 @@ function ModelSection({
   error,
   busy
 }: {
-  model: string
+  model: string | null
   models?: ModelListEntry | null
   agent: WireAgent
   onSelect?: (value: string) => void
@@ -495,7 +486,7 @@ function ModelSection({
   const entry = models ?? null
   // #1651: only the conversation's own agent's rows. An agent offering none reads the empty sentence; the
   // frame-level partial notice above still reports the entry's own drops.
-  const rows = modelRowsFor(entry, agent)
+  const rows = modelRowsFor(entry, agent).filter(row => row.value !== 'default')
   return (
     <>
       <p className="status-sheet__section-header">Model</p>
@@ -641,7 +632,7 @@ function EffortSection({
   error,
   busy
 }: {
-  effort: string
+  effort: string | null | undefined
   model: string
   models?: ModelListEntry | null
   agent: WireAgent
@@ -832,8 +823,8 @@ function ContextWindowSection({
 /**
  * The container: reads three read-only slices — the session id (#259), the daemon snapshot (#187), and
  * the write state (#256) — and wires the controls at interaction time. The displayed Model/Effort/YOLO
- * is #256's composed selectEffectiveSettings (optimistic pending overlay > client-confirmed override >
- * snapshot base); usedTokens/windowTokens still come straight from the snapshot (coalesced null → 0)
+ * uses shared model-selection and displayed-effort decisions; effective settings still determine
+ * effort offerings and YOLO. usedTokens/windowTokens still come straight from the snapshot (coalesced null → 0)
  * exactly as #188. Unidirectional: it dispatches only via submitSettingsChange and sends one command per
  * interaction; no setter is ever called during render.
  *
@@ -922,7 +913,12 @@ export function RunConfigSections({ conversationId }: { conversationId: string |
   return (
     <RunConfigView
       model={effective.model}
-      effort={effective.effort}
+      modelLayers={{
+        picked: selectEffectiveSettings(null, writeState).model,
+        stored: snapshot?.model ?? null,
+        announced: announced?.model ?? ''
+      }}
+      effort={selectDisplayedEffort(snapshot, writeState)}
       yolo={effective.yolo}
       usedTokens={contextTokens.usedTokens}
       windowTokens={contextTokens.windowTokens}

@@ -3249,11 +3249,12 @@ export interface ConversationSummary {
   cwd: string
   last_message_ts: string
   last_used_at: string
+  /** Archive instant from daemon PR #2700; optional for legacy snapshots and fixtures. */
+  archived_at?: string | null
   workspace_label: string | null
 }
 
-/** Inbound `conversations` reply body (daemon → client). Order preserved from the wire — the daemon
- *  is the source of truth for ordering (e.g. most-recently-used first). See #139. */
+/** Inbound list reply: decoding preserves wire order; individual views derive their own order. */
 export interface ConversationsPayload {
   conversations: ConversationSummary[]
 }

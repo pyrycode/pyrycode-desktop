@@ -3,7 +3,7 @@ import type { ConversationSummary } from '@shared/wire/types'
 import { partitionArchived, archivedSubtitle, tabCountLabel } from './archiveViewModel'
 
 // The row factory cloned from channelListViewModel.test.ts — only the fields the view-model reads
-// (is_archived, is_promoted, last_message_ts) matter; the rest are opaque filler.
+// (is_archived, is_promoted, archived_at, last_used_at) matter; the rest are opaque filler.
 function row(over: Partial<ConversationSummary>): ConversationSummary {
   return {
     id: 'id',
@@ -41,15 +41,6 @@ describe('partitionArchived', () => {
     expect(discussions.map((r) => r.id)).toEqual(['d1'])
   })
 
-  it('preserves the store array order within each section (no re-sort)', () => {
-    const rows = [
-      row({ id: 'c-late', is_archived: true, is_promoted: true }),
-      row({ id: 'c-early', is_archived: true, is_promoted: true })
-    ]
-    const { channels } = partitionArchived(rows)
-    expect(channels.map((r) => r.id)).toEqual(['c-late', 'c-early'])
-  })
-
   it('yields both sections empty for an empty input', () => {
     const { channels, discussions } = partitionArchived([])
     expect(channels).toHaveLength(0)
@@ -77,26 +68,26 @@ describe('archivedSubtitle', () => {
   const now = Date.parse('2026-01-15T12:00:00.000Z')
   const isoAgo = (msAgo: number): string => new Date(now - msAgo).toISOString()
 
-  it('composes "Archived " + the relative last-activity time', () => {
-    expect(archivedSubtitle(isoAgo(50 * 3_600_000), now)).toBe('Archived 2 days ago')
+  it('composes "Archived " + the selected relative time', () => {
+    expect(archivedSubtitle(row({ archived_at: isoAgo(50 * 3_600_000) }), now)).toBe('Archived 2 days ago')
   })
 
   it('does NOT double the "ago" (formatLastActivity already embeds it)', () => {
-    const out = archivedSubtitle(isoAgo(5 * 60_000), now)
+    const out = archivedSubtitle(row({ archived_at: isoAgo(5 * 60_000) }), now)
     expect(out).toBe('Archived 5m ago')
     expect(out).not.toContain('ago ago')
   })
 
   it('renders a past-a-week timestamp as "Archived <short date>" with no "ago"', () => {
     // now - 10 days = 2026-01-05 (UTC) → "Jan 5"; the date carries no "ago".
-    const out = archivedSubtitle(isoAgo(10 * 86_400_000), now)
+    const out = archivedSubtitle(row({ archived_at: isoAgo(10 * 86_400_000) }), now)
     expect(out).toBe('Archived Jan 5')
     expect(out).not.toContain('ago')
   })
 
   it('yields a bare "Archived" (no trailing space) for a non-parseable timestamp', () => {
-    expect(archivedSubtitle('not-a-date', now)).toBe('Archived')
-    expect(archivedSubtitle('', now)).toBe('Archived')
+    expect(archivedSubtitle(row({ last_used_at: 'not-a-date' }), now)).toBe('Archived')
+    expect(archivedSubtitle(row({ last_used_at: '' }), now)).toBe('Archived')
   })
 })
 
@@ -112,4 +103,55 @@ describe('tabCountLabel', () => {
   it('renders a bare label when the count is null (not yet loaded)', () => {
     expect(tabCountLabel('Channels', null)).toBe('Channels')
   })
+})
+
+
+describe('archive order', () => {
+  it.each([true, false])('sorts mixed rows across hosts in each tab, promoted=%s, without mutation', (is_promoted) => {
+    const rows = [
+      { ...row({ id: 'old-stamp', archived_at: '2026-01-01T00:00:00Z', last_used_at: '2026-03-01T00:00:00Z' }), serverId: 'host-a' },
+      { ...row({ id: 'absent', last_used_at: '2026-01-04T00:00:00Z' }), serverId: 'host-a' },
+      { ...row({ id: 'null', archived_at: null, last_used_at: '2026-01-03T00:00:00Z' }), serverId: 'host-b' },
+      { ...row({ id: 'invalid', archived_at: 'bad', last_used_at: '2026-01-02T00:00:00Z' }), serverId: 'host-b' },
+      { ...row({ id: 'new-stamp', archived_at: '2026-01-05T00:00:00Z', last_used_at: 'bad' }), serverId: 'host-b' },
+      row({ id: 'z-invalid', archived_at: 'bad', last_used_at: 'bad' }),
+      row({ id: 'a-invalid', last_used_at: '' })
+    ].map((r) => Object.freeze({ ...r, is_promoted, is_archived: true }))
+    const before = [...rows]
+    Object.freeze(rows)
+    const result = partitionArchived(rows)
+    expect(result[is_promoted ? 'channels' : 'discussions'].map((r) => r.id)).toEqual([
+      'new-stamp', 'absent', 'null', 'invalid', 'old-stamp', 'a-invalid', 'z-invalid'
+    ])
+    expect(rows).toEqual(before)
+    expect(result[is_promoted ? 'discussions' : 'channels']).toEqual([])
+  })
+
+  it('ties equivalent offset instants by UTF-16 id, keeping fully equal rows stable', () => {
+    const first = row({ id: 'same', name: 'first', is_archived: true, archived_at: '2026-01-01T12:00:00Z' })
+    const second = { ...first, name: 'second', archived_at: '2026-01-01T14:00:00+02:00' }
+    const rows = [
+      row({ id: '\uE000', is_archived: true, archived_at: '2026-01-01T07:00:00-05:00' }),
+      second, row({ id: '😀', is_archived: true, archived_at: first.archived_at }), first
+    ]
+    expect(partitionArchived(rows).discussions).toEqual([second, first, rows[2], rows[0]])
+  })
+
+  it.each(['2026-01-15', 'January 15, 2026', '2026-01-15T12:00:00', '2026-02-30T00:00:00Z', '2026-01-15 12:00:00Z'])('does not select non-RFC3339 archive stamp %s', (archived_at) => {
+    expect(archivedSubtitle(row({ archived_at, last_used_at: '2026-01-01T00:00:00Z' }), Date.parse('2026-01-15T12:00:00Z'))).toBe('Archived Jan 1')
+  })
+})
+
+
+it('orders distinct sub-millisecond RFC3339 instants before applying id ties', () => {
+  const older = row({ id: 'a', is_archived: true, archived_at: '2026-01-01T12:00:00.000000001Z' })
+  const newer = row({ id: 'z', is_archived: true, archived_at: '2026-01-01T14:00:00.000000002+02:00' })
+  expect(partitionArchived([older, newer]).discussions).toEqual([newer, older])
+})
+
+
+it('ties a parsed legacy format with an RFC3339 instant at the same millisecond', () => {
+  const stamped = row({ id: 'z', is_archived: true, archived_at: '2026-01-01T12:00:00.001Z' })
+  const legacy = row({ id: 'a', is_archived: true, last_used_at: '2026-01-01T12:00:00.001+0000' })
+  expect(partitionArchived([stamped, legacy]).discussions).toEqual([legacy, stamped])
 })

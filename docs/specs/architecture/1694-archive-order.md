@@ -72,3 +72,14 @@ Pending for the documentation stage: update `docs/knowledge/features/archive-scr
 - Threat alignment: a hostile daemon can choose ordering metadata but cannot turn it into markup, attributes, URLs or filesystem operations. Relay, disk-token theft and renderer isolation defenses stay in their existing modules; no new threat surface requires a deferred fix.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`). **Date:** 2026-10-01.
+
+
+## Revisions
+
+### 2026-10-01 — implementation and evidence
+
+- Resolved daemon availability: built an isolated Git archive of clean source revision `36acd04c79f1279c5c5dfb14a4c35e4dc6b6aff0` into `/tmp/pyry-1694-build.353mpv/pyry`; `git merge-base --is-ancestor` confirms prerequisite merge `2b918a7537a3548996633317d955e76d72b58016`. The installed dedicated daemon was not replaced. The focused Claude-less spec executed and passed (1 passed, 0 skipped), recording that revision.
+- Explicit precision detail: the selected instant retains the fractional-second remainder beyond the parsed milliseconds for comparisons after `Date.parse` milliseconds tie. A RED→GREEN test covers distinct nanosecond archive instants across equivalent UTC offsets.
+- Existing `daemonConnection` and in-process round-trip list fixtures now include normalized `archived_at: null`; this is an expected-shape update, with no production fan-out beyond the original five files.
+- Visual review of actual `ArchiveScreenView` with synthetic recent, legacy and invalid rows at 412×892 and 800×800: new ordering and all three subtitle states render correctly; header, tabs, text column and restore placement retain existing geometry. Captures: `/tmp/builder-1694-visual/archive-412.png` and `/tmp/builder-1694-visual/archive-800.png`. Pre-existing flat background, platform font fallback and Material restore-glyph differences from Figma remain outside the timestamp/order scope.
+- Final written scope remains below 800 lines, with five production files, no new exported type/component/store and one updated production subtitle caller.

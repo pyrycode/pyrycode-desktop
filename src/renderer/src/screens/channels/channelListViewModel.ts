@@ -20,8 +20,8 @@ export function titleFor(name: string | null): string {
 
 /**
  * Split the store's rows into the two Figma sections by `is_promoted` (`true` = a saved Channel,
- * `false` = an ad-hoc Recent discussion). Two order-preserving filters — no sort: the daemon's array
- * order is authoritative (AC2), so within each section rows keep their store order.
+ * `false` = an ad-hoc Recent discussion). This shared primitive preserves input order, including for
+ * Archive; active-sidebar ordering is applied separately by `partitionActive`.
  */
 // Generic over the row since #1070, so a filter never ERASES a property the caller put on its rows: the
 // sidebar hands in `ServerConversationSummary`s and needs the server stamp to survive to `groupByServer`.
@@ -42,11 +42,9 @@ export function partitionByPromotion<T extends ConversationSummary>(
 
 /**
  * The active Channel List's row source: drop archived rows first, then split the survivors by
- * promotion via the shared primitive. The exact dual of `archiveViewModel.partitionArchived`
- * (which keeps `r.is_archived`) — the two symmetric callers of `partitionByPromotion`, which itself
- * stays the neutral shared split. Order-preserving (no sort). Fixes #469: `list_conversations`
- * returns archived rows tagged `is_archived` (pyrycode#880) and the active list never filtered them,
- * so archived conversations leaked into both the active list and the Archive screen.
+ * promotion via the order-preserving shared primitive, then sort each active partition by displayed
+ * title. `groupByServer` preserves that order within each host and unattributed fallback. Archive
+ * retains input order through `partitionByPromotion`; sorting never modifies input rows or arrays.
  */
 export function partitionActive<T extends ConversationSummary>(
   rows: readonly T[]
@@ -54,7 +52,28 @@ export function partitionActive<T extends ConversationSummary>(
   channels: readonly T[]
   discussions: readonly T[]
 } {
-  return partitionByPromotion(rows.filter((r) => !r.is_archived))
+  const { channels, discussions } = partitionByPromotion(rows.filter((r) => !r.is_archived))
+  return {
+    channels: [...channels].sort(compareActiveRows),
+    discussions: [...discussions].sort(compareActiveRows)
+  }
+}
+
+/** UTF-16 code-unit ordering, independent of locale and without natural-number collation. */
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0
+}
+
+function activeSortKey(label: string): string {
+  return label.normalize('NFKD').replace(/\p{Mn}/gu, '').toLowerCase()
+}
+
+/** Keep the mobile twin's key → trimmed display label → conversation ID tie-break contract. */
+function compareActiveRows(left: ConversationSummary, right: ConversationSummary): number {
+  const leftLabel = titleFor(left.name).trim()
+  const rightLabel = titleFor(right.name).trim()
+  return compareText(activeSortKey(leftLabel), activeSortKey(rightLabel)) ||
+    compareText(leftLabel, rightLabel) || compareText(left.id, right.id)
 }
 
 /**

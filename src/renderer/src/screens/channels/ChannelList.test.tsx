@@ -168,6 +168,49 @@ const render = (
   )
 
 describe('host-first sidebar', () => {
+  it('sorts each host section and fallback independently on successive list snapshots', () => {
+    const rows = [
+      row({ id: 'bc-z', name: 'Z second channel', serverId: SECOND_SERVER, is_promoted: true }),
+      row({ id: 'ad-z', name: 'Z first chat' }),
+      row({ id: 'oc-z', name: 'Z fallback channel', serverId: null, is_promoted: true }),
+      row({ id: 'ac-z', name: 'Z first channel', is_promoted: true }),
+      row({ id: 'bd-z', name: 'Z second chat', serverId: SECOND_SERVER }),
+      row({ id: 'od-z', name: 'Z fallback chat', serverId: 'unpaired' }),
+      row({ id: 'bd-a', name: 'A second chat', serverId: SECOND_SERVER }),
+      row({ id: 'ac-a', name: 'A first channel', is_promoted: true }),
+      row({ id: 'oc-a', name: 'A fallback channel', serverId: null, is_promoted: true }),
+      row({ id: 'ad-a', name: 'A first chat' }),
+      row({ id: 'bc-a', name: 'A second channel', serverId: SECOND_SERVER, is_promoted: true }),
+      row({ id: 'od-a', name: 'A fallback chat', serverId: 'unpaired' }),
+      row({ id: 'unnamed', name: null }),
+      row({ id: 'archived', name: 'Hidden archived', is_archived: true })
+    ]
+    const titles = (html: string): string[] => [...html.matchAll(/class="channel-list__title">([^<]*)<\/span>/g)]
+      .map(match => match[1])
+    const snapshots = [rows, rows.map(r => r.id === 'ad-z' ? { ...r, name: '0 renamed chat' }
+      : r.id === 'unnamed' ? { ...r, name: 'B auto-named chat' } : r)]
+    for (const [index, snapshot] of snapshots.entries()) {
+      const html = render(snapshot, 'ad-z', [DEFAULT_SERVER, SECOND_SERVER])
+      const sections = html.split('class="channel-list__section"').slice(1)
+      expect(sections).toHaveLength(6)
+      expect(sections.map(titles)).toEqual([
+        ['A first channel', 'Z first channel'],
+        index === 0 ? ['A first chat', 'Untitled', 'Z first chat']
+          : ['0 renamed chat', 'A first chat', 'B auto-named chat'],
+        ['A second channel', 'Z second channel'],
+        ['A second chat', 'Z second chat'],
+        ['A fallback channel', 'Z fallback channel'],
+        ['A fallback chat', 'Z fallback chat']
+      ])
+      const hosts = html.split(HOST_ROW_MARKER)
+      expect(hosts).toHaveLength(3)
+      expect(hosts[1]).toContain('A first channel')
+      expect(hosts[1]).not.toContain('A second channel')
+      expect(hosts[2]).toContain('A second channel')
+      expect(html.indexOf('A fallback channel')).toBeGreaterThan(html.indexOf('Z second chat'))
+      expect(html).not.toContain('Hidden archived')
+    }
+  })
   it('draws each saved host once with its own open sections and no workspace row', () => {
     const html = render([row({ id: 'channel', is_promoted: true }), row({ id: 'chat' })], null, [DEFAULT_SERVER, SECOND_SERVER])
     expect(html.match(/class="channel-list__host"/g)).toHaveLength(2)
@@ -552,16 +595,16 @@ describe('ChannelListView', () => {
     expect(markup).not.toContain(HOST_ROW_MARKER)
   })
 
-  it('both sections preserve row order', () => {
+  it('both sections render alphabetically', () => {
     const markup = render([
-      row({ id: 'c1', name: 'kitchenclaw refactor', is_promoted: true }),
       row({ id: 'c2', name: 'leaky-faucet', is_promoted: true }),
+      row({ id: 'c1', name: 'kitchenclaw refactor', is_promoted: true }),
       row({ id: 'd1', name: 'Help me debug auth flow', is_promoted: false })
     ])
     expect(markup).toContain('>Channels<')
     expect(markup).toContain('>Chats<')
     expect(markup).not.toContain('channel-list__divider')
-    // Array order preserved within the channels section.
+    // Display order follows titles even when the snapshot is reversed.
     expect(markup.indexOf('kitchenclaw refactor')).toBeLessThan(markup.indexOf('leaky-faucet'))
   })
 

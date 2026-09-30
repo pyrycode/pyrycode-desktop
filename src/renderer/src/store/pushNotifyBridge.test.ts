@@ -459,6 +459,93 @@ describe('subscribePushNotify mute (#1607)', () => {
   })
 })
 
+// #1691: a question batch notifies like a modal prompt — same gates, name lookup and click token —
+// once per batch, deduplicated apart from modal ids (mobile's `batch:<questionBatchId>` key).
+const questionShown: Extract<DaemonEvent, { type: 'questionShown' }> = {
+  type: 'questionShown',
+  conversationId: 'conv-q-XYZ',
+  questionBatchId: 'batch-XYZ',
+  questions: [
+    {
+      question: 'question-XYZ',
+      header: 'header-XYZ',
+      options: [{ label: 'label-XYZ', description: 'desc-XYZ' }],
+      multi_select: false
+    }
+  ]
+}
+
+describe('subscribePushNotify question batches (#1691)', () => {
+  it('maps questionShown → prompt', () => {
+    expect(notifyKindForEvent(questionShown)).toBe('prompt')
+  })
+
+  it('a batch sends one named prompt with a token from its own origin, and no batch field', () => {
+    const bridge = fakeBridge()
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    const nameFor = vi.fn(() => 'deploy-bot')
+    const mintToken = vi.fn(() => 'tok')
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true, nameFor, mintToken)
+
+    bridge.emit(questionShown, 'srv-Q')
+    expect(sendCommand).toHaveBeenCalledTimes(1)
+    expect(sendCommand).toHaveBeenCalledWith({
+      type: 'notify',
+      payload: { kind: 'prompt', name: 'deploy-bot', token: 'tok' }
+    })
+    expect(nameFor).toHaveBeenCalledWith('srv-Q', 'conv-q-XYZ')
+    expect(mintToken).toHaveBeenCalledWith({ serverId: 'srv-Q', conversationId: 'conv-q-XYZ' })
+    expect(JSON.stringify(sendCommand.mock.calls[0][0])).not.toContain('XYZ')
+  })
+
+  it('a re-sent batch sends nothing more; a new batch id does', () => {
+    const bridge = fakeBridge()
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true, noName)
+
+    bridge.emit(questionShown)
+    bridge.emit(questionShown)
+    expect(sendCommand).toHaveBeenCalledTimes(1)
+    bridge.emit({ ...questionShown, questionBatchId: 'batch-XYZ-2' })
+    expect(sendCommand).toHaveBeenCalledTimes(2)
+  })
+
+  it('toggle off or muted sends and mints nothing, and does not record the batch', () => {
+    const bridge = fakeBridge()
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    const mintToken = vi.fn(() => 'tok')
+    let enabled = false
+    let muted = false
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => enabled, noName, mintToken, () => muted)
+
+    bridge.emit(questionShown)
+    enabled = true
+    muted = true
+    bridge.emit(questionShown)
+    expect(sendCommand).not.toHaveBeenCalled()
+    expect(mintToken).not.toHaveBeenCalled()
+    muted = false
+    bridge.emit(questionShown) // the daemon's re-send
+    expect(sendCommand).toHaveBeenCalledTimes(1)
+  })
+
+  it('a batch id equal to an announced modal id still notifies once, and vice versa', () => {
+    const bridge = fakeBridge()
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true, noName)
+
+    bridge.emit(modalShown)
+    bridge.emit({ ...questionShown, questionBatchId: 'modal-XYZ' })
+    bridge.emit({ ...questionShown, questionBatchId: 'modal-XYZ' })
+    expect(sendCommand).toHaveBeenCalledTimes(2)
+
+    bridge.emit(questionShown)
+    bridge.emit({ ...modalShown, modalId: 'batch-XYZ' } as DaemonEvent)
+    bridge.emit({ ...modalShown, modalId: 'batch-XYZ' } as DaemonEvent)
+    expect(sendCommand).toHaveBeenCalledTimes(4)
+  })
+})
+
 describe('conversationMutedIn (#1607)', () => {
   function row(id: string, serverId: string | null, is_muted?: boolean): ServerConversationSummary {
     const summary: ConversationSummary = {

@@ -129,7 +129,8 @@ disconnected and error all block; another connected host grants no fallback auth
 `connectedConversationHostNow` re-reads ownership and status immediately before dispatch
 and optimistic changes. This covers sending (including slash commands), reset/compact
 and recovery commands, interrupt by button or Escape, queue removal, rename/archive/delete,
-workspace changes and attachment downloads. Pre-opened dialogs cannot submit after
+workspace changes, attachment downloads and the [Log data debug-bundle
+download](conversation-shell-run-configuration.md#log-data-section-72) (\#1692). Pre-opened dialogs cannot submit after
 disconnect; blocked attempts preserve draft, rename/folder text and queued content and
 are never queued for reconnect. Settings and [prompt responses](conversation-shell-modals.md)
 retain their separately owned gates.

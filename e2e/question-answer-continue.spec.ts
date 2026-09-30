@@ -234,8 +234,8 @@ test('question panel: Continue waits for a complete batch, then sends every answ
   await expect(trailing).toBeEnabled()
   await optionRow('Neither').click()
   await optionRow('Tabs').click()
+  // Typing ticks Other (#1698), so no click on the row: one would flip it back off.
   await otherField.fill(OTHER_TYPED)
-  await otherTick.click()
 
   // Model changes preserve the active middle question and every in-progress answer.
   const footer = page.locator('.composer__footer:visible')

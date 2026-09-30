@@ -26,3 +26,7 @@ Overlap: no in-flight branch touches these files.
 ## Documentation handoff
 
 None named by the ticket. The question-panel package overview's description of the Other text being "independent of the tick" (typing does not tick) is pending for the documentation stage to update.
+
+## Revisions
+
+- **2026-09-30, during build.** The Other-input comment in `QuestionPanelView` (`QuestionPanel.tsx`) and the "holds Other text in an un-ticked row" case in `QuestionPanel.test.tsx` both said typing into an un-ticked row leaves it un-ticked. Both are reworded, comment-only; the view test's state is still reachable (type, then un-tick), so its assertion is unchanged.

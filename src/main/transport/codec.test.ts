@@ -28,6 +28,16 @@ import type {
 // absent optionals omitted (never null). Round-tripping every payload type is AC #5.
 
 const utf8 = new TextDecoder('utf-8')
+
+it('hello constructor encodes replay position independently of the legacy timestamp', () => {
+  const input = { deviceName: 'desktop', clientVersion: '0.1.0', token: 'test-token' }
+  expect(makeHelloClientPayload(input)).not.toHaveProperty('last_event_id')
+  const payload = makeHelloClientPayload({ ...input, lastEventId: 42 })
+  expect(payload).toHaveProperty('last_event_id', 42)
+  expect(payload).not.toHaveProperty('last_seen_ts')
+  expect(decodeEnvelope(encodeEnvelope({ id: 1, type: 'hello', ts: '2026-10-01T00:00:00Z', payload })).payload)
+    .toEqual(payload)
+})
 const bytesOf = (s: string): Uint8Array => new TextEncoder().encode(s)
 
 describe('base64StdEncode / base64StdDecode', () => {

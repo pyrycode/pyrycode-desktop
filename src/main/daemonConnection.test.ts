@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { onCommand, type CommandSource } from './receiveCommand'
 import { createCorrelationRouter } from './correlationRouter'
 import { createConversationRouter } from './conversationRouter'
+import { createConnectionRegistry } from './connectionRegistry'
 import { parseInboundMessage } from './transport/inboundMessage'
 import {
   createDaemonConnection,
@@ -12480,5 +12481,176 @@ describe('readWorkspaceFile (#1626)', () => {
     drivers[0].emit({ type: 'message', plaintext: wholeFileChunk(id, MINTED, new Uint8Array([1])) })
 
     expect(spy.failed).toEqual(['stream-contradiction'])
+  })
+})
+
+describe('reconnect replay cursor', () => {
+  const rawFrame = (eventId: unknown, type = 'future', payload: unknown = null): Uint8Array =>
+    new TextEncoder().encode(JSON.stringify({ id: 1, type, ts: FIXED_TS, event_id: eventId, payload }))
+  const receive = (ctx: ReturnType<typeof build>, eventId: unknown, type = 'future', payload: unknown = null): void =>
+    ctx.drivers.at(-1)!.emit({ type: 'message', plaintext: rawFrame(eventId, type, payload) })
+  const hello = async (ctx: ReturnType<typeof build>): Promise<Record<string, unknown>> => {
+    const config = await ctx.drivers.at(-1)!.config.loadDialConfig!()
+    const payload = decodeEnvelope(config!.session.hello).payload as Record<string, unknown>
+    expect(payload).not.toHaveProperty('last_seen_ts')
+    return payload
+  }
+
+  it('starts empty and retains the maximum admitted safe integer across automatic and explicit redials', async () => {
+    const ctx = await reachConnected()
+    expect(decodeEnvelope(ctx.drivers[0].config.session.hello).payload).not.toHaveProperty('last_event_id')
+    receive(ctx, 12, 'message', null) // rejected payload still establishes the position
+    receive(ctx, 11)
+    receive(ctx, 12)
+    for (const invalid of [undefined, null, '90', 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) receive(ctx, invalid)
+    expect(await hello(ctx)).toHaveProperty('last_event_id', 12)
+    receive(ctx, 13)
+    expect(await hello(ctx)).toHaveProperty('last_event_id', 13)
+    ctx.connection.reconnect()
+    await tick()
+    expect(decodeEnvelope(ctx.drivers[1].config.session.hello).payload).toHaveProperty('last_event_id', 13)
+    ctx.drivers[0].emit({ type: 'message', plaintext: rawFrame(900) })
+    expect(await hello(ctx)).toHaveProperty('last_event_id', 13)
+    receive(ctx, Number.MAX_SAFE_INTEGER)
+    expect(await hello(ctx)).toHaveProperty('last_event_id', Number.MAX_SAFE_INTEGER)
+    // Unknown/malformed frames still emit no new renderer events or commands.
+    expect(emitted(ctx.sink).map(event => event.type)).toEqual(['connecting', 'connected', 'connecting'])
+    expect(ctx.drivers.flatMap(driver => driver.sent)).toEqual([])
+  })
+
+  it('resync clears only its host, logs no position and permits a new lower position', async () => {
+    const { log, records } = captureLog()
+    const a = build({ serverId: 'A', diagnosticLog: log })
+    const b = build({ serverId: 'B', load: async () => ({ ...RECORD, server: 'B' }) })
+    for (const ctx of [a, b]) { ctx.connection.start(); await tick() }
+    receive(a, 41)
+    receive(b, 99)
+    const before = emitted(a.sink)
+    for (const payload of [null, [], 'gap', 1, {}]) {
+      receive(a, 1000, 'resync', payload)
+      expect(await hello(a)).not.toHaveProperty('last_event_id')
+    }
+    expect(await hello(b)).toHaveProperty('last_event_id', 99)
+    expect(emitted(a.sink)).toEqual(before)
+    expect(a.drivers[0].sent).toEqual([])
+    a.connection.reconnect()
+    await tick()
+    expect(decodeEnvelope(a.drivers[1].config.session.hello).payload).not.toHaveProperty('last_event_id')
+    receive(a, 2)
+    expect(await hello(a)).toHaveProperty('last_event_id', 2)
+    expect(records.filter(record => record.event === 'replay-cursor-reset')).toEqual(
+      Array.from({ length: 5 }, () => ({ event: 'replay-cursor-reset', code: 'resync' }))
+    )
+    expect(records.every(record => !('event_id' in record) && !('last_event_id' in record))).toBe(true)
+  })
+
+  it('guard failures cannot record or reset a position', async () => {
+    const ctx = await reachConnected()
+    receive(ctx, 10)
+    for (const plaintext of [
+      new Uint8Array(65_520), new Uint8Array([0xff]),
+      new TextEncoder().encode(JSON.stringify({ id: 1, type: 'resync', ts: FIXED_TS, event_id: 100 }))
+    ]) ctx.drivers[0].emit({ type: 'message', plaintext })
+    expect(await hello(ctx)).toHaveProperty('last_event_id', 10)
+  })
+
+  it.each([
+    { server: 'replacement' }, { relay: 'wss://other.example/v1/client' },
+    { token: 'replacement-token' }, { server_static_pubkey: base64StdEncode(new Uint8Array(32).fill(8)) }
+  ])('record replacement resets the retained connection: %j', async change => {
+    let record = { ...RECORD }
+    const ctx = build({ load: async () => ({ ...record }) })
+    ctx.connection.start()
+    await tick()
+    receive(ctx, 42)
+    expect(await hello(ctx)).toHaveProperty('last_event_id', 42) // equal fresh object preserves
+    record = { ...record, ...change }
+    expect(await hello(ctx)).not.toHaveProperty('last_event_id')
+    receive(ctx, 3)
+    ctx.connection.reconnect()
+    await tick()
+    expect(decodeEnvelope(ctx.drivers[1].config.session.hello).payload).toHaveProperty('last_event_id', 3)
+  })
+
+  it('an absent pairing clears the old position before pairing the same host again', async () => {
+    let record: PairedServerRecord | null = RECORD
+    const ctx = build({ load: async () => record })
+    ctx.connection.start()
+    await tick()
+    receive(ctx, 42)
+    record = null
+    expect(await ctx.drivers[0].config.loadDialConfig!()).toBeNull()
+    record = RECORD
+    ctx.connection.reconnect()
+    await tick()
+    expect(decodeEnvelope(ctx.drivers[1].config.session.hello).payload).not.toHaveProperty('last_event_id')
+  })
+
+  it('a superseded asynchronous load cannot reset the successor cursor', async () => {
+    let record = RECORD
+    let delayed: Promise<PairedServerRecord | null> | undefined
+    const ctx = build({ load: () => delayed ?? Promise.resolve(record) })
+    ctx.connection.start()
+    await tick()
+    receive(ctx, 42)
+    let resolveOld!: (record: PairedServerRecord) => void
+    delayed = new Promise(resolve => { resolveOld = resolve })
+    const stale = ctx.drivers[0].config.loadDialConfig!()
+    delayed = undefined
+    record = { ...RECORD, token: 'new-pairing' }
+    ctx.connection.reconnect()
+    await tick()
+    receive(ctx, 7)
+    resolveOld(RECORD)
+    expect(await stale).toBeNull()
+    expect(await hello(ctx)).toHaveProperty('last_event_id', 7)
+  })
+
+  it('registry replacement and unpair/re-pair reset only that host, preserving other connections', async () => {
+    const other = { ...RECORD, server: 'other' }
+    let records = [RECORD, other]
+    const contexts = new Map<string | null, ReturnType<typeof build>>()
+    const registry = createConnectionRegistry({
+      store: {
+        save: async () => {},
+        load: async () => records.at(-1) ?? null,
+        loadById: async id => records.find(record => record.server === id) ?? null,
+        list: async () => records.map(record => ({ ...record }))
+      },
+      createConnection: spec => {
+        const ctx = build({ serverId: spec.serverId, load: spec.pairedServer.load })
+        contexts.set(spec.serverId, ctx)
+        return ctx.connection
+      }
+    })
+    registry.start()
+    await tick()
+    const a = contexts.get(RECORD.server)!
+    const b = contexts.get(other.server)!
+    receive(a, 42)
+    receive(b, 99)
+    records = [{ ...RECORD, token: 'replacement-token' }, other]
+    registry.reconcile()
+    await tick()
+    expect(contexts.get(RECORD.server)).toBe(a) // replacement retains the connection
+    expect(a.drivers).toHaveLength(2)
+    expect(decodeEnvelope(a.drivers[1].config.session.hello).payload).not.toHaveProperty('last_event_id')
+    expect(await hello(b)).toHaveProperty('last_event_id', 99)
+    receive(a, 7)
+
+    records = [other]
+    registry.reconcile()
+    await tick()
+    expect(a.drivers[1].stopped).toBe(true)
+    records = [other, RECORD]
+    registry.reconcile()
+    await tick()
+    const pairedAgain = contexts.get(RECORD.server)!
+    expect(pairedAgain).not.toBe(a)
+    expect(decodeEnvelope(pairedAgain.drivers[0].config.session.hello).payload).not.toHaveProperty('last_event_id')
+    expect(contexts.get(other.server)).toBe(b)
+    expect(b.drivers).toHaveLength(1)
+    expect(await hello(b)).toHaveProperty('last_event_id', 99)
+    registry.stop()
   })
 })

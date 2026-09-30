@@ -12033,3 +12033,36 @@ describe('parseInboundMessage — agent and family tags (#1649)', () => {
     }
   })
 })
+
+describe('replay envelope observation', () => {
+  it('observes admitted envelopes before payload narrowing, including unknown types', () => {
+    const observed = vi.fn()
+    const malformed = encodeEnvelope({ id: 1, type: 'message', ts: FIXED_TS, event_id: 10, payload: null })
+    expect(() => parseInboundMessage(malformed, undefined, observed)).toThrow(WireDecodeError)
+    expect(observed).toHaveBeenCalledWith(expect.objectContaining({ type: 'message', event_id: 10 }))
+    const future = encodeEnvelope({ id: 2, type: 'future', ts: FIXED_TS, event_id: 11, payload: [] })
+    expect(parseInboundMessage(future, undefined, observed)).toBeNull()
+    expect(observed).toHaveBeenCalledTimes(2)
+    expect(parseInboundMessage(encodeMessage(MSG), undefined, observed)).toEqual({ kind: 'message', message: MSG })
+  })
+
+  it('does not observe frames rejected by size, encoding or envelope guards', () => {
+    const observed = vi.fn()
+    const raw = (value: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(value))
+    for (const bytes of [
+      new Uint8Array(MAX_PLAINTEXT_BYTES + 1), new Uint8Array([0xff]), raw(null),
+      raw({ id: 'bad', type: 'resync', ts: FIXED_TS, payload: null, event_id: 100 }),
+      raw({ id: 1, type: 'resync', ts: FIXED_TS, event_id: 100 })
+    ]) {
+      expect(() => parseInboundMessage(bytes, undefined, observed)).toThrow(WireDecodeError)
+    }
+    expect(observed).not.toHaveBeenCalled()
+  })
+
+  it.each([null, [], 'gap', 5, {}, { reason: 'expired' }])('resync suppresses every payload shape: %j', payload => {
+    const observed = vi.fn()
+    expect(parseInboundMessage(encodeEnvelope({ id: 1, type: 'resync', ts: FIXED_TS, event_id: 99, payload }),
+      undefined, observed)).toBeNull()
+    expect(observed).toHaveBeenCalledWith(expect.objectContaining({ type: 'resync' }))
+  })
+})

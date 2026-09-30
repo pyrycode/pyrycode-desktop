@@ -29,6 +29,10 @@ import {
   type ConversationLastReadStorage
 } from '../../store/conversationLastReadStore'
 import { createModalStore, type ModalStore } from '../../store/modalStore'
+import {
+  createQuestionBatchStore,
+  type QuestionBatchStore
+} from '../../store/questionBatchStore'
 
 // #801's per-row dot reads four app-wide SINGLETONS (#874 added the fourth), and A WRITE TO ANY OF THEM IS
 // INVISIBLE TO `renderToStaticMarkup`. React's server renderer resolves `useSyncExternalStore` through its
@@ -58,6 +62,8 @@ const lastReadStore = createConversationLastReadStore(lastReadMemory)
 // carries that name and the mock factory below spreads it, so a same-named local const — legal — would
 // invite a misread about which of the two a seed writes to.
 const promptStore = createModalStore()
+// #1700's fifth read: a pending question batch lights the same input-required dot a prompt does.
+const questionStore = createQuestionBatchStore()
 
 vi.mock('../../store/conversationActivityStore', async (importActual) => ({
   ...(await importActual<typeof import('../../store/conversationActivityStore')>()),
@@ -77,6 +83,11 @@ vi.mock('../../store/conversationLastReadStore', async (importActual) => ({
 vi.mock('../../store/modalStore', async (importActual) => ({
   ...(await importActual<typeof import('../../store/modalStore')>()),
   useModalStore: <T,>(selector: (s: ModalStore) => T): T => selector(promptStore.getState())
+}))
+vi.mock('../../store/questionBatchStore', async (importActual) => ({
+  ...(await importActual<typeof import('../../store/questionBatchStore')>()),
+  useQuestionBatchStore: <T,>(selector: (s: QuestionBatchStore) => T): T =>
+    selector(questionStore.getState())
 }))
 
 // The #218 idiom: server-render the pure view with injected props — no DOM harness, no store. The
@@ -895,6 +906,8 @@ describe('ChannelListView', () => {
       timelineStore.getState().clearAllTimelines()
       lastReadStore.getState().clearAllLastRead()
       promptStore.getState().dispatch({ type: 'reset' })
+      // `reconnected` clears every held batch whatever it holds — the question store's `reset`.
+      questionStore.getState().dispatch({ type: 'reconnected' })
     })
 
     // The seeds, named for the STATUS they produce rather than for the store they write, so each case
@@ -1126,6 +1139,34 @@ describe('ChannelListView', () => {
       expect(chunkFor(render(threeRows()), 'Third conversation')).toContain(
         STATUS_DOT_INPUT_REQUIRED
       )
+    })
+
+    it('draws the input-required dot for a pending question batch alone, and drops it on dismissal (#1700)', () => {
+      // The batch id is derived from, never equal to, the conversation id, as `seedInputRequired` does.
+      questionStore.getState().dispatch({
+        type: 'shown',
+        conversationId: 'd1',
+        questionBatchId: 'q-d1',
+        questions: [
+          {
+            question: 'Which branch?',
+            header: 'Branch',
+            options: [{ label: 'main', description: '' }],
+            multiSelect: false
+          }
+        ]
+      })
+      seedWorking('d1')
+      let markup = render(threeRows())
+      expect(chunkFor(markup, 'Help me debug auth flow')).toContain(STATUS_DOT_INPUT_REQUIRED)
+      expect(countOf(markup, STATUS_DOT_INPUT_REQUIRED)).toBe(1)
+      // Answering and Cancel both resolve a batch through `dismissed`; the row falls back to working.
+      questionStore
+        .getState()
+        .dispatch({ type: 'dismissed', questionBatchId: 'q-d1', outcome: 'answered', source: 'remote' })
+      markup = render(threeRows())
+      expect(chunkFor(markup, 'Help me debug auth flow')).toContain(STATUS_DOT_WORKING)
+      expect(countOf(markup, STATUS_DOT_INPUT_REQUIRED)).toBe(0)
     })
 
     it('joins no existing row, host-row or affordance match set (AC4)', () => {

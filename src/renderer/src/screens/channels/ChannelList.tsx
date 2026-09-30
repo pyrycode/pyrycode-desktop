@@ -64,6 +64,7 @@ import {
 // RE-EXPORTED at modalStore.ts:45 precisely so consumers take the read surface from one site
 // (PermissionModal.tsx:192-194 is the shipped precedent).
 import { useModalStore, selectHasOutstandingFor } from '../../store/modalStore'
+import { useQuestionBatchStore, selectBatchFor } from '../../store/questionBatchStore'
 // #1098's whole read: which chat the pane is showing. The store has held it since #278 and the sidebar
 // simply did not read it — no new store, no IPC, no wire type.
 import { useActiveConversationStore } from '../../store/activeConversationStore'
@@ -2517,14 +2518,19 @@ function ConversationStatusDotControl({
 }: {
   conversationId: string
 }): JSX.Element {
-  const inputRequired = useModalStore(selectHasOutstandingFor(conversationId))
+  const promptPending = useModalStore(selectHasOutstandingFor(conversationId))
+  // #1700: a pending question batch waits on the operator exactly as a prompt does. The selector returns
+  // a plain boolean, value-stable under `Object.is`, never the held batch or a fresh object.
+  const questionPending = useQuestionBatchStore(
+    (s) => selectBatchFor(conversationId)(s) !== undefined
+  )
   const activity = useConversationActivityStore(selectActivityFor(conversationId))
   const timeline = useConversationTimelineStore(selectTimelineFor(conversationId))
   const lastRead = useConversationLastReadStore(selectLastReadFor(conversationId))
   return (
     <ConversationStatusDot
       status={resolveConversationStatus(
-        inputRequired,
+        promptPending || questionPending,
         activity,
         isConversationUnread(timeline, lastRead)
       )}

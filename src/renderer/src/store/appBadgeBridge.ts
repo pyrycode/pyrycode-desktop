@@ -18,6 +18,7 @@ import { modalStore, selectHasOutstandingFor } from './modalStore'
 import { conversationActivityStore, selectActivityFor } from './conversationActivityStore'
 import { conversationTimelineStore, selectTimelineFor } from './conversationTimelineStore'
 import { conversationLastReadStore, selectLastReadFor } from './conversationLastReadStore'
+import { questionBatchStore, selectBatchFor } from './questionBatchStore'
 
 /**
  * How many of `conversations` resolve to a status that needs the operator. The list is the CALLER's to
@@ -37,13 +38,15 @@ export function countAttentionConversations(
 }
 
 /**
- * One conversation's status from the four stores the sidebar dot reads, read now. The same four
+ * One conversation's status from the five stores the sidebar dot reads, read now. The same five
  * selectors and the same composition as `ConversationStatusDotControl`, over `getState()` rather than
- * hooks. Back-to-back synchronous reads, so not a torn read (conversationUnread.ts states why).
+ * hooks. Back-to-back synchronous reads, so not a torn read (conversationUnread.ts states why). A pending
+ * question batch waits on the operator exactly as a prompt does (#1700), so either one is input-required.
  */
 export function conversationStatusNow(conversationId: string): ConversationStatus {
   return resolveConversationStatus(
-    selectHasOutstandingFor(conversationId)(modalStore.getState()),
+    selectHasOutstandingFor(conversationId)(modalStore.getState()) ||
+      selectBatchFor(conversationId)(questionBatchStore.getState()) !== undefined,
     selectActivityFor(conversationId)(conversationActivityStore.getState()),
     isConversationUnread(
       selectTimelineFor(conversationId)(conversationTimelineStore.getState()),
@@ -62,14 +65,15 @@ export function attentionCountNow(): number {
   )
 }
 
-/** Wake `listener` on a write to any store the count reads; the returned handle removes all five. */
+/** Wake `listener` on a write to any store the count reads; the returned handle removes all six. */
 export function subscribeToAttentionStores(listener: () => void): () => void {
   const offs = [
     conversationListStore.subscribe(listener),
     modalStore.subscribe(listener),
     conversationActivityStore.subscribe(listener),
     conversationTimelineStore.subscribe(listener),
-    conversationLastReadStore.subscribe(listener)
+    conversationLastReadStore.subscribe(listener),
+    questionBatchStore.subscribe(listener)
   ]
   return () => offs.forEach((off) => off())
 }

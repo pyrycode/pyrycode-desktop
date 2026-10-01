@@ -63,17 +63,13 @@ export function joinKeyFor(type: string, ts: string): string | undefined {
 /**
  * The join key one live daemon event contributes, or `undefined` when it contributes none (#1225).
  *
- * NO ENUMERATION OF ARMS, DELIBERATELY. The set of stamped arms was decided at the ten emit sites in
- * `daemonConnection.ts`, and re-listing it here would be a second copy to drift from the first. An arm
- * with no `daemonTs` — `connected`, which stands behind no envelope, and `messageReceived`, whose
- * operator-authored row the daemon never pushes on the interactive lane — yields no key, so its page
- * twin can never be suppressed. That is what keeps the operator's own message a matter for
- * `removeUserEcho`'s `message_id` key and not for this one; neither widens to cover the other's case.
- *
- * `event.type` is this client's own discriminant, not a daemon string: the decode already narrowed the
- * wire type to a closed set and the emit wrote a literal. Only the `ts` half is remote.
+ * Most stamped events join by type and timestamp. User receipts are excluded because
+ * `withoutHeldEchoes` owns their message-id join and preserves the held row. Lifecycle events
+ * without an envelope contribute no key. Only the timestamp half is daemon-supplied.
  */
 export function liveJoinKeyFor(event: DaemonEvent): string | undefined {
+  // History user rows join against held message ids, never timestamp identity.
+  if (event.type === 'messageReceived') return undefined
   return event.daemonTs === undefined ? undefined : joinKeyFor(event.type, event.daemonTs)
 }
 
@@ -330,38 +326,18 @@ export function translateTimelineEvent(
       // `event.ack` (HelloAckPayload) — the reconcile needs no field off it. `daemonEventBridge` and
       // `sessionStore` stay independent consumers of the same edge; this is a third, not a centralisation.
       return { type: 'reconnected' }
-    case 'messageReceived':
-      // #1223: THE OPERATOR'S OWN TURN, and the one arm this translator owns that a live frame does not
-      // produce. The daemon writes the operator's message to its conversation log and pushes no
-      // `message` frame on the interactive lane, so a served history page is the only thing that
-      // reaches this case — which is what makes claiming it a no-op for the live lane rather than a
-      // behaviour change. It is not gated on provenance, because an event carries none; it is gated on
-      // the ROLE, which is the fact that actually decides whether a row is the operator's.
-      //
-      // `role: 'assistant'` returns null and MUST keep returning null. A stored assistant `message` is
-      // not a user row, and assistant content reaches the timeline through `assistantDelta` entries
-      // anyway — mapping it here would draw claude's words in the operator's own bubble.
-      //
-      // NO `createdAt`, and this is AC5's bridge half: the clock is read on `assistantDelta` and nowhere
-      // else, so a replayed row cannot be stamped with the moment it was drawn even on the live path,
-      // which does inject one. The entry's own `ts` is the daemon's real timestamp, but no typed event
-      // in this app carries a wire timestamp and wiring one is a separate change. No `attachments`
-      // either: `MessagePayload` has no attachment field, so there is nothing to carry.
-      //
-      // `message.text` is REPLAYED operator-authored content under the same plain-text-NEVER-HTML
-      // constraint as every other string this translator passes; reusing the live lane's own row is what
-      // keeps that escaping in force. `message_id` is carried for `removeUserEcho`'s key ALONE — it is
-      // read for strict string equality and is never a lookup path, a cache key, a Map key or a React
-      // key (the item's own contract, `threadTimeline.ts`), and unlike the held echo's it is a string
-      // ANOTHER client minted, stored by the daemon and replayed.
-      //
-      // `timelineTargetFor` is deliberately NOT widened for this arm, so a live `messageReceived` — which
-      // this daemon does not send — resolves to no keyed target and reaches the flat store only, whose
-      // `items` no screen reads. Routing one by its daemon-asserted `message.conversation_id` is a
-      // separate decision with its own detector.
-      return event.message.role === 'user'
-        ? { type: 'userText', text: event.message.text, messageId: event.message.message_id }
-        : null
+    case 'messageReceived': {
+      // Receipts share the user row, but never the composer's pending-send meaning. History has no
+      // live envelope time; neither lane may stamp a receipt with the desktop arrival clock.
+      if (event.message.role !== 'user') return null
+      const ts = 'daemonTs' in event ? event.daemonTs : undefined
+      const parsed = ts !== undefined && ts.length <= MAX_JOIN_TS_CHARS ? Date.parse(ts) : NaN
+      return {
+        type: 'userText', received: true, text: event.message.text,
+        messageId: event.message.message_id,
+        createdAt: Number.isFinite(parsed) ? parsed : undefined
+      }
+    }
     case 'connecting':
     case 'disconnected':
     case 'failed':
@@ -631,6 +607,9 @@ export function translateTimelineEvent(
  */
 export function timelineTargetFor(event: DaemonEvent): string | null {
   switch (event.type) {
+    case 'messageReceived':
+      return event.message.role === 'user' && event.message.conversation_id !== ''
+        ? event.message.conversation_id : null
     case 'toolProgress':
       return event.conversationId
     case 'banner':

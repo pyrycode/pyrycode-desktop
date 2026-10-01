@@ -41,16 +41,17 @@ translateTimelineEvent(event: DaemonEvent | HistoryTimelineEvent): ThreadEvent |
 // #1223 WIDENS THE PARAMETER, not the switch's case count over DaemonEvent alone: every
 // HistoryTimelineEvent arm is its live twin minus the conversationId no case reads, so every existing
 // case body is unchanged and total. messageReceived is the one case gated on more than `event.type`:
-// case 'messageReceived': return event.message.role === 'user'
-//   ? { type: 'userText', text: event.message.text, messageId: event.message.message_id } : null
+// case 'messageReceived': role user -> userText with received: true, text, messageId and
+// createdAt parsed from bounded, finite daemonTs; other roles -> null.
 // role: 'assistant' -> null, always — a stored assistant message is not a user row, and assistant
-// content already reaches the timeline via assistantDelta. No createdAt (the clock is read only on
-// assistantDelta, and a page reduces with no clock at all — historyPageBridge.ts, below); no
-// attachments (MessagePayload carries none). timelineTargetFor is deliberately NOT widened for this
-// arm — a live messageReceived (this daemon sends none) still resolves to no keyed target and reaches
-// the flat timelineStore only, whose items no screen reads.
+// content already reaches the timeline via assistantDelta. Receipts never read the arrival clock;
+// history has no daemonTs and remains unstamped. No attachments (MessagePayload carries none).
+// timelineTargetFor routes only live role-user messages with a nonempty message.conversation_id.
+// The received marker preserves localSendPending; nonempty held message identity returns the exact
+// state before content or sidecars fold. See the parent page's Live user receipts section.
 
 timelineTargetFor(event: DaemonEvent): string | null   // #756
+// case 'messageReceived': role user and message.conversation_id !== '' -> that id, otherwise null
 // switch (event.type) { case 'assistantDelta': ... case 'unrecognizedMessage': case 'thinkingProgress':
 //   case 'resetting': case 'sessionTransition': case 'attachmentOffered':
 //   return event.conversationId
@@ -263,6 +264,7 @@ export function joinKeyFor(type: string, ts: string): string | undefined   // `$
   // undefined when ts.length is 0 or exceeds MAX_JOIN_TS_CHARS (64 — an RFC3339 timestamp with
   // nanoseconds and a numeric offset is under 40)
 export function liveJoinKeyFor(event: DaemonEvent): string | undefined
+  // messageReceived -> undefined (message-id join); otherwise
   // event.daemonTs === undefined ? undefined : joinKeyFor(event.type, event.daemonTs)
 ```
 
@@ -384,10 +386,10 @@ the middle of the page but not the newest entry — now suppresses nothing, and 
 exactly what they did before this ticket. The strongest available statement about this function: its
 output is either the joined page or the un-joined one, never a page with new content lost or reordered.
 
-**The operator's own `message` entry is kept and stepped over, never let end the run (#1437).** The daemon
-pushes no `message` frame on the interactive lane, so `liveJoinKeyFor` can never mint a key for a
-`messageReceived` entry — under the plain stop rule above, that entry always failed the "held" condition and
-ended the run at once. A page whose newest entry was the operator's own message is exactly what a short
+**A user `message` entry is kept and stepped over, never let end the run (#1437).** Live receipts now
+carry daemon time, but `liveJoinKeyFor` explicitly excludes `messageReceived` because user rows join
+by message id. Under the plain stop rule above, that entry would fail the "held" condition and
+end the run at once. A page whose newest entry is a user message is exactly what a short
 chat serves on an upward scroll near the top, so the whole conversation already on screen — the reply and
 its tool rows — survived the join and drew a second time at the head, unstamped, above the message it
 answers. The walk now special-cases the type, not "this entry could not be keyed": a `messageReceived`
@@ -401,8 +403,8 @@ from inside the run are chronologically newer, fold last, and are independent in
 The step-over is keyed on `event.type`, a client-owned discriminant, never on the daemon-supplied `ts` —
 keying it on "unkeyed" instead would let a hostile daemon walk an `assistantDelta` past its own stop
 condition and reproduce "a turn read backwards" on purpose. `withoutHeldEchoes` in `prependHistoryFor`
-remains the sole owner of removing the operator's own row by `message_id`; the walk learns nothing about it,
-so a message sent from another client — no held echo — still survives and draws.
+owns the page's message-id join; the live reducer rejects receipts already held by the same nonempty
+identity. The walk learns nothing about ids, so an unheld message from any client still survives and draws.
 
 `subscribeHistoryPage` gains a fourth, **optional trailing** parameter, `getLiveKeys?: (conversationId:
 string) => ReadonlySet<string>` — the same idiom a third time, deliberately not a third callback
@@ -415,7 +417,8 @@ current keys, not whichever were live when it mounted.
 
 | Condition | Result |
 |---|---|
-| Event carries no `daemonTs` (no envelope behind it, or an arm outside the ten) | No live key. |
+| Event carries no `daemonTs` (no envelope behind it, or an unstamped arm) | No live key. |
+| `messageReceived`, even with `daemonTs` | No timestamp key; message-id joins preserve the held row. |
 | `ts` over `MAX_JOIN_TS_CHARS` on either lane | No key composed. |
 | Live key set at its bound, oldest evicted | Nothing suppressed for the evicted key. |
 | Two page entries share one key | Neither suppressed (AC4). |
@@ -427,8 +430,8 @@ current keys, not whichever were live when it mounted.
 Every row draws a duplicate rather than dropping a message — a cosmetic fault, never a lost one.
 
 **Two fail-open rules can compose into the exact fault each one individually refuses (#1437).** The run
-rule refuses to cut a hole in a page, and the unstamped `messageReceived` arm refuses to let a live fold of
-the operator's own message suppress the page's copy — each is safe alone, but their product was a page
+rule refuses to cut a hole in a page, and the unkeyed `messageReceived` arm reserves message suppression
+for the message-id join — each is safe alone, but their product was a page
 whose newest entry is a `message` stopping the run at once, so the whole page behind it drew a second time.
 Worth re-checking the pair whenever a new fail-open rule joins this join, not just the rule in isolation.
 

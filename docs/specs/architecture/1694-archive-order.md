@@ -83,3 +83,8 @@ Pending for the documentation stage: update `docs/knowledge/features/archive-scr
 - Existing `daemonConnection` and in-process round-trip list fixtures now include normalized `archived_at: null`; this is an expected-shape update, with no production fan-out beyond the original five files.
 - Visual review of actual `ArchiveScreenView` with synthetic recent, legacy and invalid rows at 412×892 and 800×800: new ordering and all three subtitle states render correctly; header, tabs, text column and restore placement retain existing geometry. Captures: `/tmp/builder-1694-visual/archive-412.png` and `/tmp/builder-1694-visual/archive-800.png`. Pre-existing flat background, platform font fallback and Material restore-glyph differences from Figma remain outside the timestamp/order scope.
 - Final written scope remains below 800 lines, with five production files, no new exported type/component/store and one updated production subtitle caller.
+
+### 2026-10-01 — verifier rework
+
+- Resolved the verifier's MUST FIX in `channelListViewModel.test.ts`: its cross-view regression test still expected Archive input order. The shared `partitionByPromotion` assertions retain input order; Archive assertions now require ascending ids for equal fallback instants in both tabs. Production behavior and the design contract are unchanged.
+- Reproduced the reported failure before updating the assertions. No other in-flight feature branch touches this test file.

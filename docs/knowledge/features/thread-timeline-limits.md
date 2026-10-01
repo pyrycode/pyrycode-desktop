@@ -91,8 +91,10 @@ Part of [Thread timeline](thread-timeline.md).
   #199–#230. #179 retired the coarse render path (`MessageThread` unmounted, kept as dead-but-tested
   residue) and made this module's store the conversation's single thread surface — `sessionStore`
   itself (and its `messages` slice) is untouched code-wise but its render consumer is gone.
-- **`createdAt` is `undefined` on any `assistantText`/`userText` item whose producer was given no
-  clock** ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013)) — this is a legal item, not
+- **`createdAt` is `undefined` on assistant bubbles and local echoes whose producer was given no
+  clock** ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013)) — live user receipts instead
+  use bounded, finite daemon time; history-only rows and unusable receipt times remain unstamped.
+  An unstamped row is a legal item, not
   a defect: every one of the 135 pre-existing fixture sites across 17 test files produces exactly this,
   since none injects a clock, and [#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014) draws
   it as the meta row's empty slot. Test presence with `=== undefined`, never `'createdAt' in item` — the
@@ -121,30 +123,25 @@ Part of [Thread timeline](thread-timeline.md).
   not sent to the daemon with the message.
 
 - **A `dropUserText` removal is not the `userText` arm's inverse, and must not be read as one**
-  ([#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213)). `userText` opens
-  `localSendPending`'s local window on the grounds that the arm firing and the composer accepting a
-  submit are the same fact; the tempting symmetry — a removal closes what an append opened — is wrong,
+  ([#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213)). Local `userText` opens
+  `localSendPending`'s window on composer acceptance; received user events preserve it.
+  The tempting symmetry — a removal closes what an append opened — is wrong,
   because the window belongs to whatever message is currently pending, not to the one just dropped.
   `dropUserText` carries `localSendPending` through unchanged, same as every other chrome scalar, and
   leaves the daemon's next `turn_state` to close it. **Only `items` changes on this arm** — the sole
   removal arm in the reducer; every other arm appends or coalesces.
-- **A drop issued by another paired client is out of scope, by construction rather than by a guard.**
-  `queue_state` fans out to every interactive connection, so this window can observe an item leave the
-  backlog because a *different* client dropped it — but this window's timeline holds no `userText` echo
-  for a message it never sent, so `removeUserEcho` simply finds nothing to remove. There is no local
-  concept of "another device's drop" to build a heuristic for; pyrycode#2092's own doc criterion states
-  the daemon-side half of the same rule ("an item whose `message_id` matches no local echo renders as a
-  plain queued row and is never dropped").
+- **Queue snapshots do not remove a user row when a queued item disappears.** A live receipt can
+  retain another device's message, and `foldQueuedRows` can match that row by nonempty identity.
+  Removal still requires the explicit `dropUserText` event; receiving a new queue snapshot alone
+  does not infer an echo removal. See [queued-row projection](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213).
 - **An echo with no `messageId` can never be removed by a drop**, on the same "absent correlates with
   nothing" rule the field's own paragraph states above (§ Types). Nothing in this module manufactures a
   fallback key for it. [#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)'s history-drawn
   `userText` rows are not this case in practice — a stored `message` always carries the wire's
   `message_id` — but the reducer draws no distinction: a row is a row, whatever folded it.
-- **The `userText` arm's "exactly one production writer" comment predates a second one and is now
-  stale** ([#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223), still open as a verifier
-  SHOULD FIX on PR #1229). A served history page also folds `userText` events through this reducer — but
-  against a scratch state that is discarded and never reaches the *held* one this arm's `localSendPending`
-  side effect writes into, so the arm's invariant ("firing this arm on held state is the composer's own
-  accept signal") is intact in practice even though the comment's producer count is not. See [Conversation
-  timeline store](conversation-timeline-store.md) for the fold.
-
+- **Local echoes, live receipts and history share `userText`, but only local submission opens
+  Thinking.** The bridge marks both receipt lanes `received: true`. Duplicate receipts with a
+  held nonempty message id return before all content and sidecar updates; history prepend keeps
+  the held row too. Matching history that arrived first is not enriched by a later receipt.
+  See [user-event reduction](thread-timeline-internals.md#the-reducer) and
+  [live routing](conversation-timeline-store.md#live-user-receipts).

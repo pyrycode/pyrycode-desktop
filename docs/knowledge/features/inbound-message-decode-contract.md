@@ -10,7 +10,7 @@ Part of [Inbound message decode](inbound-message-decode.md); see that document f
 // Which modeled app-message the envelope carried. NOT a wire type and NOT a DaemonEvent —
 // an internal transport result the daemon-connection consumer maps onto the IPC channel.
 export type InboundDaemonMessage =
-  | { kind: 'message'; message: MessagePayload }
+  | ({ kind: 'message'; message: MessagePayload } & FrameTimestamp)
   | { kind: 'chunk'; messages: MessagePayload[] }
   | { kind: 'bundle-chunk'; seq: number; data: Uint8Array }   // #116, additive
   | { kind: 'bundle-done'; total: number }                    // #116, additive
@@ -325,7 +325,7 @@ thinking`. **Deliberately not range- or monotonicity-checked**: `estimated_token
 every inference-request boundary (four times inside one committed single-turn capture), so a
 "the reading only grows" rule would fail-close ordinary traffic — the sharpest instance yet of the house
 rule that a client-invented bound on a wire integer risks dropping valid future frames. **Takes no
-`FrameTimestamp`** (see below) — the mix-in marks the ten arms `decodeHistoryEvent` draws, and this kind
+`FrameTimestamp`** (see below) — this reading supplies no history/live join or receipt display time and
 gains no arm there (AC3, a regression pin: a stored `thinking_progress` still skips).
 
 Content-free-logged as `inbound-decoded(code: 'thinking_progress')` before the `default` branch, and
@@ -362,8 +362,8 @@ non-benign status, `allowed_warning` (2026-08-22, claude 2.1.239, `limit_type: s
 every turn kept running normally, so a carry slice rendering "you are rate limited" would mislead the
 operator.
 
-**Takes no `FrameTimestamp`**, the `thinking_progress`/`model_announced` precedent — the mix-in marks
-exactly the arms `decodeHistoryEvent` draws, and AC5 keeps this kind armless there (a regression pin:
+**Takes no `FrameTimestamp`**, the `thinking_progress`/`model_announced` precedent —
+AC5 keeps this kind out of history decoding (a regression pin:
 even a fully well-formed stored `rate_limited` still skips). Content-free-logged as
 `inbound-decoded(code: 'rate_limited')` before the `default` branch; neither `conversation_id`, `status`
 nor `limit_type` ever reaches a log line — `status`/`limit_type` are claude-authored text that crossed
@@ -489,8 +489,8 @@ fixture (`context_usage_empty.json`) carries for all three integers, alongside `
 the same posture in `requireString`. The unguarded-`Infinity` hazard a `max_tokens` of `0` creates belongs
 to the render slice (#1421), where `contextUsagePercent` already documents it.
 
-**Takes no `FrameTimestamp`**, the `thinking_progress`/`rate_limited` precedent — the mix-in marks exactly
-the arms `decodeHistoryEvent` draws, and this kind gains no arm there (a regression pin: even a
+**Takes no `FrameTimestamp`**, the `thinking_progress`/`rate_limited` precedent —
+this kind gains no history arm (a regression pin: even a
 fully well-formed stored `context_usage` still skips). Content-free-logged as `inbound-decoded(code:
 'context_usage')` before the `default` branch; neither `conversation_id`, `model`, any row's `name`,
 `server_name`, `path` or `type`, nor any of the three integers ever reaches a log line — `model` and every
@@ -522,33 +522,38 @@ absence. Full account — the six-code table, the `payload:null`-vs-no-`payload`
 daemon's reject-answer counterpart, and a docblock-placement lesson from the first attempt — in
 [Daemon error outcome](daemon-error-outcome.md).
 
-**[#1225](https://github.com/pyrycode/pyrycode-desktop/issues/1225) widens ten existing arms with a
-mixed-in `FrameTimestamp`, not a new kind** — the #642/#773 shape (a widen, not an extension) applied to
-a set of arms rather than one. `parseInboundMessage` already has the envelope's `ts` in scope by the time
-it builds any of these arms; nothing upstream carried it onward before this ticket.
+**Envelope timestamps.** `FrameTimestamp` carries the daemon envelope's required
+string `ts` verbatim on live timeline-bearing results, including `message`.
+It is per-frame and cannot ride the bind-time server-origin stamp. The original
+[history/live join](conversation-timeline-store-internals.md#the-historylive-join-1225)
+used this mix-in for identity; user receipts also use it for display.
 
 ```ts
 interface FrameTimestamp { ts: string }
 ```
 
-applied inline as `& FrameTimestamp` to exactly the ten arms the timeline draws:
-`assistant-delta`/`turn-end`/`turn-state`/`stall`/`api-retry`/`compacting`/`tool-use`/`tool-result`/
-`session-transition`/`unrecognized-message`. **Ten, not all twenty-plus** — `history-page` does NOT gain
-it, because a page's `ts` is per-**entry** and already carried on `HistoryTimelineEntry` (see [Request
-history send](request-history-send.md)); stamping the envelope that carried the page would put the
-answer's own clock where the entries' belong. `session-settings`, `conversations`, and every other kind
-stay untouched — there is no live/history join for any of them to feed.
+Each opted-in union arm requires the field; the IPC-side
+[`DaemonEventTimestamp`](daemon-event-channel-plumbing.md#daemoneventtimestamp--the-per-frame-comparand-1225)
+is optional. `parseInboundMessage` returns `{ kind: 'message', message, ts: envelope.ts }`;
+`createDaemonConnection` emits `{ type: 'messageReceived', message, daemonTs: inbound.ts }`.
+The `message_chunk` batch remains unstamped. A history-page envelope is not an entry
+timestamp and never gains this mix-in: entries already carry their own `ts`.
 
-**Mixed in per arm, not carried as a bare top-level field on `InboundDaemonMessage`.** Each arm opts in at
-its own union member, so the declaration's order and its ticket-by-ticket narrative above stay intact,
-and a reader can see which ten carry it without cross-referencing a second list. The value is copied
-verbatim from the decoded envelope's own `ts` — required there, since every envelope carries one — and
-crosses to `daemonConnection.ts`'s ten emit sites as `daemonTs: inbound.ts`, one field, copied by name.
-See [Daemon event channel — emit and subscribe §
-`DaemonEventTimestamp`](daemon-event-channel-plumbing.md#daemoneventtimestamp--the-per-frame-comparand-1225)
-for the IPC-side shape this feeds and why it is an intersection distributed over `DaemonEvent` rather than
-a member added to each arm, and [Conversation timeline store — internals § The history/live
-join](conversation-timeline-store-internals.md#the-historylive-join-1225) for what reads it.
+`decodeEnvelope` validates string shape, **not date syntax**. The role-user receipt
+translator checks at most 64 characters before `Date.parse` and accepts only finite
+epoch milliseconds as `createdAt`. Missing, empty, overlong or unparseable values
+draw the message without a time, never with the desktop arrival clock. History-only
+translation also remains unstamped; the entry's join timestamp does not become its
+display time. Assistant deltas retain their injected arrival-clock stamp.
+
+Receipt identity uses nonempty `message_id`, not `daemonTs`; `liveJoinKeyFor` explicitly
+excludes `messageReceived`. Keeping timestamp forwarding separate from identity avoids
+letting a displayed time suppress a different message or replace a held echo's time
+and attachments. The raw timestamp is never rendered, logged, sorted for row order or
+used as a filename, path, URL or React key. Existing diagnostics contain only static
+codes, byte counts and hashes. Decode/connection tests pin verbatim forwarding;
+[`liveUserReceipts.test.ts`](../../../src/renderer/src/store/liveUserReceipts.test.ts)
+pins finite display conversion, no-clock behavior and no-time fallbacks.
 
 The optional second parameter is the [content-free diagnostic logger](diagnostic-log.md) ([#130](../codebase/130.md)). Absent it, the module is silent and behaves exactly as before; injected, each of the two non-throwing outcomes leaves a content-free record (§ *Diagnostic logging*).
 

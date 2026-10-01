@@ -803,14 +803,14 @@ describe('createDaemonConnection', () => {
     expect(JSON.stringify(events)).not.toContain('noise-handshake-secret-detail')
   })
 
-  it('decodes an inbound message frame into a single messageReceived event', async () => {
+  it('decodes an inbound message frame into a single timestamped messageReceived event', async () => {
     const { sink, drivers } = await reachConnected()
     const before = emitted(sink).length
     const message = { conversation_id: 'c1', message_id: 'm1', role: 'assistant', text: 'hi there' }
 
     drivers[0].emit({ type: 'message', plaintext: messagePlaintext(message) })
 
-    expect(emitted(sink).slice(before)).toEqual([{ type: 'messageReceived', message }])
+    expect(emitted(sink).slice(before)).toEqual([{ type: 'messageReceived', message, daemonTs: FIXED_TS }])
   })
 
   it('decodes an inbound message_chunk frame into one ordered messagesReceived event', async () => {
@@ -872,7 +872,7 @@ describe('createDaemonConnection', () => {
     ).not.toThrow()
     drivers[0].emit({ type: 'message', plaintext: messagePlaintext(message) })
 
-    expect(emitted(sink).slice(before)).toEqual([{ type: 'messageReceived', message }])
+    expect(emitted(sink).slice(before)).toEqual([{ type: 'messageReceived', message, daemonTs: FIXED_TS }])
   })
 
   it('drops an inbound message with a missing field or unknown role, without emitting or throwing', async () => {
@@ -926,8 +926,8 @@ describe('createDaemonConnection', () => {
     drivers[0].emit({ type: 'message', plaintext: messagePlaintext(message) })
 
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'messageReceived', message },
-      { type: 'messageReceived', message }
+      { type: 'messageReceived', message, daemonTs: FIXED_TS },
+      { type: 'messageReceived', message, daemonTs: FIXED_TS }
     ])
   })
 
@@ -1225,7 +1225,7 @@ describe('createDaemonConnection — teardown on unpair (#504)', () => {
     const message = { conversation_id: 'c1', message_id: 'm1', role: 'assistant', text: 'hi there' }
     const beforeControl = emitted(ctx.sink).length
     ctx.drivers[0].emit({ type: 'message', plaintext: messagePlaintext(message) })
-    expect(emitted(ctx.sink).slice(beforeControl)).toEqual([{ type: 'messageReceived', message }])
+    expect(emitted(ctx.sink).slice(beforeControl)).toEqual([{ type: 'messageReceived', message, daemonTs: FIXED_TS }])
 
     // The renderer's unpair invoke, through the real handler wired the way index.ts wires it.
     const listener = unpairListenerFor({ store, onUnpaired: () => ctx.connection.reconnect() })
@@ -1635,7 +1635,7 @@ describe('createDaemonConnection — structured stream (assistant_delta / turn_e
     drivers[0].emit({ type: 'message', plaintext: chunkPlaintext({ messages: [a] }) })
 
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'messageReceived', message },
+      { type: 'messageReceived', message, daemonTs: FIXED_TS },
       { type: 'messagesReceived', messages: [a] }
     ])
   })
@@ -4181,7 +4181,7 @@ describe('createDaemonConnection — session_transition stream (#254)', () => {
     drivers[0].emit({ type: 'message', plaintext: chunkPlaintext({ messages: [a] }) })
 
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'messageReceived', message },
+      { type: 'messageReceived', message, daemonTs: FIXED_TS },
       { type: 'messagesReceived', messages: [a] }
     ])
   })
@@ -4367,7 +4367,7 @@ describe('createDaemonConnection — session_settings_updated correlation (#261,
     drivers[0].emit({ type: 'message', plaintext: chunkPlaintext({ messages: [a] }) })
 
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'messageReceived', message },
+      { type: 'messageReceived', message, daemonTs: FIXED_TS },
       { type: 'messagesReceived', messages: [a] }
     ])
   })
@@ -6993,7 +6993,7 @@ describe('createDaemonConnection — debug-bundle reassembly routing (#116)', ()
     drivers[0].emit({ type: 'message', plaintext: messagePlaintext(msg) })
     drivers[0].emit({ type: 'message', plaintext: bundleDonePlaintext(1) })
 
-    expect(emitted(sink).slice(before)).toEqual([{ type: 'messageReceived', message: msg }])
+    expect(emitted(sink).slice(before)).toEqual([{ type: 'messageReceived', message: msg, daemonTs: FIXED_TS }])
     expect([...completed[0]]).toEqual([1, 2, 3, 4])
   })
 
@@ -12038,11 +12038,7 @@ describe('createDaemonConnection — the envelope ts on the timeline-bearing emi
     expect(handshake[0]).not.toHaveProperty('daemonTs')
   })
 
-  it('leaves `messageReceived` unstamped — the operator\'s own row has no live twin to join', async () => {
-    // A live `message` frame maps onto this arm, but the daemon pushes none on the interactive lane:
-    // the operator's message is written to the log only, so its page entry has nothing to be joined to
-    // and its duplicate is the optimistic echo `removeUserEcho` dedups on `message_id`. Stamping it
-    // would mint a key that suppresses a row the live stream never drew.
+  it('forwards the message envelope timestamp for live receipt display', async () => {
     const events = await emitFor('message', {
       conversation_id: CONV,
       message_id: 'm-1',
@@ -12050,7 +12046,7 @@ describe('createDaemonConnection — the envelope ts on the timeline-bearing emi
       text: 'hello'
     })
     expect(events).toHaveLength(1)
-    expect(events[0]).not.toHaveProperty('daemonTs')
+    expect(events[0]).toHaveProperty('daemonTs', FRAME_TS)
   })
 })
 

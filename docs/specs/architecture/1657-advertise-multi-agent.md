@@ -65,3 +65,7 @@ The daemon (pyrycode#2643, v0.27.0+) withholds Codex conversations, their frames
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-25
+
+## Revisions
+
+2026-10-01 — Resumed PR #1671 after gate blockers #1673 and #1674 closed. Current main includes `daemonIdentity` in all three version-checking specs and canonical workspace derivation in the `realDaemon` fixture. The merged branch needs no design or implementation change; `loadDialConfig` still advertises both capabilities and the live spec still checks the app's own ack. Rechecked the `feature/1544` overlap: its session-settings correlation edits do not touch the hello. Scope remains two production files, seven written files, about 140 inserted lines, no new exported type, one production caller and two acceptance behaviours. Focused unit tests and the build pass; a fresh dispatcher live gate must execute and pass `real-daemon-multi-agent.spec.ts`, with `needs-real-claude` retained. Documentation handoff remains pending.

@@ -116,7 +116,7 @@ Suppression on a green run did not disappear, it moved to where it was always ac
 `launchPairedApp` awaits its fake-daemon connections before `launchIsolatedApp`.
 A dial failure can therefore leave no launch-fate attachment: Electron does not
 exist yet. `startFakeDaemonForTest` in `e2e/fixtures/fakeDaemonSetup.ts` translates
-any caught error into `Fake daemon setup failed before Electron launch: <class>`,
+an unrecovered error into `Fake daemon setup failed before Electron launch: <class>`,
 where `<class>` comes from a private `classifySetupFailure`, never from the
 original error's own text — one of a `NoiseLoadError`'s `reason` (`wasm-load-failed`
 / `wasm-load-timeout`), a `code` matched against a fixed socket-error allowlist
@@ -128,8 +128,24 @@ an unrecognised `NoiseLoadError` reason, `code` or message shape included. No
 caught error, cause, URL, headers, options or payload enter the replacement
 diagnostic; the thrown `Error` carries no `cause`.
 
-The helper does not retry; errors still fail the test, and existing teardown drains
-the forwarder. `fakeDaemonSetup.test.ts` drives a real local HTTP 404, checks
+The helper permits one retry only for an `Error` whose exact socket `code` is
+`ECONNRESET` before WebSocket open. `startFakeDaemon` frees the failed attempt's
+Noise handshake and terminates its socket before rejection; no handle reaches
+fixture teardown on that failure. The successor uses a fresh fake and handshake.
+No client handshake, command or event has been sent at this stage, so this retry
+cannot duplicate delivery. A second reset fails after two attempts. Every other
+class fails immediately, including HTTP rejections and Noise loading errors;
+existing teardown still drains the forwarder.
+
+`fakeDaemonSetup.test.ts` destroys the first real loopback HTTP upgrade socket,
+accepts the second and checks exactly two attempts, a usable handle and cleanup of
+both handshake states, with failed-state cleanup asserted before the next state
+is allocated. Stubbed tests cover reset exhaustion and immediate non-retryable
+failures without exposing error contents. This proves bounded setup recovery,
+not the cause of the original intermittent host-side reset, which remains
+undiagnosed.
+
+The same unit file drives a real local HTTP 404, checks
 success pass-through, and asserts each classified suffix via `it.each` (both
 `NoiseLoadError` reasons, two allowlisted socket codes, one non-404 HTTP status),
 plus an `it.each` over unclassified inputs — including a `code` outside the
@@ -152,6 +168,23 @@ before asserting status cleanup or retained rows. In
 delta is the positive barrier before checking that the Compacting label is gone.
 A subsequent boundary also proves delivery of the preceding repeated false frame
 before the test checks the final divider count.
+
+Unconditional `reconnectResendFrames` prove delivery after a handshake, but cannot
+prove replay negotiation. For that, use `buildReconnectFrames(hello)`, which reads
+the authenticated reconnect hello and takes precedence over unconditional resends.
+[`reconnect-event-replay.spec.ts`](../../../e2e/reconnect-event-replay.spec.ts)
+seeds a visible prefix with `event_id: 41`, drops the client leg and releases the
+missed tail only when the hello carries exactly `last_event_id: 41`. It checks the
+received cursor and absent `last_seen_ts`, retained rows, once-only ordering,
+subsequent live events and no additional `request_history`. Omitting or changing
+the cursor must prevent tail delivery and fail the proof. Capture only replay
+metadata from the hello, never its token or identity. See
+[cursor lifetime and resync](daemon-connection-lifecycle.md#replay-cursor-lifetime).
+
+Return `[]` for a nonmatching cursor. A thrown `buildReconnectFrames` callback
+currently leaves the reconnect's fresh Noise handshake unfreed before it reaches
+`Split()`; the fake's ordinary `close()` does not own that local handshake. This
+test-only failure-path limitation remains outside the replay proof.
 
 ### Stopped-turn evidence
 
@@ -231,6 +264,13 @@ enough that load could push the sleeps past the deadline. Fixed by giving that o
 own options with a seconds-long window instead of switching to fake timers: the window is
 only an upper bound, paid when delivery never shows, so a generous one costs nothing when the
 probe still turns true on an early read.
+
+`attachment-image-thumbnail.spec.ts` uses the same helper with each upload's
+absolute expected pending-tile count. Its document push injects context loss
+after `webContents.send` has delivered the completion; exactly two pending tiles
+and one document in the resulting bubble prove that confirmation avoided a
+duplicate. A pre-push count delta could mistake the preceding upload's delayed
+tile for the current completion and is not an equivalent delivery check.
 
 `readAuthentication` keeps its own private copy of the same tolerance.
 

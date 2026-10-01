@@ -25,7 +25,8 @@ export interface ClientHelloInput {
   clientVersion: string
   token: string                    // the stored device token (Noise early-data secret)
   capabilities?: readonly string[] // OPTIONAL; omitted → codec default []. Never hardcoded here.
-  lastSeenTs?: string              // OPTIONAL backfill anchor; exercised by #34, absent for now
+  lastSeenTs?: string               // Legacy timestamp; no daemon consumer. Desktop omits it.
+  lastEventId?: number              // OPTIONAL position for bounded current-conversation replay
 }
 
 export function buildClientHello(input: ClientHelloInput): Uint8Array
@@ -34,7 +35,7 @@ export function parseHelloAck(bytes: Uint8Array): HelloAckPayload
 
 ### `buildClientHello`
 
-1. `makeHelloClientPayload({ deviceName, clientVersion, token, capabilities, lastSeenTs })` — the codec injects `role:'client'` and `protocol_versions:['v2']`, defaults `capabilities` to `[]` when omitted, omits `last_seen_ts` when absent, and prefixes `clientVersion` (the bare app version) into `client_version: "pyrycode-desktop/<clientVersion>"` (see [wire codec](wire-codec.md#defaults-the-typescript-specific-problem)). **Never hand-build `HelloClientPayload`** — that would drop the injected defaults, the one thing that constructor exists to prevent.
+1. `makeHelloClientPayload({ deviceName, clientVersion, token, capabilities, lastSeenTs, lastEventId })` — the codec injects `role:'client'` and `protocol_versions:['v2']`, defaults `capabilities` to `[]` when omitted, omits absent `last_seen_ts` and `last_event_id`, and prefixes `clientVersion` (the bare app version) into `client_version: "pyrycode-desktop/<clientVersion>"` (see [wire codec](wire-codec.md#defaults-the-typescript-specific-problem)). **Never hand-build `HelloClientPayload`** — that would drop the injected defaults, the one thing that constructor exists to prevent.
 2. Wrap it: `{ id, type: 'hello', ts, payload }` — `type` is the literal `'hello'`; no optional envelope fields on an outbound hello.
 3. `encodeEnvelope(...)` → UTF-8 bytes, the Noise early-data.
 
@@ -71,13 +72,13 @@ Each rung throws a category-only `WireDecodeError` and returns nothing on failur
 ## Configuration and usage
 
 - **Main-process only, imported by relative path.** `src/main/**` has no `@shared` alias — the module imports the wire types via `../../shared/wire/types` and the codec via `./codec`. It (transitively, through the codec) uses Node `Buffer`, so the renderer bundle physically cannot import it.
-- **No production caller on merge.** This ticket is the self-contained envelope module; wiring it into a live driver is the [#62](https://github.com/pyrycode/pyrycode-desktop/issues/62) consumer slice (blocked by #10). The injection seam: #62 feeds `buildClientHello(...)` output into `NoiseRelayDriverConfig.session.hello`, and feeds the driver's `handshake-complete{helloAck}` bytes into `parseHelloAck(...)`.
-- **`makeHelloClientPayload` is mandatory** for the hello payload — do not hand-build `HelloClientPayload` (you would drop the injected `role`/`protocol_versions` defaults and the `capabilities`/`last_seen_ts` omitempty handling).
+- **Production consumer.** `daemonConnection.loadDialConfig` builds a fresh `session.hello` for the first dial and each automatic or explicit reconnect. It supplies `interactive` and the pairing's latest admitted `lastEventId`, omitting the position when none exists and always omitting `lastSeenTs`. The driver's `handshake-complete{helloAck}` bytes go through `parseHelloAck`.
+- **`makeHelloClientPayload` is mandatory** for the hello payload — do not hand-build `HelloClientPayload` (you would drop the injected `role`/`protocol_versions` defaults and the `capabilities`/`last_seen_ts`/`last_event_id` omitempty handling).
 
 ## Edge cases and limitations
 
-- **`capabilities` is never hardcoded to `interactive`.** The desktop event pipeline models only the coarse `message`/`message_chunk` types (no `turn_state`/delta/tool stream — see [session store](session-store.md)), so advertising `interactive` would make the daemon fan out envelopes this client cannot render and the user would see nothing. The capability policy is deferred to a caller that has modeled the structured stream and passes them in explicitly — the same "sourcing is the consumer's job" split applied to token/device/version.
-- **`lastSeenTs` is a pass-through, not load-bearing yet.** It maps to `HelloClientPayload.last_seen_ts` (daemon `LastSeenTS *time.Time,omitempty`) and is absent for the milestone round-trip; it only matters at backfill-on-reconnect ([#34](https://github.com/pyrycode/pyrycode-desktop/issues/34)).
+- **Capability policy belongs to the caller.** This helper defaults to `[]`; `daemonConnection` explicitly advertises `interactive` for the structured event pipeline.
+- **Replay uses `lastEventId`, not the timestamp.** `last_event_id` requests the bounded retained tail after a daemon-wide event position for the daemon's current conversation. An expired or unknown position yields `resync`; desktop clears that host's cursor without automatically loading history. `lastSeenTs` remains a compatibility pass-through to `last_seen_ts`, which has no daemon consumer. Cursor validation and pairing lifetime belong to [daemon connection](daemon-connection-lifecycle.md#replay-cursor-lifetime), not this pure builder.
 - **Over-cap encode is not defended.** `encodeEnvelope` can throw `WireEncodeError` on an over-cap envelope, but a hello is a few hundred bytes — orders of magnitude under `MAX_PLAINTEXT_BYTES` (65519). This is not a live failure mode (evidence-based — no observed failure); it would simply propagate if it ever occurred.
 - **Input to `parseHelloAck` is bounded upstream.** A v2 Noise transport message is ≤ 65535 bytes and the codec's `MAX_PLAINTEXT_BYTES` caps the decrypted envelope before it reaches `decodeEnvelope`, so there is no memory-amplification vector and the `capabilities`-array validation loop is bounded by that same cap.
 
@@ -95,6 +96,6 @@ The architect's self-review verdict is **PASS** (`docs/specs/architecture/10-hel
 
 - [Wire codec](wire-codec.md) (#5) — the serialization layer this module composes: `makeHelloClientPayload`, `encodeEnvelope`, `decodeEnvelope`, and the `WireDecodeError` reused here. It keeps `Envelope.payload` opaque `unknown`; this module is the edge that validates it.
 - [Noise session](noise-session.md) (#7) — carries `hello` (early-data for IK msg 1) and `helloAck` (recovered from msg 2) as opaque bytes; the envelope semantics are this module's job.
-- [Noise relay driver](noise-relay-driver.md) (#50) — the composition adapter whose `session.hello` this feeds and whose `handshake-complete{helloAck}` this parses, once #62 wires them.
+- [Noise relay driver](noise-relay-driver.md) (#50) — the composition adapter whose `session.hello` this feeds and whose `handshake-complete{helloAck}` this parses.
 - [#10 codebase notes](../codebase/10.md) · Spec: `docs/specs/architecture/10-hello-and-hello-ack-exchange.md`
 - Mobile/daemon mirror (via QMD `pyrycode-docs`): `protocol-mobile.md` § hello / hello_ack (both carry `capabilities` as `omitempty`); `knowledge/features/v2-session-manager.md` (the daemon marshals `HelloAckPayload{ProtocolVersion, ServerID, ConnID}` and does not set `Capabilities`).

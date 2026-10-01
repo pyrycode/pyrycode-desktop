@@ -30,9 +30,9 @@ import {
  * whole page: every entry a survivor could depend on is itself a survivor. Filtering entry-by-entry does
  * NOT have that property, and the two losses it admits are both real —
  *
- *   - AN ORPHANED RESULT. The live lane drew a `tool_use` but lost the `tool_result` to a reconnect
- *     (this client advertises no `last_event_id`, so a dropped live frame is gone and the served page is
- *     the only repair path). A per-entry filter drops the page's `toolUse` and keeps its `toolResult`;
+ *   - AN ORPHANED RESULT. The live lane drew a `tool_use` but lost the `tool_result` during a disconnect
+ *     (the bounded `last_event_id` replay tail may expire or be unavailable, leaving the served page
+ *     as the repair path). A per-entry filter drops the page's `toolUse` and keeps its `toolResult`;
  *     `fillResult` then finds no row carrying that `toolUseId` and DISCARDS the result, while the live
  *     row stays pending forever — `prependHistoryFor` reconciles nothing across the lanes.
  *   - A TURN READ BACKWARDS. The live lane drew a turn's older deltas but not its newer ones. A per-entry

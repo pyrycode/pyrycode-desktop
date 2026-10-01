@@ -82,8 +82,9 @@ whole-value writes that read nothing. The contrast is the coupling, not the coun
 - **`settingsRejected`** — looks up `pending.get(changeId)`; if absent, **no-op** (fail-closed); else
   deletes the pending marker (the explicit-choice view rolls back — the optimistic overlay vanishes, revealing
   the last confirmed value or the snapshot base) and sets `error` to the rejected field.
-- **`reconnected`** ([#539](../codebase/539.md)) — drops **every** pending marker, regardless of how many
-  were outstanding, because main abandons its envelope-id → `changeId` correlation on each re-dial
+- **`reconnected`** ([#539](../codebase/539.md)) — admitted by the bridge only for the open chat's
+  owning host; drops **every** pending marker, regardless of how many were outstanding, because main
+  abandons that host's envelope-id → `changeId` correlation on each re-dial
   (`daemonConnection.ts` `dial()`) and emits no rejection in its place, so a change stranded by a
   reconnect can never resolve on its own — and since `pending` beats `confirmed` in
   `selectEffectiveSettings`, an unresolved stranded entry would otherwise outlive (and shadow) a later
@@ -181,9 +182,10 @@ translateWriteEvent(event: DaemonEvent): RunSettingsWriteEvent | null
 // other arm → null (default fall-through — the translateSessionTransition permanent-ignore idiom, not
 // assertNever: this path owns three of the union's arms, two correlated and one connection-lifecycle).
 
-subscribeRunSettingsWrite(onDaemonEvent, dispatch): () => void
-// each event runs through translateWriteEvent; a non-null result is dispatched. Returns the off-handle
-// (the daemonEventBridge cleanup idiom).
+subscribeRunSettingsWrite(onDaemonEvent, dispatch, getOwningServerId?, logReconnect?): () => void
+// connected is admitted only for a matching client-bound origin and current unique owner; then each
+// event runs through translateWriteEvent and a non-null result is dispatched. Returns the off-handle.
+// An admitted reconnect invokes the optional logReconnect callback after dispatch.
 
 submitSettingsChange(deps, change: SettingsChange): void
 // deps = { sessionId: string; sendCommand; dispatch; mintChangeId?: () => string }
@@ -194,6 +196,25 @@ submitSettingsChange(deps, change: SettingsChange): void
 // typed non-null — #257 gates the controls on a present session id (sessionIdStore, #259), so there is
 // no null case here to guard.
 ```
+
+Reconnect admission belongs in `subscribeRunSettingsWrite`, before translation. Its default owner
+getter reads the current active conversation and conversation-list stores on each `connected` event,
+using `serverIdForOpenConversation` to require exactly one matching, client-stamped row. Ownership is
+resolved synchronously at event time, not captured when the app-level subscription mounts. Only a
+string-valued client-bound `event.serverId` matching that owner permits cleanup; daemon-reported
+`ack.server_id` never authorizes it. No active chat, unloaded/missing/ambiguous ownership, an unstamped
+row, or absent/null event origin preserves pending writes. Another host reconnecting therefore leaves
+the pending record available for a later correlated confirmation or rejection, including recall writes.
+An owning-host reconnect clears pending only, retaining confirmed settings and error state. The app
+binding emits only the static `run-settings-write` / `reconnected` diagnostic for an admitted edge.
+
+`translateWriteEvent` alone still translates any `connected` into `reconnected`; testing just that
+helper or the reducer cannot prove host isolation. The injected two-host subscription tests in
+`runSettingsWriteBridge.test.ts` use the production write and conversation-list stores, change
+ownership after subscribing, and supply misleading acknowledgement IDs in both directions. They
+assert preservation followed by correlated settlement, owner-only cleanup, and unmatched/replayed
+reply no-ops. Confirmation and rejection remain correlation-gated by the reducer, without the reconnect
+owner check. See the [reconnect ownership spec](../../specs/architecture/1714-settings-reconnect-owning-host.md).
 
 `buildSettingsPayload(sessionId, change)` builds a **fresh literal** — `session_id` plus the single
 changed key — via a per-field `switch`, so the omitempty presence contract (absent key = leave unchanged)
@@ -335,13 +356,15 @@ reply arrived.
 ## Edge cases and limitations
 
 - **A change stranded by a reconnect no longer strands forever** ([#539](../codebase/539.md)) — the
-  `reconnected` arm clears `pending` on every `connected` (re)handshake, so a dropped send or daemon
-  silence across a reconnect resolves at the next connect rather than shadowing a later confirmed change
-  permanently. Two residuals remain, both accepted rather than engineered around: (1) the sheet still
-  shows the optimistic never-applied value for the duration of the outage itself, since the clear fires
+  `reconnected` arm clears `pending` on an admitted owning-host `connected` (re)handshake, so a dropped
+  send or daemon silence across that host's reconnect resolves at the next admitted connect rather than
+  shadowing a later confirmed change permanently. Unknown ownership preserves pending until an
+  attributable reconnect, correlated reply or conversation switch. Two residuals remain, both accepted
+  rather than engineered around: (1) the sheet still shows the optimistic never-applied value for the
+  duration of the outage itself, since the clear fires
   on reconnect, not on the drop (`disconnected` is never emitted anywhere in `src/main`); (2) a change
-  dispatched in the single IPC hop between main emitting `connected` and the renderer receiving it is
-  really sent and really correlated, and gets cleared anyway — its later confirm arrives as a no-match
+  dispatched in the single IPC hop between main emitting the owning host's `connected` and the renderer
+  receiving it is really sent and really correlated, and gets cleared anyway — its later confirm arrives as a no-match
   no-op, so it never commits. Closing residual 2 would need per-change generation correlation across the
   IPC boundary, out of proportion to the defect. A stale reply for a change that stays connected the whole
   time (no reconnect involved) is still unresolved forever — that failure mode remains genuinely
@@ -393,12 +416,13 @@ reply arrived.
   `buildSettingsPayload`'s camelCase→snake_case translation. No consumer is built by this ticket; the
   control that submits a mode is #682. Split from #682.
 - [#539 codebase notes](../codebase/539.md) — the `reconnected` arm: clears every stranded `pending`
-  entry on the `connected` (re)handshake edge, preserving `confirmed`/`error`, so a change abandoned by
-  main's re-dial correlation reset can no longer shadow a later confirmed change. Split from
+  entry on an admitted owning-host `connected` (re)handshake edge, preserving `confirmed`/`error`, so a
+  change abandoned by main's re-dial correlation reset can no longer shadow a later confirmed change. Split from
   [#509](https://github.com/pyrycode/pyrycode-desktop/issues/509); sibling of
   [#538 codebase notes](../codebase/538.md) ([thread timeline](conversation-timeline-store.md)'s twin
   arm), [#415](../codebase/415.md) (`modalStore`'s), and [#197](../codebase/197.md) (`queueStore`'s) —
-  four stores now reconcile on the same edge.
+  these stores consume the connection edge, with this write bridge applying the owner check described
+  above.
 - **[#1169](../codebase/1169.md)** — added `confirmedEffortLevel`/`foldWriteEvent`: an effort confirm
   also writes the level into [Last-effort store](last-effort-store.md), read back by
   [Composer effort menu § The default apply](composer-effort-menu.md#the-default-apply-1169) to default a

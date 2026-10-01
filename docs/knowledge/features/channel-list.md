@@ -28,8 +28,9 @@ server stamp remains visible in a fallback without host actions; it is never ass
 host. Two paired daemon workspaces on one machine remain two hosts.
 
 The host and both sections begin expanded and fold independently, including on an empty host.
-Folding preserves the selected conversation and composer draft. The host keeps its daemon and relay
-status indicators when offline or reconnecting. A failed host keeps repair available and reveals its
+Folding preserves the selected conversation and composer draft. Host rows show no connection dots or
+dot wrapper in any state; Edit host reveals on hover or keyboard focus. A failed host keeps a
+separate, visible Repair host control and its error-colored glyph and label, and reveals its
 sections even if it was folded before failure. See [host and section folds](channel-list-host-fold.md).
 
 Connected hosts have a trailing plus on each section. **Create channel** and **Create chat** open
@@ -206,13 +207,14 @@ convergence on Figma node 103:2968: a derived (never declared) 24px height, shru
 the corner moved onto the fill's painted surface, 4px between rows via an adjacent-sibling rule rather
 than a column `gap`, the body-small label, the deleted time, and the status dot's now-settled centring.
 
-### The host row and its connection dots (`ChannelList.tsx`, added by #710/#718, per-server keying by [#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199))
+<a id="the-host-row-and-its-connection-dots-channellisttsx-added-by-710718-per-server-keying-by-1199"></a>
 
-Split out to its own page: [the host row and its connection dots](channel-list-host-row.md) — the row
-naming the paired machine a tree's conversations live on, and the two trailing dots reporting that
-machine's daemon and relay legs. #1199 moved both off app-wide "most recently written" singleton reads
-onto reads keyed by the row's own `serverId`, taken from this client's `serverInfoStore` list and never
-from the wire, so a second paired machine's status can no longer steer this row's dots.
+### The host row and its controls (`ChannelList.tsx`)
+
+See [the host row and its controls](channel-list-host-row.md) for saved-host identity, the disclosure,
+Edit host and failed-host Repair targets. Rows have no daemon/relay dots or hover swap. Label and
+status reads remain keyed by the row's own saved `serverId`, so another host cannot steer its label,
+failure treatment or controls. The saved-chats read-error line remains below the affected host.
 
 ### Server grouping (`channelListViewModel.ts` / `ChannelList.tsx`, added by [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070))
 
@@ -270,7 +272,8 @@ width even when visible. Static renderer tests cannot observe either CSS paint o
 scrolling. Physical trackpad momentum and changing the OS scrollbar preference were not
 manually exercised; computed style verifies the policy independently of that preference.
 
-Failed hosts keep their dots visible on hover and reserve separate pen and repair targets.
+Host rows reserve fixed trailing control space without a dot wrapper or hover/focus swap.
+Edit reveals through opacity on hover or keyboard focus; failed hosts reserve separate pen and repair targets.
 A DOM-presence assertion misses overlapping controls; exercise the actual Edit host and
 Repair host clicks (`e2e/sidebar-offline-mutations.spec.ts`).
 
@@ -283,11 +286,12 @@ the M3 scale had no `title-medium` slot before this.
 `min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap` — expiring the rule's
 former exemption ("a six-character compile-time constant cannot overflow the sidebar"), now that the
 label is bounded only at `MAX_HOST_LABEL_LENGTH` (128). Three of `.channel-list__workspace-label`'s
-four ellipsize declarations are copied; the fourth, `flex: 1 1 auto`, is **deliberately not** — it
-would make the label absorb the row's free space and render `.channel-list__host-status`'s
-`margin-left: auto` inert, replacing a shipped mechanism for pinning the connection dots to the
-trailing edge with an implicit one. The workspace row has no trailing element and no such mechanism
-to preserve, which is the whole reason the two rules differ.
+four ellipsize declarations are copied; the fourth, `flex: 1 1 auto`, is **deliberately not** — the
+label must shrink without growing away from its chevron. The disclosure uses `flex: 1 1 auto` and
+`min-width: 0`, while the row reserves space for absolutely positioned trailing controls. These
+positions and the label's truncation point stay fixed on hover. The shared `conn-dot--*` color
+bindings remain in this stylesheet independently of host presentation; conversation activity dots
+keep their own bindings.
 
 Lifting `min-width` on the label alone was not sufficient — the *ancestor* flex item,
 `.paired-shell__sidebar`, still had `min-width: auto`, and a `white-space: nowrap` descendant's
@@ -329,8 +333,10 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   repair even if it was closed earlier. Recovery restores its held host fold.
 - Apps rows and actions are absent. Workspace names, folder paths and
   `workspace_label` are retained as data but do not produce sidebar rows.
-- The relay leg's unknown state remains distinct from offline; see
-  [host connection dots](channel-list-host-row.md).
+- A host disclosure does not prove a connected session: connecting, disconnected and unreported
+  hosts remain foldable but cannot create. Authentication checks need connected-only controls or
+  composer readiness plus authentication/receipt barriers; see
+  [host connection verification](channel-list-host-row.md#connection-presentation-and-verification).
 
 ## Related
 
@@ -355,8 +361,8 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
 - [Archive screen](archive-screen.md) / [#469 codebase notes](../codebase/469.md) — `partitionActive`,
   the dual of `partitionArchived`, fixing archived rows leaking into this list.
 - [#141 codebase notes](../codebase/141.md) · Spec: `docs/specs/architecture/141-channel-list-screen.md`
-- [Host row and connection dots](channel-list-host-row.md) — saved host identity,
-  status, edit and repair.
+- [Host row and its controls](channel-list-host-row.md) — saved host identity,
+  failure treatment, edit and repair.
 - [Host and section folds](channel-list-host-fold.md) — independent state and failure reveal.
 - [Workspace data and sidebar grouping](channel-list-workspace-grouping.md) — retained
   path and label data, and the retired workspace entry points.

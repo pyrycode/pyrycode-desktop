@@ -16,6 +16,8 @@ import {
   type UIEventHandler
 } from 'react'
 import './conversation.css'
+import { useStore } from 'zustand'
+import { rememberedModel } from '../../store/rememberedModel'
 import { connectedConversationHostNow, useConversationActionAvailability } from './conversationActionAvailability'
 import { AssistantMarkdown } from './AssistantMarkdown'
 import { MARKDOWN_OPEN_FAILED_NOTICE, MarkdownReaderView, useMarkdownReader } from './MarkdownReader'
@@ -3770,7 +3772,8 @@ function Composer({
   // Composer when it changes, so the control re-enables reactively on connect (AC3) with no reload.
   // The thread selects only the timeline `items` slice, so status changes don't re-render it.
   const status = useOpenConnectionStatus()
-  const { canSend } = composerAvailability(status)
+  const recallPending = useStore(rememberedModel.pending, s => s.target !== null && s.target === conversationId)
+  const canSend = composerAvailability(status).canSend && !recallPending
   // #448: the send targets the ACTIVE conversation. submitMessage no-ops on a null id (the daemon
   // rejects an unknown conversation_id with an error frame, so a placeholder is never sent).
   const activeConversationId = useActiveConversationStore((s) => s.activeConversation?.id ?? null)
@@ -3803,7 +3806,7 @@ function Composer({
     // optimistic echo fire while not connected — this blocks the Enter path (handleKeyDown) as well
     // as the button. The input is not cleared; nothing was sent.
     const serverId = connectedConversationHostNow(activeConversationId)
-    if (!canSend || serverId === null) return false
+    if (!canSend || serverId === null || rememberedModel.pending.getState().target === activeConversationId) return false
     // `window.pyry` is dereferenced only here, at interaction time — never during render — so the
     // server-rendered container smoke test never touches the bridge. Do NOT hoist the deps object out of
     // this function: that would move the dereference into the render path, where `window.pyry` does not

@@ -24,10 +24,17 @@ function classifySetupFailure(error: unknown): string {
 // The paired fixture dials its fake daemons before launching Electron, so launch-fate
 // cannot identify these failures. Report only a fixed stage and a fixed failure class.
 export async function startFakeDaemonForTest(options: FakeDaemonOptions): Promise<FakeDaemon> {
-  try {
-    return await startFakeDaemon(options)
-  } catch (error) {
-    // A cause would put raw library errors (potentially URLs or paths) back in the report.
-    throw new Error(`Fake daemon setup failed before Electron launch: ${classifySetupFailure(error)}`)
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await startFakeDaemon(options)
+    } catch (error) {
+      // Only a pre-open reset is recoverable, once. No client or delivered events exist yet;
+      // startFakeDaemon has already released the failed attempt's socket and Noise state.
+      if (attempt === 0 && error instanceof Error && 'code' in error && error.code === 'ECONNRESET') {
+        continue
+      }
+      // A cause would put raw library errors (potentially URLs or paths) back in the report.
+      throw new Error(`Fake daemon setup failed before Electron launch: ${classifySetupFailure(error)}`)
+    }
   }
 }

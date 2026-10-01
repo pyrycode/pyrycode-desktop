@@ -660,7 +660,12 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
   socket.on('message', (data: RawData) => onMessage(data))
 
   await new Promise<void>((resolve, reject) => {
-    const onDialError = (err: Error): void => reject(err) // pre-open failure: no handle yet
+    const onDialError = (err: Error): void => {
+      // No handle reaches the caller on a failed upgrade. Release this attempt before rejection;
+      // close synchronously frees the Noise state and terminates the leg, returning a settled promise.
+      void close()
+      reject(err)
+    }
     socket.once('error', onDialError)
     socket.once('open', () => {
       socket.off('error', onDialError)

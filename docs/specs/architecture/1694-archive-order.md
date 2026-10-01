@@ -88,3 +88,10 @@ Pending for the documentation stage: update `docs/knowledge/features/archive-scr
 
 - Resolved the verifier's MUST FIX in `channelListViewModel.test.ts`: its cross-view regression test still expected Archive input order. The shared `partitionByPromotion` assertions retain input order; Archive assertions now require ascending ids for equal fallback instants in both tabs. Production behavior and the design contract are unchanged.
 - Reproduced the reported failure before updating the assertions. No other in-flight feature branch touches this test file.
+
+### 2026-10-01 — live-gate environment rework
+
+- Reproduced the gate's missing archive-stamp failure with the unchanged focused Claude-less spec on this tree. The dedicated test binary reports `0.27.0`; `go version -m` identifies clean source `9f76e4019a6769b55c92faf1f05e9be3afb18e2d`, which does not contain prerequisite merge `2b918a7537a3548996633317d955e76d72b58016`. This is a stale test-daemon input, not an archive implementation regression; no production or assertion change is required.
+- Built a fresh Git archive of `36acd04c79f1279c5c5dfb14a4c35e4dc6b6aff0`, verified prerequisite ancestry, and ran the identical focused spec: 1 passed, 0 skipped. Atomically installed that verified build at `/Users/juhanailmoniemi/.local/share/pyrycode-desktop-tests/pyry`, preserving the prior binary as `pyry.pre-1694-20261001-1122`. This updates the dedicated test executable only.
+- Reran the focused spec using the installed path: 1 passed, 0 failed, 0 skipped, recording the full source revision. Same-tree stale/current/installed results are `/tmp/builder-1694-gate-rework/stale-daemon-result.json`, `current-daemon-result.json` and `installed-daemon-result.json`. No in-flight branch overlaps the existing focused spec or plan.
+- Touched-scope unit checks: 1,975 passed and one existing opt-in live-relay test skipped; the in-process socket tests passed outside the sandbox after sandbox `EPERM`. `npm run build` passed. The full credentialed real-Claude gate remains dispatcher-owned and pending; retain `needs-real-claude` and use the updated dedicated daemon.

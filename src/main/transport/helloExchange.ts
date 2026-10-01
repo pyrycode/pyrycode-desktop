@@ -36,8 +36,10 @@ export interface ClientHelloInput {
    * caller that has modeled the structured stream passes them in explicitly.
    */
   capabilities?: readonly string[]
-  /** OPTIONAL backfill anchor (RFC3339); exercised by #34, absent for the milestone round-trip. */
+  /** Legacy timestamp field, unused by the daemon. */
   lastSeenTs?: string
+  /** Latest admitted event position for bounded replay on reconnect. */
+  lastEventId?: number
 }
 
 /**
@@ -54,7 +56,8 @@ export function buildClientHello(input: ClientHelloInput): Uint8Array {
     clientVersion: input.clientVersion,
     token: input.token,
     capabilities: input.capabilities,
-    lastSeenTs: input.lastSeenTs
+    lastSeenTs: input.lastSeenTs,
+    lastEventId: input.lastEventId
   })
   const envelope: Envelope = { id: input.id, type: 'hello', ts: input.ts, payload }
   return encodeEnvelope(envelope)

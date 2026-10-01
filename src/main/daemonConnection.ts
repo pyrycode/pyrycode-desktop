@@ -86,7 +86,7 @@ import type { AttachmentRetrievalFailure } from '../shared/ipc/attachmentRetriev
 import type { HistoryRequestFailure } from '../shared/ipc/events'
 import type { DiagnosticLog } from './diagnosticLog'
 import type { DeviceKeypairStore } from './deviceKeypair'
-import type { PairedServerStore } from './pairedServerStore'
+import type { PairedServerRecord, PairedServerStore } from './pairedServerStore'
 import {
   MAX_FRAME_BYTES,
   CAPABILITY_INTERACTIVE,
@@ -780,6 +780,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // teardown) is deliberately NOT subsumed by this counter: stop() does not bump it, so the
   // pre-createDriver guard checks both.
   let generation = 0
+  // Main-memory pairing lifetime, independent of redials and the registry's retained connection.
+  let replayPairing: PairedServerRecord | null = null
+  let replayCursor: number | undefined
   // The `hello` consumed envelope id 1 in bootstrap (:153); app envelopes continue from 2. A
   // module-local, single-writer counter — `send` has no `await`, so it runs to completion with no
   // check-then-act race. It advances only on a successful build, so a dropped over-cap send does
@@ -1142,7 +1145,17 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         // onto the IPC layer — the consumer's only job (transport/ stays IPC-free).
         let inbound: InboundDaemonMessage | null
         try {
-          inbound = parseInboundMessage(event.plaintext, deps.diagnosticLog)
+          inbound = parseInboundMessage(event.plaintext, deps.diagnosticLog, (envelope) => {
+            if (envelope.type === 'resync') {
+              replayCursor = undefined
+              deps.diagnosticLog?.event({ event: 'replay-cursor-reset', code: 'resync' })
+            } else if (
+              envelope.event_id !== undefined && Number.isSafeInteger(envelope.event_id) &&
+              envelope.event_id > 0 && (replayCursor === undefined || envelope.event_id > replayCursor)
+            ) {
+              replayCursor = envelope.event_id
+            }
+          })
         } catch {
           // Fail-closed (AC4): oversized / malformed / unparseable / mistyped payload. Drop the
           // frame — no event, no throw. The caught WireDecodeError is DROPPED (classify-don't-
@@ -2785,16 +2798,35 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // MalformedPairedServerRecordError propagates to the caller (bootstrap's catch, or the driver's
   // resolveConnection which fails closed).
   async function loadDialConfig(): Promise<DialConfig | null> {
+    const gen = generation
     const record = await pairedServer.load()
-    if (record === null) return null
+    if (stopped || gen !== generation) return null
+    if (record === null) {
+      replayPairing = null
+      replayCursor = undefined
+      return null
+    }
     const pair = await deviceKeypair.ensure()
+    if (stopped || gen !== generation) return null
     const remoteStaticPublicKey = decodeServerKey(record.server_static_pubkey)
+    if (
+      replayPairing === null || replayPairing.server !== record.server ||
+      replayPairing.relay !== record.relay || replayPairing.token !== record.token ||
+      replayPairing.server_static_pubkey !== record.server_static_pubkey
+    ) {
+      replayCursor = undefined
+      replayPairing = {
+        server: record.server, relay: record.relay, token: record.token,
+        server_static_pubkey: record.server_static_pubkey
+      }
+    }
     const hello = buildClientHello({
       id: 1,
       ts: now(),
       deviceName,
       clientVersion,
       token: record.token,
+      lastEventId: replayCursor,
       // Advertise `interactive` (#179): the daemon opens the v2 structured stream (turn state,
       // deltas, tool use/result, thinking, modal prompts) and accepts the interactive control verbs
       // — the mounted render pipeline (timeline + modal bridges) draws them. `interactive` is the
@@ -2837,11 +2869,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   async function bootstrap(gen: number): Promise<void> {
     try {
       const dc = await loadDialConfig()
-      // A reconnect superseded this in-flight bootstrap while it awaited: abandon it silently — do
-      // not emit not-paired/connect-failed or build a stale driver. The successor's dial owns the
-      // sink now. Gen check FIRST, before the not-paired branch, so a superseded bootstrap never
-      // emits not-paired.
-      if (gen !== generation) return
+      // Teardown or a reconnect may have superseded this bootstrap while it awaited. Check both
+      // fences before interpreting null as not-paired: loadDialConfig also returns null for a
+      // stopped or superseded dial, which must not emit a stale failure.
+      if (stopped || gen !== generation) return
       if (dc === null) {
         emitFailed('not-paired')
         return

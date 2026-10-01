@@ -29,7 +29,7 @@ named-host reconnect can re-dial an unchanged pairing through the separate entry
 
 `reconnect()` copies the [Noise relay driver](noise-relay-driver.md)'s own `generation`-counter idiom (`noiseRelayDriver.ts:100-118`) **one layer up**. A module-local `let generation = 0`, bumped in `dial()`, plus a per-dial wrapper around the `onEvent` passed to `createDriver` — a closure capturing the dial's `gen` that early-returns when `gen !== generation`, else forwards to the unchanged `onDriverEvent`. `bootstrap(gen)` threads the same `gen` and fences at each suspension point:
 
-- after `await pairedServer.load()`: `if (gen !== generation) return` — a reconnect superseded this in-flight bootstrap; do not emit or build a stale driver.
+- after `await pairedServer.load()` and `await deviceKeypair.ensure()`, `loadDialConfig` checks `stopped` and its captured generation before changing the pairing snapshot or building a hello. A cancelled load returns `null`; `bootstrap` checks both fences before treating that result as an absent pairing.
 - before `createDriver`: `if (stopped || gen !== generation) return` — covers app-quit (**`stopped`**, which `generation` does NOT subsume) **and** supersession. `stopped` is checked explicitly because `stop()` does not bump `generation`.
 - `catch`: `if (gen === generation) emitFailed('connect-failed')` — a superseded bootstrap's throw is silent (its `failed` would clobber the successor's `connecting`).
 
@@ -89,6 +89,27 @@ interleaving race-safe by construction (no interleaving needs its own handling).
 - The **first** dial keeps using the config `bootstrap` already loaded (no reason to reload microseconds later, and #82's first-dial not-paired/connect-failed messaging stays put); the provider drives only the automatic re-dials.
 - **Fail-closed:** a reconnect that finds no record (`load()` → `null`), or a throw from a malformed record / bad key / keychain failure, ends supervision via the synthetic `NO_PAIRED_RECORD_CLOSE_CODE` → the driver's `terminal` → this module's `failed('connection-closed')` — a non-connected event, never a crash (AC3). The record never leaves the background process (AC5). The full mechanics are in the [relay supervisor](relay-supervisor.md) and [noise relay driver](noise-relay-driver.md) docs; the [#83 codebase note](../codebase/83.md) has the design.
 
+## Replay cursor lifetime
+
+Each host's connection holds a scalar replay cursor and a copied four-field pairing
+snapshot in main-process memory for this app run. Initial, automatic-reconnect and
+explicit-reconnect hellos send the latest cursor as `last_event_id`, omitting the
+key when no position exists. `last_event_id` requests the daemon's bounded retained
+tail for its current conversation after a daemon-wide event position. It does not
+request history. `last_seen_ts` has no daemon consumer and is never sent by this
+connection; the [hello builder](hello-exchange.md) retains only its compatibility
+input.
+
+On every dial, compare `server`, `relay`, `token` and `server_static_pubkey` with
+the snapshot. Equal values preserve the cursor across redials even when the store
+returns a fresh object. Any changed field or an absent record clears it. The
+[registry](daemon-connection-registry.md) retains a connection on pairing
+replacement, so connection lifetime alone cannot define cursor lifetime. Copy the
+named fields rather than retaining the caller's mutable record. Unpair removes
+the host's connection; pairing that host again creates an empty cursor. Other
+hosts keep their own positions. Nothing persists the cursor or exposes it as a
+renderer or log field.
+
 # How it works
 
 ## The bootstrap (what `start()` drives)
@@ -97,12 +118,12 @@ interleaving race-safe by construction (no interleaving needs its own handling).
 
 1. Guard: if already `started` or already `stopped`, no-op (single explicit connect).
 2. Emit `{ type: 'connecting' }` **synchronously** via `emitDaemonEvent`, before any `await` (AC3).
-3. `const dc = await loadDialConfig()` — which does: `await pairedServer.load()` (`null` → the provider returns `null`); `await deviceKeypair.ensure()` (device static keypair; the private key stays here); `decodeServerKey(record.server_static_pubkey)` (`base64StdDecode` then require exactly **32 bytes** — the length check the codec deliberately omits; both throws caught by `bootstrap`); `buildClientHello({ id: 1, ts: now(), deviceName, clientVersion, token: record.token })` (`capabilities`/`lastSeenTs` omitted — never hardcode `interactive`, see [hello exchange](hello-exchange.md)); returns the assembled `{ connection, session }` `DialConfig`.
-4. Gen check FIRST (`if (gen !== generation) return`), then `dc === null` → `failed('not-paired')`, return — the order preserved from #82 so a superseded bootstrap never emits a spurious `not-paired`.
+3. `const dc = await loadDialConfig()` — load the pairing, ensure the device static keypair, decode the server key as exactly **32 bytes**, compare the replay pairing snapshot, then build a fresh hello with `id: 1`, `ts: now()`, identity, token, `capabilities: ['interactive']` and optional `lastEventId`. `lastSeenTs` is omitted. The provider checks stopped/generation fences after both awaits and returns the assembled `{ connection, session }` or `null` for an absent record or cancellation.
+4. Check `if (stopped || gen !== generation) return` before the null-result branch. Only a current, active bootstrap interprets `dc === null` as `failed('not-paired')`. A cancelled successful load must emit no post-stop renderer event or diagnostic; checking only for driver construction misses this stale-failure path.
 5. If `stopped` or superseded since step 2, return without constructing the driver (`if (stopped || gen !== generation) return` — closes the start/stop and reconnect-supersede races).
 6. `createDriver({ connection: dc.connection, session: dc.session, loadDialConfig, onEvent: fenced })` and retain the handle. The driver dials on construction; `loadDialConfig` is threaded so the driver's *automatic* reconnects re-source the record.
 
-## Driver config assembled at step 8
+## Driver config assembled by `loadDialConfig`
 
 | Config field | Value | Note |
 |---|---|---|
@@ -112,10 +133,30 @@ interleaving race-safe by construction (no interleaving needs its own handling).
 | `session.staticPrivateKey` | `pair.privateKey` | raw 32B device static |
 | `session.remoteStaticPublicKey` | `decodeServerKey(...)` | raw 32B |
 | `session.prologue` | `new Uint8Array(0)` | zero-length matches the daemon |
-| `session.hello` | `buildClientHello(...)` output | token + identity early-data |
+| `session.hello` | `buildClientHello(...)` output | token + identity + optional pairing-scoped `last_event_id`; no `last_seen_ts` |
 | `onEvent` | `onDriverEvent` | the single event-mapping choke point |
 
 ## The driver-event → DaemonEvent mapping (`onDriverEvent`)
+
+### Inbound replay positions and resync
+
+The generation-fenced `message` callback passes an envelope observer to
+`parseInboundMessage`. It runs once after the plaintext-size and envelope guards,
+before payload narrowing. Except for `resync`, a positive safe-integer `event_id`
+advances the cursor only when greater than the held value. Missing, nonnumeric,
+nonpositive, fractional and unsafe values leave it unchanged. Unknown frame types
+and malformed payloads still advance a valid admitted position while retaining
+their existing ignore/drop behavior. A rejected size or envelope guard cannot
+record or reset anything; a superseded driver's events never reach the observer.
+
+An admitted `resync` clears only this host's cursor regardless of payload shape,
+ignoring its own `event_id`. The decoder returns `null`: no renderer event and no
+automatic `request_history`. The next hello omits `last_event_id` until another
+valid event establishes a new position, which may be lower than the old cursor.
+Only the static `replay-cursor-reset` diagnostic with code `resync` is emitted;
+no cursor, host id or payload enters it. An expired or unavailable tail therefore
+leaves recovery to the existing history flow. Replayed events use the ordinary
+live-event path; the daemon's watermark owns duplicate suppression.
 
 The single choke point. Nothing else emits.
 
@@ -168,8 +209,8 @@ control and its integrated proof belong to
 
 # State + concurrency model
 
-- **No store.** Three locals: `started`, `stopped`, `driver`. The single source of session state is the renderer's [session store](session-store.md) ([#2](../codebase/2.md)); this module only *emits* into it via IPC.
-- **The `start()`/`stop()` race** is closed by checking `stopped` **immediately before** the synchronous `createDriver` call (step 7). JS yields only at `await`, so `stop()` can only interleave at an await point: if it ran during an earlier `await`, `stopped` is `true` at step 7 → the driver is never constructed; if it runs after step 8, `driver` is set → it is torn down. No orphaned driver.
+- **Main-process state.** Driver/lifecycle handles, generation and the pairing-scoped replay cursor stay here. Renderer session state lives in the [session store](session-store.md); replay position is never an IPC field.
+- **The `start()`/`stop()` race** is closed by checking `stopped` after asynchronous dial loads, before null classification and immediately before synchronous driver construction. JS yields only at `await`: a stop during load/key ensure cancels output; a stop after construction tears down the held driver.
 - **`stopped` does double duty** — it is both the start/stop race guard *and* the "suppress the clean-stop terminal" flag, so no separate `stopping` boolean is needed.
 - **`generation` is a second, orthogonal fence for `reconnect()`** ([#82](../codebase/82.md)) — it supersedes an in-flight dial when a fresh one begins, dropping the old driver's stop-terminal and aborting a stale `bootstrap`. `stop()` deliberately does not bump it (permanent teardown stays `stopped`'s job), so the pre-`createDriver` guard checks both. Full model in § Connect-on-pair.
 - **Transient reconnects are invisible here.** The supervisor absorbs transient drops and re-dials the *same* driver without surfacing `terminal`; on reconnect the driver **re-sources the record via `loadDialConfig`** ([#83](../codebase/83.md)) then runs a fresh handshake and fires another `handshake-complete` → this re-emits `connected`. During the gap the UI stays on its last status. (This is distinct from `reconnect()`, which **replaces** the driver entirely — see § Connect-on-pair.)

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { test, expect, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { pushConfirmingDelivery } from './fixtures/confirmedPush'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import { ATTACHMENT_UPLOAD_EVENT_CHANNEL } from '../src/shared/ipc/attachmentUpload'
 import type { AttachmentUploadEvent } from '../src/shared/ipc/attachmentUpload'
@@ -169,13 +170,25 @@ test('an image attachment draws as its own bytes, sized live, with the file row 
 }) => {
   const { page, app } = await launchPairedApp({ buildReplyFrames })
 
-  const pushCompleted = (event: AttachmentUploadEvent): Promise<void> =>
-    app.evaluate(
-      ({ BrowserWindow }, payload) => {
-        const [window] = BrowserWindow.getAllWindows()
-        window.webContents.send(payload.channel, payload.event)
-      },
-      { channel: ATTACHMENT_UPLOAD_EVENT_CHANNEL, event }
+  // A lost inspection context cannot tell us whether send ran. Observe this push's absolute tile
+  // count before retrying; a previous upload's late tile must not stand in for the current one.
+  const pendingTiles = page.locator('.composer__attachment-slot')
+  const pushCompleted = (event: AttachmentUploadEvent, tilesAfter: number): Promise<void> =>
+    pushConfirmingDelivery(
+      () =>
+        app.evaluate(
+          ({ BrowserWindow }, payload) => {
+            const [window] = BrowserWindow.getAllWindows()
+            window.webContents.send(payload.channel, payload.event)
+            // Exercise the ambiguous outcome: delivery happened before inspection reported a loss.
+            // A blind resend duplicates the document; the pending strip and bubble assert exactly one.
+            if (payload.event.uploadId === payload.loseContextAfterUploadId) {
+              throw new Error('Execution context was destroyed, most likely because of a navigation.')
+            }
+          },
+          { channel: ATTACHMENT_UPLOAD_EVENT_CHANNEL, event, loseContextAfterUploadId: ID_DOCUMENT }
+        ),
+      async () => (await pendingTiles.count()) >= tilesAfter
     )
 
   const send = async (text: string): Promise<void> => {
@@ -212,8 +225,9 @@ test('an image attachment draws as its own bytes, sized live, with the file row 
     })
 
   // --- 1. A message carrying an image AND a document: one of each, in record order. AC1's last clause. ---
-  await pushCompleted(upload(ID_TALL, 'portrait.png'))
-  await pushCompleted(upload(ID_DOCUMENT, 'quarterly-report.pdf'))
+  await pushCompleted(upload(ID_TALL, 'portrait.png'), 1)
+  await pushCompleted(upload(ID_DOCUMENT, 'quarterly-report.pdf'), 2)
+  await expect(pendingTiles).toHaveCount(2)
   await send('a picture and a document')
 
   const first = bubble(0)
@@ -279,7 +293,7 @@ test('an image attachment draws as its own bytes, sized live, with the file row 
 
   // --- 5. AC3's capped case. The 800x100 source would be 1280 wide at 160 tall, so the cap always binds:
   // the width lands ON the bubble's measured content width and the height falls proportionally. ---
-  await pushCompleted(upload(ID_WIDE, 'panorama.png'))
+  await pushCompleted(upload(ID_WIDE, 'panorama.png'), 1)
   await send('a very wide one')
 
   const second = bubble(1)
@@ -348,7 +362,7 @@ test('an image attachment draws as its own bytes, sized live, with the file row 
   expect(portraitAfterResize.box.height).toBeCloseTo(THUMBNAIL_HEIGHT_PX, 0)
 
   // --- 7. AC3's closing assumption: an image naturally shorter than 160px is NOT scaled up. ---
-  await pushCompleted(upload(ID_SMALL, 'thumb.png'))
+  await pushCompleted(upload(ID_SMALL, 'thumb.png'), 1)
   await send('a small one')
 
   const third = bubble(2)
@@ -365,7 +379,7 @@ test('an image attachment draws as its own bytes, sized live, with the file row 
   // two legs, same store, same blob URL — so this isolates the decode failure from every fetch failure.
   // The result is the plain textual fallback: no broken-image icon, no reason, and the name as escaped
   // children. ---
-  await pushCompleted(upload(ID_LIAR, 'pretend-picture.png'))
+  await pushCompleted(upload(ID_LIAR, 'pretend-picture.png'), 1)
   await send('this one lies')
 
   const fourth = bubble(3)

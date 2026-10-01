@@ -30,6 +30,7 @@ import {
   agentFromWire
 } from '../../shared/wire/types'
 import type {
+  Envelope,
   WireAgent,
   BannerPayload,
   MessagePayload,
@@ -4049,7 +4050,8 @@ function parseBannerPayload(payload: unknown): BannerPayload {
  */
 export function parseInboundMessage(
   plaintext: Uint8Array,
-  diagnosticLog?: DiagnosticLog
+  diagnosticLog?: DiagnosticLog,
+  observeEnvelope?: (envelope: Envelope) => void
 ): InboundDaemonMessage | null {
   // Size guard (AC4): decodeEnvelope does not size-check, so this is the only thing that makes an
   // oversized-but-valid-JSON frame fail closed here. The upstream Noise transport already bounds the
@@ -4059,10 +4061,14 @@ export function parseInboundMessage(
     throw new WireDecodeError('inbound plaintext exceeds max size')
   }
   const envelope = decodeEnvelope(plaintext)
+  // Replay position belongs to the admitted envelope, even when payload narrowing later fails.
+  observeEnvelope?.(envelope)
   // Each log fires AFTER the modeled envelope has fully narrowed, so the throw path stays unlogged: a
   // frame that fails to narrow throws first and leaves no record. Optional chaining short-circuits the
   // whole call (including hashPlaintext) when no logger is injected — absent-logger costs nothing.
   switch (envelope.type) {
+    case 'resync':
+      return null
     case 'message': {
       const message = parseMessagePayload(envelope.payload)
       diagnosticLog?.event({

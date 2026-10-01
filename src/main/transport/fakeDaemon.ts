@@ -69,7 +69,7 @@
 import { WebSocket } from 'ws'
 import type { RawData } from 'ws'
 import { type NoiseCipherState } from 'noise-c.wasm'
-import { NOISE_PROTOCOL, MAX_FRAME_BYTES, type HelloAckPayload } from '../../shared/wire/types'
+import { NOISE_PROTOCOL, MAX_FRAME_BYTES, type HelloAckPayload, type Envelope } from '../../shared/wire/types'
 import { loadNoiseLib } from './noiseLib'
 import {
   encodeEnvelope,
@@ -316,6 +316,8 @@ export interface FakeDaemonOptions {
    *  or `[]` (resolved-while-away); a queue e2e would pass a `queue_state` envelope. Streaming AFTER
    *  hello_ack guarantees the client processes `connected` (→ reset) before the re-sends repopulate. */
   reconnectResendFrames?: Uint8Array[]
+  /** Test-only replay negotiation probe. Receives authenticated hello; overrides unconditional resends. */
+  buildReconnectFrames?: (hello: Envelope) => Uint8Array[]
 }
 
 /** Closed set of static reasons — NEVER carries key/token/frame/plaintext bytes. */
@@ -534,7 +536,8 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
       // Recover + validate the client `hello` early-data exactly as handleMsg1 — a malformed hello
       // fail-closes (faithfulness: a lax fake must reject what the real daemon rejects).
       const hello = fresh.ReadMessage(raw, true) ?? EMPTY_AD
-      decodeEnvelope(hello)
+      const reconnectHello = decodeEnvelope(hello)
+      const frames = options.buildReconnectFrames?.(reconnectHello) ?? reconnectResendFrames
       const msg2 = fresh.WriteMessage(
         encodeEnvelope({ id: HELLO_ACK_ID, type: 'hello_ack', ts: HELLO_ACK_TS, payload: helloAck })
       )
@@ -555,7 +558,7 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
       state = 'transport'
       sendNoise(msg2, 'noise_resp')
       // Re-send the still-held frames sealed under the NEW send cipher, in order (modal-agnostic).
-      for (const frame of reconnectResendFrames) {
+      for (const frame of frames) {
         sendNoise(send.EncryptWithAd(EMPTY_AD, frame))
       }
     } catch {
@@ -657,7 +660,12 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
   socket.on('message', (data: RawData) => onMessage(data))
 
   await new Promise<void>((resolve, reject) => {
-    const onDialError = (err: Error): void => reject(err) // pre-open failure: no handle yet
+    const onDialError = (err: Error): void => {
+      // No handle reaches the caller on a failed upgrade. Release this attempt before rejection;
+      // close synchronously frees the Noise state and terminates the leg, returning a settled promise.
+      void close()
+      reject(err)
+    }
     socket.once('error', onDialError)
     socket.once('open', () => {
       socket.off('error', onDialError)

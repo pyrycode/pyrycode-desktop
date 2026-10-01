@@ -196,6 +196,7 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
         is_archived: bool(c.is_archived), cwd: string(c.cwd), last_message_ts: string(c.last_message_ts),
         last_used_at: string(c.last_used_at), workspace_label: nullable(c.workspace_label, string),
         is_muted: optional(c.is_muted, bool),
+        ...(c.archived_at === undefined ? {} : { archived_at: nullable(c.archived_at, string) }),
         // An untagged row restores with no key at all, as before #1649.
         ...(c.agent === undefined ? {} : { agent: agentFromWire(string(c.agent)) })
       }

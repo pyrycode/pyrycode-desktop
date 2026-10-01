@@ -39,6 +39,8 @@ security-sensitive.
   restore row per archived conversation of that kind (title over an "Archived &lt;relative time&gt;"
   subtitle, with a trailing icon-only restore control), or a per-tab empty-state line ("No archived
   channels" / "No archived discussions") when that kind has zero archived rows.
+- Each tab sorts across all hosts by the most recent archive instant first. Legacy or invalid
+  archive stamps fall back to `last_used_at`; the subtitle uses that same selected instant.
 - Activating a row's restore control dispatches the `unarchiveConversation` command
   ([#346](../codebase/346.md)) for that row's id, fire-and-forget; the row leaves the tab and both tab
   counts recompute automatically once the daemon confirms (see Data flow) — no local mutation, no
@@ -170,7 +172,8 @@ The tab panel (`role="tabpanel"`, `aria-labelledby` switching with `selectedTab`
 this kind) → the per-tab empty-state copy; non-empty → one `ArchiveRow` per archived conversation.
 
 `ArchiveRow` (Figma 18-19) is a title (`titleFor`, the Channel List's untitled fallback) over an
-"Archived …" subtitle (`archivedSubtitle`), with a sibling icon-only `RestoreControl`
+"Archived …" subtitle (`archivedSubtitle(conversation, now)`, using the same selected instant as
+the row's ordering), with a sibling icon-only `RestoreControl`
 (`aria-label="Restore"`, `aria-hidden` SVG, a Material `replay` glyph standing in for Figma's
 counter-clockwise restore arrow — not load-bearing, since the accessible name comes from the
 `aria-label`). `requestUnarchiveConversation(sendCommand, conversationId)` dispatches the inline
@@ -186,17 +189,26 @@ optional-gated, the same posture `SettingsScreen`'s back affordance uses.
 Framework-free `.ts`, mirroring `channelListViewModel.ts` — unit-tested without React or the store:
 
 - `partitionArchived(rows)` — filters to `is_archived === true`, then delegates to the existing
-  `partitionByPromotion` on that subset (channels = promoted, discussions = not). Order-preserving, no
-  sort — the daemon's array order is authoritative. Returns `{ channels, discussions }`, whose keys are
-  exactly the `ArchiveTab` union members.
-- `archivedSubtitle(iso, now)` — composes `"Archived " + formatLastActivity(iso, now)` (→ "Archived 2
-  days ago", "Archived Jul 4"). `formatLastActivity` already embeds "ago" and falls back to a short
-  date past a week, so this never doubles it; a non-parseable `iso` makes `formatLastActivity` return
-  `''`, collapsing the subtitle to the bare `"Archived"`. Does **not** extend `formatLastActivity` with
-  Figma's coarser "weeks/months ago" buckets — that function is shared with the Channel List, so this
-  composition keeps the change additive to the archive screen only. Honest-signal seam:
-  `ConversationSummary` carries no true `archived_at` time, only `last_message_ts` — the same last-
-  activity posture `channelListViewModel.ts` documents for its own row subtitle.
+  `partitionByPromotion` on that subset (channels = promoted, discussions = not), then sorts fresh
+  arrays for each tab across all hosts. Returns `{ channels, discussions }`, whose keys are exactly
+  the `ArchiveTab` union members. Neither the input array nor its rows mutate; the shared partition
+  function and the store retain their own ordering.
+- The archive-local `archiveInstant(row)` selector chooses `archived_at` only when it has RFC3339
+  date/time/zone syntax, a valid calendar day and a parseable instant. Absent, `null`, invalid or
+  non-RFC3339 stamps fall back to a parseable `last_used_at`. Legacy rows participate among stamped
+  rows using that fallback time. A bare date, a timestamp without a zone or an impossible calendar
+  date cannot displace last use, even when JavaScript's permissive `Date.parse` accepts it.
+- Selected instants sort descending. UTC offsets are compared as instants, and fractional seconds
+  beyond milliseconds are retained so `Date.parse` truncation cannot create false ties. Equal
+  instants tie by conversation id ascending in UTF-16 code-unit order, without locale comparison.
+  Rows with an unparseable fallback follow every parsable row and use the same id rule. Fully equal
+  selected keys and ids retain input order through stable sorting.
+- `archivedSubtitle(row, now)` uses the same selector and composes
+  `"Archived " + formatLastActivity(instant.iso, now)` (→ "Archived 2 days ago", "Archived Jul 4").
+  Neither timestamp parseable means bare `"Archived"`, with no trailing space. The source is never
+  `last_message_ts`. `formatLastActivity` keeps its existing relative-time buckets and short date
+  past a week; it already embeds "ago", so the subtitle never doubles it. The shared formatter's
+  other callers are unchanged; Figma's coarser "weeks/months ago" buckets remain unimplemented.
 - `tabCountLabel(base, count)` — `count === null` → the bare `base`; otherwise `` `${base} (${count})` ``,
   including `count === 0` → "Channels (0)".
 
@@ -244,12 +256,29 @@ restore row click
 BackControl onClick → onBack → PairedShell dispatch({ type: 'back' }) → nextPairedRoute → 'list'
 ```
 
+## Testing
+
+`archiveViewModel.test.ts` covers both tabs across hosts, frozen inputs, missing/null/invalid
+stamps, invalid fallback times, equivalent UTC offsets, sub-millisecond ordering, UTF-16 id ties
+and stable equal rows. `ArchiveScreen.test.tsx` renders timestamps separated by weeks to prove
+the subtitle source, last-use fallback and bare "Archived". Cross-view assertions also live in
+`channelListViewModel.test.ts`: Archive sorts while the shared `partitionByPromotion` preserves
+input order, so changing only the archive suite would miss that regression.
+
+[`e2e/real-daemon-archive-order.spec.ts`](../../../e2e/real-daemon-archive-order.spec.ts) uses the
+Claude-less daemon fixture. It observes the first archive completing before issuing the second,
+then expects second-archived-first against opposing last-used order. It also checks both daemon
+archive stamps, preventing a missing prerequisite from passing on coincidental fallback order.
+The tested daemon must contain [daemon PR #2700](https://github.com/pyrycode/pyrycode/pull/2700);
+the spec records its revision. See the [live test runbook](live-e2e-runbook.md) for execution.
+
 ## Edge cases and limitations
 
-- **No true "archived at" time.** `ConversationSummary` carries no `archived_at` field, only
-  `last_message_ts` — the subtitle's "Archived …" time is measured from that last-activity signal, not
-  a true archive timestamp, and Figma's coarser "weeks/months ago" buckets are deferred pending a
-  daemon field. Same honest-signal posture the Channel List documents for its own row subtitle.
+- **Legacy archive time is approximate.** The daemon reports nullable `archived_at`; active and
+  legacy archived rows can have `null`, and older saved rows can omit it. An invalid stamp also
+  falls back to `last_used_at` for both sorting and text. This fallback does not reconstruct the
+  original archive action. When it cannot parse either, the row sorts after timed rows and reads
+  bare "Archived".
 - **No stack-aware back**, same as `settings`/`thread`: `archive → back` always lands on `list`
   regardless of which route dispatched it.
 - **Restore is fire-and-forget with no optimistic UI.** A row stays visible until the daemon's

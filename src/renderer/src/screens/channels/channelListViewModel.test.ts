@@ -149,7 +149,7 @@ describe('partitionActive', () => {
     expect(discussions.map(r => r.serverId)).toEqual(['host-a', 'host-a', 'host-b'])
   })
 
-  it('keeps the shared partition and Archive in input order despite unsorted names', () => {
+  it('preserves shared partition input order and breaks equal Archive timestamps by id', () => {
     const rows = [
       row({ id: 'cz', name: 'Zulu', is_promoted: true, is_archived: true }),
       row({ id: 'dz', name: 'Zulu', is_archived: true }),
@@ -161,8 +161,9 @@ describe('partitionActive', () => {
     expect(shared.channels.map(r => r.id)).toEqual(['cz', 'ca'])
     expect(shared.discussions.map(r => r.id)).toEqual(['dz', 'da', 'active'])
     const archived = partitionArchived(rows)
-    expect(archived.channels.map(r => r.id)).toEqual(['cz', 'ca'])
-    expect(archived.discussions.map(r => r.id)).toEqual(['dz', 'da'])
+    // All archived rows share the factory's fallback instant, so the id tie-break decides order.
+    expect(archived.channels.map(r => r.id)).toEqual(['ca', 'cz'])
+    expect(archived.discussions.map(r => r.id)).toEqual(['da', 'dz'])
     expect(partitionActive(rows).discussions.map(r => r.id)).toEqual(['active'])
     expect(partitionActive(rows).channels).toEqual([])
   })

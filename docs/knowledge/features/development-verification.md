@@ -144,6 +144,9 @@ the fake responses.
 A real-Claude failure can come from the installed daemon being too old or too new
 for the client contract. It can also be an unrelated race.
 Check the daemon version and the capabilities the test needs.
+Confirm the actual test executable's source revision contains the prerequisite merge. A focused
+pass against a temporary binary leaves a stale dedicated test binary unchanged; rerun against
+the executable the dispatcher uses before treating that environment as repaired.
 Compare neighbouring gate runs and per-spec durations before assigning the cause.
 Search existing bug tickets before creating another.
 

@@ -218,9 +218,10 @@ correct outcome, not a hard failure:
 
 [#933](https://github.com/pyrycode/pyrycode-desktop/issues/933) added a fourth, opt-in skip gate: a
 `real-*` spec can declare `test.use({ requiredCapabilities: [...] })` to skip — never fail — against
-a daemon whose `hello_ack` doesn't advertise a capability the spec needs. A spec that declares nothing
-(every spec but `real-claude-question-answer.spec.ts` and `real-claude-question-cancel.spec.ts`, both
-declaring `question`) dials no probe and is gated exactly by the three checks above, byte for byte.
+a daemon whose `hello_ack` doesn't advertise a capability the spec needs. The question-answer and
+question-cancel specs declare `question`; `real-daemon-multi-agent.spec.ts` declares
+`['interactive', 'multi_agent']`. A spec that declares nothing dials no probe and is gated exactly
+by the three checks above, byte for byte.
 Declaring one turns a stale daemon from a routed-to-a-builder test *failure* into a
 routed-to-the-operator environment *skip* — the same class as a missing credential — which matters
 because the dispatcher's real-claude gate can't tell "the code is wrong" from "the daemon predates
@@ -261,6 +262,16 @@ The mechanism, in `e2e/fixtures/daemonCapabilityGate.ts`:
 `vitest.config.ts` and `playwright.config.ts` each gained one line so the pure decision could be unit
 tested beside the fixture it serves without Playwright trying to collect it: `.test.ts` under `e2e/`
 is vitest's, `.spec.ts` is Playwright's — a suffix invariant, not a directory one.
+
+[`real-daemon-multi-agent.spec.ts`](../../../e2e/real-daemon-multi-agent.spec.ts) uses
+`spawnClaude: false` and requires both `interactive` and `multi_agent`, so an older daemon skips
+through `daemonCapabilityGate` rather than failing. The probe is a separate connection: its ack
+can pass even if production forgot a capability. After pairing, the spec subscribes to
+`window.pyry.onDaemonEvent` **before** calling `reconnectServer`, which forces a fresh app handshake.
+It polls the first `connected` ack for both names. The recorder filters the spec-owned expected
+names against `ack.capabilities`, retaining no daemon-supplied strings for test diagnostics.
+This proves acceptance of the production hello, not Codex turn execution. Executed evidence lives
+in the [runbook](live-e2e-runbook.md#current-real-claude-gate-state).
 
 ### Fixture chain and teardown
 
@@ -492,7 +503,7 @@ overrides the resolved `pyry` binary when it isn't on `PATH` (e.g. a sibling-rep
   dev flags this scenario consumes without relaxing.
 - [#933](https://github.com/pyrycode/pyrycode-desktop/issues/933) — added the capability-gated skip
   (`e2e/fixtures/daemonCapabilityGate.ts`) described above; `real-claude-question-answer.spec.ts`
-  (#928) and `real-claude-question-cancel.spec.ts` (#929) are its two consumers, both declaring
+  (#928) and `real-claude-question-cancel.spec.ts` (#929) were its first two consumers, both declaring
   `question`.
 - [#929](https://github.com/pyrycode/pyrycode-desktop/issues/929) — the fifth tier sibling
   (`real-claude-question-cancel.spec.ts`); the refusal twin of #928's answer arm, contrasted with the

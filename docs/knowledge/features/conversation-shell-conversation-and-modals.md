@@ -11,14 +11,17 @@ Part of [Conversation shell](conversation-shell.md); see that document for what 
 
 ## The interactive flip + thread cutover (#179)
 
-The on-switch for the whole structured surface above. `loadDialConfig` (`daemonConnection.ts`) now
-passes `capabilities: [CAPABILITY_INTERACTIVE]` to `buildClientHello` — the single production call
-site, previously always `[]`. `interactive` is the only capability in the vocabulary, so advertising
-it turns on everything the daemon offers a paired interactive client: the v2 structured stream (turn
-state, deltas, tool use/result, thinking) and the `modal_shown` prompts, all decoded by the
-already-shipped, previously-inert transport (#199–#230) and rendered by the already-mounted pipeline
-above. The daemon's accepted set echoes back on `hello_ack.capabilities`, surfaced unchanged on the
-`connected{ack}` event (`parseHelloAck` already did this — no production change needed for that half).
+`loadDialConfig` (`daemonConnection.ts`), the single production `buildClientHello` call site,
+passes `capabilities: [CAPABILITY_INTERACTIVE, CAPABILITY_MULTI_AGENT]`.
+`interactive` enables the v2 structured stream (turn state, deltas, tool use/result, thinking)
+and the `modal_shown` prompts decoded by the transport and rendered by the timeline and modal
+bridges. `multi_agent` also unlocks Codex conversations, their frames and Codex model rows on a
+supporting v0.27.0+ daemon (pyrycode#2643); without it those are withheld even from an interactive
+client. Codex uses the existing channel rows and the per-agent decoders. The daemon echoes the
+accepted intersection on `hello_ack.capabilities`, surfaced unchanged on `connected{ack}`.
+The unit test in `daemonConnection.test.ts` decodes the hello built by `loadDialConfig` and pins
+both names; the [real-daemon proof](real-claude-liveness-e2e.md#capability-gated-skip--the-one-check-that-runs-after-the-daemon-exists)
+checks the app's own acknowledgment separately from the harness probe.
 
 Advertising `interactive` stops the daemon's coarse `message` fan-out in the same instant
 (pyrycode #699), so the flip and the render cutover **land in one commit**:

@@ -72,7 +72,22 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
-**Latest verified run: combined #1673 and #1674, 2026-09-27 — 23 executed, 23 passed, 0 failed, 1 skipped.**
+**Latest verified run: #1657, 2026-10-01 — 24 executed, 24 passed, 0 failed, 1 skipped.**
+The [dispatcher verdict](https://github.com/pyrycode/pyrycode-desktop/issues/1657#issuecomment-5933303183)
+records branch `dbe8a350a0` merged with `origin/main` `bd5b9348e7`, exit 0.
+Its per-test JSON log `2026-10-01T14-11-47-394Z_real-claude-gate_#1657.log` under
+`pyrycode-desktop-agents/logs/` confirms `real-daemon-multi-agent.spec.ts` executed and passed
+at 14:15:24 UTC, retry 0 (665ms). The version-checking specs attach daemon revision
+`36acd04c79f1279c5c5dfb14a4c35e4dc6b6aff0`. The sole skip remains the Reset session fixme
+for pyrycode#2436. This covers the built app and local relay, not the production relay.
+
+`e2e/real-daemon-multi-agent.spec.ts` uses `spawnClaude: false` and
+`requiredCapabilities: ['interactive', 'multi_agent']`; `daemonCapabilityGate` skips unsupported
+daemons, including those predating v0.27.0. Its body records the app's own `connected` ack
+after reconnecting and requires both names; the separate gate probe cannot prove production
+advertises them. See the [liveness overview](real-claude-liveness-e2e.md#capability-gated-skip--the-one-check-that-runs-after-the-daemon-exists).
+
+**Previous verified run: combined #1673 and #1674, 2026-09-27 — 23 executed, 23 passed, 0 failed, 1 skipped.**
 The operator ran `npm run e2e:real:gate` on commit `97ad5940`, containing both fixes and
 `origin/main` at `d085e321`. The configured test binary reported `pyry 0.27.0`.
 All five release-version cases and the workspace grouping, cwd-equality, and unique-create
@@ -137,8 +152,8 @@ the daemon spawns the child with its strict `--mcp-config` and the on-demand `mc
 ticket's Channel-info trigger sends has something to answer), ticks Show built-in, and asserts the
 daemon's own `pyry_approve`/`pyry_files` rows by exact name — see [Channel info § MCP servers
 section](conversation-shell-channel-info-mcp.md#mcp-servers-section-1490).
-The combined run executed 23 tests against the fork's configured floor of 10.
-`PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED` is still owed a bump to 23 so a missing runnable
+The latest run executed 24 tests against the fork's configured floor of 10.
+`PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED` is still owed a bump to 24 so a missing runnable
 case cannot hide behind the lower floor. The floor lives in the fork's dispatcher
 configuration, not this repo.
 
@@ -393,14 +408,14 @@ next state change updates one place, not four.
 PYRY_REAL_CLAUDE_GATE_CMD="npm install --no-audit --no-fund >&2 && npm run build >&2 && npx playwright test --config playwright.real-claude.config.ts --reporter=json"
 PYRY_REAL_CLAUDE_GATE_FORMAT=playwright-json
 PYRY_REAL_CLAUDE_GATE_TIMEOUT_MS=1800000
-PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED=22
+PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED=24
 ```
 
 Why each line is what it is:
 
 - **Install and build chatter goes to stderr on purpose.** The gate reads stdout and expects Playwright's JSON report alone. Its parser skips to the first `{`, but npm output ahead of the report can still defeat it, so the chatter is routed away rather than tolerated.
 - **The gate needs the per-test JSON reporter, not `e2e:real:gate`.** The repo's own gate script prints a human list. The dispatcher counts tests that ran a body, and it cannot count what it cannot read.
-- **The floor must match the runnable test count on the branch.** A lower floor can hide a missing-prerequisite skip. Count tests, not files, and account explicitly for an existing `test.fixme`: #1522 declares 23 tests in 20 files, with 22 runnable after the known system-prompt exclusion. The example above reflects those 22, including three new queue-delivery cases; the actual gate still reported 10. Updating this document does not change the fork's external configuration. See § Current real-claude gate state for the executed tests and the excluded case.
+- **The floor must match the runnable test count on the branch.** A lower floor can hide a missing-prerequisite skip. Count tests, not files, and account explicitly for an existing `test.fixme`: the latest run declares 25 tests, with 24 runnable after the known system-prompt exclusion. The example above reflects those 24; the actual gate still reported 10. Updating this document does not change the fork's external configuration. See § Current real-claude gate state for the executed tests and the excluded case.
 - **The floor is one-sided.** It answers "did enough tests run", never "did the right ones run". The 66-executed run described in § Current real-claude gate state cleared a floor of 10 with room to spare while running 56 fake-tier specs under the real-daemon config. A count above the floor is not evidence that the intended tier ran.
 
 **This fork cannot tell an inherited failure from a new one.** On a red run the gate is meant to re-run just the failing tests against the base commit, so a failure that already exists on `main` parks for the operator instead of being blamed on the branch. That comparison never runs here: the dispatcher's filter builder rejects any test name outside a conservative character set, and every Playwright name carries spaces and a `›` separator, so the filter is always refused ([agent-dispatcher#38](https://github.com/pyrycode/agent-dispatcher/issues/38)). While any spec in the tier is red, **every** gated ticket that reaches the gate is failed and sent back for rework for a fault it did not cause, and each one needs a hand correction. That is what happened to [#928](https://github.com/pyrycode/pyrycode-desktop/issues/928) on the first live run, for the pre-existing red later filed as [#941](https://github.com/pyrycode/pyrycode-desktop/issues/941).

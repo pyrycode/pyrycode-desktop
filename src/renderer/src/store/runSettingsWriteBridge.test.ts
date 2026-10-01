@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { DaemonEvent } from '@shared/ipc/events'
-import type { HelloAckPayload, MessagePayload } from '@shared/wire/types'
+import type { ConversationSummary, HelloAckPayload, MessagePayload } from '@shared/wire/types'
 import {
   translateWriteEvent,
   subscribeRunSettingsWrite,
@@ -12,7 +12,9 @@ import {
   foldWriteEvent,
   type SubmitSettingsChangeDeps
 } from './runSettingsWriteBridge'
-import type { RunSettingsWriteEvent, SettingsChange } from './runSettingsWriteStore'
+import { createRunSettingsWriteStore, type RunSettingsWriteEvent, type SettingsChange } from './runSettingsWriteStore'
+import { createConversationListStore, selectConversations } from './conversationListStore'
+import { serverIdForOpenConversation } from '../screens/conversation/unpairAction'
 
 // Framework-free data-path tests with injected spies (the sessionIdBridge idiom): no React, no
 // Electron. Inbound (translate/subscribe) and outbound (submit) helpers carry the logic and are
@@ -118,12 +120,12 @@ describe('subscribeRunSettingsWrite', () => {
     expect(dispatch).toHaveBeenCalledWith({ type: 'settingsRejected', changeId: 'c2' })
   })
 
-  it('routes a connected into dispatch as reconnected (#539)', () => {
+  it('routes an owning-host connected into dispatch as reconnected', () => {
     const bridge = fakeBridge()
     const dispatch = vi.fn()
-    subscribeRunSettingsWrite(bridge.onDaemonEvent, dispatch)
+    subscribeRunSettingsWrite(bridge.onDaemonEvent, dispatch, () => 'host-a')
 
-    bridge.emit({ type: 'connected', ack })
+    bridge.emit({ type: 'connected', ack, serverId: 'host-a' } as DaemonEvent)
     expect(dispatch).toHaveBeenCalledTimes(1)
     expect(dispatch).toHaveBeenCalledWith({ type: 'reconnected' })
   })
@@ -142,6 +144,114 @@ describe('subscribeRunSettingsWrite', () => {
     const cleanup = subscribeRunSettingsWrite(bridge.onDaemonEvent, vi.fn())
     cleanup()
     expect(bridge.off).toHaveBeenCalledTimes(1)
+  })
+
+  const row = (id: string): ConversationSummary => ({
+    id, name: null, cwd: '/project', is_promoted: false, is_archived: false,
+    last_message_ts: '2026-10-01T00:00:00Z', last_used_at: '2026-10-01T00:00:00Z', workspace_label: null
+  })
+  function ownedWrite() {
+    const bridge = fakeBridge()
+    const writes = createRunSettingsWriteStore()
+    const lists = createConversationListStore()
+    lists.getState().setConversations([row('a')], 'host-a')
+    lists.getState().setConversations([row('b')], 'host-b')
+    let active: string | null = 'a'
+    const log = vi.fn()
+    subscribeRunSettingsWrite(bridge.onDaemonEvent, writes.getState().dispatch,
+      () => serverIdForOpenConversation(selectConversations(lists.getState()), active), log)
+    const pick = (changeId: string, change: SettingsChange) =>
+      writes.getState().dispatch({ type: 'changeDispatched', changeId, change })
+    pick('pending', { field: 'model', value: 'opus' })
+    const reconnect = (serverId?: string | null, reportedId = 'host-a') =>
+      bridge.emit({ type: 'connected', ack: { ...ack, server_id: reportedId },
+        ...(serverId === undefined ? {} : { serverId }) } as DaemonEvent)
+    return { bridge, writes, lists, pick, reconnect, log, setActive: (id: string | null) => { active = id } }
+  }
+
+  it.each<{ change: SettingsChange; confirmed: { model?: string; effort?: string } }>([
+    { change: { field: 'model', value: 'opus' }, confirmed: { model: 'opus' } },
+    { change: { field: 'effort', value: 'high' }, confirmed: { effort: 'high' } }
+  ])(
+    'preserves $change.field through another host reconnect and commits the later correlated confirm', ({ change, confirmed }) => {
+      const h = ownedWrite()
+      h.pick('pending', change)
+      const before = h.writes.getState()
+      h.reconnect('host-b', 'host-a')
+      expect(h.writes.getState()).toBe(before)
+      expect(h.log).not.toHaveBeenCalled()
+      h.bridge.emit({ type: 'sessionSettingsUpdated', sessionId: 's', changeId: 'pending' })
+      expect(h.writes.getState().pending.size).toBe(0)
+      expect(h.writes.getState().confirmed).toEqual(confirmed)
+    })
+
+  it('clears all pending on owner reconnect, preserving confirmed settings and error', () => {
+    const h = ownedWrite()
+    h.pick('confirmed', { field: 'effort', value: 'high' })
+    h.bridge.emit({ type: 'sessionSettingsUpdated', sessionId: 's', changeId: 'confirmed' })
+    h.pick('rejected', { field: 'yolo', value: true })
+    h.pick('second-pending', { field: 'permissionMode', value: 'plan' })
+    h.bridge.emit({ type: 'sessionSettingsRejected', changeId: 'rejected' })
+    const before = h.writes.getState()
+    expect(before.pending.size).toBe(2)
+    expect(before.error).toBe('yolo')
+    h.reconnect('host-a', 'host-b')
+    expect(h.writes.getState().pending.size).toBe(0)
+    expect(h.writes.getState().confirmed).toBe(before.confirmed)
+    expect(h.writes.getState().error).toBe('yolo')
+    expect(h.log).toHaveBeenCalledOnce()
+  })
+
+  it('resolves ownership and the active conversation again after subscribing', () => {
+    const h = ownedWrite()
+    h.lists.getState().setConversations([], 'host-a')
+    h.lists.getState().setConversations([row('a'), row('b')], 'host-b')
+    const before = h.writes.getState()
+    h.reconnect('host-a')
+    expect(h.writes.getState()).toBe(before)
+    h.reconnect('host-b')
+    expect(h.writes.getState().pending.size).toBe(0)
+    h.lists.getState().setConversations([row('a')], 'host-a')
+    h.lists.getState().setConversations([row('b')], 'host-b')
+    h.setActive('b')
+    h.pick('next', { field: 'effort', value: 'low' })
+    h.reconnect('host-a')
+    expect(h.writes.getState().pending.has('next')).toBe(true)
+    h.reconnect('host-b')
+    expect(h.writes.getState().pending.size).toBe(0)
+  })
+
+  it.each(['no-active', 'unloaded', 'missing', 'ambiguous', 'unstamped', 'null-owner', 'absent-origin', 'null-origin'])(
+    'preserves pending with %s', scenario => {
+      const h = ownedWrite()
+      if (scenario === 'no-active') h.setActive(null)
+      if (scenario === 'unloaded') h.lists.getState().clearAllConversations()
+      if (scenario === 'missing') h.setActive('unknown')
+      if (scenario === 'ambiguous') h.lists.getState().setConversations([row('a')], 'host-b')
+      if (scenario === 'unstamped' || scenario === 'null-owner') {
+        h.lists.getState().clearAllConversations()
+        h.lists.getState().setConversations([row('a')], scenario === 'null-owner' ? null : undefined)
+      }
+      const before = h.writes.getState()
+      h.reconnect(scenario === 'absent-origin' ? undefined : scenario === 'null-origin' ? null : 'host-a')
+      expect(h.writes.getState()).toBe(before)
+      expect(h.log).not.toHaveBeenCalled()
+    })
+
+  it('retains unmatched-reply no-ops and correlated rejection after an unrelated reconnect', () => {
+    const h = ownedWrite()
+    const before = h.writes.getState()
+    h.reconnect('host-b')
+    h.bridge.emit({ type: 'sessionSettingsUpdated', sessionId: 's', changeId: 'unknown' })
+    h.bridge.emit({ type: 'sessionSettingsRejected', changeId: 'unknown' })
+    expect(h.writes.getState()).toBe(before)
+    h.bridge.emit({ type: 'sessionSettingsRejected', changeId: 'pending' })
+    expect(h.writes.getState().pending.size).toBe(0)
+    expect(h.writes.getState().confirmed).toEqual({})
+    expect(h.writes.getState().error).toBe('model')
+    const rejected = h.writes.getState()
+    h.bridge.emit({ type: 'sessionSettingsUpdated', sessionId: 's', changeId: 'pending' })
+    expect(h.writes.getState()).toBe(rejected)
   })
 })
 

@@ -22,6 +22,8 @@ import type { StoreApi } from 'zustand/vanilla'
 import type { RunSettingsWriteStore } from './runSettingsWriteStore'
 import { conversationTimelineStore, type ConversationTimelineStore } from './conversationTimelineStore'
 import { activeConversationStore } from './activeConversationStore'
+import { conversationListStore, selectConversations } from './conversationListStore'
+import { serverIdForOpenConversation } from '../screens/conversation/unpairAction'
 import { requestRunConfigSnapshot } from '../screens/conversation/runConfigSnapshot'
 
 /** Compile-time exhaustiveness guard: a new SettingsChange field without a case is a type error. */
@@ -45,11 +47,8 @@ export function translateWriteEvent(event: DaemonEvent): RunSettingsWriteEvent |
     case 'sessionSettingsRejected':
       return { type: 'settingsRejected', changeId: event.changeId }
     case 'connected':
-      // #539: main abandons its envelope-id → changeId correlation on every re-dial and emits no
-      // rejections, so an in-flight change's reply can never arrive. Flip the (re)handshake edge to the
-      // payload-free clear that drops the stranded pending markers before they outlive a later confirmed
-      // change. Ignores `event.ack` (HelloAckPayload) — the clear needs no field off it. `connected` and
-      // not `disconnected`, which is emitted nowhere in src/main (the modalBridge.ts:61 precedent).
+      // Main abandons write correlations on re-dial. subscribeRunSettingsWrite admits only the
+      // owning host's edge before translating it to this pending-only clear; event.ack is ignored.
       return { type: 'reconnected' }
     default:
       return null
@@ -60,15 +59,27 @@ export function translateWriteEvent(event: DaemonEvent): RunSettingsWriteEvent |
  * Subscribe via the injected `onDaemonEvent`; each owned reply runs through `translateWriteEvent` and a
  * non-null result is dispatched into the store; every unrelated event no-ops. Returns the unsubscribe
  * handle (the daemonEventBridge off-handle idiom) so the React binding can use it as its effect
- * cleanup. The listener only dispatches — it never throws into React.
+ * cleanup. Reconnect admission resolves the active conversation's unique owner at event time;
+ * unknown ownership or origin preserves pending writes. Reply correlation remains the reducer's job.
  */
 export function subscribeRunSettingsWrite(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
-  dispatch: (event: RunSettingsWriteEvent) => void
+  dispatch: (event: RunSettingsWriteEvent) => void,
+  getOwningServerId: () => string | null = () => serverIdForOpenConversation(
+    selectConversations(conversationListStore.getState()),
+    activeConversationStore.getState().activeConversation?.id ?? null
+  ),
+  logReconnect?: () => void
 ): () => void {
   return onDaemonEvent((event) => {
+    if (event.type === 'connected') {
+      if (!('serverId' in event) || typeof event.serverId !== 'string') return
+      const owner = getOwningServerId()
+      if (owner === null || event.serverId !== owner) return
+    }
     const writeEvent = translateWriteEvent(event)
     if (writeEvent !== null) dispatch(writeEvent)
+    if (writeEvent?.type === 'reconnected') logReconnect?.()
   })
 }
 
@@ -262,8 +273,9 @@ export function RunSettingsWriteData(): null {
     // one addition is that an effort confirm also writes the level to the renderer-local preference.
     // `getState()` PER EVENT, never captured at subscription: this listener is app-lifetime, so a
     // snapshot of `pending` taken here would freeze at whatever was in flight when App mounted.
-    return subscribeRunSettingsWrite(window.pyry.onDaemonEvent, (event) =>
-      foldWriteEvent(
+    return subscribeRunSettingsWrite(
+      window.pyry.onDaemonEvent,
+      (event) => foldWriteEvent(
         {
           getPending: () => runSettingsWriteStore.getState().pending,
           dispatch: runSettingsWriteStore.getState().dispatch,
@@ -275,7 +287,9 @@ export function RunSettingsWriteData(): null {
           log: code => window.pyry.sendDiagnostic({ event: 'composer-effort', code })
         },
         event
-      )
+      ),
+      undefined,
+      () => window.pyry.sendDiagnostic({ event: 'run-settings-write', code: 'reconnected' })
     )
   }, [])
 

@@ -3623,9 +3623,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   }
 
   function setSessionSettings(payload: SetSessionSettingsPayload, changeId: string): void {
-    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
-    // mid-bootstrap, or bootstrap-failed). A settings change has no consumer to fail; a request sent
-    // while disconnected simply produces no reply. No empty-session_id guard: an empty/unknown id is
+    // The send twin: inert no-op without a driver. Local rejection below covers build/send failures
+    // after a driver is available. No empty-session_id guard: an empty/unknown id is
     // the daemon's `session.not_found` to reject (mirrors archiveConversation's empty conversation_id).
     if (driver === null) return
     // Capture the id BEFORE the build increments it, so the pending entry is keyed by this request's
@@ -3643,10 +3642,12 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // throw skips this (caught below), so no phantom entry is left for a reply that will never come.
       // Removed by the correlated reply in onDriverEvent, or abandoned on the next dial().
       pendingSettings.set(envelopeId, changeId)
+      deps.diagnosticLog?.event({ event: 'session-settings-write-sent' })
     } catch {
-      // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
-      // driver/wasm throw. The caught object is DROPPED — its message could echo the payload; no log,
-      // no event (classify-don't-forward, inherited #62).
+      // A build/send failure records no pending correlation. Settle the fire-and-forget write once,
+      // with no retry or exception text: the caught object could echo the settings payload.
+      deps.diagnosticLog?.event({ event: 'session-settings-write-failed', code: 'build-or-send-failed' })
+      emitDaemonEvent(sink, { type: 'sessionSettingsRejected', changeId })
     }
   }
 

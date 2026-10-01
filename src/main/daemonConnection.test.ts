@@ -6377,6 +6377,76 @@ describe('createDaemonConnection — setSessionSettings (outbound set_session_se
     connection.setSessionSettings(PARTIAL, 'change-2')
     expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
   })
+
+  it.each(['build', 'send'] as const)(
+    'rejects local %s failure once without leaking content or leaving a pending correlation',
+    async (failure) => {
+      const { log, records } = captureLog()
+      const { connection, sink, drivers } = build({ diagnosticLog: log })
+      connection.start()
+      await tick()
+      const driver = drivers[0]
+      driver.emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+      const payload: SetSessionSettingsPayload = {
+        session_id: 'private-session',
+        model: failure === 'build' ? 'private-model'.repeat(MAX_PLAINTEXT_BYTES) : 'private-model',
+        effort: 'private-effort',
+        permission_mode: 'private-mode',
+        yolo: true
+      }
+      const send = vi.spyOn(driver.handle, 'sendMessage')
+      if (failure === 'send') {
+        send.mockImplementationOnce(() => {
+          throw new Error(`private-exception ${JSON.stringify(payload)} private-change`)
+        })
+      }
+      const beforeEvents = emitted(sink).length
+      const beforeLogs = records.length
+
+      expect(() => connection.setSessionSettings(payload, 'private-change')).not.toThrow()
+      const rejection = { type: 'sessionSettingsRejected', changeId: 'private-change' }
+      expect(emitted(sink).slice(beforeEvents)).toEqual([rejection])
+      expect(records.slice(beforeLogs)).toEqual([
+        { event: 'session-settings-write-failed', code: 'build-or-send-failed' }
+      ])
+      expect(send).toHaveBeenCalledTimes(failure === 'build' ? 0 : 1)
+      expect(driver.sent).toHaveLength(0)
+
+      // A real inbound confirmation cannot settle a request that failed locally.
+      driver.emit({
+        type: 'message',
+        plaintext: sessionSettingsUpdatedPlaintext({ session_id: 'private-session' }, 2)
+      })
+      await tick()
+      expect(emitted(sink).slice(beforeEvents)).toEqual([rejection])
+      expect(send).toHaveBeenCalledTimes(failure === 'build' ? 0 : 1)
+
+      // Build failures keep the id; send failures consume it. A subsequent write remains pending
+      // until its own daemon confirmation and cannot inherit the failed change's correlation.
+      const beforeSuccessLogs = records.length
+      connection.setSessionSettings(PARTIAL, 'successful-change')
+      expect(emitted(sink).slice(beforeEvents)).toEqual([rejection])
+      expect(records.slice(beforeSuccessLogs)).toEqual([{ event: 'session-settings-write-sent' }])
+      expect(driver.sent).toHaveLength(1)
+      const id = decodeEnvelope(driver.sent[0]).id
+      expect(id).toBe(failure === 'build' ? 2 : 3)
+      driver.emit({
+        type: 'message',
+        plaintext: sessionSettingsUpdatedPlaintext({ session_id: PARTIAL.session_id }, id)
+      })
+      driver.emit({
+        type: 'message',
+        plaintext: sessionSettingsUpdatedPlaintext({ session_id: PARTIAL.session_id }, id)
+      })
+      expect(emitted(sink).slice(beforeEvents)).toEqual([
+        rejection,
+        { type: 'sessionSettingsUpdated', sessionId: 'sess-a', changeId: 'successful-change' }
+      ])
+      expect(JSON.stringify(records)).not.toMatch(/private-|sess-a|successful-change/)
+      connection.stop()
+    }
+  )
 })
 
 describe('createDaemonConnection — answerModal (outbound modal_answer, #236)', () => {

@@ -153,7 +153,7 @@ that would do so is the refused one.
 |---|---|---|
 | `SetSessionSettingsPayload` + `'set_session_settings'` `EnvelopeType` member | `src/shared/wire/types.ts` | ported wire type, field-for-field with the daemon |
 | `buildSetSessionSettings` | `src/main/transport/setSessionSettingsEnvelope.ts` (new) | pure builder — **owns the presence contract** |
-| `setSessionSettings(payload)` | `src/main/daemonConnection.ts` | connection method — a faithful `requestSnapshot` twin |
+| `setSessionSettings(payload, changeId)` | `src/main/daemonConnection.ts` | connection method — sends and correlates settlement, including local rejection |
 | `setSessionSettings` command / `isSetSessionSettingsPayload` guard | `src/shared/ipc/commands.ts` | the sealed union member + untrusted-boundary guard |
 
 ### 1. Wire type (`src/shared/wire/types.ts`)
@@ -204,15 +204,17 @@ through a renderer barrel. MAY throw `WireEncodeError` over `MAX_PLAINTEXT_BYTES
 
 ```ts
 function setSessionSettings(payload: SetSessionSettingsPayload, changeId: string): void {
-  if (driver === null) return              // inert no-op — a settings change has no consumer to fail
+  if (driver === null) return              // inert no-op without a driver
   const envelopeId = nextEnvelopeId         // captured before build — the id the reply's in_reply_to echoes
   try {
     const bytes = buildSetSessionSettings({ id: nextEnvelopeId, ts: now(), payload })
     nextEnvelopeId += 1                     // shares the one counter with send/requestSnapshot/...
     driver.sendMessage(bytes)
     pendingSettings.set(envelopeId, changeId) // #261 — recorded only after a successful send
+    deps.diagnosticLog?.event({ event: 'session-settings-write-sent' })
   } catch {
-    // Never throw out of the module (parity #490). Dropped, no log, no event.
+    deps.diagnosticLog?.event({ event: 'session-settings-write-failed', code: 'build-or-send-failed' })
+    emitDaemonEvent(sink, { type: 'sessionSettingsRejected', changeId })
   }
 }
 ```
@@ -286,7 +288,9 @@ window → sendCommand({type:'setSessionSettings', payload:{session_id, model?, 
       → COMMAND_CHANNEL → onCommand (isRendererCommand → isSetSessionSettingsPayload + changeId guard)
       → connection.setSessionSettings(payload, changeId)
       → buildSetSessionSettings (presence contract + fresh literal) → driver.sendMessage
-        → pendingSettings.set(envelopeId, changeId)   [inert no-op if not connected, no map entry]
+        → pendingSettings.set(envelopeId, changeId)   [inert no-op without a driver, no map entry]
+        → build/send throw: DaemonEvent{ type: 'sessionSettingsRejected', changeId }
+          → RunSettingsWriteData → dispatch({settingsRejected, changeId})
 
 daemon → session_settings_updated frame → decoded by #264 (carries in_reply_to)
       → daemonConnection matches in_reply_to against pendingSettings (#261)
@@ -302,13 +306,25 @@ window → #257 (RunConfigSections) → changeSetting (AC5 session-id gate) → 
 | Failure | Layer | Behaviour |
 |---|---|---|
 | Renderer sends malformed `setSessionSettings` (incl. missing/non-string `changeId`) | `isRendererCommand`/`isSetSessionSettingsPayload` | dropped at the boundary |
-| Not connected when `setSessionSettings` called | `daemonConnection` | inert no-op; no throw, no event, no pending-map entry |
-| Over-cap / driver throw on send | try/catch in the connection method | caught, dropped — no log, no event, no pending-map entry (recorded only after a successful send, #261) |
+| No driver when `setSessionSettings` called | `daemonConnection` | inert no-op; no throw, no event, no pending-map entry |
+| Envelope-build exception (including over-cap encoding) or driver-send exception | try/catch in the connection method | exactly one `{ type: 'sessionSettingsRejected', changeId }` using the submitted `changeId`; static failure diagnostic; no pending-map entry, throw to the caller or retry |
 | Empty/unknown `session_id` | daemon | `session.not_found` — no client-side guard, by design (Evidence-Based Fix Selection) |
 | Reply's `in_reply_to` absent or matches no pending entry | `daemonConnection` (#261) | ignored — no event, fail-closed (AC3); covers a hostile daemon forging a confirmation for an id the client never sent |
 | Reply confirms a change whose entry was abandoned by a `dial()` reset | `daemonConnection` (#261) | ignored — no event (AC5) |
 | Daemon rejects the change (`error` frame, `in_reply_to` matches a pending entry) | `daemonConnection` (#269) | correlated, entry deleted, `{ type: 'sessionSettingsRejected', changeId }` emitted; the #116 reassembler and #248 modal FIFO are both skipped on this match |
 | `error` frame whose `in_reply_to` is absent or matches no pending entry | `daemonConnection` (#269) | falls through unchanged to the pre-existing `daemon-error` consumers (bundle reassembler / modal FIFO) |
+
+Local rejection settles the fire-and-forget write through the same
+[write-store](run-settings-write-store.md) event path as daemon rejection. The pending correlation is
+recorded only after a successful send, so a later confirmation cannot settle the failed change.
+Successful sends still wait for daemon-correlated confirmation or rejection. A build failure leaves
+`nextEnvelopeId` unconsumed; a send failure consumes it because advancement precedes the driver call.
+The null-driver early return remains separate from local build/send rejection.
+
+Boundary tests in `src/main/daemonConnection.test.ts` use real over-cap encoding and a throwing driver,
+then inject late confirmations and confirm a subsequent valid write. Checking only for a rejection
+would miss a phantom pending correlation; checking only for a nonthrowing call would miss a write
+that remains pending forever. The tests also assert exact rejection events and static diagnostics.
 
 This slice's UI surface is [#257](../codebase/257.md)'s interactive Model/Effort/YOLO controls. Both the
 confirmed ([#261](../codebase/261.md)) and rejected ([#269](../codebase/269.md)) correlation halves
@@ -334,8 +350,15 @@ Ticket carries `security-sensitive`; architect self-review verdict **PASS** (no 
   escalation, sits in the same payload shape; it would also drift from the daemon's `validPermissionMode`
   the next time upstream adds a mode. Architect self-review verdict **PASS**, code review **PASS**, no
   findings on either pass.
-- **Log-free; classify-don't-forward.** The method's `catch {}` drops the caught object with no log,
-  no event — it could echo `model`/`effort`/`session_id`.
+- **Static diagnostics; classify-don't-forward.** Successful sends log only
+  `{ event: 'session-settings-write-sent' }`; local build/send failures log only
+  `{ event: 'session-settings-write-failed', code: 'build-or-send-failed' }`. These records contain no
+  settings values, session ids, correlation ids or exception text. The `catch {}` discards the exception
+  without reading it, since its text could echo the payload. The local rejection is a fresh
+  `{ type: 'sessionSettingsRejected', changeId }` carrying only the submitted correlation; no payload,
+  session id, envelope id, error code or exception text is forwarded in it. It uses the existing typed
+  event channel and server-origin binding. See the
+  [local rejection spec](../../specs/architecture/1715-local-settings-rejection.md).
 - **No new IPC surface, no new crypto, no new RNG** (unlike `answerModal`, this command mints no token).
   `nextEnvelopeId` is a monotonic application id, not a Noise nonce.
 - **Threat model.** A compromised renderer can request a settings change only for a `session_id` it

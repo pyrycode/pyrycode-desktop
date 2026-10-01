@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { ConversationSummary } from '@shared/wire/types'
+import { partitionArchived } from '../archive/archiveViewModel'
 import {
   UNNAMED_LABEL,
   UNKNOWN_WORKSPACE_LABEL,
@@ -111,13 +112,60 @@ describe('partitionActive', () => {
     expect(discussions.map((r) => r.id)).toEqual(['d1'])
   })
 
-  it('preserves the store array order within each section (no re-sort)', () => {
+  it.each([true, false])('sorts the worked example (promoted=%s)', (is_promoted) => {
+    const rows = ['beta', 'Alpha', 'alpha', 'Émile', 'zeta', null]
+      .map((name, index) => row({ id: String(index), name, is_promoted }))
+    const result = partitionActive(rows)
+    expect((is_promoted ? result.channels : result.discussions).map(r => titleFor(r.name)))
+      .toEqual(['Alpha', 'alpha', 'beta', 'Émile', 'Untitled', 'zeta'])
+  })
+
+  it.each([
+    { names: [null, 'zeta', ' ', '', 'Alpha'], ids: ['4', '0', '2', '3', '1'] },
+    { names: [' beta ', '\tAlpha\n', 'alpha'], ids: ['1', '2', '0'] },
+    { names: ['ﬃ', 'Ｆoo', 'Émile', 'e\u0301clair', 'delta'], ids: ['4', '3', '2', '0', '1'] },
+    { names: ['Chat 2', 'Chat 10', 'Chat 1'], ids: ['2', '1', '0'] },
+    { names: ['\uE000', '𐀀', '😀', 'z'], ids: ['3', '1', '2', '0'] },
+    { names: ['alpha', 'Álpha', 'Alpha'], ids: ['2', '0', '1'] }
+  ])('uses the specified keys and UTF-16 label ties for $names', ({ names, ids }) => {
+    const result = partitionActive(names.map((name, index) => row({ id: String(index), name })))
+    expect(result.discussions.map(r => r.id)).toEqual(ids)
+  })
+
+  it('breaks identical trimmed-label ties by UTF-16 id without mutating rows or input', () => {
+    const rows = Object.freeze([
+      Object.freeze(stamped('host-b', { id: '\uE000', name: ' Alpha ' })),
+      Object.freeze(stamped('host-a', { id: '𐀀', name: 'Alpha' })),
+      Object.freeze(stamped('host-a', { id: 'a', name: '\tAlpha' }))
+    ])
+    const before = rows.map(r => ({ ...r }))
+    const { discussions } = partitionActive(rows)
+    expect(discussions.map(r => r.id)).toEqual(['a', '𐀀', '\uE000'])
+    expect(rows).toEqual(before)
+    expect(discussions).toEqual([rows[2], rows[1], rows[0]])
+    expect(discussions[0]).toBe(rows[2])
+    expect(discussions[1]).toBe(rows[1])
+    expect(discussions[2]).toBe(rows[0])
+    expect(discussions.map(r => r.serverId)).toEqual(['host-a', 'host-a', 'host-b'])
+  })
+
+  it('preserves shared partition input order and breaks equal Archive timestamps by id', () => {
     const rows = [
-      row({ id: 'c-late', is_archived: false, is_promoted: true }),
-      row({ id: 'c-early', is_archived: false, is_promoted: true })
+      row({ id: 'cz', name: 'Zulu', is_promoted: true, is_archived: true }),
+      row({ id: 'dz', name: 'Zulu', is_archived: true }),
+      row({ id: 'ca', name: 'Alpha', is_promoted: true, is_archived: true }),
+      row({ id: 'da', name: 'Alpha', is_archived: true }),
+      row({ id: 'active', name: 'Active' })
     ]
-    const { channels } = partitionActive(rows)
-    expect(channels.map((r) => r.id)).toEqual(['c-late', 'c-early'])
+    const shared = partitionByPromotion(rows)
+    expect(shared.channels.map(r => r.id)).toEqual(['cz', 'ca'])
+    expect(shared.discussions.map(r => r.id)).toEqual(['dz', 'da', 'active'])
+    const archived = partitionArchived(rows)
+    // All archived rows share the factory's fallback instant, so the id tie-break decides order.
+    expect(archived.channels.map(r => r.id)).toEqual(['ca', 'cz'])
+    expect(archived.discussions.map(r => r.id)).toEqual(['da', 'dz'])
+    expect(partitionActive(rows).discussions.map(r => r.id)).toEqual(['active'])
+    expect(partitionActive(rows).channels).toEqual([])
   })
 
   it('yields both sections empty when every row is archived', () => {

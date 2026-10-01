@@ -3,6 +3,7 @@ import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/lau
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type {
   SendMessagePayload,
+  SessionSettingsPayload,
   SlashCommandListPayload,
   WireSlashCommand
 } from '../src/shared/wire/types'
@@ -218,4 +219,82 @@ test('an unpublished action is greyed out and sends nothing, by click or by Ente
 
   await expect.poll(() => sent.length, { timeout: ROUNDTRIP_TIMEOUT_MS }).toBe(1)
   expect(sent[0].text).toBe('/compact')
+})
+
+// #1697 — a session whose `session_settings` reply says it has no slash commands (a Codex session) is
+// offered every command row GREYED rather than none, mobile's `absentComposerActions` rule. The published
+// menu here names `compact`, so a greyed Compact session proves the flag wins over the menu. Picking a
+// greyed row sends nothing; the control row is untouched.
+function sessionSettingsFrame(inReplyTo: number): Uint8Array {
+  return encodeEnvelope({
+    id: PUSH_ENVELOPE_ID + 1,
+    type: 'session_settings',
+    ts: FIXED_TS,
+    in_reply_to: inReplyTo,
+    payload: {
+      session_id: 'session-1697',
+      model: 'seeded-model',
+      effort: 'low',
+      yolo: false,
+      permission_mode: 'default',
+      used_tokens: 50_000,
+      window_tokens: 200_000,
+      capabilities: { slash_commands: false, mcp_servers: false, context_usage_detail: false }
+    } satisfies SessionSettingsPayload
+  })
+}
+
+test('a session without slash commands greys every command row, and a pick sends nothing (#1697)', async ({
+  launchPairedApp
+}) => {
+  const sent: SendMessagePayload[] = []
+  const { page, daemon } = await launchPairedApp({
+    buildReplyFrames: (inbound: Uint8Array): Uint8Array[] => {
+      const envelope = decodeEnvelope(inbound)
+      switch (envelope.type) {
+        case 'send_message':
+          sent.push(envelope.payload as SendMessagePayload)
+          return []
+        case 'request_session_settings':
+          return [sessionSettingsFrame(envelope.id)]
+        default:
+          return [seedConversationsFrame()]
+      }
+    }
+  })
+  daemon.pushFrame(slashCommandListFrame())
+
+  // The context reading arrives in the same reply as the flags, so once it shows, the flags are held too.
+  await expect(page.locator('.composer__context')).toHaveText('Context: 25%', {
+    timeout: ROUNDTRIP_TIMEOUT_MS
+  })
+
+  await actionsTrigger(page).click()
+  const panel = actionsPanel(page)
+  await expect(panel).toBeVisible()
+
+  const rows = panel.getByRole('menuitem')
+  await expect(rows).toHaveCount(3)
+  await expect(rows.nth(0)).toHaveText(CONTROL_ROW)
+  await expect(rows.nth(0)).not.toHaveAttribute('aria-disabled', 'true')
+  for (const [index, label] of [
+    [1, AVAILABLE_ROW],
+    [2, UNAVAILABLE_ROW]
+  ] as const) {
+    await expect(rows.nth(index)).toContainText(label)
+    await expect(rows.nth(index)).toContainText(UNAVAILABLE_NOTE)
+    await expect(rows.nth(index)).toHaveAttribute('aria-disabled', 'true')
+  }
+
+  // A forced click (the first test's reason) and an Enter on a greyed row both leave the panel open and
+  // send nothing. Compact session is the row the published menu names, so it is the sharper one to pick.
+  const compact = panel.getByRole('menuitem', { name: AVAILABLE_ROW })
+  await compact.click({ force: true })
+  await expect(panel).toBeVisible()
+  await page.keyboard.press('ArrowDown')
+  await expect(compact).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(panel).toBeVisible()
+  expect(sent).toHaveLength(0)
+  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveCount(0)
 })

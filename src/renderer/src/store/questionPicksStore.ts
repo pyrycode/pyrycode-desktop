@@ -109,7 +109,8 @@ export interface QuestionPicksState {
  * The renderer-local, sealed input union. Seven arms, each NAMED FOR ITS BEHAVIOUR rather than
  * carrying a `multiSelect: boolean` flag, and that is a deliberate choice: a boolean at the call site
  * is invertible with no type error, and it sits between a `string` and two `number`s that `tsc`
- * cannot tell apart either. A named arm cannot be sent backwards silently.
+ * cannot tell apart either. A named arm cannot be sent backwards silently. `otherTextChanged` is the one
+ * exception (#1698), carrying mobile's flag verbatim.
  *
  * **WHETHER A QUESTION REPLACES OR ACCUMULATES IS TOLD TO THIS STORE, NEVER READ OFF THE HELD BATCH.**
  * `multiSelect` lives on `Question` in the other store and the two stay apart, so the distinction
@@ -138,9 +139,18 @@ export type QuestionPickEvent =
   // MULTI-SELECT. Flips the Other tick, leaving ticked option picks and the text in place — Other
   // sits ALONGSIDE them here, the opposite of `otherPicked` above.
   | { type: 'otherToggled'; questionBatchId: string; questionIndex: number }
-  // Replaces the typed text in either shape. Never moves `otherTicked` or `optionIndices`: the text
-  // is held independently of the tick, so typing into an un-ticked row is ordinary traffic.
-  | { type: 'otherTextChanged'; questionBatchId: string; questionIndex: number; text: string }
+  // Replaces the typed text AND ticks Other, copying mobile's `OtherTextChanged` (#1698): single-select
+  // also clears the option pick, as `otherPicked` does; multi-select keeps the ticked options. Emptying
+  // the text still ticks. The one arm carrying a `multiSelect` flag rather than a behaviour name — the
+  // owner's call was to mirror mobile's event shape. The text is still held independently of the tick,
+  // so un-ticking afterwards keeps it.
+  | {
+      type: 'otherTextChanged'
+      multiSelect: boolean
+      questionBatchId: string
+      questionIndex: number
+      text: string
+    }
   // The daemon retired this batch. Carries ONLY the id: no `outcome`, no `source`. This store clears
   // on any dismissal regardless of cause, which is what satisfies the fail-closed reading rule at
   // this layer — an unrecognised `source` means RESOLVED, CAUSE UNKNOWN, and never an answer.
@@ -309,9 +319,9 @@ function reduceQuestionPicks(
     case 'otherTextChanged': {
       const current = selectionIn(state, event.questionBatchId, event.questionIndex)
       return withSelection(state, event.questionBatchId, event.questionIndex, {
-        optionIndices: current.optionIndices,
+        optionIndices: event.multiSelect ? current.optionIndices : [],
         otherText: event.text,
-        otherTicked: current.otherTicked
+        otherTicked: true
       })
     }
     case 'dismissed': {

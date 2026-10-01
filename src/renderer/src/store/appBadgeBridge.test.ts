@@ -13,6 +13,23 @@ import { modalStore } from './modalStore'
 import { conversationActivityStore } from './conversationActivityStore'
 import { conversationTimelineStore } from './conversationTimelineStore'
 import { conversationLastReadStore } from './conversationLastReadStore'
+import { questionBatchStore } from './questionBatchStore'
+
+// One pending question batch for `conversationId`; its id is derived from, never equal to, the conversation id.
+const showBatch = (conversationId: string): void =>
+  questionBatchStore.getState().dispatch({
+    type: 'shown',
+    conversationId,
+    questionBatchId: `q-${conversationId}`,
+    questions: [{ question: 'Which branch?', header: 'Branch', options: [], multiSelect: false }]
+  })
+const dismissBatch = (conversationId: string): void =>
+  questionBatchStore.getState().dispatch({
+    type: 'dismissed',
+    questionBatchId: `q-${conversationId}`,
+    outcome: 'unanswered',
+    source: 'no_answer'
+  })
 
 const rows = (...ids: string[]): { id: string }[] => ids.map((id) => ({ id }))
 
@@ -99,6 +116,7 @@ describe('conversationStatusNow', () => {
     conversationActivityStore.setState(conversationActivityStore.getInitialState(), true)
     conversationTimelineStore.setState(conversationTimelineStore.getInitialState(), true)
     conversationLastReadStore.setState(conversationLastReadStore.getInitialState(), true)
+    questionBatchStore.setState(questionBatchStore.getInitialState(), true)
   })
 
   it('reads idle for a conversation nothing is held about', () => {
@@ -109,6 +127,14 @@ describe('conversationStatusNow', () => {
     modalStore.setState({ outstanding: [{ conversationId: 'asking' }] } as never)
     expect(conversationStatusNow('asking')).toBe('input-required')
     expect(conversationStatusNow('other')).toBe('idle')
+  })
+
+  it('reads input-required for a conversation with only a pending question batch, until it is dismissed (#1700)', () => {
+    showBatch('asking')
+    expect(conversationStatusNow('asking')).toBe('input-required')
+    expect(conversationStatusNow('other')).toBe('idle')
+    dismissBatch('asking')
+    expect(conversationStatusNow('asking')).toBe('idle')
   })
 
   it('reads working for a running turn, and new-messages for a held slice with no read mark', () => {
@@ -131,6 +157,7 @@ describe('attentionCountNow and subscribeToAttentionStores', () => {
     conversationActivityStore.setState(conversationActivityStore.getInitialState(), true)
     conversationTimelineStore.setState(conversationTimelineStore.getInitialState(), true)
     conversationLastReadStore.setState(conversationLastReadStore.getInitialState(), true)
+    questionBatchStore.setState(questionBatchStore.getInitialState(), true)
   })
 
   it('counts every server\'s rows and leaves archived ones out, as the sidebar does', () => {
@@ -159,11 +186,26 @@ describe('attentionCountNow and subscribeToAttentionStores', () => {
     expect(attentionCountNow()).toBe(1)
   })
 
+  it('counts a question-only row once, and a row holding both a prompt and a batch once (#1700)', () => {
+    conversationListStore.setState({
+      conversations: [
+        { id: 'asking', serverId: 'host-a', is_archived: false },
+        { id: 'both', serverId: 'host-a', is_archived: false }
+      ]
+    } as never)
+    showBatch('asking')
+    showBatch('both')
+    modalStore.setState({ outstanding: [{ conversationId: 'both' }] } as never)
+    expect(attentionCountNow()).toBe(2)
+    dismissBatch('asking')
+    expect(attentionCountNow()).toBe(1)
+  })
+
   it('reads zero before any list has loaded', () => {
     expect(attentionCountNow()).toBe(0)
   })
 
-  it('wakes the listener on a write to each of the five stores, and off removes all five', () => {
+  it('wakes the listener on a write to each of the six stores, and off removes all six', () => {
     const listener = vi.fn()
     const off = subscribeToAttentionStores(listener)
     conversationListStore.setState({ conversations: [] } as never)
@@ -171,13 +213,15 @@ describe('attentionCountNow and subscribeToAttentionStores', () => {
     conversationActivityStore.setState({ entries: new Map() } as never)
     conversationTimelineStore.setState({ timelines: new Map() } as never)
     conversationLastReadStore.setState({ marks: new Map() } as never)
-    expect(listener).toHaveBeenCalledTimes(5)
+    questionBatchStore.setState({ outstanding: [] } as never)
+    expect(listener).toHaveBeenCalledTimes(6)
     off()
     conversationListStore.setState({ conversations: null } as never)
     modalStore.setState({ outstanding: [] } as never)
     conversationActivityStore.setState({ entries: new Map() } as never)
     conversationTimelineStore.setState({ timelines: new Map() } as never)
     conversationLastReadStore.setState({ marks: new Map() } as never)
-    expect(listener).toHaveBeenCalledTimes(5)
+    questionBatchStore.setState({ outstanding: [] } as never)
+    expect(listener).toHaveBeenCalledTimes(6)
   })
 })

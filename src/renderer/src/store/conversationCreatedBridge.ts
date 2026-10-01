@@ -9,6 +9,13 @@ import { useEffect, useRef } from 'react'
 import type { RendererCommand } from '@shared/ipc/commands'
 import type { DaemonEvent } from '@shared/ipc/events'
 import type { ConversationCreatedPayload, WireAgent } from '@shared/wire/types'
+import { rememberedModel } from './rememberedModel'
+import { activeConversationStore } from './activeConversationStore'
+import { modelListStore } from './modelListStore'
+import { sessionStore } from './sessionStore'
+import { runSettingsWriteStore } from './runSettingsWriteStore'
+import { submitSettingsChange } from './runSettingsWriteBridge'
+import { connectedConversationHostNow } from '../screens/conversation/conversationActionAvailability'
 
 /**
  * Fire the `createConversation` command (#241 wired the main side through to the daemon). An inline
@@ -49,11 +56,9 @@ export function requestNewConversation(
  * is not a validation: the daemon polices the name server-side, and the view's blank-disable means this
  * is never reached with an empty one, so there is no redundant guard here.
  *
- * `cwd` is REQUIRED and non-null (a channel is created in a named workspace, never in the daemon's
- * default) and is carried VERBATIM — not normalised, not trimmed, no `path` module, no local
- * resolution. It is the workspace group's own key, which IS a daemon-asserted `cwd`, so echoing exactly
- * what was received is the only safe handling; main re-validates it at the untrusted IPC boundary and
- * rebuilds a fresh three-field literal before it reaches the wire.
+ * `cwd` is present and nullable: null asks the daemon to use its default folder. An explicit path is
+ * carried verbatim, without local normalisation. Main re-validates the IPC payload and constructs the
+ * wire command.
  *
  * Fire-and-forget, like its twin: `sendCommand` is `void`, no result to await. Navigation to the new
  * channel is decoupled and event-driven, through `useConversationCreatedNav` below.
@@ -64,7 +69,7 @@ export function requestNewConversation(
 export function requestNewChannel(
   sendCommand: (command: RendererCommand) => void,
   name: string,
-  cwd: string,
+  cwd: string | null,
   serverId?: string,
   choice?: { agent?: WireAgent; model?: string; effort?: string }
 ): void {
@@ -208,11 +213,28 @@ export function useConversationCreatedNav(
   useEffect(() => {
     onCreatedRef.current = onCreated
   })
-  useEffect(
-    () =>
-      subscribeConversationCreated(window.pyry.onDaemonEvent, (created, serverId) =>
-        onCreatedRef.current(created, serverId)
-      ),
-    []
-  )
+  useEffect(() => {
+    const off = subscribeConversationCreated(window.pyry.onDaemonEvent, (created, serverId) => {
+      rememberedModel.start(created, serverId, {
+        onDaemonEvent: window.pyry.onDaemonEvent,
+        ownsTarget: () => activeConversationStore.getState().activeConversation?.id === created.id &&
+          serverId !== undefined && sessionStore.getState().statuses.get(serverId)?.type === 'connected',
+        canWriteTarget: () => connectedConversationHostNow(created.id) === serverId,
+        subscribeOwnership: listener => {
+          const offActive = activeConversationStore.subscribe(listener)
+          const offConnection = sessionStore.subscribe(listener)
+          return () => { offActive(); offConnection() }
+        },
+        getModels: () => modelListStore.getState().lists.get(created.id),
+        writes: runSettingsWriteStore,
+        submit: (sessionId, change, changeId) => submitSettingsChange({
+          sessionId, sendCommand: window.pyry.sendCommand,
+          dispatch: runSettingsWriteStore.getState().dispatch, mintChangeId: () => changeId
+        }, change),
+        mintChangeId: () => crypto.randomUUID(),
+        log: code => window.pyry.sendDiagnostic({ event: 'composer-model-recall', code })
+      }, () => onCreatedRef.current(created, serverId))
+    })
+    return () => { off(); rememberedModel.cancel() }
+  }, [])
 }

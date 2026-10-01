@@ -43,170 +43,113 @@ remain immediate; availability during questions adds no wait-for-next-turn label
 
 ## `composerModelMenuModel`, one pure function deciding all three renderings
 
-`ComposerModelMenu.tsx` exports a pure
-`composerModelMenuModel(models, layers: ComposerModelLayers): ComposerModelMenuModel | null` that turns
-the inputs into everything the view needs (`label`, `options`, `currentId`), so every rule below is
-unit-testable as data rather than only through markup — the same property `COMPOSER_ACTIONS` buys
-`ComposerActionsMenu`, adapted to entries that are the daemon's rather than the client's. A static render
-can never open the panel, so without this extraction the entries would only be assertable indirectly.
-
-**`ComposerModelLayers` (#1053)** replaced a single `model: string` parameter with three, resolved in this
-fixed order — a pending-or-confirmed **pick** made in this client, then what claude **announced** for the
-running turn, then the snapshot's **stored** explicit choice:
+`composerModelMenuModel(models, layers, agent)` decides the footer label, visible options and
+`currentId`. The [Run configuration sheet](conversation-shell-run-configuration.md#run-configuration-model-section-daemon-published-rows-975)
+uses the same decision for its Model radios. Keep these inputs separate:
 
 ```ts
 export interface ComposerModelLayers {
-  picked: string      // pending optimistic over client-confirmed; '' = no pick in force
-  announced: string    // claude's identifier for the running turn; '' = none, or a degenerate one
-  stored: string       // the run-config snapshot's stored choice; '' = the daemon's inherited default
+  picked: string       // pending optimistic choice over client-confirmed choice; '' = no pick
+  announced: string    // this conversation's running-turn identifier; '' = no announcement
+  stored: string | null // saved model; ''/default = inherited, null = no snapshot
 }
 ```
 
-`''` means "nothing at this layer", uniformly across all three — this control's existing posture (it
-already drew nothing for an unset session model) rather than a new decision, and it is what lets the
-container collapse `AnnouncedModel | null` from `announcedModelStore` to a plain string: a `null`
-announcement and a `{ model: '' }` one both read as "nothing here", which is the only distinction this
-surface could draw anyway. The store's own `null`-vs-`''` contract stays intact where it is established —
-[Announced-model store](announced-model-store.md) and the run-configuration sheet still read it.
+The container obtains `picked` through `selectEffectiveSettings(null, writeState).model`, preserving
+pending-over-confirmed precedence without the snapshot base. `stored` is `snapshot?.model ?? null`;
+a real empty saved model remains `''`. The announcement is conversation-scoped through
+[Announced-model store](announced-model-store.md).
 
-**The announcement is ranked below a pick and above the stored choice, deliberately not above a
-confirmed pick.** A held announcement carries no sequence or timestamp, so it carries no information
-about whether it is older or newer than a pick — ranking it above a *confirmed* pick would let a stale
-pre-pick announcement beat the pick the instant the daemon confirms it, making a confirm and a rejection
-render identically. `announcedModelStore` keyed itself by conversation in #1146, and that left this
-property true per key: each conversation's held record is still the bare two fields, with nothing added
-to date or order it against a pick made in the same chat. The ordering is a client-side judgment call,
-not something the daemon's frames can settle.
+**Visible rows.** Filter to the conversation's agent, then omit every raw `value === 'default'` row.
+Retain all other rows in published order, with no deduplication or synthesis. Claude dropdown labels
+use `modelFamily(row.value)`, falling back to `display_name`; Codex labels use `display_name` verbatim.
+The sheet keeps published display names and resolutions. Option IDs and writes remain the raw `value`.
+The internal Claude default row stays available for recommendation lookup and
+[effort offerings](composer-effort-menu.md), even though neither model surface offers it.
 
-The table assumes a selection callback is available; without it, any held label
-uses the inert span described in [The write](#the-write).
+**Explicit marking.** A non-empty pending or confirmed pick wins; otherwise a saved model other than
+`''` or `'default'` is explicit. Mark only a visible row whose raw `value` equals that choice. An unmatched
+choice marks nothing, even if its resolution or family would match. Duplicate explicit values remain
+carried and can share the same marker; ambiguity stopping below applies to inherited matching.
+A [remembered model](remembered-model.md) saved onto a new chat is an explicit choice and takes this rule.
+
+**Inherited marking.** With no pick and saved `''` or `'default'`, use a non-empty announcement against
+the visible rows in this order:
+
+1. Exact raw `row.value === announced`.
+2. Exact raw `row.resolved_model === announced`.
+3. `modelFamily(row.value) === modelFamily(announced)`, only when the announced family is non-empty.
+
+At each tier, one candidate wins, zero advances, and multiple candidates stop with nothing marked.
+An ambiguous earlier tier never falls through to a less precise unique match. Once an announcement
+exists, an unmatched or ambiguous announcement marks nothing; the published default resolution cannot
+supply a marker then. An announcement can also establish this reading before a snapshot arrives.
+
+Before any announcement, Claude may mark only a unique non-default row whose raw `resolved_model`
+equals the internal Claude default row's resolution. Ignore an empty or literal `<unmeasured>` default
+resolution. An unmatched or ambiguous usable resolution marks nothing. Codex has no such recommendation
+fallback and marks nothing before an announcement.
+
+**Why the published default is only a pre-announcement fallback.** An inherited Claude session launches
+without `--model`, so a `model` in Claude's `settings.json` can win. The published `default` row describes
+Claude's recommended model, rather than proving what that session runs. The observed default-model chat
+ran Opus 5.5 while that row resolved to Sonnet. Continuing to mark Sonnet after the Opus announcement
+would misreport the running model. Announcements determine inherited marking but never become written
+settings. See [the selection spec](../../specs/architecture/1690-running-model-selection.md).
+
+**Claude trigger labels.** Explicit choices retain the existing shown-source order: pick, then announcement,
+then saved model. An exact published-row hit names the family of `resolved_model`, then the family of
+`value`, then the published `display_name`; a miss names the shown identifier's family, then the raw
+identifier. Thus an explicit saved row can remain marked while an announcement supplies a different
+trigger label. A confirmed pick stays above the announcement: the announcement carries no sequence or
+timestamp to establish that it is newer, so letting it beat confirmation would let a stale pre-pick
+announcement undo the optimistic label.
+
+Inherited Claude labels name the marked row by the same resolution-family → value-family → display-name
+chain. With nothing marked, use the announced family, then the family of the usable default resolution,
+then `COMPOSER_MODEL_MENU_LABEL` (`Model`). That resolution may still supply a label after an announcement
+with no family, but never a marker.
+
+Codex explicit labels retain the pick → announcement → saved source order; inherited labels use the
+announcement. An exact raw source-to-value lookup shows the daemon's display name on a hit and the raw
+source on a miss. An unset Codex snapshot without an announcement reads `Model` and still offers its rows.
+
+`modelFamily` strips one exact leading `claude-`, takes the leading ASCII-letter run, upper-cases its
+first letter and leaves the rest unchanged. No family allowlist, trimming or case folding is involved.
+Use this transform only for these display rules and the designated inherited family tier; explicit
+choices, resolution joins and writes compare raw identifiers with `===`.
+
+The table assumes a selection callback is available; without one, every held label uses the inert span.
 
 | Input | Rendering |
 |---|---|
-| no layer has anything, and `models` publishes no inherited-default row (`picked === announced === stored === ''`, and `effortRowFor(models, '')` is `undefined`) | `null` — nothing in the row |
-| something to show, and `models` is `null` or `models.models` is empty | an inert `<span>`: the label, no chevron, no role, no tabindex, no handler, no `.composer-options-anchor` |
-| something to show and rows are present, or no layer has anything but the inherited-default row is published | `ComposerOptionsMenu` with the rows as options |
+| no snapshot (`stored === null`), no pick and no announcement, even with a held model list | `null`: no trigger |
+| snapshot, pick or announcement available, but no visible non-default rows | inert label span, no chevron, role, tabindex, handler or options anchor |
+| snapshot, pick or announcement available, and visible non-default rows | `ComposerOptionsMenu` with the shared `currentId` |
 
-The first rendering is not in #988's ACs; it was that ticket's own decision, taken because it is otherwise
-reachable in the app's ordinary startup window (see § Turn-end dependency below), and #1053's AC4 widened
-its criterion from "the session's model is unset" to "no layer has anything" without changing its shape.
-**[#1423](https://github.com/pyrycode/pyrycode-desktop/issues/1423) narrowed it again**, and this is the
-state that ticket exists for: a session on the daemon's inherited default with no announcement yet used to
-sit in the `null` rendering permanently, which mattered because since pyrycode#2085 that is every new
-chat's state until its first turn — exactly the window in which a model is most worth choosing.
-`ContextUsageControl` takes the identical posture for its own unavailable reading, and #811's no-placeholder
-rule points the same way — rendering nothing invents no name for the daemon's own held-verbatim `''`
-("inherited default"). #1423 resolves the emptiness a different way: `''` is not an absence, it is the
-daemon's own name for its inherited default, and the daemon publishes an ordinary row for it. When `shown`
-is `''`, `composerModelMenuModel` looks that row up through `effortRowFor(models, '')` — #1168's helper (see
-below) — before falling through to `null`. `null` survives only when no such row is published, or no
-`model_list` frame has arrived at all, which is AC2's second arm.
-
-The second rendering is AC4, and it cannot be `options={[]}`: `ComposerOptionsMenu` renders
-`aria-haspopup="menu"` and `aria-expanded` unconditionally and would open exactly the empty panel AC4
-forbids. The chevron is omitted deliberately on this arm — it is the design's "this opens a panel" mark,
-and drawing it over an element that opens nothing is the visual half of the claim AC4 refuses. The class
-that draws it (`composer__footer-button`) carries no `cursor: pointer`, so the inert arm doesn't lie about
-being clickable either — see § CSS extraction.
-
-**The label, since #1095, is a family, not the published prose.** `row ? row.display_name : shown` — the
-expression above, mirroring `RunningModelSection`'s exactly rather than `row?.display_name ?? shown` (which
-would treat a matched row's empty `display_name` as a miss) — is now only the **fallback** (`verbatim`
-below), reached when nothing derives a family. The match is still `publishedRowFor(models, shown)` — the
-one exported home for the rule, exported since #988 for its third caller (`RunConfigSections.tsx`) and
-reused by #1053 for a fourth. A miss is ordinary, not an error: since #1053, it is also the *common* case
-for an announcement, which claude reports at least as specific an identifier as it was given.
-
-Juhana ruled on 2026-09-05 that this control shows the family and nothing else — no version, no date, no
-context size, since those are always the newest and so carry no information here. `modelFamily(identifier)`
-(module-private, beside `firstShown`) is the whole rule: strip one leading `claude-` if present, take the
-leading run of ASCII letters, upper-case its first letter, hold the rest as claude sent them; `''` when
-nothing matches. `''` is the same "nothing here" `firstShown` already consumes, so the source chain composes
-with it rather than adding a second nullability idiom. There is no allow-list — a family this client has
-never heard of (`claude-newname-6`) derives through the same rule as a known one, which is what keeps #988's
-AC2 ("no client copy naming a model concept") intact; the one client-owned literal on this path is the
-`claude-` prefix itself, a vendor-prefix strip rather than a vocabulary.
-
-The trigger's source chain, on a hit: `firstShown(modelFamily(row.resolved_model), modelFamily(row.value))`,
-falling back to `verbatim = row ? row.display_name : shown` when both derive `''`. On a miss:
-`modelFamily(shown)`, falling back to `shown` itself. `resolved_model` leads because the trigger's job is to
-name what **runs**, and it is the field naming the concrete identifier behind an alias like `default`; the
-`value` step is an ordinary second source rather than a guard against an unseen case — the captured fixture
-`WireModelOption`'s docblock cites carries the literal `<unmeasured>` on four of its five rows, whose head is
-`<` and so yields `''`.
-
-**The marking (`currentId`) is a second, separate lookup (#1053):** `publishedRowFor(models, session)`
-where `session` is the first non-empty of picked and stored — **never** the announcement. The label and
-the marking read different layer-sets on purpose: the label answers "what's shown", the marking answers
-"what would picking do nothing" / "what is the daemon actually set to", and the daemon is set to what the
-session says, never to what claude reported running. The two collapse to the same row whenever a pick is
-in force, and again since #1423 when *nothing* is (`shown === ''` implies picked and stored are both `''`
-too, so the marking lookup would take the identical `''` argument — one inherited-default row honestly
-answers both lookups in that state). They differ exactly in the state #1053 exists for: an announcement
-with no pick and no stored choice, where the label shows the announcement and nothing is marked current.
-
-**Precedence changed under #1423.** Exact equality was always the whole rule for this lookup, but before
-\#1423 that meant a daemon publishing a row whose `value` was literally `''` would have that row marked
-current on an inherited-default session with no pick — an honest reading of an edge case nobody expected
-to hit. Since #1423, an empty session model resolves the inherited-default row through `effortRowFor` and
-consults no other row, so that literal-`''`-value edge case no longer reaches `publishedRowFor` at all.
-This is the same one-rule-one-answer posture `effortRowFor`'s own docblock states for the two effort
-surfaces (see [Composer effort menu](composer-effort-menu.md) and
-[Run-configuration sections](conversation-shell-run-configuration.md)), which this control now shares
-instead of contradicting.
-
-**The options:** `entry.models.map((row) => ({ id: row.value, label: ... }))`, exactly the published rows,
-in the daemon's order — nothing deduped, dropped, reordered or synthesized, per AC2. `id` is the row's
-`value`, so `onSelect(id)` submits it with no lookup. Two rows may legitimately share a `value` (claude's
-prerogative, per the store's own header); both are carried and both wear `aria-current`, accepted rather
-than fixed, since AC2's "exactly the published rows" outranks a tidier list.
-
-**Since #1095, each row's `label` is `modelFamily(published.value)`, falling back to `published.display_name`
-when that derives `''`.** A row reads its own `value` and **never** `resolved_model` — the opposite of the
-trigger, deliberately: a row's job is to name a *choice*, and `default` is its own choice. Derived from
-`resolved_model` it would wear the label of the row it resolves to (`claude-sonnet-5` → `Sonnet`), and the
-panel would show two identical rows submitting different values; from `value` it reads `Default`, the
-daemon's own word capitalised. Two rows that derive to the same family are both shown, per AC2, and each
-still submits its own `value` — the derivation changes nothing about which rows exist or what they send.
-
-This is the panel's first consumer to pass a non-null `currentId` (`ComposerActionsMenu` passes `null`:
-"a list of actions, not a choice"). A miss marks nothing, through the panel's existing no-special-case
-branch. See above for what `currentId` resolves against since #1053 (the session layers, never the
-announcement).
+A snapshot naming no model is inheritance, even when the recommendation is unavailable: it can render
+`Model`. No snapshot is a distinct loading state and stays absent until a pick, announcement or snapshot
+arrives. The inert arm bypasses `ComposerOptionsMenu`, which would otherwise advertise and open an empty
+popup. The shared footer-button class has no pointer cursor and the inert arm omits the chevron.
 
 ## Per-agent filtering (#1651)
 
-Once the daemon advertises `multi_agent`, `model_list` is one merged list — Claude's rows, then one Codex
-row per family — and a model of the other agent is refused on a session. `composerModelMenuModel` gained a
-third argument, `agent: WireAgent = 'claude'` (defaulted so the ~40 existing untagged-list calls in
-`ComposerModelMenu.test.tsx` stay byte-identical), and every lookup and the options list now go through it:
-`options` is `modelRowsFor(models, agent)` — the entry's rows whose own `agent` (absent counts as Claude,
-the [Conversation list store](conversation-list-store.md#which-agent-runs-a-conversation-since-1649) wire
-rule) matches — mapped through a newly exported `composerModelRowLabel(row)`. That function is keyed on the
-**row's** agent, not the conversation's: a Claude row keeps #1095's family-over-`value` rule, a Codex row
-returns `display_name` **verbatim** — no Codex name is ever built on the client, from `value`, `family` or
-anything else. The container reads the conversation's agent through
+A merged `model_list` contains both agents' rows, while each conversation can choose only its own agent's
+models. `modelRowsFor(models, agent)` preserves order and treats an untagged row as Claude; the model
+surfaces then exclude raw `value === 'default'`. Inherited announcement matching uses the same three tiers
+for both agents, entirely within those visible rows. Foreign rows cannot cause ambiguity or a match.
+
+`composerModelRowLabel` keys on the row's own agent: Claude uses the value-family rule, Codex uses the
+daemon's display name. Codex trigger labels remain daemon display names or raw announcements, with `Model`
+for the empty snapshot state; they never use a derived family as visible copy.
+
+The container resolves the conversation's agent through
 [`useConversationAgent`](conversation-shell-run-configuration.md#run-configuration-model-section-daemon-published-rows-975).
-
-**Codex is its own branch, not a filtered pass through the Claude rules above.** There is no
-inherited-default row to resolve for an unset model on Codex — `effortRowFor`'s `default` substitution is
-Claude's alone (see [Composer effort menu](composer-effort-menu.md#composereffortmenumodel-one-pure-function-deciding-all-three-renderings))
-— so once a snapshot says the model is unset (`shown === '' && layers.stored !== null`), the trigger reads
-the client-owned `COMPOSER_MODEL_DEFAULT_LABEL = 'Default'`, marks nothing (`currentId: null`), and still
-opens against the Codex rows already resolved into `options` — deliberately not the `null` (absent-row)
-rendering the Claude branch would reach in the equivalent state, since a Codex conversation's menu should
-stay operable with no model chosen. With no snapshot at all (`layers.stored === null`), it is still `null`,
-matching the Claude branch's own no-snapshot reading. On a hit or a miss, the trigger and the marking follow
-the Claude branch's own miss rule (`row ? row.display_name : shown`) — never `modelFamily`, anywhere on this
-path.
-
-`publishedRowFor` and `effortRowFor` both took `agent` as a **required**, not optional, third parameter —
-deliberate, so no caller can join across agents by omission; every production call site (this menu, the
-[effort](composer-effort-menu.md) and [permission-mode](composer-permission-mode-menu.md) menus, the run
-configuration sheet's three sections and `EffortDefaultData`) passes the conversation's own agent and the
-typecheck enforces it. See [Conversation shell — run
-configuration](conversation-shell-run-configuration.md#run-configuration-model-section-daemon-published-rows-975)
-for the sheet's own filtering and `useConversationAgent`'s resolution.
+`publishedRowFor` and `effortRowFor` require an `agent: WireAgent` argument so a caller cannot accidentally
+join across agents. The latter's empty-model substitution onto the internal default row remains Claude's
+alone. See [Composer effort menu](composer-effort-menu.md#composereffortmenumodel-one-pure-function-deciding-all-three-renderings)
+for offerings and [the sheet](conversation-shell-run-configuration.md#run-configuration-model-section-daemon-published-rows-975)
+for its agent resolution.
 
 ## The write
 
@@ -229,6 +172,34 @@ and run-configuration sheet name the rejection, including while answering a ques
 This trigger also does not read
 `supports_auto_mode` and does not touch the permission mode — `SettingsChange` has no such field to send,
 and that control belongs to #682.
+
+## New-chat model recall
+
+The last non-empty deliberate model pick confirmed through this dropdown or the Run
+configuration sheet is persisted verbatim as one profile-wide value shared across
+hosts and agents. Pending/rejected picks, passive reads and automatic recall never
+replace it. See [Remembered model](remembered-model.md) for storage and correlation rules.
+
+Create chat and Add workspace activate the new chat immediately and read that preference
+once. Channels and existing conversations do not recall. A non-empty value other than
+raw `default` must exactly match a published row for the new chat's agent (absent means
+Claude), with no `value` truncation. Recall accepts a cached list or waits up to five
+seconds; empty or ineligible lists skip immediately. After eligibility it waits up to
+five seconds for that chat's first settings reply, accepting one already received.
+An empty session ID ends recall immediately. With a usable session and connected owning
+host, it sends exactly one model-only write using the raw remembered value.
+
+While pending, Send is disabled and the shared `sendText` guard blocks Enter, Actions
+and status-area message sends before draft clearing or attachment consumption. After
+submission, command return does not release the hold: the correlated confirmation
+commits the chat's own selection and releases sending; rejection rolls back the
+optimistic label silently and releases sending. No separate preference label is rendered.
+
+Missing/empty/`default` preferences, either read timeout and write failures preserve the
+inherited settings and preference without error UI or retry. Leaving or losing the owning
+connection cancels the attempt; reopening/reconnecting does not replay it. Another host's
+reconnect preserves the pending write and hold. Diagnostics contain only static outcome
+codes. The model menu's geometry and label rules remain those described above.
 
 ## Turn-end dependency, shared with the context reading
 
@@ -268,23 +239,14 @@ showing — even on a chat whose actual stored model was something else entirely
 this chat at all, `''` keeps meaning the snapshot named no model (the daemon's inherited default,
 \#1423's reading). The container supplies the distinction it was flattening — `snapshot?.model ?? null`
 rather than `?? ''`, since `??` does not fire on `''` and a real empty-model snapshot still arrives as `''`.
-`firstShown` widened to accept the null and treats it as nothing at that layer exactly as `''` already was,
-so the label and marking chains read through it unchanged; #1423's inherited-default branch in
-`composerModelMenuModel` gained the one guard that tells the two apart, resolving `effortRowFor` only when
-`layers.stored !== null`. With no snapshot, the function now falls through to the `shown === '' && inherited
-=== undefined` arm and returns `null` — #988's absent rendering — instead of drawing the previous chat's
-row. `runConfigStore`'s header had held this same distinction one layer down since #1167 (`snapshot: null`
-as the distinct not-yet-loaded state); the fix threads it up rather than inventing a new one. #1167's
-`activateConversation` docblock states the clear exists so controls "say nothing instead of something
-false" — this is now true of this control too, for the window between a switch and the next snapshot.
+`firstShown` treats null as nothing at that layer, while `composerModelMenuModel` explicitly returns
+`null` when there is no snapshot, pick or announcement. A cached recommendation alone therefore cannot
+show the previous chat's model during the switch. `runConfigStore` already distinguishes `snapshot: null`
+from an empty saved model; the container preserves that distinction rather than flattening it.
 
-**The closed window is the no-snapshot one only.** A daemon `no_session` settings reply after a restart —
-the 2026-09-15 behaviour named in #1495's Context, fixed daemon-side in pyrycode rather than here — still
-lands as a real snapshot with `model: ''`, and #1423's branch still resolves the inherited-default row for
-it, correctly: a zero-valued reply is a snapshot, not an absence. #1495 also does not add a way to pick a
-model while none is held — the control is simply absent during that window, which trades against #1423's
-own motivation (a new, unmessaged chat is when a model is most worth choosing) in favour of never showing a
-false one.
+A real settings reply with `model: ''` still represents inheritance. It takes the pre-announcement
+recommendation rule described above, or reads `Model` when no usable resolution is available. The absent
+trigger is limited to the no-snapshot window without a pick or announcement.
 
 ## CSS: the shared footer-button treatment, lifted on its second consumer
 
@@ -349,13 +311,12 @@ by the daemon but not sanitized (see [Model-list store](model-list-store.md)). S
 the three reaches exactly one JSX text position (React's default escaping); `value` additionally reaches
 `key={option.id}` (React's own keyed reconciliation — a `Map` internally, not a plain-object index), a
 string comparison against `currentId`, and the `onSelect` pass-through into the write payload — no
-attribute, URL, filename, cache key, lookup path or log line, on any branch. The announced identifier's
-only other use is as a lookup **argument** to `publishedRowFor` (a `find` with `===` over an array, never
-a plain-object index) — it is a REPORT, never a control input: nothing branches on its content beyond
-`=== ''`, and `onSelect` still dispatches only a value a published row itself carries, never the announced
-string, so a hostile daemon cannot make this control send a value it did not itself publish. The panel's
-`aria-label` is a client-owned constant (`COMPOSER_MODEL_MENU_LABEL = 'Model'`) naming the panel, never the
-trigger's visible text — unlike `ComposerActionsMenu`, this trigger cannot use its own label as
+attribute, URL, filename, cache key, lookup path or log line, on any branch. The announced identifier also
+participates in exact raw value/resolution comparisons and the designated inherited family tier, using
+array scans rather than an object keyed by daemon text. It is a report used
+for display and marking; `onSelect` dispatches only a published row's raw value, never the announcement.
+The panel's `aria-label` is a client-owned constant (`COMPOSER_MODEL_MENU_LABEL = 'Model'`) naming the
+panel, never the trigger's visible text — unlike `ComposerActionsMenu`, this trigger cannot use its own label as
 `aria-label`, since that label is daemon-authored and `aria-label` is an attribute sink CLAUDE.md's
 daemon-text ruling forbids outright. The trigger itself carries no `aria-label` at all, so its accessible
 name stays its visible (auto-escaped) text. No `title` tooltip either, for the same reason — the 120px
@@ -368,32 +329,29 @@ value, the same tier as `.composer__model-label`'s CSS ellipsis one element up: 
 does not claim to, the store still holds every string verbatim, and React still escapes the one text
 position each label reaches. A family is a `[A-Za-z]+` prefix with one character upper-cased, so a control
 byte or a terminal escape can reach the DOM only through the unchanged verbatim fallback — the same path
-that carried it before this ticket. Nothing feeds a derived label back into a lookup: `publishedRowFor` is
-still called with the raw string, `currentId` is still a raw published `value`, and `onSelect` still
-dispatches a value a row carries; the only branch on a derived label is `=== ''`, on the client's own
-answer. The standing "`value` is not parseable" prohibition in `modelListStore.ts`, `shared/ipc/events.ts`
-and `shared/wire/types.ts` is re-scoped rather than deleted by this ticket: it stays absolute about
-matching, indexing and keying — deriving a display label is none of those three, and a consumer deriving a
-family for any other purpose is still doing the forbidden thing.
+that carried it before this ticket. `publishedRowFor` still receives raw strings, `currentId` remains a
+raw published `value`, and `onSelect` sends that value. Family comparison is limited to the inherited
+selection tier above; it does
+not widen explicit-choice matching, indexing, keying or writes. Neither labels nor family derivation
+sanitize the held strings; React's text escaping remains the rendering boundary.
 
 This menu deliberately surfaces neither of `ModelListEntry`'s two truncation reports
 (`truncated_fields`, `droppedModels`), nor `announcedModelStore`'s own `truncated` cut report — the
 run-configuration sheet remains the surface that reports a cut; withholding a report here is a
 completeness question the sheet already answers, not a leak.
 
-## The follow-up this ticket answered
-
-\#988 left a gap, noted but not filed: a session on the daemon's inherited default (`model === ''`) had no
-footer model control at all, even once a list had arrived — the run-configuration sheet was the only way
-in for that state. #1053 closed it by layering in the value held in
-[Announced-model store](announced-model-store.md) — what claude announced for the running turn (see
-§ `ComposerModelLayers` above) — rather than by inventing an
-empty-label affordance or client copy naming a model concept — both of which #988's own reasoning had
-already ruled out. The gap is closed for the state it was filed from; it reopens only if the daemon stops
-announcing (an app-lifetime `announcedModelStore` clear followed by no new turn), which is already covered
-by AC4's "nothing at any layer" rendering.
-
 ## Testing
+
+`e2e/composer-model-recall.spec.ts` holds correlated recall replies and proves first-send
+release on confirmation/rejection, draft/attachment retention and no recall for channels
+or existing chats. The [remembered-model tests](remembered-model.md#testing) also exercise
+the production write subscription and asynchronous background encoding/send failures;
+a renderer-only throwing mock misses that failure boundary.
+
+`e2e/real-claude-model-recall.spec.ts` deliberately confirms a published model different
+from the inherited one, relaunches the same profile and checks the new chat's first
+announcement against the picked row's resolved model. Live evidence requires an executed
+passing test, not an all-skipped exit.
 
 `e2e/question-answer-continue.spec.ts` holds settings replies while checking the optimistic
 label and preserved answers, then drives a correlated rejection and retry at 800px. It
@@ -408,14 +366,26 @@ init. Waiting for an announcement during the parked question therefore observes 
 lifecycle. `e2e/real-claude-question-answer.spec.ts` records the ensuing announcement in its
 `resolved-target-model` attachment. Optimistic panel dismissal alone proves no continuation.
 
-Renderer tests are static server renders (CLAUDE.md); `ComposerModelMenu.test.tsx` covers the view against
-`composerModelMenuModel` directly (each of the three renderings, four explicit near-misses — case fold,
-prefix, superstring, surrounding whitespace — all failing to match on purpose, and the duplicate-`value`
-case). The container is proven only at its `ConversationScreen.tsx` mount site. The pinned mount order was
-Actions → this trigger → the context reading at the time this ticket shipped; since
-[#682](composer-permission-mode-menu.md) landed the order is Actions → permission mode → this trigger →
-effort → the context reading, and the anchor/`aria-haspopup` counts that ticket's own tests pin moved from
-one to two accordingly.
+Renderer tests are static server renders (CLAUDE.md), so they cannot prove clicks or effect delivery.
+`modelSelection.test.tsx` gives both surfaces identical input layers with independently stated expected
+row IDs and trigger labels. It covers the no-snapshot distinction, usable/empty/unmeasured/unmatched and
+ambiguous recommendations, value/resolution/family tiers and ambiguity, disagreement with the default,
+saved `default`, explicit matched/unmatched choices, agent filtering and Codex. Reducer-driven cases prove
+pending, confirmed and rejected picks. Assert the marked row's identity on each surface: a count of one
+alone can pass with the wrong dropdown row selected.
+
+`e2e/real-claude-effort-default.spec.ts` observes the inherited chat's own announcement, a fresh model list
+and settings after a real turn. Its independent wire-data oracle checks both model surfaces and applied
+effort, retaining `inherited-model-selection` evidence. Live acceptance needs an actually executed passing
+test; collection or an all-skipped zero exit proves nothing.
+
+When a menu hides an internal row, derive positional click indices from the visible agent-filtered,
+non-default rows. The real question driver once indexed the full list (Default, Sonnet, Fable, Opus,
+Haiku); the old Opus index clicked Haiku after Default disappeared. Acknowledgement and original-answer
+continuation still passed; only the ensuing announcement exposed the wrong model. Assert menu count and
+target label before clicking, then assert the announced result. The fake-transport menu spec saves its
+integrated footer and sheet screenshots through `testInfo.outputPath` and attaches them so repeated runs
+retain their own evidence.
 
 Two lessons from the e2e drive (`e2e/composer-model-menu.spec.ts`), useful to any future footer control
 reading the same stores:
@@ -454,42 +424,16 @@ above:
   `stored` would otherwise silently answer "nothing" for every layer behind it, with no test in this repo
   positioned to catch it.
 
-**#1053's layering** moved the nine existing `composerModelMenuModel` call sites in
-`ComposerModelMenu.test.tsx` onto a `stored(...)` helper that builds a `ComposerModelLayers` record with
-the other two layers empty, so every rule #988 shipped keeps asserting exactly what it asserted; the
-`view` helper's six call sites needed no edit, since it builds the same record internally. New cases cover
-the announcement resolving to a label with no pick and no stored choice, the announcement outranking a
-stored choice that names a *different* row (label and `currentId` diverge — the pair a single-string
-model couldn't represent), a pick outranking both, and the all-empty-layers `null` case.
+`e2e/composer-model-announced.spec.ts` drives announcement-over-saved label precedence, a picked row
+outranking both, and rejection restoring the announcement label. The launch supplies a snapshot; to prove
+a later stored-choice response arrived, count captured `request_session_settings` envelopes rather than
+using a label that can remain unchanged. See [the activation refresh](paired-shell-conversation-exits.md#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166).
 
-A new e2e spec, `e2e/composer-model-announced.spec.ts`, drives the ordering directly rather than
-extending `composer-model-menu.spec.ts` (whose drive is ordered around *not* having an announcement). At
-the time this spec was written, a fresh launch had no run-config snapshot at all, so `model_announced`
-pushed unsolicited before any snapshot existed was the only way to show the control with no turn-end
-dance needed — proof the announcement alone is sufficient, unlike every other snapshot-dependent control
-on this row (see § Turn-end dependency). **Since #1166** the launch itself supplies a snapshot, so the
-spec's launch-state assertion became a presence check (the stored choice, not an empty label) and its
-step proving the announcement outranks a later stored choice moved from an absence-based barrier to
-`expect.poll`-counting the captured `request_session_settings` envelopes — see [Paired shell —
-conversation exits and stamps § The run-configuration and model-list
-ask](paired-shell-conversation-exits.md#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166)
-for why an absence barrier stopped being available. `model_list` still resolves the label to a display
-name; a `turn_state` thinking → idle pair still brings in a *different* stored choice without moving the
-label off the announcement; and a picked third row still moves the label at once and reverts to the
-announcement (not to the stored choice) on a withheld-reply, correlated-`error`-frame rejection — the same
-optimistic-overlay idiom above, proving where a reverted pick lands when an announcement is present.
-
-**#1095 turned the published-prose label into a derived family**, and with it, both e2e specs' miss→hit
-step (published rows arrive; the label moves off the launch-state string) went vacuous: every alias in
-`MODEL_ROWS` matched its own family by construction, so both sides of the transition rendered the same
-family and the assertion passed whether or not the row lookup ran. The only re-anchor is a row whose
-`value` and `resolved_model` name *different* families — `default`, resolving to `claude-sonnet-5`, is the
-**only** published value with that property, since every other alias derives its own family from itself.
-Both `composer-model-menu.spec.ts` and `composer-model-announced.spec.ts` replaced one row with
-`default` / `claude-sonnet-5`, so the label reads `Default` before the list and `Sonnet` after — an
-observable move only a real row lookup produces. This was not a convenient choice; it was the only one
-available, which is worth stating in a spec so a later edit doesn't swap the anchor row for a tidier one
-that quietly loses the property.
+A label-source test needs inputs whose source families differ. Rows whose value and resolution share a
+family make a miss-to-hit assertion pass even without a row lookup. The internal default resolution can
+exercise that distinction without offering a Default row: an inherited label moves from `Model` before a
+list to the recommendation's family after it. Invented explicit rows with differing families can exercise
+the explicit source chain without changing the production vocabulary.
 
 **A label narrowing can disarm a spec that used the label as a settle signal, with no test list to catch
 it.** `e2e/composer-permission-mode-auto.spec.ts` waits on `.composer__model-label` twice to prove a

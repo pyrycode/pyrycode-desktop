@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import type { ConversationSummary } from '../src/shared/wire/types'
 import type { Locator } from '@playwright/test'
 
@@ -323,26 +324,26 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   expectAbout(dotBox.y + dotBox.height / 2, rowBox.y + rowBox.height / 2)
 
   // --- 7. AC1's pitch. Mint a second row through the real product control — the workspace row's `Create
-  // chat` plus sends `create_conversation` with that group's own cwd, the seed's workspace, so the two
+  // chat` plus confirms a daemon-default create. The seed uses that default cwd, so the two
   // rows land in ONE group as adjacent siblings. Both assertions matter and they fail in opposite
   // directions: a `gap` on the `.channel-list` column would produce the 4px between rows AND move the
   // workspace row's spacing, which AC1's second half forbids. The adjacent-sibling rule produces the
   // first and leaves the second at the zero it has today. ---
-  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
+  await confirmCreateChat(page)
   await expect(row).toHaveCount(2)
   // TWO workspace rows since #1485: both conversations are chats, so the Channels tree draws the same
   // workspace as an empty mirror above the divider. The count is still an exact number rather than a
   // `.first()` — one group per tree is the claim, and three would mean the two chats had split.
-  await expect(page.locator('.channel-list__workspace')).toHaveCount(2)
+  await expect(page.locator('.channel-list__section')).toHaveCount(2)
 
   const firstRow = await boxOf(row.nth(0), 'first sidebar row')
   const secondRow = await boxOf(row.nth(1), 'second sidebar row')
   // `.nth(1)` is the CHATS tree's group — the one these rows sit under. The Channels mirror renders
   // first, above the divider, and boxing it would measure the gap to nothing.
-  const workspaceRow = await boxOf(page.locator('.channel-list__workspace').nth(1), 'workspace row')
+  const sectionRow = await boxOf(page.locator('.channel-list__section').nth(1), 'Chats section')
 
   expectAbout(gapBetween(firstRow, secondRow), ROW_GAP_PX)
-  expectAbout(gapBetween(workspaceRow, firstRow), 0)
+  expectAbout(gapBetween(sectionRow, firstRow), 0)
   // Both rows kept the height, so the pitch really is 24-on-28 and not one row that grew — and both did
   // so with the fill present on one of them, which is what makes this the live detector for a wrapper
   // that grew a padding or a border to carry that fill (#1098's most likely regression).

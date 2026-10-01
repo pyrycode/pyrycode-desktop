@@ -16,6 +16,8 @@ import {
   type FakeRoutingRelay
 } from '../../src/main/transport/fakeRoutingRelay'
 import { decideCapabilityGate, readDaemonCapabilities } from './daemonCapabilityGate'
+import { expectDesktopIsolated, RENDERER_THROTTLING_SWITCHES } from './desktopIsolation'
+import { HIDDEN_WINDOW_ENV_FLAG } from '../../src/main/windowPresentation'
 import { LOOPBACK_RELAY_ENV_FLAG } from '../../src/main/relayPolicy'
 import { TEST_SECRET_BACKEND_ENV_FLAG } from '../../src/main/secretBackend'
 import type { QrPayload } from '../../src/shared/wire/types'
@@ -97,7 +99,7 @@ export interface SpawnedDaemon {
   // Only the three credential fields decoded from `pyry pair` stdout. The QrPayload's `relay` is assembled
   // test-side from the #251 relay's /v1/client leg, never from pyry's output (which points at prod).
   pairFields: Pick<QrPayload, 'server' | 'token' | 'server_static_pubkey'>
-  // The daemon's working directory (`-pyry-workdir`, `<daemonHome>/work`), created and reaped by the
+  // The daemon's canonical working directory (`-pyry-workdir`, `<daemonHome>/work`), created and reaped by the
   // fixture. Exposed (#487) so a real-claude spec can write a test-OWNED gate file into it and have claude
   // poll that file to hold a turn open deterministically — a real, ordinary tool-running turn released by a
   // filesystem event, with no `sleep`/timing race. The test and the daemon share one filesystem, so a file
@@ -312,9 +314,11 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
       // control socket is `$HOME/.pyry/<name>.sock`, so the 104-byte macOS `sun_path` limit now binds on
       // the HOME rather than on a separate socket dir. Measured 2026-09-13: `os.tmpdir()` on this machine
       // yields an 83-byte socket path — it binds, but the margin is the machine's TMPDIR, not a property
-      // of this code; `/tmp` yields 39. `realpathSync` handles the /tmp → /private/tmp symlink exactly as
-      // it already handled /var/folders → /private/var/folders (see the trust seed below).
+      // of this code; `/tmp` yields 39, or 47 after macOS resolves it to `/private/tmp`.
       daemonHome = await mkdtemp('/tmp/pyry-daemon-')
+      // Track the allocation before resolving it so cleanup also runs if realpath fails. Derive every
+      // workspace path from the canonical home: pyry 0.27.0 canonicalises created conversation cwd.
+      daemonHome = realpathSync(daemonHome)
       const workdir = join(daemonHome, 'work')
       await mkdir(workdir, { recursive: true, mode: 0o700 })
       // #1283 — where the SEEDED conversation lives, which is `workdir` itself unless a spec moved it.
@@ -543,6 +547,10 @@ export async function withIsolatedElectronApp(
   delete env.ELECTRON_RENDERER_URL
   env[LOOPBACK_RELAY_ENV_FLAG] = '1'
   env[TEST_SECRET_BACKEND_ENV_FLAG] = '1'
+  // The same desktop isolation as the default tier (#1067, #1672): the dispatcher runs this tier
+  // unattended on the operator's machine, so a launch must neither show and focus a window nor be
+  // throttled when the operator works in another one.
+  env[HIDDEN_WINDOW_ENV_FLAG] = '1'
   const userDataDir = await mkdtemp(join(tmpdir(), 'pyry-e2e-realclaude-'))
   let current: ElectronApplication | null = null
   let relaunching = false
@@ -554,9 +562,13 @@ export async function withIsolatedElectronApp(
     }).toBe(true)
   }
   const launch = async (): Promise<IsolatedElectronApp> => {
-    const app = await electron.launch({ args: ['.', `--user-data-dir=${userDataDir}`], env })
+    const app = await electron.launch({
+      args: ['.', `--user-data-dir=${userDataDir}`, ...RENDERER_THROTTLING_SWITCHES.map((name) => `--${name}`)],
+      env
+    })
     current = app
     const page = await app.firstWindow()
+    await expectDesktopIsolated(app)
     return {
       app, page, userDataDir,
       async relaunch() {
@@ -723,9 +735,9 @@ function decodePairFields(stdout: string): SpawnedDaemon['pairFields'] {
  * note). Mode 0o600, matching the Go seeds. `cwd` goes through JSON.stringify for correct escaping.
  *
  * `cwd` was the daemon's `-pyry-workdir` verbatim until #1283 gave it the `seedCwdSubdir` option; it is
- * still that directory whenever the option is left at its default. It is written RAW: the daemon records
- * a create's payload `cwd` byte-for-byte too, and the client's `groupByWorkspace` keys on the raw string,
- * so any normalisation here would split one workspace into two sidebar groups.
+ * still that directory whenever the option is left at its default. Both paths derive from the canonical
+ * daemon home, matching pyry's canonicalised create cwd. The client's `groupByWorkspace` keys on the
+ * supplied string, so seeding a symlink alias would split one workspace into two sidebar groups.
  */
 async function seedRegistry(
   daemonHome: string,

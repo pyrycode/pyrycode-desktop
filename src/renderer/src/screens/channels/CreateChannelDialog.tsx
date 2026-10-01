@@ -60,46 +60,35 @@ export function systemPromptOverLimit(text: string): boolean {
   return UTF8.encode(text).length > MAX_SYSTEM_PROMPT_BYTES
 }
 
-// One stage since #1436 removed the folder round trip: the channel is created in the clicked
-// workspace itself, so `createConversation` is the first command this draft sends. Since #1428 a
-// second one can follow it, so the pending arm RECORDS WHAT WAS ASKED FOR: the trimmed name and the
-// `cwd` that went out (which is what a confirmation is matched against), and the prompt to write once
-// one matches. A ref and not state — the daemon-event listener below is installed by an effect that
-// deliberately does not re-subscribe on a keystroke, so a captured draft would be whatever was typed
-// when the listener was installed.
+// The daemon chooses the default folder, so the pending arm records the trimmed name and prompt only.
+// A ref keeps the event listener's snapshot current without resubscribing on each keystroke.
 type Pending =
   | { type: 'idle' }
-  | { type: 'channel'; name: string; cwd: string; systemPrompt: string | null }
+  | { type: 'channel'; name: string; systemPrompt: string | null }
 
 /**
  * Whether this confirmation is for the create THIS dialog asked for (AC2).
  *
  * `conversationCreated` is uncorrelated — main emits it on decode without matching it to a request —
- * so the payload's own echoed fields are the only handles beyond the host stamp the listener already
- * checks. All three echo: `real-daemon-create-channel.spec.ts` drives a real daemon and asserts the
- * created row's title reads the typed name (a null-named create renders "Untitled"), that the
- * workspace label list stays ONE group keyed on the requested `cwd` (a defaulted `cwd` mints a
- * second), and that the promoted-row Rename count goes to two. `conversationStateFake` mints its row
- * from the request, so the fake tier echoes them too. A gate that never matched would silently drop
- * every prompt write — worse than the misattribution it prevents — which is why that evidence is a
- * precondition and not a footnote.
+ * so the payload's echoed promotion and name are the only handles beyond the host stamp the listener
+ * checks. The daemon resolves a null requested `cwd` to its default; the reply's path cannot be
+ * compared with a requested path. The real-daemon spec proves the created name, promotion, and default
+ * workspace independently of the fake's request echo.
  *
  * THIS IS AN ATTRIBUTION FILTER, NOT AN AUTHORIZATION CHECK. A hostile or impersonating daemon picks
  * the `id` in its own confirmation and could already direct the write anywhere; no client-side compare
  * of fields that same party supplies can prevent that. What it closes is the real hazard: a same-host
  * confirmation for a create some OTHER client asked for, which would otherwise write the operator's
- * text onto a conversation they did not create. `===` is the right compare — `name` and `cwd` are
- * opaque display/routing strings, never secrets, so no constant-time compare applies.
+ * text onto a conversation they did not create. The name is an opaque display string, never a secret.
  *
  * RESIDUAL, stated rather than engineered around (the posture `daemon-connection-correlation.md`
- * already takes): two identical concurrent creates on one host — same trimmed name, same `cwd` — stay
+ * already takes): two identical concurrent promoted creates on one host with the same trimmed name stay
  * indistinguishable, and the first confirmation to arrive takes the write.
  */
 export function confirmsPending(conversation: ConversationCreatedPayload, pending: Pending): boolean {
   return pending.type === 'channel' &&
     conversation.is_promoted === true &&
-    conversation.name === pending.name &&
-    conversation.cwd === pending.cwd
+    conversation.name === pending.name
 }
 
 /**
@@ -145,8 +134,7 @@ function writePrompt(conversation: ConversationCreatedPayload, pending: Pending)
 
 // This mounted draft owns only its continuation. The daemon owns already-sent operations,
 // and the existing navigation bridge owns opening confirmed channels.
-export function CreateChannelDialog({ cwd, serverId, onDismiss }: {
-  cwd: string
+export function CreateChannelDialog({ serverId, onDismiss }: {
   serverId: string
   onDismiss: () => void
 }): JSX.Element {
@@ -229,17 +217,16 @@ export function CreateChannelDialog({ cwd, serverId, onDismiss }: {
       setError(null)
       // The synchronous ref is set before dispatch, so a second activation cannot re-enter
       // before React paints the disabled OK. It records what goes out — the TRIMMED name
-      // `requestNewChannel` sends and the verbatim `cwd` — so a confirmation can be matched against
-      // it, plus the prompt to write, or `null` for a box that holds nothing but whitespace.
+      // `requestNewChannel` sends the trimmed name; the daemon resolves `cwd: null`. Retain the prompt
+      // to write, or `null` for a box that holds nothing but whitespace.
       pending.current = {
         type: 'channel',
         name: displayName,
-        cwd,
         systemPrompt: systemPrompt.trim() === '' ? null : systemPrompt
       }
       window.pyry.sendDiagnostic({ event: 'channel-create-state', code: 'channel-requested' })
       try {
-        requestNewChannel(window.pyry.sendCommand, displayName, cwd, serverId)
+        requestNewChannel(window.pyry.sendCommand, displayName, null, serverId)
       } catch {
         fail()
       }

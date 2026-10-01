@@ -30,7 +30,7 @@ export function decodeEnvelope(bytes: Uint8Array): Envelope
 // The one default-injecting constructor (see Defaults).
 export function makeHelloClientPayload(input: {
   deviceName: string; clientVersion: string; token: string
-  capabilities?: readonly string[]; lastSeenTs?: string
+  capabilities?: readonly string[]; lastSeenTs?: string; lastEventId?: number
 }): HelloClientPayload
 
 // Deterministic, catchable decode-failure signal at the trust boundary.
@@ -51,12 +51,27 @@ Taken directly from mobile's `NoiseSessionPump` + `OkHttpRelayTransport`:
 Mobile relies on Kotlin runtime defaults (`encodeDefaults = true`). TS interfaces carry no runtime defaults, so "always emit defaults" (AC #3) is split by how each field is enforced:
 
 - **Literal-typed fields enforce themselves.** `InnerFrameV2.v: 2` and `HelloClientPayload.role: 'client'` are literal types — you cannot construct the object without them, so `JSON.stringify` always emits them. **No runtime injector.**
-- **Non-literal defaults need one constructor.** `makeHelloClientPayload` is the **single** function that injects `protocol_versions: ['v2']` (reusing `PROTOCOL_VERSION` from `types.ts`). `capabilities` is a **caller argument** defaulting to `[]` — **not** a hardcoded `['interactive']`: the desktop event pipeline models only the coarse `message` types, so advertising `interactive` would make the daemon fan out envelopes this client cannot render (the caller passes them in once the structured stream is modeled — see [hello exchange](hello-exchange.md), the consumer of this constructor). `last_seen_ts` is emitted only when provided (never `null`). `HelloClientPayload` is the **only** encode-side payload with non-literal defaults — hence one constructor, not the per-payload-wrapper anti-pattern the ticket warned against. `Envelope` has no defaulted fields, so callers build it directly.
+- **Non-literal defaults need one constructor.** `makeHelloClientPayload` injects `protocol_versions: ['v2']` (reusing `PROTOCOL_VERSION` from `types.ts`). `capabilities` is a caller argument defaulting to `[]`; `daemonConnection` supplies `['interactive']` for the structured stream through [hello exchange](hello-exchange.md). Optional `lastEventId` and legacy `lastSeenTs` become `last_event_id` and `last_seen_ts` only when provided, never `null`. `HelloClientPayload` is the only encode-side payload with non-literal defaults, so it has one constructor. `Envelope` has no defaulted fields; callers build it directly.
 - **`client_version` gets an app-name prefix, added once, here.** `input.clientVersion` is the bare app version (`app.getVersion()`, e.g. `"0.1.0"`); the constructor writes `client_version` as `` `${CLIENT_APP_NAME}/${input.clientVersion}` `` (`CLIENT_APP_NAME = 'pyrycode-desktop'`), the `<app>/<MAJOR>.<MINOR>.<PATCH>` format the daemon parses (pyrycode `docs/protocol-mobile.md` § `hello`, "`client_version` format"; \#1612). The prefix is added inside this constructor rather than by the caller because the same bare `clientVersion` also feeds the relay `User-Agent` header and the session-start log banner, and prefixing it upstream would double-prefix both (see [daemon connection lifecycle](daemon-connection-lifecycle.md) `clientVersion` field). Once a daemon release enforces a minimum `client_version` it cannot parse, an unprefixed hello is rejected — desktop shipped this format ahead of that gate.
 
 ### Omit-absent-optionals, without `null` (AC #3)
 
-`JSON.stringify` drops `undefined` keys but **serializes `null`**. So the only safe representation of an absent optional is `undefined`/omitted. This ticket dropped `| null` from `Envelope.in_reply_to` / `Envelope.event_id` / `HelloClientPayload.last_event_id` (later renamed `last_seen_ts: string` in #27) in `src/shared/wire/types.ts` → `number | undefined`. That makes "absent" the only representation and lets `JSON.stringify`'s natural omission satisfy AC #3 with **no runtime scrub**. It does not drift the wire contract — mobile's `explicitNulls = false` never emits these as `null` either; `number | undefined` is the faithful representation of mobile's `Long? = null`. Zero edit fan-out (no consumers of those fields today).
+`JSON.stringify` drops `undefined` keys but **serializes `null`**. Represent absent
+optionals as `undefined`/omitted: `Envelope.in_reply_to`, `Envelope.event_id` and
+`HelloClientPayload.last_event_id` are optional numbers; the legacy `last_seen_ts`
+is an optional string. The constructor adds the hello fields only when supplied,
+matching mobile's `explicitNulls = false` without a runtime scrub.
+
+`last_event_id` requests bounded current-conversation replay after a daemon-wide
+event position. `last_seen_ts` has no daemon consumer; connection-produced hellos
+never send it. The codec passes the numeric position through without validating
+its range. [Daemon connection](daemon-connection-lifecycle.md#replay-cursor-lifetime)
+owns positive-safe-integer validation and the in-memory cursor; `decodeEnvelope`
+keeps payloads opaque and only retains numeric `event_id` values. Observe an
+admitted envelope before narrowing its payload, so unknown types and malformed
+payloads can still advance replay. Failed size or envelope guards cannot advance
+or reset it. An expired or unknown position yields `resync`; the connection clears
+that host's cursor without automatically loading history.
 
 ### Data flow
 

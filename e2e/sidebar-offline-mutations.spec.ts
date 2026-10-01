@@ -2,6 +2,7 @@ import { test, expect, FIRST_SERVER_ID, SECOND_SERVER_ID, SEEDED_ROW, SECOND_SEE
 import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
 import type { RendererCommand } from '../src/shared/ipc/commands'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { confirmCreateChat } from './fixtures/confirmCreateChat'
 
 async function event(app: PairedApp, value: object): Promise<void> {
   await app.app.evaluate(({ BrowserWindow }, { channel, value }) => {
@@ -39,8 +40,7 @@ test('pre-opened mutation dialogs cannot submit by keyboard after disconnection'
     // `renameConversation` (the helper is reused verbatim), and a `New label` fill always differs from the
     // seeded title, so the send is armed exactly as before and the offline case still has one to suppress.
     ['.channel-list__rename', '.edit-channel__input', 'OK', 'renameConversation'],
-    ['.channel-list__workspace-create', '.create-channel__input', 'OK', 'createConversation'],
-    ['.channel-list__workspace-edit', '.edit-workspace__input', 'OK', 'renameWorkspace']
+    ['.channel-list__section-create', '.create-channel__input', 'OK', 'createConversation']
   ]
   for (const [entry, input, confirm, commandType] of cases) {
     await page.locator(entry).first().click({ force: true })
@@ -113,21 +113,21 @@ test('sidebar ownership follows the target in both open-chat directions', async 
     // TWO of each since #1485 — the connected host's group is drawn in BOTH trees now, so it carries a
     // plus and a pen in each. The claim is unchanged and is still exact: the DISCONNECTED host's two
     // groups carry neither, which is what these numbers not being four says.
-    await expect(page.locator('.channel-list__workspace-create')).toHaveCount(2)
-    await expect(page.locator('.channel-list__workspace-edit')).toHaveCount(2)
+    await expect(page.locator('.channel-list__section-create')).toHaveCount(2)
+    await expect(page.locator('.channel-list__workspace-edit')).toHaveCount(0)
     await expect(page.locator('.channel-list__rename')).toHaveCount(1)
     // #1426 deleted the assertion that stood here: the global create was inert while two hosts were
     // paired. The plus that replaced it is per-row and carries no such state — it is withheld entirely
     // for a host that is not connected, which the three counts above already read.
     await commands.clear()
     // `.first()` is the CHANNELS tree's plus — that tree renders above the divider — which is the one
-    // that opens `.create-channel__input`. The Chats mirror's plus creates a chat with no dialog.
-    await page.locator('.channel-list__workspace-create').first().click({ force: true })
+    // that opens `.create-channel__input`. The Chats mirror's plus opens chat confirmation.
+    await page.locator('.channel-list__section-create').first().click({ force: true })
     await page.locator('.create-channel__input').fill('Owned channel')
     await page.getByRole('button', { name: 'OK', exact: true }).click()
     await expect.poll(async () => (await commands.read()).filter(c => c.type === 'createConversation').length).toBe(1)
     expect((await commands.read()).find(c => c.type === 'createConversation')).toMatchObject({
-      serverId: online, payload: { cwd: onlineRow.cwd, is_promoted: true }
+      serverId: online, payload: { cwd: null, is_promoted: true }
     })
     await page.getByRole('button', { name: onlineRow.name!, exact: true }).click()
     const offlineHeld = page.locator('.channel-list__row').filter({ hasText: offlineRow.name! })
@@ -148,10 +148,10 @@ test('chat creation and promotion address the connected sidebar host while anoth
   const commands = await observeCommands(app)
   await connection(app, FIRST_SERVER_ID, 'disconnected')
   await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
-  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
+  await confirmCreateChat(page)
   await expect.poll(async () => (await commands.read()).filter(c => c.type === 'createConversation').length).toBe(1)
   expect((await commands.read()).find(c => c.type === 'createConversation')).toMatchObject({
-    serverId: SECOND_SERVER_ID, payload: { cwd: SECOND_SEEDED_ROW.cwd, is_promoted: false }
+    serverId: SECOND_SERVER_ID, payload: { cwd: null, is_promoted: false }
   })
   await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
   const secondRow = page.locator('.channel-list__row').filter({ hasText: SECOND_SEEDED_ROW.name! })
@@ -170,24 +170,44 @@ test('chat creation and promotion address the connected sidebar host while anoth
 // create any more, and its host-targeting claim is not lost — the sibling test above presses the plus and
 // asserts the resulting `createConversation` carries the right `serverId` and `cwd`. What survives is the
 // failed-host half, which is what this test is now named for.
-test('failed-host local controls remain usable', async ({ launchPairedApp }) => {
+test('failed-host local controls remain usable', async ({ launchPairedApp }, testInfo) => {
   const app = await launchPairedApp({ buildReplyFrames: conversationStateFake() })
   const { page } = app
   await connection(app, FIRST_SERVER_ID, 'failed')
   const host = page.locator('.channel-list__host').first()
   await expect(host.getByRole('button', { name: 'Repair host' })).toBeVisible()
+  const edit = host.getByRole('button', { name: 'Edit host' })
+  const repair = host.getByRole('button', { name: 'Repair host' })
+  const label = host.locator('.channel-list__host-label')
+  const boxes = async () => Promise.all([host, label, edit, repair].map(async locator => {
+    const box = await locator.boundingBox()
+    if (!box) throw new Error('failed-host controls must have layout boxes')
+    return box
+  }))
+  const before = await boxes()
+  const [rowBox, labelBox, editBox, repairBox] = before
+  expect(rowBox.height).toBe(28)
+  expect(labelBox.x + labelBox.width).toBeLessThanOrEqual(editBox.x)
+  expect(editBox.x + editBox.width).toBeLessThanOrEqual(repairBox.x)
+  expect(rowBox.x + rowBox.width - editBox.x - editBox.width).toBe(52)
+  expect(rowBox.x + rowBox.width - repairBox.x - repairBox.width).toBe(28)
+  await expect(host.locator('.channel-list__host-disclosure')).toHaveCount(0)
+  await expect(host.locator('.channel-list__host-status, .channel-list__host-dot')).toHaveCount(0)
   await host.hover()
+  expect(await boxes()).toEqual(before)
+  await expect(edit).toHaveCSS('opacity', '1')
+  await expect(host.locator('.channel-list__host-status, .channel-list__host-dot')).toHaveCount(0)
   await host.getByRole('button', { name: 'Edit host' }).click()
   await expect(page.getByRole('dialog')).toHaveCount(1)
   await page.getByRole('button', { name: 'Cancel', exact: true }).click()
-  const workspace = page.locator('.channel-list__workspace').first()
-  await workspace.click()
-  await expect(workspace).toHaveAttribute('aria-expanded', 'false')
-  await workspace.click()
-  await expect(workspace).toHaveAttribute('aria-expanded', 'true')
-  await expect(page.getByRole('button', { name: 'Pair new host' })).toHaveCount(2)
+  const section = page.locator('.channel-list__section-disclosure').first()
+  await section.click()
+  await expect(section).toHaveAttribute('aria-expanded', 'false')
+  await section.click()
+  await expect(section).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByRole('button', { name: 'Pair new host' })).toHaveCount(1)
   await host.hover()
-  await page.screenshot({ path: '/tmp/builder-1379-failed-host.png', animations: 'disabled' })
+  await page.screenshot({ path: testInfo.outputPath('host-failed.png'), animations: 'disabled' })
   await host.getByRole('button', { name: 'Repair host' }).click()
   await expect(page.getByText('Repair pairing: Server', { exact: true })).toBeVisible()
 })

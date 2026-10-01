@@ -68,10 +68,22 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 - **A transient-drop reconnect does not yet reload the stored record** — that is [#83](https://github.com/pyrycode/pyrycode-desktop/issues/83) (open). This gate is unaffected: a fresh pair (this runbook's path) dials the current record via #82's `reconnect()`, which re-sources at dial time; #83 only concerns automatic re-dials mid-session after a transient drop.
 - **Single active conversation.** Everything uses `MILESTONE_CONVERSATION_ID = 'default'` ([#66](https://github.com/pyrycode/pyrycode-desktop/issues/66)) — there is no conversation-selection surface this milestone.
 - **Dark scheme only, mobile layout stretched to the window** — the desktop-specific layout is deferred until the app is fully functioning.
+- **Real-daemon fixture paths must be canonical.** The fixture resolves its temporary daemon home before deriving the workspace path, daemon cwd argument, and registry seed cwd. On macOS, `/tmp` resolves to `/private/tmp`; mixing them makes one workspace appear as two groups. The seeded subdirectory remains distinct, and the short control-socket path is unchanged ([#1674](https://github.com/pyrycode/pyrycode-desktop/issues/1674)).
 
 ## Current real-claude gate state
 
-**Latest verified run: #1522, 2026-09-19 — 22 executed, 22 passed, 0 failed, 1 skipped;
+**Latest verified run: combined #1673 and #1674, 2026-09-27 — 23 executed, 23 passed, 0 failed, 1 skipped.**
+The operator ran `npm run e2e:real:gate` on commit `97ad5940`, containing both fixes and
+`origin/main` at `d085e321`. The configured test binary reported `pyry 0.27.0`.
+All five release-version cases and the workspace grouping, cwd-equality, and unique-create
+cases passed. The three version-checking specs now accept either a source revision or a
+release version and record the parsed value as `daemon-revision`. The one skipped case is
+the existing Reset session `test.fixme` for pyrycode#2436. This result covers the built
+desktop, local routing relay, real daemon, and real Claude. It does not test the production
+relay. The outcome is recorded on [#1673](https://github.com/pyrycode/pyrycode-desktop/issues/1673)
+and [#1674](https://github.com/pyrycode/pyrycode-desktop/issues/1674).
+
+**Previous recorded run: #1522, 2026-09-19 — 22 executed, 22 passed, 0 failed, 1 skipped;
 all four required queue cases passed on retry 0.** The
 [dispatcher verdict](https://github.com/pyrycode/pyrycode-desktop/issues/1522#issuecomment-5741840980)
 records `feature/1522` at `8abd854c7b`, merged with `origin/main` at `db45831a51`
@@ -119,18 +131,16 @@ built desktop, local routing relay, real daemon and real Claude at the recorded 
 it does not establish behavior through the production relay. The
 [liveness overview](real-claude-liveness-e2e.md#what-it-does) explains the correlated proof.
 
-**#1579 adds `e2e/real-claude-mcp.spec.ts`, one more executed spec, not yet counted by a gate run.**
+**#1579 added `e2e/real-claude-mcp.spec.ts`, which passed in the combined 2026-09-27 run.**
 It opens Channel info against a real daemon and a real non-bypass child (`skipPermissions: false`, so
 the daemon spawns the child with its strict `--mcp-config` and the on-demand `mcp_status_request` this
 ticket's Channel-info trigger sends has something to answer), ticks Show built-in, and asserts the
 daemon's own `pyry_approve`/`pyry_files` rows by exact name — see [Channel info § MCP servers
 section](conversation-shell-channel-info-mcp.md#mcp-servers-section-1490).
-It carries `needs-real-claude` and has not executed on the dispatcher's gate as of this writing; the
-\#1522 run above is still the latest confirmed execution, at 22 runnable tests against a configured floor
-of 10. Once this spec executes, the runnable count becomes 23, and `PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED`
-is owed a matching bump — the same debt #1433 recorded when the tier grew from 10 to 20 and that has
-gone unpaid across every run since (the floor was still 10 at #1522). The floor lives in the fork's
-dispatcher configuration, not this repo.
+The combined run executed 23 tests against the fork's configured floor of 10.
+`PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED` is still owed a bump to 23 so a missing runnable
+case cannot hide behind the lower floor. The floor lives in the fork's dispatcher
+configuration, not this repo.
 
 ### Earlier recorded runs
 

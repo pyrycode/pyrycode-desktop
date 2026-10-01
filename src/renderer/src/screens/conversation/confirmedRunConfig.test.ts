@@ -186,6 +186,35 @@ it('ignores other hosts, invalidates owning reconnects, and excludes reset/repla
   h.off()
 })
 
+it('drops memory search on switch, reconnect and replacement until a current report arrives', () => {
+  const h = setup()
+  const memorySearch = { availability: 'available' as const, providers: [
+    { id: 'local', display_name: 'Local', installed: true, enabled: false, availability: 'unavailable' as const }
+  ] }
+  const reading = (conversationId: string, sessionId: string): DaemonEvent => ({
+    type: 'runConfigReceived', conversationId, sessionId, model: '', effort: '', yolo: false,
+    permissionMode: 'default', used_tokens: 0, window_tokens: 0, memorySearch
+  })
+  h.emit(reading('chat', 'session'))
+  expect(h.config.getState().snapshot?.memorySearch).toEqual(memorySearch)
+  h.switchTo('other', 'host')
+  expect(h.config.getState().snapshot?.memorySearch).toBeUndefined()
+  h.emit(reading('chat', 'session'))
+  expect(h.config.getState().snapshot?.memorySearch).toBeUndefined()
+  h.emit(reading('other', 'other-session'))
+  expect(h.config.getState().snapshot?.memorySearch).toEqual(memorySearch)
+  h.emit({ type: 'connected' } as DaemonEvent)
+  expect(h.config.getState().snapshot?.memorySearch).toBeUndefined()
+  h.emit(reading('other', 'other-session'))
+  h.emit({ type: 'sessionTransition', conversationId: 'other', newSessionId: 'replacement', reason: 'clear', occurredAt: '', workspaceCwd: null })
+  expect(h.config.getState().snapshot?.memorySearch).toBeUndefined()
+  h.emit(reading('other', 'other-session'))
+  expect(h.config.getState().snapshot?.memorySearch).toBeUndefined()
+  h.emit(reading('other', 'replacement'))
+  expect(h.config.getState().snapshot?.memorySearch).toEqual(memorySearch)
+  h.off()
+})
+
 it('bounds repeated old-mode replies after an acknowledged no-op', () => {
   const h = setup()
   h.report(); h.pick(); h.settle()

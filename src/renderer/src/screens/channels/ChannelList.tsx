@@ -13,21 +13,7 @@ import {
   useConversationListStore,
   selectConversations
 } from '../../store/conversationListStore'
-import { requestNewConversation } from '../../store/conversationCreatedBridge'
-// #1199 reads BOTH legs per server. The app-wide `selectStatus` / `selectRelayLinkStatus` cells are
-// untouched in name, signature and value; the host row is simply no longer a reader of either.
-// `selectStatus` keeps four other consumers (the composer status row, the connection banner, the repair
-// control, `composerSend`); `selectRelayLinkStatus` keeps NONE — this row was its last production
-// reader, and retiring it is deliberately out of scope here (its own header records that). Each
-// store's INITIAL cell is imported too —
-// it is the collapse target for a server that has reported nothing, so the launch frame is pinned to the
-// same constant it has always rendered rather than to a literal restated here.
-import { useSessionStore, sessionStore, selectStatusFor, initialSessionState, type SessionState, type ConnectionStatus } from '../../store/sessionStore'
-import {
-  useRelayLinkStore,
-  selectRelayLinkStatusFor,
-  initialRelayLinkState
-} from '../../store/relayLinkStore'
+import { useSessionStore, sessionStore, selectStatusFor, type SessionState, type ConnectionStatus } from '../../store/sessionStore'
 // #834's read path, shipped dormant by #833 and mounted here, re-keyed by server id in #1199.
 // `HostLabelData` is the headless one-shot invoke; the store binding + keyed selector feed the row.
 // Nothing else in this file touches either.
@@ -65,29 +51,13 @@ import {
 // RE-EXPORTED at modalStore.ts:45 precisely so consumers take the read surface from one site
 // (PermissionModal.tsx:192-194 is the shipped precedent).
 import { useModalStore, selectHasOutstandingFor } from '../../store/modalStore'
+import { useQuestionBatchStore, selectBatchFor } from '../../store/questionBatchStore'
 // #1098's whole read: which chat the pane is showing. The store has held it since #278 and the sidebar
 // simply did not read it — no new store, no IPC, no wire type.
 import { useActiveConversationStore } from '../../store/activeConversationStore'
 import { resolveConversationStatus } from '../../store/conversationStatus'
 import { isConversationUnread } from '../../store/conversationUnread'
-// #718 reuses #330's shipped two-leg mapping ACROSS SCREENS rather than growing a second copy of it —
-// two surfaces in the same window disagreeing about one leg is precisely the lie the dot pair exists to
-// prevent. Cross-screen import is this codebase's established idiom (ArchiveScreen and
-// WorkspacePickerSheet both import from `channels/channelListViewModel`; `settings/DefaultWorkspaceRow`
-// imports a component out of `conversation/`), and lifting the three symbols into a shared module first
-// would be adjacent refactoring for no behaviour change. No cycle: ConversationScreen reaches back into
-// this directory only for `channelListViewModel` and `EditChatDialog`, neither of which imports
-// this file.
-// #1439 takes a FOURTH symbol from this module, the per-conversation archive send, for the reason the
-// paragraph above gives: the verb already exists and a second copy of the `archiveConversation` literal
-// would be a second enumeration of one wire contract. It is bound into a one-argument closure at the
-// confirm site, so the Edit workspace dialog module imports nothing from the conversation screen.
-import {
-  relayLeg,
-  daemonLeg,
-  requestArchiveConversation,
-  type ConnectionLeg
-} from '../conversation/ConversationScreen'
+import { requestArchiveConversation } from '../conversation/ConversationScreen'
 import { SaveAsChannelDialog } from './SaveAsChannelDialog'
 // #1440 renamed this module for its new title. `requestRenameConversation` KEEPS its name: it owns the
 // `renameConversation` wire literal, and renaming the helper would drift it from the verb it sends.
@@ -97,6 +67,7 @@ import { EditChatDialogView, requestRenameConversation } from './EditChatDialog'
 // already trims, so the retitle costs no second command constructor and no second wire path.
 import { EditChannelDialog } from './EditChannelDialog'
 import { CreateChannelDialog } from './CreateChannelDialog'
+import { CreateChatDialog } from './CreateChatDialog'
 // #1180 — the view and its send helper travel together, unlike #1179's split: this verb has exactly
 // one sender and no shipped twin to sit beside, which is `EditChatDialog`'s shape.
 import {
@@ -146,8 +117,8 @@ import {
 // previews, top app bar, and "See all" link are deferred to other tickets.
 //
 // #1426 deleted the new-discussion FAB (#242) that used to float over this list. The sidebar's one route
-// to a new chat is now the workspace row's own plus (#1178/#1185/#1189), which mints in the clicked row's
-// directory on that row's host rather than in a Settings-chosen default on the sole paired one.
+// to a new chat is now the workspace row's own plus (#1178/#1185/#1189), which opens confirmation
+// for that row's host; the daemon then chooses its default folder.
 //
 // #1097 converged that row on the DESKTOP node (103:2968): a 24px row carrying a body-small label and
 // nothing else. The trailing last-activity time the mobile node drew is gone — deleted, not hidden —
@@ -203,7 +174,7 @@ export function ChannelList({
   const conversations = useConversationListStore(selectConversations)
   // #1426 — the client-owned default workspace (#403) is NO LONGER READ HERE. The FAB was its only reader
   // in this file and it closed over the current value so #404 would re-render the container; with the FAB
-  // gone the plus carries the clicked row's own `cwd`, so the setting reaches no create path and this
+  // gone the plus targets the clicked row's host with `cwd: null`, so the setting reaches no create path and this
   // container has one fewer store slice to wake on. The store and its Settings row are untouched — whether
   // that row stays is a separate decision, tracked in the project's Open Questions.
   //
@@ -224,8 +195,8 @@ export function ChannelList({
   // `renderToStaticMarkup`, so a store-reading row can only ever render `activeConversation: null` — the
   // renderer tier could prove the UNFILLED case and nothing else, leaving the whole marked state to e2e.
   // Read here, the state reaches `ChannelListView` as an injectable prop, which is the seam the unit tier
-  // already has a `render()` helper for — where this file's twice-shipped answer to the same problem
-  // (HostRow/HostRowControl, HostConnectionDots/HostConnectionDotsControl) costs a component and an
+  // already has a `render()` helper for — where this file's existing answer to the same problem
+  // (HostRow/HostRowControl) costs a component and an
   // export. The honest cost, stated rather than hidden: a switch re-renders the whole sidebar where a
   // per-row read would re-render two rows. Accepted — a switch already rebuilds the chat pane, and this
   // is the prop path #1097 freed by deleting `now`.
@@ -276,13 +247,10 @@ export function ChannelList({
   // third cell would be one more thing to clear on host loss and one more thing to forget.
   const [editChannelRow, setEditChannelRow] = useState<SidebarRow | null>(null)
   const [editChannelName, setEditChannelName] = useState('')
-  // The Create-channel dialog's own per-interaction target (#1179), independent of the two above for
-  // their stated reason: an open dialog's fixed-inset overlay covers the window, so no two can be open
-  // at once and no mutual-exclusion logic is needed. The target retains the host and workspace to
-  // create in — the group key the clicked plus closed over — and holding it here is what keeps that
-  // daemon-asserted path out of the dialog view entirely. The mounted dialog owns its draft,
-  // seeded EMPTY on every open (there is no current name to seed from, this being a create).
-  const [createChannelTarget, setCreateChannelTarget] = useState<{ cwd: string; serverId: string } | null>(null)
+  // The selected host stays fixed through each dialog, independent of workspace path. Both creations
+  // ask the daemon to choose its default folder; mounting a fresh dialog resets its local draft.
+  const [createChatServerId, setCreateChatServerId] = useState<string | null>(null)
+  const [createChannelTarget, setCreateChannelTarget] = useState<{ serverId: string } | null>(null)
   // The Edit-workspace dialog's own per-interaction pair (#1180), independent of the three above for
   // their stated reason: an open dialog's fixed-inset overlay covers the window, so no two can be open
   // at once. Hold the exact path and clicked host together until dismissal.
@@ -340,6 +308,7 @@ export function ChannelList({
     // #1476: AC3's host-loss close, HERE rather than in a second effect — one subscription clears every
     // dialog's target, so a disconnect can never leave one of them holding a stale row.
     if (editChannelRow && unavailable(editChannelRow.serverId)) setEditChannelRow(null)
+    if (createChatServerId && unavailable(createChatServerId)) setCreateChatServerId(null)
     if (createChannelTarget && unavailable(createChannelTarget.serverId)) setCreateChannelTarget(null)
     // #1439: the arm goes with the target on the host-loss path (AC2), in the same statement — a reset
     // written anywhere else is one an edit to this branch can forget.
@@ -347,7 +316,7 @@ export function ChannelList({
       setEditWorkspaceTarget(null)
       setEditWorkspaceArchive('idle')
     }
-  }), [saveRow, renameRow, editChannelRow, createChannelTarget, editWorkspaceTarget])
+  }), [saveRow, renameRow, editChannelRow, createChatServerId, createChannelTarget, editWorkspaceTarget])
   return (
     <>
       {/* #834: the headless one-shot that fills the host row's label, mounted HERE — the SettingsScreen
@@ -368,8 +337,8 @@ export function ChannelList({
           with the same lifetime. It renders null, so DOM order is immaterial, and it dereferences
           `window.pyry` only inside its effect. `HostLabelData` reads the list this fills, so the launch
           sequence is: this resolves → `serverInfoStore` fills → one keyed label read per paired server.
-          Every frame before that renders the fallback word and the two stores' initial dot pair, which
-          is exactly what the row shows at launch today (AC5). Settings and ConversationScreen each mount
+          Hosts use the fallback label until their keyed label reads resolve. Settings and
+          ConversationScreen each mount
           their own instance; a second one here is the established posture, not a duplicate — the store
           holds one list and each mount re-reads it. */}
       <ServerInfoData />
@@ -383,20 +352,16 @@ export function ChannelList({
         onOpenArchive={onOpenArchive}
         onPairNewHost={onPairNewHost}
         onRepairHost={onRepairHost}
-        // Retain the clicked workspace and its host through the synchronous send. Since #1426 this is the
-        // sidebar's ONLY direct create: `window.pyry` is dereferenced HERE, at interaction time, never
-        // during render, which is the discipline the deleted `onNewConversation` used to be named for.
-        onCreateChat={(cwd, serverId) => {
-          if (!canMutateHost(serverId)) return
-          requestNewConversation(window.pyry.sendCommand, cwd, serverId)
-        }}
-        // #1179 — the Channels-tree plus OPENS A DIALOG and sends nothing: the workspace is fixed by
-        // the row that was clicked, and the name still has to be typed. Both cells are seeded together
-        // so a reopen always starts from an empty field (the CreateFolderDialog reset, achieved by the
-        // seed rather than by a store, since there is no store here to reset).
-        onCreateChannel={(cwd, serverId) => {
+        // The current workspace row supplies the host, while the daemon chooses the default folder.
+        onCreateChat={(_cwd, serverId) => {
           if (!canMutateHost(serverId) || serverId === undefined) return
-          setCreateChannelTarget({ cwd, serverId })
+          setCreateChatServerId(serverId)
+          window.pyry.sendDiagnostic({ event: 'chat-create-state', code: 'opened' })
+        }}
+        // The Channels-tree plus opens its existing named draft for the clicked host.
+        onCreateChannel={(_cwd, serverId) => {
+          if (!canMutateHost(serverId) || serverId === undefined) return
+          setCreateChannelTarget({ serverId })
         }}
         // #1180 — the pen OPENS A DIALOG and sends nothing: the workspace is fixed by the row that was
         // clicked, and the new name still has to be typed. Both cells are seeded together, the field
@@ -553,14 +518,12 @@ export function ChannelList({
           }}
         />
       )}
-      {/* #1179 — gated on an explicit `!== null` and NEVER on truthiness: an empty-string `cwd` would
-          collapse into "no dialog open" under a truthy test (the trap `App.tsx`'s `openConversationId`
-          header names). It is unreachable today because `renderServerTrees` withholds the plus from the
-          unknown-workspace group, whose key IS the empty string — and writing the check this way is
-          what keeps that withhold load-bearing for one reason rather than two. */}
+      {createChatServerId !== null && connected(createChatServerId) && (
+        <CreateChatDialog serverId={createChatServerId}
+          onDismiss={() => setCreateChatServerId(null)} />
+      )}
       {createChannelTarget !== null && connected(createChannelTarget.serverId) && (
         <CreateChannelDialog
-          cwd={createChannelTarget.cwd}
           serverId={createChannelTarget.serverId}
           onDismiss={() => setCreateChannelTarget(null)}
         />
@@ -759,9 +722,9 @@ export function ChannelList({
 /**
  * The pure view. Always returns a stable `aria-label="Conversations"` root (the test hook, present in
  * every state); content varies with the conversation store's tri-state AND the paired-server list:
- *  - `conversations === null` (not-yet-loaded) → saved hosts and headers, with no conversation rows.
- *  - loaded, but nothing to draw — no paired server AND no active row → the wrapper only.
- *  - anything to draw → BOTH section headers and the divider, unconditionally, each header followed by
+ *  - `conversations === null` (not-yet-loaded) → saved hosts, with no conversation rows.
+ *  - loaded, but nothing to draw — no paired server AND no active row → the toolbar only.
+ *  - anything to draw → two trees separated by the divider, each with
  *    one host row per paired server in pairing order (#1070).
  *
  * The loaded-zero empty state is GONE since #1070, deleted rather than hidden: a paired app always has a
@@ -793,8 +756,8 @@ export function ChannelListView({
   // #1070 — the paired servers to draw a subtree for, in pairing order (oldest-paired first). REQUIRED
   // rather than optional, `openConversationId`'s reasoning: the container must decide, and a defaulted
   // prop would let a future caller silently render a sidebar with no host row at all. An EMPTY array is
-  // the real launch state — the paired-server one-shot has not settled — and is what makes the two
-  // headers wait rather than flashing above nothing.
+  // the real launch state — the paired-server one-shot has not settled — and is what makes the host trees
+  // wait rather than flashing above nothing.
   //
   // Ids and not `ServerInfoValue`s: this view has no business with a relay URL, and the narrower prop is
   // also the one the unit tier can inject in one literal.
@@ -808,22 +771,12 @@ export function ChannelListView({
   onOpen: (row: ConversationSummary) => void
   onOpenSettings: () => void
   onOpenArchive: () => void
-  // #1303 — open the pairing flow, drawn on BOTH section headers. REQUIRED rather than optional, the
-  // reasoning its four siblings below already carry: the container must decide, and a defaulted prop
-  // would let a future caller silently render a sidebar whose headers show a plus that opens nothing.
-  // It travels one hop further than `onOpenSettings` — which stops here — because `renderBody` is what
-  // draws the headers and hands it to each of them.
+  // Required navigation callback for the always-visible toolbar entry.
   onPairNewHost: () => void
   onRepairHost?: (serverId: string) => void
-  // #1178 — start a chat in the named workspace, and since #1426 the sidebar's ONLY create that sends a
-  // command directly. REQUIRED rather than optional, `openConversationId`'s reasoning: the container must
-  // decide, and a defaulted prop would let a future caller silently render a sidebar with no route to a
-  // new chat at all. The `cwd` is the group's key and travels verbatim; this view never inspects it.
+  // The workspace-row plus opens confirmation for its host. The row's cwd is no longer a destination.
   onCreateChat: (cwd: string, serverId: string | undefined) => void
-  // #1179 — open the Create-channel dialog for the named workspace. REQUIRED for `onCreateChat`'s
-  // reason, and the symmetric one: a defaulted prop would let a future caller silently render a
-  // Channels tree whose plus opens nothing. It receives the group's `cwd` and does NOT send a command —
-  // the dialog's Create does, once a name has been typed.
+  // The Channels-tree workspace plus opens the named channel dialog for its host.
   onCreateChannel: (cwd: string, serverId: string | undefined) => void
   // #1180 — open the Edit-workspace dialog for the named workspace. REQUIRED for its two siblings'
   // reason: a defaulted prop would let a future caller silently render a sidebar whose pen opens
@@ -859,37 +812,19 @@ export function ChannelListView({
 }): JSX.Element {
   return (
     <section className="channel-list" aria-label="Conversations">
-      {/* #1443, Figma Top bar 115:3693 — the card's own bar, drawn at last where #333/#347 could only
-          invent: the gear at the content edge and the Archive entry 28 to its right, under a rule. Both
-          the ALIGNMENT and the ORDER flip here — this was an archive-then-gear cluster pinned top-RIGHT,
-          sticky inside the scroller, and the drawing puts the gear first at the left. Still present in
-          all three list states (AC1), because it is still a sibling of the list body rather than part of
-          it. The wrapper keeps `.channel-list__actions` as its class token although it is no longer a
-          cluster and no longer sticky: three specs park the pointer on it and nothing in the redraw
-          needs a new name. It is no longer the list's only sticky child either — since #1426 deleted the
-          FAB and this ticket unpinned the bar, the sidebar has no sticky child at all. */}
+      {/* The toolbar and rule stay outside the list scrollport. */}
       <div className="channel-list__actions">
         <SettingsButton onClick={onOpenSettings} />
         <ArchiveButton onClick={onOpenArchive} />
+        <PairNewHostButton onClick={onPairNewHost} />
       </div>
-      {/* The rule (497:1852) — 20 under the bar and drawn in the same 1px, same colour, same 60% as the
-          section divider below, which is what the node draws. A sibling element rather than the bar's
-          own border: the 60% is carried by `opacity`, this file family's de-emphasis device, and a
-          border would fade the two glyphs with it. */}
       <div className="channel-list__actions-rule" />
-      {/* THE SCROLLPORT, and the structural half of #1443. `.channel-list` used to be both the padded
-          card column and the scroller; the bar cannot both sit still and live inside a scroller that has
-          no ground of its own to hide rows behind (#1058 deleted this column's background so the card
-          wash could show through), so the tree moved into its own wrapper and `.channel-list` kept only
-          the padding. The card's 28px column gap rides here as the wrapper's top padding rather than on
-          the bar, so the Channels header scrolls away with its rows instead of pinning under the rule. */}
       <div className="channel-list__tree">
         {renderBody(
           conversations,
           statuses,
           serverIds,
           openConversationId,
-          onPairNewHost,
           onOpen,
           onCreateChat,
           onCreateChannel,
@@ -930,6 +865,7 @@ function SettingsButton({ onClick }: { onClick: () => void }): JSX.Element {
       className="channel-list__settings"
       aria-label="Settings"
       onClick={onClick}
+      {...controlNamePlacement}
     >
       <svg
         className="channel-list__settings-icon"
@@ -941,6 +877,7 @@ function SettingsButton({ onClick }: { onClick: () => void }): JSX.Element {
       >
         <path d="M8.3569 1.125C8.48641 0.472059 9.05191 0 9.70806 0H12.2895C12.9457 0 13.5112 0.472059 13.6407 1.125L14.2666 4.21324C14.8753 4.47794 15.4451 4.81765 15.9631 5.21912L18.8899 4.22647C19.5115 4.01471 20.1936 4.27941 20.5217 4.86176L21.8124 7.14706C22.1405 7.72941 22.0239 8.46176 21.5318 8.90735L19.2309 10.9985C19.2698 11.325 19.2871 11.6603 19.2871 12C19.2871 12.3397 19.2655 12.675 19.2309 13.0015L21.5361 15.0971C22.0282 15.5426 22.1405 16.2794 21.8167 16.8574L20.526 19.1426C20.1979 19.7206 19.5158 19.9897 18.8942 19.7779L15.9674 18.7853C15.4451 19.1868 14.8753 19.5221 14.2709 19.7912L13.6493 22.875C13.5155 23.5324 12.95 24 12.2981 24H9.7167C9.06054 24 8.49504 23.5279 8.36553 22.875L7.74391 19.7912C7.13524 19.5265 6.56974 19.1868 6.04741 18.7853L3.10766 19.7779C2.48604 19.9897 1.80399 19.725 1.47591 19.1426L0.185184 16.8574C-0.142893 16.275 -0.0263396 15.5426 0.465776 15.0971L2.77095 13.0015C2.7321 12.675 2.71483 12.3397 2.71483 12C2.71483 11.6603 2.73642 11.325 2.77095 10.9985L0.465776 8.90294C-0.0263396 8.45735 -0.138577 7.72059 0.185184 7.14265L1.47591 4.85735C1.80399 4.275 2.48604 4.01029 3.10766 4.22206L6.03446 5.21471C6.55679 4.81324 7.12661 4.47794 7.73096 4.20882L8.3569 1.125ZM10.9988 15.5294C12.9068 15.5206 14.4479 13.9368 14.4393 11.9868C14.4306 10.0368 12.8809 8.46176 10.9729 8.47059C9.06486 8.47941 7.52376 10.0632 7.53239 12.0132C7.54102 13.9632 9.09076 15.5382 10.9988 15.5294Z" />
       </svg>
+      <span className="channel-list__control-name" aria-hidden="true">Settings</span>
     </button>
   )
 }
@@ -963,6 +900,7 @@ function ArchiveButton({ onClick }: { onClick: () => void }): JSX.Element {
       className="channel-list__archive"
       aria-label="Archive"
       onClick={onClick}
+      {...controlNamePlacement}
     >
       <svg
         className="channel-list__archive-icon"
@@ -974,6 +912,7 @@ function ArchiveButton({ onClick }: { onClick: () => void }): JSX.Element {
       >
         <path d="M0 1.5C0 0.670312 0.670312 0 1.5 0H22.5C23.3297 0 24 0.670312 24 1.5V3C24 3.82969 23.3297 4.5 22.5 4.5H1.5C0.670312 4.5 0 3.82969 0 3V1.5ZM1.5 6.75H22.5V18C22.5 19.6547 21.1547 21 19.5 21H4.5C2.84531 21 1.5 19.6547 1.5 18V6.75ZM8.625 9.75C8.00156 9.75 7.5 10.2516 7.5 10.875C7.5 11.4984 8.00156 12 8.625 12H15.375C15.9984 12 16.5 11.4984 16.5 10.875C16.5 10.2516 15.9984 9.75 15.375 9.75H8.625Z" />
       </svg>
+      <span className="channel-list__control-name" aria-hidden="true">Archive</span>
     </button>
   )
 }
@@ -984,7 +923,7 @@ function ArchiveButton({ onClick }: { onClick: () => void }): JSX.Element {
 // silently removed because the sidebar card (103:2959) never drew a floating button, and because the
 // deletion is what the three comments above — SettingsButton's, ArchiveButton's and the actions
 // cluster's — used to cite as the shape they cloned. Its replacement was already shipped: the workspace
-// row's plus (#1178/#1185/#1189) mints in the clicked row's directory on that row's host, so every paired
+// row's plus (#1178/#1185/#1189) confirms on the clicked row's host with the daemon's default folder, so every paired
 // machine keeps a route to a first chat and no create depends on a client-side default any more.
 
 // What the host row shows when there is NO usable operator label (#834) — a client-owned module-level
@@ -1074,25 +1013,15 @@ export function hostRowEditSeed(value: HostLabelValue): string {
 //
 // The row repeats in BOTH trees on purpose (operator, 2026-08-21); the trees are not deduplicated.
 //
-// The ROW is not interactive: a plain <div>, no onClick, no aria-label. The label carries the row's
-// meaning, so the glyph is aria-hidden — a second accessible name would be noise. The two connection dots
-// #672 reserved this row's trailing edge for landed in #718, as the store-bound leaf below; the row itself
-// stays non-interactive, and the dots are named individually rather than through the row.
+// The row wrapper is a plain <div>, with no onClick or aria-label. Healthy hosts put the glyph,
+// label and chevron in a disclosure button; failed hosts show the glyph and label directly and
+// retain Repair host. Edit host is a sibling control, so neither action nests inside the disclosure.
+// The glyph is aria-hidden because the label already names the host.
 //
-// ITS SUBTREE STOPPED BEING NON-INTERACTIVE IN #1185, which is why that paragraph now says "the row"
-// rather than "this". The row grew the pen and plus the drawing puts in the dots' slot on hover (Host
-// 399:1366, Hover 399:1408) — two <button> SIBLINGS of the label, never a wrapper around it and never
-// nested in each other, so the row's own tag is untouched and clicking the glyph or the name still does
-// nothing. `channels.css` owns the swap: the pair is `opacity: 0` at rest and the dots `opacity: 1`, and
-// a hover or a control's `:focus-visible` inverts both.
-//
-// ⭐ THE SWAP IS GUARDED ON A CONTROL BEING DRAWN, and that guard is the ticket rather than a detail.
-// Each control renders only when its handler is passed and THIS TICKET ADDS NO CALLER — the Edit host
-// dialog (#1187) and the Add workspace dialog (#1189) pass them, against the `serverId` this row already
-// carries. A hover rule keyed on the row alone would therefore blank the SHIPPED app's connection dots
-// into an empty slot for as long as those two take, so `channels.css`'s rule is keyed on the row
-// CONTAINING a control (`:has()`); a row drawn with neither handler hovers exactly as it does today.
-// `e2e/host-row-hover-controls.spec.ts` is what reads that back from the running window.
+// Host rows have no connection dots at rest, on hover or on focus. `channels.css` reveals Edit host
+// on hover or keyboard focus without moving its reserved target or the label; failed rows keep
+// Edit and Repair separately clickable. `e2e/host-row-hover-controls.spec.ts` proves the reveal and
+// fixed geometry in the running window.
 //
 // Nullary handlers, `WorkspaceRow`'s `onEdit` shape: the caller closes over the machine it is drawing, so
 // `serverId` never becomes an argument this view handles. `() => void` also refuses a function declaring
@@ -1125,13 +1054,8 @@ export function hostRowEditSeed(value: HostLabelValue): string {
 // Deliberate asymmetry: the STRUCTURAL naming stays "host" (the design's word, and what #672/#703 stack
 // onto) — class names are selectors, not copy. The `label` prop's VALUE is the one thing the user sees.
 //
-// #834 made this the PURE VIEW and put `HostRowControl` below it, mirroring `HostConnectionDots` /
-// `HostConnectionDotsControl` twenty lines down. EXPORTED for that neighbour's stated reason: a zustand
-// singleton seeded before a `renderToStaticMarkup` call is invisible to it (the server renderer reads
-// `getServerSnapshot()`, wired to the state captured at store CREATION), so the container can only ever
-// render the initial `loading` cell and this is the only seam the unit tier reaches the four-arm matrix
-// through. "Pure" in the same qualified sense its neighbour already is: it takes its own data as props;
-// its dot subtree reads two singletons.
+// `HostRow` takes its data as props so the static renderer can exercise every host presentation.
+// `HostRowControl` reads the label and status for the saved server identity.
 //
 // `label` is UNTRUSTED text off disk (`hostLabelHandler.ts:69-71` hands the "escaped text only"
 // obligation here) and it goes in as an auto-escaped React CHILD and NOWHERE else. Four sinks are
@@ -1150,28 +1074,8 @@ export function hostRowEditSeed(value: HostLabelValue): string {
 // The glyph is a sixth inline Material path in this file's existing idiom — the `dns` server-rack, sized
 // 12px per the Figma node rather than the 24px the interactive buttons use, so it reads as a level marker
 // rather than a control.
-// #1199 gave the row a `serverId`: WHICH machine it is about. The label arrives already resolved to text
-// (the container ran `hostRowLabel`), so the id is here for the dot subtree alone — pure pass-through,
-// rendered nowhere. It is a prop rather than a second store read inside the dots so the row's identity
-// is single-sourced, and it is the shape #1070's loop hands down now that this is one row per server.
-//
-// #1070 NARROWED IT FROM `string | null` TO `string`. The `null` arm meant "the paired-server list has
-// not resolved yet", which was reachable while the row rendered unconditionally; it is not any more,
-// because a host row now exists BECAUSE an id was in that list. The branch and its collapse are deleted
-// rather than left as a dead arm whose comment describes a frame that cannot occur.
-//
-// THE ID GETS THE LABEL'S FOUR-SINK TREATMENT, plus the one a keyed store invites: the KEY is the server
-// id and the VALUE is the label, never the reverse. It becomes no attribute, no class name, no title, no
-// URL, no lookup path and no log line, and its only use in this subtree is as an argument to the three
-// per-server selector factories.
-//
-// ONE SINK LEFT THAT LIST IN #1070: the React key. `renderBody` keys each server's subtree fragment by
-// this id, and the ban is amended rather than quietly broken. The distinction is not a concession — the
-// six sinks above all either reach the DOM or reach persistence, where a React key is reconciliation
-// identity alone: never serialised, never emitted by `renderToStaticMarkup`, unobservable to the page.
-// The alternative is worse than the doc edit: an index key would cross-wire fold state and per-row
-// instances between machines whenever the paired list reorders. `ChannelList.test.tsx` pins the claim by
-// rendering a sentinel id and asserting it appears nowhere in the markup.
+// Server identity stays in the container's keyed reads and callbacks; the existing `serverId`
+// prop contract is retained without rendering the id into the DOM.
 // #1427 — THE POINTER-RELATIVE PLACEMENT OF `.channel-list__control-name`, and the one part of it a
 // stylesheet cannot do: the pointer's position is not available to CSS. Eight controls in this file wear
 // that pill and all eight spread `controlNamePlacement`, so there is one handler set and no per-control
@@ -1235,7 +1139,6 @@ const EDIT_HOST_CONTROL_LABEL = 'Edit host'
 
 export function HostRow({
   label,
-  serverId,
   // #1507 — the row's own fold, as three required props on the pure view. Required rather than optional,
   // `WorkspaceRow`'s stated reason for `hasRows` one level down: every caller knows all three answers, and
   // a default would be a second way to draw a disclosure over nothing. `onToggle` is nullary, this file's
@@ -1297,17 +1200,7 @@ export function HostRow({
             {name}
           </>
         ) : (
-          // The disclosure. Its class is a DISTINCT TOKEN from the row's, which is the one structural call
-          // of this ticket: `.channel-list__host` matches whole class tokens, so leaving that class on the
-          // row above keeps the pen's and the plus's hover reveals, the two-selector `:has()` dot swap, the
-          // failed row's pen inset and 21 e2e reads addressing a control, a dot or a name pill as its
-          // DESCENDANT — all of which would break at once if the class moved here for symmetry with
-          // `.channel-list__workspace-head`. `paired-shell-card`'s hit test reads `closest()`, so a hit on
-          // this button still answers with the row.
-          //
-          // The pen, the plus, the repair control and the dots stay SIBLINGS of this button and never
-          // children of it: an interactive control cannot nest inside a button (#274), and the disclosure
-          // coming first is the tab order AC3 pins.
+          // Keep the disclosure separate from the sibling Edit and Repair controls.
           <button
             type="button"
             className="channel-list__host-disclosure"
@@ -1316,7 +1209,7 @@ export function HostRow({
           >
             {glyph}
             {name}
-            {hasWorkspaces && (
+            {(
               // The fold mark (Chevron 510:2384), DOWN as `WorkspaceRow` draws it; `channels.css` rotates
               // it a quarter turn off this button's own `aria-expanded` for the collapsed state, which is
               // the whole of "one state signal". The art is the workspace row's, REUSED and not
@@ -1342,21 +1235,13 @@ export function HostRow({
             )}
           </button>
         )}
-        <HostConnectionDotsControl serverId={serverId} />
         {failed && onRepair && (
           <button type="button" className="channel-list__host-repair" aria-label="Repair host" onClick={onRepair}>
             <span className="channel-list__host-repair-icon" aria-hidden="true" />
           </button>
         )}
         {onEditHost && (
-          // The pen, APPENDED AFTER the dots and never before them: the elements above are byte-identical
-          // to what shipped, which is what leaves `HOST_ROW_MARKER`, `HOST_ICON_MARKER`, `HOST_LABEL_OPEN`
-          // and `DOT_WRAPPER_MARKER` matching and the five e2e specs AC5 names unedited. Icon-only, so
-          // `aria-label` supplies the accessible name — `.channel-list__workspace-edit`'s treatment one
-          // level up, and since #1190 its `.channel-list__control-name` pill as well.
-          //
-          // The glyph is `.channel-list__workspace-edit-icon`'s path in place, reused and NOT re-exported:
-          // the same 12-unit viewBox scaled to the drawing's 14 by the box.
+          // Icon-only control with a client-owned accessible name and a pointer/focus name pill.
           <button
             type="button"
             className="channel-list__host-edit"
@@ -1390,42 +1275,7 @@ export function HostRow({
             </span>
           </button>
         )}
-        {!failed && onAddWorkspace && (
-          // The plus, in the slot the dots occupy at rest — which is what makes the drawing a SWAP rather
-          // than an addition: its 16px box (342…358 in the 360 content box) sits over the pair's own
-          // 341…359. `.channel-list__workspace-create`'s treatment, glyph path included, and since #1190
-          // its name pill too.
-          //
-          // ITS OWN CLASS RATHER THAN THE WORKSPACE PLUS'S, the call #1180 made for the pen beside it: the
-          // two are the same drawn control at the same size and inset, but they hang off different rows,
-          // and a shared class would have to be revealed by two unrelated `:hover` ancestors — a selector
-          // list that grows with every row family rather than a block that says where it lives.
-          <button
-            type="button"
-            className="channel-list__host-add"
-            aria-label={ADD_WORKSPACE_CONTROL_LABEL}
-            onClick={onAddWorkspace}
-            {...controlNamePlacement}
-          >
-            <svg
-              className="channel-list__host-add-icon"
-              viewBox="0 0 16 16"
-              width="16"
-              height="16"
-              fill="currentColor"
-              aria-hidden="true"
-            >
-              <path d="M6.28571 14.2857V9.71429H1.71429C0.764286 9.71429 0 8.95 0 8C0 7.05 0.764286 6.28571 1.71429 6.28571H6.28571V1.71429C6.28571 0.764286 7.05 0 8 0C8.95 0 9.71429 0.764286 9.71429 1.71429V6.28571H14.2857C15.2357 6.28571 16 7.05 16 8C16 8.95 15.2357 9.71429 14.2857 9.71429H9.71429V14.2857C9.71429 15.2357 8.95 16 8 16C7.05 16 6.28571 15.2357 6.28571 14.2857Z" />
-            </svg>
-            {/* The plus's name pill (#1190) on the control beside it — same class, same append discipline
-                and the same one-constant-read-twice wiring as the pen's above, for that comment's reasons.
-                The two pills are the reason the pen and the plus can be told apart at all before a click:
-                they are two bare glyphs 10px apart with nothing else to distinguish them. */}
-            <span className="channel-list__control-name" aria-hidden="true">
-              {ADD_WORKSPACE_CONTROL_LABEL}
-            </span>
-          </button>
-        )}
+
       </div>
       {localReadFailed && (
         <p className="channel-list__local-read-error" role="status">
@@ -1436,8 +1286,7 @@ export function HostRow({
   )
 }
 
-// The store-bound container (#834) — `HostConnectionDotsControl`'s posture one component up: read the
-// single shipped slice, pass it through the pure collapse, render the pure view. Nothing else.
+// The store-bound container reads the keyed host label and renders the pure view.
 //
 // THE ROW STILL READS AND NEVER WRITES, but the store no longer has one writer (#1299). It has two: the
 // loader mounted in `ChannelList` fills every slot on mount, and the Edit host dialog records main's answer
@@ -1546,11 +1395,8 @@ function HostRowControl({
  * component happens to be holding — otherwise a host folded before it errored is stranded, its chevron gone
  * with the fold that hid it and no control left to re-open it short of restarting the app.
  *
- * Returns a shorthand fragment, emitting NO element of its own — exactly like the keyed <Fragment> it
- * replaced, and like `CollapsibleWorkspaceGroup` below it. The rendered sequence under `.channel-list` stays
- * the FLAT run of siblings (header, host, workspace, rows, …), which is what keeps the section-header
- * adjacency rule exact, keeps each workspace head a sibling of its host row, and leaves the ancestry 28 e2e
- * specs walk unchanged.
+ * The contents wrapper keeps its children mounted while the host is folded, so each section retains its
+ * own local fold state. `display: contents` keeps the open host's row geometry unchanged.
  */
 export function CollapsibleHostGroup({
   serverId,
@@ -1592,124 +1438,10 @@ export function CollapsibleHostGroup({
         onAddWorkspace={onAddWorkspace}
         onRepairHost={onRepairHost}
       />
-      {/* The whole of AC1: this machine's workspace GROUPS are withdrawn from the DOM, the row above is
-          not, and nothing else happens — no navigation, no command, no store dispatch, no
-          active-conversation change. The handler's entire body is the state flip.
-
-          `|| failed` is the stranding guard, not a second state: while a host is failed its row draws no
-          disclosure, so the boolean it is holding must not be allowed to withhold anything. The fold is
-          kept rather than reset, so a machine that recovers returns to the state the operator left it in. */}
-      {(expanded || failed) && children}
+      {/* Keep section state mounted across host folds. A failed host still exposes its contents even if
+          it was closed before failure; recovery returns to the saved host fold. */}
+      <div className="channel-list__host-content" hidden={!expanded && !failed}>{children}</div>
     </>
-  )
-}
-
-/**
- * The host row's two trailing connection dots (#718, Figma 110:3499 + 106:3114) — the HOST leg first, the
- * relay leg second. The pure view: props in, markup out, no store, no `window.pyry`, no effects.
- *
- * EXPORTED for the same reason `CollapsibleWorkspaceGroup` is — it is the only seam through which the unit
- * tier reaches the full category × label matrix; the container below can only ever render the two
- * singletons' initial cell of it. #330's `ConnectionStatusIndicator` was exported on the same reasoning
- * until #962 retired it with the status row, leaving this the only two-dot view in the app.
- *
- * LEG ORDER is the design's and is the REVERSE of the retired `ConnectionStatusIndicator(relay, daemon)`'s,
- * whose argument order the container below still carries. Both props are a `ConnectionLeg`, so a swap
- * type-checks and renders silently — hence the ordering test.
- *
- * COLOUR comes from `.conn-dot--up` / `--in-progress` / `--down` / `--unknown`, worn WITHOUT any base class
- * of their own. #330 split colour from geometry into separate classes and that split is the seam this slice
- * reused; #962 then deleted the status row that held both halves, and the colour half MOVED into
- * `channels.css` beside `.channel-list__host-dot` rather than dying with it — these dots are its only
- * consumer now, and one copy in the renderer is still what #330's AC2 asks for. `.channel-list__host-dot`
- * carries the 6px geometry and no `background`. Nothing here reads a computed colour, so a lost binding
- * would blank these dots silently; `e2e/connection-dot-colours.spec.ts` is the tier that would catch it.
- *
- * `role="img"` is what makes `aria-label` land: on a bare <span> the accessible-name computation drops it,
- * so the dot would have no name at all (AC3 passing review while failing in a screen reader). Not
- * `role="status"` — that is a live region, and #330 deliberately declined one because the ConnectionBanner
- * (#279) already politely announces disconnects. The wrapper carries no role and no name of its own: the
- * host row renders twice and #670's two-pane layout shows the conversation status row at the same time, so
- * #330's `role="group" aria-label="Connection status"` shape would put three identically-named groups in
- * one window. AC3 asks for a name per dot, not per group.
- *
- * The dots carry NO text node (AC4) — the row shows the glyph, the machine name and the two dots only.
- */
-export function HostConnectionDots({
-  host,
-  relay
-}: {
-  host: ConnectionLeg
-  relay: ConnectionLeg
-}): JSX.Element {
-  return (
-    <span className="channel-list__host-status">
-      <span
-        className={`channel-list__host-dot conn-dot--${host.category}`}
-        role="img"
-        aria-label={host.label}
-      />
-      <span
-        className={`channel-list__host-dot conn-dot--${relay.category}`}
-        role="img"
-        aria-label={relay.label}
-      />
-    </span>
-  )
-}
-
-// The store-bound container — `ConnectionStatusIndicatorControl`'s body with the two legs REORDERED. Reads
-// each leg through its own shipped narrow selector, so a relay flap re-renders these four dots and not a
-// single conversation row; lifting the reads to `ChannelList` would couple the whole sidebar to both legs'
-// state, and would also thread two more arguments through `renderBody`'s already-six-positional signature
-// for a value no intermediate uses. (#1070 added `serverIds` and made it six; the argument against
-// lifting only got stronger, since each added positional raises the cost of the next.)
-//
-// The honest cost: `ChannelListView` is no longer strictly pure — its subtree now reads two singletons,
-// which deviates from this file's own container-reads / pure-view doc comment. It is safe under the unit
-// harness for the same reason `ConnectionStatusIndicatorControl` is: a zustand `useStore` read
-// server-renders fine, yielding each store's initial value (relay `null` → "Relay Unknown" since #719 —
-// not yet known rather than known-offline, since this row is the first frame of every launch; session
-// `{ type: 'disconnected' }` → "Pyrycode Offline" — no false green).
-//
-// The two legs are read INDEPENDENTLY and never cross-referenced (AC2): each mapping takes one status and
-// returns one leg, so "relay up, host down" renders as exactly that. `daemonLeg`'s label says "Pyrycode"
-// rather than the design's "Host" or the visible row's "Server" — deliberately, since any other word would
-// re-derive the label half of #330's contract, and this dot reports the pyry DAEMON SESSION, not the
-// machine: a machine can be up while the daemon is not, and this dot goes red in that case.
-//
-// #1199 BOUND BOTH READS TO ONE SERVER. `selectStatus` / `selectRelayLinkStatus` are "the most recently
-// written status across every connection", so with two machines paired this row reported whichever
-// connection last moved — the other machine's flap steering this machine's dots. Both per-server
-// selectors (#1133, #1134) shipped for exactly this consumer and are read here with a CLIENT-HELD id,
-// never a wire-supplied one, which is the rule `relayLinkStore`'s own header states.
-//
-// THE SILENT-SERVER COLLAPSE, and why it is written as two constants rather than two literals. Both
-// per-server selectors answer `undefined` for a server that has reported nothing yet — deliberately
-// undefaulted, so "not heard from" stays distinct from a reported state — while `daemonLeg` takes a
-// non-optional `ConnectionStatus` and `relayLeg` takes `RelayLinkStatus | null`. So this row has to
-// decide what a silent server's dots look like, and it lands them on each store's OWN INITIAL CELL:
-// `initialSessionState.status` (→ down, "Pyrycode Offline") and `initialRelayLinkState.status` (→
-// `null`, hence unknown, "Relay Unknown"). That is not a fifth category and not a guess — it is
-// literally the pair this row has rendered on every launch frame since #718, back when both reads were
-// app-wide and both stores were untouched. Reading the constants rather than restating `{ type:
-// 'disconnected' }` and `null` is what keeps that true if either store ever changes its initial cell.
-//
-// #1070 DELETED THE `null` GUARD that used to wrap both reads. It existed because a `null` serverId — the
-// frames before the paired-server one-shot resolved — must never reach a keyed selector: `StatusOrigin`
-// and `RelayLinkOrigin` both admit `null` as a REAL slot key (unstamped writes land there), so passing it
-// through would read someone else's cell rather than answering "not known". That frame no longer exists:
-// a host row is drawn because its id was in the paired list, so the id is always a real one. The silent-
-// server collapse below is untouched and is a DIFFERENT case — a paired server that has reported nothing
-// yet — which is still very much reachable.
-function HostConnectionDotsControl({ serverId }: { serverId: string }): JSX.Element {
-  const daemonStatus = useSessionStore(selectStatusFor(serverId))
-  const relayStatus = useRelayLinkStore(selectRelayLinkStatusFor(serverId))
-  return (
-    <HostConnectionDots
-      host={daemonLeg(daemonStatus ?? initialSessionState.status)}
-      relay={relayLeg(relayStatus ?? initialRelayLinkState.status)}
-    />
   )
 }
 
@@ -2171,8 +1903,8 @@ const CREATE_CHAT_CONTROL_LABEL = 'Create chat'
 
 // #1179 — its Channels-tree counterpart, and the reason the plus now travels with a name. Same idiom,
 // same client-owned rule, and #1181's pill reads BOTH. The two words differ because the two trees
-// create different things: the Chats plus sends `is_promoted: false, name: null`, this one opens the
-// dialog that sends `is_promoted: true` and a typed name.
+// create different things: the Chats plus opens confirmation for an unnamed chat, while this one
+// opens the named-channel dialog. Both send only after confirmation.
 const CREATE_CHANNEL_CONTROL_LABEL = 'Create channel'
 
 /**
@@ -2281,10 +2013,9 @@ function renderServerTrees(
   const { servers, unattributed } = groupByServer(serverIds, rows)
   // #1485 — THE COMPLEMENT, SPLIT BY THE SAME HOSTS BEFORE IT REACHES `groupByWorkspace`, and that split is
   // the security property rather than tidiness. A workspace row's plus and pen route by the host the row is
-  // drawn under (`index.ts`: `servers.route(command.serverId)`), while the group key is a bare path that
-  // repeats across machines — so handing the whole other tree to the grouper would draw Pyrybox's directory
-  // under Macbook's host row and send that path to Macbook, a create in a directory the operator never
-  // chose on a machine never told it. `groupByServer` is called with the SAME client-held `serverIds`, so
+  // drawn under, while the group key is a bare path that repeats across machines. Handing the whole
+  // other tree to the grouper would draw one machine's directory under another; its create control
+  // could then target the wrong host. `groupByServer` is called with the SAME client-held `serverIds`, so
   // its docblock's join direction holds here unchanged: a row's stamp can select among existing keys and
   // can never mint one.
   //
@@ -2315,17 +2046,9 @@ function renderServerTrees(
       <CollapsibleWorkspaceGroup
         key={group.key}
         label={group.label}
-        // THE GROUP'S KEY IS ITS `cwd` (`groupByWorkspace`), passed VERBATIM: not normalised, not
-        // trimmed, no `path` module, no local resolution. It is daemon-asserted text making its first
-        // trip back OUT as a command field, so the only safe handling is to echo exactly what was
-        // received — main re-validates it at the untrusted IPC boundary and rebuilds a fresh three-field
-        // literal before it reaches the wire.
-        //
-        // The unknown group is skipped: its key is `UNKNOWN_WORKSPACE_KEY`, the empty string, which
-        // names no directory and is NOT the `null` "take the daemon default" signal the payload keeps
-        // distinct. Decided on the KEY, never on the label — a real directory named "Unknown workspace"
-        // is an ordinary group and keeps its plus. Since #1179 that withhold covers BOTH trees, and it
-        // is what keeps the empty string from ever reaching either create.
+        // The plus remains under a workspace row until #1683 relocates it, but the container uses only
+        // the clicked host; both creates send `cwd: null`. Keep the unknown-workspace group and
+        // disconnected hosts without a plus in the current hierarchy.
         create={
           create === undefined || group.key === UNKNOWN_WORKSPACE_KEY || serverId === undefined || statuses.get(serverId)?.type !== 'connected'
             ? undefined
@@ -2386,237 +2109,161 @@ function renderServerTrees(
   )
 }
 
-// The pair-new-host control's accessible name (#1303) — a client-owned module-level constant in the
-// ADD_WORKSPACE_CONTROL_LABEL / EDIT_HOST_CONTROL_LABEL idiom, and a compile-time constant rather than a
-// prop for `HostRow`'s stated security reason: with no `label` field there is no slot for a caller to
-// pass `Pair new host on ${label}` and interpolate untrusted operator or daemon text into an attribute —
-// the exact shape #696's review made a MUST FIX. BOTH headers carry the SAME name by design (the drawing
-// places one component under each), so the e2e locator for it is two-match and is indexed rather than
-// differentiated; `ChannelList.test.tsx` pins the count of two.
+// Client-owned copy supplies both the accessible name and the visible tooltip.
 const PAIR_NEW_HOST_CONTROL_LABEL = 'Pair new host'
 
-/**
- * One section header and the plus that opens the pairing flow (#1303, Figma `Sidebar header` 405:7885
- * under Channels and 405:7896 under Chats — the same component instance, so neither is a special case).
- *
- * THE <header>'S OWN `class` ATTRIBUTE IS EXACTLY WHAT IT WAS, and that is a constraint rather than an
- * accident: `ChannelList.test.tsx`'s `SECTION_HEADER_MARKER` is a quote-anchored
- * `class="channel-list__section-header"` substring count read by five specs, and
- * `e2e/sidebar-tree-geometry.spec.ts` and `e2e/paired-shell-card.spec.ts` both locate on that class. The
- * button is a CHILD; nothing about the header's own attribute run moves. The header gains
- * `position: relative` in `channels.css` — the containing block the absolutely positioned button needs —
- * and its box, its 20px line and the 12px below it are untouched, which is what preserves the 32px
- * header-to-first-host rhythm AC5 pins.
- *
- * THE CLASS SHARES NO TOKEN with `channel-list__row`, `__row-open`, `__section-header`, `__workspace` or
- * `__host`. Playwright runs locators in strict mode, so an element JOINING an existing locator's match
- * set raises a strict-mode violation rather than an assertion failure, and 28+ specs ride
- * `launchPairedApp`'s unfiltered `.channel-list__row-open` click. This guard needs no edit under `e2e/`.
- *
- * `label` is one of two client-owned literals from `renderBody` ('Channels' / 'Chats') and reaches the
- * text child alone. The plus is the drawn control from #1178's workspace row with two deviations the
- * ticket names: it is painted `--color-primary` and DRAWN AT REST — there is no hover reveal here, so
- * unlike the row and host-row controls it needs no `:has()`-guarded swap and no pointer to appear.
- *
- * `onPairNewHost` is nullary, `HostRow`'s handler shape: the caller closes over nothing per-header, so
- * there is no argument for a future caller to come to depend on, and `() => void` refuses a function
- * declaring a parameter so React's synthetic event cannot reach one either.
- */
-function SectionHeader({
-  label,
-  onPairNewHost
-}: {
-  label: string
-  onPairNewHost: () => void
-}): JSX.Element {
+function PairNewHostButton({ onClick }: { onClick: () => void }): JSX.Element {
   return (
-    <header className="channel-list__section-header">
-      {label}
-      <button
-        type="button"
-        className="channel-list__pair"
-        aria-label={PAIR_NEW_HOST_CONTROL_LABEL}
-        onClick={onPairNewHost}
-        {...controlNamePlacement}
-      >
-        {/* The drawing's `399:1045` "Icon Edgeless" plus — the same glyph #1178 shipped for the
-            workspace row, so `.channel-list__workspace-create-icon`'s 16-unit path is reused verbatim
-            rather than re-exported. `aria-hidden` because the button's `aria-label` is the name. */}
-        <svg
-          className="channel-list__pair-icon"
-          viewBox="0 0 16 16"
-          width="16"
-          height="16"
-          fill="currentColor"
-          aria-hidden="true"
+    <button
+      type="button"
+      className="channel-list__pair"
+      aria-label={PAIR_NEW_HOST_CONTROL_LABEL}
+      onClick={onClick}
+      {...controlNamePlacement}
+    >
+      <span className="channel-list__pair-icon" aria-hidden="true" />
+      <span className="channel-list__control-name" aria-hidden="true">
+        {PAIR_NEW_HOST_CONTROL_LABEL}
+      </span>
+    </button>
+  )
+}
+
+function HostSection({
+  label,
+  rows,
+  onCreate,
+  defaultExpanded = true
+}: {
+  label: 'Channels' | 'Chats'
+  rows: readonly JSX.Element[]
+  onCreate?: () => void
+  defaultExpanded?: boolean
+}): JSX.Element {
+  const [expanded, setExpanded] = useState(defaultExpanded)
+  return (
+    <>
+      <div className="channel-list__section">
+        <button
+          type="button"
+          className="channel-list__section-disclosure"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((open) => !open)}
         >
-          <path d="M6.28571 14.2857V9.71429H1.71429C0.764286 9.71429 0 8.95 0 8C0 7.05 0.764286 6.28571 1.71429 6.28571H6.28571V1.71429C6.28571 0.764286 7.05 0 8 0C8.95 0 9.71429 0.764286 9.71429 1.71429V6.28571H14.2857C15.2357 6.28571 16 7.05 16 8C16 8.95 15.2357 9.71429 14.2857 9.71429H9.71429V14.2857C9.71429 15.2357 8.95 16 8 16C7.05 16 6.28571 15.2357 6.28571 14.2857Z" />
-        </svg>
-        {/* #1304 — the control's NAME, in the pill the row's trailing controls (#1172) and the workspace
-            row's plus (#1181) already wear. APPENDED AFTER THE GLYPH, never before it: `ChannelList.test.tsx`
-            pins the <svg>'s whole opening run and counts `aria-label="Pair new host"`, and a child after
-            the closing tag leaves both byte-identical — the pill's text is a bare text node, not an
-            attribute.
-
-            `PAIR_NEW_HOST_CONTROL_LABEL` and nothing else, which is the whole of "one definition": the
-            same constant supplies the `aria-label` above, so the spoken name and the drawn one cannot
-            drift, and there is still no slot anywhere in this component for a caller to interpolate
-            operator or daemon text into either.
-
-            `aria-hidden` is belt-and-braces rather than the mechanism — the `aria-label` already overrides
-            child text for the accessible name — which is why the unit tier pins the count of names at two
-            beside the count of pills. */}
-        <span className="channel-list__control-name" aria-hidden="true">
-          {PAIR_NEW_HOST_CONTROL_LABEL}
-        </span>
-      </button>
-    </header>
+          {expanded ? (
+            <svg className="channel-list__section-icon" viewBox="0 0 13 11" width="13" height="11" fill="currentColor" aria-hidden="true">
+              <path d="M0.567308 5.6392L0 7.33631V2.52381C0 1.67526 0.689904 0.985352 1.53846 0.985352H4.8726C5.20433 0.985352 5.52885 1.09352 5.79567 1.29304L6.71875 1.98535C6.85096 2.08631 7.01442 2.1392 7.18029 2.1392H10C10.8486 2.1392 11.5385 2.8291 11.5385 3.67766V4.06227H2.75481C1.76202 4.06227 0.879808 4.69689 0.564904 5.6392H0.567308ZM10.7067 10.9854H1.60096C0.8125 10.9854 0.257212 10.2137 0.507212 9.46612L1.66106 6.00458C1.81731 5.53343 2.25962 5.21612 2.75481 5.21612H11.8606C12.649 5.21612 13.2043 5.98776 12.9543 6.73535L11.8005 10.1969C11.6442 10.668 11.2019 10.9854 10.7067 10.9854Z" />
+            </svg>
+          ) : (
+            <svg className="channel-list__section-icon" viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true">
+              <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
+            </svg>
+          )}
+          <span className="channel-list__section-label">{label}</span>
+          <svg className="channel-list__section-chevron" viewBox="0 0 8 4" width="8" height="4" fill="currentColor" aria-hidden="true">
+            <path d="M4.38533 3.8393C4.16311 4.03385 3.80222 4.03385 3.58 3.8393L0.166667 0.850973C-0.0555557 0.656421 -0.0555557 0.340467 0.166667 0.145915C0.388889 -0.048638 0.749779 -0.048638 0.972001 0.145915L3.98356 2.78249L6.99511 0.147471C7.21733 -0.0470815 7.57822 -0.0470815 7.80044 0.147471C8.02267 0.342024 8.02267 0.657977 7.80044 0.85253L4.38711 3.84086L4.38533 3.8393Z" />
+          </svg>
+        </button>
+        {onCreate && (
+          <button
+            type="button"
+            className="channel-list__section-create"
+            aria-label={label === 'Channels' ? CREATE_CHANNEL_CONTROL_LABEL : CREATE_CHAT_CONTROL_LABEL}
+            onClick={onCreate}
+            {...controlNamePlacement}
+          >
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
+              <path d="M6.28571 14.2857V9.71429H1.71429C0.764286 9.71429 0 8.95 0 8C0 7.05 0.764286 6.28571 1.71429 6.28571H6.28571V1.71429C6.28571 0.764286 7.05 0 8 0C8.95 0 9.71429 0.764286 9.71429 1.71429V6.28571H14.2857C15.2357 6.28571 16 7.05 16 8C16 8.95 15.2357 9.71429 14.2857 9.71429H9.71429V14.2857C9.71429 15.2357 8.95 16 8 16C7.05 16 6.28571 15.2357 6.28571 14.2857Z" />
+            </svg>
+            <span className="channel-list__control-name" aria-hidden="true">
+              {label === 'Channels' ? CREATE_CHANNEL_CONTROL_LABEL : CREATE_CHAT_CONTROL_LABEL}
+            </span>
+          </button>
+        )}
+      </div>
+      {expanded && rows}
+    </>
   )
 }
 
 function renderBody(
   conversations: readonly SidebarRow[] | null,
   statuses: SessionState['statuses'],
-  // #1070 — the paired servers to draw, in pairing order. Data, so it leads the callbacks like the id
-  // below. Its EMPTINESS is meaningful: it is the launch frame before the one-shot settles.
   serverIds: readonly string[],
-  // #1098 — data, so it leads the callbacks. It is compared, never rendered: the id is daemon-asserted
-  // and stays a comparison operand, never a class-name interpolation, an attribute value, a title, an
-  // object key or a log line (`ConversationStatusDotControl`'s condition on the same value).
   openConversationId: string | null,
-  // #1303 — open the pairing flow. Handed to BOTH headers, which is the whole of the wiring: the drawing
-  // places the same `Sidebar header` component under Channels and under Chats, so neither is a special
-  // case and there is no per-tree difference to carry. It leads the row callbacks because it is the one
-  // handler this function consumes ITSELF rather than passing to `renderServerTrees`.
-  onPairNewHost: () => void,
   onOpen: (row: ConversationSummary) => void,
-  // #1178 — start a chat in a named workspace. Handed to the `discussions` tree ALONE, which — with
-  // its #1179 sibling below — is the one place the two trees are told apart now that
-  // `renderServerTrees` draws both.
   onCreateChat: (cwd: string, serverId: string | undefined) => void,
-  // #1179 — open the Create-channel dialog for a named workspace. Handed to the `channels` tree alone.
-  // The container turns it into dialog state; nothing is sent until the dialog's Create.
   onCreateChannel: (cwd: string, serverId: string | undefined) => void,
-  // #1180 — open the Edit-workspace dialog for a named workspace. Handed to BOTH trees, unlike the two
-  // creates above it: this is the one trailing control that is not a per-tree difference. The container
-  // turns it into dialog state; nothing is sent until the dialog's Save.
-  onEditWorkspace: (cwd: string, label: string, serverId: string | undefined) => void,
-  // #1299 — open the Edit host dialog for a named machine. Handed to BOTH trees, like `onEditWorkspace`
-  // above it: every host row draws the pen, and both of a machine's two rows open the same dialog for the
-  // same machine. The container turns it into dialog state; nothing is written until the dialog's Save.
+  _onEditWorkspace: (cwd: string, label: string, serverId: string | undefined) => void,
   onEditHost: (serverId: string, seedLabel: string) => void,
-  // #1308 — open the Add workspace dialog for a named machine. Handed to BOTH trees, like `onEditHost`
-  // above it: every host row draws the plus, and both of a machine's two rows open the same dialog for the
-  // same machine. The container turns it into dialog state; nothing is sent until the dialog's Start chat.
   onAddWorkspace: (serverId: string) => void,
   onRepairHost: ((serverId: string) => void) | undefined,
   onSaveAsChannel: (row: SidebarRow) => void,
-  // #1441 gave both trees a pen into this ONE handler; #1476 split it back in two, because the two pens
-  // now open two different modals. `onRename` is the CHATS tree's from here on, `onEditChannel` the
-  // Channels tree's — handed to the two `renderServerTrees` calls below, the level that already tells
-  // the trees apart by building `CHATS_ROW_PEN` and `CHANNELS_ROW_PEN` there.
   onRename: (row: SidebarRow) => void,
   onEditChannel: (row: SidebarRow) => void
 ): JSX.Element | null {
-  // A view-only empty list leaves the store's not-yet-loaded meaning intact while saved hosts render.
-  // Filter archived rows out of the active list (#469) — they live only in the Archive screen.
   const { channels, discussions } = partitionActive(conversations ?? [])
-  // NOTHING TO DRAW — no paired machine and no active row. This one gate replaces both `length > 0`
-  // section gates AND the `No conversations yet` paragraph #1070 deleted, and it is decided from the
-  // ACTIVE partition rather than the raw store count, so a store holding only archived rows still counts
-  // as zero (the check the empty state already made).
-  //
-  // The server half is what the paired app answers on: a machine paired with no conversations at all
-  // renders both headers and its two host rows, because that row carries the plus that starts its first
-  // chat (#1185, #1189). The ROW half is not redundant with it — it covers the frames after the daemon's
-  // list arrives but before the paired-server one-shot settles, where the rows would otherwise be
-  // withheld from a sidebar that has them in hand. They render unattributed there, and the host rows
-  // appear a tick later.
   if (serverIds.length === 0 && channels.length === 0 && discussions.length === 0) return null
+  const hostedChannels = groupByServer(serverIds, channels)
+  const hostedChats = groupByServer(serverIds, discussions)
+  const chatsByHost = new Map(hostedChats.servers.map((host) => [host.serverId, host.rows]))
+  const channelRow = (row: SidebarRow): JSX.Element => (
+    <Row
+      key={row.id}
+      row={row}
+      isOpen={row.id === openConversationId}
+      onOpen={() => onOpen(row)}
+      pen={typeof row.serverId === 'string' && statuses.get(row.serverId)?.type === 'connected'
+        ? { ...CHANNELS_ROW_PEN, onEdit: () => onEditChannel(row) }
+        : undefined}
+    />
+  )
+  const chatRow = (row: SidebarRow): JSX.Element => (
+    <Row
+      key={row.id}
+      row={row}
+      isOpen={row.id === openConversationId}
+      onOpen={() => onOpen(row)}
+      onSaveAsChannel={typeof row.serverId === 'string' && statuses.get(row.serverId)?.type === 'connected'
+        ? () => onSaveAsChannel(row)
+        : undefined}
+      pen={typeof row.serverId === 'string' && statuses.get(row.serverId)?.type === 'connected'
+        ? { ...CHATS_ROW_PEN, onEdit: () => onRename(row) }
+        : undefined}
+    />
+  )
   return (
     <>
-      {/* Both headers and the divider render UNCONDITIONALLY inside the gate above (operator ruling,
-          2026-09-06). Until #1070 each was conditioned on its section holding a row, and the divider on
-          both holding one; a section is now a permanent home for one host row per paired machine, empty
-          or not, so there is nothing left for those conditions to express. `.channel-list__section-header`
-          therefore matches exactly two elements in every drawn state, which is what keeps the suite's
-          header locators single-match. */}
-      <SectionHeader label="Channels" onPairNewHost={onPairNewHost} />
-      {/* Saved Channels are already promoted — they pass no onSaveAsChannel (that affordance is Recent-
-          only), but they DO pass a pen, so each saved Channel row carries one (#360, AC1). Since #1441 a
-          Recent row carries a pen too, so the PEN is no longer what tells the two sections apart — the
-          CHEVRON is, and so is the pen's own class token, which is why the Chats tree got its own
-          (`.channel-list__rename` is what the promote specs proxy "the row moved sections" on since
-          #1070, the mutually exclusive section headers having stopped being mutually exclusive). */}
-      {/* #1179 — the Channels tree's own create, and the second half of the per-tree difference. The
-          two control objects are built HERE, at the only level that knows which tree it is drawing, so
-          the two client-owned label constants stay module-local to this file and neither reaches a
-          component that also handles a `cwd`. */}
-      {/* #1485 — the Chats partition rides along as this tree's COMPLEMENT: a workspace holding only chats
-          draws its head row here too, with the Create-channel plus and the pen below. `renderBody` already
-          holds both partitions from one `partitionActive` call, so the union costs no new data and nothing
-          is threaded further up. */}
-      {renderServerTrees(channels, discussions, serverIds, statuses, (c) => (
-        <Row
-          key={c.id}
-          row={c}
-          // #1098 — the comparison happens HERE, so `Row` takes a boolean about itself rather than a
-          // global id to reason about. `===` against a possibly-null id and never a truthiness test: an
-          // empty-string id stays an ordinary key instead of collapsing into "nothing open" (App.tsx's
-          // `openConversationId` header names the same trap).
-          isOpen={c.id === openConversationId}
-          onOpen={() => onOpen(c)}
-          // #1441 — the pen's WORD and TOKENS are chosen here, at the only level that knows which tree it
-          // is drawing, exactly like the two control objects below. The gate is unchanged.
-          // #1476 — and so is its HANDLER now: this tree's pen opens the Edit channel modal, the Chats
-          // tree's below still opens Edit chat. The word travels in `CHANNELS_ROW_PEN`, the modal in the
-          // handler, and this is the one level that knows both.
-          pen={typeof c.serverId === 'string' && statuses.get(c.serverId)?.type === 'connected' ? { ...CHANNELS_ROW_PEN, onEdit: () => onEditChannel(c) } : undefined}
-        />
-      ), onEditHost, onAddWorkspace, onRepairHost, { label: CREATE_CHANNEL_CONTROL_LABEL, onCreate: onCreateChannel },
-        // #1180 — the same control object in both trees, built at each call site rather than hoisted,
-        // so the pattern reads identically to the create beside it and the label constant stays
-        // module-local to this file.
-        { label: EDIT_WORKSPACE_CONTROL_LABEL, onEdit: onEditWorkspace })}
-      <div className="channel-list__divider" />
-      {/* The header reads "Chats" (#709, Figma 106:3258); the code-level partition is still `discussions`
-          — renaming that vocabulary was explicitly out of scope.
-
-          The two trees group independently (operator, 2026-08-21): the server and workspace levels repeat
-          here rather than being shared, so a machine — and a workspace — appears in both. Since #1485 that
-          holds for a workspace with rows in only ONE tree as well: the levels still repeat rather than
-          being shared, and what the trees now share is the SET of keys per host, not the groups themselves
-          — each tree builds its own instances, holding its own rows and its own fold.
-          Since #704 their DISCLOSURE is independent too, for free: this is a different sibling
-          list from the Channels one above, so the same `cwd` in both yields two CollapsibleWorkspaceGroup
-          instances holding two separate booleans. #1070 extends that property across servers by the same
-          mechanism and with nothing to implement for it. */}
-      <SectionHeader label="Chats" onPairNewHost={onPairNewHost} />
-      {/* #1485 — the complement, the other way round. This is the direction the Add-workspace dialog
-          needed: it starts a CHAT, so its new folder landed here and the Channels tree above never learned
-          of it. */}
-      {renderServerTrees(discussions, channels, serverIds, statuses, (d) => (
-        <Row
-          key={d.id}
-          row={d}
-          // Same comparison as the Channels tree above — one `Row` serves both, so the open chat is
-          // marked in whichever tree it lives in and neither is a special case.
-          isOpen={d.id === openConversationId}
-          onOpen={() => onOpen(d)}
-          onSaveAsChannel={typeof d.serverId === 'string' && statuses.get(d.serverId)?.type === 'connected' ? () => onSaveAsChannel(d) : undefined}
-          // #1441 — the Chats tree's pen. It shared `onRename` with the Channels tree until #1476 gave
-          // that tree its own modal and its own handler; from here on `onRename` is THIS tree's alone and
-          // still opens `EditChatDialogView`. The handler is otherwise unchanged — it re-checks the host
-          // with `canMutateHost` and seeds the field with `titleFor(row.name)`, so a null-named chat
-          // still prefills with its `Untitled` placeholder.
-          //
-          // The SAME connected gate as the chevron above it, restated rather than hoisted so the two read
-          // identically — which is what makes "a Chats row whose host is not connected draws neither
-          // control" true by construction rather than by two conditions kept in step by hand.
-          pen={typeof d.serverId === 'string' && statuses.get(d.serverId)?.type === 'connected' ? { ...CHATS_ROW_PEN, onEdit: () => onRename(d) } : undefined}
-        />
-      ), onEditHost, onAddWorkspace, onRepairHost, { label: CREATE_CHAT_CONTROL_LABEL, onCreate: onCreateChat },
-        { label: EDIT_WORKSPACE_CONTROL_LABEL, onEdit: onEditWorkspace })}
+      {hostedChannels.servers.map((host) => {
+        const connected = statuses.get(host.serverId)?.type === 'connected'
+        return (
+          <CollapsibleHostGroup
+            key={host.serverId}
+            serverId={host.serverId}
+            hasWorkspaces
+            onEditHost={onEditHost}
+            onAddWorkspace={onAddWorkspace}
+            onRepairHost={onRepairHost}
+          >
+            <HostSection
+              label="Channels"
+              rows={host.rows.map(channelRow)}
+              onCreate={connected ? () => onCreateChannel('', host.serverId) : undefined}
+            />
+            <HostSection
+              label="Chats"
+              rows={(chatsByHost.get(host.serverId) ?? []).map(chatRow)}
+              onCreate={connected ? () => onCreateChat('', host.serverId) : undefined}
+            />
+          </CollapsibleHostGroup>
+        )
+      })}
+      {hostedChannels.unattributed.length > 0 && (
+        <HostSection label="Channels" rows={hostedChannels.unattributed.map(channelRow)} />
+      )}
+      {hostedChats.unattributed.length > 0 && (
+        <HostSection label="Chats" rows={hostedChats.unattributed.map(chatRow)} />
+      )}
     </>
   )
 }
@@ -2627,7 +2274,7 @@ function renderBody(
  * unread composition lives. Here, per row, keyed by THE ROW'S OWN conversation id.
  *
  * Read the four narrow per-id slices, reduce them to one status, render the dot. That is the whole body.
- * It is `HostConnectionDotsControl`'s shape one level down — a store-bound `*Control` beside a store-free
+ * A store-bound `*Control` sits beside a store-free
  * leaf — and it lives HERE rather than in `ConversationStatusDot.tsx` because that file declares itself
  * store-free in its own header.
  *
@@ -2664,7 +2311,7 @@ function renderBody(
  *   - A `console.*` ON ANY PATH. Both source stores and both pure modules are log-free by construction,
  *     and there is no read miss to report — `null` is a defined reading, not an error.
  *
- * The honest cost, the same one HostConnectionDotsControl (:353-364) already took and recorded:
+ * The cost of these separate per-row reads:
  * `ChannelListView` drifts further from its "pure view" docstring, since its subtree now reads four more
  * singletons. Safe under `renderToStaticMarkup` in Node — the activity and timeline stores hydrate to
  * empty maps, the modal store hydrates to `initialModalState` with an empty `outstanding`
@@ -2677,14 +2324,19 @@ function ConversationStatusDotControl({
 }: {
   conversationId: string
 }): JSX.Element {
-  const inputRequired = useModalStore(selectHasOutstandingFor(conversationId))
+  const promptPending = useModalStore(selectHasOutstandingFor(conversationId))
+  // #1700: a pending question batch waits on the operator exactly as a prompt does. The selector returns
+  // a plain boolean, value-stable under `Object.is`, never the held batch or a fresh object.
+  const questionPending = useQuestionBatchStore(
+    (s) => selectBatchFor(conversationId)(s) !== undefined
+  )
   const activity = useConversationActivityStore(selectActivityFor(conversationId))
   const timeline = useConversationTimelineStore(selectTimelineFor(conversationId))
   const lastRead = useConversationLastReadStore(selectLastReadFor(conversationId))
   return (
     <ConversationStatusDot
       status={resolveConversationStatus(
-        inputRequired,
+        promptPending || questionPending,
         activity,
         isConversationUnread(timeline, lastRead)
       )}

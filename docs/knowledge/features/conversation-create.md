@@ -180,10 +180,9 @@ existing null fall-through list. The real consumer at #241 time was
 subscribes directly via `window.pyry.onDaemonEvent`, not through any of the three exhaustive bridges
 above. `requestNewConversation` got a second caller in
 [#1178](channel-list-workspace-row-nest.md):
-each sidebar workspace row's hover-revealed plus, sending that group's own `cwd` rather than the client's
-saved default — the first caller to pass this constructor a `cwd` that is daemon-asserted text rather than
-a client-side setting, verbatim and unnormalised, relying on `isCreateConversationPayload` and the
-fresh-literal rebuild in `daemonConnection.createConversation` at the boundary below. [#1179](create-channel-dialog.md)
+each Chats-tree workspace row's hover-revealed plus. Since #1682 it opens a confirmation dialog
+and sends `cwd: null` to use the clicked host's daemon default, rather than sending the group's
+path. [#1179](create-channel-dialog.md)
 then gave `requestNewConversation` a **sibling constructor**, `requestNewChannel`, rather than widening it
 with a flag: it sends the command's *other* fixed payload shape — `is_promoted: true` plus a trimmed,
 renderer-typed `name` — from the Channels-tree workspace plus's own dialog, so `requestNewConversation`
@@ -193,14 +192,15 @@ directly. See [Create-channel dialog](create-channel-dialog.md) for the dialog, 
 the security review of the second untrusted value (`name`) this adds to the same outgoing command.
 [#1308](channel-list-host-row.md#the-add-workspace-dialog-1308) then gave the command a **third sibling
 constructor**, `requestNewWorkspaceChat`, one level up from #1178's: an operator-typed folder rather than
-an existing group's own `cwd`, and a top-level `serverId` that is *required* rather than optional — the
+the daemon default, and a top-level `serverId` that is *required* rather than optional — the
 host row's Add-workspace dialog always knows which machine's plus was clicked, and main refuses an unnamed
-`createConversation` as ambiguous once more than one server is paired (#1120). Its payload is
-`requestNewConversation`'s byte for byte. `requestNewConversation` and `requestNewChannel`
+`createConversation` as ambiguous once more than one server is paired (#1120). It shares
+`requestNewConversation`'s unpromoted, unnamed shape but requires a non-null path.
+`requestNewConversation` and `requestNewChannel`
 now also accept an optional explicit `serverId`; sidebar callers always supply their retained
 host after a live connectivity check. Omitting it preserves main's single-host fallback.
 `requestNewWorkspaceChat` still requires the host and trims operator-entered paths, while
-the sidebar helpers preserve daemon-reported `cwd` verbatim. See
+the two workspace-row create dialogs pass null and retain only the clicked host. See
 [sidebar availability](channel-list.md#the-container--pure-view-channellisttsx).
 [#515](../codebase/515.md)
 later added a second, independent consumer on the same event: the [conversation list
@@ -211,8 +211,9 @@ subscriptions are separate and side-effect-disjoint (nav vs. re-list), so they n
 ## Data flow
 
 ```
-Chats-tree "Create chat" plus (#1178) → requestNewConversation(window.pyry.sendCommand, cwd, serverId)
-  → sendCommand({serverId, type:'createConversation', payload:{is_promoted,name,cwd}})
+Chats-tree "Create chat" plus (#1178) → confirmation dialog → OK
+  → requestNewConversation(window.pyry.sendCommand, null, serverId)
+  → sendCommand({serverId, type:'createConversation', payload:{is_promoted:false,name:null,cwd:null}})
   → COMMAND_CHANNEL → onCommand (isCreateConversationPayload ✓) → connection.createConversation(payload)
   → authenticated connection check → buildCreateConversation({id,ts,payload:{fresh literal}}) → driver.sendMessage
     unavailable/build/send failure → host-stamped conversationCreateRejected
@@ -228,7 +229,7 @@ The diagram traces `requestNewConversation`'s one production caller today; the C
 Add-workspace dialog feed the same `conversationCreated` event into the same subscription through their
 own constructors (`requestNewChannel`, `requestNewWorkspaceChat` — see [the create → nav
 bridge](new-discussion-fab.md)). The original caller, the new-discussion FAB, sent a client-settings
-`defaultCwd` here instead of a daemon-asserted group `cwd`; it was deleted in #1426.
+`defaultCwd` here instead of the daemon default; it was deleted in #1426.
 
 ## Error handling
 
@@ -318,7 +319,7 @@ for pending-entry lifetime and the accepted concurrent-caller limitation.
   notes](../codebase/242.md) — the renderer consumer: fires `createConversation`, navigates on
   `conversationCreated`. The FAB itself, its original caller, was deleted in #1426.
 - [Channel List — the workspace row's own nest and its create-chat plus](channel-list-workspace-row-nest.md)
-  (#1178) — the second caller, sending a workspace group's own `cwd` instead of the saved default.
+  (#1178) — the second caller, now confirming a daemon-default create on the clicked host.
 - [Create-channel dialog](create-channel-dialog.md) (#1179) — `requestNewChannel`, the sibling
   constructor sending the command's other fixed payload shape (`is_promoted: true` plus a name); the
   first path to a channel that does not go through [Save-as-channel](save-as-channel-dialog.md)'s

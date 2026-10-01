@@ -10,7 +10,9 @@ need them.
 
 The badge counts every non-archived, non-muted conversation, across every paired host, whose
 sidebar status dot resolves to `input-required` or `new-messages` — exactly the rows
-[`ConversationStatusDotControl`](channel-list-status-dot.md) draws a dot for. `working` does not
+[`ConversationStatusDotControl`](channel-list-status-dot.md) draws a dot for. An outstanding permission
+or trust prompt or a pending question batch makes a conversation `input-required`; holding both still
+counts once, because the badge counts conversations rather than prompts or batches. `working` does not
 count: the sidebar shows it as working, not attention, and counting it would tick the badge up on
 every streamed turn. A conversation muted on its host ([#1607](https://github.com/pyrycode/pyrycode-desktop/issues/1607))
 does not count either, even with an outstanding prompt — the sidebar status dot is unchanged and
@@ -30,10 +32,13 @@ overlay — a red disc with a white count, `9+` above nine, cleared at zero.
 
 ## The renderer half: reusing the dot's own composition, not restating it
 
-`conversationStatusNow(id)` is the dot control's own four-selector read —
-`selectHasOutstandingFor`, `selectActivityFor`, `selectTimelineFor`, `selectLastReadFor` — fed into
-`resolveConversationStatus(…, isConversationUnread(…))`, copied verbatim so the badge and the dots
-can never disagree about what needs attention. `attentionCountNow()` applies the same
+`conversationStatusNow(id)` repeats the dot control's five-source read over `getState()` —
+`selectHasOutstandingFor`, `selectBatchFor`, `selectActivityFor`, `selectTimelineFor`, `selectLastReadFor`.
+The input-required fact is `selectHasOutstandingFor(id)(modalStore.getState()) ||
+selectBatchFor(id)(questionBatchStore.getState()) !== undefined`, fed into
+`resolveConversationStatus(…, isConversationUnread(…))` with the activity and unread facts. Keep this
+composition aligned with the row control when adding an attention source.
+`attentionCountNow()` applies the same
 `!is_archived` filter the [Channel List view model](channel-list.md) applies to its active list,
 plus `row.is_muted !== true` since [#1607](https://github.com/pyrycode/pyrycode-desktop/issues/1607),
 over `selectConversations` (every paired server's rows in one array), then calls the pure
@@ -43,7 +48,7 @@ change to the counting rule itself. `countAttentionConversations` stays one rule
 it is handed; it does not know what "muted" or "archived" mean.
 
 `subscribeAppBadge({ subscribe, count, sendCommand })` computes once on subscribe and again on every
-notification from the five source stores (`conversationListStore`, `modalStore`,
+notification from the six source stores (`conversationListStore`, `modalStore`, `questionBatchStore`,
 `conversationActivityStore`, `conversationTimelineStore`, `conversationLastReadStore`, fanned out by
 `subscribeToAttentionStores`), and sends `{ type: 'setBadgeCount', payload: { count } }` only when
 the count differs from the last one sent. The last-sent value starts `null`, so the very first
@@ -54,6 +59,14 @@ last-host clear**: it sends `0` (unless `0` was already the last value) before u
 unmounts `PairedShell`, so the same teardown that stops the subscription is the one that clears the
 badge. No new store — the fan-out and the last-sent comparison are the only state, and both live in
 the hook's own effect closure.
+
+The question-batch subscription makes both arrival and dismissal recompute the count
+([#1700](https://github.com/pyrycode/pyrycode-desktop/issues/1700)). Answer and Cancel each dispatch
+`dismissed`; once no prompt or batch remains, the status falls back to the other facts. The row may
+still count if it becomes `new-messages`. Reading the question store without subscribing to it would
+leave a correct direct status calculation but a stale badge. `appBadgeBridge.test.ts` checks both:
+question-only status returns to idle on dismissal, question-only and prompt-plus-question rows each
+count once, and writes to every source wake the listener until teardown removes all six subscriptions.
 
 The three closures (`attentionCountNow`, `subscribeToAttentionStores`, `subscribeAppBadge`) are
 exported and unit-tested directly, rather than only through `useAppBadge`, because the renderer test

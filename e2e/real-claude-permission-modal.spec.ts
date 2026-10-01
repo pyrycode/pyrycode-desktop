@@ -2,6 +2,7 @@ import { type Page } from '@playwright/test'
 import { existsSync, statSync, utimesSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 // Authenticated execution belongs to the dispatcher. An absent offer fails this scenario;
@@ -71,7 +72,7 @@ test('real claude session checkbox grants repeated Bash use only in the current 
     await expect(page.locator('.channel-list__row-open')).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
 
     const create = async (count: number): Promise<string> => {
-      await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
+      await confirmCreateChat(page)
       await expect.poll(() => page.evaluate(() => (window as DriveWindow).permissionDrive.created.length),
         { timeout: HANDSHAKE_TIMEOUT_MS }).toBe(count)
       // Compare paths inside the page: failed assertions expose only a Boolean.

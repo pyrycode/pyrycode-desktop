@@ -23,8 +23,10 @@ question this leaves).
 
 Introduced in [#242](../codebase/242.md), split from [#142](../codebase/142.md); the sibling transport
 ticket [#241](../codebase/241.md) (the `createConversation` command / `conversationCreated` event)
-shipped first and is consumed here unchanged. Renderer-only — no transport, IPC, store, or wire code, so
-not security-sensitive.
+shipped first and is consumed here unchanged. The original bridge changed no transport,
+IPC, store or wire code. Automatic model recall now composes renderer stores and the
+existing settings-write path; its [security review](../../specs/architecture/1701-remembered-model.md#security-review)
+covers captured ownership, raw eligibility and correlated settlement.
 
 ## How it works
 
@@ -36,7 +38,7 @@ One module, twin of [`conversationListBridge.ts`](conversation-list-store.md#the
 requestNewConversation(sendCommand: (c: RendererCommand) => void, defaultCwd: string | null, serverId?: string): void
 // sendCommand({ type: 'createConversation', payload: { is_promoted: false, name: null, cwd: defaultCwd }, ...serverId })
 // inline literal, no builder — the requestConversationList precedent. Sole caller today: the Chats-tree
-// workspace row's "Create chat" plus, passing that group's own cwd (#1178) — not the FAB's Settings default.
+// workspace row's "Create chat" confirmation, passing null for the clicked host's daemon default.
 
 translateConversationCreated(event: DaemonEvent): ConversationCreatedPayload | null
 // switch (event.type) { case 'conversationCreated': return event.conversation; default: return null }
@@ -64,18 +66,22 @@ hard-`assertNever` `daemonEventBridge`/`timelineBridge`/`modalBridge` shape). It
 `event.conversation` directly (a filter, not a field remap), so a rename of the arm is still caught by
 the `case` label failing to overlap the union.
 
-The bridge passes the **decoded payload** through to `onCreated`, even though the current nav consumer
-ignores it (navigation is conversation-agnostic) — the created `id` is available at this seam for a
-future select-and-load ticket to change only the consumer, not the bridge.
+The bridge passes the decoded payload and main-stamped creating host to `onCreated`.
+`useConversationCreatedNav` starts [remembered-model recall](remembered-model.md) before
+calling it, installing the hold and reply listeners before activation can request settings.
+Only newly created unpromoted chats recall; channel creation navigates without recall.
+The hook captures the target's identity and observes active-conversation and owning-host
+status changes to cancel the attempt. Its cleanup also cancels recall.
 
 ### The nav wiring (`src/renderer/src/PairedShell.tsx`)
 
-One line in the `PairedShell` container: `useConversationCreatedNav((created, serverId) => dispatch({
-type: 'open' }))`. `dispatch` is the stable `useReducer` dispatcher from [paired shell](paired-shell.md);
-the arrow ignores the created payload and fires the existing `open` transition, regardless of which of
-the three callers above sent the create. The hook's own effect is what dereferences `window.pyry`, so
-`PairedShell` itself stays free of effects/window access at its own level (preserving its
-server-renderability).
+`PairedShell`'s `useConversationCreatedNav` callback activates the created conversation,
+retains the stamped host and conversation as the pane/timeline target, initializes its
+timeline and post-list configuration request, then dispatches the existing `open`
+transition. All three create callers use this callback. Activation requests the new
+chat's own settings and model list; recall retains early replies without reading the
+active-only session store. Bridge access remains effect/interaction-scoped so the shell
+stays server-renderable.
 
 The subscription is **shell-scoped, not app-lifetime** — unlike `ConversationListData`, which must stay
 live across routes, `useConversationCreatedNav` is mounted only where `PairedShell` mounts (the paired
@@ -85,14 +91,16 @@ subscription tears down; on re-pair a fresh shell mounts a fresh subscription.
 ### Data flow
 
 ```
-Chats-tree "Create chat" plus (#1178) → requestNewConversation(window.pyry.sendCommand, cwd, serverId)
-  → sendCommand({serverId, type:'createConversation', payload:{is_promoted:false,name:null,cwd}})
+Chats-tree "Create chat" plus (#1178) → confirmation dialog → OK
+  → requestNewConversation(window.pyry.sendCommand, null, serverId)
+  → sendCommand({serverId, type:'createConversation', payload:{is_promoted:false,name:null,cwd:null}})
   → [#241, already shipped] COMMAND_CHANNEL → createConversation(payload) → daemon
 
 daemon → conversation_created frame → [#241] → conversationCreated DaemonEvent
   → DAEMON_EVENT_CHANNEL → useConversationCreatedNav's subscription
     → translateConversationCreated → payload (or null → skip)
-    → dispatch({ type: 'open' })          [PairedShell's useReducer(nextPairedRoute, 'list')]
+    → start model recall for a new chat (hold/listeners before activation)
+    → activate created conversation + retain creating host → dispatch({ type: 'open' })
   → PairedShellView route flips 'list' → 'thread' → ConversationScreen renders
 ```
 
@@ -108,12 +116,12 @@ diagram above is one representative path, not the only one.
   not](conversation-create.md#the-success-reply-stays-uncorrelated-the-rejection-since-1307-does-not).
   There is no timeout or retry here; [`conversationCreateRejected`](conversation-create.md#error-handling)
   (#1307) is a separate, bare failure signal each caller gates on its own in-flight state.
-- **Navigation is conversation-agnostic.** `open` always shows the single active conversation; the
-  created conversation's `id` is decoded and passed to the nav consumer but unused today. A future
-  select-and-load ticket changes only `useConversationCreatedNav`'s call site, not the bridge.
-- **Untrusted daemon strings are not rendered here.** `ConversationCreatedPayload.name`/`.cwd` pass
-  through the bridge but this path consumes the event only as a nav trigger — neither field is rendered,
-  so no escaping concern arises.
+- **Navigation activates the created target.** Recall holds only that chat's sends through
+  correlated settlement. Leaving or losing its host cancels the attempt; reopening or
+  reconnecting never starts it again. See [recall addressing](remembered-model.md#creation-and-addressing).
+- **Untrusted daemon strings are not rendered by the bridge.**
+  `ConversationCreatedPayload.name`/`.cwd` pass through to activation; downstream
+  displays follow the existing escaped-text contract.
 - **The click→command wiring and the event→nav wiring are each unit-proven, not DOM-tested** — the
   codebase has no jsdom harness (`renderToStaticMarkup` only). `conversationCreatedBridge.test.ts`
   spy-drives the pure helpers; the full click→command→event→nav chain is proven by composing these

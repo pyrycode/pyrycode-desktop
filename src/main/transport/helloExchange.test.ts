@@ -24,6 +24,14 @@ const ackBytes = (payload: unknown, extra: Partial<Envelope> = {}): Uint8Array =
   encodeEnvelope({ id: 1, type: 'hello_ack', ts: '2026-07-04T12:00:00Z', payload, ...extra })
 
 describe('buildClientHello', () => {
+  it('encodes the replay position and omits absent replay and timestamp fields', () => {
+    const withCursor = decodeEnvelope(buildClientHello({ ...baseInput, lastEventId: 42 }))
+    expect(withCursor.payload).toMatchObject({ last_event_id: 42 })
+    expect(withCursor.payload).not.toHaveProperty('last_seen_ts')
+    const fresh = decodeEnvelope(buildClientHello(baseInput))
+    expect(fresh.payload).not.toHaveProperty('last_event_id')
+    expect(fresh.payload).not.toHaveProperty('last_seen_ts')
+  })
   it('wraps a defaults-injected HelloClientPayload in a hello envelope with the input id/ts', () => {
     const decoded = decodeEnvelope(buildClientHello(baseInput))
     expect(decoded.id).toBe(1)

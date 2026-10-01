@@ -402,9 +402,9 @@ export function QuestionPanelView({
             <div className="question-panel__other-field">
               {/* CONTROLLED, so the store is the field's only source of truth — which is what carries the
                   typed text across the remount a chat switch forces (the picks live outside the keyed
-                  conversation pane precisely for this). `otherText` is held INDEPENDENTLY of `otherTicked`,
-                  so typing into an un-ticked row is ordinary traffic and this value is never gated on the
-                  tick. It is the one string on this panel the daemon did not author — and it is still
+                  conversation pane precisely for this). `otherText` is held INDEPENDENTLY of `otherTicked`:
+                  typing ticks the row (#1698), but un-ticking it afterwards keeps the text, so this value
+                  is never gated on the tick. It is the one string on this panel the daemon did not author — and it is still
                   bound as a React `value`, escaped by React itself, never a raw-markup sink. */}
               <input
                 type="text"

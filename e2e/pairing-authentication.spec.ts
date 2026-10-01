@@ -79,7 +79,11 @@ async function readAuthentication(app: ElectronApplication) {
 }
 
 test('new host waits while the existing host is connected; timeout, Retry and one real save', async ({ launchPairedApp }) => {
-  const { app, page } = await launchPairedApp()
+  const { app, page } = await launchPairedApp({}, { hostLabel: 'Existing host' })
+  const existingHost = page.locator('.channel-list__host').filter({ hasText: 'Existing host' })
+  const newHost = page.locator('.channel-list__host').filter({
+    has: page.locator('.channel-list__host-label').filter({ hasText: /^Server$/ })
+  })
   const forwarder = await startFakeRelayForwarder()
   const daemon = await startFakeDaemonForTest({ url: forwarder.url })
   const server = { forwarder, daemon, serverId: 'new-selected-host' }
@@ -91,7 +95,9 @@ test('new host waits while the existing host is connected; timeout, Retry and on
     await confirm(page, server)
     await expect(page.getByText(pending, { exact: true })).toBeVisible()
     await expect.poll(() => control(app)).toEqual({ saves: 1, responses: 1, authenticated: true })
-    await expect(page.getByRole('img', { name: 'Pyrycode Connected', exact: true })).toHaveCount(2)
+    await expect(existingHost.locator('.channel-list__host-disclosure')).toBeVisible()
+    await expect(existingHost.locator(':scope + .channel-list__host-content')
+      .getByRole('button', { name: 'Create chat', exact: true })).toHaveCount(1)
     await page.setViewportSize({ width: 800, height: 600 })
     await page.screenshot({ path: '/private/tmp/builder-1366-pending-800.png' })
     await page.clock.runFor(30_000)
@@ -99,7 +105,9 @@ test('new host waits while the existing host is connected; timeout, Retry and on
     await page.screenshot({ path: '/private/tmp/builder-1366-timeout-800.png' })
     await control(app, 'authenticate')
     // An authenticated host does not dismiss sticky failure without a user action.
-    await expect(page.getByRole('img', { name: 'Pyrycode Connected', exact: true })).toHaveCount(4)
+    await expect(newHost.locator('.channel-list__host-disclosure')).toBeVisible()
+    await expect(newHost.locator(':scope + .channel-list__host-content')
+      .getByRole('button', { name: 'Create chat', exact: true })).toHaveCount(1)
     await expect(page.getByRole('alert')).toContainText('temporarily unavailable')
     await page.getByRole('button', { name: 'Retry', exact: true }).click()
     await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
@@ -129,7 +137,10 @@ test('manual repair waits for fresh authentication; rejection and cancellation r
   await page.keyboard.press('Escape')
   await expect(dialog).toHaveCount(0)
   await control(app, 'authenticate')
-  await expect(page.getByRole('img', { name: 'Pyrycode Connected', exact: true })).toHaveCount(2)
+  const host = page.locator('.channel-list__host')
+  await expect(host.locator('.channel-list__host-disclosure')).toBeVisible()
+  await expect(host.getByRole('button', { name: 'Repair host', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
   await expect(page.getByPlaceholder('Message…')).toHaveValue('Preserved repair draft')
   await expect(page.locator('.channel-list__row-open')).toHaveCount(1)
   await page.getByRole('button', { name: 'Pair new host' }).first().click()
@@ -189,7 +200,10 @@ test('an identical same-host save cannot reuse the pre-confirmation connected st
   await page.getByRole('button', { name: 'Pair', exact: true }).click()
   await expect.poll(() => control(app)).toEqual({ saves: 1, responses: 1, authenticated: false })
   await expect(page.getByText(pending, { exact: true })).toBeVisible()
-  await expect(page.getByRole('img', { name: 'Pyrycode Connected', exact: true })).toHaveCount(2)
+  const host = page.locator('.channel-list__host')
+  await expect(host.locator('.channel-list__host-disclosure')).toBeVisible()
+  await expect(host.locator(':scope + .channel-list__host-content')
+    .getByRole('button', { name: 'Create chat', exact: true })).toHaveCount(1)
   await page.getByRole('button', { name: 'Close dialog', exact: true }).click()
   await expect(page.locator('.conversation')).toBeVisible()
 })

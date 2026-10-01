@@ -121,15 +121,19 @@ export const NEW_SESSION_ACTION: ComposerOptionsPanelOption = {
  * The by-reference property is unchanged for that function's own callers.
  *
  * #1655 — `slashCommands` false (the session's capability list says it has none, as for Codex) leaves the
- * control row alone. The slash-command rows are dropped, not greyed: such a session publishes no menu, so
- * `markUnavailableActions` would read it as unknown and leave both live, and each would reach the agent as
- * prompt text.
+ * control row alone and marks EVERY slash-command row unavailable, whatever `menu` says: such a session
+ * publishes no menu, so `markUnavailableActions` would read it as unknown and leave both live, and each
+ * would reach the agent as prompt text. #1697 greys them rather than dropping them, mobile's
+ * `absentComposerActions` rule — the owner's call on 2026-09-30. The marking spreads the client's own
+ * option, so `id` and `label` carry through exactly as they do from `markUnavailableActions`.
  */
 export function composerActionRows(
   menu: SlashCommandListEntry | null,
   slashCommands: boolean
 ): readonly ComposerOptionsPanelOption[] {
-  if (!slashCommands) return [NEW_SESSION_ACTION]
+  if (!slashCommands) {
+    return [NEW_SESSION_ACTION, ...COMPOSER_ACTIONS.map((action) => ({ ...action, unavailable: true }))]
+  }
   return [NEW_SESSION_ACTION, ...markUnavailableActions(COMPOSER_ACTIONS, menu)]
 }
 

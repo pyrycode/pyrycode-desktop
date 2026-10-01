@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type {
   ConversationSummary,
@@ -198,7 +199,7 @@ test('a confirmed run-configuration override does not follow the operator into t
   // --- 3. Switch to B, minted through the plus's real create round trip: the correlated
   // `conversation_created` drives the nav, so B is the open chat. B's own ask goes out and is captured
   // unanswered, so B has a session-settings request in flight and no reply — the defect's exact state. ---
-  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
+  await confirmCreateChat(page)
   await expect
     .poll(() => requests.find((r) => r.conversationId !== SEED.id)?.envelopeId, {
       timeout: ROUNDTRIP_TIMEOUT_MS

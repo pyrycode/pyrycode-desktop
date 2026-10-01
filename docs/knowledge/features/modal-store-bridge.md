@@ -19,10 +19,12 @@ before this ticket. [#248](../codebase/248.md) later added a third owned case he
 ## What it does
 
 Turns the three owned `DaemonEvent` modal arms into `ModalEvent`s and folds them into `ModalState` via
-`reduceModal`, exposing `selectOutstanding` (the prompt queue) and `selectRejections` (the rejection
-surface, [#249](../codebase/249.md)) as its two read surfaces. A `modalShown`/`modalDismissed` arrival
-re-renders only components selecting the outstanding slice, a `modalAnswerRejected` arrival only those
-selecting rejections — both orthogonal to `sessionStore`, `timelineStore`, and `runConfigStore`.
+`reduceModal`, exposing narrow subscriptions to the prompt queue, rejection feedback and transient
+resolution feedback. `selectOutstanding` and `selectRejections` read their slices;
+`TopOverlayControl` selects the held resolution object for the open chat directly. A dismissal can
+change both outstanding prompts and resolution feedback, while each subscriber wakes only when its
+selected value changes. These slices remain orthogonal to `sessionStore`, `timelineStore` and
+`runConfigStore`.
 
 ## How it works
 
@@ -122,6 +124,7 @@ daemon frame ─(#201/#248 transport, snake→camel; `modal_shown`'s `conversati
    → modalStore.dispatch → reduceModal → ModalState
    → selectOutstanding (the prompt queue) / selectRejections (the rejection surface, #249)
    → both read by PermissionModal (#224 prompt render, #249 rejection render)
+   → resolutions.find(r => r.conversationId === open.id) → TopOverlayControl → TopOverlay
 ```
 
 ## Configuration and usage
@@ -175,6 +178,27 @@ daemon frame ─(#201/#248 transport, snake→camel; `modal_shown`'s `conversati
   [#179](../codebase/179.md), so no `modal_shown`/`modal_dismissed` frame reached this bridge in
   production before then — the store and bridge were built and tested against injected `DaemonEvent`s
   only. Now live.
+
+## Permission resolution feedback
+
+The bridge already forwards `modalDismissed` source; no new wire or IPC behavior is needed.
+`reduceModal` first finds the held prompt, copies its chat owner and selects only `remote` or
+`timeout` feedback. Unknown/already-removed IDs, local answers/cancels and later daemon
+acknowledgements create no notice. The local-only `resolutionDisplayed` and `resolutionDismissed`
+events come from `TopOverlayControl`, never this translator.
+
+The [Top overlay](conversation-shell.md#permission-resolution-notices) places a Default pill between
+usage and Re-pair: exactly “Resolved on another device” or “Request timed out”, with an X named
+“Dismiss permission resolution notice”. Only the latest notice per chat waits for that chat to
+open. On display it gets four seconds; X, expiry or navigation consumes it, so returning cannot
+replay it. A replacement gets a fresh display deadline even when its copy is unchanged. Lifecycle
+events carry the held object, so an old timer or effect cleanup cannot remove a replacement.
+
+Feedback belongs to `resolutions`, independent of reconnect-scoped `resolved` duplicate suppression.
+Reconnect preserves pending/displayed notices and never manufactures one by clearing a prompt;
+pairing `reset` clears both phases. Keeping feedback only in component state would lose closed-chat
+delivery and bypass the pairing boundary. See the [model contract](modal-prompt-model.md#the-reducer)
+and [verification coverage](development-verification.md#what-each-test-tier-proves).
 
 ## Modal-answer rejection ([#248](../codebase/248.md) transport, [#249](../codebase/249.md) render)
 

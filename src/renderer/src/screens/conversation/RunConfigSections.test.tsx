@@ -169,19 +169,19 @@ describe('RunConfigView — Model rows from the published list (#975)', () => {
 
   it('renders one row per published entry, in the daemon order, labelled with display_name (AC1)', () => {
     const markup = renderToStaticMarkup(<RunConfigView {...base} models={PUBLISHED} />)
-    expect(markup.match(/run-config__model-row/g)?.length).toBe(3)
+    expect(markup.match(/run-config__model-row/g)?.length).toBe(2)
     // Published ORDER, not merely presence: the three labels appear in the order the frame carried.
-    const positions = PUBLISHED_ROWS.map((row) => markup.indexOf(row.display_name))
+    const positions = PUBLISHED_ROWS.filter(row => row.value !== 'default').map((row) => markup.indexOf(row.display_name))
     expect(positions.every((at) => at >= 0)).toBe(true)
     expect([...positions]).toEqual([...positions].sort((a, b) => a - b))
     // Exactly as many name elements as published entries — the guard that no client-owned row survives
     // alongside them. Stated as a count rather than as a list of the deleted labels, so this file keeps
     // no model name of its own either.
-    expect(markup.match(/run-config__model-name/g)?.length).toBe(PUBLISHED_ROWS.length)
+    expect(markup.match(/run-config__model-name/g)?.length).toBe(PUBLISHED_ROWS.length - 1)
   })
 
   it('marks the row whose value is EXACTLY the current model, and only that row (AC2)', () => {
-    for (const row of PUBLISHED_ROWS) {
+    for (const row of PUBLISHED_ROWS.filter(row => row.value !== 'default')) {
       const markup = renderToStaticMarkup(<RunConfigView {...base} model={row.value} models={PUBLISHED} />)
       expect(segmentFor(markup, 'run-config__model-row', row.display_name)).toContain('Current model')
       expect(markup.match(/Current model/g)?.length).toBe(1)
@@ -196,7 +196,7 @@ describe('RunConfigView — Model rows from the published list (#975)', () => {
       <RunConfigView {...base} models={PUBLISHED} onChange={(): void => undefined} />
     )
     expect(markup).toContain('role="button"')
-    for (const row of PUBLISHED_ROWS) {
+    for (const row of PUBLISHED_ROWS.filter(row => row.value !== 'default')) {
       const reselected = renderToStaticMarkup(
         <RunConfigView {...base} model={row.value} models={PUBLISHED} />
       )
@@ -225,14 +225,14 @@ describe('RunConfigView — Model rows from the published list (#975)', () => {
 
   it('shows the concrete identifier the value resolves to on the second line (AC4)', () => {
     const markup = renderToStaticMarkup(<RunConfigView {...base} models={PUBLISHED} />)
-    for (const row of PUBLISHED_ROWS) {
+    for (const row of PUBLISHED_ROWS.filter(row => row.value !== 'default')) {
       expect(markup).toContain(`<p class="run-config__model-descriptor">${row.resolved_model}</p>`)
     }
   })
 
   it('renders an unresolved (empty) identifier as a present, empty line rather than none', () => {
     const models: ModelListEntry = {
-      models: [modelRow({ value: 'default', display_name: 'Recommended pick' })],
+      models: [modelRow({ value: 'unresolved', display_name: 'Unresolved pick' })],
       droppedModels: 0
     }
     const markup = renderToStaticMarkup(<RunConfigView {...base} models={models} />)
@@ -1175,7 +1175,7 @@ describe('RunConfigView — running model (#560)', () => {
     expect(markup).not.toContain(UNKNOWN)
     // Naming the row IS "identifies that row": no second selection marker joins the list, which is what
     // keeps the 'Current model' count assertions (and the page-wide e2e count) honest.
-    expect(markup).not.toContain('Current model')
+    expect(markup.split('class="run-config__running"')[1]?.split('class="run-config__model-list"')[0]).not.toContain('Current model')
   })
 
   it('resolves every published value to its own display name (AC1)', () => {
@@ -1216,7 +1216,7 @@ describe('RunConfigView — running model (#560)', () => {
     )
     expect(markup).toContain(value('claude-haiku-4-5'))
     expect(markup).not.toContain(value('Quick tier'))
-    expect(markup).not.toContain('Current model')
+    expect(markup.split('class="run-config__running"')[1]?.split('class="run-config__model-list"')[0]).not.toContain('Current model')
   })
 
   it('does not join on resolved_model — that field is displayed, never matched (AC1)', () => {

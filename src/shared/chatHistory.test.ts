@@ -82,3 +82,19 @@ describe('chat history records and requests', () => {
     ]) expect(() => parseChatHistoryRequest(value)).toThrow()
   })
 })
+
+
+describe('saved list archive timestamp', () => {
+  const list = (rows: unknown[]) => ({ version: 1, kind: 'list', serverId: 'host', conversations: rows })
+  it.each(['2026-09-30T12:00:00Z', 'invalid-time', '', null])('preserves %s through JSON restoration', (archived_at) => {
+    const saved = list([{ ...summary, archived_at }])
+    expect(parseChatHistorySnapshot(JSON.parse(JSON.stringify(saved)))).toEqual(saved)
+  })
+  it('restores a pre-field saved snapshot without inventing an archive time', () => {
+    const saved = list([summary])
+    expect(parseChatHistorySnapshot(JSON.parse(JSON.stringify(saved)))).toEqual(saved)
+  })
+  it.each([false, true, 1, {}, []])('rejects wrong-type saved stamps: %s', (archived_at) => {
+    expect(() => parseChatHistorySnapshot(list([{ ...summary, archived_at }]))).toThrow()
+  })
+})

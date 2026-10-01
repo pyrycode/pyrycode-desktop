@@ -108,11 +108,12 @@ its inner `workspaceGroups` closes over each group's own key and hands `Collapsi
 nullary `create?: WorkspaceCreateControl`, which reaches `WorkspaceRow` unchanged — the same
 optional-value shape `Row` already uses for `onSaveAsChannel`. `renderBody` builds one control object
 per tree at its two `renderServerTrees` calls — the only place the two trees are told apart — and since
-[#1179](create-channel-dialog.md) supplies one to **both**: the `channels` call's opens [the
-Create-channel dialog](create-channel-dialog.md) instead of sending a command directly, the `discussions`
-call's still fires `(cwd) => requestNewConversation(window.pyry.sendCommand, cwd)` — the FAB's own
-constructor ([conversation-create.md](conversation-create.md)), and `requestNewConversation`'s **second
-caller**, the first with a `cwd` that is not the client's own saved default.
+[#1179](create-channel-dialog.md) supplies one to **both**. The Channels control opens [the
+Create-channel dialog](create-channel-dialog.md); since #1682 the Chats control opens a Create chat
+confirmation too. The callbacks receive the group's path from `renderServerTrees` but retain only
+its connected host. Confirming either dialog sends `cwd: null` for the daemon default; the clicked
+workspace path is no longer the creation destination. [Conversation create](conversation-create.md)
+covers the request constructors and confirmation-driven navigation.
 
 **#1179 turned the threaded value from a bare callback into one object carrying a name too.**
 `WorkspaceRow` used to hard-code `CREATE_CHAT_CONTROL_LABEL` on the plus's `aria-label`; once the
@@ -126,24 +127,17 @@ the container state that opens it.
 
 **The unknown-workspace group is withheld by its key, never by its label — in both trees since #1179.**
 `groupByWorkspace`'s fallback bucket keys on `UNKNOWN_WORKSPACE_KEY` (`''`, exported by this ticket for
-its first outside consumer), which names no directory and is **not** the same signal as the `cwd: null`
-"take the daemon default" the create payload keeps distinct on the wire; sending `''` as a `cwd` would
-ask the daemon to create in its own process directory. `renderServerTrees` compares the group's *key*
+its first outside consumer), which names no directory. The create payload instead sends `cwd: null`
+to request the daemon default; `''` would mean a different path. `renderServerTrees` compares the group's *key*
 against the sentinel and withholds the `create` control there — never against `UNKNOWN_WORKSPACE_LABEL`
 — so a real directory a user happens to name "Unknown workspace" is an ordinary group and keeps its
 plus. #1179 reuses this same withhold for the Channels-tree plus with no new condition, since one
 `create === undefined || group.key === UNKNOWN_WORKSPACE_KEY` check now gates both trees' controls.
 
-**Security review note, carried forward because it is the first time this value crosses this
-boundary:** `group.key` is `row.cwd`, daemon-asserted text that until now the sidebar only ever used as
-an escaped React child, a `Map` key or a React key. This ticket hands it to `requestNewConversation` as
-an *outgoing* command field for the first time. It travels verbatim — no normalisation, no trim, no
-`path` module — because `isCreateConversationPayload` re-validates at the renderer→main boundary and
-`daemonConnection.createConversation` rebuilds a fresh three-field literal before the send, and because
-the reachable set of values is a strict subset of paths the daemon itself asserted (the client mints no
-key but the withheld `''` sentinel). An oversized `cwd` fails closed the same way an oversized name
-already does — `buildCreateConversation` throws on the plaintext cap and the send is dropped, never
-partially written.
+**Security boundary.** `group.key` is daemon-asserted `row.cwd`, but neither create plus sends it
+back as a command field since #1682. The key still identifies groups and the Edit workspace target.
+The create callbacks keep the connected `serverId` from the clicked row and send `cwd: null`; main
+validates the typed payload before sending it to the daemon.
 
 **The control's name**, `CREATE_CHAT_CONTROL_LABEL = 'Create chat'`, is a client-owned module constant
 read by the plus's `aria-label`, in the `RENAME_CONTROL_LABEL` / `SAVE_AS_CHANNEL_CONTROL_LABEL` idiom
@@ -164,17 +158,14 @@ plan named as the cost of sharing `.channel-list__workspace-create` across both 
 `e2e/sidebar-tree-geometry.spec.ts` retargets `WORKSPACE_ICON_X` to `CARD_INSET_PX + 28` and adds
 `WORKSPACE_LABEL_X`, asserted equal to `TITLE_X` (both retargeted again by #1506, to `CARD_INSET_PX + 12`
 and `CARD_INSET_PX + 34` — see above). `e2e/sidebar-workspace-create.spec.ts` (the Chats-tree
-plus's own drive) seeds its clicked group's `cwd` at a path **other than** the fake harness's
-`DEFAULT_CREATED_CWD` (`conversationStateFake` mints a created row at `payload.cwd ?? DEFAULT_CREATED_CWD`,
-which happens to equal the default seed's own workspace) — otherwise a plus that silently sent `null`
-would still land its row in the same group and the drive would pass with the bug present. It reads the
-plus's box and opacity at rest/hover/focus (the last via a real Tab traversal, not `locator.focus()` —
-the same `:focus-visible` modality trap #1171 already documents), then clicks it and reads the row
-count and the group's own row count going up before reading `aria-expanded` unchanged. Its seed is a
-single **unpromoted** row, so #1179's Channels-tree plus renders no group at all and this spec's strict
-`.channel-list__workspace-create` locator still resolves to exactly one element even though both trees
-now draw that class — which is why #1179 needed no edit here. The Channels-tree plus's own drive,
-covering the dialog it opens, is [`e2e/sidebar-create-channel.spec.ts`](create-channel-dialog.md#testing).
+plus's own drive) seeds its clicked group at a path **other than** the fake harness's
+`DEFAULT_CREATED_CWD`. The fake mints a created row at `payload.cwd ?? DEFAULT_CREATED_CWD`, so
+the contrast proves the confirmation asks for the daemon default instead of the clicked path.
+The spec reads the plus's box and opacity at rest/hover/focus (the last via a real Tab traversal,
+not `locator.focus()`), then checks modal keyboard focus, cancel/close without a create, one
+`cwd: null` create on OK, and navigation only after the held daemon reply. The plus remains a
+sibling of the disclosure, so opening it does not toggle the fold. The Channels-tree plus's own
+drive is [`e2e/sidebar-create-channel.spec.ts`](create-channel-dialog.md#testing).
 
 ## Related
 

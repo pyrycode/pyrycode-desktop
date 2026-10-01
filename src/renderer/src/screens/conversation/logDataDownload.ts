@@ -7,7 +7,7 @@
 // events it consumes (debugBundleProgress / debugBundleSaved / debugBundleFailed) map to NO
 // session-store action — translateDaemonEvent returns null for them — so this section owns their
 // state locally (ADR 0006: ephemeral screen-local view-state, a useReducer over this pure reducer).
-import type { DaemonEvent, DebugBundleFailure } from '@shared/ipc/events'
+import type { DaemonEvent, DebugBundleFailure, StampedDaemonEvent } from '@shared/ipc/events'
 
 /**
  * The four visible phases of one download attempt. `downloading` carries a running chunk count (the
@@ -95,6 +95,19 @@ export function toDownloadAction(event: DaemonEvent): DownloadAction | null {
     default:
       return null
   }
+}
+
+/**
+ * #1692: the per-server filter over `toDownloadAction`. With two hosts paired, bundle events arrive
+ * stamped with the server that emitted them, and only the host this section asked may move it — so
+ * nothing before a request, and never another host's download.
+ */
+export function bundleActionFor(
+  event: StampedDaemonEvent,
+  requestedServerId: string | null
+): DownloadAction | null {
+  if (requestedServerId === null || event.serverId !== requestedServerId) return null
+  return toDownloadAction(event)
 }
 
 /**

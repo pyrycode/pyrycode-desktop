@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { onCommand, type CommandSource } from './receiveCommand'
 import { createCorrelationRouter } from './correlationRouter'
 import { createConversationRouter } from './conversationRouter'
+import { createConnectionRegistry } from './connectionRegistry'
 import { parseInboundMessage } from './transport/inboundMessage'
 import {
   createDaemonConnection,
@@ -35,6 +36,7 @@ import type {
 } from './transport/noiseRelayDriver'
 import type { DiagnosticEvent, DiagnosticLog } from './diagnosticLog'
 import { base64StdEncode, base64StdDecode, encodeEnvelope, decodeEnvelope } from './transport/codec'
+import { sessionSettingsGoldenFixtures } from './transport/sessionSettingsGoldenFixtures'
 import type { BundleConsumer, BundleFailReason } from './transport/bundleReassembler'
 import { createDebugBundleDownload, type DebugBundleDownload } from './debugBundleDownload'
 import {
@@ -802,14 +804,14 @@ describe('createDaemonConnection', () => {
     expect(JSON.stringify(events)).not.toContain('noise-handshake-secret-detail')
   })
 
-  it('decodes an inbound message frame into a single messageReceived event', async () => {
+  it('decodes an inbound message frame into a single timestamped messageReceived event', async () => {
     const { sink, drivers } = await reachConnected()
     const before = emitted(sink).length
     const message = { conversation_id: 'c1', message_id: 'm1', role: 'assistant', text: 'hi there' }
 
     drivers[0].emit({ type: 'message', plaintext: messagePlaintext(message) })
 
-    expect(emitted(sink).slice(before)).toEqual([{ type: 'messageReceived', message }])
+    expect(emitted(sink).slice(before)).toEqual([{ type: 'messageReceived', message, daemonTs: FIXED_TS }])
   })
 
   it('decodes an inbound message_chunk frame into one ordered messagesReceived event', async () => {
@@ -871,7 +873,7 @@ describe('createDaemonConnection', () => {
     ).not.toThrow()
     drivers[0].emit({ type: 'message', plaintext: messagePlaintext(message) })
 
-    expect(emitted(sink).slice(before)).toEqual([{ type: 'messageReceived', message }])
+    expect(emitted(sink).slice(before)).toEqual([{ type: 'messageReceived', message, daemonTs: FIXED_TS }])
   })
 
   it('drops an inbound message with a missing field or unknown role, without emitting or throwing', async () => {
@@ -925,8 +927,8 @@ describe('createDaemonConnection', () => {
     drivers[0].emit({ type: 'message', plaintext: messagePlaintext(message) })
 
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'messageReceived', message },
-      { type: 'messageReceived', message }
+      { type: 'messageReceived', message, daemonTs: FIXED_TS },
+      { type: 'messageReceived', message, daemonTs: FIXED_TS }
     ])
   })
 
@@ -944,13 +946,31 @@ describe('createDaemonConnection', () => {
     expect(sink.webContents.send.mock.calls.length).toBe(before)
   })
 
-  it('never constructs a driver when stop() races the bootstrap', async () => {
-    const { connection, drivers } = build()
+  it.each(['load', 'ensure'] as const)('never constructs a driver or emits after stop() races bootstrap %s', async (operation) => {
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    const load = vi.fn(async () => { await pending; return RECORD })
+    const ensure = vi.fn(async () => { await pending; return PAIR })
+    const { log, records } = captureLog()
+    const { connection, drivers, sink } = build({
+      load: operation === 'load' ? load : undefined,
+      ensure: operation === 'ensure' ? ensure : undefined,
+      diagnosticLog: log
+    })
     connection.start()
-    connection.stop() // before the async bootstrap resolves
+    await tick()
+    expect(operation === 'load' ? load : ensure).toHaveBeenCalledOnce()
+    expect(emitted(sink)).toEqual([{ type: 'connecting' }])
+    expect(records).toEqual([{ event: 'daemon-dial' }])
+    connection.stop()
+    const beforeEvents = emitted(sink)
+    const beforeRecords = [...records]
+    release()
     await tick()
 
     expect(drivers).toHaveLength(0)
+    expect(emitted(sink)).toEqual(beforeEvents)
+    expect(records).toEqual(beforeRecords)
   })
 
   it('is idempotent: a second start() does not construct a second driver', async () => {
@@ -1224,7 +1244,7 @@ describe('createDaemonConnection — teardown on unpair (#504)', () => {
     const message = { conversation_id: 'c1', message_id: 'm1', role: 'assistant', text: 'hi there' }
     const beforeControl = emitted(ctx.sink).length
     ctx.drivers[0].emit({ type: 'message', plaintext: messagePlaintext(message) })
-    expect(emitted(ctx.sink).slice(beforeControl)).toEqual([{ type: 'messageReceived', message }])
+    expect(emitted(ctx.sink).slice(beforeControl)).toEqual([{ type: 'messageReceived', message, daemonTs: FIXED_TS }])
 
     // The renderer's unpair invoke, through the real handler wired the way index.ts wires it.
     const listener = unpairListenerFor({ store, onUnpaired: () => ctx.connection.reconnect() })
@@ -1634,7 +1654,7 @@ describe('createDaemonConnection — structured stream (assistant_delta / turn_e
     drivers[0].emit({ type: 'message', plaintext: chunkPlaintext({ messages: [a] }) })
 
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'messageReceived', message },
+      { type: 'messageReceived', message, daemonTs: FIXED_TS },
       { type: 'messagesReceived', messages: [a] }
     ])
   })
@@ -4180,7 +4200,7 @@ describe('createDaemonConnection — session_transition stream (#254)', () => {
     drivers[0].emit({ type: 'message', plaintext: chunkPlaintext({ messages: [a] }) })
 
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'messageReceived', message },
+      { type: 'messageReceived', message, daemonTs: FIXED_TS },
       { type: 'messagesReceived', messages: [a] }
     ])
   })
@@ -4366,7 +4386,7 @@ describe('createDaemonConnection — session_settings_updated correlation (#261,
     drivers[0].emit({ type: 'message', plaintext: chunkPlaintext({ messages: [a] }) })
 
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'messageReceived', message },
+      { type: 'messageReceived', message, daemonTs: FIXED_TS },
       { type: 'messagesReceived', messages: [a] }
     ])
   })
@@ -5034,6 +5054,7 @@ describe('createDaemonConnection — conversations (list_conversations request /
     is_promoted: true,
     is_archived: false,
     is_muted: false,
+    archived_at: null,
     cwd: '/home/user/project',
     last_message_ts: '2026-07-08T00:00:00Z',
     last_used_at: '2026-07-09T00:00:00Z',
@@ -5045,6 +5066,7 @@ describe('createDaemonConnection — conversations (list_conversations request /
     is_promoted: false,
     is_archived: true,
     is_muted: true,
+    archived_at: null,
     cwd: '/tmp/scratch',
     last_message_ts: '2026-07-07T00:00:00Z',
     last_used_at: '2026-07-07T12:00:00Z',
@@ -6375,6 +6397,76 @@ describe('createDaemonConnection — setSessionSettings (outbound set_session_se
     connection.setSessionSettings(PARTIAL, 'change-2')
     expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
   })
+
+  it.each(['build', 'send'] as const)(
+    'rejects local %s failure once without leaking content or leaving a pending correlation',
+    async (failure) => {
+      const { log, records } = captureLog()
+      const { connection, sink, drivers } = build({ diagnosticLog: log })
+      connection.start()
+      await tick()
+      const driver = drivers[0]
+      driver.emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+      const payload: SetSessionSettingsPayload = {
+        session_id: 'private-session',
+        model: failure === 'build' ? 'private-model'.repeat(MAX_PLAINTEXT_BYTES) : 'private-model',
+        effort: 'private-effort',
+        permission_mode: 'private-mode',
+        yolo: true
+      }
+      const send = vi.spyOn(driver.handle, 'sendMessage')
+      if (failure === 'send') {
+        send.mockImplementationOnce(() => {
+          throw new Error(`private-exception ${JSON.stringify(payload)} private-change`)
+        })
+      }
+      const beforeEvents = emitted(sink).length
+      const beforeLogs = records.length
+
+      expect(() => connection.setSessionSettings(payload, 'private-change')).not.toThrow()
+      const rejection = { type: 'sessionSettingsRejected', changeId: 'private-change' }
+      expect(emitted(sink).slice(beforeEvents)).toEqual([rejection])
+      expect(records.slice(beforeLogs)).toEqual([
+        { event: 'session-settings-write-failed', code: 'build-or-send-failed' }
+      ])
+      expect(send).toHaveBeenCalledTimes(failure === 'build' ? 0 : 1)
+      expect(driver.sent).toHaveLength(0)
+
+      // A real inbound confirmation cannot settle a request that failed locally.
+      driver.emit({
+        type: 'message',
+        plaintext: sessionSettingsUpdatedPlaintext({ session_id: 'private-session' }, 2)
+      })
+      await tick()
+      expect(emitted(sink).slice(beforeEvents)).toEqual([rejection])
+      expect(send).toHaveBeenCalledTimes(failure === 'build' ? 0 : 1)
+
+      // Build failures keep the id; send failures consume it. A subsequent write remains pending
+      // until its own daemon confirmation and cannot inherit the failed change's correlation.
+      const beforeSuccessLogs = records.length
+      connection.setSessionSettings(PARTIAL, 'successful-change')
+      expect(emitted(sink).slice(beforeEvents)).toEqual([rejection])
+      expect(records.slice(beforeSuccessLogs)).toEqual([{ event: 'session-settings-write-sent' }])
+      expect(driver.sent).toHaveLength(1)
+      const id = decodeEnvelope(driver.sent[0]).id
+      expect(id).toBe(failure === 'build' ? 2 : 3)
+      driver.emit({
+        type: 'message',
+        plaintext: sessionSettingsUpdatedPlaintext({ session_id: PARTIAL.session_id }, id)
+      })
+      driver.emit({
+        type: 'message',
+        plaintext: sessionSettingsUpdatedPlaintext({ session_id: PARTIAL.session_id }, id)
+      })
+      expect(emitted(sink).slice(beforeEvents)).toEqual([
+        rejection,
+        { type: 'sessionSettingsUpdated', sessionId: 'sess-a', changeId: 'successful-change' }
+      ])
+      expect(JSON.stringify(records)).not.toMatch(/private-|sess-a|successful-change/)
+      connection.stop()
+    }
+  )
 })
 
 describe('createDaemonConnection — answerModal (outbound modal_answer, #236)', () => {
@@ -6922,7 +7014,7 @@ describe('createDaemonConnection — debug-bundle reassembly routing (#116)', ()
     drivers[0].emit({ type: 'message', plaintext: messagePlaintext(msg) })
     drivers[0].emit({ type: 'message', plaintext: bundleDonePlaintext(1) })
 
-    expect(emitted(sink).slice(before)).toEqual([{ type: 'messageReceived', message: msg }])
+    expect(emitted(sink).slice(before)).toEqual([{ type: 'messageReceived', message: msg, daemonTs: FIXED_TS }])
     expect([...completed[0]]).toEqual([1, 2, 3, 4])
   })
 
@@ -8647,6 +8739,25 @@ describe('createDaemonConnection — newSession (kill-and-respawn claude in one 
 })
 
 describe('createDaemonConnection — requestSessionSettings (run-config request/reply, #491)', () => {
+  const MEMORY_CASES = [
+    { name: 'available', report: { availability: 'available', providers: [
+      { id: 'qmd', display_name: 'QMD', installed: true, enabled: true, availability: 'available' }
+    ] } },
+    { name: 'disabled', report: { availability: 'unavailable', providers: [
+      { id: 'memsearch', display_name: 'Memsearch', installed: true, enabled: false, availability: 'unavailable' }
+    ] } },
+    { name: 'absent', report: { availability: 'absent', providers: [] } },
+    { name: 'unknown', report: { availability: 'unknown', providers: [] } },
+    { name: 'omitted', report: undefined }
+  ] as const
+
+  // The daemon fixtures omit in_reply_to; add only the request correlation for this event path.
+  function correlatedGoldenFixture(name: keyof typeof sessionSettingsGoldenFixtures, replyTo: number): Uint8Array {
+    return encodeEnvelope({
+      ...decodeEnvelope(Buffer.from(sessionSettingsGoldenFixtures[name])),
+      in_reply_to: replyTo
+    })
+  }
   const RUN_CONFIG = {
     session_id: 'sess-a',
     model: 'claude-opus-4-8',
@@ -8694,6 +8805,59 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     ctx.connection.requestSessionSettings(conversationId)
     return { ...ctx, replyTo: lastRequestId(ctx) }
   }
+
+  it.each(MEMORY_CASES)('carries the daemon $name memory report to the stamped event', async ({ name, report }) => {
+    const ctx = await requested()
+    ctx.drivers[0].emit({ type: 'message', plaintext: correlatedGoldenFixture(name, ctx.replyTo) })
+    const events = stampedEvents(ctx.sink).filter((e) => e.type === 'runConfigReceived')
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ conversationId: CONV, serverId: 'server-config',
+      sessionId: 'sess-a', model: 'opus', effort: 'high', yolo: false,
+      permissionMode: 'default', used_tokens: 12480, window_tokens: 200000,
+      memorySearch: report })
+    expect(events[0]).not.toHaveProperty('memory_search')
+  })
+
+  it('keeps an older or malformed memory report from becoming confirmed status', async () => {
+    const ctx = await requested()
+    ctx.drivers[0].emit({ type: 'message', plaintext: correlatedGoldenFixture('omitted', ctx.replyTo) })
+    ctx.connection.requestSessionSettings(CONV)
+    ctx.drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext({
+      ...RUN_CONFIG, memory_search: { availability: 'available', providers: [{}] }
+    }, lastRequestId(ctx)) })
+    const events = stampedEvents(ctx.sink).filter((e) => e.type === 'runConfigReceived')
+    expect(events).toHaveLength(2)
+    expect(events[0].memorySearch).toBeUndefined()
+    expect(events[1].memorySearch).toEqual({ availability: 'unknown', providers: [] })
+    expect(events[1]).toMatchObject({ model: RUN_CONFIG.model, effort: RUN_CONFIG.effort,
+      permissionMode: RUN_CONFIG.permission_mode, used_tokens: RUN_CONFIG.used_tokens,
+      window_tokens: RUN_CONFIG.window_tokens })
+  })
+
+  it('attributes out-of-order memory reports by request and drops unmatched or abandoned replies', async () => {
+    const ctx = await connected()
+    ctx.connection.requestSessionSettings('conv-first')
+    const first = lastRequestId(ctx)
+    ctx.connection.requestSessionSettings('conv-second')
+    const second = lastRequestId(ctx)
+    ctx.drivers[0].emit({ type: 'message', plaintext: correlatedGoldenFixture('absent', second) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: correlatedGoldenFixture('available', first) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: correlatedGoldenFixture('available', first) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: correlatedGoldenFixture('available', first + 100) })
+    expect(stampedEvents(ctx.sink).filter((e) => e.type === 'runConfigReceived')
+      .map((e) => ({ conversationId: e.conversationId, serverId: e.serverId,
+        memorySearch: e.memorySearch }))).toEqual([
+      { conversationId: 'conv-second', serverId: 'server-config', memorySearch: MEMORY_CASES[2].report },
+      { conversationId: 'conv-first', serverId: 'server-config', memorySearch: MEMORY_CASES[0].report }
+    ])
+    ctx.connection.requestSessionSettings('conv-abandoned')
+    const abandoned = lastRequestId(ctx)
+    ctx.connection.reconnect()
+    await tick()
+    ctx.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    ctx.drivers[1].emit({ type: 'message', plaintext: correlatedGoldenFixture('available', abandoned) })
+    expect(stampedEvents(ctx.sink).filter((e) => e.type === 'runConfigReceived')).toHaveLength(2)
+  })
 
   it('drops superseded reads of the same conversation', async () => {
     const ctx = await requested()
@@ -11895,11 +12059,7 @@ describe('createDaemonConnection — the envelope ts on the timeline-bearing emi
     expect(handshake[0]).not.toHaveProperty('daemonTs')
   })
 
-  it('leaves `messageReceived` unstamped — the operator\'s own row has no live twin to join', async () => {
-    // A live `message` frame maps onto this arm, but the daemon pushes none on the interactive lane:
-    // the operator's message is written to the log only, so its page entry has nothing to be joined to
-    // and its duplicate is the optimistic echo `removeUserEcho` dedups on `message_id`. Stamping it
-    // would mint a key that suppresses a row the live stream never drew.
+  it('forwards the message envelope timestamp for live receipt display', async () => {
     const events = await emitFor('message', {
       conversation_id: CONV,
       message_id: 'm-1',
@@ -11907,7 +12067,7 @@ describe('createDaemonConnection — the envelope ts on the timeline-bearing emi
       text: 'hello'
     })
     expect(events).toHaveLength(1)
-    expect(events[0]).not.toHaveProperty('daemonTs')
+    expect(events[0]).toHaveProperty('daemonTs', FRAME_TS)
   })
 })
 
@@ -12407,5 +12567,176 @@ describe('readWorkspaceFile (#1626)', () => {
     drivers[0].emit({ type: 'message', plaintext: wholeFileChunk(id, MINTED, new Uint8Array([1])) })
 
     expect(spy.failed).toEqual(['stream-contradiction'])
+  })
+})
+
+describe('reconnect replay cursor', () => {
+  const rawFrame = (eventId: unknown, type = 'future', payload: unknown = null): Uint8Array =>
+    new TextEncoder().encode(JSON.stringify({ id: 1, type, ts: FIXED_TS, event_id: eventId, payload }))
+  const receive = (ctx: ReturnType<typeof build>, eventId: unknown, type = 'future', payload: unknown = null): void =>
+    ctx.drivers.at(-1)!.emit({ type: 'message', plaintext: rawFrame(eventId, type, payload) })
+  const hello = async (ctx: ReturnType<typeof build>): Promise<Record<string, unknown>> => {
+    const config = await ctx.drivers.at(-1)!.config.loadDialConfig!()
+    const payload = decodeEnvelope(config!.session.hello).payload as Record<string, unknown>
+    expect(payload).not.toHaveProperty('last_seen_ts')
+    return payload
+  }
+
+  it('starts empty and retains the maximum admitted safe integer across automatic and explicit redials', async () => {
+    const ctx = await reachConnected()
+    expect(decodeEnvelope(ctx.drivers[0].config.session.hello).payload).not.toHaveProperty('last_event_id')
+    receive(ctx, 12, 'message', null) // rejected payload still establishes the position
+    receive(ctx, 11)
+    receive(ctx, 12)
+    for (const invalid of [undefined, null, '90', 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) receive(ctx, invalid)
+    expect(await hello(ctx)).toHaveProperty('last_event_id', 12)
+    receive(ctx, 13)
+    expect(await hello(ctx)).toHaveProperty('last_event_id', 13)
+    ctx.connection.reconnect()
+    await tick()
+    expect(decodeEnvelope(ctx.drivers[1].config.session.hello).payload).toHaveProperty('last_event_id', 13)
+    ctx.drivers[0].emit({ type: 'message', plaintext: rawFrame(900) })
+    expect(await hello(ctx)).toHaveProperty('last_event_id', 13)
+    receive(ctx, Number.MAX_SAFE_INTEGER)
+    expect(await hello(ctx)).toHaveProperty('last_event_id', Number.MAX_SAFE_INTEGER)
+    // Unknown/malformed frames still emit no new renderer events or commands.
+    expect(emitted(ctx.sink).map(event => event.type)).toEqual(['connecting', 'connected', 'connecting'])
+    expect(ctx.drivers.flatMap(driver => driver.sent)).toEqual([])
+  })
+
+  it('resync clears only its host, logs no position and permits a new lower position', async () => {
+    const { log, records } = captureLog()
+    const a = build({ serverId: 'A', diagnosticLog: log })
+    const b = build({ serverId: 'B', load: async () => ({ ...RECORD, server: 'B' }) })
+    for (const ctx of [a, b]) { ctx.connection.start(); await tick() }
+    receive(a, 41)
+    receive(b, 99)
+    const before = emitted(a.sink)
+    for (const payload of [null, [], 'gap', 1, {}]) {
+      receive(a, 1000, 'resync', payload)
+      expect(await hello(a)).not.toHaveProperty('last_event_id')
+    }
+    expect(await hello(b)).toHaveProperty('last_event_id', 99)
+    expect(emitted(a.sink)).toEqual(before)
+    expect(a.drivers[0].sent).toEqual([])
+    a.connection.reconnect()
+    await tick()
+    expect(decodeEnvelope(a.drivers[1].config.session.hello).payload).not.toHaveProperty('last_event_id')
+    receive(a, 2)
+    expect(await hello(a)).toHaveProperty('last_event_id', 2)
+    expect(records.filter(record => record.event === 'replay-cursor-reset')).toEqual(
+      Array.from({ length: 5 }, () => ({ event: 'replay-cursor-reset', code: 'resync' }))
+    )
+    expect(records.every(record => !('event_id' in record) && !('last_event_id' in record))).toBe(true)
+  })
+
+  it('guard failures cannot record or reset a position', async () => {
+    const ctx = await reachConnected()
+    receive(ctx, 10)
+    for (const plaintext of [
+      new Uint8Array(65_520), new Uint8Array([0xff]),
+      new TextEncoder().encode(JSON.stringify({ id: 1, type: 'resync', ts: FIXED_TS, event_id: 100 }))
+    ]) ctx.drivers[0].emit({ type: 'message', plaintext })
+    expect(await hello(ctx)).toHaveProperty('last_event_id', 10)
+  })
+
+  it.each([
+    { server: 'replacement' }, { relay: 'wss://other.example/v1/client' },
+    { token: 'replacement-token' }, { server_static_pubkey: base64StdEncode(new Uint8Array(32).fill(8)) }
+  ])('record replacement resets the retained connection: %j', async change => {
+    let record = { ...RECORD }
+    const ctx = build({ load: async () => ({ ...record }) })
+    ctx.connection.start()
+    await tick()
+    receive(ctx, 42)
+    expect(await hello(ctx)).toHaveProperty('last_event_id', 42) // equal fresh object preserves
+    record = { ...record, ...change }
+    expect(await hello(ctx)).not.toHaveProperty('last_event_id')
+    receive(ctx, 3)
+    ctx.connection.reconnect()
+    await tick()
+    expect(decodeEnvelope(ctx.drivers[1].config.session.hello).payload).toHaveProperty('last_event_id', 3)
+  })
+
+  it('an absent pairing clears the old position before pairing the same host again', async () => {
+    let record: PairedServerRecord | null = RECORD
+    const ctx = build({ load: async () => record })
+    ctx.connection.start()
+    await tick()
+    receive(ctx, 42)
+    record = null
+    expect(await ctx.drivers[0].config.loadDialConfig!()).toBeNull()
+    record = RECORD
+    ctx.connection.reconnect()
+    await tick()
+    expect(decodeEnvelope(ctx.drivers[1].config.session.hello).payload).not.toHaveProperty('last_event_id')
+  })
+
+  it('a superseded asynchronous load cannot reset the successor cursor', async () => {
+    let record = RECORD
+    let delayed: Promise<PairedServerRecord | null> | undefined
+    const ctx = build({ load: () => delayed ?? Promise.resolve(record) })
+    ctx.connection.start()
+    await tick()
+    receive(ctx, 42)
+    let resolveOld!: (record: PairedServerRecord) => void
+    delayed = new Promise(resolve => { resolveOld = resolve })
+    const stale = ctx.drivers[0].config.loadDialConfig!()
+    delayed = undefined
+    record = { ...RECORD, token: 'new-pairing' }
+    ctx.connection.reconnect()
+    await tick()
+    receive(ctx, 7)
+    resolveOld(RECORD)
+    expect(await stale).toBeNull()
+    expect(await hello(ctx)).toHaveProperty('last_event_id', 7)
+  })
+
+  it('registry replacement and unpair/re-pair reset only that host, preserving other connections', async () => {
+    const other = { ...RECORD, server: 'other' }
+    let records = [RECORD, other]
+    const contexts = new Map<string | null, ReturnType<typeof build>>()
+    const registry = createConnectionRegistry({
+      store: {
+        save: async () => {},
+        load: async () => records.at(-1) ?? null,
+        loadById: async id => records.find(record => record.server === id) ?? null,
+        list: async () => records.map(record => ({ ...record }))
+      },
+      createConnection: spec => {
+        const ctx = build({ serverId: spec.serverId, load: spec.pairedServer.load })
+        contexts.set(spec.serverId, ctx)
+        return ctx.connection
+      }
+    })
+    registry.start()
+    await tick()
+    const a = contexts.get(RECORD.server)!
+    const b = contexts.get(other.server)!
+    receive(a, 42)
+    receive(b, 99)
+    records = [{ ...RECORD, token: 'replacement-token' }, other]
+    registry.reconcile()
+    await tick()
+    expect(contexts.get(RECORD.server)).toBe(a) // replacement retains the connection
+    expect(a.drivers).toHaveLength(2)
+    expect(decodeEnvelope(a.drivers[1].config.session.hello).payload).not.toHaveProperty('last_event_id')
+    expect(await hello(b)).toHaveProperty('last_event_id', 99)
+    receive(a, 7)
+
+    records = [other]
+    registry.reconcile()
+    await tick()
+    expect(a.drivers[1].stopped).toBe(true)
+    records = [other, RECORD]
+    registry.reconcile()
+    await tick()
+    const pairedAgain = contexts.get(RECORD.server)!
+    expect(pairedAgain).not.toBe(a)
+    expect(decodeEnvelope(pairedAgain.drivers[0].config.session.hello).payload).not.toHaveProperty('last_event_id')
+    expect(contexts.get(other.server)).toBe(b)
+    expect(b.drivers).toHaveLength(1)
+    expect(await hello(b)).toHaveProperty('last_event_id', 99)
+    registry.stop()
   })
 })

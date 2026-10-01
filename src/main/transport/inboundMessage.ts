@@ -30,6 +30,7 @@ import {
   agentFromWire
 } from '../../shared/wire/types'
 import type {
+  Envelope,
   WireAgent,
   BannerPayload,
   MessagePayload,
@@ -62,6 +63,8 @@ import type {
   SessionTransitionPayload,
   SessionSettingsPayload,
   SessionCapabilitiesPayload,
+  MemorySearchPayload,
+  MemorySearchAvailability,
   SessionPromptStatus,
   SystemPromptPayload,
   SessionSettingsUpdatedPayload,
@@ -336,32 +339,13 @@ export interface RetrievedAttachmentChunk extends Omit<AttachmentChunkPayload, '
 }
 
 /**
- * The `ts` of the envelope an arm was decoded from (#1225) — the DAEMON'S OWN timestamp for the logical
- * event, mixed into exactly the ten timeline-bearing arms of `InboundDaemonMessage` below and into no
- * other. The daemon mints one timestamp per logical event, hoisted above its per-connection fan-out, and
- * hands that same value to the conversation-log entry and to every outbound envelope for that event — so
- * (`type`, `ts`) is the one key on which a served history page can be joined to what the live stream
- * already drew, and the window's `HistoryTimelineEntry` has carried the page half of it since #1227.
+ * The daemon envelope timestamp, mixed into live timeline-bearing results. The message arm also
+ * carries it for receipt display. It is per-frame, independent of server origin. History page
+ * envelope times are not entry times, so the page arm intentionally carries no FrameTimestamp.
  *
- * IT MUST COME FROM THE DECODE AND CANNOT RIDE #1068's STAMP. `bindServerOrigin` applies `serverId` at
- * BIND time, once per producer; this value is per-FRAME. That is the whole reason the thread crosses
- * this file at all rather than being added beside the origin in `emitDaemonEvent.ts`.
- *
- * MIXED IN PER-ARM RATHER THAN DISTRIBUTED OVER THE WHOLE UNION, which is the opposite of the shape the
- * IPC side takes (`DaemonEvent`'s optional `daemonTs`, #1068's `WithOrigin`). The two differ because the
- * requirements do: here the field is REQUIRED and the set of arms is closed, so naming it at each of the
- * ten sites is what makes "these ten and no others" readable at the declaration instead of inferable
- * from the emit; there it is optional and must not perturb 33 test files of bare literals. `history-page`
- * is deliberately NOT among them — a page's `ts` is per-ENTRY and already on each decoded entry, so
- * stamping the envelope that carried the page would put the ANSWER's clock where the entries' belong.
- *
- * SECURITY: a daemon-asserted string that reaches a COMPARISON and nothing else. `decodeEnvelope` has
- * already fail-closed a non-string `ts`, so what is carried here is a validated `string` — the check
- * matters, because a `ts: {}` template-stringified downstream would collapse every frame onto one join
- * key and turn a dedup into a mass suppressor. It is never parsed into a date, never sorted on to decide
- * row order, never rendered, and never a filename, a lookup path, a cache key or a log field: the ten
- * decode arms below log byte length and a one-way hash only, and `emitDaemonEvent` is log-free by
- * construction.
+ * SECURITY: `decodeEnvelope` validates string shape. Timeline joins use a bounded comparand; user
+ * receipts parse a bounded value into finite epoch milliseconds. Never use it as a path, filename,
+ * URL, React key or log field. Diagnostics carry only static codes, byte lengths and payload hashes.
  */
 interface FrameTimestamp {
   ts: string
@@ -822,7 +806,7 @@ interface FrameTimestamp {
  */
 export type InboundDaemonMessage =
   | { kind: 'banner'; banner: BannerPayload }
-  | { kind: 'message'; message: MessagePayload }
+  | ({ kind: 'message'; message: MessagePayload } & FrameTimestamp)
   | { kind: 'chunk'; messages: MessagePayload[] }
   | { kind: 'bundle-chunk'; seq: number; data: Uint8Array }
   | { kind: 'bundle-done'; total: number }
@@ -1364,8 +1348,49 @@ function parseSessionSettingsPayload(payload: unknown): SessionSettingsPayload {
   const capabilities = payload.capabilities === undefined
     ? undefined
     : parseSessionCapabilities(payload.capabilities)
+  const memory_search = Object.hasOwn(payload, 'memory_search')
+    ? parseMemorySearchReport(payload.memory_search)
+    : undefined
   return {
-    session_id, model, effort, effective_effort, yolo, permission_mode, used_tokens, window_tokens, capabilities
+    session_id, model, effort, effective_effort, yolo, permission_mode, used_tokens, window_tokens,
+    capabilities, memory_search
+  }
+}
+
+/** A malformed present report is unknown as a whole; no partial provider can confirm availability. */
+function parseMemorySearchReport(value: unknown): MemorySearchPayload {
+  const unknown: MemorySearchPayload = { availability: 'unknown', providers: [] }
+  if (!isRecord(value) || !Array.isArray(value.providers)) return unknown
+  const availability = memorySearchAvailability(value.availability)
+  if (availability === null) return unknown
+
+  const providers: MemorySearchPayload['providers'] = []
+  for (const provider of value.providers) {
+    if (!isRecord(provider) ||
+      typeof provider.id !== 'string' ||
+      typeof provider.display_name !== 'string' ||
+      typeof provider.installed !== 'boolean' ||
+      typeof provider.enabled !== 'boolean') return unknown
+    const providerAvailability = memorySearchAvailability(provider.availability)
+    if (providerAvailability === null) return unknown
+    providers.push({
+      id: provider.id,
+      display_name: provider.display_name,
+      installed: provider.installed,
+      enabled: provider.enabled,
+      availability: providerAvailability
+    })
+  }
+  return { availability, providers }
+}
+
+function memorySearchAvailability(value: unknown): MemorySearchAvailability | null {
+  switch (value) {
+    case 'available': return 'available'
+    case 'unavailable': return 'unavailable'
+    case 'absent': return 'absent'
+    case 'unknown': return 'unknown'
+    default: return null
   }
 }
 
@@ -3084,7 +3109,7 @@ function parseQueueStatePayload(payload: unknown): QueueStatePayload {
  * every field is required-present — `name: null` is a valid VALUE (a distinct unnamed conversation,
  * AC2), and `is_promoted: false` / `is_archived: false` are valid values (an ad-hoc discussion /
  * unarchived), never absences, so requireStringOrNull / requireBoolean check the TYPE, not truthiness.
- * Returns only the nine known fields; unknown server-added keys are tolerated (forward-compat) but
+ * Returns only the known fields; unknown server-added keys are tolerated (forward-compat) but
  * NOT copied through — this is what keeps the emitted event minimal. Its messages name the failure
  * category only — a `name` / `cwd` / `workspace_label` could echo a conversation title, a workspace path
  * or a workspace name.
@@ -3112,6 +3137,7 @@ function parseConversationSummary(payload: unknown): ConversationSummary {
   const cwd = requireString(payload, 'cwd')
   const last_message_ts = requireString(payload, 'last_message_ts')
   const last_used_at = requireString(payload, 'last_used_at')
+  const archived_at = payload.archived_at === undefined ? null : requireStringOrNull(payload, 'archived_at')
   const workspace_label = requireStringOrNull(payload, 'workspace_label')
   const is_muted = payload.is_muted === undefined ? false : requireBoolean(payload, 'is_muted')
   return {
@@ -3123,6 +3149,7 @@ function parseConversationSummary(payload: unknown): ConversationSummary {
     cwd,
     last_message_ts,
     last_used_at,
+    archived_at,
     workspace_label,
     ...optionalAgent(payload)
   }
@@ -4023,7 +4050,8 @@ function parseBannerPayload(payload: unknown): BannerPayload {
  */
 export function parseInboundMessage(
   plaintext: Uint8Array,
-  diagnosticLog?: DiagnosticLog
+  diagnosticLog?: DiagnosticLog,
+  observeEnvelope?: (envelope: Envelope) => void
 ): InboundDaemonMessage | null {
   // Size guard (AC4): decodeEnvelope does not size-check, so this is the only thing that makes an
   // oversized-but-valid-JSON frame fail closed here. The upstream Noise transport already bounds the
@@ -4033,10 +4061,14 @@ export function parseInboundMessage(
     throw new WireDecodeError('inbound plaintext exceeds max size')
   }
   const envelope = decodeEnvelope(plaintext)
+  // Replay position belongs to the admitted envelope, even when payload narrowing later fails.
+  observeEnvelope?.(envelope)
   // Each log fires AFTER the modeled envelope has fully narrowed, so the throw path stays unlogged: a
   // frame that fails to narrow throws first and leaves no record. Optional chaining short-circuits the
   // whole call (including hashPlaintext) when no logger is injected — absent-logger costs nothing.
   switch (envelope.type) {
+    case 'resync':
+      return null
     case 'message': {
       const message = parseMessagePayload(envelope.payload)
       diagnosticLog?.event({
@@ -4045,7 +4077,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'message', message }
+      return { kind: 'message', message, ts: envelope.ts }
     }
     case 'message_chunk': {
       const { messages } = parseMessageChunkPayload(envelope.payload)

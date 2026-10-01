@@ -144,8 +144,8 @@ Related.
 
 ## What it does
 
-Requests settings on sheet open, connection, turn completion, every conversation activation
-(including reopening the current chat), and a correlated successful effort write. Activation
+Requests settings on Run configuration or Channel info sheet open, connection, turn completion,
+every conversation activation (including reopening the current chat), and a correlated successful effort write. Activation
 supplies the bound session and saved choices even before a first message; see the
 [activation seam](paired-shell-conversation-exits.md#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166).
 The [write bridge](run-settings-write-store.md#remembering-the-confirmed-level-1169) refreshes after
@@ -172,6 +172,7 @@ export interface RunConfigSnapshot {
   permissionMode: string                     // #1020 — '' means "no session was resolved"
   usedTokens: number; windowTokens: number   // #192 — windowTokens === 0 means "usage unavailable"
   slashCommands?: boolean; mcpServers?: boolean; contextUsageDetail?: boolean  // #1655, see below
+  memorySearch?: MemorySearchPayload          // daemon search report; omission means unknown
 }
 export interface RunConfigState { snapshot: RunConfigSnapshot | null }  // null = not yet loaded
 export type RunConfigStore = RunConfigState & {
@@ -209,6 +210,13 @@ of two.
 `permissionMode` (#1020) follows the identical verbatim-hold rule — see § Permission mode below for
 what the value means and why it is never derived from `yolo`.
 
+`memorySearch` is copied only when the daemon supplies its optional search report. The whole-snapshot
+replacement drops an earlier report when the next accepted reply omits it; an explicit `unknown`
+remains a report, and provider `installed: false` or `enabled: false` stays intact. The aggregate
+availability, not the number of providers or the MCP server list, determines whether search was
+reported absent. See [Channel info](conversation-shell-session-and-channel-info.md#memory-search-report)
+for the displayed states.
+
 ### Permission mode (#1020)
 
 The snapshot's `permissionMode` reports the running child's confirmed permission mode.
@@ -232,7 +240,8 @@ A rejection requests a refresh without cancelling an earlier acknowledged target
 extending its deadline. Timeout preserves the latest report.
 
 Conversation/host changes, owning-host reconnects, reset and session replacement clear
-permission confirmation while preserving other snapshot fields where applicable.
+permission confirmation and the memory-search report while preserving other snapshot fields where
+applicable.
 Reset suppresses incoming readings until completion.
 A replacement during reset keeps that suppression, and completion keeps the new session guard.
 Main discards superseded requests and requests invalidated by reset or replacement.
@@ -495,6 +504,16 @@ change, so no subscriber wakes on a redundant clear. It reverts to the *distinct
 never to an all-zero snapshot — `''` / `false` / `0` are real daemon readings and must stay
 distinguishable from "nothing has arrived for this chat yet", which is what makes every footer
 control's not-known rendering reachable at all.
+
+The optional memory-search report follows this lifetime too: activation of a different conversation
+or exit drops the whole snapshot. `subscribeConfirmedRunConfig` also removes `memorySearch` from a
+retained snapshot on conversation or host change, owning-host reconnect, reset, and session transition;
+those paths retain some other fields, so relying on `clearSnapshot` alone would leave a stale search
+claim visible. The existing conversation, host and expected-session gates admit only a current reply
+to restore it. A not-yet-loaded or omitted report therefore reads as unknown in Channel info until a
+correlated reply supplies a report. Opening Channel info requests fresh session settings for its
+active conversation through `requestRunConfigSnapshot`; activation and reconnect continue to refresh
+the same reading.
 
 Both conversation-lifetime helpers call it through one shared `clearRunConfig` dep member that also
 resets [Run configuration write store](run-settings-write-store.md) in the same act — since #1231,

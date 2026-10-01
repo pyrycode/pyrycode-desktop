@@ -30,7 +30,7 @@ once.
 
   ```ts
   export type ConversationStatus =
-    | 'input-required' // a permission or trust prompt is outstanding; the operator is the blocker
+    | 'input-required' // a prompt or question batch is pending; the operator is the blocker
     | 'working'         // the assistant is mid-work in this conversation
     | 'new-messages'    // content this client holds that the operator has not read
     | 'idle'            // nothing to report
@@ -53,8 +53,8 @@ once.
   cost.
 
 - **Precedence, a flat sequence of early returns, one line per level:**
-  1. **Input required** — a permission or trust prompt is outstanding for this conversation. The one
-     state blocked on the *operator*, so it outranks everything below and must never hide behind a
+  1. **Input required** — a permission or trust prompt or a question batch is pending for this
+     conversation. The one state blocked on the *operator*, so it outranks everything below and must never hide behind a
      busier-looking status — including when that same conversation is also working, also unread, or both
      ([#873](https://github.com/pyrycode/pyrycode-desktop/issues/873) AC2). A plain boolean, never a
      `conversationId` — see the SECURITY note below. Landed correct-but-unreachable behind a literal
@@ -62,7 +62,10 @@ once.
      ([`ConversationStatusDotControl`](channel-list-status-dot.md#the-row-s-status-dot-channellist-tsx-added-by-801-874))
      — the same way #799 and #800 each landed before #801 wired them — until
      [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) composed
-     `selectHasOutstandingFor(conversationId)` (`modalPrompts.ts:254`) there.
+     `selectHasOutstandingFor(conversationId)` (`modalPrompts.ts:254`) there. Since
+     [#1700](https://github.com/pyrycode/pyrycode-desktop/issues/1700), both the row control and
+     [app badge](app-badge.md) OR that prompt presence with `selectBatchFor(conversationId)(state) !==
+     undefined` from the question-batch store. The resolver still accepts only the composed boolean.
   2. **Working** — any of the five activity facts (`resetting` joined the other four at
      [#1516](https://github.com/pyrycode/pyrycode-desktop/issues/1516)).
   3. **New messages** — the `unread` boolean, already derived by `isConversationUnread` at the call site;
@@ -109,11 +112,10 @@ once.
 
 - File: `src/renderer/src/store/conversationStatus.ts`. Two exports: the `ConversationStatus` type and
   `resolveConversationStatus`. `isWorking` stays module-private.
-- One consumer: [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801)/[#874](https://github.com/pyrycode/pyrycode-desktop/issues/874)
-  compose `selectHasOutstandingFor(id)`, `selectActivityFor(id)` and `isConversationUnread(timeline,
-  lastRead)` at their shared call site
-  ([`ConversationStatusDotControl`](channel-list-status-dot.md#the-row-s-status-dot-channellist-tsx-added-by-801-874))
-  and pass all three results straight in; this module still does not read any source store itself.
+- Two consumers: [`ConversationStatusDotControl`](channel-list-status-dot.md) and
+  [`conversationStatusNow`](app-badge.md) compose prompt-or-question presence, `selectActivityFor(id)`
+  and `isConversationUnread(timeline, lastRead)` before calling the resolver. This module still does
+  not read any source store itself.
 - Lives beside its two inputs under `store/`, not `screens/`, for the reason `conversationUnread.ts`
   already gives: its inputs are store slices rather than wire rows, and its consumer is the sidebar rather
   than any one screen. `threadTimeline.ts` (pure) beside `timelineStore.ts` (a store) is the naming pair

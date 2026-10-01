@@ -2,7 +2,7 @@ import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 // The credential-light real-daemon tier (#439) driving the CREATE-CHANNEL path — the Channels-tree
-// workspace plus, its dialog, and the `create_conversation { is_promoted: true, name, cwd }` that Create
+// workspace plus, its dialog, and the `create_conversation { is_promoted: true, name, cwd: null }` that OK
 // sends — against a REAL spawned `pyry` on #251's content-blind routing relay, gating on the `pyry` binary
 // ALONE (no `claude`, no Anthropic credential). This is the real-daemon twin of the merged fake-stack spec
 // #1179 (`sidebar-create-channel.spec.ts`): the same drive through the same shipped UI, with the in-process
@@ -19,39 +19,15 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 // the content-blind relay, so an in-process capture is unavailable here. Every assertion reads DOM text /
 // visibility / counts only.
 //
-// ⭐ THE cwd TRAP, AND WHAT SEPARATES THE TWO OUTCOMES (AC3). The daemon defaults a null payload `cwd` to
-// its own `-pyry-workdir`, and `seedRegistry` used to put the seeded conversation in that same directory —
-// so a create whose `cwd` the daemon HONOURED and one it IGNORED would both land in the seed's workspace
-// group, and "the new row joined that group" would pass either way. This is not hypothetical: the daemon
-// ignores a payload `cwd` on `promote_conversation` deliberately (pyrycode/pyrycode#949), and
-// `real-daemon-promote.spec.ts`'s header records it.
+// The seed lives below the daemon's workdir. A `cwd: null` create must appear in a second workspace,
+// labelled `work`, while a regression that sends the clicked seed path leaves only one group. Both
+// trees mirror each group, so the ordered label list distinguishes those outcomes.
 //
-// #1283's `seedCwdSubdir` moves the seed one level DOWN, so the two outcomes render differently. Since
-// #1485 every workspace on a host is drawn under BOTH trees, and a promoted-only list gives the Chats tree
-// no rows — so it draws each group as an empty MIRROR, and the ordered label list is the Channels run
-// followed by the Chats run:
+// pyry 0.27.0 canonicalises a created conversation's cwd, while the client's `groupByWorkspace` keys
+// on the supplied string. The fixture therefore seeds a canonical path too, so the seed and created row
+// share the same key. The seed remains a distinct subdirectory of the daemon's canonical workdir.
 //
-//   honoured  → `.channel-list__workspace-label` reads ['<WORKSPACE_LABEL>', '<WORKSPACE_LABEL>'] — one
-//               group holding both rows, mirrored once
-//   defaulted → it reads ['<WORKSPACE_LABEL>', 'work', '<WORKSPACE_LABEL>', 'work'] — the created row
-//               minted a second group, mirrored in turn
-//
-// The assertion is `toHaveText([…])` on the whole ordered label list, NOT a count, and the shape is
-// deliberately self-diagnosing: a defaulted create fails with `work` in the diff (the daemon ignored the
-// payload), while a daemon that canonicalised the path would fail with the SAME label FOUR times (one
-// workspace split into two groups, each mirrored). A bare count reports every one of them as a number.
-//
-// This rests on a read of the daemon rather than a guess: `CreateConversation` resolves `cwd := defaultCwd`
-// and overwrites it with `*p.Cwd` when the payload sets one, recording that string byte-for-byte — no
-// cleaning, no `filepath.Abs`, no symlink resolution — and the client's `groupByWorkspace` keys on the raw
-// `cwd` string. So the seed's registry path and the created row's path are the same key. `resolveSpawnDir`
-// does validate the REQUESTED dir (confine to $HOME after symlink resolution, create if missing,
-// trust-mark), and the seed sits inside the daemon's own workdir, so it is confined by construction.
-//
-// A SINGLE PROMOTED SEED, not the second seeded workspace the ticket sketches: one seed already separates
-// the two outcomes, and a second would add a second KEY — two groups per tree, four labels — to reason
-// around for no extra discrimination. #1485 retired the older form of this reason: the single seed already
-// puts a group and a "Create chat" plus in the Chats tree, as its mirror.
+// A single promoted seed supplies the Channels plus and the contrasting non-default group.
 //
 // AND NOT A STRUCTURAL ATTRIBUTION OF THE ROW TO ITS GROUP: `renderServerTrees` renders a FLAT run of
 // siblings (host, workspace head, rows, …) — 28 e2e specs depend on that ancestry — so there is no
@@ -99,15 +75,10 @@ const ROUNDTRIP_TIMEOUT_MS = 15_000
 // Whole spec: handshake + one round-trip + dialog open + headroom. Well under the config's 300s default.
 const SPEC_TIMEOUT_MS = 120_000
 
-// What the seeded workspace's group is LABELLED. `workspaceLabelFor` takes the last non-blank segment of
-// the row's `cwd`, which the fixture sets to `<daemonHome>/work/<seedCwdSubdir>` — so this must equal the
-// `seedCwdSubdir` above, and it must not be `work` (the daemon's own workdir basename, the label a
-// defaulted create would mint). Kept as its own constant because it is the EXPECTED value of the cwd
-// assertion, and reading an expected value off the fixture would be reading it off the thing under test.
+// The seed path and daemon default resolve to different visible workspace labels.
 const WORKSPACE_LABEL = 'channel-workspace'
 
-// The workdir basename — what a create whose `cwd` the daemon IGNORED would be labelled. Never asserted
-// on directly; it is here so the label above can be read against it at a glance.
+// The daemon's configured default workdir basename.
 const DAEMON_DEFAULT_LABEL = 'work'
 
 // The name this drive types. Client-owned, so it is safe to assert on — and it is what tells a create that
@@ -120,7 +91,7 @@ const CHANNEL_NAME = 'Release notes'
 // unpromoted one the reverse.
 const CREATE_CHANNEL_NAME = 'Create channel'
 
-test('real daemon creates a promoted, named channel in the requested workspace over the real wire', async ({
+test('real daemon creates a promoted, named channel in its default workspace over the real wire', async ({
   relay,
   daemon,
   page
@@ -140,7 +111,7 @@ test('real daemon creates a promoted, named channel in the requested workspace o
   await pairFromUnpairedLaunch(page, payload)
 
   const rows = page.locator('.channel-list__row')
-  const workspaceLabels = page.locator('.channel-list__workspace-label')
+  const sections = page.locator('.channel-list__section')
   const renameControl = page.locator('.channel-list__rename')
   const saveControl = page.locator('.channel-list__save')
   const createChannel = page.getByRole('button', { name: CREATE_CHANNEL_NAME })
@@ -159,17 +130,15 @@ test('real daemon creates a promoted, named channel in the requested workspace o
   // names its OWN control — the mirror wears "Create chat", never a second "Create channel" (the older
   // reason given here, that a promoted-only list leaves the Chats tree without a group at all, is the very
   // claim #1485 retired); and no Save control, the promoted seed's half of the affordance split. ---
-  await expect(workspaceLabels).toHaveText([WORKSPACE_LABEL, WORKSPACE_LABEL])
+  await expect(sections).toHaveCount(2)
+  await expect(page.locator('.channel-list__workspace')).toHaveCount(0)
   expect(WORKSPACE_LABEL).not.toBe(DAEMON_DEFAULT_LABEL)
   await expect(rows).toHaveCount(1)
   await expect(createChannel).toHaveCount(1)
   await expect(saveControl).toHaveCount(0)
   await expect(dialog).toHaveCount(0)
 
-  // --- Open the dialog from the workspace row's plus (AC1). Playwright counts an opacity-0 element as
-  // visible and moves the pointer onto it before clicking, which hovers the row on the way, so no explicit
-  // hover is needed. The container closes over the clicked group's `cwd`; the dialog itself never receives
-  // it. ---
+  // Open from the seed workspace row; the dialog retains its host but sends no seed path.
   await createChannel.click()
   await expect(dialog).toBeVisible()
 
@@ -202,12 +171,9 @@ test('real daemon creates a promoted, named channel in the requested workspace o
   await expect(renameControl).toHaveCount(2)
   await expect(saveControl).toHaveCount(0)
 
-  // --- ⭐ AC3, the `cwd` arm, and the only assertion that can see it. Still exactly one workspace KEY —
-  // one group per tree, both labelled after the requested one — so the create carried the clicked group's
-  // key rather than null. A daemon that ignored it lands the row under its own `-pyry-workdir` and this
-  // reads [WORKSPACE_LABEL, 'work', WORKSPACE_LABEL, 'work']. See the header for why the whole label list,
-  // and not a count. ---
-  await expect(workspaceLabels).toHaveText([WORKSPACE_LABEL, WORKSPACE_LABEL])
+  // The second group is the daemon's default path, not the clicked workspace. The initial two labels
+  // above establish the before state; this read cannot pass before the round trip.
+  await expect(sections).toHaveCount(2)
 
   // --- The dialog closed on Create (AC1). Ordered last: it is about to be gone anyway, so it proves
   // nothing on its own — it is here to catch a dialog that stayed open behind the created row. ---

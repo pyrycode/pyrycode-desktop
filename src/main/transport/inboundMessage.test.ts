@@ -5,6 +5,7 @@ import {
   type DecodedHistoryPage
 } from './inboundMessage'
 import { encodeEnvelope, base64StdEncode, WireDecodeError } from './codec'
+import { sessionSettingsGoldenFixtures } from './sessionSettingsGoldenFixtures'
 import { createDiagnosticLog, type DiagnosticLog, type DiagnosticEvent } from '../diagnosticLog'
 import {
   MAX_PLAINTEXT_BYTES,
@@ -1035,6 +1036,7 @@ const CONV_NAMED = {
   is_promoted: true,
   is_archived: false,
   is_muted: false,
+  archived_at: null,
   cwd: '/home/user/project',
   last_message_ts: '2026-07-08T00:00:00Z',
   last_used_at: '2026-07-09T00:00:00Z',
@@ -1048,6 +1050,7 @@ const CONV_UNNAMED = {
   is_promoted: false,
   is_archived: true,
   is_muted: true,
+  archived_at: null,
   cwd: '/tmp/scratch',
   last_message_ts: '2026-07-07T00:00:00Z',
   last_used_at: '2026-07-07T12:00:00Z',
@@ -1131,18 +1134,18 @@ const SESSION_SETTINGS_UPDATED = {
 
 describe('parseInboundMessage — happy', () => {
   it('narrows a valid message envelope into a message result', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 
   it('drops unknown payload keys, keeping only the four known fields', () => {
     const withExtras = encodeMessage({ ...MSG, extra: 'ignore-me', event_ptr: 99 })
-    expect(parseInboundMessage(withExtras)).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(withExtras)).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 
   it('accepts both user and assistant roles', () => {
     const user: MessagePayload = { ...MSG, role: 'user' }
-    expect(parseInboundMessage(encodeMessage(user))).toEqual({ kind: 'message', message: user })
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(user))).toEqual({ kind: 'message', message: user, ts: FIXED_TS })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 
   it('narrows a message_chunk into an ordered batch', () => {
@@ -1232,7 +1235,7 @@ describe('parseInboundMessage — debug-bundle recognition (#116, additive)', ()
   })
 
   it('still routes a message / message_chunk to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
     expect(parseInboundMessage(encodeChunk({ messages: [MSG_A] }))).toEqual({
       kind: 'chunk',
       messages: [MSG_A]
@@ -1518,7 +1521,7 @@ describe('parseInboundMessage — screen_snapshot is no longer modeled (#622)', 
   })
 
   it('still routes a message / message_chunk to its existing kind (no widening)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
     expect(parseInboundMessage(encodeChunk({ messages: [MSG_A] }))).toEqual({
       kind: 'chunk',
       messages: [MSG_A]
@@ -1580,7 +1583,7 @@ describe('parseInboundMessage — assistant_delta / turn_end recognition (#199, 
   })
 
   it('still routes a message / message_chunk to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -1666,7 +1669,7 @@ describe('parseInboundMessage — conversations recognition (#139, additive)', (
   })
 
   it('still routes a message / message_chunk to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -1865,7 +1868,7 @@ describe('parseInboundMessage — recent_workspaces_list recognition (#380, addi
   })
 
   it('still routes a message / message_chunk to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -1968,7 +1971,7 @@ describe('parseInboundMessage — conversation_created recognition (#241, additi
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -2089,7 +2092,7 @@ describe('parseInboundMessage — conversation_updated recognition (#273, additi
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -2195,7 +2198,7 @@ describe('parseInboundMessage — conversation_deleted recognition (#375, additi
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -2251,7 +2254,7 @@ describe('parseInboundMessage — workspace_folder_created recognition (#381, ad
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -2334,7 +2337,7 @@ describe('parseInboundMessage — workspace_updated recognition (#1288, additive
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -2448,7 +2451,7 @@ describe('parseInboundMessage — session_transition recognition (#254, additive
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -2601,7 +2604,7 @@ describe('parseInboundMessage — session_settings_updated recognition (#264, ad
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -2671,7 +2674,7 @@ describe('parseInboundMessage — turn_state recognition (#214, additive)', () =
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -2726,7 +2729,7 @@ describe('parseInboundMessage — stall recognition (#315, additive)', () => {
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 
   it('still returns null for a well-formed envelope of another unmodeled type (no widening)', () => {
@@ -5576,7 +5579,7 @@ describe('parseInboundMessage — tool_use recognition (#217, additive)', () => 
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -5769,7 +5772,7 @@ describe('parseInboundMessage — tool_result recognition (#229, additive)', () 
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -5908,7 +5911,7 @@ describe('parseInboundMessage — queue_state recognition (#292, additive)', () 
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -6117,7 +6120,7 @@ describe('parseInboundMessage — modal_shown recognition (#201, additive)', () 
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -6278,7 +6281,7 @@ describe('parseInboundMessage — modal_dismissed recognition (#201, additive)',
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -6628,7 +6631,7 @@ describe('parseInboundMessage — question_dismissed recognition (#894, additive
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -7585,7 +7588,7 @@ describe('parseInboundMessage — attachment_stored recognition (#964, additive)
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -7769,7 +7772,7 @@ describe('parseInboundMessage — attachment_chunk recognition (#998, additive)'
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -8010,7 +8013,7 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
 
     const result = parseInboundMessage(plaintext, log)
 
-    expect(result).toEqual({ kind: 'message', message: payload })
+    expect(result).toEqual({ kind: 'message', message: payload, ts: FIXED_TS })
     expect(lines).toHaveLength(1)
     const record = JSON.parse(lines[0])
     expect(record.event).toBe('inbound-decoded')
@@ -9830,7 +9833,7 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
   })
 
   it('does not log and does not throw when no logger is injected (AC5)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
     expect(parseInboundMessage(encodeEnvelope({ id: 1, type: 'ack', ts: FIXED_TS, payload: {} }))).toBeNull()
     expect(() => parseInboundMessage(encodeMessage({ ...MSG, text: undefined }))).toThrow(WireDecodeError)
   })
@@ -10126,6 +10129,60 @@ describe('parseInboundMessage — secret-safety / log-free', () => {
 })
 
 describe('parseInboundMessage — session_settings recognition (#491)', () => {
+  const memoryFixtureBase = {
+    session_id: 'sess-a', model: 'opus', effort: 'high', yolo: false,
+    permission_mode: 'default', used_tokens: 12480, window_tokens: 200000
+  }
+  it.each([
+    { name: 'available', report: { availability: 'available', providers: [
+      { id: 'qmd', display_name: 'QMD', installed: true, enabled: true, availability: 'available' }
+    ] } },
+    { name: 'disabled', report: { availability: 'unavailable', providers: [
+      { id: 'memsearch', display_name: 'Memsearch', installed: true, enabled: false, availability: 'unavailable' }
+    ] } },
+    { name: 'absent', report: { availability: 'absent', providers: [] } },
+    { name: 'unknown', report: { availability: 'unknown', providers: [] } }
+  ] as const)('decodes the daemon $name memory-search fixture', ({ name, report }) => {
+    const decoded = parseInboundMessage(Buffer.from(sessionSettingsGoldenFixtures[name]))
+    if (decoded?.kind !== 'session-settings') throw new Error('expected session settings')
+    expect(decoded.sessionSettings.memory_search).toEqual(report)
+    expect(decoded.sessionSettings).toMatchObject(memoryFixtureBase)
+  })
+
+  it('keeps the older daemon session_settings fixture without a memory report', () => {
+    const decoded = parseInboundMessage(Buffer.from(sessionSettingsGoldenFixtures.omitted))
+    if (decoded?.kind !== 'session-settings') throw new Error('expected session settings')
+    expect(decoded.sessionSettings.memory_search).toBeUndefined()
+    expect(decoded.sessionSettings).toMatchObject(memoryFixtureBase)
+  })
+
+  it('preserves both false provider booleans without inferring aggregate absence', () => {
+    const report = { availability: 'unavailable', providers: [
+      { id: 'qmd', display_name: 'QMD', installed: false, enabled: false, availability: 'unavailable' }
+    ] }
+    const decoded = parseInboundMessage(encodeSessionSettings({ ...memoryFixtureBase, memory_search: report }))
+    if (decoded?.kind !== 'session-settings') throw new Error('expected session settings')
+    expect(decoded.sessionSettings.memory_search).toEqual(report)
+  })
+
+  it.each([
+    null, [], {}, { availability: 'available' }, { availability: 'future', providers: [] },
+    { availability: 'absent', providers: [{}] },
+    { availability: 'available', providers: [
+      { id: 'qmd', display_name: 'QMD', installed: true, enabled: false, availability: 'future' }
+    ] },
+    { availability: 'available', providers: [
+      { id: 'qmd', display_name: 'QMD', installed: false, enabled: null, availability: 'available' }
+    ] }
+  ].map((report) => ({ report })))(
+    'maps incomplete or future memory report $report to unknown without losing settings', ({ report }) => {
+      const decoded = parseInboundMessage(encodeSessionSettings({ ...memoryFixtureBase, memory_search: report }))
+      if (decoded?.kind !== 'session-settings') throw new Error('expected session settings')
+      expect(decoded.sessionSettings.memory_search).toEqual({ availability: 'unknown', providers: [] })
+      expect(decoded.sessionSettings).toMatchObject(memoryFixtureBase)
+    }
+  )
+
   it.each([undefined, null, 'low', '', '  future-effort <report>  '])(
     'preserves effective_effort %j independently of saved effort', (effectiveEffort) => {
       const decoded = parseInboundMessage(encodeSessionSettings({
@@ -10543,7 +10600,7 @@ describe('parseInboundMessage — history_page recognition (#1222, additive)', (
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -11614,6 +11671,7 @@ describe('parseInboundMessage — the envelope ts on the timeline-bearing arms (
   }
 
   it.each([
+    ['message', MSG],
     ['assistant_delta', DELTA],
     ['turn_end', TURN_END],
     ['turn_state', TURN_STATE],
@@ -11976,5 +12034,50 @@ describe('parseInboundMessage — agent and family tags (#1649)', () => {
         )
       }
     }
+  })
+})
+
+describe('replay envelope observation', () => {
+  it('observes admitted envelopes before payload narrowing, including unknown types', () => {
+    const observed = vi.fn()
+    const malformed = encodeEnvelope({ id: 1, type: 'message', ts: FIXED_TS, event_id: 10, payload: null })
+    expect(() => parseInboundMessage(malformed, undefined, observed)).toThrow(WireDecodeError)
+    expect(observed).toHaveBeenCalledWith(expect.objectContaining({ type: 'message', event_id: 10 }))
+    const future = encodeEnvelope({ id: 2, type: 'future', ts: FIXED_TS, event_id: 11, payload: [] })
+    expect(parseInboundMessage(future, undefined, observed)).toBeNull()
+    expect(observed).toHaveBeenCalledTimes(2)
+    expect(parseInboundMessage(encodeMessage(MSG), undefined, observed)).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
+  })
+
+  it('does not observe frames rejected by size, encoding or envelope guards', () => {
+    const observed = vi.fn()
+    const raw = (value: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(value))
+    for (const bytes of [
+      new Uint8Array(MAX_PLAINTEXT_BYTES + 1), new Uint8Array([0xff]), raw(null),
+      raw({ id: 'bad', type: 'resync', ts: FIXED_TS, payload: null, event_id: 100 }),
+      raw({ id: 1, type: 'resync', ts: FIXED_TS, event_id: 100 })
+    ]) {
+      expect(() => parseInboundMessage(bytes, undefined, observed)).toThrow(WireDecodeError)
+    }
+    expect(observed).not.toHaveBeenCalled()
+  })
+
+  it.each([null, [], 'gap', 5, {}, { reason: 'expired' }])('resync suppresses every payload shape: %j', payload => {
+    const observed = vi.fn()
+    expect(parseInboundMessage(encodeEnvelope({ id: 1, type: 'resync', ts: FIXED_TS, event_id: 99, payload }),
+      undefined, observed)).toBeNull()
+    expect(observed).toHaveBeenCalledWith(expect.objectContaining({ type: 'resync' }))
+  })
+})
+
+
+describe('conversation list archive timestamp', () => {
+  it.each(['2026-09-30T12:00:00Z', 'invalid-time', '', null, undefined])('preserves or normalizes %s', (archived_at) => {
+    const result = parseInboundMessage(encodeConversations({ conversations: [{ ...CONV_NAMED, archived_at }] }))
+    expect(result?.kind).toBe('conversations')
+    if (result?.kind === 'conversations') expect(result.conversations[0].archived_at).toBe(archived_at ?? null)
+  })
+  it.each([false, true, 1, {}, []])('rejects wrong-type archive stamps for the whole list: %s', (archived_at) => {
+    expect(() => parseInboundMessage(encodeConversations({ conversations: [CONV_UNNAMED, { ...CONV_NAMED, archived_at }] }))).toThrow(WireDecodeError)
   })
 })

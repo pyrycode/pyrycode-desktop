@@ -96,20 +96,19 @@ out.
 
 `e2e/real-daemon-create-channel.spec.ts` is the real-daemon twin of the fake-tier
 [Create-channel dialog](create-channel-dialog.md)'s `e2e/sidebar-create-channel.spec.ts`. The fake twin
-mints its created row *from the request* — `conversationStateFake` echoes back whatever `is_promoted`,
-`name` and `cwd` the client sent — so it proves what the client sends and nothing about what the daemon
+mints its created row *from the request* — `conversationStateFake` uses the sent `is_promoted` and
+`name`, and the sent `cwd` or its fixed default for null — so it proves what the client sends
+and nothing about what the daemon
 does with it. This is the first exercise of the daemon's promoted-create branch: every create the app had
 sent before #1179 carried `is_promoted: false, name: null`.
 
-**The cwd trap.** `create_conversation` defaults a null payload `cwd` to the daemon's own
-`-pyry-workdir`, and every earlier `real-*` spec seeds its one conversation *in* that directory — so with a
-single seeded workspace, a create whose `cwd` the daemon honoured and one it silently defaulted would both
-land in the seed's workspace group, and "the new row joined that group" would pass either way. #1283 gave
-the fixture a third option, `seedCwdSubdir`, that moves the seed one level *below* the workdir so the two
-outcomes render differently — see below. Confirmed by reading the daemon handler rather than guessing: it
-resolves `cwd := defaultCwd` and overwrites it with the payload's value verbatim, no cleaning and no
-symlink resolution, storing exactly what `groupByWorkspace`'s raw-string key later reads — so the seed's
-registry path and the created row's path are genuinely comparable as the same key.
+**The cwd trap.** `create_conversation` resolves a null payload `cwd` to the daemon's own
+`-pyry-workdir`. A seed in that same directory would let both the intended null request and an
+accidental clicked-path request appear in one workspace group. The fixture's `seedCwdSubdir`
+puts the seed one level below the workdir. The current spec expects a second group labelled
+`work` after confirmation; a request carrying the clicked seed path leaves only the seed group.
+The fake twin verifies the outgoing explicit null, while this real-daemon drive proves where the
+daemon stores the promoted, named channel.
 
 **A whitespace-only subdirectory name would have silently defeated the whole mechanism.** The client's
 `workspaceLabelFor` trims each path segment as its display predicate, so a seed placed at a
@@ -123,10 +122,9 @@ setup instead of skipping clean.
 **No structural way to scope a row to its group.** Both the Channels and Chats trees render a flat run of
 siblings (host, workspace head, rows, …) that 28 other e2e specs already depend on, so there is no group
 ancestor to scope a row locator by. The spec instead asserts the whole ordered list of
-`.channel-list__workspace-label` texts, not a count — deliberately self-diagnosing: a defaulted create
-shows the workdir's `work` label in the diff, while a hypothetical canonicalising daemon (one that
-resolved the seed and the created row's `cwd` to different string forms) would instead show the same label
-twice. A bare `toHaveCount(1)` collapses both failures into the same number and tells you nothing.
+`.channel-list__workspace-label` texts, not a count — deliberately self-diagnosing: the intended
+default create adds the workdir's `work` label, while a create in the clicked seed folder does not.
+The ordered labels expose which group appeared; a bare count obscures that distinction.
 
 ### Proving `rename_workspace` is genuine, and the label-clearing trap a fresh registry hides (#1293)
 

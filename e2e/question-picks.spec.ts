@@ -207,11 +207,18 @@ test('question panel: picks are live in both variants, survive a chat switch and
 
   // AC2 — the Other field holds what is typed. `toHaveValue` pins that the box really holds it, so what
   // survives the switch below is a transition this drive caused rather than an assertion against a box that
-  // was never filled (the siblings' non-vacuity anchor). Typing does NOT tick the row: the store holds the
-  // text independently of the tick, so this is ordinary traffic and the radio pick above stands.
+  // was never filled (the siblings' non-vacuity anchor). #1698 — typing ticks Other, as on mobile, and in
+  // this radio group that REPLACES the Elixir pick; the dot count stays at 1 because the dot moved.
   await otherField.fill(OTHER_TEXT)
   await expect(otherField).toHaveValue(OTHER_TEXT)
+  await expect(control('radio', OTHER_TICK)).toBeChecked()
+  await expect(control('radio', 'Elixir')).not.toBeChecked()
+  await expect(dots).toHaveCount(1)
+  // Picking Elixir again un-ticks Other and leaves its text in the box: the text is held apart from the tick.
+  await optionRow('Elixir').click()
   await expect(control('radio', 'Elixir')).toBeChecked()
+  await expect(control('radio', OTHER_TICK)).not.toBeChecked()
+  await expect(otherField).toHaveValue(OTHER_TEXT)
 
   // AC3, away — Add workspace mints a second conversation and navigates to it WITHOUT leaving the thread route,
   // which remounts the whole conversation subtree (#670's keying). The batch is display-scoped, so the other
@@ -272,12 +279,17 @@ test('question panel: picks are live in both variants, survive a chat switch and
 
   // AC2, second half — typed Other text becomes the answer value itself, so in this variant the Other row
   // sits ticked BESIDE ticked option labels rather than replacing them (the opposite of arc 1's radio
-  // semantics, and the second place a transposed arm would show).
+  // semantics, and the second place a transposed arm would show). #1698 — the typing alone ticks it.
   await otherField.fill(OTHER_TEXT)
-  await otherRow.click()
   await expect(control('checkbox', OTHER_TICK)).toBeChecked()
   await expect(control('checkbox', 'Haskell')).toBeChecked()
   await expect(ticks).toHaveCount(2)
+  await expect(otherField).toHaveValue(OTHER_TEXT)
+  // Un-ticking Other keeps both its text and the ticked option.
+  await otherRow.click()
+  await expect(control('checkbox', OTHER_TICK)).not.toBeChecked()
+  await expect(control('checkbox', 'Haskell')).toBeChecked()
+  await expect(ticks).toHaveCount(1)
   await expect(otherField).toHaveValue(OTHER_TEXT)
 
   // AC5, second half — the batch goes and the draft is still in the box, untouched by everything above.
@@ -313,10 +325,11 @@ test('question panel: picks are live in both variants, survive a chat switch and
   await expect(tab(LANGUAGE_HEADER)).toHaveAttribute('aria-current', 'true')
 
   // Part-answer the first question: an option pick and typed Other text, the two fields AC5 must carry.
-  await optionRow('Rust').click()
-  await expect(control('radio', 'Rust')).toBeChecked()
+  // Typed FIRST, since typing ticks Other and would replace a radio pick made before it (#1698).
   await otherField.fill(OTHER_TEXT)
   await expect(otherField).toHaveValue(OTHER_TEXT)
+  await optionRow('Rust').click()
+  await expect(control('radio', 'Rust')).toBeChecked()
 
   // AC3 — the jump. The second question's own text, its own options and its own MULTI-select row style all
   // arrive together; the first question's rows are gone rather than merely unchecked. Its Other field opens
@@ -335,7 +348,6 @@ test('question panel: picks are live in both variants, survive a chat switch and
   await optionRow('Helix').click()
   await optionRow('Zed').click()
   await otherField.fill(EDITOR_OTHER_TEXT)
-  await otherRow.click()
   await expect(ticks).toHaveCount(3)
 
   // AC5, backwards — every field of the first question's selection is exactly as it was left. This is the

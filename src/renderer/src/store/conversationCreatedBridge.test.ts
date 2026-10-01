@@ -71,6 +71,16 @@ describe('requestNewConversation', () => {
 // single-literal assertion, which is the property that would be lost if the two shapes were folded
 // into one constructor behind a flag.
 describe('requestNewChannel', () => {
+  it('sends an explicit daemon-default cwd with the clicked host', () => {
+    const sendCommand = vi.fn()
+    requestNewChannel(sendCommand, ' Release notes ', null, 'second-host')
+    expect(sendCommand).toHaveBeenCalledOnce()
+    expect(sendCommand).toHaveBeenCalledWith({
+      type: 'createConversation',
+      payload: { is_promoted: true, name: 'Release notes', cwd: null },
+      serverId: 'second-host'
+    })
+  })
   it('fires exactly one createConversation with is_promoted true, the name and the cwd (AC3)', () => {
     const sendCommand = vi.fn()
     requestNewChannel(sendCommand, 'Release notes', '/home/pyry/project')

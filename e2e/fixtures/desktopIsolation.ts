@@ -34,10 +34,12 @@ import { HIDDEN_WINDOW_ENV_FLAG } from '../../src/main/windowPresentation'
 // discards close errors unlogged for the same reason. The launch-fate report at the bottom of this file
 // is held to the SAME contract, by construction rather than by care — see its own note.
 //
-// `e2e/fixtures/realDaemon.ts` keeps its own launch and is deliberately NOT a caller: the `real-*` tier
-// is operator-supervised by nature, and routing it through here would put a change that can be proven
-// without a live daemon behind a live gate. It is the one exemption the launch-site guard in
-// `desktop-isolation.spec.ts` allows.
+// `e2e/fixtures/realDaemon.ts` keeps its own launch and is deliberately NOT a caller: routing it through
+// here would put a change that can be proven without a live daemon behind a live gate. It is the one
+// exemption the launch-site guard in `desktop-isolation.spec.ts` allows. It is NOT exempt from the
+// isolation itself (#1672): the dispatcher runs the `real-*` tier unattended on the operator's machine,
+// so that launch applies the same switches and flag from this module and asserts them with
+// `expectDesktopIsolated`.
 
 /**
  * The Chromium switches that exempt the launched renderer from being slowed down when its window is not

@@ -132,13 +132,9 @@ export type ThreadItem =
       elapsedSeconds?: number
     }
   | ({ kind: 'turnBoundary'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string } & TurnEndMetrics)
-  // The user's own message — a renderer-sourced echo, not daemon content, so it carries no `turnId`
-  // (the daemon assigns those) and no `seq` (wire fidelity for daemon deltas): just the text. Ships
-  // dormant; #179 wires the producer (the composer echo) and the render row.
-  //
-  // #1013: `createdAt` carries the `assistantText` contract above verbatim, with one difference in WHICH
-  // moment it names — the optimistic echo, i.e. when the operator pressed send, which for a
-  // renderer-sourced item is the only moment there is.
+  // A whole user message from a local echo, live receipt or history. No turn id or delta sequence.
+  // `createdAt` is local submission time for an echo, or parsed daemon envelope time for a live
+  // receipt. History-only rows have no stamp. Stored as epoch milliseconds and formatted at render.
   //
   // #1039: `attachments` are the files that were attached to THIS message, in the order their uploads
   // completed — the first thing in this app that associates an attachment with a message, and what #815's
@@ -154,14 +150,9 @@ export type ThreadItem =
   // (`MessagePayload` has no attachment field and there is no list verb), so this field can only ever
   // describe attachments this client minted itself until that wire change exists.
   //
-  // #1213: `messageId` is the id this window minted for the message's OWN `send_message` frame — the same
-  // id, minted once and used twice, so the wire and this row can never name different messages. It exists
-  // for exactly one purpose: correlating this echo with the queued row the daemon draws for the same
-  // message, so `dropUserText` can take the echo out when the operator cancels it. ABSENT means the
-  // producer minted none — test `item.messageId === undefined`, never `'messageId' in item`, since the
-  // reducer assigns it unconditionally. Absence is a LEGAL item and it is the shape a future history
-  // backfill would produce; an id-less echo correlates with NOTHING and can never be removed by a drop,
-  // which is the right answer for a message this window did not send.
+  // `messageId` identifies the send across clients, receipts, queued snapshots and history. A
+  // non-empty match preserves the held row; absent/empty ids correlate with nothing. The value is
+  // never rendered, logged or used as a path, URL, filename or React key.
   //
   // UNTRUSTED ON THE READ SIDE, on the same terms as `text`: the value it is COMPARED against arrives from
   // another client through a content-blind relay. It is read for strict string equality only — never a
@@ -270,27 +261,12 @@ export type ThreadEvent =
     }
   | { type: 'turnState'; state: TurnPhase }
   | ({ type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string } & TurnEndMetrics)
-  // The user's own message. A whole message, never a stream of deltas — folded by a plain fresh
-  // tail-append (like `toolUse`/`turnEnd`), not coalesced via `appendDelta`.
-  //
-  // #1013: `createdAt` is the composer's stamp, field-for-field with the `userText` item. Its sole
-  // producer (`composerSend.ts`) reads it from an OPTIONAL injected `now`, so an omitted clock leaves it
-  // undefined rather than falling back to the wall clock.
-  //
-  // #1039: `attachments` is field-for-field with the item's, and its sole producer reads it from an
-  // OPTIONAL injected `takeAttachments` on the same terms — an unwired take leaves it undefined rather
-  // than reaching for some other source. It rides the EVENT rather than arriving as a reducer parameter
-  // for `createdAt`'s recorded reason: `reduceTimeline` is called by the two timeline stores, which are
-  // production paths, so a parameter there would have to be threaded through every store-level spec.
-  //
-  // #1213: `messageId` is field-for-field with the item's, and its sole producer reads it from the
-  // REQUIRED `newMessageId` it already calls for the wire frame — so unlike `createdAt` and `attachments`
-  // above, production always carries one. It is optional on the TYPE anyway, and deliberately: the union
-  // is constructed in dozens of specs that mint no id, and requiring it would redden every one of them to
-  // buy nothing (an id-less echo is already a legal, un-droppable row). Absent means the producer minted
-  // none — see the item.
+  // Local submission and received messages share row data. Only local submission opens the
+  // Thinking window; `received` is set by the bridge for live and history receipts. Optional fields
+  // preserve callers that supply neither timestamp nor attachments nor message identity.
   | {
       type: 'userText'
+      received?: true
       text: string
       createdAt?: number
       messageId?: string
@@ -617,6 +593,12 @@ function removeUserEcho(items: readonly ThreadItem[], messageId: string): readon
  * true; it is the narrower reading — "the chrome scalars are all daemon-sourced" — that no longer is.
  */
 export function reduceTimeline(state: TimelineState, event: ThreadEvent): TimelineState {
+  // Reject a held receipt before content or chrome sidecars can change anything.
+  if (event.type === 'userText' && event.received === true &&
+      event.messageId !== undefined && event.messageId !== '' &&
+      state.items.some(item => item.kind === 'userText' && item.messageId === event.messageId)) {
+    return state
+  }
   let next = reduceTimelineContent(state, event)
   const stoppingBanner = event.type === 'userText' || event.type === 'reset' ? undefined
     : event.type === 'banner' && event.stopsTurn
@@ -857,32 +839,8 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
         thinkingTokens: null
       }
     case 'userText':
-      // A whole user message: fresh tail-append (never coalesced), `phase` untouched — the `turnEnd`
-      // arm's discipline. Always a new `items` array (a fresh append is always a change). NOT in AC2's
-      // clear set: a renderer-sourced echo is not daemon turn activity, so `stalled` is carried unchanged.
-      //
-      // #650: and this arm OPENS the working indicator's local window. It can carry that meaning because
-      // this dispatch IS the composer's accept signal: `userText` has exactly one production writer
-      // (`composerSend.ts`, the optimistic echo), sitting below both of `submitMessage`'s `false` returns
-      // and above its `return true`, and the daemon streams no user-message event in interactive mode. So
-      // "the arm fired" and "the composer accepted the submit" are the same fact, and a refused submit
-      // (whitespace-only, no active conversation) opens nothing because no code runs at all. IF A SECOND
-      // `userText` PRODUCER IS EVER ADDED — a history backfill is the obvious candidate — it must be
-      // re-examined against this arm, because backfilled messages are not pending sends.
-      //
-      // A redundant open (already pending) is deliberately NOT special-cased into a same-reference no-op:
-      // this arm always builds a fresh `items` array, so it has never returned the same reference.
-      //
-      // #1013: `createdAt` is carried onto the item verbatim and UNCONDITIONALLY — the `input` / `resultDetail`
-      // discipline, never a conditional spread. Never coalesced, so unlike `appendDelta` there is no earlier
-      // stamp to preserve: a user message is whole on arrival and its time is the one the composer stamped.
-      //
-      // #1039: `attachments` is carried the same way and BY REFERENCE — never `[...event.attachments]`,
-      // which on an absent list yields `[]` and silently converts "this message carried none" into "this
-      // message carried an empty set". Sharing the array is safe for the reason the whole echo object is
-      // shared across the two stores: the producer builds it fresh and never mutates it, and this reducer
-      // only ever reads it. Nothing is deduplicated, reordered, bounded or inspected — the recorded order
-      // is the order the uploads completed, and every display decision belongs to #815 / #868.
+      // Fresh messages append whole, preserving row treatment and held attachment references.
+      // A receipt does not represent a new local submission, so it leaves the pending window alone.
       return {
         items: [
           ...state.items,
@@ -890,9 +848,6 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
             kind: 'userText',
             text: event.text,
             createdAt: event.createdAt,
-            // #1213: carried verbatim and UNCONDITIONALLY — the `createdAt` / `attachments` discipline,
-            // never a conditional spread. This reducer is a CARRIER of the id, never its source: it mints
-            // nothing, compares nothing here, and holds no opinion about what an absent one means.
             messageId: event.messageId,
             attachments: event.attachments
           }
@@ -902,7 +857,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
         apiRetry: state.apiRetry,
         compacting: state.compacting,
         resetting: state.resetting,
-        localSendPending: true,
+        localSendPending: event.received === true ? state.localSendPending : true,
         // #1314: carried. A renderer-sourced echo is no more the daemon's word on the reading than it is
         // on the stall one line up; the operator sending a second message mid-turn does not un-say how
         // deep the running think is.

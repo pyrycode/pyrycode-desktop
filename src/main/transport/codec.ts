@@ -144,8 +144,8 @@ const CLIENT_APP_NAME = 'pyrycode-desktop'
  * The one default-injecting constructor. TS interfaces carry no runtime defaults, so the
  * non-literal default `protocol_versions` (["v2"]) must be injected here (mobile's
  * `encodeDefaults = true`). `role: 'client'` is a literal type and needs no injection.
- * `last_seen_ts` is emitted only when provided (omitted, never null, otherwise), matching the
- * daemon's `omitempty`: absence is the "nothing seen yet" signal that suppresses backfill.
+ * Optional reconnect fields are omitted when absent. `last_event_id` requests replay;
+ * the legacy `last_seen_ts` field has no daemon consumer.
  *
  * `capabilities` is a caller-provided argument, NOT a hardcoded `["interactive"]`. The desktop
  * event pipeline models only the coarse `message` type; the structured interactive stream
@@ -168,6 +168,7 @@ export function makeHelloClientPayload(input: {
   token: string
   capabilities?: readonly string[]
   lastSeenTs?: string
+  lastEventId?: number
 }): HelloClientPayload {
   const payload: HelloClientPayload = {
     role: 'client',
@@ -178,6 +179,7 @@ export function makeHelloClientPayload(input: {
     capabilities: input.capabilities ? [...input.capabilities] : []
   }
   if (input.lastSeenTs !== undefined) payload.last_seen_ts = input.lastSeenTs
+  if (input.lastEventId !== undefined) payload.last_event_id = input.lastEventId
   return payload
 }
 

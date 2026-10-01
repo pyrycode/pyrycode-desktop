@@ -20,6 +20,7 @@ const render = (props: {
   reading?: UsageLimitReading | null
   dismissed?: UsageLimitReading | null
   repair?: boolean
+  resolution?: 'remote' | 'timeout' | null
 }): string => renderToStaticMarkup(
   <TopOverlay
     reading={props.reading ?? null}
@@ -27,6 +28,8 @@ const render = (props: {
     dismissed={props.dismissed ?? null}
     repair={props.repair ?? false}
     onDismissUsage={() => {}}
+    resolution={props.resolution ?? null}
+    onDismissResolution={() => {}}
     onRepair={() => {}}
   />
 )
@@ -100,5 +103,30 @@ describe('TopOverlay (#1604)', () => {
     ['reset time', { resetsAt: NOW + 3600 }]
   ] as const)('shows the pill again once the %s changes', (_field, change) => {
     expect(render({ reading: reading(change), dismissed: reading() })).toContain('top-overlay-pill__text')
+  })
+})
+
+
+describe('permission resolution pill', () => {
+  it.each([
+    ['remote', 'Resolved on another device'],
+    ['timeout', 'Request timed out']
+  ] as const)('renders %s with exact client copy, Default treatment and X', (resolution, copy) => {
+    const markup = render({ resolution })
+    expect(markup).toContain(`<div class="top-overlay-pill top-overlay-pill--default"><span class="top-overlay-pill__text">${copy}</span>`)
+    expect(markup).toContain('aria-label="Dismiss permission resolution notice"')
+    expect(markup).toContain('<svg width="8" height="8"')
+    expect(markup).toContain('aria-hidden="true"')
+    expect(markup).not.toContain('top-overlay-pill--error')
+    expect(markup).not.toContain('remote')
+    expect(markup).not.toContain('timeout')
+  })
+
+  it('stacks usage, resolution and Re-pair in one overlay', () => {
+    const markup = render({ reading: reading(), resolution: 'remote', repair: true })
+    expect(markup.match(/conversation__top-overlay/g)).toHaveLength(1)
+    expect(markup.indexOf(USAGE_LIMIT_WARNING_COPY)).toBeLessThan(markup.indexOf('Resolved on another device'))
+    expect(markup.indexOf('Resolved on another device')).toBeLessThan(markup.indexOf(COMPOSER_REPAIR_BUTTON_COPY))
+    expect(markup.match(/top-overlay-pill--default/g)).toHaveLength(2)
   })
 })

@@ -16,12 +16,14 @@ import {
   type UIEventHandler
 } from 'react'
 import './conversation.css'
+import { useStore } from 'zustand'
+import { rememberedModel } from '../../store/rememberedModel'
 import { connectedConversationHostNow, useConversationActionAvailability } from './conversationActionAvailability'
 import { AssistantMarkdown } from './AssistantMarkdown'
 import { MARKDOWN_OPEN_FAILED_NOTICE, MarkdownReaderView, useMarkdownReader } from './MarkdownReader'
 import { PyryMark } from '../../theme/PyryMark'
 import type { Message } from './messageViewModel'
-import type { QueuedItem, ConversationCreatedPayload, WireResetHandoff, WireAgent } from '@shared/wire/types'
+import type { QueuedItem, ConversationCreatedPayload, WireResetHandoff, WireAgent, MemorySearchPayload } from '@shared/wire/types'
 import type { ModelRefusalEvent, RelayLinkStatus } from '@shared/ipc/events'
 import { sessionStore, useSessionStore, initialSessionState, selectStatusFor, type ConnectionStatus } from '../../store/sessionStore'
 import { canRespondToPromptNow, usePromptResponseAvailability } from './promptResponseAvailability'
@@ -118,6 +120,7 @@ import { isAtBottom, isNearTop } from './threadScrollPosition'
 import { toolHeadlineRuns } from './toolHeadline'
 import { listedInputFields, shellCommandBlock } from './toolBody'
 import { serverIdForOpenConversation } from './unpairAction'
+import { requestRunConfigSnapshot } from './runConfigSnapshot'
 import { selectDraft, useComposerDraftStore } from '../../store/composerDraftStore'
 import {
   conversationListStore,
@@ -142,7 +145,7 @@ import { RunConfigSections, useConversationAgent } from './RunConfigSections'
 import { SystemPromptSection } from './SystemPromptSection'
 import { LogDataSection } from './LogDataSection'
 import { PermissionModal } from './PermissionModal'
-import { useModalStore, selectHasOutstandingFor } from '../../store/modalStore'
+import { modalStore, useModalStore, selectHasOutstandingFor } from '../../store/modalStore'
 import { QuestionPanelView, optionPickEventFor, otherPickEventFor } from './QuestionPanel'
 import {
   useQuestionBatchStore,
@@ -443,6 +446,7 @@ export function ConversationScreen({
   const openChannelInfo = (): void => {
     setChannelInfoOpen(true)
     requestMcpStatus(window.pyry.sendCommand, activeConversation?.id ?? null)
+    requestRunConfigSnapshot(window.pyry.sendCommand, activeConversation?.id ?? null)
   }
   // #1627: an open reader covers the whole pane, composer included; the sidebar is PairedShell's. The
   // thread and the Composer stay MOUNTED beneath it, hidden, never unmounted: the Composer's pending
@@ -657,7 +661,7 @@ export function ConversationScreen({
           <RunConfigSections conversationId={activeConversation?.id ?? null} />
           {/* Log data is the last section ("beneath Context-window"); #182 prepends the
               Context-window section above it as it lands. */}
-          <LogDataSection />
+          <LogDataSection conversationId={openConversationId} available={actionsAvailable} />
         </StatusSheet>
       )}
       {/* #365: the Channel Info sheet — the StatusSheet twin, overlaying the conversation surface with the
@@ -3113,6 +3117,26 @@ const CHANNEL_INFO_SHEET_TITLE_ID = 'channel-info-sheet-title'
 // The daemon strings (name / cwd / id) reach the DOM only as auto-escaped React children — never
 // dangerouslySetInnerHTML, never path/markup interpretation (the toolCall / sessionBoundary posture). They
 // are already rendered elsewhere in this file, so no new trust boundary.
+function memorySearchStatus(report: MemorySearchPayload | undefined): string {
+  switch (report?.availability) {
+    case 'available': return 'Memory search available'
+    case 'unavailable': return 'Memory search unavailable'
+    case 'absent': return 'No memory-search provider detected'
+    default: return 'Memory search status unknown'
+  }
+}
+
+function memoryProviderStatus(provider: MemorySearchPayload['providers'][number]): string {
+  if (!provider.installed) return 'Not installed'
+  if (!provider.enabled) return 'Installed, disabled'
+  switch (provider.availability) {
+    case 'available': return 'Installed, enabled'
+    case 'unavailable': return 'Installed, unavailable'
+    case 'absent': return 'Installed, search absent'
+    case 'unknown': return 'Installed, status unknown'
+  }
+}
+
 export function ChannelInfoSheetView({
   conversation,
   now = Date.now(),
@@ -3125,6 +3149,7 @@ export function ChannelInfoSheetView({
   onDeleteCancel,
   systemPromptSection,
   mcpServersSection,
+  memorySearch,
   sessionFacts = null,
   sessionCostUsd = null,
   agent = 'claude'
@@ -3159,6 +3184,7 @@ export function ChannelInfoSheetView({
   systemPromptSection?: ReactNode
   // #1490: the MCP servers section, a slot supplied only for a non-null conversation like the one above.
   mcpServersSection?: ReactNode
+  memorySearch?: MemorySearchPayload
 }): JSX.Element {
   // Title: the daemon name when present; the client-owned unnamed label when `name === null` (a distinct
   // "unnamed scratch conversation", not an empty string); the fallback when there is no conversation.
@@ -3245,6 +3271,25 @@ export function ChannelInfoSheetView({
                   <span className="channel-info__row-value">{formatSessionCost(sessionCostUsd)}</span>
                 </div>
               )}
+            </>
+          )}
+          {conversation !== null && (
+            <>
+              <p className="status-sheet__section-header">Memory search</p>
+              <div className="channel-info__row">
+                <span className="channel-info__row-label">Status</span>
+                <span className="channel-info__row-value">{memorySearchStatus(memorySearch)}</span>
+              </div>
+              {memorySearch?.providers.map((provider, index) => (
+                <div className="channel-info__row" key={index}>
+                  <span className="channel-info__row-label channel-info__memory-name">
+                    {boundMcpText(provider.display_name)}
+                  </span>
+                  <span className="channel-info__row-value channel-info__memory-state">
+                    {memoryProviderStatus(provider)}
+                  </span>
+                </div>
+              ))}
             </>
           )}
           {mcpServersSection}
@@ -3382,6 +3427,7 @@ function ChannelInfoSheet({
   // #1655: a session that reports no MCP status (a Codex session) gets no MCP section, rather than one
   // showing its unavailable line forever. The snapshot is the open conversation's, which this sheet is.
   const mcpServers = useRunConfigStore(selectMcpServersSupported)
+  const memorySearch = useRunConfigStore(selectSnapshot)?.memorySearch
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameName, setRenameName] = useState('')
   // #377: the Delete confirm's per-interaction state — the `renameOpen` twin (transient UI state →
@@ -3404,6 +3450,7 @@ function ChannelInfoSheet({
         sessionFacts={sessionFacts}
         sessionCostUsd={sessionCostUsd}
         agent={agent}
+        memorySearch={memorySearch}
         now={now}
         onClose={onClose}
         // Supply onRename ONLY for a non-null conversation — a null active conversation yields no button
@@ -3725,7 +3772,8 @@ function Composer({
   // Composer when it changes, so the control re-enables reactively on connect (AC3) with no reload.
   // The thread selects only the timeline `items` slice, so status changes don't re-render it.
   const status = useOpenConnectionStatus()
-  const { canSend } = composerAvailability(status)
+  const recallPending = useStore(rememberedModel.pending, s => s.target !== null && s.target === conversationId)
+  const canSend = composerAvailability(status).canSend && !recallPending
   // #448: the send targets the ACTIVE conversation. submitMessage no-ops on a null id (the daemon
   // rejects an unknown conversation_id with an error frame, so a placeholder is never sent).
   const activeConversationId = useActiveConversationStore((s) => s.activeConversation?.id ?? null)
@@ -3758,7 +3806,7 @@ function Composer({
     // optimistic echo fire while not connected — this blocks the Enter path (handleKeyDown) as well
     // as the button. The input is not cleared; nothing was sent.
     const serverId = connectedConversationHostNow(activeConversationId)
-    if (!canSend || serverId === null) return false
+    if (!canSend || serverId === null || rememberedModel.pending.getState().target === activeConversationId) return false
     // `window.pyry` is dereferenced only here, at interaction time — never during render — so the
     // server-rendered container smoke test never touches the bridge. Do NOT hoist the deps object out of
     // this function: that would move the dereference into the render path, where `window.pyry` does not
@@ -4262,14 +4310,7 @@ export function QuestionPanelSlot({ batch }: { batch: QuestionBatch }): JSX.Elem
       selection={selection}
       onOptionChosen={(optionIndex) => dispatch(optionPickEventFor({ ...at, optionIndex }))}
       onOtherChosen={() => dispatch(otherPickEventFor(at))}
-      onOtherTextChanged={(text) =>
-        dispatch({
-          type: 'otherTextChanged',
-          questionBatchId: batch.questionBatchId,
-          questionIndex: activeIndex,
-          text
-        })
-      }
+      onOtherTextChanged={(text) => dispatch({ type: 'otherTextChanged', ...at, text })}
     />
   )
 }
@@ -4722,6 +4763,25 @@ function TopOverlayControl({ onRepairHost }: {
     open === null ? NO_USAGE_LIMIT_READING : selectUsageLimitFor(open.id, nowSeconds)
   )
   const dismissed = useUsagePillDismissalStore(s => s.dismissed)
+  const resolution = useModalStore(s =>
+    open === null ? null : s.resolutions.find(r => r.conversationId === open.id) ?? null)
+  useEffect(() => {
+    if (resolution?.phase === 'pending') {
+      modalStore.getState().dispatch({ type: 'resolutionDisplayed', resolution })
+    }
+  }, [resolution])
+  useEffect(() => {
+    if (resolution?.phase !== 'displayed') return
+    const dismiss = (): void => {
+      modalStore.getState().dispatch({ type: 'resolutionDismissed', resolution })
+    }
+    const timer = setTimeout(dismiss, 4000)
+    return () => {
+      clearTimeout(timer)
+      // Leaving a chat consumes its displayed feedback. Identity guards replacement and reset.
+      dismiss()
+    }
+  }, [resolution])
   const handleRepair = (): void => {
     const current = selectActiveConversation(activeConversationStore.getState())
     const serverId = serverIdForOpenConversation(
@@ -4732,6 +4792,10 @@ function TopOverlayControl({ onRepairHost }: {
   }
   return (
     <TopOverlay
+      resolution={resolution?.phase === 'displayed' ? resolution.kind : null}
+      onDismissResolution={() => {
+        if (resolution !== null) modalStore.getState().dispatch({ type: 'resolutionDismissed', resolution })
+      }}
       reading={usageLimit}
       nowSeconds={nowSeconds}
       dismissed={dismissed}

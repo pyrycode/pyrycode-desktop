@@ -2103,6 +2103,87 @@
   opacity: 0.38;
 }
 
+/* The create-only Model field scopes the shared interaction menu to Figma's full-width list. */
+.create-channel__model-field > .composer-options-anchor {
+  display: block;
+}
+
+/* Figma's list extends beyond the modal's bottom edge. Closed and short modals keep scrolling. */
+.create-channel-overlay > .modal:has(.create-channel__model[aria-expanded="true"]) {
+  overflow: visible;
+}
+
+.create-channel__model {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-4);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--color-on-primary) 41%, transparent);
+  color: var(--color-on-surface);
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.create-channel__model > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.create-channel__model > img {
+  flex-shrink: 0;
+  transform: rotate(180deg);
+}
+
+.create-channel__model:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.create-channel__model:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.create-channel__model-field .composer-options-anchor > .composer-options {
+  top: calc(100% + var(--space-1));
+  right: 0;
+  bottom: auto;
+  left: 0;
+  width: auto;
+  max-height: calc(10 * var(--space-7));
+  overflow: auto;
+  box-shadow: 0 var(--space-1) var(--space-3) color-mix(in srgb, var(--color-scrim) 40%, transparent);
+}
+
+.create-channel__model-field .composer-options__item {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  flex-shrink: 0;
+}
+
+/* At short window heights keep the list in the scrollable modal so keyboard focus and Cancel fit. */
+@media (max-height: 550px) {
+  .create-channel-overlay > .modal:has(.create-channel__model[aria-expanded="true"]) {
+    overflow: auto;
+  }
+
+  .create-channel__model-field .composer-options-anchor > .composer-options {
+    position: relative;
+    top: auto;
+    margin-top: var(--space-1);
+  }
+}
+
 /* #1428's channel system prompt — the "Text area large" instance, restating the name input's fill,
    corner, padding and body-medium type as a sibling rule (this file's idiom for a twin control). Four
    rows over a 20px line plus 16px of vertical padding is the drawing's 112px box. `resize: vertical`

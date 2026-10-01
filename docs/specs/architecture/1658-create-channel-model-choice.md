@@ -56,3 +56,7 @@ None. Cleaner-shape check: reuse the shared interaction menu with scoped geometr
 ## Size check
 
 Sketch and plan: 3 production TypeScript files, 1 CSS file, 1 SVG asset, about 650 written lines including tests and plan; no new exported type/component/store, 1 existing consumer updated, 5 observable acceptance criteria, no new reject branch. Analogue #1428 added 812 scoped lines, including a 332-line plan; this plan and menu reuse keep the current change smaller. Remote feature overlap check found none.
+
+## Revisions
+
+2026-10-01: Source inspection and integrated captures clarified shared menu behavior and asset delivery. The menu supports wrapping Up/Down, Enter/Space and Escape; Home/End remain native unhandled keys. Vite inlines small SVG imports, while the renderer CSP deliberately rejects data URLs. ChannelForm therefore loads the exact exported local chevron through a blob URL, creates it only while the model field exists and revokes it on cleanup; no CSP/build configuration change. The open list extends beyond the panel at ordinary heights as drawn, while windows at or below 550px keep it in the modal's scroll flow. Its shadow uses the design's 4px/12px/40% scrim treatment with existing tokens. No new error branch or store; about 550 written lines after these adjustments.

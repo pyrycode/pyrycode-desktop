@@ -406,7 +406,7 @@ describe('translateTimelineEvent — the two owned arms', () => {
 // arm is claimed for the HISTORY shape and gated on the role rather than on where the event came from.
 describe('translateTimelineEvent — the messageReceived arm (#1223)', () => {
   it('maps a role-user message to a userText event, over both the live and the history shape', () => {
-    const userText = { type: 'userText', text: 'why did that fail?', messageId: 'm-9' }
+    const userText = { type: 'userText', received: true, text: 'why did that fail?', messageId: 'm-9' }
 
     // The history shape: #1227 drops `conversation_id` at the decode, so the arm must not read one.
     expect(
@@ -433,7 +433,7 @@ describe('translateTimelineEvent — the messageReceived arm (#1223)', () => {
       () => 12345
     )
 
-    expect(event).toEqual({ type: 'userText', text: 'q', messageId: 'm' })
+    expect(event).toEqual({ type: 'userText', received: true, text: 'q', messageId: 'm' })
   })
 
   it('draws no row for a role-assistant message, and none for the bulk arm', () => {
@@ -448,15 +448,13 @@ describe('translateTimelineEvent — the messageReceived arm (#1223)', () => {
     expect(translateTimelineEvent({ type: 'messagesReceived', messages: [message] })).toBeNull()
   })
 
-  it('resolves no keyed write target, so the live lane draws exactly what it drew before', () => {
+  it('routes a live user receipt only to its named conversation', () => {
     const live: DaemonEvent = {
       type: 'messageReceived',
       message: { ...message, role: 'user' }
     }
 
-    // `timelineTargetFor` is deliberately NOT widened: routing a live `message` frame by its
-    // daemon-asserted `message.conversation_id` is a separate decision with its own detector.
-    expect(timelineTargetFor(live)).toBeNull()
+    expect(timelineTargetFor(live)).toBe(message.conversation_id)
     expect(
       timelineWriteTarget({ type: 'userText', text: 't' }, null, () => 'open-conversation')
     ).toBeNull()

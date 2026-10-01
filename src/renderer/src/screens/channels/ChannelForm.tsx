@@ -1,5 +1,5 @@
 import { MAX_SYSTEM_PROMPT_BYTES, type WireModelOption } from '@shared/wire/types'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ComposerOptionsMenu } from '../conversation/ComposerOptionsPanel'
 import { composerModelRowLabel } from '../conversation/ComposerModelMenu'
 import modelChevron from '../../assets/channel-model-chevron.svg?raw'
@@ -49,6 +49,7 @@ export function ChannelForm({ name, busy, error, onNameChange, prompt, model }: 
   }
 }): JSX.Element {
   const [modelChevronUrl, setModelChevronUrl] = useState<string>()
+  const modelField = useRef<HTMLDivElement>(null)
   const hasModel = model !== undefined
   useEffect(() => {
     if (!hasModel) return
@@ -58,6 +59,34 @@ export function ChannelForm({ name, busy, error, onNameChange, prompt, model }: 
     setModelChevronUrl(url)
     return () => URL.revokeObjectURL(url)
   }, [hasModel])
+  useEffect(() => {
+    const field = modelField.current
+    const modal = field?.closest('.modal')
+    if (!hasModel || field === null || modal === null || modal === undefined) return
+    // Only the list escapes the modal's scrollport. Keep its viewport anchor current when the
+    // prompt is resized or the modal scrolls, without changing the shared menu's interaction.
+    const place = (): void => {
+      const trigger = field.querySelector<HTMLButtonElement>('.create-channel__model')
+      if (trigger === null) return
+      const bounds = trigger.getBoundingClientRect()
+      field.style.setProperty('--channel-model-left', `${bounds.left}px`)
+      field.style.setProperty('--channel-model-top', `${bounds.bottom}px`)
+      field.style.setProperty('--channel-model-width', `${bounds.width}px`)
+    }
+    place()
+    const observer = new ResizeObserver(place)
+    observer.observe(modal)
+    observer.observe(field)
+    modal.addEventListener('scroll', place)
+    window.addEventListener('resize', place)
+    return () => {
+      observer.disconnect()
+      modal.removeEventListener('scroll', place)
+      window.removeEventListener('resize', place)
+    }
+  }, [hasModel])
+  const chevron = <span className="create-channel__model-chevron" aria-hidden="true"
+    style={{ maskImage: modelChevronUrl === undefined ? undefined : `url(${modelChevronUrl})` }} />
   return <>
     <label className="create-channel__field">
       <span className="create-channel__label">Channel name:</span>
@@ -70,11 +99,11 @@ export function ChannelForm({ name, busy, error, onNameChange, prompt, model }: 
         autoFocus
       />
     </label>
-    {model !== undefined && <div className="create-channel__field create-channel__model-field" role="group" aria-label="Model">
+    {model !== undefined && <div ref={modelField} className="create-channel__field create-channel__model-field" role="group" aria-label="Model">
       <span className="create-channel__label">Model:</span>
       {busy ? <button type="button" className="create-channel__model" disabled>
         <span>{model.selected === undefined ? 'Default' : composerModelRowLabel(model.selected)}</span>
-        <img src={modelChevronUrl} alt="" aria-hidden="true" />
+        {chevron}
       </button> : <ComposerOptionsMenu
         options={model.rows.map((row, index) => ({ id: String(index), label: composerModelRowLabel(row) }))}
         currentId={model.selected === undefined ? null : String(model.rows.indexOf(model.selected))}
@@ -83,7 +112,7 @@ export function ChannelForm({ name, busy, error, onNameChange, prompt, model }: 
         triggerClassName="create-channel__model"
         triggerContent={<>
           <span>{model.selected === undefined ? 'Default' : composerModelRowLabel(model.selected)}</span>
-          <img src={modelChevronUrl} alt="" aria-hidden="true" />
+          {chevron}
         </>}
         placement="bottom-end"
       />}

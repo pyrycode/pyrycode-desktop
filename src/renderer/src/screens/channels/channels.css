@@ -2108,11 +2108,6 @@
   display: block;
 }
 
-/* Figma's list extends beyond the modal's bottom edge. Closed and short modals keep scrolling. */
-.create-channel-overlay > .modal:has(.create-channel__model[aria-expanded="true"]) {
-  overflow: visible;
-}
-
 .create-channel__model {
   box-sizing: border-box;
   display: flex;
@@ -2138,8 +2133,14 @@
   white-space: nowrap;
 }
 
-.create-channel__model > img {
+.create-channel__model-chevron {
+  display: block;
   flex-shrink: 0;
+  width: var(--space-5);
+  height: var(--space-3);
+  background: var(--color-primary);
+  mask-repeat: no-repeat;
+  mask-position: center;
   transform: rotate(180deg);
 }
 
@@ -2154,11 +2155,13 @@
 }
 
 .create-channel__model-field .composer-options-anchor > .composer-options {
-  top: calc(100% + var(--space-1));
-  right: 0;
+  /* A fixed list can extend beyond the panel as drawn without disabling the modal's scrolling. */
+  position: fixed;
+  top: calc(var(--channel-model-top) + var(--space-1));
+  right: auto;
   bottom: auto;
-  left: 0;
-  width: auto;
+  left: var(--channel-model-left);
+  width: var(--channel-model-width);
   max-height: calc(10 * var(--space-7));
   overflow: auto;
   box-shadow: 0 var(--space-1) var(--space-3) color-mix(in srgb, var(--color-scrim) 40%, transparent);
@@ -2173,13 +2176,11 @@
 
 /* At short window heights keep the list in the scrollable modal so keyboard focus and Cancel fit. */
 @media (max-height: 550px) {
-  .create-channel-overlay > .modal:has(.create-channel__model[aria-expanded="true"]) {
-    overflow: auto;
-  }
-
   .create-channel__model-field .composer-options-anchor > .composer-options {
     position: relative;
     top: auto;
+    left: auto;
+    width: auto;
     margin-top: var(--space-1);
   }
 }

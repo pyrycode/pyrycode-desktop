@@ -9,6 +9,13 @@ import { useEffect, useRef } from 'react'
 import type { RendererCommand } from '@shared/ipc/commands'
 import type { DaemonEvent } from '@shared/ipc/events'
 import type { ConversationCreatedPayload, WireAgent } from '@shared/wire/types'
+import { rememberedModel } from './rememberedModel'
+import { activeConversationStore } from './activeConversationStore'
+import { modelListStore } from './modelListStore'
+import { sessionStore } from './sessionStore'
+import { runSettingsWriteStore } from './runSettingsWriteStore'
+import { submitSettingsChange } from './runSettingsWriteBridge'
+import { connectedConversationHostNow } from '../screens/conversation/conversationActionAvailability'
 
 /**
  * Fire the `createConversation` command (#241 wired the main side through to the daemon). An inline
@@ -206,11 +213,28 @@ export function useConversationCreatedNav(
   useEffect(() => {
     onCreatedRef.current = onCreated
   })
-  useEffect(
-    () =>
-      subscribeConversationCreated(window.pyry.onDaemonEvent, (created, serverId) =>
-        onCreatedRef.current(created, serverId)
-      ),
-    []
-  )
+  useEffect(() => {
+    const off = subscribeConversationCreated(window.pyry.onDaemonEvent, (created, serverId) => {
+      rememberedModel.start(created, serverId, {
+        onDaemonEvent: window.pyry.onDaemonEvent,
+        ownsTarget: () => activeConversationStore.getState().activeConversation?.id === created.id &&
+          serverId !== undefined && sessionStore.getState().statuses.get(serverId)?.type === 'connected',
+        canWriteTarget: () => connectedConversationHostNow(created.id) === serverId,
+        subscribeOwnership: listener => {
+          const offActive = activeConversationStore.subscribe(listener)
+          const offConnection = sessionStore.subscribe(listener)
+          return () => { offActive(); offConnection() }
+        },
+        getModels: () => modelListStore.getState().lists.get(created.id),
+        writes: runSettingsWriteStore,
+        submit: (sessionId, change, changeId) => submitSettingsChange({
+          sessionId, sendCommand: window.pyry.sendCommand,
+          dispatch: runSettingsWriteStore.getState().dispatch, mintChangeId: () => changeId
+        }, change),
+        mintChangeId: () => crypto.randomUUID(),
+        log: code => window.pyry.sendDiagnostic({ event: 'composer-model-recall', code })
+      }, () => onCreatedRef.current(created, serverId))
+    })
+    return () => { off(); rememberedModel.cancel() }
+  }, [])
 }

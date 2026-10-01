@@ -30,12 +30,13 @@ Turns owned `DaemonEvent` arms into `ThreadEvent`s and folds them into `Timeline
 `reduceTimeline`, exposing `selectItems`/`selectPhase`/`selectStalled`/`selectApiRetry`/
 `selectCompacting`/`selectLocalSendPending` as the read surface. A stream arrival (an
 `assistant_delta` chunk, a `turn_end` marker, a `tool_use` call, its `tool_result` outcome, a `stall`
-onset, an `api_retry` edge, a `compacting` edge, `compaction_boundary` metadata or a `banner` report)
+onset, an `api_retry` edge, a `compacting` edge, `compaction_boundary` metadata, a user `message`
+receipt or a `banner` report)
 re-renders only components selecting a timeline slice — orthogonal to `sessionStore`
 and `runConfigStore`. The `connected`→`reconnected` arm
 ([#538](../codebase/538.md)), is not stream content at all — it is the connection-lifecycle reconcile
 that clears activity chrome on a fresh handshake while preserving held banner reports. `localSendPending`
-([#650](../codebase/650.md)) is written by neither path: it is set by the renderer-sourced `userText`
+([#650](../codebase/650.md)) is opened by neither path: it is set by the renderer-sourced local `userText`
 event the composer dispatches directly (see below). Refusal recovery also dispatches
 client-owned write-lifetime events into the retained conversation slice.
 
@@ -62,6 +63,33 @@ events, including reconnect; `prependHistoryFor` preserves it with the held item
 [`store/compaction.test.ts`](../../../src/renderer/src/store/compaction.test.ts)
 pins both index-shifting cases, association consumption and supersession, failure
 preservation, conversation isolation and reconnect without a false completion.
+
+## Live user receipts
+
+`messageReceived` translates only role `user` into `userText` with `received: true`.
+`timelineTargetFor` routes its nonempty `message.conversation_id` to that conversation's
+retained timeline, creating a slice when absent. It never infers the conversation on
+screen. Empty ids and other roles change no thread. Other retained slices and read marks
+stay unchanged; growth in a previously read background slice makes it unread through
+the [existing item-count predicate](conversation-unread.md).
+
+Receipts preserve `localSendPending`, while accepted local submission still opens
+Thinking. Live time comes from `daemonTs`; unusable times and history-only rows draw
+without time. A matching nonempty `message_id` returns the exact held state before
+any row or sidecar mutation. Identity covers optimistic echoes, repeated receipts,
+queued folding and history in either arrival order; equal text and empty/absent ids
+do not suppress rows. Retaining the held row also retains local attachments, which
+the received payload cannot supply. See [user event semantics](thread-timeline-internals.md#the-reducer)
+and [message timestamp contract](inbound-message-decode-contract.md#public-contract).
+
+`messageReceived` explicitly contributes no timestamp live-join key, even when
+`daemonTs` is present. The history filter keeps and steps over these entries so the
+message-id join can preserve held rows without stopping the adjacent stream join.
+[`liveUserReceipts.test.ts`](../../../src/renderer/src/store/liveUserReceipts.test.ts)
+covers held/new routing, background unread state, no-op identity and history/queue joins.
+[`e2e/live-user-receipts.spec.ts`](../../../e2e/live-user-receipts.spec.ts) delivers
+encrypted `message` envelopes through the mounted app, checks daemon time and observes
+a held optimistic echo before the correlated receipt.
 
 ## Claude banner routing and lifetime
 
@@ -103,12 +131,15 @@ of level, including hidden `info`. Its lifetime differs from stopped-turn recove
 | Stopping banner | Replaces the held report. | Appends one item. |
 | Non-stopping banner | Preserves it. | Appends one item. |
 | Accepted local typed/slash send (`userText`) | Clears it. | Preserves them. |
+| Fresh received user row (`userText`, `received: true`) | Clears it through the shared user-event wrapper. | Preserves them. |
+| Duplicate user receipt | Preserves it and the exact held state. | Preserves them. |
 | Empty or blocked send attempt | Preserves it. | Preserves them. |
-| Daemon activity, trailing idle, session boundary, reconnect, navigation or history prepend | Preserves it. | Preserves them. |
+| Other daemon activity, trailing idle, session boundary, reconnect, navigation or history prepend | Preserves it. | Preserves them. |
 | Timeline reset, holder clear or eviction | Drops it. | Drops them. |
 
-Acceptance means inserting the optimistic user row through
-[composer send](composer-send.md), not receiving a daemon acknowledgement. The
+Local acceptance means inserting the optimistic user row through
+[composer send](composer-send.md). The shared wrapper also clears the report on a
+fresh receipt; a matching receipt returns before that lifecycle runs. The
 reducer wrapper preserves the report across other content reducers, even when they
 reconstruct state. `stopsTurn` only controls display: it never interrupts, retries,
 changes permission or mutates turn lifecycle. The `stoppingBanner` reading shares
@@ -524,7 +555,7 @@ This proves Desktop dispatch and UI behavior, without requiring a live Claude re
   [#856](https://github.com/pyrycode/pyrycode-desktop/issues/856) renders it.
 - [#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223) — draws a served history page: widens
   `translateTimelineEvent`'s parameter to `DaemonEvent | HistoryTimelineEvent`, adds its tenth owned arm
-  (`messageReceived`→`userText`, live-lane-dormant by construction), and adds the fifth channel subscriber
+  (`messageReceived`→`userText`, initially history-only; now also routed live as described above), and adds the fifth channel subscriber
   (`historyPageBridge.ts`) and fifth store write path (`prependHistoryFor`) covered in full above.
   Blocked-by [#1222](request-history-send.md) (the ask + transport decode) and
   [#1227](request-history-send.md) (the per-entry payload decode); [#1224](https://github.com/pyrycode/pyrycode-desktop/issues/1224)
@@ -544,7 +575,7 @@ This proves Desktop dispatch and UI behavior, without requiring a live Claude re
   anchoring proof. Spec: `docs/specs/architecture/1260-history-scroll-back-walk.md`.
 - [#1225](https://github.com/pyrycode/pyrycode-desktop/issues/1225) — the last slice of the #1088 family:
   joins a served page to the live stream on (`type`, `ts`) so an entry present on both draws once. Adds
-  `daemonTs` (an optional field on ten `DaemonEvent` arms, carried down from the envelope's own `ts` —
+  `daemonTs` (optional envelope metadata, initially forwarded on ten arms and now also on user receipts —
   see [Daemon event channel — emit and subscribe §
   `DaemonEventTimestamp`](daemon-event-channel-plumbing.md#daemoneventtimestamp--the-per-frame-comparand-1225)),
   a `liveKeys` set on `ConversationSlice`, and a page-side `withoutLiveEntries` pre-filter in

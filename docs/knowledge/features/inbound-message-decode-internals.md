@@ -11,7 +11,7 @@ Part of [Inbound message decode](inbound-message-decode.md); see that document f
 1. **Size guard.** `plaintext.length > MAX_PLAINTEXT_BYTES` (65519) → throw. `decodeEnvelope` does **not** size-check, so this is the only thing that fails an oversized-but-valid-JSON frame closed at this boundary. (Belt-and-suspenders: the upstream Noise transport already bounds the plaintext, but this boundary re-checks what it owns — the unit test drives this function directly, and a future driver change must not silently un-bound it. See § Why the explicit size guard.)
 2. **`decodeEnvelope(plaintext)`** — inherits the codec's fail-closed rejection of bad UTF-8, malformed JSON, a non-object top-level, and a missing `id` / `type` / `ts` / `payload`.
 3. **Route on `envelope.type`:**
-   - `'message'` → `{ kind: 'message', message: parseMessagePayload(payload) }`
+   - `'message'` → `{ kind: 'message', message: parseMessagePayload(payload), ts: envelope.ts }` — verbatim envelope time for live user receipt display; no date parsing at this boundary.
    - `'message_chunk'` → `{ kind: 'chunk', messages: parseMessageChunkPayload(payload).messages }`
    - `'debug_bundle_chunk'` / `'debug_bundle_done'` / `'error'` → the three additive kinds ([#116](../codebase/116.md), see above) — narrowed and content-free-logged as `inbound-decoded` before the `default` branch is ever reached. `'error'`'s `daemon-error` kind widened with the already-decoded `Envelope.in_reply_to` as `inReplyTo?: number` ([#269](../codebase/269.md)) — propagated, not re-parsed; still no `ErrorPayload` field is narrowed.
    - `'assistant_delta'` → `{ kind: 'assistant-delta', delta }` / `'turn_end'` → `{ kind: 'turn-end', turnEnd }` ([#199](../codebase/199.md)) — narrowed via `parseAssistantDeltaPayload` / `parseTurnEndPayload`, each content-free-logged as `inbound-decoded(code: 'assistant_delta' | 'turn_end')` before the `default` branch. The two v2 interactive-stream kinds that graduate out of `inbound-unmodeled` once #179 flips `interactive` on.
@@ -120,7 +120,7 @@ case 'message': {
   if (inbound === null) return                        // other envelope type: ignored, no event
   switch (inbound.kind) {
     case 'message':
-      emitDaemonEvent(sink, { type: 'messageReceived', message: inbound.message })
+      emitDaemonEvent(sink, { type: 'messageReceived', message: inbound.message, daemonTs: inbound.ts })
       return
     case 'chunk':
       emitDaemonEvent(sink, { type: 'messagesReceived', messages: inbound.messages })

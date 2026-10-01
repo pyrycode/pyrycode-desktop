@@ -93,6 +93,14 @@ Optimistic state can disappear in the same frame when the fake immediately repli
 Hold the fake response, assert the optimistic state, then send the correlated reply.
 A rejection can distinguish states whose successful renderings look identical.
 
+A streaming assistant row includes cursor and metadata text, so an exact-text locator
+can miss a visible delivery marker. Target the assistant role wrapper with `hasText`
+for the positive barrier, then assert duplicate absence. In
+[`live-user-receipts.spec.ts`](../../../e2e/live-user-receipts.spec.ts), a later
+`assistant_delta` on the same encrypted stream proves the preceding receipts passed
+through the mounted app before the one-row checks; an immediate count alone could
+pass before either receipt arrived.
+
 The footer needs a session-settings snapshot before its controls can render.
 Check the current refresh trigger. A lone idle event does not produce a transition
 from running to idle. Drive the prerequisite transition when the fixture requires it.

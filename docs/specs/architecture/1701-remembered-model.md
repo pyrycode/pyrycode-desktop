@@ -77,3 +77,17 @@ None. The settings address comes from the target's first correlated read reply; 
 
 **Reviewer:** builder self-review per `builder/security-review.md`
 **Date:** 2026-10-01
+
+## Revisions
+
+### 2026-10-01 — prerequisite settlement and integration proof
+
+The verifier found that the original Error handling and Security review assumed settlement guarantees that the write bridge and background boundary did not yet provide. Merged #1714 now admits reconnect cleanup in `subscribeRunSettingsWrite` only for the active conversation's owning host; merged #1715 makes `setSessionSettings` emit a correlated `sessionSettingsRejected` on envelope-build or driver-send failure. Both production callers are wired here already. Recall must consume those events through the existing subscription, fold and reducer; a synchronous renderer throw is not evidence of background failure settlement. No further production change is planned.
+
+Replace the recall unit harness's hand-picked confirmation/rejection fold with `subscribeRunSettingsWrite`. Prove that host B's reconnect preserves host A's pending recall, and A's later confirmation commits its effective dropdown setting and releases sending without remembering again. Compose `createRememberedModel`, `submitSettingsChange` and that subscription with the actual `createDaemonConnection` in its existing test fixture; an over-cap model exercises real encoding failure, and a throwing fake driver exercises the real send catch. Deliver emitted rejection events asynchronously, as IPC does, and assert pending hold before delivery, silent rollback, inherited effective settings, unchanged preference, release and no retry after delivery.
+
+**Security review recheck: PASS.** Trust boundaries remain the stamped typed event and correlated pending record. Local background failures now settle via the named main boundary, with static diagnostics and no exception/model/session content. Host B cannot discard A's correlation; ownership loss still cancels the attempt. Storage, secrets, crypto, Electron capabilities and network limits remain as reviewed above. The existing read deadlines and acknowledgement/ownership settlement model are unchanged. No new security finding or deferred fix.
+
+Files additionally read: `src/main/daemonConnection.ts` → `setSessionSettings`; `src/main/daemonConnection.test.ts` → `build`, `makeDriverFactory`, `captureLog`; the #1714 and #1715 plans and owning settings-write overview. Codegraph remains uninitialized; source reads supplied this map. Overlaps with #1544, #1657, #1694 and #1699 affect other test blocks only; append local tests and build through them.
+
+Rechecked size: one deliverable, at most 800 total inserted lines including the existing implementation and this revision, five production files, two new exported interfaces, one reactive store, one consumer, five acceptance criteria and unchanged reject branches. Documentation handoff and dispatcher-owned real-Claude acceptance remain pending as specified above.

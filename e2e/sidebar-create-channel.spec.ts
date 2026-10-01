@@ -290,6 +290,34 @@ test('Codex model is keyboard selectable, uses submission-time effort and surviv
   await expect(reopened).toHaveCount(0)
 })
 
+test('Default channel starts with remembered effort and needs no follow-up settings write', async ({ launchPairedApp }) => {
+  const fake = modelControlled('first-seed', mergedModels)
+  const app = await launchPairedApp({ buildReplyFrames: fake.reply })
+  await app.page.locator('.composer__effort').click()
+  await app.page.getByRole('menu', { name: 'Effort', exact: true })
+    .getByRole('menuitem', { name: 'low', exact: true }).click()
+  const writes = () => fake.requests.filter(request => request.type === 'set_session_settings')
+  await expect.poll(() => writes().length).toBe(1)
+  fake.remember(app)
+  await expect.poll(() => app.page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBe('low')
+  const dialog = await open(app)
+  await expect(dialog.locator('.create-channel__model')).toHaveText('Default')
+  await nameField(dialog).fill('Default effort channel')
+  await dialog.getByRole('button', { name: 'OK', exact: true }).click()
+  const creates = () => fake.requests.filter(request => request.type === 'create_conversation')
+  await expect.poll(() => creates().length).toBe(1)
+  expect(creates()[0].payload).toEqual({ cwd: null, is_promoted: true,
+    name: 'Default effort channel', effort: 'low' })
+  fake.settle(app, false)
+  await expect(dialog).toHaveCount(0)
+  await expect(app.page.locator('.channel-list__row-open[aria-current="true"]'))
+    .toHaveText('Default effort channel')
+  await expect(app.page.locator('.composer__effort-label')).toHaveText('low')
+  await app.page.locator('.channel-list__row-open[aria-current="true"]').click()
+  await expect(app.page.locator('.composer__effort-label')).toHaveText('low')
+  expect(writes()).toHaveLength(1)
+})
+
 test('model choices stay on the clicked host and equal values from different agents remain distinct', async ({ launchPairedApp }) => {
   const first = modelControlled('first-seed', [modelRow('default', 'Inherited'), modelRow('sonnet', 'Sonnet')])
   const second = modelControlled('second-seed', [modelRow('default', 'Inherited'),

@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StampedDaemonEvent } from '@shared/ipc/events'
 import type { ConversationCreatedPayload, WireModelOption } from '@shared/wire/types'
 import { createRememberedModel } from './rememberedModel'
-import { createRunSettingsWriteStore, type SettingsChange } from './runSettingsWriteStore'
-import { foldWriteEvent, submitSettingsChange } from './runSettingsWriteBridge'
+import { createRunSettingsWriteStore, selectEffectiveSettings, type SettingsChange } from './runSettingsWriteStore'
+import { foldWriteEvent, submitSettingsChange, subscribeRunSettingsWrite } from './runSettingsWriteBridge'
 
 const chat: ConversationCreatedPayload = { id: 'new', is_promoted: false, cwd: '/workspace',
   name: null, last_used_at: '', workspace_label: null }
@@ -24,13 +24,6 @@ function harness(value: string | null = row.value) {
   const listeners = new Set<(event: StampedDaemonEvent) => void>()
   const off = vi.fn()
   const emit = (event: StampedDaemonEvent) => {
-    if (event.type === 'sessionSettingsUpdated' || event.type === 'sessionSettingsRejected') {
-      foldWriteEvent({ getPending: () => writes.getState().pending, dispatch: writes.getState().dispatch,
-        rememberEffort: vi.fn(), rememberModel: model.remember }, {
-        type: event.type === 'sessionSettingsUpdated' ? 'settingsConfirmed' : 'settingsRejected',
-        changeId: event.changeId
-      })
-    }
     for (const listener of listeners) listener(event)
   }
   const deps = {
@@ -47,6 +40,10 @@ function harness(value: string | null = row.value) {
     }, change),
     mintChangeId: () => 'recall', log
   }
+  subscribeRunSettingsWrite(deps.onDaemonEvent, event => foldWriteEvent({
+    getPending: () => writes.getState().pending, dispatch: writes.getState().dispatch,
+    rememberEffort: vi.fn(), rememberModel: model.remember
+  }, event), () => 'host')
   const list = (models = [row], conversationId = 'new', serverId = 'host') => emit({
     type: 'modelList', serverId, conversationId, models, droppedModels: 0
   })
@@ -208,6 +205,23 @@ describe('remembered model', () => {
     h.list(); h.emit(settings)
     expect(h.model.pending.getState().target).toBeNull()
     expect(h.writes.getState().pending.size).toBe(0)
+    expect(h.send).toHaveBeenCalledTimes(1)
+  })
+
+  it('another host reconnect preserves recall until the owning confirmation commits selection', () => {
+    const h = harness(); h.start(); h.list(); h.emit(settings)
+    h.emit({ type: 'connected', serverId: 'other-host', ack: {
+      protocol_version: 'v2', server_id: 'other-host', conn_id: 'conn', capabilities: []
+    } })
+    expect(h.writes.getState().pending.get('recall')).toEqual({ field: 'model', value: row.value, source: 'recall' })
+    expect(h.model.pending.getState().target).toBe('new')
+    h.emit({ type: 'sessionSettingsUpdated', serverId: 'host', sessionId: 'session-new', changeId: 'recall' })
+    expect(h.writes.getState().pending.size).toBe(0)
+    expect(h.writes.getState().confirmed.model).toBe(row.value)
+    expect(selectEffectiveSettings(null, h.writes.getState()).model).toBe(row.value)
+    expect(h.model.pending.getState().target).toBeNull()
+    expect(h.storage.write).not.toHaveBeenCalled()
+    h.list(); h.emit(settings)
     expect(h.send).toHaveBeenCalledTimes(1)
   })
 

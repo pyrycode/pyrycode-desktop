@@ -85,11 +85,18 @@ string-to-string map with its supplied keys.
 Every snapshot has `version: 1`, `serverId` and a `kind` of `list` or `timeline`.
 A list's `conversations` array retains all eight required `ConversationSummary` fields:
 `id`, `name`, `is_promoted`, `is_archived`, `cwd`, `last_message_ts`, `last_used_at`
-and `workspace_label`, plus two optional ones carried when the daemon sent them:
+and `workspace_label`, plus optional fields carried when present:
 `is_muted` ([#1594](https://github.com/pyrycode/pyrycode-desktop/issues/1594)) and `agent`
 ([#1649](https://github.com/pyrycode/pyrycode-desktop/issues/1649), mapped through `agentFromWire` —
 a row saved before #1649 restores with no `agent` key at all, exactly as it did before). Duplicate
 conversation ids within one list are invalid; array order is preserved without sorting.
+
+`archived_at?: string | null` is also retained. Snapshot validation preserves strings (including
+invalid timestamps) and explicit `null`, rejects other value types, and restores pre-field rows
+without adding the key. This differs from live list decoding, which normalizes absence to `null`.
+Timestamp eligibility belongs to the [Archive derivation](archive-screen.md#the-view-model-archiveviewmodelts),
+so rejecting invalid date strings here would prevent its last-use fallback and discard an otherwise
+valid saved list. Saved order remains unchanged; Archive sorts its own per-tab arrays.
 
 A timeline adds `conversationId`, ordered `items`, `prependedRows` and `coverage`.
 `prependedRows` is the nonnegative safe-integer index offset used to preserve

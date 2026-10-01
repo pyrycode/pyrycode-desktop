@@ -1,9 +1,9 @@
 // #1604: the conversation's Top overlay (Figma 132:4171, frame "Top overlay"; the pill is 347:6617) — a
 // right-aligned stack of pills pinned to the top of the message area while the timeline scrolls beneath
-// it. Shared with mobile. Two occupants: claude's usage-limit reading, then the pairing-error Re-pair.
+// it. Shared with mobile. Occupants: usage, permission resolution, then pairing-error Re-pair.
 //
-// A PURE VIEW: the markup is a function of the reading, the instant, the dismissed triple and the repair
-// flag, which is what lets every arm be a static render in this repo's node-environment specs. The
+// A PURE VIEW: the markup is a function of the reading, the instant, the dismissed triple, resolution
+// kind and repair flag, which is what lets every arm be a static render in this repo's node-environment specs. The
 // store-bound container is `TopOverlayControl` in ConversationScreen.tsx.
 //
 // NO DAEMON-AUTHORED STRING REACHES THIS DOM. The usage text is `usageLimitNotice`'s, composed from
@@ -13,6 +13,7 @@
 //
 // NO LIVE REGION, on the status-row chip's ruling: #279's banner already announces connection changes,
 // and the usage reading is not a place to queue announcements.
+import type { ModalResolution } from '../../store/modalPrompts'
 import type { UsageLimitReading } from '../../store/usageLimitStore'
 import { isUsageReadingDismissed, usageLimitNotice } from './usageLimitNotice'
 import { COMPOSER_REPAIR_BUTTON_COPY } from './composerSend'
@@ -26,8 +27,12 @@ export function TopOverlay({
   dismissed,
   repair,
   onDismissUsage,
-  onRepair
+  onRepair,
+  resolution,
+  onDismissResolution
 }: {
+  resolution: ModalResolution['kind'] | null
+  onDismissResolution: () => void
   reading: UsageLimitReading | null
   nowSeconds: number
   dismissed: UsageLimitReading | null
@@ -37,7 +42,7 @@ export function TopOverlay({
 }): JSX.Element | null {
   const usage = reading === null || isUsageReadingDismissed(reading, dismissed) ? null : reading
   // No pills, no element: the overlay takes no space and leaves nothing in the tree.
-  if (usage === null && !repair) return null
+  if (usage === null && resolution === null && !repair) return null
   const notice = usage === null ? null : usageLimitNotice(usage, nowSeconds)
   return (
     <div className="conversation__top-overlay">
@@ -66,6 +71,26 @@ export function TopOverlay({
               </svg>
             </button>
           )}
+        </div>
+      )}
+      {resolution !== null && (
+        <div className="top-overlay-pill top-overlay-pill--default">
+          <span className="top-overlay-pill__text">
+            {resolution === 'remote' ? 'Resolved on another device' : 'Request timed out'}
+          </span>
+          <button
+            type="button"
+            className="top-overlay-pill__dismiss"
+            aria-label="Dismiss permission resolution notice"
+            onClick={onDismissResolution}
+          >
+            <svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true" focusable="false">
+              <path
+                fill="currentColor"
+                d="M.294.294a1 1 0 0 1 1.413 0L4 2.587 6.293.294a1 1 0 1 1 1.413 1.413L5.413 4l2.293 2.293a1 1 0 1 1-1.413 1.413L4 5.413 1.707 7.706A1 1 0 0 1 .294 6.293L2.587 4 .294 1.707a1 1 0 0 1 0-1.413Z"
+              />
+            </svg>
+          </button>
         </div>
       )}
       {repair && (

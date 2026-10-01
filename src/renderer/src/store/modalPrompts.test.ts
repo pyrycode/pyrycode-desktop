@@ -730,3 +730,62 @@ describe('selectHasOutstandingFor — the per-conversation read (#878)', () => {
     expect(Object.getOwnPropertyNames(Object.prototype)).not.toContain('m1')
   })
 })
+
+describe('permission resolution feedback', () => {
+  it.each(['remote', 'timeout'] as const)('records %s only from a held prompt, with its owner', source => {
+    const state = run([shown('opaque', { conversationId: '__proto__' }), dismissed('opaque', 'DAEMON_OUTCOME', source)])
+    expect(state.resolutions).toEqual([{ conversationId: '__proto__', kind: source, phase: 'pending' }])
+    expect(reduceModal(state, dismissed('opaque', 'DAEMON_OUTCOME', source))).toBe(state)
+    expect(reduceModal(state, dismissed('unknown', '', source))).toBe(state)
+  })
+
+  it.each(['allow', 'cancel'])('local %s and its later daemon dismissal stay silent', outcome => {
+    const state = run([shown('local'), dismissed('local', outcome, 'local'), dismissed('local', outcome, 'remote')])
+    expect(state.resolutions).toEqual([])
+  })
+
+  it('an unrecognized source cannot create feedback', () => {
+    // Simulate a buggy caller outside the typed bridge; source never becomes DOM copy.
+    const event = { type: 'dismissed', modalId: 'held', outcome: 'DAEMON_OUTCOME', source: 'unknown' } as unknown as ModalEvent
+    expect(reduceModal(run([shown('held')]), event).resolutions).toEqual([])
+  })
+
+  it('keeps only the latest per chat without disturbing another chat', () => {
+    const first = run([shown('one', { conversationId: 'a' }), dismissed('one', '', 'remote'),
+      shown('two', { conversationId: 'b' }), dismissed('two', '', 'timeout')])
+    const old = first.resolutions[0]
+    const next = [shown('three', { conversationId: 'a' }), dismissed('three', '', 'timeout')].reduce(reduceModal, first)
+    expect(next.resolutions).toEqual([{ conversationId: 'b', kind: 'timeout', phase: 'pending' },
+      { conversationId: 'a', kind: 'timeout', phase: 'pending' }])
+    expect(next.resolutions[0]).toBe(first.resolutions[1])
+    expect(reduceModal(next, { type: 'resolutionDisplayed', resolution: old })).toBe(next)
+    expect(reduceModal(next, { type: 'resolutionDismissed', resolution: old })).toBe(next)
+  })
+
+  it('guards display and dismissal by identity, including a replaced displayed notice', () => {
+    const pending = run([shown('one'), dismissed('one', '', 'remote')])
+    const notice = pending.resolutions[0]
+    const displayed = reduceModal(pending, { type: 'resolutionDisplayed', resolution: notice })
+    expect(displayed.resolutions[0].phase).toBe('displayed')
+    expect(reduceModal(displayed, { type: 'resolutionDisplayed', resolution: notice })).toBe(displayed)
+    const active = displayed.resolutions[0]
+    expect(reduceModal(displayed, { type: 'resolutionDisplayed', resolution: active })).toBe(displayed)
+    expect(reduceModal(displayed, { type: 'resolutionDismissed', resolution: { ...active } })).toBe(displayed)
+    const replacement = [shown('two', { conversationId: 'conv-one' }), dismissed('two', '', 'timeout')].reduce(reduceModal, displayed)
+    expect(reduceModal(replacement, { type: 'resolutionDismissed', resolution: active })).toBe(replacement)
+    const cleared = reduceModal(displayed, { type: 'resolutionDismissed', resolution: active })
+    expect(cleared.resolutions).toEqual([])
+    expect(reduceModal(cleared, { type: 'resolutionDismissed', resolution: active })).toBe(cleared)
+  })
+
+  it('reconnect neither manufactures nor discards feedback; reset clears pending and displayed', () => {
+    const state = run([shown('held'), shown('one'), dismissed('one', '', 'remote'),
+      shown('two'), dismissed('two', '', 'timeout')])
+    const displayed = reduceModal(state, { type: 'resolutionDisplayed', resolution: state.resolutions[0] })
+    const rejoined = reduceModal(displayed, reconnected('conv-held', 'conv-one', 'conv-two'))
+    expect(rejoined.outstanding).toEqual([])
+    expect(rejoined.resolutions).toBe(displayed.resolutions)
+    expect(reduceModal(rejoined, dismissed('held', '', 'timeout'))).toBe(rejoined)
+    expect(reduceModal(rejoined, reset()).resolutions).toEqual([])
+  })
+})

@@ -29,6 +29,19 @@ click handlers, focus changes, or layout. A removed bridge mount can leave its
 import and all unit tests green. Check that each bridge is mounted in the app.
 Use the fake-transport browser tier to prove event delivery through the app.
 
+Permission resolution coverage separates these proofs explicitly.
+[`modalPrompts.test.ts`](../../../src/renderer/src/store/modalPrompts.test.ts) checks held-owner
+detection, silent local/unknown dismissals, per-chat replacement, stale-object guards, reconnect
+preservation and pairing reset. [`TopOverlay.test.tsx`](../../../src/renderer/src/screens/conversation/TopOverlay.test.tsx)
+pins both client copies, Default treatment, accessible X and usage/resolution/Re-pair order.
+Neither static rendering nor reducer tests execute the display timer or navigation cleanup.
+[`permission-resolution-notices.spec.ts`](../../../e2e/permission-resolution-notices.spec.ts)
+injects `modal_shown`/`modal_dismissed` frames through fake transport to prove both sources, local
+silence, X, expiry, deferred display beyond four seconds, chat isolation, navigation without replay
+and replacement across the old deadline. Its paused browser clock checks visibility at 3999ms and
+absence at 4000ms from display. Same-copy replacement is essential: a timer keyed only to kind/copy
+could pass a remote-to-timeout case while expiring a timeout-to-timeout replacement early.
+
 The end-to-end directory has historically been outside the project's TypeScript
 configurations. Playwright strips types when it loads a spec. Check the current
 configurations before claiming that a green build typechecks a changed spec.
@@ -91,6 +104,16 @@ Read the running window's boxes when a padded scroller is involved.
 Flow arithmetic alone can predict the wrong boundary.
 An overlay can paint beneath a later positioned sibling when both use automatic
 stacking. Check the complete ancestor and sibling arrangement.
+
+Resolution-pill visual evidence covers four states: remote and timeout at both 1280×800 and
+800×600 window sizes (1280×772 and 800×572 content viewports). The
+[review of implementation revision `1b6aabfe`](https://github.com/pyrycode/pyrycode-desktop/pull/1719#issuecomment-5929842972)
+records all four captures compared with Figma Top overlay `132:4171` and Default pill `347:6617`:
+token colours, body-small typography, padding, radius, shadow, right alignment, 12px stack spacing
+and the exact 8px X matched, and both copies fit at minimum width. Integrated captures show usage
+plus resolution; simultaneous usage/resolution/Re-pair order is a static-render assertion backed
+by shared layout source, rather than a three-pill screenshot. Captures prove appearance; the
+fake-transport spec above proves lifetime and interaction.
 
 Text truncation needs a shrinkable chain of flex items on the relevant main axis.
 A bare text node cannot carry its own bounded truncation box.

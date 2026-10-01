@@ -145,7 +145,7 @@ import { RunConfigSections, useConversationAgent } from './RunConfigSections'
 import { SystemPromptSection } from './SystemPromptSection'
 import { LogDataSection } from './LogDataSection'
 import { PermissionModal } from './PermissionModal'
-import { useModalStore, selectHasOutstandingFor } from '../../store/modalStore'
+import { modalStore, useModalStore, selectHasOutstandingFor } from '../../store/modalStore'
 import { QuestionPanelView, optionPickEventFor, otherPickEventFor } from './QuestionPanel'
 import {
   useQuestionBatchStore,
@@ -4763,6 +4763,25 @@ function TopOverlayControl({ onRepairHost }: {
     open === null ? NO_USAGE_LIMIT_READING : selectUsageLimitFor(open.id, nowSeconds)
   )
   const dismissed = useUsagePillDismissalStore(s => s.dismissed)
+  const resolution = useModalStore(s =>
+    open === null ? null : s.resolutions.find(r => r.conversationId === open.id) ?? null)
+  useEffect(() => {
+    if (resolution?.phase === 'pending') {
+      modalStore.getState().dispatch({ type: 'resolutionDisplayed', resolution })
+    }
+  }, [resolution])
+  useEffect(() => {
+    if (resolution?.phase !== 'displayed') return
+    const dismiss = (): void => {
+      modalStore.getState().dispatch({ type: 'resolutionDismissed', resolution })
+    }
+    const timer = setTimeout(dismiss, 4000)
+    return () => {
+      clearTimeout(timer)
+      // Leaving a chat consumes its displayed feedback. Identity guards replacement and reset.
+      dismiss()
+    }
+  }, [resolution])
   const handleRepair = (): void => {
     const current = selectActiveConversation(activeConversationStore.getState())
     const serverId = serverIdForOpenConversation(
@@ -4773,6 +4792,10 @@ function TopOverlayControl({ onRepairHost }: {
   }
   return (
     <TopOverlay
+      resolution={resolution?.phase === 'displayed' ? resolution.kind : null}
+      onDismissResolution={() => {
+        if (resolution !== null) modalStore.getState().dispatch({ type: 'resolutionDismissed', resolution })
+      }}
       reading={usageLimit}
       nowSeconds={nowSeconds}
       dismissed={dismissed}

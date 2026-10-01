@@ -18,6 +18,7 @@ import {
   type SettingsChange
 } from './runSettingsWriteStore'
 import { lastEffortStore } from './lastEffortStore'
+import { rememberedModel } from './rememberedModel'
 import type { StoreApi } from 'zustand/vanilla'
 import type { RunSettingsWriteStore } from './runSettingsWriteStore'
 import { conversationTimelineStore, type ConversationTimelineStore } from './conversationTimelineStore'
@@ -185,6 +186,7 @@ export interface FoldWriteEventDeps {
   getPending: () => ReadonlyMap<string, SettingsChange>
   dispatch: (event: RunSettingsWriteEvent) => void
   rememberEffort: (level: string) => void
+  rememberModel?: (value: string) => void
   refresh?: () => void
   log?: (code: 'confirmed' | 'rejected') => void
 }
@@ -204,8 +206,12 @@ export interface FoldWriteEventDeps {
 export function foldWriteEvent(deps: FoldWriteEventDeps, event: RunSettingsWriteEvent): void {
   const pending = deps.getPending()
   const level = confirmedEffortLevel(pending, event)
+  const model = event.type === 'settingsConfirmed' ? pending.get(event.changeId) : undefined
   const rejected = event.type === 'settingsRejected' && pending.get(event.changeId)?.field === 'effort'
   deps.dispatch(event)
+  if (model?.field === 'model' && model.source !== 'recall' && model.value !== '') {
+    deps.rememberModel?.(model.value)
+  }
   if (rejected) deps.log?.('rejected')
   if (level !== null) {
     deps.rememberEffort(level)
@@ -280,6 +286,10 @@ export function RunSettingsWriteData(): null {
           getPending: () => runSettingsWriteStore.getState().pending,
           dispatch: runSettingsWriteStore.getState().dispatch,
           rememberEffort: lastEffortStore.getState().setLastEffort,
+          rememberModel: value => {
+            rememberedModel.remember(value)
+            window.pyry.sendDiagnostic({ event: 'composer-model-preference', code: 'confirmed' })
+          },
           refresh: () => requestRunConfigSnapshot(
             window.pyry.sendCommand,
             activeConversationStore.getState().activeConversation?.id ?? null

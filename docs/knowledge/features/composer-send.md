@@ -167,7 +167,13 @@ Through [#968](../codebase/968.md), `ComposerAvailability` also carried `hint: s
 
 Both facts (`canSend` and, before #968, `hint`) derive from the single `selectStatus` read, so there is one source of truth. A `default: assertNever(status)` arm makes a new `ConnectionStatus` arm a compile error — unchanged by #968.
 
-In the container, `Composer` selects `status`, derives `{ canSend }`, and:
+In the container, `Composer` combines connection availability with the
+[new-chat model-recall hold](remembered-model.md#eligibility-and-settlement). It selects
+whether recall targets this conversation to disable Send, and rechecks the pending
+target synchronously in the shared `sendText` path before `submitMessage`. Enter, Actions
+and status-area message sends therefore cannot consume drafts or attachments while
+recall is pending. The hold ends on correlated settlement or cancellation, not when
+the settings command returns; unrelated chats remain available.
 
 ### 5. Re-pair gate — `shouldOfferRepair` ([#167](../codebase/167.md))
 
@@ -422,7 +428,7 @@ selected/creating host + conversation -> retained draft coordinates
   pane remount / return from another screen -> selectDraft -> controlled textarea + sizing
 
 Send / Enter -> handleSubmit -> sendText(text)
-  unavailable host -> false; retain draft
+  unavailable host / pending model recall -> false; retain draft and attachments
   submitMessage(text, activeConversationId, deps)
     whitespace-only / no conversation -> false; retain draft
     mint message_id; send trimmed text through guarded bridge

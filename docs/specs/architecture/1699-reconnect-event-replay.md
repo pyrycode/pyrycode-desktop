@@ -79,3 +79,9 @@ Pending for the documentation stage: correct reconnect-field descriptions in `do
 
 **Reviewer:** builder self-review per `builder/security-review.md`  
 **Date:** 2026-10-01
+
+## Revisions
+
+2026-10-01 — PR #1712 verifier MUST FIX: `loadDialConfig` returns null when permanent teardown races a pending pairing load or key ensure, but `bootstrap` interpreted that cancellation as an absent pairing. Check `stopped` alongside the generation fence before the null-result branch. Cancelled successful loads must construct no driver and emit no post-stop renderer event or diagnostic. Extend the existing bootstrap race test with explicitly pending load/ensure cases and assertions on both output channels. Replay negotiation and pairing lifetime are unchanged; the rework touches one production file and adds about 30 written lines, within the existing sizing-floor exception.
+
+In-flight overlaps rechecked: #1544 changes config correlation and #1657 changes advertised capabilities in `daemonConnection`; neither changes `bootstrap` or its teardown test. No dependency blocks this local guard.

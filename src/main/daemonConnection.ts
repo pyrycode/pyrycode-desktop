@@ -2869,11 +2869,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   async function bootstrap(gen: number): Promise<void> {
     try {
       const dc = await loadDialConfig()
-      // A reconnect superseded this in-flight bootstrap while it awaited: abandon it silently — do
-      // not emit not-paired/connect-failed or build a stale driver. The successor's dial owns the
-      // sink now. Gen check FIRST, before the not-paired branch, so a superseded bootstrap never
-      // emits not-paired.
-      if (gen !== generation) return
+      // Teardown or a reconnect may have superseded this bootstrap while it awaited. Check both
+      // fences before interpreting null as not-paired: loadDialConfig also returns null for a
+      // stopped or superseded dial, which must not emit a stale failure.
+      if (stopped || gen !== generation) return
       if (dc === null) {
         emitFailed('not-paired')
         return

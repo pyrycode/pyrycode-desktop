@@ -946,13 +946,31 @@ describe('createDaemonConnection', () => {
     expect(sink.webContents.send.mock.calls.length).toBe(before)
   })
 
-  it('never constructs a driver when stop() races the bootstrap', async () => {
-    const { connection, drivers } = build()
+  it.each(['load', 'ensure'] as const)('never constructs a driver or emits after stop() races bootstrap %s', async (operation) => {
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    const load = vi.fn(async () => { await pending; return RECORD })
+    const ensure = vi.fn(async () => { await pending; return PAIR })
+    const { log, records } = captureLog()
+    const { connection, drivers, sink } = build({
+      load: operation === 'load' ? load : undefined,
+      ensure: operation === 'ensure' ? ensure : undefined,
+      diagnosticLog: log
+    })
     connection.start()
-    connection.stop() // before the async bootstrap resolves
+    await tick()
+    expect(operation === 'load' ? load : ensure).toHaveBeenCalledOnce()
+    expect(emitted(sink)).toEqual([{ type: 'connecting' }])
+    expect(records).toEqual([{ event: 'daemon-dial' }])
+    connection.stop()
+    const beforeEvents = emitted(sink)
+    const beforeRecords = [...records]
+    release()
     await tick()
 
     expect(drivers).toHaveLength(0)
+    expect(emitted(sink)).toEqual(beforeEvents)
+    expect(records).toEqual(beforeRecords)
   })
 
   it('is idempotent: a second start() does not construct a second driver', async () => {

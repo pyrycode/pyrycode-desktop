@@ -338,32 +338,13 @@ export interface RetrievedAttachmentChunk extends Omit<AttachmentChunkPayload, '
 }
 
 /**
- * The `ts` of the envelope an arm was decoded from (#1225) — the DAEMON'S OWN timestamp for the logical
- * event, mixed into exactly the ten timeline-bearing arms of `InboundDaemonMessage` below and into no
- * other. The daemon mints one timestamp per logical event, hoisted above its per-connection fan-out, and
- * hands that same value to the conversation-log entry and to every outbound envelope for that event — so
- * (`type`, `ts`) is the one key on which a served history page can be joined to what the live stream
- * already drew, and the window's `HistoryTimelineEntry` has carried the page half of it since #1227.
+ * The daemon envelope timestamp, mixed into live timeline-bearing results. The message arm also
+ * carries it for receipt display. It is per-frame, independent of server origin. History page
+ * envelope times are not entry times, so the page arm intentionally carries no FrameTimestamp.
  *
- * IT MUST COME FROM THE DECODE AND CANNOT RIDE #1068's STAMP. `bindServerOrigin` applies `serverId` at
- * BIND time, once per producer; this value is per-FRAME. That is the whole reason the thread crosses
- * this file at all rather than being added beside the origin in `emitDaemonEvent.ts`.
- *
- * MIXED IN PER-ARM RATHER THAN DISTRIBUTED OVER THE WHOLE UNION, which is the opposite of the shape the
- * IPC side takes (`DaemonEvent`'s optional `daemonTs`, #1068's `WithOrigin`). The two differ because the
- * requirements do: here the field is REQUIRED and the set of arms is closed, so naming it at each of the
- * ten sites is what makes "these ten and no others" readable at the declaration instead of inferable
- * from the emit; there it is optional and must not perturb 33 test files of bare literals. `history-page`
- * is deliberately NOT among them — a page's `ts` is per-ENTRY and already on each decoded entry, so
- * stamping the envelope that carried the page would put the ANSWER's clock where the entries' belong.
- *
- * SECURITY: a daemon-asserted string that reaches a COMPARISON and nothing else. `decodeEnvelope` has
- * already fail-closed a non-string `ts`, so what is carried here is a validated `string` — the check
- * matters, because a `ts: {}` template-stringified downstream would collapse every frame onto one join
- * key and turn a dedup into a mass suppressor. It is never parsed into a date, never sorted on to decide
- * row order, never rendered, and never a filename, a lookup path, a cache key or a log field: the ten
- * decode arms below log byte length and a one-way hash only, and `emitDaemonEvent` is log-free by
- * construction.
+ * SECURITY: `decodeEnvelope` validates string shape. Timeline joins use a bounded comparand; user
+ * receipts parse a bounded value into finite epoch milliseconds. Never use it as a path, filename,
+ * URL, React key or log field. Diagnostics carry only static codes, byte lengths and payload hashes.
  */
 interface FrameTimestamp {
   ts: string
@@ -824,7 +805,7 @@ interface FrameTimestamp {
  */
 export type InboundDaemonMessage =
   | { kind: 'banner'; banner: BannerPayload }
-  | { kind: 'message'; message: MessagePayload }
+  | ({ kind: 'message'; message: MessagePayload } & FrameTimestamp)
   | { kind: 'chunk'; messages: MessagePayload[] }
   | { kind: 'bundle-chunk'; seq: number; data: Uint8Array }
   | { kind: 'bundle-done'; total: number }
@@ -4090,7 +4071,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'message', message }
+      return { kind: 'message', message, ts: envelope.ts }
     }
     case 'message_chunk': {
       const { messages } = parseMessageChunkPayload(envelope.payload)

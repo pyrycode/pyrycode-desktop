@@ -1150,13 +1150,13 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
           return
         }
         if (inbound === null) return // AC5: a well-formed envelope of another type is ignored.
-        // Route on the narrowed kind. The message / message_chunk paths are unchanged; the three
+        // Route on the narrowed kind. Messages forward their envelope time for receipt display; the three
         // debug-bundle kinds (#116) feed the armed reassembler (a no-op when none is in flight —
         // optional chaining, or the settled reassembler's own inert guard — preserving the prior
         // drop behaviour and keeping an unrelated `error` harmless when no bundle is streaming).
         switch (inbound.kind) {
           case 'message':
-            emitDaemonEvent(sink, { type: 'messageReceived', message: inbound.message })
+            emitDaemonEvent(sink, { type: 'messageReceived', message: inbound.message, daemonTs: inbound.ts })
             return
           case 'chunk':
             emitDaemonEvent(sink, { type: 'messagesReceived', messages: inbound.messages })

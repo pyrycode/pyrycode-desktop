@@ -103,32 +103,28 @@ export type DaemonEvent = WithDaemonTs<BaseDaemonEvent>
 `serverId` once, at BIND time, for every event a producer emits — the per-frame `ts` this ticket carries
 cannot ride that value, because it differs on every event and is only known at the decode
 (`parseInboundMessage`, see [Inbound message decode — public
-contract](inbound-message-decode-contract.md)). So `daemonTs` is added at the ten `daemonConnection.ts`
-emit sites that construct a timeline-bearing arm (`assistant-delta`, `turn-end`, `turn-state`, `stall`,
-`api-retry`, `compacting`, `tool-use`, `tool-result`, `session-transition`, `unrecognized-message`), each
-copying `daemonTs: inbound.ts` by name onto its existing fresh literal — never a spread. `connected` has
-no envelope behind it and gains nothing; `messageReceived` stays unstamped too, since the daemon pushes
-no live `message` frame on the interactive lane for the operator's own message (its duplicate is the
-optimistic echo `removeUserEcho` dedups on `messageId` — see [Thread timeline §
-Types](thread-timeline-internals.md#types)).
+contract](inbound-message-decode-contract.md)). `daemonConnection.ts` copies
+`daemonTs: inbound.ts` by name onto opted-in live timeline emits, including `messageReceived`.
+`connected` has no envelope behind it and stays unstamped. Confirmed user messages now arrive
+live from other devices and from the sender itself; their timestamp feeds display, while
+their nonempty `messageId` joins receipts, held echoes, queue snapshots and history.
+See [live user receipts](conversation-timeline-store.md#live-user-receipts).
 
 The **same two reasons** `StampedDaemonEvent` took this shape apply again: the field stays optional, so
 the 33 test files building bare `DaemonEvent` literals as bridge inputs keep compiling, and it resolves
-on the bare union with no per-arm switch, so a renderer consumer needs no second enumeration of the ten
-stamped arms to drift from the emit's own set. The type does not say WHICH arms carry it — that set is
-enforced once, at the ten emit sites, and pinned by `daemonConnection.test.ts` asserting the untouched
-arms carry none. **A wrongly-stamped arm's failure direction is a key that matches no entry, never a
-suppression** — the same fail-open posture the field's own security section states.
+on the bare union with no per-arm switch. The type does not say which arms carry it;
+the emit sites and `daemonConnection.test.ts` pin that set. No arrival clock supplies
+a missing timestamp, and history-only translations have no live envelope timestamp.
 
-**A comparand, and nothing else.** `daemonTs` is remote-supplied text, already fail-closed to a `string`
-by `decodeEnvelope` before it ever reaches an emit, and its one reader — `liveJoinKeyFor`
-(`timelineBridge.ts`) — composes it with `event.type` into a join key and discards it. It is never parsed
-into a date, never sorted on to decide row order, never rendered, and never a filename, a lookup path, a
-cache key, a React key or a log field. It rides beside `createdAt` (#1013) without being confused with
-it: `createdAt` is a LOCAL clock stamp taken from `Date.now` at the bridge and is the only thing any
-display reads; `daemonTs` is the daemon's own value and reaches no render path at all. See [Conversation
-timeline store — internals § The history/live
-join](conversation-timeline-store-internals.md#the-historylive-join-1225) for the join this field feeds.
+**Identity and display have separate consumers.** `decodeEnvelope` validates `daemonTs`
+as a string, not as a date. Most stamped events use it only for the bounded
+[`type`, `ts` join](conversation-timeline-store-internals.md#the-historylive-join-1225).
+`liveJoinKeyFor` explicitly excludes `messageReceived`: those rows join by message id.
+The role-user translator parses at most 64 characters and accepts only finite epoch
+milliseconds as `createdAt`; unusable values draw without time. Assistant `createdAt`
+remains the injected arrival stamp and local echoes retain their composer time.
+The raw string is never displayed, sorted for row order, logged or used as a filename,
+path, URL or React key. Diagnostics remain static codes, byte counts and hashes.
 
 ## 3. The preload subscription (`src/preload/index.ts`)
 

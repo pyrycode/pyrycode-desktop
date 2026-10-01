@@ -40,7 +40,7 @@ type ThreadEvent =
   | { type: 'turnEnd'; turnId: string; stopReason: string
       ; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string
       ; durationMs?: number; inputTokens?: number; cacheReadTokens?: number; cacheCreationTokens?: number; outputTokens?: number; costUsdTotal?: number }
-  | { type: 'userText'; text: string; createdAt?: number; messageId?: string; attachments?: readonly MessageAttachment[] }
+  | { type: 'userText'; received?: true; text: string; createdAt?: number; messageId?: string; attachments?: readonly MessageAttachment[] }
   | { type: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
   | { type: 'stallDetected' }
   | { type: 'apiRetry'; active: boolean; current: number; total: number }
@@ -74,7 +74,8 @@ completion outcomes and delayed counts belong to retained `compactionBoundary` r
 with `pendingCompaction` identifying the row awaiting metadata. See
 [compaction lifetime](conversation-timeline-store.md#what-it-does).
 **`localSendPending` ([#650](../codebase/650.md)) is a fifth such
-scalar** — set by the `userText` arm (the composer's own accept signal, no separate event) and cleared
+scalar** — set by local `userText` (the composer's own accept signal, no separate event);
+live and history receipts carry `received: true` and preserve either pending value. It is cleared
 only by the daemon's own turn-activity edge; its full rationale, the working-indicator consumer, and
 what a `dropUserText` removal (below) deliberately leaves it as live in [Conversation shell §
 Thinking / working indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967),
@@ -117,10 +118,12 @@ preserve the field, the same as `input`'s widen. Ships dormant — the sole cons
 neither absence nor emptiness draws anything.
 
 **`createdAt` ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013)) is a third field-pair widen, on `assistantText`/`userText`
-and their matching event arms** — epoch milliseconds, the moment a bubble first appeared, stamped in the
-renderer from an injected clock rather than carried from the envelope `ts` (the `assistantDelta` IPC arm
-names four fields fail-closed and does not forward it; the timeline is in-memory and cleared on exit and
-pairing end (#757), so nothing replays old messages a fresh clock would mis-stamp). Unlike `input` and
+and their matching event arms** — epoch milliseconds. Assistant bubbles and local echoes use an
+optional injected renderer clock. Live user receipts instead use the daemon envelope's `ts`,
+forwarded as `daemonTs` and parsed only when at most 64 characters and finite. Missing, empty,
+overlong or invalid times leave the row unstamped; receipts never read the arrival clock.
+History-only translation supplies no `createdAt`, even though the entry has a join timestamp.
+See [message timestamp contract](inbound-message-decode-contract.md#public-contract). Unlike `input` and
 `resultDetail`, the clock is **not** threaded through `reduceTimeline` as a parameter — the field rides
 the event instead, and the reason is worth stating because it is not the one the ticket's own two
 cascade-count ceilings (55 reducer call sites, 68 event literals) would suggest: **the two timeline
@@ -132,9 +135,9 @@ actually decided the seam here. `translateTimelineEvent`/`subscribeTimeline`
 ([conversation timeline store](conversation-timeline-store.md)) and `ComposerSendDeps.now`
 ([composer send](composer-send.md)) take the clock instead, both as an **optional trailing parameter with
 no wall-clock default** — an absent
-clock means no stamp, at every seam, which is what keeps all 135 pre-existing `assistantText`/`userText`
-fixture sites compiling and passing unedited. `appendDelta` (below) is the one place the two branches
-diverge: only the fresh-append case takes the incoming stamp, so a coalesced bubble keeps its *first*
+clock means no local stamp, which is what keeps all 135 pre-existing `assistantText`/`userText`
+fixture sites compiling and passing unedited. `appendDelta` (below) preserves the assistant timestamp:
+only the fresh-append case takes the incoming stamp, so a coalesced bubble keeps its *first*
 delta's time. [#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014) (shipped) is the sibling
 slice that renders it into the meta row [#969](../codebase/969.md) left empty — see [Conversation shell —
 message bubble § The meta row](conversation-shell-message-bubble.md#the-meta-row).
@@ -175,9 +178,10 @@ the queued message it stood for: the daemon parks a mid-turn send instead of run
 same id back on the [queue store](queue-store.md)'s `QueuedItem.message_id`
 (pyrycode#2092), and nothing else the two rows share is a key (`text` is not unique, position mis-aligns
 on the first drop). Absent means the producer minted none — test `item.messageId === undefined`, never
-`'messageId' in item`, since the reducer assigns it unconditionally; this is the shape a future history
-backfill producer would take, and an id-less echo correlates with nothing and can never be removed by a
-drop. Untrusted on the read side, on the same terms as `text`: the value it is compared against arrives
+`'messageId' in item`, since the reducer assigns it unconditionally. Live receipts and history rows
+carry the daemon's `message_id`; a nonempty match also suppresses a receipt or history duplicate,
+preserving the held row. Empty/absent ids suppress nothing, and equal text is never identity.
+An id-less echo cannot be removed by a drop. Untrusted on the read side, on the same terms as `text`: the value it is compared against arrives
 from another client through a content-blind relay, so it is read for strict string equality only — never
 a lookup path, a cache key, a filename, a URL, a `Map` key or a React key (`selectItems`' render key stays
 array index, per § Edge cases below). Field-for-field identical between the item and the event; production
@@ -247,7 +251,7 @@ that record draws; the boundary still closes the streaming cursor when undrawn.
 
 `latestTurnEnd` is separate, transient state for [composer recovery](conversation-shell-composer-status.md#stopped-turn-recovery).
 A non-cancelled `turnEnd` sets it only when `isError === true` or `outcome` is nonempty
-and differs from `success`; any other end clears it. Local `userText`, a non-idle
+and differs from `success`; any other end clears it. A fresh local or received `userText`, a non-idle
 `turnState`, `assistantDelta`, `toolUse`, `toolResult`, `toolProgress`, `toolDenied`
 and `thinkingProgress` clear it, as do `sessionBoundary`, `reset` and `reconnected`.
 A trailing idle preserves it. Retry, compaction and stall reports do not clear it.
@@ -269,6 +273,17 @@ there can still accompany clearing `latestTurnEnd`. If that reading is unchanged
 the wrapper returns the content fold's exact state reference, preserving legacy no-op
 identity on reconnect.
 
+Before that fold or any sidecar update, a `received: true` user event with a nonempty
+`messageId` matching any held user row returns the **exact held state**. Checking only
+the tail, or rejecting after the wrapper, would move/rewrite an earlier echo or clear
+its recovery state. The first held row keeps position, text, time and attachment
+references across repeated receipts and the sender's optimistic echo. A held history
+row also wins against a later receipt, so its absent time is not filled in. The
+[history prepend](conversation-timeline-store-history.md) and queued-row projection
+join by the same nonempty identity, never by text or timestamp.
+[`liveUserReceipts.test.ts`](../../../src/renderer/src/store/liveUserReceipts.test.ts)
+pins these joins, exact-reference rejection and both pending-send values.
+
 | event | effect |
 |---|---|
 | `assistantDelta` | tail-check coalesce: same-`turnId` tail `assistantText` → replace with concatenated text, keeping the **tail's own** `createdAt` ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013), so a coalesced bubble stays dated by its first delta); otherwise append fresh, carrying the event's `createdAt`. `seq` carried, not consulted — arrival order is authoritative. |
@@ -279,7 +294,7 @@ identity on reconnect.
 | `turnState` | set `phase`; same reference if unchanged (no-churn); clears `thinkingTokens` to `null` when `event.state !== 'thinking'` (the widened guard below lets a repeat `turn_state{idle}` through when a reading is still held, rather than early-outing and leaving it stale) — [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) |
 | `turnEnd` | append a `turnBoundary`, copying the event's six `TurnEndMetrics` fields onto it by name ([#1565](https://github.com/pyrycode/pyrycode-desktop/issues/1565)); does **not** touch `phase`; clears `thinkingTokens` to `null` — the think this reading measured is over even though `phase` itself resets separately on the daemon's own `turn_state: idle` — [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) |
 | `thinkingProgress` | assign `thinkingTokens: event.estimatedTokens` verbatim (same reference on a verbatim repeat — the wire has no dedup and re-fires as the count climbs); `items`/`phase`/every other scalar untouched — [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) |
-| `userText` | append a fresh `userText` item, carrying the event's `createdAt`, `messageId` and `attachments` unconditionally and by reference (never coalesced, so unlike `assistantDelta` there is no earlier stamp or set to preserve — [#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013), [#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039), [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213)); does **not** touch `phase` — the user's own message, sourced from the composer echo since [#179](../codebase/179.md) |
+| `userText` | Append a whole user row with `createdAt`, `messageId` and attachment references unchanged; never coalesce. Local submission sets `localSendPending: true`; `received: true` preserves it. Phase and activity scalars stay unchanged. Duplicate receipts are rejected before this fold. Fresh rows clear `latestTurnEnd` and `stoppingBanner` in the wrapper. |
 | `sessionBoundary` | append a fresh `sessionBoundary` item (never coalesced); does **not** touch `phase` — the `/clear`/idle-eviction/workspace-change marker, sourced from the daemon's `sessionTransition` event via the bridge since [#286](../codebase/286.md) |
 | `stallDetected` | set `stalled: true`; `items`/`phase` untouched. Same reference if `stalled` is already `true` (no-churn) — [#317](../codebase/317.md) |
 | `apiRetry` | `active: true` → hold `{ current, total }` (same reference if unchanged, no-churn); `active: false` → `null`, discarding the event's counter unconditionally. `items`/`phase`/`stalled` untouched — [#493](../codebase/493.md) |
@@ -350,4 +365,3 @@ pure selectors `selectItems`, `selectPhase`, `selectStalled`, `selectApiRetry`, 
   this in the first submission; see [#121 codebase notes](../codebase/121.md) § Patterns
   established). Returns the same array reference on no match, so the reducer can return the same
   `state`.
-

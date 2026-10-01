@@ -223,11 +223,12 @@ moves and `assertNever` stays total. That widen is what lets a **new** module, `
 reuse this same function one entry at a time rather than write a second mapping, which is what makes "a
 page produces the rows the live stream would have" structural rather than asserted.
 `translateTimelineEvent` also gains its tenth owned arm in the process, `messageReceived`→`userText`,
-gated on `event.message.role === 'user'` — the operator's own turn, which the daemon stores in its log but
-never pushes as a live frame, so this arm draws only from a page. `timelineTargetFor` is deliberately
-**not** widened to route it: a live `messageReceived` (which this daemon never sends) still resolves to no
-keyed target and reaches the flat `timelineStore` only, whose `items` no screen reads — the live lane is
-therefore a verified no-op, not an assumed one.
+gated on `event.message.role === 'user'`. Initially this was history-only and
+`timelineTargetFor` gave a live message no keyed target. Confirmed user messages now
+arrive live from the daemon, including the sender's receipt; the bridge routes them
+by nonempty `message.conversation_id`, never by the open conversation. Both live and
+history translation mark `received: true`; other roles remain ignored. See
+[current receipt behavior](conversation-timeline-store.md#live-user-receipts).
 
 `historyPageBridge.ts` is a **fifth** independent channel subscriber, beside the session, timeline, modal
 and question bridges — not a widening of `subscribeTimeline`'s injected `dispatch`, which would cascade
@@ -241,14 +242,11 @@ draw the transcript backwards) and folds each translated entry through `reduceTi
 the store's new `prependHistoryFor(conversationId, items)` write path. No clock reaches the fold — AC5 —
 so no replayed row is stamped with the moment it was drawn, at both this seam and the bridge arm above.
 
-The scratch-state fold is the answer to the question this doc's `userText` arm below and
-`threadTimeline.ts`'s own comment pose ("if a second `userText` producer is ever added — a history
-backfill is the obvious candidate — it must be re-examined against this arm"): **neither a distinct event
-nor a flag** — a page never reaches the *held* state's reducer at all, so `localSendPending` and the other
-four chrome scalars a page's entries might carry (`turn_state`, `stall`, `api_retry`, `compacting`) are
-structurally unable to escape the discarded scratch fold. `reduceTimeline` itself needed no edit for any
-of this. (`threadTimeline.ts`'s own comment at the `userText` arm still names only the composer as the
-producer and does not yet record this third answer — a verifier SHOULD FIX on PR #1229, not blocking.)
+The scratch-state fold keeps a page's status changes out of the held timeline:
+`reduceHistoryPage` returns only items. Live receipts do reach held state, so the
+shared `userText` event now needs the explicit `received: true` marker to preserve
+`localSendPending`. Local events without that marker still open Thinking. History
+uses the marker too, and neither lane reads the arrival clock for user receipts.
 
 `prependHistoryFor` is a fifth store write path, beside `dispatchFor`/`markViewed`/`clearAllTimelines`/
 `clearTimelineFor` (see [Conversation timeline holder](conversation-timeline-holder.md)) — it takes
@@ -257,9 +255,11 @@ nothing) returns the state object unchanged, so zustand's `Object.is` short-circ
 conversation creates its slice through the existing `withNewSliceAtHead`; a key-present one is spread with
 a new `items: [...fresh, ...held.items]`, carrying every chrome scalar through by spread rather than
 recomputing it, so no future sixth scalar can be forgotten here. `fresh` drops any page row whose
-`messageId` a held `userText` already carries — the operator's optimistic echo and the daemon's stored copy
-of the same message are the same message arriving by two routes (AC4), and the **held echo wins**: it
-carries the operator's own `createdAt` and `attachments`, which the replayed row has neither of. The match
+nonempty `messageId` a held `userText` already carries — whether an optimistic echo or a live receipt.
+The **held row wins**, preserving position, text, `createdAt` and attachment references.
+Empty/absent ids suppress nothing; equal text with distinct ids remains separate. If history arrives
+first, the reducer rejects the later matching live receipt before any sidecar fold, so the history
+row stays unstamped. The match
 is a strict-equality scan over the held rows, never a `Set` or `Map` of ids — a page's `messageId` is the
 id *another* client minted, stored and replayed, untrusted on the same terms as every other `messageId`
 read (see `threadTimeline.ts` § Types), and a keyed collection of them is exactly what that field's "never
@@ -336,12 +336,14 @@ this ticket-by-ticket log promised at #1223 above — "the general fix still nee
 join](conversation-timeline-store-internals.md#the-historylive-join-1225), not restated here).
 
 Two production halves, threaded end to end: the envelope's `ts` did not reach the window at all before
-this ticket (`createdAt` on a `ThreadItem` is a *local* clock stamp #1013 introduced, unrelated in
-provenance) — [inbound message decode](inbound-message-decode-contract.md) and [daemon event channel §
+this ticket (assistant and local-echo `createdAt` still use the renderer clock; live user receipts
+now convert the envelope time for display) — [inbound message decode](inbound-message-decode-contract.md) and [daemon event channel §
 `DaemonEventTimestamp`](daemon-event-channel-plumbing.md#daemoneventtimestamp--the-per-frame-comparand-1225)
-carry it down as `daemonTs`, an optional field on ten of the arms this store's bridge translates, added by
+carry it down as `daemonTs`, optional envelope metadata initially forwarded on ten arms, added by
 the same intersection-over-the-union shape #1068's `StampedDaemonEvent` established rather than a member on
-each arm. The join itself is a new `liveKeys: ReadonlySet<string>` field on `ConversationSlice`
+each arm. Message forwarding now carries it too, but `liveJoinKeyFor` explicitly excludes
+`messageReceived`: history user rows remain message-id joins through `withoutHeldEchoes`,
+and `withoutLiveEntries` keeps and steps over them. The join itself is a `liveKeys: ReadonlySet<string>` field on `ConversationSlice`
 (`conversationTimelineStore.ts`) recording the live half of the key, and a `withoutLiveEntries` pre-filter
 in `historyPageBridge.ts`'s `reduceHistoryPage` dropping the page's matching entries ahead of its existing
 fold — both covered in full in Internals, including the two verifier MUST FIXes the rework leg closed: the

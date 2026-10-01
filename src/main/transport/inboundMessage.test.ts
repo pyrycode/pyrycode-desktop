@@ -1134,18 +1134,18 @@ const SESSION_SETTINGS_UPDATED = {
 
 describe('parseInboundMessage — happy', () => {
   it('narrows a valid message envelope into a message result', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 
   it('drops unknown payload keys, keeping only the four known fields', () => {
     const withExtras = encodeMessage({ ...MSG, extra: 'ignore-me', event_ptr: 99 })
-    expect(parseInboundMessage(withExtras)).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(withExtras)).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 
   it('accepts both user and assistant roles', () => {
     const user: MessagePayload = { ...MSG, role: 'user' }
-    expect(parseInboundMessage(encodeMessage(user))).toEqual({ kind: 'message', message: user })
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(user))).toEqual({ kind: 'message', message: user, ts: FIXED_TS })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 
   it('narrows a message_chunk into an ordered batch', () => {
@@ -1235,7 +1235,7 @@ describe('parseInboundMessage — debug-bundle recognition (#116, additive)', ()
   })
 
   it('still routes a message / message_chunk to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
     expect(parseInboundMessage(encodeChunk({ messages: [MSG_A] }))).toEqual({
       kind: 'chunk',
       messages: [MSG_A]
@@ -1521,7 +1521,7 @@ describe('parseInboundMessage — screen_snapshot is no longer modeled (#622)', 
   })
 
   it('still routes a message / message_chunk to its existing kind (no widening)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
     expect(parseInboundMessage(encodeChunk({ messages: [MSG_A] }))).toEqual({
       kind: 'chunk',
       messages: [MSG_A]
@@ -1583,7 +1583,7 @@ describe('parseInboundMessage — assistant_delta / turn_end recognition (#199, 
   })
 
   it('still routes a message / message_chunk to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -1669,7 +1669,7 @@ describe('parseInboundMessage — conversations recognition (#139, additive)', (
   })
 
   it('still routes a message / message_chunk to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -1868,7 +1868,7 @@ describe('parseInboundMessage — recent_workspaces_list recognition (#380, addi
   })
 
   it('still routes a message / message_chunk to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -1971,7 +1971,7 @@ describe('parseInboundMessage — conversation_created recognition (#241, additi
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -2092,7 +2092,7 @@ describe('parseInboundMessage — conversation_updated recognition (#273, additi
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -2198,7 +2198,7 @@ describe('parseInboundMessage — conversation_deleted recognition (#375, additi
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -2254,7 +2254,7 @@ describe('parseInboundMessage — workspace_folder_created recognition (#381, ad
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -2337,7 +2337,7 @@ describe('parseInboundMessage — workspace_updated recognition (#1288, additive
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -2451,7 +2451,7 @@ describe('parseInboundMessage — session_transition recognition (#254, additive
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -2604,7 +2604,7 @@ describe('parseInboundMessage — session_settings_updated recognition (#264, ad
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -2674,7 +2674,7 @@ describe('parseInboundMessage — turn_state recognition (#214, additive)', () =
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -2729,7 +2729,7 @@ describe('parseInboundMessage — stall recognition (#315, additive)', () => {
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 
   it('still returns null for a well-formed envelope of another unmodeled type (no widening)', () => {
@@ -5579,7 +5579,7 @@ describe('parseInboundMessage — tool_use recognition (#217, additive)', () => 
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -5772,7 +5772,7 @@ describe('parseInboundMessage — tool_result recognition (#229, additive)', () 
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -5911,7 +5911,7 @@ describe('parseInboundMessage — queue_state recognition (#292, additive)', () 
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -6120,7 +6120,7 @@ describe('parseInboundMessage — modal_shown recognition (#201, additive)', () 
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -6281,7 +6281,7 @@ describe('parseInboundMessage — modal_dismissed recognition (#201, additive)',
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -6631,7 +6631,7 @@ describe('parseInboundMessage — question_dismissed recognition (#894, additive
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -7588,7 +7588,7 @@ describe('parseInboundMessage — attachment_stored recognition (#964, additive)
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -7772,7 +7772,7 @@ describe('parseInboundMessage — attachment_chunk recognition (#998, additive)'
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -8013,7 +8013,7 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
 
     const result = parseInboundMessage(plaintext, log)
 
-    expect(result).toEqual({ kind: 'message', message: payload })
+    expect(result).toEqual({ kind: 'message', message: payload, ts: FIXED_TS })
     expect(lines).toHaveLength(1)
     const record = JSON.parse(lines[0])
     expect(record.event).toBe('inbound-decoded')
@@ -9833,7 +9833,7 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
   })
 
   it('does not log and does not throw when no logger is injected (AC5)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
     expect(parseInboundMessage(encodeEnvelope({ id: 1, type: 'ack', ts: FIXED_TS, payload: {} }))).toBeNull()
     expect(() => parseInboundMessage(encodeMessage({ ...MSG, text: undefined }))).toThrow(WireDecodeError)
   })
@@ -10600,7 +10600,7 @@ describe('parseInboundMessage — history_page recognition (#1222, additive)', (
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG, ts: FIXED_TS })
   })
 })
 
@@ -11671,6 +11671,7 @@ describe('parseInboundMessage — the envelope ts on the timeline-bearing arms (
   }
 
   it.each([
+    ['message', MSG],
     ['assistant_delta', DELTA],
     ['turn_end', TURN_END],
     ['turn_state', TURN_STATE],

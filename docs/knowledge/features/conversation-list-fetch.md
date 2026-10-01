@@ -19,20 +19,31 @@ export interface ConversationSummary {
   name: string | null          // null = unnamed scratch conversation, NEVER '' 
   is_promoted: boolean         // true = a saved channel; false = an ad-hoc discussion
   is_archived: boolean
+  is_muted?: boolean
+  agent?: WireAgent
   cwd: string                  // untrusted display text — never resolved to a real fs path here
   last_message_ts: string      // RFC3339 — a TIMESTAMP, not preview text (no message text on this wire)
   last_used_at: string         // RFC3339
+  archived_at?: string | null  // optional for old saved rows and fixtures
+  workspace_label: string | null
 }
 
 export interface ConversationsPayload {
-  conversations: ConversationSummary[]   // order preserved from the wire — daemon is source of truth
+  conversations: ConversationSummary[]   // decode preserves wire order; views derive their own order
 }
 ```
 
-All seven `ConversationSummary` fields are always present on the wire (no `omitempty`). There is
+The eight required `ConversationSummary` fields must be present on the wire. There is
 **no `kind` enum and no preview text on the wire** — "discussion vs channel" is derived from
 `is_promoted` downstream, and a relative "last active" time is derived from `last_message_ts`
 (#141's job, not this ticket's).
+
+The nullable archive stamp from [daemon PR #2700](https://github.com/pyrycode/pyrycode/pull/2700)
+is retained as an unparsed string or `null`; a missing live field normalizes to `null`. Any other
+value type fails the whole list closed. Invalid timestamp strings remain valid wire values so
+the [Archive screen](archive-screen.md#the-view-model-archiveviewmodelts) can select its last-use
+fallback. [Saved snapshots](chat-history.md#snapshot-contract) also retain strings/null but preserve
+absence on older rows. `is_muted` defaults to `false`; optional `agent` passes through `agentFromWire`.
 
 ## The eight pieces
 
@@ -109,9 +120,13 @@ function parseConversationSummary(payload: unknown): ConversationSummary {
     name: requireStringOrNull(payload, 'name'),
     is_promoted: requireBoolean(payload, 'is_promoted'),
     is_archived: requireBoolean(payload, 'is_archived'),
+    is_muted: payload.is_muted === undefined ? false : requireBoolean(payload, 'is_muted'),
     cwd: requireString(payload, 'cwd'),
     last_message_ts: requireString(payload, 'last_message_ts'),
-    last_used_at: requireString(payload, 'last_used_at')
+    last_used_at: requireString(payload, 'last_used_at'),
+    archived_at: payload.archived_at === undefined ? null : requireStringOrNull(payload, 'archived_at'),
+    workspace_label: requireStringOrNull(payload, 'workspace_label'),
+    ...optionalAgent(payload)
   }
 }
 
@@ -146,7 +161,7 @@ case 'conversations':
 ```
 
 Unlike `screen_snapshot`'s content-drop, there is **nothing to drop here** — `parseConversationSummary`
-already returns only the seven known fields (unknown server-added keys are decoded-but-not-copied at
+already returns only allowlisted fields (unknown server-added keys are decoded-but-not-copied at
 parse time, not filtered at emit time), so passing the decoded array reference through verbatim is
 safe. This mirrors `messagesReceived: inbound.messages`, not `snapshotReceived`'s hand-built minimal
 shape. Field names stay **snake_case** — the event reuses the wire `ConversationSummary` row type

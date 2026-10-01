@@ -123,7 +123,7 @@ describe('ArchiveScreenView', () => {
     // Each archived channel's title, including the untitled fallback for the null-name row (AC3).
     expect(markup).toContain('alpha-channel')
     expect(markup).toContain(UNNAMED_LABEL)
-    // The subtitle labels the row as archived and shows its last-activity relative time (AC3).
+    // The subtitle labels the row as archived and shows the legacy last-use relative time (AC3).
     expect(markup).toContain('Archived 2 days ago')
     // One accessible restore control per archived channel (AC4); the archived discussion is not here.
     expect(countOccurrences(markup, 'aria-label="Restore"')).toBe(2)
@@ -177,5 +177,28 @@ describe('requestUnarchiveConversation', () => {
       type: 'unarchiveConversation',
       payload: { conversation_id: 'conv-42' }
     })
+  })
+})
+
+
+describe('archive subtitle source', () => {
+  it.each([true, false])('uses archive time rather than weeks-old message/use time, promoted=%s', (is_promoted) => {
+    const markup = renderView(is_promoted ? 'channels' : 'discussions', [row({
+      is_promoted, is_archived: true, archived_at: '2026-02-15T11:55:00Z',
+      last_used_at: '2026-01-01T00:00:00Z', last_message_ts: '2025-12-01T00:00:00Z'
+    })], NOW)
+    expect(markup).toContain('>Archived 5m ago</span>')
+    expect(markup).not.toContain('Archived Jan 1')
+    expect(markup).not.toContain('Archived Dec 1')
+  })
+  it.each([undefined, null, 'bad', '2026-02-15'])('falls back to last use for %s', (archived_at) => {
+    const markup = renderView('channels', [row({
+      is_promoted: true, is_archived: true, archived_at,
+      last_used_at: '2026-02-13T12:00:00Z', last_message_ts: '2026-01-01T00:00:00Z'
+    })], NOW)
+    expect(markup).toContain('>Archived 2 days ago</span>')
+  })
+  it('renders bare Archived when both candidate timestamps fail', () => {
+    expect(renderView('discussions', [row({ is_archived: true, archived_at: 'bad', last_used_at: 'bad' })], NOW)).toContain('>Archived</span>')
   })
 })

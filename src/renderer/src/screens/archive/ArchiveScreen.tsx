@@ -11,9 +11,8 @@ import { partitionArchived, archivedSubtitle, tabCountLabel } from './archiveVie
 
 // Client-owned copy — module-level constants (the SETTINGS_COPY idiom), never daemon strings. The row
 // titles/subtitles render untrusted daemon-derived strings as auto-escaped React children (opaque
-// text, never dangerouslySetInnerHTML), so there is still no injection sink: this is why the slice is
-// not security-sensitive. `restore` names the icon-only restore control (its accessible name); the two
-// `empty*` strings are the per-tab loaded-zero empty states.
+// text, never dangerouslySetInnerHTML). Timestamp selection validates instants before formatting.
+// `restore` names the icon-only control; `empty*` supplies the per-tab loaded-zero empty states.
 const ARCHIVE_COPY = {
   title: 'Archived',
   back: 'Back',
@@ -159,10 +158,11 @@ function emptyCopyFor(tab: ArchiveTab): string {
   return tab === 'channels' ? ARCHIVE_COPY.emptyChannels : ARCHIVE_COPY.emptyDiscussions
 }
 
+// Existing flat surface and Material restore glyph differ from Figma; timestamp-only work retains them.
 // One archived row (Figma 18-19) — a flex row: a text column (title over the "Archived …" subtitle) and
-// a trailing restore control. `name` and `last_message_ts` are untrusted daemon-derived strings rendered
+// a trailing restore control. `name` and selected timestamps are untrusted daemon-derived strings rendered
 // as auto-escaped React children (never dangerouslySetInnerHTML) — opaque text. `titleFor` guards a
-// null/blank name (never a blank row, AC3); `archivedSubtitle` composes the last-activity relative time
+// null/blank name (never a blank row, AC3); `archivedSubtitle` selects archive time with a last-use fallback
 // without doubling "ago". The restore control is a SIBLING of the text column, not nested, and its click
 // dispatches unarchive fire-and-forget — the row's departure and the recomputed counts arrive later via
 // the daemon's `conversation_updated` → re-list path (AC4), not synchronously here.
@@ -179,7 +179,7 @@ function ArchiveRow({
     <div className="archive__row">
       <div className="archive__row-text">
         <span className="archive__row-title">{titleFor(row.name)}</span>
-        <span className="archive__subtitle">{archivedSubtitle(row.last_message_ts, now)}</span>
+        <span className="archive__subtitle">{archivedSubtitle(row, now)}</span>
       </div>
       <RestoreControl onClick={() => onRestore(row.id)} />
     </div>

@@ -71,7 +71,7 @@ The internal Claude default row stays available for recommendation lookup and
 `''` or `'default'` is explicit. Mark only a visible row whose raw `value` equals that choice. An unmatched
 choice marks nothing, even if its resolution or family would match. Duplicate explicit values remain
 carried and can share the same marker; ambiguity stopping below applies to inherited matching.
-A remembered model saved onto a new chat is an explicit choice and takes this rule.
+A [remembered model](remembered-model.md) saved onto a new chat is an explicit choice and takes this rule.
 
 **Inherited marking.** With no pick and saved `''` or `'default'`, use a non-empty announcement against
 the visible rows in this order:
@@ -172,6 +172,34 @@ and run-configuration sheet name the rejection, including while answering a ques
 This trigger also does not read
 `supports_auto_mode` and does not touch the permission mode — `SettingsChange` has no such field to send,
 and that control belongs to #682.
+
+## New-chat model recall
+
+The last non-empty deliberate model pick confirmed through this dropdown or the Run
+configuration sheet is persisted verbatim as one profile-wide value shared across
+hosts and agents. Pending/rejected picks, passive reads and automatic recall never
+replace it. See [Remembered model](remembered-model.md) for storage and correlation rules.
+
+Create chat and Add workspace activate the new chat immediately and read that preference
+once. Channels and existing conversations do not recall. A non-empty value other than
+raw `default` must exactly match a published row for the new chat's agent (absent means
+Claude), with no `value` truncation. Recall accepts a cached list or waits up to five
+seconds; empty or ineligible lists skip immediately. After eligibility it waits up to
+five seconds for that chat's first settings reply, accepting one already received.
+An empty session ID ends recall immediately. With a usable session and connected owning
+host, it sends exactly one model-only write using the raw remembered value.
+
+While pending, Send is disabled and the shared `sendText` guard blocks Enter, Actions
+and status-area message sends before draft clearing or attachment consumption. After
+submission, command return does not release the hold: the correlated confirmation
+commits the chat's own selection and releases sending; rejection rolls back the
+optimistic label silently and releases sending. No separate preference label is rendered.
+
+Missing/empty/`default` preferences, either read timeout and write failures preserve the
+inherited settings and preference without error UI or retry. Leaving or losing the owning
+connection cancels the attempt; reopening/reconnecting does not replay it. Another host's
+reconnect preserves the pending write and hold. Diagnostics contain only static outcome
+codes. The model menu's geometry and label rules remain those described above.
 
 ## Turn-end dependency, shared with the context reading
 
@@ -313,6 +341,17 @@ run-configuration sheet remains the surface that reports a cut; withholding a re
 completeness question the sheet already answers, not a leak.
 
 ## Testing
+
+`e2e/composer-model-recall.spec.ts` holds correlated recall replies and proves first-send
+release on confirmation/rejection, draft/attachment retention and no recall for channels
+or existing chats. The [remembered-model tests](remembered-model.md#testing) also exercise
+the production write subscription and asynchronous background encoding/send failures;
+a renderer-only throwing mock misses that failure boundary.
+
+`e2e/real-claude-model-recall.spec.ts` deliberately confirms a published model different
+from the inherited one, relaunches the same profile and checks the new chat's first
+announcement against the picked row's resolved model. Live evidence requires an executed
+passing test, not an all-skipped exit.
 
 `e2e/question-answer-continue.spec.ts` holds settings replies while checking the optimistic
 label and preserved answers, then drives a correlated rejection and retry at 800px. It

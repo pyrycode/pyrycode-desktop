@@ -35,7 +35,7 @@ The sheet and recall policy keep using this store's explicit-choice composition.
 
 ```ts
 export type SettingsChange =
-  | { field: 'model'; value: string }
+  | { field: 'model'; value: string; source?: 'recall' }
   | { field: 'effort'; value: string }
   | { field: 'yolo'; value: boolean }
   | { field: 'permissionMode'; value: string }   // #1021 — plain string, no union, no allowlist
@@ -82,6 +82,8 @@ whole-value writes that read nothing. The contrast is the coupling, not the coun
 - **`settingsRejected`** — looks up `pending.get(changeId)`; if absent, **no-op** (fail-closed); else
   deletes the pending marker (the explicit-choice view rolls back — the optimistic overlay vanishes, revealing
   the last confirmed value or the snapshot base) and sets `error` to the rejected field.
+  A model change with `source: 'recall'` preserves the existing error instead, so automatic
+  new-chat rollback creates no ordinary user-pick error UI.
 - **`reconnected`** ([#539](../codebase/539.md)) — admitted by the bridge only for the open chat's
   owning host; drops **every** pending marker, regardless of how many were outstanding, because main
   abandons that host's envelope-id → `changeId` correlation on each re-dial
@@ -252,7 +254,7 @@ confirmedEffortLevel(pending: ReadonlyMap<string, SettingsChange>, event: RunSet
 // changeId, reconnected, conversationSwitched — is null.
 
 foldWriteEvent(deps: FoldWriteEventDeps, event: RunSettingsWriteEvent): void
-// deps = { getPending, dispatch, rememberEffort, refresh?, log? }
+// deps = { getPending, dispatch, rememberEffort, rememberModel?, refresh?, log? }
 // resolve the pending match BEFORE dispatch; on success, dispatch → remember → log → refresh.
 // A correlated effort rejection dispatches and logs, but neither remembers nor refreshes.
 ```
@@ -289,6 +291,23 @@ security review caught this; the shipped guard lives in the *reader* instead
 because nothing added to this reducer could distinguish "refused, don't retry" from "confirmed, now
 stale" without becoming per-field state this store has no other reason to hold.
 
+### Remembering the confirmed model
+
+`foldWriteEvent` also captures a correlated pending model change before dispatch consumes
+it. After dispatch, a non-empty value without `source: 'recall'` calls `rememberModel`,
+wired by `RunSettingsWriteData` to the profile-wide [remembered-model preference](remembered-model.md).
+Dropdown and Run configuration picks share this seam. Pending, rejected, passive,
+unmatched and replayed events never persist. Automatic recall confirms the chat's choice
+but cannot overwrite a newer deliberate preference, unlike effort's re-remembering rule.
+The optional source is renderer metadata; `buildSettingsPayload` still sends only the
+session ID and raw model value. Preference diagnostics contain only static codes.
+
+Recall regressions must use the production subscription, fold and reducer together:
+an unrelated host's reconnect must preserve the pending record so a later owning-host
+confirmation both commits the effective selection and releases sending. Background
+build/send failures arrive as asynchronous correlated rejection events; command return
+alone proves no settlement. See [the boundary tests](remembered-model.md#testing).
+
 ### The React binding — `RunSettingsWriteData` (same file)
 
 A headless leaf (`RunSettingsWriteData(): null`) mounted **unconditionally at App level**
@@ -297,7 +316,7 @@ sheet-scoped. A confirm/reject reply can arrive **after** the Run config sheet c
 must outlive the sheet; a sheet-scoped subscription would strand the pending marker. That same rationale
 now covers the `reconnected` clear ([#539](../codebase/539.md)) for free — the edge fires whether or not
 the sheet is open. The settings subscription passes translated events through `foldWriteEvent`,
-wiring this store's dispatch, last-effort persistence, active-conversation refresh and content-free
+wiring this store's dispatch, last-effort and remembered-model persistence, active-conversation refresh and content-free
 diagnostics. `getState()`
 is read **per event**, never captured at subscription, because this listener is app-lifetime: a `pending`
 snapshot taken at mount would freeze at whatever was in flight when App mounted. `window.pyry` is

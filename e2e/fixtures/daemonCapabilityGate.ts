@@ -223,7 +223,8 @@ function probeOnce(
  * `/v1/client` path) with three substitutions: an EPHEMERAL static minted from the shared wasm
  * loader instead of the persisted device keypair (deviceKeypair needs safeStorage, and the daemon
  * pins no device static — its Device record has no pubkey field, so token auth is the real gate);
- * `advertise` instead of production's `[CAPABILITY_INTERACTIVE]`; and a probe-shaped identity.
+ * `advertise` instead of production's `[CAPABILITY_INTERACTIVE, CAPABILITY_MULTI_AGENT]`; and a
+ * probe-shaped identity.
  *
  * The pairing token is REUSED rather than a second `pyry pair` being minted: the daemon's
  * Devices.Validate is a pure hash lookup, and Device.RedeemBy's own comment records that a redeemed

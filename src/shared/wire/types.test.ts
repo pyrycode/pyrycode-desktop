@@ -3,6 +3,7 @@ import {
   NOISE_PROTOCOL,
   PROTOCOL_VERSION,
   CAPABILITY_INTERACTIVE,
+  CAPABILITY_MULTI_AGENT,
   ATTACHMENT_CHUNK_DATA_BYTES,
   ATTACHMENT_ID_MAX_BYTES,
   ATTACHMENT_FILENAME_MAX_BYTES,
@@ -85,6 +86,10 @@ describe('wire protocol constants', () => {
 
   it('advertises the interactive capability', () => {
     expect(CAPABILITY_INTERACTIVE).toBe('interactive')
+  })
+
+  it('names the multi_agent capability (#1657)', () => {
+    expect(CAPABILITY_MULTI_AGENT).toBe('multi_agent')
   })
 })
 

@@ -75,8 +75,7 @@ export type ModalEvent =
       defaultToNo?: boolean
       alwaysAllow?: ModalPrompt['alwaysAllow']
     }
-  // `outcome`/`source` are carried for the follow-up consumer (a resolution toast) but NOT consulted
-  // by the reduce — only `modalId` drives the clear — mirroring threadTimeline's carried-but-unused `seq`.
+  // Only held prompts can create feedback; outcome is never displayed.
   | { type: 'dismissed'; modalId: string; outcome: string; source: 'remote' | 'local' | 'timeout' }
   // #249: a modal answer that round-tripped to a daemon `error`. Produced by the bridge from the
   // content-free `modalAnswerRejected` daemon event (#248) — it carries ONLY the `modalId` nonce, no
@@ -86,6 +85,9 @@ export type ModalEvent =
   // #249: a LOCAL user action — the user dismissed a rejection banner. Never produced by the bridge;
   // dispatched inline from the container, exactly as answer/cancel dispatch `dismissed` locally.
   | { type: 'rejectionDismissed'; modalId: string }
+  // Local-only feedback lifecycle; stale object references cannot act on a replacement.
+  | { type: 'resolutionDisplayed'; resolution: ModalResolution }
+  | { type: 'resolutionDismissed'; resolution: ModalResolution }
   // #415: the transport (re)connected. Fires on EVERY supervisor (re)handshake, including the first
   // connect. Reconciles the reconnecting server's prompts against the daemon's connect-time re-sends by
   // clearing them; that daemon then repopulates via `shown`, and absence = resolved-while-away. #510:
@@ -116,6 +118,13 @@ export type ModalEvent =
   // This is the one clear that reaches a prompt held for a conversation no server's list ever carried.
   | { type: 'reset' }
 
+/** Transient client-selected feedback; object identity guards local display/expiry events. */
+export interface ModalResolution {
+  conversationId: string
+  kind: 'remote' | 'timeout'
+  phase: 'pending' | 'displayed'
+}
+
 /**
  * The whole modal state: the ordered set of still-outstanding prompts, plus the rejection surface —
  * the arrival-ordered, de-duplicated `modalId`s of answers that round-tripped to a daemon `error`
@@ -124,6 +133,7 @@ export type ModalEvent =
  * content-free. Separate ownership records scope those IDs to a chat for the feedback's lifetime.
  */
 export interface ModalState {
+  resolutions: readonly ModalResolution[]
   outstanding: readonly ModalPrompt[]
   rejections: readonly string[]
   // Feedback ownership survives reconnect independently of resolved suppression records.
@@ -324,7 +334,21 @@ export function reduceModal(state: ModalState, event: ModalEvent): ModalState {
         conversationId: dismissedPrompt.conversationId,
         modalId: event.modalId
       })
-      return { ...state, outstanding, resolved }
+      const resolutions: readonly ModalResolution[] = event.source === 'remote' || event.source === 'timeout'
+        ? [...state.resolutions.filter(r => r.conversationId !== dismissedPrompt.conversationId), {
+            conversationId: dismissedPrompt.conversationId, kind: event.source, phase: 'pending'
+          }]
+        : state.resolutions
+      return { ...state, outstanding, resolved, resolutions }
+    }
+    case 'resolutionDisplayed': {
+      if (event.resolution.phase !== 'pending' || !state.resolutions.includes(event.resolution)) return state
+      return { ...state, resolutions: state.resolutions.map(r =>
+        r === event.resolution ? { ...r, phase: 'displayed' } : r) }
+    }
+    case 'resolutionDismissed': {
+      if (!state.resolutions.includes(event.resolution)) return state
+      return { ...state, resolutions: state.resolutions.filter(r => r !== event.resolution) }
     }
     case 'rejected': {
       const rejections = appendUnique(state.rejections, event.modalId)
@@ -387,7 +411,7 @@ export function reduceModal(state: ModalState, event: ModalEvent): ModalState {
   }
 }
 
-export const initialModalState: ModalState = { outstanding: [], rejections: [], rejectionOwners: [], resolved: [] }
+export const initialModalState: ModalState = { outstanding: [], rejections: [], rejectionOwners: [], resolved: [], resolutions: [] }
 
 /** Selector — the read surface, returns the slice by reference (matching `selectItems`). */
 export const selectOutstanding = (s: ModalState): readonly ModalPrompt[] => s.outstanding

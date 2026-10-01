@@ -17,7 +17,10 @@ see [Unpair control](conversation-shell-chrome.md#unpair-control-166-deleted-by-
 
 A **proactive** twin of that escape hatch landed in [#167](../codebase/167.md): beneath the composer, a `Re-pair` button that appeared only when the connection had hit a terminal failure or the daemon had rejected the pairing, instead of requiring the user to notice the manual header control. [#963](https://github.com/pyrycode/pyrycode-desktop/issues/963) folded it into the composer status row's own error slot as a filled button, in place of the block beneath the composer. [#1604](https://github.com/pyrycode/pyrycode-desktop/issues/1604) moved it again, out of that slot into the **Top overlay** (below) as a pill, so a pairing rejection no longer competes with the slot's other occupants for the same space. See [Re-pair control](conversation-shell-chrome.md#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963) below and [Composer — actionable-error button](conversation-shell-composer-repair-button.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963-re-pair-split-out-by-1604).
 
-A **Top overlay of pills** landed in [#1604](https://github.com/pyrycode/pyrycode-desktop/issues/1604): a right-aligned stack pinned over the message area's top edge, shared with mobile, that takes no space and renders no element when it has no pills. Two occupants moved into it out of the composer status row's single-occupant slot, where each used to compete with every other slot occupant for the same space: the [usage-limit notice](conversation-shell-composer-usage-limit-notice.md#the-usage-limit-notice-now-a-top-overlay-pill-1321-moved-by-1604) (#1321) — now a Default pill with a dismiss X for exactly `allowed_warning`, an Error pill with no X for every other status, shown whatever the slot holds and whatever the connection state — and the pairing-error [Re-pair button](conversation-shell-composer-repair-button.md) (#963), now an Error pill with no X. `TopOverlay` (the pure view) and `TopOverlayControl` (its store-bound container) live in `ConversationScreen.tsx`; the thread and the overlay together are wrapped in an always-rendered `.conversation__message-area`, so the overlay — Re-pair especially — still has somewhere to sit when an offline host leaves `Timeline` nothing to draw.
+A **Top overlay of pills** landed in [#1604](https://github.com/pyrycode/pyrycode-desktop/issues/1604): a right-aligned stack pinned over the message area's top edge, shared with mobile, that takes no space and renders no element when it has no pills. Two occupants moved into it out of the composer status row's single-occupant slot, where each used to compete with every other slot occupant for the same space: the [usage-limit notice](conversation-shell-composer-usage-limit-notice.md#the-usage-limit-notice-now-a-top-overlay-pill-1321-moved-by-1604) (#1321) — now a Default pill with a dismiss X for exactly `allowed_warning`, an Error pill with no X for every other status, shown whatever the slot holds and whatever the connection state — and the pairing-error [Re-pair button](conversation-shell-composer-repair-button.md) (#963), now an Error pill with no X. `TopOverlay` (the pure view) lives in `TopOverlay.tsx`, and `TopOverlayControl` (its store-bound container) lives in `ConversationScreen.tsx`; the thread and the overlay together are wrapped in an always-rendered `.conversation__message-area`, so the overlay — Re-pair especially — still has somewhere to sit when an offline host leaves `Timeline` nothing to draw.
+
+The [permission resolution notice](#permission-resolution-notices) occupies the middle of this stack,
+between usage and Re-pair, with client-owned copy and a dismiss X.
 
 A **third, prominent** read of the connection status landed in [#279](../codebase/279.md): a disconnected-only banner across the top of the thread, between the header row and the message list — distinct from both the composer's terse inline gate and the still-separate #149 two-dot indicator. See [Connection banner](conversation-shell-chrome.md#connection-banner-279) below.
 
@@ -99,6 +102,31 @@ This screen is large enough that its surfaces live in their own documents. Each 
 - [Thread scroll pin](conversation-shell-scroll-pin.md) — Whether the thread stays pinned to the bottom as new content arrives, and the user-input demand band and preservation of reading position across prepends.
 
 The seams this screen exposes are in [Seams](conversation-shell-seams.md).
+
+### Permission resolution notices
+
+`TopOverlay.tsx` is the pure view; `TopOverlayControl` in `ConversationScreen.tsx` selects the open
+chat's resolution from the [modal store](modal-store-bridge.md#permission-resolution-feedback).
+The pill sits below usage and above Re-pair, using the existing Default treatment and exact 8px X.
+Its only copies are “Resolved on another device” (`remote`) and “Request timed out” (`timeout`);
+the X is named “Dismiss permission resolution notice”. Outcome, raw source and daemon-authored text
+never enter this notice's DOM. An unknown/already-removed prompt, local answer/cancel or reconnect
+clear creates no feedback; ownership comes only from a matching held prompt.
+
+Only the latest unseen resolution per chat is retained. Opening its chat dispatches
+`resolutionDisplayed` and replaces the pending object with a displayed one; a closed chat's notice
+does not age while waiting. The displayed object owns a four-second effect timer. X or expiry removes
+it; leaving the chat or unmounting the screen cancels the timer and consumes displayed feedback,
+so returning does not replay it. Another chat's pending entry remains untouched. A newer notice
+replaces pending or displayed feedback and starts a fresh deadline on display, even for identical
+copy. Cleanup and expiry dispatch `resolutionDismissed` with the held object, whose identity prevents
+stale work from clearing the replacement.
+
+`resolutions` is transient feedback, separate from reconnect-scoped `resolved` duplicate suppression.
+Reconnect preserves existing pending/displayed notices without creating any; pairing `reset` clears
+both phases. See the [model contract](modal-prompt-model.md#the-reducer) and
+[verification notes](development-verification.md#what-each-test-tier-proves) for lifecycle proofs.
+
 ### Held reading and host availability
 
 Held chats remain selectable, scrollable and copyable when their host disconnects.

@@ -55,6 +55,36 @@ export const RENDERER_THROTTLING_SWITCHES = [
   'disable-background-timer-throttling'
 ] as const
 
+/**
+ * The harness's opt-out from hiding the launched window. Set it to exactly `'1'` only where no operator
+ * shares the display: the Linux dispatcher container, which runs Electron under Xvfb. On Linux a window
+ * that is never shown produces no frames, so every `page.screenshot` and `locator.screenshot` waits out
+ * its 30 s timeout; measured 2026-10-04, three specs went from 3 failed in 2.3 min hidden to 4 passed in
+ * 10 s shown. Showing a window on a virtual display steals nobody's focus, and the throttling switches
+ * above still apply. Only the harness reads this variable. The app's own gate is still
+ * `HIDDEN_WINDOW_ENV_FLAG`, so a real launch is unaffected.
+ */
+export const SHOW_WINDOW_E2E_ENV_FLAG = 'PYRY_E2E_SHOW_WINDOW'
+
+/** Whether this test run leaves launched windows shown. Exact `'1'` opt-in, like the app's own flags. */
+export function e2eShowsWindow(env: Record<string, string | undefined> = process.env): boolean {
+  return env[SHOW_WINDOW_E2E_ENV_FLAG] === '1'
+}
+
+/**
+ * A copy of `env` carrying this run's window presentation: `HIDDEN_WINDOW_ENV_FLAG` set by default, and
+ * removed under the opt-out so an inherited value cannot hide the window anyway. Both launch sites use
+ * it, the default tier through `launchIsolatedApp` and the `real-*` tier in `realDaemon.ts`.
+ */
+export function withWindowPresentation(
+  env: Record<string, string | undefined>
+): Record<string, string | undefined> {
+  const next = { ...env }
+  if (e2eShowsWindow()) delete next[HIDDEN_WINDOW_ENV_FLAG]
+  else next[HIDDEN_WINDOW_ENV_FLAG] = '1'
+  return next
+}
+
 /** What the launched app reports about its own isolation. Counts and booleans only — never a path. */
 export type DesktopIsolationState = {
   /** The subset of RENDERER_THROTTLING_SWITCHES that Chromium actually parsed off this launch's argv. */
@@ -89,7 +119,7 @@ export async function launchIsolatedApp(options: {
 }): Promise<ElectronApplication> {
   const app = await electron.launch({
     args: [...options.args, ...RENDERER_THROTTLING_SWITCHES.map((name) => `--${name}`)],
-    env: { ...options.env, [HIDDEN_WINDOW_ENV_FLAG]: '1' }
+    env: withWindowPresentation(options.env)
   })
   options.fate.watch(app)
   return app
@@ -120,12 +150,15 @@ export async function readDesktopIsolation(
  *
  * The `windows > 0` clause is not decoration: `visibleWindows === 0` is trivially true of a launch with
  * no window at all, so without it a regression that lost the window entirely would read as a pass.
+ *
+ * Under `SHOW_WINDOW_E2E_ENV_FLAG` the window is shown on purpose, so the visibility clause is not
+ * asserted; the switches and the window's existence still are.
  */
 export async function expectDesktopIsolated(app: ElectronApplication): Promise<void> {
   const state = await readDesktopIsolation(app)
   expect(state.switchesApplied).toEqual([...RENDERER_THROTTLING_SWITCHES])
   expect(state.windows).toBeGreaterThan(0)
-  expect(state.visibleWindows).toBe(0)
+  if (!e2eShowsWindow()) expect(state.visibleWindows).toBe(0)
 }
 
 // --- Launch fate (#1127) ------------------------------------------------------------------------

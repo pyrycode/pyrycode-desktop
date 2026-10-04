@@ -1,7 +1,7 @@
 import { readFile, readdir } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { test, expect } from './fixtures/launchPairedApp'
-import { expectDesktopIsolated, readDesktopIsolation } from './fixtures/desktopIsolation'
+import { e2eShowsWindow, expectDesktopIsolated, readDesktopIsolation } from './fixtures/desktopIsolation'
 
 // #1067's cover. The tier reddened one spec per run, a different one each run, always at
 // `pairFromUnpairedLaunch`'s fingerprint-card wait — a step with no socket and no handshake in it, so the
@@ -47,9 +47,10 @@ test('the isolation is read back from the launched app, not from fixture source'
     'disable-background-timer-throttling'
   ])
   // A window EXISTS and is not visible. Asserted as two facts on purpose: `visibleWindows === 0` alone is
-  // trivially true of a launch that lost its window entirely, and would read as a pass.
+  // trivially true of a launch that lost its window entirely, and would read as a pass. Under the
+  // harness's show-window opt-out (Xvfb in the dispatcher container) the window is shown on purpose.
   expect(state.windows).toBeGreaterThan(0)
-  expect(state.visibleWindows).toBe(0)
+  if (!e2eShowsWindow()) expect(state.visibleWindows).toBe(0)
 })
 
 // The deterministic detector for AC1's second consequence. An in-app read-back structurally cannot see a

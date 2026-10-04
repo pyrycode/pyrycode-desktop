@@ -353,7 +353,11 @@ test('the box grows a line at a time to a five-line ceiling, then scrolls (AC2, 
 
   await input.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home')
   await input.pressSequentially('start ')
-  await expect.poll(scrollTop).toBe(0)
+  // The caret's line is in view, asserted with the same tolerance as the tail above and not as
+  // "scrolled fully to the top". macOS's Meta+ArrowUp scrolls to 0. Linux's Control+Home scrolls the
+  // CARET flush to the edge, which leaves the first line's leading above the fold: measured 6px under
+  // Xvfb in the pyrybox dispatcher container, 2026-10-04, with Roboto bundled.
+  await expect.poll(scrollTop).toBeLessThan(LINE_HEIGHT_PX)
   await input.press(process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End')
   await input.pressSequentially(' end')
   await expect(input).toHaveValue(`start ${draftOfLines(8)}! end`)

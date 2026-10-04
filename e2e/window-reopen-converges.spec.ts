@@ -40,6 +40,10 @@ const REOPEN_TEST_TIMEOUT_MS = 90_000
 // the same order of magnitude as the fixture's own handshake wait.
 const REOPEN_TIMEOUT_MS = 20_000
 
+// macOS only. Everywhere else `window-all-closed` quits the app (src/main/index.ts), so closing the last
+// window ends the process and there is no reopened window to converge.
+test.skip(process.platform !== 'darwin', 'only macOS keeps the app running after its last window closes')
+
 test('a window reopened after close converges on the live connection', async ({
   launchPairedApp
 }) => {

@@ -219,7 +219,7 @@ for (const closeCode of [4421, 4401]) {
     await expect(page.locator('.composer-status__error')).toHaveCount(0)
     const withButton = await readStatusRowGeometry(page)
     expect(withButton).toEqual({ rowHeight: 32, groupFromBottom: 0, iconFromBottom: atRest.iconFromBottom })
-    if (closeCode === 4421) await page.screenshot({ path: '/private/tmp/builder-1510-reconnect-800.png' })
+    if (closeCode === 4421) await page.screenshot({ path: '/tmp/builder-1510-reconnect-800.png' })
     await reconnect.click()
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
     await expect.poll(() => recoveryCounts(app)).toEqual({

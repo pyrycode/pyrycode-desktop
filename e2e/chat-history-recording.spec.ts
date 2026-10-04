@@ -290,6 +290,8 @@ test('records received content, drains buffered quit, and reads locally after re
 })
 
 test('window close drains the writer and a reopened window can read its saved rows', async ({ launchPairedApp }) => {
+  // macOS only: everywhere else `window-all-closed` quits the app, so there is no window to reopen.
+  test.skip(process.platform !== 'darwin', 'only macOS keeps the app running after its last window closes')
   const { page, app, daemon, servers } = await launchPairedApp()
   await page.clock.install({ time: new Date('2026-09-12T12:00:00Z') })
   await page.clock.pauseAt(new Date('2026-09-12T12:00:01Z'))

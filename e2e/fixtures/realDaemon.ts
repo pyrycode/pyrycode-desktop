@@ -16,7 +16,7 @@ import {
   type FakeRoutingRelay
 } from '../../src/main/transport/fakeRoutingRelay'
 import { decideCapabilityGate, readDaemonCapabilities } from './daemonCapabilityGate'
-import { expectDesktopIsolated, RENDERER_THROTTLING_SWITCHES } from './desktopIsolation'
+import { e2eShowsWindow, expectDesktopIsolated, RENDERER_THROTTLING_SWITCHES } from './desktopIsolation'
 import { HIDDEN_WINDOW_ENV_FLAG } from '../../src/main/windowPresentation'
 import { LOOPBACK_RELAY_ENV_FLAG } from '../../src/main/relayPolicy'
 import { TEST_SECRET_BACKEND_ENV_FLAG } from '../../src/main/secretBackend'
@@ -549,8 +549,10 @@ export async function withIsolatedElectronApp(
   env[TEST_SECRET_BACKEND_ENV_FLAG] = '1'
   // The same desktop isolation as the default tier (#1067, #1672): the dispatcher runs this tier
   // unattended on the operator's machine, so a launch must neither show and focus a window nor be
-  // throttled when the operator works in another one.
-  env[HIDDEN_WINDOW_ENV_FLAG] = '1'
+  // throttled when the operator works in another one. The harness's show-window opt-out shows it
+  // instead, for Xvfb runs where a hidden window never paints (see SHOW_WINDOW_E2E_ENV_FLAG).
+  if (e2eShowsWindow()) delete env[HIDDEN_WINDOW_ENV_FLAG]
+  else env[HIDDEN_WINDOW_ENV_FLAG] = '1'
   const userDataDir = await mkdtemp(join(tmpdir(), 'pyry-e2e-realclaude-'))
   let current: ElectronApplication | null = null
   let relaunching = false

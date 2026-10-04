@@ -1,3 +1,4 @@
+@import './theme/fonts.css';
 @import './theme/tokens.css';
 
 /* Full-height chain so the conversation shell can fill the window and the

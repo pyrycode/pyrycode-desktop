@@ -46,3 +46,11 @@ Failure count tests each root once for result error OR denial; descendant failur
 ## Open Questions
 
 None.
+
+## Revisions
+
+2026-10-05: Preserve run expansion when a prepend introduces an earlier root into the same run. A run is expanded if any surviving member origin is marked in `expandedRuns`; closing clears markers for all its members. Opening still records the first root origin. This also preserves member state when history supplies a previously missing owner.
+
+2026-10-05: `TimelineRow` also omits informational banners. With folding enabled, exclude those from the drawn projection and join reading so invisible notices cannot split visually adjacent tools. Optional-off joins remain unchanged.
+
+2026-10-05: The done-check sublayer resolves to Schemes/On Surface Variant (`#c2c7cf`), while the spinner uses Primary. Use the exported check path with `currentColor` and the existing on-surface-variant token.

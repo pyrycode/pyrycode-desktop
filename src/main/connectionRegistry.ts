@@ -243,6 +243,8 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
    * these members makes the `Omit` true of the value, not just of its type.
    */
   const viewOf = (resolve: () => DaemonConnection): ActiveConnection => ({
+    requestHostSystemPrompt: (requestId) => resolve().requestHostSystemPrompt(requestId),
+    setHostSystemPrompt: (text, requestId) => resolve().setHostSystemPrompt(text, requestId),
     send: (payload) => resolve().send(payload),
     requestSessionSettings: (conversationId) => resolve().requestSessionSettings(conversationId),
     requestModelList: (conversationId) => resolve().requestModelList(conversationId),

@@ -4,6 +4,7 @@ import {
   Fragment,
   useEffect,
   useState,
+  useRef,
   type FocusEvent,
   type PointerEvent,
   type ReactNode
@@ -79,7 +80,7 @@ import {
 // #1299 — the same shape one level up the tree, and the host row pen's FIRST caller. Its write helper
 // takes an injected transport rather than `sendCommand`: nothing on that path reaches the daemon.
 import {
-  EditHostDialogView,
+  EditHostDialog,
   requestSetHostLabel,
   runEditHostUnpair,
   type EditHostStatus
@@ -289,6 +290,7 @@ export function ChannelList({
   // re-seeded to `idle` on every open by the same `onEditHost` handler that seeds the other two, which is
   // what makes AC2's "the dialog reopens idle" true with no reset code of its own.
   const [editHostStatus, setEditHostStatus] = useState<EditHostStatus>('idle')
+  const editHostInteraction = useRef(0)
   // The Add-workspace dialog's open cell (#1308) — ONE cell, not the pairs above it, because the path and
   // the round-trip status live in the dialog container rather than here: it is mounted only while this
   // holds a server id, so its subscription's lifetime IS the dialog's open lifetime, which is what makes
@@ -381,6 +383,7 @@ export function ChannelList({
         // NOT `hostRowLabel`'s: the row displays the generic word for every non-name outcome, and seeding
         // an editable field with it would invite storing that word as the machine's actual name.
         onEditHost={(serverId, seedLabel) => {
+          editHostInteraction.current++
           setEditHostServerId(serverId)
           setEditHostName(seedLabel)
           setEditHostStatus('idle')
@@ -577,7 +580,7 @@ export function ChannelList({
           deliberately ACCEPTS the empty string as a server id, so an empty id is storable and a truthy
           gate would collapse a real machine's dialog into "none open". */}
       {editHostServerId !== null && (
-        <EditHostDialogView
+        <EditHostDialog key={editHostInteraction.current} serverId={editHostServerId}
           name={editHostName}
           status={editHostStatus}
           // #1300 — the clicked row's OWN identity, looked up HERE because this is the only place both
@@ -599,43 +602,14 @@ export function ChannelList({
           onNameChange={setEditHostName}
           // Cancel closes and writes nothing (AC1). It is never disabled, so it is the exit even while a
           // write is outstanding; the next open re-seeds all three cells, so there is nothing to clear.
-          onCancel={() => setEditHostServerId(null)}
-          onSave={() => {
-            // `window.pyry` is dereferenced HERE, at interaction time, never during render — the
-            // `onCreateChat` discipline. The helper trims the name and classifies the answer; this
-            // arrow decides only what to do with it.
-            //
-            // ⭐ THE STORE WRITE IS KEYED BY THE ID CAPTURED IN THIS CLOSURE, never by anything the
-            // response carried — `HostLabelResult` names no server at all, and this id came off the
-            // client's own paired-server list. It is fixed BEFORE the await and never re-read from state
-            // after it, which is `loadHostLabelFor`'s stated rule applied to the write: keying off
-            // anything else would let one machine's answer land on another machine's row.
-            //
-            // `void`, never floating: `requestSetHostLabel` always resolves, so there is no rejection to
-            // handle and nothing here can surface as an unhandled rejection in React. A Cancel or a
-            // navigation away mid-write leaves this resolution writing a store slot that is still
-            // CORRECT — main has already persisted it — and two setState calls that are inert on a
-            // closed or unmounted dialog.
+          onCancel={() => { editHostInteraction.current++; setEditHostServerId(null) }}
+          onSaveName={async () => {
+            const interaction = editHostInteraction.current
             const serverId = editHostServerId
-            setEditHostStatus('saving')
-            void requestSetHostLabel(window.pyry.setHostLabelFor, serverId, editHostName).then(
-              (next) => {
-                if (next === null) {
-                  // #1422 — guarded for the same reason the unpair arm below is, now that one cell
-                  // spans two round trips: this write may only report against its OWN flight. The
-                  // dialog's disabled verb keeps a save and an erase from being launched together,
-                  // but the footer Cancel is never disabled, so a dismissal mid-save and a reopen can
-                  // still leave this resolution arriving over an erase that started afterwards.
-                  // Unguarded it would clear `unpairing` mid-flight — unfreezing the field, OK and
-                  // both answers, and swallowing the erase's own failure line, whose guard would then
-                  // no longer recognise the arm it left behind.
-                  setEditHostStatus((prev) => (prev === 'saving' ? 'failed' : prev))
-                  return
-                }
-                hostLabelStore.getState().setHostLabelFor(serverId, next)
-                setEditHostServerId(null)
-              }
-            )
+            const next = await requestSetHostLabel(window.pyry.setHostLabelFor, serverId, editHostName)
+            if (next !== null) hostLabelStore.getState().setHostLabelFor(serverId, next)
+            if (interaction === editHostInteraction.current) setEditHostStatus(next === null ? 'failed' : 'idle')
+            return next !== null
           }}
           // #1422 — the unpair slot. Arm and cancel are pure cell moves; only confirm acts.
           unpair={{
@@ -647,6 +621,7 @@ export function ChannelList({
               // path where it matters more: keying off anything else would let one machine's answer
               // erase, or report against, another machine's record.
               const serverId = editHostServerId
+              const interaction = editHostInteraction.current
               void runEditHostUnpair({
                 // `window.pyry` is dereferenced HERE, at interaction time, never during render — the
                 // `onCreateChat` discipline, so this container stays server-renderable.
@@ -687,11 +662,14 @@ export function ChannelList({
                 // failure against it. Reading `prev` closes both: in that case it is B's id and `idle`
                 // respectively, so each is a no-op, and on the ordinary path both behave exactly as the
                 // unguarded calls would. The updaters are pure, so StrictMode's double invoke is inert.
-                setStatus: (next) =>
-                  setEditHostStatus((prev) =>
-                    next === 'unpairing' || prev === 'unpairing' ? next : prev
-                  ),
-                close: () => setEditHostServerId((prev) => (prev === serverId ? null : prev))
+                setStatus: (next) => {
+                  if (interaction === editHostInteraction.current) setEditHostStatus(next)
+                },
+                close: () => {
+                  if (interaction === editHostInteraction.current) {
+                    editHostInteraction.current++; setEditHostServerId(null)
+                  }
+                }
               })
             }
           }}

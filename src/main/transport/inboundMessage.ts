@@ -24,6 +24,7 @@
 // sibling #133). Absent a logger the module is silent; behaviour is otherwise identical.
 import { blake2s } from '@noble/hashes/blake2'
 import { decodeEnvelope, base64StdDecode, WireDecodeError } from './codec'
+import { MAX_SYSTEM_PROMPT_BYTES } from '../../shared/wire/types'
 import {
   ATTACHMENT_FILENAME_MAX_BYTES,
   MAX_PLAINTEXT_BYTES,
@@ -67,6 +68,7 @@ import type {
   MemorySearchAvailability,
   SessionPromptStatus,
   SystemPromptPayload,
+  HostSystemPromptPayload,
   SessionSettingsUpdatedPayload,
   HistoryEntry,
   HistoryPagePayload,
@@ -805,6 +807,7 @@ interface FrameTimestamp {
  * catch-all, so the stream stops here until claimed.
  */
 export type InboundDaemonMessage =
+  | { kind: 'host-system-prompt'; hostSystemPrompt: HostSystemPromptPayload; inReplyTo: number | undefined }
   | { kind: 'banner'; banner: BannerPayload }
   | ({ kind: 'message'; message: MessagePayload } & FrameTimestamp)
   | { kind: 'chunk'; messages: MessagePayload[] }
@@ -4126,6 +4129,18 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'session-settings', sessionSettings, inReplyTo: envelope.in_reply_to }
+    }
+    case 'host_system_prompt': {
+      const payload = envelope.payload
+      if (!isRecord(payload) || typeof payload.system_prompt !== 'string' ||
+          typeof payload.default_system_prompt !== 'string' ||
+          Buffer.byteLength(payload.system_prompt, 'utf8') > MAX_SYSTEM_PROMPT_BYTES ||
+          Buffer.byteLength(payload.default_system_prompt, 'utf8') > MAX_SYSTEM_PROMPT_BYTES) {
+        throw new WireDecodeError('invalid host system prompt payload')
+      }
+      diagnosticLog?.event({ event: 'inbound-decoded', code: 'host_system_prompt' })
+      return { kind: 'host-system-prompt', inReplyTo: envelope.in_reply_to,
+        hostSystemPrompt: { system_prompt: payload.system_prompt, default_system_prompt: payload.default_system_prompt } }
     }
     case 'system_prompt': {
       // Narrow BEFORE logging so a malformed reply throws first and leaves no record — and on this

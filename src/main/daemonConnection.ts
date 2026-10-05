@@ -37,6 +37,7 @@ import { buildRequestMcpStatus } from './transport/requestMcpStatusEnvelope'
 import { buildMcpReconnect } from './transport/mcpReconnectEnvelope'
 import { buildMcpToggle } from './transport/mcpToggleEnvelope'
 import { buildStopBackgroundTask } from './transport/stopBackgroundTaskEnvelope'
+import { encodeEnvelope } from './transport/codec'
 import { buildRequestSystemPrompt } from './transport/requestSystemPromptEnvelope'
 import { buildSetSystemPrompt } from './transport/setSystemPromptEnvelope'
 import { buildSetConversationMuted } from './transport/setConversationMutedEnvelope'
@@ -272,6 +273,8 @@ interface PendingRetrieval {
  * record-reload.
  */
 export interface DaemonConnection {
+  requestHostSystemPrompt(requestId: string): void
+  setHostSystemPrompt(systemPrompt: string, requestId: string): void
   /** Idempotent. Emits `connecting`, then sources the inputs and constructs the driver. */
   start(): void
   /** Idempotent teardown: stop the driver and suppress the resulting terminal. */
@@ -904,6 +907,29 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // conversation's history to another. Single-writer — every mutation runs to completion inside a
   // synchronous requestHistory / onDriverEvent body, no await between a read and a write.
   const pendingHistoryRequests = new Map<number, string>()
+  // Host-wide read/write waits are independent and expire without retry.
+  type HostPromptPending = { requestId: string; timer: ReturnType<typeof setTimeout> }
+  const pendingHostPromptReads = new Map<number, HostPromptPending>()
+  const pendingHostPromptWrites = new Map<number, HostPromptPending>()
+  function failHostPrompt(requestId: string, operation: 'read' | 'write', code: string): void {
+    deps.diagnosticLog?.event({ event: 'host-prompt-failed', code })
+    emitDaemonEvent(sink, { type: 'hostSystemPromptFailed', requestId, operation })
+  }
+  function takeHostPrompt(id: number, operation: 'read' | 'write'): HostPromptPending | undefined {
+    const pending = operation === 'read' ? pendingHostPromptReads : pendingHostPromptWrites
+    const found = pending.get(id)
+    if (found) { clearTimeout(found.timer); pending.delete(id) }
+    return found
+  }
+  function abandonHostPrompts(): void {
+    for (const operation of ['read', 'write'] as const) {
+      const pending = operation === 'read' ? pendingHostPromptReads : pendingHostPromptWrites
+      for (const id of pending.keys()) {
+        const found = takeHostPrompt(id, operation)
+        if (found) failHostPrompt(found.requestId, operation, 'connection-lost')
+      }
+    }
+  }
   // envelopeId → the conversation id that request_system_prompt named, for a system-prompt read's
   // attribution (#1230). THE SAME PROBLEM the two maps above solve, on a third reply that names no
   // conversation of its own — and here the omission is a SECURITY PROPERTY upstream rather than a
@@ -1009,6 +1035,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // `minClientVersion` is the classifier's already-validated MAJOR.MINOR.PATCH (#1613), placed on the
   // event only for `update-required`, and never logged.
   function emitFailed(code: string, message = messageFor(code), minClientVersion?: string): void {
+    abandonHostPrompts()
     authenticated = false
     if (pairingRejected) {
       code = 'pairing-rejected'
@@ -1235,6 +1262,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // client's OWN changeId, never a field read from the untrusted error payload (AC1/AC4 no-echo).
             const inReplyTo = inbound.inReplyTo
             if (inReplyTo !== undefined) {
+              for (const operation of ['read', 'write'] as const) {
+                const found = takeHostPrompt(inReplyTo, operation)
+                if (found) { failHostPrompt(found.requestId, operation, 'rejected'); return }
+              }
               const changeId = pendingSettings.get(inReplyTo)
               if (changeId !== undefined) {
                 pendingSettings.delete(inReplyTo)
@@ -1510,6 +1541,20 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               contextUsageDetail: inbound.sessionSettings.capabilities?.context_usage_detail,
               memorySearch: inbound.sessionSettings.memory_search
             })
+            return
+          }
+          case 'host-system-prompt': {
+            if (inbound.inReplyTo === undefined) return
+            for (const operation of ['read', 'write'] as const) {
+              const found = takeHostPrompt(inbound.inReplyTo, operation)
+              if (found) {
+                deps.diagnosticLog?.event({ event: 'host-prompt-received', code: operation })
+                emitDaemonEvent(sink, { type: 'hostSystemPromptReceived', requestId: found.requestId, operation,
+                  systemPrompt: inbound.hostSystemPrompt.system_prompt,
+                  defaultSystemPrompt: inbound.hostSystemPrompt.default_system_prompt })
+                return
+              }
+            }
             return
           }
           case 'system-prompt': {
@@ -2759,6 +2804,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         emitDaemonEvent(sink, { type: 'relayLinkChanged', status: 'connected' })
         return
       case 'relay-link-down': {
+        abandonHostPrompts()
         const wasAuthenticated = authenticated
         authenticated = false
         // A retryable close is stream-fatal too (#505): the supervisor auto-re-dials into a fresh
@@ -2782,6 +2828,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         return
       }
       case 'terminal':
+        abandonHostPrompts()
         // A stream interrupted by a socket drop resolves the consumer (no hang, no lingering bytes).
         // Deterministic code, safe unconditionally: fail on a settled/absent reassembler is inert.
         failBundleStream()
@@ -3168,6 +3215,32 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       failHistoryRequest(payload.conversation_id, 'build-or-send-failed')
     }
   }
+
+  function sendHostPrompt(operation: 'read' | 'write', requestId: string, systemPrompt = ''): void {
+    if (operation === 'write' && Buffer.byteLength(systemPrompt, 'utf8') > MAX_SYSTEM_PROMPT_BYTES) {
+      failHostPrompt(requestId, operation, 'prompt-too-long'); return
+    }
+    if (driver === null || !authenticated) { failHostPrompt(requestId, operation, 'unavailable'); return }
+    const envelopeId = nextEnvelopeId++
+    const pending = operation === 'read' ? pendingHostPromptReads : pendingHostPromptWrites
+    try {
+      const bytes = encodeEnvelope({ id: envelopeId, ts: now(),
+        type: operation === 'read' ? 'request_host_system_prompt' : 'set_host_system_prompt',
+        payload: operation === 'read' ? {} : { system_prompt: systemPrompt } })
+      const timer = setTimeout(() => {
+        const found = takeHostPrompt(envelopeId, operation)
+        if (found) failHostPrompt(found.requestId, operation, 'timed-out')
+      }, 15_000)
+      pending.set(envelopeId, { requestId, timer })
+      driver.sendMessage(bytes)
+      deps.diagnosticLog?.event({ event: 'host-prompt-sent', code: operation })
+    } catch {
+      takeHostPrompt(envelopeId, operation)
+      failHostPrompt(requestId, operation, 'send-failed')
+    }
+  }
+  function requestHostSystemPrompt(requestId: string): void { sendHostPrompt('read', requestId) }
+  function setHostSystemPrompt(systemPrompt: string, requestId: string): void { sendHostPrompt('write', requestId, systemPrompt) }
 
   function requestSystemPrompt(conversationId: string): void {
     // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
@@ -4036,6 +4109,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
 
   // The single fresh-connect path both start() and reconnect() funnel through.
   function dial(): void {
+    abandonHostPrompts()
     authenticated = false
     const gen = ++generation
     // Tear down a live driver before dialing the next, so two sockets never stack and only the
@@ -4126,6 +4200,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       if (stopped) return
       stopped = true
       authenticated = false
+      abandonHostPrompts()
       // Idempotent driver teardown. If the bootstrap has not yet constructed the driver, the
       // `stopped` guard above (step 7) prevents it from ever being constructed.
       driver?.stop()
@@ -4138,6 +4213,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     reconnectMcpServer,
     toggleMcpServer,
     stopBackgroundTask,
+    requestHostSystemPrompt,
+    setHostSystemPrompt,
     requestSystemPrompt,
     requestHistory,
     requestConversations,

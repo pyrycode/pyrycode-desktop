@@ -12916,3 +12916,68 @@ describe('reconnect replay cursor', () => {
     registry.stop()
   })
 })
+
+describe('host prompt request ownership', () => {
+  const reply = (id: number, text = '', type: EnvelopeType = 'host_system_prompt') => encodeEnvelope({
+    id: 91, type, ts: FIXED_TS, in_reply_to: id,
+    payload: type === 'error' ? { code: 'host_system_prompt.unavailable', message: 'never forward' }
+      : { system_prompt: text, default_system_prompt: 'default' }
+  })
+  it('correlates reads and durable writes separately and consumes once', async () => {
+    const { connection, drivers, sink } = await reachConnected()
+    connection.requestHostSystemPrompt('read-1')
+    connection.setHostSystemPrompt('  new\n', 'write-1')
+    const frames = drivers[0].sent.map(decodeEnvelope)
+    const read = frames.find(e => e.type === 'request_host_system_prompt')!
+    const write = frames.find(e => e.type === 'set_host_system_prompt')!
+    expect(read.payload).toEqual({})
+    expect(write.payload).toEqual({ system_prompt: '  new\n' })
+    drivers[0].emit({ type: 'message', plaintext: reply(1000) })
+    drivers[0].emit({ type: 'message', plaintext: reply(write.id, '  new\n') })
+    drivers[0].emit({ type: 'message', plaintext: reply(read.id) })
+    drivers[0].emit({ type: 'message', plaintext: reply(read.id, 'duplicate') })
+    expect(emitted(sink).filter(e => e.type === 'hostSystemPromptReceived')).toEqual([
+      { type: 'hostSystemPromptReceived', operation: 'write', requestId: 'write-1', systemPrompt: '  new\n', defaultSystemPrompt: 'default' },
+      { type: 'hostSystemPromptReceived', operation: 'read', requestId: 'read-1', systemPrompt: '', defaultSystemPrompt: 'default' }
+    ])
+    connection.stop()
+  })
+  it('rejects over-limit multibyte writes locally while exact bytes reach the wire', async () => {
+    const { connection, drivers, sink } = await reachConnected()
+    connection.setHostSystemPrompt('é'.repeat(4096), 'exact')
+    const count = drivers[0].sent.length
+    connection.setHostSystemPrompt('é'.repeat(4097), 'over')
+    expect(drivers[0].sent).toHaveLength(count)
+    expect(emitted(sink)).toContainEqual({ type: 'hostSystemPromptFailed', operation: 'write', requestId: 'over' })
+    connection.stop()
+  })
+  it('settles rejection, disconnect and late old-driver replies without reuse', async () => {
+    const { connection, drivers, sink } = await reachConnected()
+    connection.requestHostSystemPrompt('read')
+    const id = decodeEnvelope(drivers[0].sent.at(-1)!).id
+    drivers[0].emit({ type: 'message', plaintext: reply(id, '', 'error') })
+    connection.setHostSystemPrompt('new', 'write')
+    const writeId = decodeEnvelope(drivers[0].sent.at(-1)!).id
+    connection.reconnect()
+    drivers[0].emit({ type: 'message', plaintext: reply(writeId, 'late') })
+    expect(emitted(sink).filter(e => e.type === 'hostSystemPromptFailed')).toEqual([
+      { type: 'hostSystemPromptFailed', operation: 'read', requestId: 'read' },
+      { type: 'hostSystemPromptFailed', operation: 'write', requestId: 'write' }
+    ])
+    expect(emitted(sink).filter(e => e.type === 'hostSystemPromptReceived')).toEqual([])
+    connection.stop()
+  })
+  it('expires a withheld reply and discards its eventual answer', async () => {
+    const ctx = await reachConnected()
+    vi.useFakeTimers()
+    ctx.connection.requestHostSystemPrompt('timeout')
+    const id = decodeEnvelope(ctx.drivers[0].sent.at(-1)!).id
+    vi.advanceTimersByTime(15_000)
+    ctx.drivers[0].emit({ type: 'message', plaintext: reply(id) })
+    expect(emitted(ctx.sink).filter(e => e.type.startsWith('hostSystemPrompt'))).toEqual([
+      { type: 'hostSystemPromptFailed', operation: 'read', requestId: 'timeout' }
+    ])
+    ctx.connection.stop()
+    vi.useRealTimers()
+  })
+})

@@ -1,0 +1,138 @@
+import { writeFileSync } from 'node:fs'
+import { test, expect, SEEDED_ROW, SECOND_SEEDED_ROW } from './fixtures/launchPairedApp'
+import { conversationStateFake } from './fixtures/conversationStateFake'
+import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
+import type { Envelope } from '../src/shared/wire/types'
+
+const TS = '2026-10-05T00:00:00Z'
+const DEFAULT = 'Keep the main thread free. The operator cannot send you a message while a turn runs. Their messages wait until the turn ends.\n' +
+  '- Hand any work longer than a few tool calls to a background subagent. Reply at once with what started, and report the result when it arrives.\n' +
+  '- Delegate builds, test runs, device testing, waiting on CI, investigations across several files, ticket filing, design work, log digging and knowledge capture.\n' +
+  '- Keep inline only quick work: an answer from context, one lookup, one file read, one small edit.\n' +
+  '- In this conversation, responsiveness matters more than token usage.\n' +
+  '- Use a cheaper model for routine delegated work.\n' +
+  '- Give each subagent a short brief, not the conversation history.\n' +
+  '- Check a subagent’s claim cheaply before acting on it.\n' +
+  '- Never run two subagents on one shared resource, such as a connected device, emulator or one working tree.'
+const answer = (id: number, text: string, failed = false) => encodeEnvelope({
+  id: 900, ts: TS, in_reply_to: id, type: failed ? 'error' : 'host_system_prompt',
+  payload: failed ? { code: 'host_system_prompt.unavailable', message: 'fixed daemon failure' }
+    : { system_prompt: text, default_system_prompt: DEFAULT }
+})
+function hostFake(seed: typeof SEEDED_ROW, initial: string) {
+  const base = conversationStateFake([seed])
+  const reads: Envelope[] = [], writes: Envelope[] = []
+  const state = { current: initial, holdRead: false, failRead: false, holdWrite: false, failWrite: false }
+  return { state, reads, writes, buildReplyFrames(bytes: Uint8Array): Uint8Array[] {
+    const env = decodeEnvelope(bytes)
+    if (env.type === 'request_host_system_prompt') {
+      reads.push(env)
+      return state.holdRead ? [] : [answer(env.id, state.current, state.failRead)]
+    }
+    if (env.type === 'set_host_system_prompt') {
+      writes.push(env)
+      if (state.holdWrite) return []
+      if (!state.failWrite) state.current = (env.payload as { system_prompt: string }).system_prompt
+      return [answer(env.id, state.current, state.failWrite)]
+    }
+    return base(bytes)
+  } }
+}
+
+test('selected-host prompt read, reset, durable save, failures and modal lifetime', async ({ launchPairedApp }) => {
+  test.setTimeout(90_000)
+  const a = hostFake(SEEDED_ROW, 'host A instructions'), b = hostFake(SECOND_SEEDED_ROW, '')
+  const { page, app, servers } = await launchPairedApp(
+    { buildReplyFrames: a.buildReplyFrames }, { secondServer: { buildReplyFrames: b.buildReplyFrames }, hostLabel: 'Pyrybox' })
+  // Paint once before the retained capture: a hidden window may hold the previous frame.
+  const capture = async (name: string) => {
+    const paint = () => app.evaluate(async ({ BrowserWindow }) => {
+      const image = await BrowserWindow.getAllWindows()[0].capturePage(undefined, { stayHidden: true, stayAwake: true })
+      return image.toPNG().toString('base64')
+    })
+    await paint()
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    writeFileSync(`/tmp/builder-1738/${name}.png`, Buffer.from(await paint(), 'base64'))
+  }
+  const dialog = page.getByRole('dialog', { name: 'Edit host', exact: true })
+  const field = dialog.getByRole('textbox', { name: 'Host system prompt:' })
+  const reset = dialog.getByRole('button', { name: 'Reset to default', exact: true })
+  const ok = dialog.getByRole('button', { name: 'OK', exact: true })
+  const cancel = dialog.locator('.modal__action--cancel')
+  const open = async () => {
+    const host = page.locator('.channel-list__host').nth(1)
+    await host.hover(); await host.getByRole('button', { name: 'Edit host', exact: true }).click()
+    await expect(dialog).toBeVisible()
+  }
+  await open()
+  await expect(field).toBeEnabled(); await expect(field).toHaveValue('')
+  expect(a.reads).toHaveLength(0); expect(b.reads).toHaveLength(1)
+  await capture('empty')
+  await field.fill('Reply in British English and keep answers short.\nAsk before you push, merge or delete anything.\nWrite commit messages in the imperative mood.')
+  await capture('filled')
+  b.state.holdWrite = true
+  await dialog.getByRole('textbox', { name: 'Host name:' }).fill('Saved name')
+  await ok.click(); await expect.poll(() => b.writes.length).toBe(1)
+  await expect(field).toBeDisabled(); await expect(ok).toBeDisabled(); await expect(reset).toBeDisabled()
+  await expect(dialog.getByRole('button', { name: 'Unpair host' })).toBeDisabled(); await expect(cancel).toBeEnabled()
+  b.state.current = (b.writes[0].payload as { system_prompt: string }).system_prompt
+  servers[1].daemon.pushFrame(answer(b.writes[0].id, b.state.current))
+  await expect(dialog).toHaveCount(0); expect(a.writes).toHaveLength(0)
+  b.state.holdWrite = false
+  await open(); await expect(field).toHaveValue(b.state.current)
+  await field.fill(''); await ok.click(); await expect(dialog).toHaveCount(0)
+  expect(b.writes[1].payload).toEqual({ system_prompt: '' })
+  await open(); await expect(field).toBeEnabled(); await reset.click()
+  await expect(field).toHaveValue(DEFAULT); await expect(reset).toHaveCount(0)
+  await capture('default')
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(800, 900))
+  await capture('default-minimum-width')
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(800, 450))
+  await expect.poll(() => page.viewportSize()?.width ?? page.evaluate(() => innerWidth)).toBe(800)
+  await cancel.scrollIntoViewIfNeeded(); await expect(cancel).toBeInViewport()
+  await capture('default-short')
+  await cancel.click(); await expect(dialog).toHaveCount(0); expect(b.writes).toHaveLength(2)
+  await open(); await expect(field).toHaveValue('')
+  await dialog.getByRole('button', { name: 'Close dialog' }).click()
+  b.state.failRead = true
+  await open(); await expect(dialog.getByText('Could not read the host system prompt')).toBeVisible()
+  await expect(field).toBeDisabled(); await expect(reset).toHaveCount(0)
+  await expect(dialog.getByRole('textbox', { name: 'Host name:' })).toBeEnabled()
+  await cancel.click(); b.state.failRead = false; b.state.holdRead = true
+  await open(); await expect.poll(() => b.reads.length).toBe(6)
+  const oldRead = b.reads.at(-1)!.id
+  await cancel.click(); await open(); await expect.poll(() => b.reads.length).toBe(7)
+  servers[1].daemon.pushFrame(answer(oldRead, 'stale'))
+  servers[0].daemon.pushFrame(answer(b.reads.at(-1)!.id, 'wrong host'))
+  servers[1].daemon.pushFrame(answer(b.reads.at(-1)!.id, 'fresh'))
+  await expect(field).toHaveValue('fresh')
+  await field.fill('  retry\n ')
+  servers[1].daemon.pushFrame(answer(b.reads.at(-1)!.id, 'duplicate'))
+  b.state.holdRead = false; b.state.failWrite = true
+  await dialog.getByRole('textbox', { name: 'Host name:' }).fill('Name survives prompt rejection')
+  await ok.click(); await expect(dialog.getByText('Could not save the host system prompt')).toBeVisible()
+  await expect(field).toHaveValue('  retry\n '); await expect(field).toBeEnabled()
+  b.state.failWrite = false
+  await ok.click(); await expect(dialog).toHaveCount(0)
+  expect(b.writes.at(-1)!.payload).toEqual({ system_prompt: '  retry\n ' })
+  await open(); await expect(field).toHaveValue('  retry\n ')
+  await expect(dialog.getByRole('textbox', { name: 'Host name:' })).toHaveValue('Name survives prompt rejection')
+  await field.fill('é'.repeat(4097)); await expect(ok).toBeDisabled()
+  await expect(dialog.getByText('Over the 8192-byte limit. Shorten it before saving.')).toBeVisible()
+  await field.fill('é'.repeat(4096)); await expect(ok).toBeEnabled()
+  b.state.holdWrite = true
+  await ok.click(); await expect.poll(() => b.writes.length).toBe(5)
+  const oldWrite = b.writes.at(-1)!.id
+  await cancel.click(); await open(); await expect(field).toHaveValue('  retry\n ')
+  servers[1].daemon.pushFrame(answer(oldWrite, 'late durable write'))
+  await field.fill('new interaction')
+  await expect(field).toHaveValue('new interaction'); await expect(dialog).toBeVisible()
+  await cancel.click()
+  await open(); await expect(field).toHaveValue('  retry\n ')
+  await field.fill('interrupted write'); await ok.click()
+  await expect.poll(() => b.writes.length).toBe(6)
+  servers[1].forwarder.closeClientLeg(4404)
+  await expect(dialog.getByText('Could not save the host system prompt')).toBeVisible()
+  await expect(field).toHaveValue('interrupted write'); await expect(field).toBeEnabled()
+  await expect(dialog).toBeVisible(); await cancel.click()
+})

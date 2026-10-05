@@ -77,3 +77,8 @@ None. The cleaner shape is a dialog-local controller with injected name persiste
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-05
+
+
+## Revisions
+
+2026-10-05: Implementation also reads `connectionRegistry.ts` → `viewOf` and its fake, and `modalBridge.ts`, `questionBridge.ts`, `timelineBridge.ts` → their exhaustive translators. Add the two host methods to the lifecycle-free facade and explicitly ignore host events in every translator; the contracts are unchanged. A read arriving during local name persistence now seeds the saved previous prompt state, so a failed name write restores that reading instead of losing it. A regression test proves this race. CSS `field-sizing: content` grows the textarea from four lines to the fourteen-line cap for the long default; scrolling remains native. The Linux hidden Electron fixture requires `capturePage` plus a paint barrier to capture its current frame. Written work is approximately 800 lines including plan/tests, with five new exported types/components/store surfaces and fewer than ten consumer updates.

@@ -14,6 +14,8 @@ export const PROTOCOL_VERSION = 'v2' as const
 export const CAPABILITY_INTERACTIVE = 'interactive' as const
 /** Tells the daemon this client understands more than one agent, so it sends Codex conversations (#1657). */
 export const CAPABILITY_MULTI_AGENT = 'multi_agent' as const
+/** Detection only (pyrycode#2797): the daemon echoes it when it accepts `stop_background_task` (#1770). */
+export const CAPABILITY_STOP_BACKGROUND_TASK = 'stop_background_task' as const
 
 /** Which agent runs a conversation or offers a model row (#1649). */
 export type WireAgent = 'claude' | 'codex'
@@ -282,6 +284,9 @@ export type EnvelopeType =
   // Asks the daemon to move one named MCP server to the requested enabled state. The client sends
   // `enabled` explicitly for both values and never retries a refusal (#1586).
   | 'mcp_toggle'
+  // Client → daemon (pyrycode#2796). Asks the daemon to stop one background task. Accepted: no reply.
+  // Refused: one error `stop_background_task.refused` correlated by in_reply_to. Never retried (#1770).
+  | 'stop_background_task'
   // The conversation's MODEL inventory (#971) — the identities claude will run as, with the
   // reasoning-effort levels each one supports. Same shape of frame as its sibling below and drawn from
   // the same `initialize` control reply: v2 outbound (binary → phone), interactive-capability-gated,
@@ -2837,6 +2842,14 @@ export interface MCPTogglePayload {
   conversation_id: string
   server_name: string
   enabled: boolean
+}
+
+/** Ask the daemon to stop one background task (#1770), field-for-field with the daemon's payload. Both ids
+ *  are opaque daemon strings, required and non-empty; `task_id` is the one the roster rows carry. Never a
+ *  log field, a map key, a path or markup on this side. */
+export interface StopBackgroundTaskPayload {
+  conversation_id: string
+  task_id: string
 }
 
 /**

@@ -553,6 +553,45 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand(valid)).toBe(true)
   })
 
+  it.each([
+    ['conv-42', 'task-7'], ['__proto__', 'constructor'], ['conv\n<&>', 'task "<img>"']
+  ])('accepts a background-task stop for conversation %j and task %j (#1770)', (id, taskId) => {
+    expect(isRendererCommand({ type: 'stopBackgroundTask', payload: {
+      conversation_id: id, task_id: taskId, extra: 'ignored'
+    } })).toBe(true)
+  })
+
+  it.each([
+    {}, { payload: undefined }, { payload: null }, { payload: {} }, { payload: 'conv-42' },
+    { payload: { conversation_id: 'conv-42' } },
+    { payload: { task_id: 'task-7' } },
+    { payload: { conversation_id: '', task_id: 'task-7' } },
+    { payload: { conversation_id: 'conv-42', task_id: '' } },
+    { payload: { conversation_id: null, task_id: 'task-7' } },
+    { payload: { conversation_id: 'conv-42', task_id: null } },
+    { payload: { conversation_id: 42, task_id: 'task-7' } },
+    { payload: { conversation_id: 'conv-42', task_id: 7 } }
+  ])('rejects malformed background-task stop %j (#1770)', (fields) => {
+    expect(isRendererCommand({ type: 'stopBackgroundTask', ...fields })).toBe(false)
+  })
+
+  it('requires the background-task stop payload and both ids at compile time (#1770)', () => {
+    // @ts-expect-error a stop requires a payload
+    const bare: RendererCommand = { type: 'stopBackgroundTask' }
+    const missingTask: RendererCommand = {
+      type: 'stopBackgroundTask',
+      // @ts-expect-error the task id must be present
+      payload: { conversation_id: 'conv-42' }
+    }
+    const valid: RendererCommand = {
+      type: 'stopBackgroundTask', payload: { conversation_id: 'conv-42', task_id: 'task-7' }
+    }
+    for (const invalid of [bare, missingTask]) {
+      expect(isRendererCommand(invalid)).toBe(false)
+    }
+    expect(isRendererCommand(valid)).toBe(true)
+  })
+
   it('types requestModelList as payload-REQUIRED — a bare send does not compile (#1165)', () => {
     // Compile-time half of AC2, and the half the runtime guard above cannot prove: `src/shared/**/*`
     // is inside tsconfig.node.json's include, so `npm run typecheck` reads this file, and an unused

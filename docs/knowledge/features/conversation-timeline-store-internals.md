@@ -472,11 +472,16 @@ session boundary ─(sessionTransition, #286)→ translateTimelineEvent → { ty
     reset chat A, switch to chat B while the wrap-up turn ran, and the divider drew in B, never in A)
 
 operator presses Enter ─(composerSend.ts, submitMessage, guard passed)→ optimistic echo
-   → timelineStore.dispatch({ type: 'userText', text }) → reduceTimeline → localSendPending: true
+   → timelineStore.dispatch({ type: 'userText', text }) → reduceTimeline →
+       localSendPending: { messageId: event.messageId ?? '', queued: false }   [#1725, was `true`]
    → selectLocalSendPending (read by ConversationScreen's workingIndicatorStateWithLocalSend, composed
                               on top of #215's shouldShowThinking/workingIndicatorState gate)
    (#650 — renderer-sourced, no daemon frame, no bridge involvement; closed by the next turnState,
     reconnected, or reset arm above, never by a fourth path of its own)
+   → a queue_state for this conversation listing that messageId later flips queued: true via
+     conversationTimelineStore.markLocalSendQueued — see Queue store § The data path and
+     Conversation timeline holder § How it works (#1725; sticky, and keyed-holder-only — it does not
+     reach the flat timelineStore above)
 
 trusted upward thread input near top, connected owner →
    requestOlderHistory(historyAskDeps, conversationId, nearTop)

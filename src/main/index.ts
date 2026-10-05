@@ -823,6 +823,12 @@ app.whenReady().then(() => {
           command.payload.enabled)
         return
       }
+      case 'stopBackgroundTask': {
+        // Routed like the toggle above (#1770): the conversation's host gets the frame, or no wire does.
+        const conversationId = command.payload.conversation_id
+        router.route(conversationId)?.stopBackgroundTask(conversationId, command.payload.task_id)
+        return
+      }
       case 'requestHistory':
         // ROUTED BY CONVERSATION, mirroring the two cases above — a conversation's history belongs to
         // the server that hosts it, so the frame goes there or to no wire at all (#1222). The WHOLE

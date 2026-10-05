@@ -1,8 +1,8 @@
 # Daemon connection — system-prompt and MCP-status correlation
 
 Split out of [Daemon connection correlation](daemon-connection-correlation.md) for size. System-prompt
-read, system-prompt write (plus the workspace-renaming correlation that shipped alongside it), and
-MCP-status request correlation — in the order they shipped.
+read/write, workspace renaming, MCP-status requests and actuation, background-task stops, and
+conversation-mute writes.
 
 # System-prompt read correlation (#1230)
 
@@ -287,6 +287,55 @@ full in `docs/specs/architecture/1586-mcp-toggle.md`. The four exhaustive render
 `case 'mcpToggleRejected':` arm; nothing in the window consumes the event yet — presenting the refusal and
 the on/off switch itself are [#1587](https://github.com/pyrycode/pyrycode-desktop/issues/1587), which this
 ticket blocks.
+
+# Background-task stop correlation (#1770)
+
+`loadDialConfig` advertises `CAPABILITY_STOP_BACKGROUND_TASK` (`'stop_background_task'`) beside
+`interactive` and `multi_agent`. This is detection only: a supporting daemon echoes it in
+`hello_ack.capabilities`, already delivered to the window on `connected.ack`. The send path does not
+gate on that echo; a Stop task control can use it to detect support.
+
+The `stopBackgroundTask` renderer command carries `StopBackgroundTaskPayload` with required
+`conversation_id` and `task_id` strings. `isStopBackgroundTaskPayload` rejects missing, non-string or
+empty ids at the IPC boundary; it preserves nonempty strings verbatim and accepts extra fields.
+Main routes by conversation to its owning host, and the registry delegates both arguments to that
+connection's `stopBackgroundTask(conversationId, taskId)`. An unclaimed conversation sends nothing.
+`buildStopBackgroundTask` constructs a fresh payload containing exactly `{ conversation_id, task_id }`
+in one `stop_background_task` envelope, so extra renderer fields cannot reach the wire. An unavailable
+or unauthenticated driver sends nothing; a build/send throw is caught. Nothing retries or waits on a
+timer, and local failure emits no rejection event.
+
+`pendingBackgroundTaskStops: Map<number, { conversationId: string; taskId: string }>` records both
+ids only after the send succeeds. **An accepted stop gets no reply at all**, unlike `mcp_toggle`'s
+ordinary `mcp_status` report. The daemon is also silent when it cannot act on the conversation, so
+silence cannot confirm success. Entries therefore survive normal successful use until eviction or
+the next `dial()`: the cap, not a success correlation path, bounds this map. It holds at most
+`MAX_PENDING_BACKGROUND_TASK_STOPS` (32) entries, evicting the oldest by insertion order before
+recording a 33rd. `dial()` clears it beside `pendingMcpToggles`, preventing recycled envelope ids
+from settling a dead connection's request.
+
+The protocol refusal is an `error` with code `stop_background_task.refused` and `in_reply_to` naming
+the request; it carries no task id. The `daemon-error` handler checks this map immediately after
+the MCP toggle map, using only `inReplyTo`. A hit deletes the entry, emits one
+`backgroundTaskStopRejected { conversationId, taskId }` from the **send-time values**, consumes the
+frame and returns. It reads neither the reflected conversation nor the error code/message: unknown
+or non-string codes settle identically. Missing, unrelated, duplicate, evicted or cleared correlation
+emits no stop-rejection event and falls through to existing error handling. Each verb has its own map
+and draws envelope ids from one sequence, so an MCP toggle refusal cannot settle a pending stop.
+
+Both ids remain opaque strings, never diagnostic fields, paths or URLs. Diagnostics use fixed names:
+`background-task-stop-sent`, `background-task-stop-rejected`, `background-task-stop-refused` with
+`code: 'unavailable'`, and `background-task-stop-failed` with `code: 'build-or-send-failed'`. Neither
+id, reflected daemon content nor caught exception text enters a log. The four exhaustive renderer
+bridges (`daemonEventBridge`, `modalBridge`, `questionBridge`, `timelineBridge`) ignore the event;
+the Stop task button, refusal presentation and live round-trip belong to the separate UI slice.
+
+The envelope tests compare bytes against a hand-built expected frame, including awkward opaque ids
+and dropped extras. Command, connection and registry tests cover boundary rejection, host routing,
+single-send behaviour, local failure, send-time attribution against forged reflected ids, separate
+MCP/stop refusals, duplicate suppression, oldest-first eviction, redial cleanup and content-free
+logs. See the [transport plan](../../specs/architecture/1770-stop-background-task.md) for the contract
+and security review.
 
 # Conversation-mute write correlation ([#1595](https://github.com/pyrycode/pyrycode-desktop/issues/1595))
 

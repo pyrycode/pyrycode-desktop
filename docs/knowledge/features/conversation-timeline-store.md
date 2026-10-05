@@ -36,8 +36,10 @@ re-renders only components selecting a timeline slice — orthogonal to `session
 and `runConfigStore`. The `connected`→`reconnected` arm
 ([#538](../codebase/538.md)), is not stream content at all — it is the connection-lifecycle reconcile
 that clears activity chrome on a fresh handshake while preserving held banner reports. `localSendPending`
-([#650](../codebase/650.md)) is opened by neither path: it is set by the renderer-sourced local `userText`
-event the composer dispatches directly (see below). Refusal recovery also dispatches
+([#650](../codebase/650.md), retyped from `boolean` to `LocalSendPending | null` by
+[#1725](https://github.com/pyrycode/pyrycode-desktop/issues/1725) — see
+[Thread timeline § Types](thread-timeline-internals.md#types)) is opened by neither path: it is set by the
+renderer-sourced local `userText` event the composer dispatches directly (see below). Refusal recovery also dispatches
 client-owned write-lifetime events into the retained conversation slice.
 
 An observed `compacting: true` → `false` transition appends one permanent
@@ -313,7 +315,7 @@ This proves Desktop dispatch and UI behavior, without requiring a live Claude re
   than restated. `localSendPending` now reaches that same function as one of the six
   [keyed-holder](conversation-timeline-holder.md) fields the container destructures. See
   [Conversation shell § Thinking / working
-  indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967).
+  indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967-splits-the-local-send-window-into-sending-and-waiting-for-claude-since-1725).
 - **`useHistoryPageBridge()` mounts in `App.tsx`** ([#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)),
   beside `useQuestionBridge()` rather than replacing it — the first rework pass on this ticket landed a
   hunk that deleted the neighbouring call while keeping its now-unused-looking import, which compiled and

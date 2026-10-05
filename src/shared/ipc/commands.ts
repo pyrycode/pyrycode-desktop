@@ -37,6 +37,7 @@ import type {
   MCPStatusRequestPayload,
   MCPReconnectPayload,
   MCPTogglePayload,
+  StopBackgroundTaskPayload,
   RequestSystemPromptPayload,
   RequestHistoryPayload,
   InterruptPayload,
@@ -350,6 +351,7 @@ export type RendererCommand =
   | { type: 'requestMcpStatus'; payload: MCPStatusRequestPayload }
   | { type: 'reconnectMcpServer'; payload: MCPReconnectPayload }
   | { type: 'toggleMcpServer'; payload: MCPTogglePayload }
+  | { type: 'stopBackgroundTask'; payload: StopBackgroundTaskPayload }
   | { type: 'requestHistory'; payload: RequestHistoryPayload }
   | { type: 'requestSystemPrompt'; payload: RequestSystemPromptPayload }
   | { type: 'requestConversations'; serverId?: string }
@@ -524,6 +526,8 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return 'payload' in value && isMCPReconnectPayload(value.payload)
     case 'toggleMcpServer':
       return 'payload' in value && isMCPTogglePayload(value.payload)
+    case 'stopBackgroundTask':
+      return 'payload' in value && isStopBackgroundTaskPayload(value.payload)
     case 'requestHistory':
       // Payload-required (#1222) — the neighbour's idiom verbatim, including why the
       // explicitly-`undefined` case is refused by the payload guard and not by the `in` check.
@@ -1036,6 +1040,15 @@ function isMCPReconnectPayload(value: unknown): value is MCPReconnectPayload {
  * `enabled`, so a truthy stand-in such as `'false'` or `1` never becomes a requested state. */
 function isMCPTogglePayload(value: unknown): value is MCPTogglePayload {
   return isMCPReconnectPayload(value) && 'enabled' in value && typeof value.enabled === 'boolean'
+}
+
+/** The background-task stop guard (#1770): both ids present, strings and non-empty, so a blank or missing
+ * id sends nothing. Opaque lookup keys; buildStopBackgroundTask discards extra fields. */
+function isStopBackgroundTaskPayload(value: unknown): value is StopBackgroundTaskPayload {
+  if (typeof value !== 'object' || value === null) return false
+  return 'conversation_id' in value && typeof value.conversation_id === 'string' &&
+    value.conversation_id.length > 0 &&
+    'task_id' in value && typeof value.task_id === 'string' && value.task_id.length > 0
 }
 
 /** The untrusted renderer→main boundary guard for the requestSystemPrompt payload (#1230). The guard

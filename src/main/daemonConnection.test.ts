@@ -12981,3 +12981,21 @@ describe('host prompt request ownership', () => {
     vi.useRealTimers()
   })
 })
+
+it('host prompt local send failures settle both operations without leaking text', async () => {
+  const { connection, drivers, sink } = build({ throwOnSend: true })
+  connection.requestHostSystemPrompt('offline-read')
+  connection.setHostSystemPrompt('private instructions', 'offline-write')
+  connection.start(); await tick()
+  drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+  connection.requestHostSystemPrompt('send-read')
+  connection.setHostSystemPrompt('private instructions', 'send-write')
+  expect(emitted(sink).filter(e => e.type === 'hostSystemPromptFailed')).toEqual([
+    { type: 'hostSystemPromptFailed', operation: 'read', requestId: 'offline-read' },
+    { type: 'hostSystemPromptFailed', operation: 'write', requestId: 'offline-write' },
+    { type: 'hostSystemPromptFailed', operation: 'read', requestId: 'send-read' },
+    { type: 'hostSystemPromptFailed', operation: 'write', requestId: 'send-write' }
+  ])
+  expect(JSON.stringify(emitted(sink))).not.toContain('private instructions')
+  connection.stop()
+})

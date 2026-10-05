@@ -13,17 +13,19 @@ src/renderer/src/
     ├── channels/ChannelList.tsx          # + SettingsButton entry (in-file, unexported)
     ├── pairing/PairingScreen.tsx          # reused as-is on the new 'pairServer' route (#152, no edit)
     └── settings/
-        ├── SettingsScreen.tsx            # scaffold (#333) + mounts ServerInfoData/ServerRowControl (#334) + Defaults section (#404) + Notifications section (#409) + Storage section (#351) + About section (#350) + PairAnotherServerRow (#152) + onUnpaired threading (#1162)
+        ├── SettingsScreen.tsx            # scaffold (#333) + mounts ServerInfoData/ServerRowControl (#334) + Defaults section (#404) + Notifications section (#409) + Thread section + Storage section (#351) + About section (#350) + PairAnotherServerRow (#152) + onUnpaired threading (#1162)
         ├── ServerRow.tsx                 # pure ServerRow view + store-bound ServerRowControl (#334, new) + per-row Unpair action + UnpairPhase (#1162)
         ├── unpairServerAction.ts         # runUnpairServer — pure erase→refresh→maybe-route helper, a SIBLING of unpairAction.ts's runUnpair (#1162, new)
         ├── DefaultWorkspaceRow.tsx       # pure DefaultWorkspaceRowView + store-bound DefaultWorkspaceRowControl + in-file DefaultWorkspacePickerSheet (#404, new)
         ├── PushNotificationRow.tsx       # pure PushNotificationRowView + store-bound PushNotificationRowControl (#409, new)
+        ├── CollapseToolUsesRow.tsx       # pure switch view + store-bound Control in Thread
         ├── ArchivedCountRow.tsx          # pure ArchivedCountRow view + store-bound ArchivedCountRowControl (#351, new)
         └── settings.css                 # token-only, scaffold + Server row + Default-workspace row + Notifications row/switch + Storage row + About row + Pair-another-server row + per-row Unpair action styles (#333 + #334 + #404 + #409 + #351 + #350 + #152 + #1162)
 
 src/renderer/src/store/conversationListStore.ts  # + selectArchivedCount selector (#351)
 src/renderer/src/store/defaultWorkspaceStore.ts  # #403; read/write seam #404 consumes (documented separately)
 src/renderer/src/store/pushNotificationPrefStore.ts  # #408; read/write seam #409 consumes (documented separately)
+src/renderer/src/store/collapseToolUsesPrefStore.ts  # shared Thread preference, also read by ConversationScreen
 src/renderer/src/store/recentWorkspacesStore.ts + recentWorkspacesBridge.ts  # #382; picker data path #404 mounts while open
 src/renderer/src/store/serverInfoLoader.ts       # loadServerInfo now RESOLVES TO the list it wrote, not void (#1162) — the one refresh unpairServerAction.ts reuses
 
@@ -412,6 +414,37 @@ effect, no `window.pyry` — a pure read plus one interaction-time write, and no
 preference is entirely client-owned (see [Push-notification preference
 store](push-notification-preference-store.md)).
 
+## The Thread section
+
+`SettingsScreen` mounts `CollapseToolUsesRowControl` directly below Notifications
+and above Storage, inside the existing `settings__section` / `settings__section-body`
+structure with the same `settings__section-header` treatment. The pure
+`CollapseToolUsesRowView({ enabled, onToggle })` reuses `settings__notifications-row`,
+its text/label classes and `settings__switch` / `settings__switch--on` / knob classes;
+there is no separate switch CSS or Mobile modal.
+
+The client-owned constant “Collapse assistant tool uses” supplies both the visible
+label and `aria-label`. Its native `<button type="button" role="switch">` reflects
+`aria-checked={enabled}` and calls `onToggle(!enabled)` on click; Enter and Space
+activate that same native button without custom keyboard handlers. The knob is
+decorative (`aria-hidden="true"`).
+
+The control reads `useCollapseToolUsesPrefStore(selectCollapseToolUses)` and invokes
+`collapseToolUsesPrefStore.getState().setCollapseToolUses(next)` inside the callback.
+The [separate preference store](collapse-tool-uses-preference-store.md) defaults on,
+persists off across restarts and feeds `ConversationScreen`'s `Timeline.foldTools`
+prop across all hosts and conversations. This is a renderer-only write with no
+daemon command. Static tests inject both values into the pure view: changing the
+singleton after import cannot prove the off view through server rendering.
+
+The [verifier visual review](https://github.com/pyrycode/pyrycode-desktop/pull/1793#issuecomment-6003905659)
+compared all four Settings on/off captures at `08f34a4f` with
+[Figma 726:8150](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=726-8150).
+Windows were 800×800 and 1280×800, content viewports 800×773 and 1280×773.
+Thread placement, shared typography, spacing and the 52×32 switch matched the
+Desktop adaptation. The linked review preserves the evidence independently of
+scratch captures; see the [Linux frame-generation requirement](e2e-harness.md#desktop-isolation-default-tier-launches).
+
 ## The Storage section (`ArchivedCountRow.tsx` + `conversationListStore.ts`, #351)
 
 Inserted as a `settings__section` **between** Connection and About — Figma's Storage section sits above
@@ -535,6 +568,8 @@ ChannelList SettingsButton.onClick
         → <DefaultWorkspaceRowView defaultWorkspace=… onActivate={() => setOpen(true)} />
     → mounts <PushNotificationRowControl /> → usePushNotificationPrefStore(selectPushNotificationsEnabled)
         → <PushNotificationRowView enabled=… onToggle={(next) => setPushNotificationsEnabled(next)} />
+    → mounts <CollapseToolUsesRowControl /> → useCollapseToolUsesPrefStore(selectCollapseToolUses)
+        → <CollapseToolUsesRowView enabled=… onToggle={(next) => setCollapseToolUses(next)} />
     → mounts <ArchivedCountRowControl /> → useConversationListStore(selectArchivedCount) → <ArchivedCountRow archivedCount=… />
     → renders the About section: `Version ${__APP_VERSION__}` (no fetch, no store — substituted at build time)
     → renders <PairAnotherServerRow onActivate={onPairAnother} />
@@ -558,6 +593,12 @@ PushNotificationRowView switch button.onClick (#409)
     → pushNotificationPrefStore.getState().setPushNotificationsEnabled(next)  [no daemon command]
       → storage.write(next) [localStorage, #408] then set({ pushNotificationsEnabled: next })
     → PushNotificationRowControl re-renders with the new store value on the next tick
+
+CollapseToolUsesRowView switch button.onClick (also native Enter/Space)
+  → onToggle(!enabled)
+    → collapseToolUsesPrefStore.getState().setCollapseToolUses(next) [no daemon command]
+      → storage.write(next) [localStorage] then set({ collapseToolUses: next })
+    → switch reflects the new value; ConversationScreen passes it to Timeline.foldTools
 
 UnpairAction Confirm.onClick, row names its own serverId (#1162)
   → ServerRowControl.handleConfirm(serverId): setPhase({ kind: 'unpairing', serverId })

@@ -52,8 +52,12 @@ each .background-task-panel__row (TaskRow, #1635):
   .__cut-type "Truncated by the daemon" when task.truncatedFields names task_type — #582
   .__description <description, mono for local_bash, body text otherwise; muted on a finished row>
   .__cut-description "Truncated by the daemon" when task.truncatedFields names description — #582
-  finished && task.summary !== null && task.summary.text !== '' → .__summary <task.summary.text> + .__cut-summary
+  trimmedDescription = task.description.trim()
+  finished && task.summary !== null && task.summary.text !== '' &&
+    (trimmedDescription === '' || !task.summary.text.trim().includes(trimmedDescription))
+                              → .__summary <task.summary.text> + .__cut-summary
                                  "Truncated by the daemon" when task.summary.truncatedFields names "summary" — #1639
+                                 (repeated summaries and their cut chips are hidden together — #1754)
   task.latestUpdate !== null → .__update ("Latest update" label + .__update-block > .__no-change | .__patch) + .__cut-patch
                                  when update.truncatedFields (not task.truncatedFields) names "patch" — #583
 ```
@@ -285,15 +289,41 @@ that still alone decides grouping and the count.
   or Finished, so an unrecognised word still counts and displays as Running even while its tag shows the
   raw text.
 
-A finished row (`finished && task.summary !== null && task.summary.text !== ''`) draws
-`.background-task-panel__summary` straight after the description and its cut chip, holding
-`task.summary.text` as an auto-escaped child — never mono, unlike the `local_bash` description. Its own
+A finished row with a non-null, non-empty summary draws `.background-task-panel__summary` straight
+after the description and its cut chip, unless the summary repeats the description. Since
+[#1754](https://github.com/pyrycode/pyrycode-desktop/issues/1754), `TaskRow` compares
+`task.summary.text.trim().includes(task.description.trim())`, case-sensitively, only when the trimmed
+description is non-empty. A match hides both the summary and its cut chip: an exact repeat or a template
+such as `Agent "Review relay changes" finished` adds no line below `Review relay changes`. A summary
+without that substring, including a distinct failure/stop reason or a case-different summary, remains
+visible. Empty and whitespace-only descriptions retain non-empty summaries; testing `includes('')`
+without this guard would hide every summary for those rows. Only leading and trailing whitespace is
+trimmed for comparison; internal whitespace is unchanged. This is a display rule: held task and summary
+data stay untouched, and retained `task.summary.text` renders verbatim as an auto-escaped child — never
+mono, unlike the `local_bash` description. Its own
 cut report, `wasCut(task.summary.truncatedFields, CUT_FIELD_SUMMARY)`, draws the existing dashed cut chip
 (now `.background-task-panel__cut-summary`) straight after it, the same `wasCut`/`CUT_FIELD_*` pattern
 \#582/\#583 established for `task_type`/`description`/`patch` — `CUT_FIELD_SUMMARY` (`'summary'`) is matched
 only against `task.summary.truncatedFields`, never `task.truncatedFields`, the same crossover trap #583
 already documents for the patch marker. An empty summary (`text === ''`) draws no line; a running row
-never draws one, since the `finished` guard is checked first.
+never draws one, since the `finished` guard is checked first. Neither draws a summary cut chip.
+
+`BackgroundTaskPanel.test.tsx` has four static-render regression tests for this display rule:
+
+- Template and exact repeats disappear with their summary cut chips, while the description and status
+  remain. Frozen held records retain their contents and summary identity after rendering.
+- Different failure/stop reasons and case-different summaries remain verbatim with their cut chips.
+- Empty and whitespace-only descriptions still show a non-empty summary.
+- Empty summaries show neither a summary nor its cut chip, with empty or non-empty descriptions.
+
+These tests assert markup from the actual pure view; they do not exercise effects or interaction. See
+[renderer test boundaries](development-verification.md#what-each-test-tier-proves). The
+[visual review](https://github.com/pyrycode/pyrycode-desktop/pull/1760#issuecomment-5992148664) compared
+static captures of `BackgroundTaskPanelView` at revision `29ce8d38256c576160f98582f2212089bcb0315a`
+with [Figma node 564:2230](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=564-2230)
+at 1280×800 and 800×600. Synthetic completed/template, failed/informative and
+stopped/empty-description rows confirmed summary visibility and retained token colours, typography
+and card spacing. This evidence covers isolated presentation; no interaction transition changed.
 
 **CSS.** Completed reuses `--color-success` for its label over a 16% tint expressed as
 `color-mix(in srgb, var(--color-success) 16%, transparent)` — no new hex literal, matching the Figma-drawn

@@ -374,6 +374,7 @@ function formatTaskType(taskType: string): string {
  *  latest update; a finished card adds its summary under the description (#1639). Every daemon field is an
  *  auto-escaped child of its own element. */
 function TaskRow({ task, finished }: { task: HeldBackgroundTask; finished: boolean }): JSX.Element {
+  const trimmedDescription = task.description.trim()
   const descriptionClass =
     task.taskType === TASK_TYPE_SHELL
       ? 'background-task-panel__description background-task-panel__description--mono'
@@ -401,8 +402,10 @@ function TaskRow({ task, finished }: { task: HeldBackgroundTask; finished: boole
       )}
       {/* #1639: the summary claude sent with the terminal status, on a finished row only — the group,
           not the held record, decides that, so a running row never shows one. An empty summary draws
-          no line, and its cut chip follows it straight after, reading the SUMMARY's own list. */}
-      {finished && task.summary !== null && task.summary.text !== '' && (
+          no line, and its cut chip follows it straight after, reading the SUMMARY's own list.
+          Summaries repeating a non-empty description hide both the line and its chip. */}
+      {finished && task.summary !== null && task.summary.text !== '' &&
+        (trimmedDescription === '' || !task.summary.text.trim().includes(trimmedDescription)) && (
         <>
           <span className="background-task-panel__summary">{task.summary.text}</span>
           {wasCut(task.summary.truncatedFields, CUT_FIELD_SUMMARY) && (

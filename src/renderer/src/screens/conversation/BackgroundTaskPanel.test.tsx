@@ -789,6 +789,70 @@ describe('drawerClosesOnKeyDown — one Escape does one thing (#1634 AC3)', () =
   })
 })
 
+describe('BackgroundTaskPanelView — repeated finish summaries (#1754)', () => {
+  const renderFinished = (held: HeldBackgroundTask): string =>
+    renderToStaticMarkup(
+      <BackgroundTaskPanelView
+        entry={entry([held])}
+        finishedTaskIds={new Set([held.taskId])}
+        onClose={noop}
+      />
+    )
+
+  it('hides template and exact summaries containing the trimmed description without changing held data', () => {
+    for (const text of ['  Agent "Review relay changes" finished  ', ' Review relay changes ']) {
+      const summary = Object.freeze({ text, truncatedFields: ['summary'] })
+      const held = Object.freeze(task({
+        taskType: 'local_agent',
+        description: '  Review relay changes  ',
+        status: 'completed',
+        summary
+      }))
+      const before = structuredClone(held)
+      const markup = renderFinished(held)
+      expect(markup).toContain('background-task-panel__description">  Review relay changes  </span>')
+      expect(markup).toContain('Completed')
+      expect(markup).not.toContain('background-task-panel__summary')
+      expect(markup).not.toContain('background-task-panel__cut-summary')
+      expect(held).toEqual(before)
+      expect(held.summary).toBe(summary)
+    }
+  })
+
+  it('shows different failure and stop reasons and preserves case-sensitive comparison', () => {
+    for (const text of ['  Exited with code 1: port already in use.  ', 'Stopped by user', 'NPM RUN BUILD finished']) {
+      const markup = renderFinished(task({
+        description: 'npm run build',
+        status: 'failed',
+        summary: { text, truncatedFields: ['summary'] }
+      }))
+      expect(markup).toContain(`<span class="background-task-panel__summary">${text}</span>`)
+      expect(markup).toContain('background-task-panel__cut-summary')
+    }
+  })
+
+  it('shows a non-empty summary for an empty or whitespace-only description', () => {
+    for (const description of ['', ' \n\t ']) {
+      const markup = renderFinished(task({
+        description,
+        summary: { text: 'Task finished', truncatedFields: null }
+      }))
+      expect(markup).toContain('<span class="background-task-panel__summary">Task finished</span>')
+    }
+  })
+
+  it('shows no summary or cut marker for empty summaries with empty or non-empty descriptions', () => {
+    for (const description of ['', 'npm run build']) {
+      const markup = renderFinished(task({
+        description,
+        summary: { text: '', truncatedFields: ['summary'] }
+      }))
+      expect(markup).not.toContain('background-task-panel__summary')
+      expect(markup).not.toContain('background-task-panel__cut-summary')
+    }
+  })
+})
+
 // #1639: the status word the tag draws and the summary a finished row shows. The group still comes from
 // `finishedTaskIds` alone; the word only chooses the tag, by exact match against client constants.
 describe('BackgroundTaskPanelView — status tag and summary (#1639)', () => {

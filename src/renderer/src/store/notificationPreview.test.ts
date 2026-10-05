@@ -6,9 +6,9 @@ import { NOTIFICATION_PREVIEW_CHARS, notificationPreviewIn, type NotifyEvent } f
 // Pure lookups over a hand-built timeline state: no store singleton, no React. Each slice is filed under
 // `conv` and stamped with server `srv` unless a test says otherwise.
 
-function stateWith(items: ThreadItem[], serverId: string | undefined = 'srv'): ConversationTimelineState {
+function stateWith(items: ThreadItem[], serverId: string | null = 'srv'): ConversationTimelineState {
   const slice: ConversationSlice = {
-    ...(serverId === undefined ? {} : { serverId }),
+    ...(serverId === null ? {} : { serverId }),
     timeline: { ...initialTimelineState, items },
     history: null,
     prependedRows: 0,
@@ -96,7 +96,8 @@ describe('notificationPreviewIn — turn end (#1737)', () => {
   })
 
   it('reads an unstamped slice', () => {
-    const state = stateWith([text('t1', 'Reply.')], undefined)
+    const state = stateWith([text('t1', 'Reply.')], null)
+    expect(state.timelines.get('conv')).not.toHaveProperty('serverId')
     expect(notificationPreviewIn(state, turnEnd('t1'))).toBe('Reply.')
   })
 

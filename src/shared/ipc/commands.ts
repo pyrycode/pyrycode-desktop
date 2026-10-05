@@ -1253,10 +1253,10 @@ function isDequeueMessagePayload(value: unknown): value is DequeueMessagePayload
  *  this guard tests CLOSED-SET MEMBERSHIP: `kind` must equal one of the two NotifyKind literals. This is
  *  the security-relevant line of the slice: a `typeof === 'string'` check here would let an arbitrary,
  *  possibly daemon-derived string pass the boundary and later map to no copy at all, defeating the
- *  by-construction guarantee that no free text can ride into an OS notification's body. A non-object, a
+ *  by-construction guarantee that every kind has a static fallback body. A non-object, a
  *  missing `kind`, a non-string `kind`, and any string outside the set are all rejected.
  *
- *  The optional `name` (#1593) is the one free-text field, and it only ever becomes the title: it must be
+ *  The optional `name` (#1593) is one of two free-text fields, and it only ever becomes the title: it must be
  *  absent, `undefined`, or a string, and any other type fails the whole command closed. Its content is
  *  not judged here — main's notificationTitle drops control characters and bounds the length, because
  *  this side of the boundary is not trusted to have done so. The optional `preview` (#1737) is the second

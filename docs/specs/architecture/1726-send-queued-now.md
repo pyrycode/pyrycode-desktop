@@ -76,3 +76,7 @@ No new state or async job. The flag lives in the existing run-config snapshot, c
 ## Documentation handoff
 
 - Pending for the documentation stage: in `docs/knowledge/features/conversation-shell-conversation-and-modals.md`, beside the "No Figma coverage for the queued row or its drop control" paragraph, record that Send now has no separate Figma frame, that it follows the drop control's idiom by decision (#1726), and that Juhana may overrule it.
+
+## Revisions
+
+- 2026-10-05, Open Question resolved: the existing `message_id` dedupe keeps a sent-now message to one row when the daemon's user `message` push carries the echo's id. `e2e/queued-send-now.spec.ts` asserts it with no reducer change; the real-daemon confirmation is `e2e/real-claude-queue-send-now.spec.ts`, pending the dispatcher's live gate. No design change.

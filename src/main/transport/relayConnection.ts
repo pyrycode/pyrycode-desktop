@@ -17,6 +17,8 @@
 // diagnostics go through the injected content-free DiagnosticLog (#126) and never carry a header
 // value, a frame byte, or a URL query (href/search) — only the event name, a status / close code,
 // a module-static classification, and the safe hostname + pathname coordinates.
+import { randomUUID } from 'node:crypto'
+import { notifySend, type SendOutcome } from './sendObservation'
 import { WebSocket } from 'ws'
 import type { RawData } from 'ws'
 import type { DiagnosticLog } from '../diagnosticLog'
@@ -78,7 +80,7 @@ export interface RelayConnection {
    * is not OPEN (an attempted send with no live connection surfaces an error, never a silent
    * drop).
    */
-  send(frame: string | Uint8Array): void
+  send(frame: string | Uint8Array, observe?: (outcome: SendOutcome) => void): void
   /**
    * Idempotent local close (WS 1000). Tears down timers and listeners; the terminal `closed`
    * event fires once via onEvent. Safe to call before `connected`.
@@ -120,6 +122,7 @@ export function createRelayConnection(
   let pingInterval: ReturnType<typeof setInterval> | null = null
   let pongDeadline: ReturnType<typeof setTimeout> | null = null
 
+  const connectionId = randomUUID()
   const ws = new WebSocket(config.url, { headers: config.headers, maxPayload: maxFrameBytes })
 
   // Safe diagnostic coordinates — the HOSTNAME and PATHNAME only, reused at every log site. Never
@@ -175,7 +178,7 @@ export function createRelayConnection(
     opened = true
     clearConnectTimer()
     config.onEvent({ type: 'connected' })
-    config.diagnosticLog?.event({ event: 'relay-open', host, path })
+    config.diagnosticLog?.event({ event: 'relay-open', host, path, connectionId })
     // Ping unconditionally every idle interval (matching the Go mirror's pingLoop): this
     // guarantees <= idle interval between keepalives, the invariant the relay's symmetric side
     // expects. Arm a single pong-deadline; a 'pong' clears it, its expiry tears the connection.
@@ -242,6 +245,7 @@ export function createRelayConnection(
     // on a peer/library close — the wire `reason.toString()` (attacker-controlled) is NEVER logged.
     config.diagnosticLog?.event({
       event: 'relay-closed',
+      connectionId,
       status: terminal.code,
       code: pending?.reason,
       host,
@@ -250,11 +254,12 @@ export function createRelayConnection(
     teardownAndEmitClosed(terminal.code, terminal.reason)
   })
 
-  function send(frame: string | Uint8Array): void {
+  function send(frame: string | Uint8Array, observe?: (outcome: SendOutcome) => void): void {
     if (ws.readyState !== WebSocket.OPEN) {
       throw new RelayNotConnectedError()
     }
     ws.send(frame)
+    notifySend(observe, { type: 'sent', connectionId })
   }
 
   function close(): void {

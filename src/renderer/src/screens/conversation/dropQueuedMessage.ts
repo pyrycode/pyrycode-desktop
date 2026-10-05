@@ -30,6 +30,7 @@
 //
 // STILL NO camelCase→snake rename on the wire ids (they are already snake_case), and still extracted like
 // every sibling guarded send (submitMessage, answerPrompt, cancelPrompt, runUnpair) rather than inlined.
+import type { MessageLifecycleDiagnostic } from '@shared/ipc/diagnostics'
 import { dequeueMessageCommand, type RendererCommand } from '@shared/ipc/commands'
 import type { ThreadEvent } from '../../store/threadTimeline'
 
@@ -46,6 +47,7 @@ import type { ThreadEvent } from '../../store/threadTimeline'
  * would leave the other holding the lie, and switching conversations would bring it back.
  */
 export interface DropQueuedMessageDeps {
+  diagnose?: (record: MessageLifecycleDiagnostic) => void
   sendCommand: (command: RendererCommand) => void
   dispatch: (event: ThreadEvent) => void
   dispatchFor: (conversationId: string, event: ThreadEvent) => void
@@ -79,12 +81,15 @@ export function dropQueuedMessage(
   message_id: string | undefined,
   deps: DropQueuedMessageDeps
 ): void {
+  if (message_id !== undefined && message_id !== '') {
+    try { deps.diagnose?.({ event: 'message-cancel-requested', messageId: message_id, conversationId: conversation_id }) } catch { /* Local request only. */ }
+  }
   try {
     deps.sendCommand(dequeueMessageCommand({ conversation_id, queued_msg_id }))
-  } catch (error) {
+  } catch {
     // A send-bridge failure must not crash the window, and it leaves the thread exactly as it was: the
     // daemon never heard the drop, so the message is still queued and its echo is still honest.
-    console.error('drop queued message send failed', error)
+    console.error('drop queued message send failed')
     return
   }
 

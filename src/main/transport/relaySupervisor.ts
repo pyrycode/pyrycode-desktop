@@ -15,6 +15,7 @@
 // `connection.headers` carry identity — a stray console.log would leak either to main-process
 // stdout. All diagnostics travel as RelaySupervisorEvent data; the consumer decides whether to
 // log and must not log frame contents or the connection headers.
+import type { SendOutcome } from './sendObservation'
 import {
   createRelayConnection,
   RelayNotConnectedError,
@@ -99,7 +100,7 @@ export interface RelaySupervisor {
    * (before first connect, during a backoff gap, or after terminal). No buffering across a
    * reconnect — v2 re-handshakes and re-sends from the layer above.
    */
-  send(frame: string | Uint8Array): void
+  send(frame: string | Uint8Array, observe?: (outcome: SendOutcome) => void): void
   /**
    * Idempotent teardown (AC #4): stop reconnecting, cancel the pending backoff timer, release
    * the underlying connection, and emit one terminal { code: 1000, reason: 'stopped' }. No
@@ -252,12 +253,12 @@ export function createRelaySupervisor(
     current = createConnection({ ...conn, onEvent: onConnEvent })
   }
 
-  function send(frame: string | Uint8Array): void {
+  function send(frame: string | Uint8Array, observe?: (outcome: SendOutcome) => void): void {
     if (current === null) {
       throw new RelayNotConnectedError()
     }
     // Delegates to #21's send, which itself throws if the socket is not OPEN (e.g. connecting).
-    current.send(frame)
+    current.send(frame, observe)
   }
 
   function stop(): void {

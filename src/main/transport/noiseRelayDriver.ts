@@ -20,6 +20,7 @@
 // still-encrypted InnerFrameV2 / malformed length prefix — never plaintext), so they are logged
 // content-free (capped hex) through the optional injected DiagnosticLog (#133), which the driver also
 // forwards into each session it builds so the session's own read-failure catches can do the same.
+import { notifySend, type SendOutcome } from './sendObservation'
 import { createRelaySupervisor } from './relaySupervisor'
 import type {
   RelaySupervisor,
@@ -118,7 +119,7 @@ export interface NoiseRelayDriverConfig {
 /** Handle for the driven session. */
 export interface NoiseRelayDriver {
   /** Post-handshake app-message send. Delegates to the current session; inert before handshake-complete / after terminal. */
-  sendMessage(plaintext: Uint8Array): void
+  sendMessage(plaintext: Uint8Array, observe?: (outcome: SendOutcome) => void): void
   /** Idempotent teardown: stop the supervisor (→ one terminal), close the current session, drop buffered frames. */
   stop(): void
 }
@@ -218,14 +219,18 @@ export function createNoiseRelayDriver(config: NoiseRelayDriverConfig): NoiseRel
     // Outbound: the session's raw Noise bytes → base64-std → InnerFrameV2 → supervisor.send. The
     // session's sendFrame contract forbids throwing back into it, so codec/send throws are caught
     // here and classified. A stale session's writes are dropped by the generation guard.
-    const sendFrame = (raw: Uint8Array): void => {
-      if (gen !== generation) return
+    const sendFrame = (raw: Uint8Array, observe?: (outcome: SendOutcome) => void): void => {
+      if (gen !== generation) {
+        notifySend(observe, { type: 'dropped', reason: 'send-refused' })
+        return
+      }
       const type = firstFrame || rekeyInitPending ? 'noise_init' : 'noise_msg'
       firstFrame = false
       rekeyInitPending = false
       try {
-        supervisor.send(encodeInnerFrame({ v: 2, type, data: base64StdEncode(raw) }))
+        supervisor.send(encodeInnerFrame({ v: 2, type, data: base64StdEncode(raw) }), observe)
       } catch {
+        notifySend(observe, { type: 'dropped', reason: 'write-failed' })
         emit({ type: 'error', reason: 'outbound-frame-encode-failed' })
       }
     }
@@ -384,10 +389,14 @@ export function createNoiseRelayDriver(config: NoiseRelayDriverConfig): NoiseRel
     fatalCloseCodes: config.fatalCloseCodes
   })
 
-  function sendMessage(plaintext: Uint8Array): void {
+  function sendMessage(plaintext: Uint8Array, observe?: (outcome: SendOutcome) => void): void {
     // Inert if no session; the session is also inert before transport state, so a pre-handshake
     // call is a silent no-op (matches the session contract).
-    session?.sendMessage(plaintext)
+    if (session === null) {
+      notifySend(observe, { type: 'dropped', reason: 'send-refused' })
+      return
+    }
+    session.sendMessage(plaintext, observe)
   }
 
   // stop() drives supervisor.stop(), which synchronously emits terminal{1000,'stopped'} back

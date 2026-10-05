@@ -440,7 +440,7 @@ describe('submitMessage', () => {
       messageId: 'g1'
     })
     // The swallowed error stays content-free — no conversation id and no message text (ADR 0007).
-    expect(errorSpy).toHaveBeenCalledWith('composer send failed', expect.anything())
+    expect(errorSpy).toHaveBeenCalledWith('composer send failed')
     errorSpy.mockRestore()
   })
 
@@ -743,5 +743,30 @@ describe('the actionable-error button copy (#963)', () => {
     const [type, action] = COMPOSER_REPAIR_BUTTON_COPY.split(' - ')
     expect(type).toBe('Pairing error')
     expect(action).toBe('Re-pair')
+  })
+})
+
+describe('composer lifecycle diagnostics', () => {
+  it('records queued before dispatch, including bridge failure, and refuses no-op submissions', () => {
+    const id = '12345678-1234-4123-8123-123456789abc'
+    const calls: string[] = []
+    const deps = { diagnose: (record: { event: string; messageId: string }) => {
+      expect(record.messageId).toBe(id); calls.push(record.event)
+    }, sendCommand: () => { calls.push('dispatch'); throw new Error('SECRET') },
+    dispatch: vi.fn(), dispatchFor: vi.fn(), newMessageId: () => id }
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(submitMessage(' ', 'chat', deps)).toBe(false)
+    expect(submitMessage('text', null, deps)).toBe(false)
+    expect(calls).toEqual([])
+    expect(submitMessage('text', 'chat', deps)).toBe(true)
+    expect(calls).toEqual(['message-queued', 'dispatch', 'message-bridge-failed'])
+    expect(error).toHaveBeenCalledWith('composer send failed')
+    error.mockRestore()
+  })
+  it('diagnostic failure cannot prevent sending', () => {
+    const sendCommand = vi.fn()
+    expect(submitMessage('text', 'chat', { sendCommand, diagnose: () => { throw new Error() },
+      dispatch: vi.fn(), dispatchFor: vi.fn(), newMessageId: () => '12345678-1234-4123-8123-123456789abc' })).toBe(true)
+    expect(sendCommand).toHaveBeenCalledTimes(1)
   })
 })

@@ -1752,3 +1752,34 @@ describe('the local send window stages — Sending, then Waiting for Claude (#17
     expect(next.phase).toBe('thinking')
   })
 })
+
+describe('session error transient notice', () => {
+  const error = (code = 'session.blocked'): ThreadEvent => ({ type: 'sessionError', code })
+  const pending = reduceTimeline(initialTimelineState, { type: 'userText', text: 'kept', messageId: 'm1' })
+  it.each(['idle', 'thinking', 'responding'] as const)('closes stale chrome in %s without deleting rows', phase => {
+    const next = reduceTimeline({ ...pending, phase, stalled: true, compacting: true,
+      thinkingTokens: 9, apiRetry: { current: 1, total: 2 } }, error())
+    expect(next).toMatchObject({ sessionError: { code: 'session.blocked' }, phase: 'idle',
+      localSendPending: null, stalled: false, compacting: false, thinkingTokens: null, apiRetry: null })
+    expect(next.items).toBe(pending.items)
+  })
+  it('replaces the notice', () => {
+    expect(reduceTimeline(reduceTimeline(pending, error()), error('future')).sessionError).toEqual({ code: 'future' })
+  })
+  it.each<ThreadEvent>([
+    { type: 'turnState', state: 'idle' }, { type: 'userText', text: 'echo', received: true, messageId: 'm2' },
+    { type: 'assistantDelta', turnId: 't1', seq: 1, text: 'content' }, { type: 'reconnected' },
+    { type: 'sessionBoundary', reason: 'workspace_change', workspaceCwd: '/workspace', occurredAt: 'now' },
+    { type: 'sessionBoundary', reason: 'idle_evict', workspaceCwd: null, occurredAt: 'now' }
+  ])('preserves on $type', event => {
+    const held = reduceTimeline(pending, error())
+    expect(reduceTimeline(held, event).sessionError).toBe(held.sessionError)
+  })
+  it.each<ThreadEvent>([
+    { type: 'userText', text: 'next', messageId: 'm2' }, { type: 'turnState', state: 'thinking' },
+    { type: 'turnState', state: 'responding' }, { type: 'reset' }, { type: 'sessionErrorCleared' },
+    { type: 'sessionBoundary', reason: 'clear', workspaceCwd: null, occurredAt: 'now' }
+  ])('clears on $type', event => {
+    expect(reduceTimeline(reduceTimeline(pending, error()), event).sessionError).toBeUndefined()
+  })
+})

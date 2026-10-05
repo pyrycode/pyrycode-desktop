@@ -20,9 +20,11 @@ const render = (props: {
   reading?: UsageLimitReading | null
   dismissed?: UsageLimitReading | null
   repair?: boolean
+  sessionError?: string
   resolution?: 'remote' | 'timeout' | null
 }): string => renderToStaticMarkup(
   <TopOverlay
+    sessionError={props.sessionError}
     reading={props.reading ?? null}
     nowSeconds={NOW}
     dismissed={props.dismissed ?? null}
@@ -128,5 +130,25 @@ describe('permission resolution pill', () => {
     expect(markup.indexOf(USAGE_LIMIT_WARNING_COPY)).toBeLessThan(markup.indexOf('Resolved on another device'))
     expect(markup.indexOf('Resolved on another device')).toBeLessThan(markup.indexOf(COMPOSER_REPAIR_BUTTON_COPY))
     expect(markup.match(/top-overlay-pill--default/g)).toHaveLength(2)
+  })
+})
+
+describe('session error pill', () => {
+  it.each([
+    ['session.blocked', 'Claude did not pick up your last message. It was not delivered.'],
+    ['session.child_crashing', 'Claude keeps failing to start. Your message is waiting.'],
+    ['HOSTILE <script> CODE', 'Claude stopped responding.'], ['', 'Claude stopped responding.']
+  ])('uses only client copy for %s, with no dismiss control', (sessionError, copy) => {
+    const html = render({ sessionError })
+    expect(html).toContain(copy)
+    expect(html).toContain('top-overlay-pill--error')
+    expect(html).not.toContain('<button')
+    expect(html).not.toContain('HOSTILE')
+  })
+  it('stacks after usage and resolution and before Re-pair', () => {
+    const html = render({ reading: reading(), resolution: 'remote', sessionError: 'session.blocked', repair: true })
+    expect(html.indexOf(USAGE_LIMIT_WARNING_COPY)).toBeLessThan(html.indexOf('Resolved on another device'))
+    expect(html.indexOf('Resolved on another device')).toBeLessThan(html.indexOf('Claude did not pick up'))
+    expect(html.indexOf('Claude did not pick up')).toBeLessThan(html.indexOf(COMPOSER_REPAIR_BUTTON_COPY))
   })
 })

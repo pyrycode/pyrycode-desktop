@@ -237,6 +237,8 @@ export function translateTimelineEvent(
         workspaceCwd: event.workspaceCwd,
         occurredAt: event.occurredAt
       }
+    case 'sessionError':
+      return { type: 'sessionError', code: event.code }
     case 'stallDetected':
       // #317: the stall-onset arm. The DaemonEvent carries `conversationId` (#732); the ThreadEvent
       // this returns is `{ type: 'stallDetected' }` and nothing else, so the id STOPS here — a
@@ -623,6 +625,7 @@ export function timelineTargetFor(event: DaemonEvent): string | null {
     case 'turnState':
     case 'toolUse':
     case 'toolResult':
+    case 'sessionError':
     case 'stallDetected':
     case 'apiRetry':
     case 'compacting':
@@ -744,9 +747,13 @@ export function timelineWriteTarget(
 export function subscribeTimeline(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
   dispatch: (event: ThreadEvent, conversationId: string | null, joinKey?: string) => void,
-  now?: () => number
+  now?: () => number,
+  onReconnect?: (serverId: string) => void
 ): () => void {
   return onDaemonEvent((event) => {
+    if (event.type === 'connected' && 'serverId' in event && typeof event.serverId === 'string') {
+      onReconnect?.(event.serverId)
+    }
     const threadEvent = translateTimelineEvent(event, now)
     if (!threadEvent) return
     // #1225 — the ARITY widens a third time, for #756's own arithmetic: a function of arity 2 is
@@ -831,7 +838,8 @@ export function useTimelineBridge(getOpenConversationId: () => string | null): v
             conversationTimelineStore.getState().dispatchFor(target, event, joinKey)
           }
         },
-        Date.now
+        Date.now,
+        serverId => conversationTimelineStore.getState().clearSessionErrorsForHost(serverId)
       ),
     [getOpenConversationId]
   )

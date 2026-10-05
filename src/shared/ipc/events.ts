@@ -604,6 +604,14 @@ type BaseDaemonEvent =
       type: 'mcpToggleRejected'
       conversationId: string
     }
+  | {
+      // The daemon refused this app's `stop_background_task` (#1770). Both ids are the ones recorded at
+      // send time: the error frame never carries a task id, and its `conversation_id` is not read. No
+      // daemon code, message or in_reply_to crosses. Routing keys, never markup or a log field.
+      type: 'backgroundTaskStopRejected'
+      conversationId: string
+      taskId: string
+    }
   // The background-task open arm (#564) — claude started work that OUTLIVES the turn that spawned it
   // (pyrycode#1240), the frame that separates that case from a genuine finish.
   //

@@ -251,6 +251,7 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
     reconnectMcpServer: (conversationId, serverName) => resolve().reconnectMcpServer(conversationId, serverName),
     toggleMcpServer: (conversationId, serverName, enabled) =>
       resolve().toggleMcpServer(conversationId, serverName, enabled),
+    stopBackgroundTask: (conversationId, taskId) => resolve().stopBackgroundTask(conversationId, taskId),
     requestHistory: (payload) => resolve().requestHistory(payload),
     requestSystemPrompt: (conversationId) => resolve().requestSystemPrompt(conversationId),
     requestConversations: () => resolve().requestConversations(),

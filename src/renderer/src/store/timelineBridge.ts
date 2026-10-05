@@ -373,6 +373,7 @@ export function translateTimelineEvent(
     case 'mcpStatusRequestRejected': // The channel info sheet's notice owns this (#1579).
     case 'mcpReconnectRejected': // The channel info sheet's Reconnect control owns this (#1582).
     case 'mcpToggleRejected': // The channel info sheet's on/off switch owns this (#1586).
+    case 'backgroundTaskStopRejected': // The Stop task button owns this (#1770).
     case 'modelAnnounced':
     case 'questionShown':
     case 'questionDismissed':

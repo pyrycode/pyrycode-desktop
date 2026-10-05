@@ -245,11 +245,17 @@ export function subscribeBackgroundTaskRoster(
   resetRostersForServer: (origin: ConversationListOrigin) => void,
   setStartedTask: (snapshot: BackgroundTaskStartedSnapshot) => void,
   setUpdatedTask: (snapshot: BackgroundTaskUpdatedSnapshot) => void,
-  setTaskProgress: (snapshot: BackgroundTaskProgressSnapshot) => void
+  setTaskProgress: (snapshot: BackgroundTaskProgressSnapshot) => void,
+  endTaskStopWait?: (conversationId: string, taskId: string) => void
 ): () => void {
   return onDaemonEvent((event) => {
     if (event.type === 'connected') {
       resetRostersForServer(originOf(event))
+      return
+    }
+    if (event.type === 'backgroundTaskStopRejected') {
+      // Main recorded both ids at send time; no daemon error content crosses this path.
+      endTaskStopWait?.(event.conversationId, event.taskId)
       return
     }
     const snapshot = translateBackgroundTaskRoster(event)
@@ -315,7 +321,8 @@ export function BackgroundTaskRosterData(): null {
           .resetRostersFor(selectConversationIdsFor(origin)(conversationListStore.getState())),
       (snapshot) => backgroundTaskRosterStore.getState().setStartedTask(snapshot),
       (snapshot) => backgroundTaskRosterStore.getState().setUpdatedTask(snapshot),
-      (snapshot) => backgroundTaskRosterStore.getState().setTaskProgress(snapshot)
+      (snapshot) => backgroundTaskRosterStore.getState().setTaskProgress(snapshot),
+      (conversationId, taskId) => backgroundTaskRosterStore.getState().endTaskStopWait(conversationId, taskId)
     )
   }, [])
 

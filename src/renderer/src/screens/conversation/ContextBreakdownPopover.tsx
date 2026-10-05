@@ -167,8 +167,8 @@ export function ContextBreakdownPanel({
  * menu's contract, which does not steal focus back from the element the user chose.
  *
  * Its own anchor class rather than `.composer-options-anchor`: that one wears min-width: 0, and the
- * reading is the footer control that never gives width (#1107). No right-edge clamp: the panel is
- * right-aligned to the reading in CSS (see `.context-breakdown`), so there is nothing to measure.
+ * reading is the footer control that never gives width (#1107). No edge clamp: the panel is aligned to
+ * the footer row's left edge in CSS (see `.context-breakdown`), so there is nothing to measure.
  */
 export function ContextBreakdownPopover({
   reading,

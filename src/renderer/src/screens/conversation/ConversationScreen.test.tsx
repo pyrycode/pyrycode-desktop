@@ -4395,51 +4395,77 @@ describe('ComposerErrorChip — the connection-error chip in the status row (#79
 // present/absent matrix is proven by server-rendering it with injected figures and no store. The
 // arithmetic itself lives in contextUsage.test.ts; what these prove is the MARKUP — that the reading is
 // a reading and not a control, and that its absent arm renders nothing at all.
-describe('ContextUsageReading — the composer footer’s context percentage (#811)', () => {
-  // An EXACT markup assertion, not a toContain, and deliberately so: AC3 ("it is a reading, not a
-  // control: no click handler, not focusable") is structural in a string this short — no onclick, no
-  // tabindex, no role, no href, no <button> and nothing else can hide in it. Do not relax this to a
-  // substring check; the exactness IS the assertion.
-  //
-  // #1062 turned ONE exact pin into THREE, one per severity step, and that is the tripwire this
-  // component's own comment promised working rather than an obstacle to route around: the reading now has
-  // three renderings and each one is pinned whole. The primary arm below is byte-identical to the string
-  // this file pinned before #1062 — the step that reads "nothing to see" must not have moved at all.
-  it('renders the percentage as a single bare text run — no handler, no tabindex, no role (AC1, AC3)', () => {
+//
+// #1728: the reading is the design's ring (Figma 347:5408 → Context), with the percentage and the
+// warning state as visually hidden text. Each step is still pinned as EXACT markup, so nothing — no
+// handler, no tabindex, no role, no visible text — can be added to any of them silently.
+//
+// The arc's dash is the reading's share of the r=6.5 circumference (40.841), hard-coded per case so the
+// test does not re-derive it from the formula under test.
+const contextRing = (className: string, dash: string, label: string): string =>
+  `<span class="${className}">` +
+  '<svg class="composer__context-ring" width="15" height="15" viewBox="0 0 15 15" aria-hidden="true">' +
+  '<circle class="composer__context-track" cx="7.5" cy="7.5" r="6.5"></circle>' +
+  '<circle class="composer__context-arc" cx="7.5" cy="7.5" r="6.5" ' +
+  `stroke-dasharray="${dash} 40.841" transform="matrix(0 -1 -1 0 15 15)"></circle></svg>` +
+  `<span class="composer__context-label">${label}</span></span>`
+
+describe('ContextUsageReading — the composer footer’s context circle (#811, #1728)', () => {
+  it('draws the ring with the percentage as hidden text below 70% — no handler, no tabindex, no role', () => {
     const markup = renderToStaticMarkup(
-      <ContextUsageReading usedTokens={98000} windowTokens={200000} />
+      <ContextUsageReading usedTokens={138000} windowTokens={200000} />
     )
-    expect(markup).toBe('<span class="composer__context">Context: 49%</span>')
+    expect(markup).toBe(contextRing('composer__context', '28.180', 'Context: 69%'))
   })
 
-  // #1062 AC2/AC4: the middle step wears the modifier and NOTHING else changes — same prefix, same single
-  // run, same base class LEADING (which is what keeps the five footer-order assertions further down this
-  // file, all of which locate the reading by substring, honest). The 50 here is the boundary itself:
-  // contextUsageStep's own tests pin 49/50 as values, and this pins that the view actually asks it.
-  it('wears the warning modifier from 50%, with the text unchanged (AC2, AC4)', () => {
-    const markup = renderToStaticMarkup(
-      <ContextUsageReading usedTokens={100000} windowTokens={200000} />
-    )
-    expect(markup).toBe(
-      '<span class="composer__context composer__context--warning">Context: 50%</span>'
-    )
-  })
-
-  // #1062 AC2/AC4: the top step, where the string itself changes. The word is the non-colour channel for
-  // the one step that means "act now", and it is a WORD rather than a glyph because a glyph inside a text
-  // run cannot be hidden from a screen reader. Still one run, still nothing but a class attribute.
-  it('wears the error modifier and says "high" from 70% (AC2, AC4)', () => {
+  // The middle step wears the modifier the arc's colour follows, and its hidden text says "high", so the
+  // warning is not carried by colour alone now that no percentage is visible.
+  it('wears the warning modifier and says "high" from 70%', () => {
     const markup = renderToStaticMarkup(
       <ContextUsageReading usedTokens={140000} windowTokens={200000} />
     )
     expect(markup).toBe(
-      '<span class="composer__context composer__context--error">Context high: 70%</span>'
+      contextRing('composer__context composer__context--warning', '28.588', 'Context high: 70%')
     )
+  })
+
+  it('stays at the warning step at 84%', () => {
+    const markup = renderToStaticMarkup(
+      <ContextUsageReading usedTokens={168000} windowTokens={200000} />
+    )
+    expect(markup).toBe(
+      contextRing('composer__context composer__context--warning', '34.306', 'Context high: 84%')
+    )
+  })
+
+  it('wears the error modifier and says "nearly full" from 85%', () => {
+    const markup = renderToStaticMarkup(
+      <ContextUsageReading usedTokens={170000} windowTokens={200000} />
+    )
+    expect(markup).toBe(
+      contextRing('composer__context composer__context--error', '34.715', 'Context nearly full: 85%')
+    )
+  })
+
+  // The arc is derived from the reading, not copied from the design's static 75%: a known 0% draws no
+  // arc (a zero dash) and a full window the whole circumference.
+  it.each([
+    [0, 0, '0.000'],
+    [500, 0, '0.000'],
+    [45000, 23, '9.393'],
+    [200000, 100, '40.841']
+  ] as const)('draws %i used tokens (%i%) as a %s-unit arc', (used, pct, dash) => {
+    const markup = renderToStaticMarkup(
+      <ContextUsageReading usedTokens={used} windowTokens={200000} />
+    )
+    expect(markup).toContain(`stroke-dasharray="${dash} 40.841"`)
+    expect(markup).toContain(`: ${pct}%</span>`)
   })
 
   // AC2's whole surface, in the STRICT form the ComposerErrorChip describe above uses: an exact-empty
   // markup, not a not.toContain. That is what proves "not an empty element holding the slot either" —
-  // a substring assertion would pass on a rendered-but-empty <span>.
+  // a substring assertion would pass on a rendered-but-empty <span>, and an unavailable reading must
+  // not draw the dark 0% ring either.
   it('renders nothing at all when the window count is 0 — not an empty element (AC2)', () => {
     expect(renderToStaticMarkup(<ContextUsageReading usedTokens={146000} windowTokens={0} />)).toBe('')
   })
@@ -4455,20 +4481,15 @@ describe('ContextUsageReading — the composer footer’s context percentage (#8
     expect(markup).not.toContain('NaN')
   })
 
-  // An over-full session is the top step by definition, so #1062's word rides the clamp too — this is the
-  // longest string the reading can ever produce (18 characters, the bound .composer__context's nowrap
-  // comment now states).
-  it('clamps an over-full session to 100% rather than running past it', () => {
+  it('clamps an over-full session to a full ring rather than running past it', () => {
     const markup = renderToStaticMarkup(
       <ContextUsageReading usedTokens={250000} windowTokens={200000} />
     )
-    expect(markup).toContain('Context high: 100%')
+    expect(markup).toContain('stroke-dasharray="40.841 40.841"')
+    expect(markup).toContain('Context nearly full: 100%')
     expect(markup).not.toContain('Infinity')
   })
 
-  // The reading is NOT a live region. After #810 the figures refresh on every connect and every turn
-  // end, so a polite region here would announce a percentage after every single turn — the
-  // ComposerErrorChip ruling, and stronger here because the update cadence is the turn itself.
   it('is not a live region — the figure re-renders on every turn end', () => {
     const markup = renderToStaticMarkup(
       <ContextUsageReading usedTokens={168000} windowTokens={200000} />
@@ -5200,10 +5221,9 @@ describe('ConversationScreen — store binding', () => {
     })
     try {
       const markup = renderToStaticMarkup(<ConversationScreen />)
-      // 84% is the top step since #1062, so the mounted reading says "high" — the seeded figures are the
-      // design's own (Figma 110:3497) and are left as they are, because a mount proof is stronger when it
-      // reads the string the shipped surface actually shows.
+      // 84% is the warning step since #1728, so the mounted reading's hidden text says "high".
       expect(markup).toContain('Context high: 84%')
+      expect(markup).toContain('stroke-dasharray="34.306 40.841"')
       // In the ROW, not loose in the composer: the reading follows .composer__footer's opening tag.
       expect(markup.indexOf('composer__context')).toBeGreaterThan(
         markup.indexOf('class="composer__footer"')
@@ -5292,7 +5312,8 @@ describe('ConversationScreen — store binding', () => {
     )
     try {
       const markup = renderToStaticMarkup(<ConversationScreen />)
-      expect(markup).toContain('<span class="composer__context">Context: 25%</span>')
+      expect(markup).toContain('<span class="composer__context">')
+      expect(markup).toContain('<span class="composer__context-label">Context: 25%</span>')
       expect(markup.includes('composer__context-trigger')).toBe(trigger)
     } finally {
       runConfig.mockRestore()
@@ -5308,7 +5329,7 @@ describe('ConversationScreen — store binding', () => {
   // initial state is an empty map) the control renders AC4's inert label, which is exactly what makes
   // this a mount proof — the label is the seeded snapshot's own model value, so it can only appear if the
   // container actually read the snapshot.
-  it('mounts the model control in the footer row, between Actions and the reading (AC1, AC4)', () => {
+  it('mounts the model control in the footer row, after the reading and Actions (AC1, AC4)', () => {
     const restoreConnection = stageOpenConnection(CONNECTED)
     const sessionId = vi.spyOn(sessionIdStore, 'getInitialState').mockReturnValue({
       ...sessionIdStore.getInitialState(), sessionId: 'held-session'
@@ -5330,9 +5351,10 @@ describe('ConversationScreen — store binding', () => {
       const triggerAt = markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)
       const modelAt = markup.indexOf('composer__model-label')
       expect(triggerAt).toBeGreaterThan(-1)
-      // The design's item order: Actions, then the model control, then the reading.
+      // The design's item order since #1728: the reading, Actions, then the model control.
+      expect(markup.indexOf('class="composer__context')).toBeGreaterThan(-1)
+      expect(markup.indexOf('class="composer__context')).toBeLessThan(triggerAt)
       expect(modelAt).toBeGreaterThan(triggerAt)
-      expect(markup.indexOf('composer__context')).toBeGreaterThan(modelAt)
       // The mount proof's own half, through the mounted container: nothing is published, so the label is
       // derived from the session's own model value — `seeded-session-model` reads as `Seeded` since
       // #1095. Still a mount proof, and a slightly stronger one: only a container that read the snapshot
@@ -5360,7 +5382,7 @@ describe('ConversationScreen — store binding', () => {
   // file can make. With no model list published (the model-list store's initial state is an empty map)
   // both render their inert arms, so each label can only appear if its container actually read the
   // snapshot. Connected ownership leaves Actions and permission mode operable.
-  it('mounts the effort control in the footer row, between the model control and the reading (AC1, AC3)', () => {
+  it('mounts the effort control in the footer row, after the reading and the model control (AC1, AC3)', () => {
     const restoreConnection = stageOpenConnection(CONNECTED)
     const sessionId = vi.spyOn(sessionIdStore, 'getInitialState').mockReturnValue({
       ...sessionIdStore.getInitialState(), sessionId: 'held-session'
@@ -5384,9 +5406,12 @@ describe('ConversationScreen — store binding', () => {
       const effortAt = markup.indexOf('composer__effort-label')
       expect(markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)).toBeGreaterThan(-1)
       expect(modelAt).toBeGreaterThan(-1)
-      // The design's item order: Actions, the model control, the effort control, then the reading.
+      // The design's item order since #1728: the reading, Actions, the model control, then effort.
+      expect(markup.indexOf('class="composer__context')).toBeGreaterThan(-1)
+      expect(markup.indexOf('class="composer__context')).toBeLessThan(
+        markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)
+      )
       expect(effortAt).toBeGreaterThan(modelAt)
-      expect(markup.indexOf('composer__context')).toBeGreaterThan(effortAt)
       // The session's effort VERBATIM, through the mounted container — no relabelling, no capitalisation.
       expect(markup).toContain('>seeded-session-effort<')
       // AC3's inert arm: THIS control adds no popup announcement and no anchor. 2 rather than 1 since
@@ -5433,9 +5458,13 @@ describe('ConversationScreen — store binding', () => {
       const markup = renderToStaticMarkup(<ConversationScreen />)
       const permissionAt = markup.indexOf('composer__permission-label')
       const modelAt = markup.indexOf('composer__model-label')
-      // Figma 110:3494's order, in full: Actions, permission mode, model, effort, then the reading.
-      if (connected) expect(markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)).toBeGreaterThan(-1)
+      // The footer's order in full since #1728 (Figma 347:5408): the reading, Actions, permission mode,
+      // model, then effort.
+      const contextAt = markup.indexOf('class="composer__context')
+      expect(contextAt).toBeGreaterThan(-1)
+      if (connected) expect(markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)).toBeGreaterThan(contextAt)
       else expect(markup).not.toContain(ACTIONS_TRIGGER_CLASS_RUN)
+      expect(permissionAt).toBeGreaterThan(contextAt)
       expect(permissionAt).toBeGreaterThan(markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN))
       expect(modelAt).toBeGreaterThan(permissionAt)
       expect(markup.indexOf('composer__effort-label')).toBeGreaterThan(modelAt)
@@ -5484,7 +5513,7 @@ describe('ConversationScreen — store binding', () => {
   })
 
   // AC1's "the row's LAST item", in the only form a static render can state it: past the context reading,
-  // which is the item the design puts immediately before it. The same getInitialState SPY as the three
+  // which since #1728 is the row's first item, and past every control. The same getInitialState SPY as the three
   // tests above, and for the same reason — zustand v5 reads getInitialState() under renderToStaticMarkup,
   // so a seeded snapshot is what makes the reading (and the three menu labels) appear at all.
   it('places the attach button last in the footer row, past all four controls and the reading (AC1)', () => {

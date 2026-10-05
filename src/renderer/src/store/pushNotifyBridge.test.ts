@@ -459,6 +459,56 @@ describe('subscribePushNotify mute (#1607)', () => {
   })
 })
 
+// #1737: the body previews the reply or the pending action. Looked up only on the send path, after every
+// gate, and an absent preview leaves the key off the payload.
+describe('subscribePushNotify previews (#1737)', () => {
+  it('sends the looked-up preview, and looks it up with the stamped event', () => {
+    const bridge = fakeBridge()
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    const previewFor = vi.fn(() => 'All tests pass.')
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true, noName, undefined, undefined, previewFor)
+
+    bridge.emit(turnEnd, 'srv-A')
+    expect(previewFor).toHaveBeenCalledWith({ ...turnEnd, serverId: 'srv-A' })
+    expect(sendCommand).toHaveBeenCalledWith({
+      type: 'notify',
+      payload: { kind: 'turn-complete', preview: 'All tests pass.' }
+    })
+  })
+
+  it('omits the preview key when there is none', () => {
+    const bridge = fakeBridge()
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true, noName, undefined, undefined, () => null)
+
+    bridge.emit(modalShown)
+    expect(sendCommand).toHaveBeenCalledTimes(1)
+    const sent = sendCommand.mock.calls[0][0]
+    expect(sent).toEqual({ type: 'notify', payload: { kind: 'prompt' } })
+    expect(sent.type === 'notify' && 'preview' in sent.payload).toBe(false)
+  })
+
+  it('looks nothing up when the toggle is off, the conversation is muted or the prompt was announced', () => {
+    const bridge = fakeBridge()
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    const previewFor = vi.fn(() => 'preview')
+    let enabled = false
+    let muted = false
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => enabled, noName, undefined, () => muted, previewFor)
+
+    bridge.emit(turnEnd)
+    enabled = true
+    muted = true
+    bridge.emit(turnEnd)
+    expect(previewFor).not.toHaveBeenCalled()
+    muted = false
+    bridge.emit(modalShown)
+    bridge.emit(modalShown)
+    expect(previewFor).toHaveBeenCalledTimes(1)
+    expect(sendCommand).toHaveBeenCalledTimes(1)
+  })
+})
+
 // #1691: a question batch notifies like a modal prompt — same gates, name lookup and click token —
 // once per batch, deduplicated apart from modal ids (mobile's `batch:<questionBatchId>` key).
 const questionShown: Extract<DaemonEvent, { type: 'questionShown' }> = {

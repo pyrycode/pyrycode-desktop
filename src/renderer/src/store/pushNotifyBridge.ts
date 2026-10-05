@@ -22,6 +22,8 @@ import {
   type ConversationListState,
   type ServerConversationSummary
 } from './conversationListStore'
+import { conversationTimelineStore } from './conversationTimelineStore'
+import { notificationPreviewIn, type NotifyEvent } from './notificationPreview'
 import { pushNotificationPrefStore } from './pushNotificationPrefStore'
 
 /**
@@ -58,7 +60,7 @@ export function notifyKindForEvent(event: DaemonEvent): NotifyKind | null {
  * `isPushEnabled` is read PER-EVENT (a thunk), not captured at subscribe time — load-bearing for AC3: a
  * user who flips the toggle off in Settings mid-session must see the NEXT turn-end/prompt not fire. The
  * payload is a fresh literal built from the closed kind plus, since #1593, the looked-up conversation name
- * — no field of the event itself is copied in.
+ * and, since #1737, the looked-up preview — the event is never spread into it.
  * The listener only ever calls `sendCommand` inside the owned arms and never throws into React.
  *
  * #514: one OS notification per prompt, however many times the link re-handshakes. The daemon re-sends
@@ -108,6 +110,12 @@ export function notifyKindForEvent(event: DaemonEvent): NotifyKind | null {
  * sits after the toggle gate so a muted event mints no token. Like a toggle-dropped prompt, a muted one
  * is never recorded as announced, so a prompt unmuted while outstanding notifies on the daemon's
  * re-send. Optional and "not muted" when omitted, so a caller that does not care passes nothing.
+ *
+ * #1737: the body previews the reply or the action awaiting approval. On the same send path, after every
+ * gate, `previewFor` reads it for the stamped event (notificationPreview.ts); a preview rides as
+ * `payload.preview` and `null` omits the key, so main shows the fixed copy. Untrusted daemon-derived text:
+ * main cleans and caps it, and nothing here logs it. Optional, so a caller that passes nothing sends no
+ * preview.
  */
 export function subscribePushNotify(
   onDaemonEvent: (listener: (event: StampedDaemonEvent) => void) => () => void,
@@ -115,7 +123,8 @@ export function subscribePushNotify(
   isPushEnabled: () => boolean,
   nameFor: (serverId: string | null, conversationId: string) => string | null,
   mintToken?: (target: NotificationTarget) => string,
-  isMuted?: (serverId: string | null, conversationId: string) => boolean
+  isMuted?: (serverId: string | null, conversationId: string) => boolean,
+  previewFor?: (event: NotifyEvent) => string | null
 ): () => void {
   const announced = new Set<string>()
   return onDaemonEvent((event) => {
@@ -140,12 +149,14 @@ export function subscribePushNotify(
     if (isMuted?.(event.serverId, event.conversationId) === true) return
     const name = nameFor(event.serverId, event.conversationId)
     const token = mintToken?.({ serverId: event.serverId, conversationId: event.conversationId })
+    const preview = previewFor?.(event) ?? null
     sendCommand({
       type: 'notify',
       payload: {
         kind,
         ...(name === null ? {} : { name }),
-        ...(token === undefined ? {} : { token })
+        ...(token === undefined ? {} : { token }),
+        ...(preview === null ? {} : { preview })
       }
     })
     if (announceKey !== null) announced.add(announceKey)
@@ -269,7 +280,8 @@ export function usePushNotify(targets: NotificationTargets): void {
           conversationNameIn(conversationListStore.getState(), serverId, conversationId),
         targets.mint,
         (serverId, conversationId) =>
-          conversationMutedIn(conversationListStore.getState(), serverId, conversationId)
+          conversationMutedIn(conversationListStore.getState(), serverId, conversationId),
+        (event) => notificationPreviewIn(conversationTimelineStore.getState(), event)
       ),
     [targets]
   )

@@ -27,8 +27,8 @@ import type {
 // that reaches this row seeds `seeded-model` / `low` / `default` / 25%, which since #1095 draws as a
 // six-character family; the row can fit that even with nothing giving. So this drive publishes a model and
 // an effort level long enough to sit AT their own `max-width` bounds, the permission mode whose
-// client-owned label is the widest in that control's vocabulary, and a full context window, which is the
-// reading's longest possible string (`Context high: 100%`, 18 characters).
+// client-owned label is the widest in that control's vocabulary, and a full context window (since #1728
+// the reading is a fixed 15px ring, so the window only proves the reading landed).
 //
 // THE STANDING RULE IS KEPT: a fake-tier spec may not supply an input production does not produce. The two
 // frames here are `session_settings` (the reply to the app's own `request_session_settings`) and
@@ -60,9 +60,14 @@ const NARROW_HEIGHT_PX = 600
 // the row's `column-gap`. Asserted at the LAUNCH width, where the fix must be invisible.
 const FOOTER_RHYTHM_PX = 20
 
-// One window, filled exactly, so the reading renders its longest string: `Context high: 100%`. The top
-// severity step is the one that appends the word, and `used == window` is the only pair that reaches 100.
+// One window, filled exactly, so the ring reads 100% at the top severity step.
 const WINDOW_TOKENS = 200_000
+
+// #1728: the context circle's place in the row (Figma 347:5408 → Context): the row's 12px padding plus
+// the left group's 4px inset, a 15px ring, and 16px to Actions.
+const CONTEXT_INSET_PX = 16
+const CONTEXT_RING_PX = 15
+const CONTEXT_TO_ACTIONS_PX = 16
 
 // The three published strings, each chosen to sit past its own control's client-owned bound.
 //
@@ -79,7 +84,7 @@ const LONG_EFFORT = 'exceptionallythorough'
 const WIDEST_MODE = 'dontAsk'
 const WIDEST_LABEL = 'Approved actions only'
 
-const READING_TEXT = 'Context high: 100%'
+const READING_TEXT = 'Context nearly full: 100%'
 
 // The single published row. Its `value` is what the session's model matches on, so `publishedRowFor` hits
 // and the trigger derives from `resolved_model` above; its `effort_levels` is what makes both the model
@@ -141,6 +146,21 @@ const footerOverflowPx = (page: Page): Promise<number> =>
   page
     .locator('.composer__footer')
     .evaluate((el) => el.scrollWidth - el.clientWidth)
+
+/** The circle's inset from the row's left edge, its size, and its gap to the Actions anchor. */
+async function expectContextGeometry(page: Page, actionsAnchor: Locator): Promise<void> {
+  const [row, ring, actions] = await Promise.all([
+    page.locator('.composer__footer').boundingBox(),
+    page.locator('.composer__context-ring').boundingBox(),
+    actionsAnchor.boundingBox()
+  ])
+  if (!row || !ring || !actions) throw new Error('the context circle did not lay out')
+  expect(ring.width).toBe(CONTEXT_RING_PX)
+  expect(ring.height).toBe(CONTEXT_RING_PX)
+  expect(ring.x - row.x).toBeCloseTo(CONTEXT_INSET_PX, 1)
+  expect(ring.y - row.y).toBeCloseTo(4, 1)
+  expect(actions.x - (ring.x + ring.width)).toBeCloseTo(CONTEXT_TO_ACTIONS_PX, 1)
+}
 
 async function expectAttachmentGeometry(page: Page): Promise<void> {
   const footer = page.locator('.composer__footer')
@@ -230,6 +250,7 @@ test('composer footer: the row compresses instead of overflowing at the 800px mi
   await expect.poll(() => footerOverflowPx(page)).toBeLessThanOrEqual(0)
 
   await expectAttachmentGeometry(page)
+  await expectContextGeometry(page, actionsAnchor)
   const evidenceDir = join(tmpdir(), 'builder-1727')
   await mkdir(evidenceDir, { recursive: true })
   // Compare the actual footer at the Figma node's 785px logical width.
@@ -280,11 +301,11 @@ test('composer footer: the row compresses instead of overflowing at the 800px mi
     ).toBeLessThanOrEqual(0)
   }
 
-  // --- 5. AC2. All six occupants still render, in the Figma's order (Actions · mode · model · effort ·
-  // reading · attach) — as GEOMETRY rather than as DOM order, since the row's order is a visual contract
+  // --- 5. AC2. All six occupants still render, in the Figma's order (reading · Actions · mode · model ·
+  // effort · attach since #1728) — as GEOMETRY rather than as DOM order, since the row's order is a visual contract
   // and a flex `order` or a re-parent would leave the markup's order intact. ---
   const boxes = await Promise.all(
-    [actionsAnchor, permissionAnchor, modelAnchor, effortAnchor, reading, attach].map((item) =>
+    [reading, actionsAnchor, permissionAnchor, modelAnchor, effortAnchor, attach].map((item) =>
       item.boundingBox()
     )
   )
@@ -297,18 +318,24 @@ test('composer footer: the row compresses instead of overflowing at the 800px mi
   // The row still holds its hard height at the narrow width — it compressed, it did not wrap or grow.
   expect((await footer.boundingBox())?.height).toBe(20)
   await expectAttachmentGeometry(page)
+  await expectContextGeometry(page, actionsAnchor)
 
-  // Every inline setting remains reachable by keyboard at the supported minimum.
-  const controls = [actionsAnchor, permissionAnchor, modelAnchor, effortAnchor].map((anchor) =>
-    anchor.locator('button').first()
-  )
+  // Every inline setting remains reachable by keyboard at the supported minimum, starting at the context
+  // circle's breakdown trigger, the row's first item since #1728.
+  const contextTrigger = page.locator('.composer__context-trigger')
+  await expect(contextTrigger).toHaveAccessibleName(READING_TEXT)
+  const controls = [
+    contextTrigger,
+    ...[actionsAnchor, permissionAnchor, modelAnchor, effortAnchor].map((anchor) =>
+      anchor.locator('button').first()
+    )
+  ]
   for (let index = 0; index < controls.length; index += 1) {
     if (index === 0) await controls[index].focus()
     else await page.keyboard.press('Tab')
     await expect(controls[index]).toBeFocused()
     expect((await controls[index].boundingBox())!.width).toBeGreaterThan(0)
   }
-  await page.keyboard.press('Tab') // context breakdown
   await page.keyboard.press('Tab') // sole trailing control: Attach
   await expect(attach).toBeFocused()
 

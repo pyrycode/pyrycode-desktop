@@ -674,7 +674,7 @@ describe('createDaemonConnection', () => {
     expect(payload.device_name).toBe('my-desktop')
   })
 
-  it('advertises the interactive and multi_agent capabilities in the client hello (#179 AC1, #1657)', async () => {
+  it('advertises the interactive, multi_agent and stop_background_task capabilities in the client hello (#179 AC1, #1657, #1770)', async () => {
     const { connection, drivers } = build()
     connection.start()
     await tick()
@@ -683,7 +683,7 @@ describe('createDaemonConnection', () => {
     // buildClientHello in isolation, so this pins the production wiring, not the codec default.
     const envelope = decodeEnvelope(drivers[0].config.session.hello)
     const payload = envelope.payload as Record<string, unknown>
-    expect(payload.capabilities).toEqual(['interactive', 'multi_agent'])
+    expect(payload.capabilities).toEqual(['interactive', 'multi_agent', 'stop_background_task'])
   })
 
   it('decodes server_static_pubkey to the raw 32-byte key', async () => {
@@ -8704,6 +8704,182 @@ describe('createDaemonConnection — toggleMcpServer (#1586)', () => {
     connections.delete('host-A')
     expect(() => receive({}, { type: 'toggleMcpServer', payload: {
       conversation_id: 'conv-42', server_name: 'docs', enabled: true
+    } })).not.toThrow()
+    expect(host.drivers[0].sent).toHaveLength(1)
+    expect(other.drivers[0].sent).toEqual([])
+    off()
+    host.connection.stop()
+    other.connection.stop()
+  })
+})
+
+describe('createDaemonConnection — stopBackgroundTask (#1770)', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  function refusal(code: unknown, inReplyTo: number): Uint8Array {
+    return encodeEnvelope({ id: 90, type: 'error', ts: FIXED_TS, in_reply_to: inReplyTo, payload: {
+      code, message: 'private daemon detail', retryable: false,
+      conversation_id: 'daemon-named-conversation', task_id: 'daemon-named-task'
+    } })
+  }
+  const stopRejections = (sink: ReturnType<typeof build>['sink']): DaemonEvent[] =>
+    emitted(sink).filter((e) => e.type === 'backgroundTaskStopRejected' || e.type === 'mcpToggleRejected')
+  const lastSentId = (ctx: ReturnType<typeof build>): number =>
+    decodeEnvelope(ctx.drivers[0].sent[ctx.drivers[0].sent.length - 1]).id
+
+  it('sends exactly one two-field frame on the shared id sequence and never re-sends', async () => {
+    const { connection, drivers } = await reachConnected()
+    vi.useFakeTimers()
+    connection.send({ conversation_id: 'other', message_id: 'm1', text: 'hello' })
+    connection.stopBackgroundTask('conv-42', 'task-7')
+    expect(drivers[0].sent.map(decodeEnvelope)[1]).toEqual({ id: 3, type: 'stop_background_task', ts: FIXED_TS,
+      payload: { conversation_id: 'conv-42', task_id: 'task-7' } })
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(drivers[0].sent).toHaveLength(2)
+    connection.stop()
+  })
+
+  it('is inert before startup, before authentication and after stop, and logs no id', async () => {
+    const { log, records } = captureLog()
+    const { connection, drivers } = build({ diagnosticLog: log })
+    expect(() => connection.stopBackgroundTask('private-conv', 'private-task')).not.toThrow()
+    connection.start()
+    await tick()
+    connection.stopBackgroundTask('private-conv', 'private-task')
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    connection.stop()
+    expect(() => connection.stopBackgroundTask('private-conv', 'private-task')).not.toThrow()
+    expect(drivers[0].sent).toEqual([])
+    expect(records.filter((entry) => entry.event === 'background-task-stop-refused')).toEqual(
+      Array.from({ length: 3 }, () => ({ event: 'background-task-stop-refused', code: 'unavailable' }))
+    )
+    expect(JSON.stringify(records)).not.toMatch(/private-conv|private-task/)
+  })
+
+  it('catches a send failure, records nothing and never retries', async () => {
+    const { log, records } = captureLog()
+    const { connection, sink, drivers } = build({ diagnosticLog: log, throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    vi.useFakeTimers()
+    expect(() => connection.stopBackgroundTask('private-conv', 'private-task')).not.toThrow()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(records.at(-1)).toEqual({ event: 'background-task-stop-failed', code: 'build-or-send-failed' })
+    for (const id of [2, 3]) {
+      drivers[0].emit({ type: 'message', plaintext: refusal('stop_background_task.refused', id) })
+    }
+    expect(stopRejections(sink)).toEqual([])
+    expect(JSON.stringify(records)).not.toMatch(/private-conv|private-task|driver send boom/)
+    connection.stop()
+  })
+
+  it.each(['stop_background_task.refused', 'stop_background_task.something_later', 42])(
+    'settles a correlated %j refusal with the ids recorded at send time', async (code) => {
+      const { log, records } = captureLog()
+      const ctx = build({ diagnosticLog: log })
+      ctx.connection.start()
+      await tick()
+      ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+      ctx.connection.stopBackgroundTask('conv-42', 'task-7')
+      const before = emitted(ctx.sink).length
+      ctx.drivers[0].emit({ type: 'message', plaintext: refusal(code, lastSentId(ctx)) })
+      const events = emitted(ctx.sink).slice(before)
+      expect(events).toEqual([{ type: 'backgroundTaskStopRejected', conversationId: 'conv-42', taskId: 'task-7' }])
+      expect(JSON.stringify(events)).not.toMatch(/private|daemon-named|in_reply_to|refused/)
+      expect(records.at(-1)).toEqual({ event: 'background-task-stop-rejected' })
+      expect(JSON.stringify(records)).not.toMatch(/conv-42|task-7|private|daemon-named/)
+      expect(ctx.drivers[0].sent).toHaveLength(1)
+      ctx.connection.stop()
+    })
+
+  it('emits nothing for an uncorrelated error or a second error at the same id', async () => {
+    const ctx = await reachConnected()
+    ctx.connection.stopBackgroundTask('conv-42', 'task-7')
+    const id = lastSentId(ctx)
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('stop_background_task.refused', id + 1) })
+    expect(stopRejections(ctx.sink)).toEqual([])
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('stop_background_task.refused', id) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('stop_background_task.refused', id) })
+    expect(stopRejections(ctx.sink)).toEqual([
+      { type: 'backgroundTaskStopRejected', conversationId: 'conv-42', taskId: 'task-7' }
+    ])
+    ctx.connection.stop()
+  })
+
+  it('settles a stop refusal and an MCP toggle refusal as their own events', async () => {
+    const ctx = await reachConnected()
+    ctx.connection.toggleMcpServer('conv-toggle', 'docs', false)
+    const toggleId = lastSentId(ctx)
+    ctx.connection.stopBackgroundTask('conv-stop', 'task-7')
+    const stopId = lastSentId(ctx)
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('mcp_actuation.refused', toggleId) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('stop_background_task.refused', stopId) })
+    expect(stopRejections(ctx.sink)).toEqual([
+      { type: 'mcpToggleRejected', conversationId: 'conv-toggle' },
+      { type: 'backgroundTaskStopRejected', conversationId: 'conv-stop', taskId: 'task-7' }
+    ])
+    ctx.connection.stop()
+  })
+
+  it('bounds the outstanding stops, evicting the oldest', async () => {
+    const ctx = await reachConnected()
+    for (let i = 0; i < 33; i += 1) ctx.connection.stopBackgroundTask('conv-42', `task-${i}`)
+    const ids = ctx.drivers[0].sent.map(decodeEnvelope).map((frame) => frame.id)
+    for (const index of [0, 1, 32]) {
+      ctx.drivers[0].emit({ type: 'message', plaintext: refusal('stop_background_task.refused', ids[index]) })
+    }
+    expect(stopRejections(ctx.sink).map((e) => e.type === 'backgroundTaskStopRejected' && e.taskId))
+      .toEqual(['task-1', 'task-32'])
+    ctx.connection.stop()
+  })
+
+  it('clears outstanding stops on a new dial, so a recycled id settles nothing', async () => {
+    const ctx = await reachConnected()
+    ctx.connection.stopBackgroundTask('conv-42', 'task-7')
+    const staleId = lastSentId(ctx)
+    ctx.connection.reconnect()
+    await tick()
+    ctx.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    ctx.drivers[1].emit({ type: 'message', plaintext: refusal('stop_background_task.refused', staleId) })
+    expect(stopRejections(ctx.sink)).toEqual([])
+    ctx.connection.stop()
+  })
+
+  it('routes a validated command to its host, strips extra fields and refuses empty ids and unknown hosts', async () => {
+    const connections = new Map<string, DaemonConnection>()
+    const router = createConversationRouter({ connectionFor: (id) => connections.get(id) ?? null })
+    const host = build({ serverId: 'host-A', wrapSink: router.observe })
+    const other = build({ serverId: 'host-B', wrapSink: router.observe })
+    connections.set('host-A', host.connection)
+    connections.set('host-B', other.connection)
+    host.connection.start()
+    other.connection.start()
+    await tick()
+    for (const ctx of [host, other]) ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    host.drivers[0].emit({ type: 'message', plaintext: conversationCreatedPlaintext({
+      id: 'conv-42', is_promoted: false, cwd: '/workspace', name: null, last_used_at: '', workspace_label: null
+    }) })
+    const source = { on: vi.fn(), removeListener: vi.fn() } satisfies CommandSource
+    const off = onCommand(source, (command) => {
+      if (command.type === 'stopBackgroundTask') {
+        const conversationId = command.payload.conversation_id
+        router.route(conversationId)?.stopBackgroundTask(conversationId, command.payload.task_id)
+      }
+    })
+    const receive = source.on.mock.calls[0][1]
+    receive({}, { type: 'stopBackgroundTask', serverId: 'host-B', payload: {
+      conversation_id: 'conv-42', task_id: 'task-7', serverId: 'host-B', token: 'smuggled'
+    } })
+    expect(host.drivers[0].sent.map(decodeEnvelope)).toEqual([{ id: 2, ts: FIXED_TS, type: 'stop_background_task',
+      payload: { conversation_id: 'conv-42', task_id: 'task-7' } }])
+    receive({}, { type: 'stopBackgroundTask', payload: { conversation_id: 'conv-42', task_id: '' } })
+    receive({}, { type: 'stopBackgroundTask', payload: { conversation_id: '', task_id: 'task-7' } })
+    receive({}, { type: 'stopBackgroundTask', payload: { conversation_id: 'conv-42' } })
+    expect(() => receive({}, { type: 'stopBackgroundTask', payload: {
+      conversation_id: 'unknown', task_id: 'task-7'
     } })).not.toThrow()
     expect(host.drivers[0].sent).toHaveLength(1)
     expect(other.drivers[0].sent).toEqual([])

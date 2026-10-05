@@ -20,7 +20,9 @@ import type {
   MCPStatusPayload,
   MCPStatusRequestPayload,
   MCPReconnectPayload,
-  MCPTogglePayload
+  MCPTogglePayload,
+  StopBackgroundTaskPayload,
+  BackgroundTask
 } from '../../src/shared/wire/types'
 
 // The stateful `conversationStateFake` reply factory (#434) — TEST-ONLY e2e infrastructure. The fake
@@ -124,7 +126,15 @@ export interface ConversationStateFake {
   setMcpToggleAnswer(conversationId: string, answer: McpReconnectAnswer | null): void
   /** Every `mcp_toggle` payload received, in arrival order. A fresh copy. */
   mcpToggleRequests(): readonly MCPTogglePayload[]
+  /** Silence by default; configure outcomes for an exact conversation/task pair. */
+  setBackgroundTaskStopAnswer(conversationId: string, taskId: string, answer: BackgroundTaskStopAnswer): void
+  backgroundTaskStopRequests(): readonly StopBackgroundTaskPayload[]
+  /** Deliver a held response using the real request's correlation id. */
+  replyToBackgroundTaskStop(index: number, answer: BackgroundTaskStopAnswer): Uint8Array[]
 }
+
+export type BackgroundTaskStopAnswer = 'silent' | 'stopped' | 'refused' | { roster: readonly BackgroundTask[] }
+
 
 /**
  * The fake's answer to `mcp_reconnect` (#1583): an accepted reconnect's fresh `mcp_status`, correlated by
@@ -230,6 +240,26 @@ export function conversationStateFake(
   const mcpReconnectRequests: MCPReconnectPayload[] = []
   const mcpToggleAnswers = new Map<string, McpReconnectAnswer>(Object.entries(options.mcpToggleAnswers ?? {}))
   const mcpToggleRequests: MCPTogglePayload[] = []
+  const taskStopAnswers = new Map<string, Map<string, BackgroundTaskStopAnswer>>()
+  const taskStopRequests: { id: number; payload: StopBackgroundTaskPayload }[] = []
+  const taskStopReply = (index: number, answer: BackgroundTaskStopAnswer): Uint8Array[] => {
+    const request = taskStopRequests[index]
+    if (request === undefined) throw new Error('Missing synthetic stop request')
+    if (answer === 'silent') return []
+    const frame = (type: 'error' | 'background_task_updated' | 'background_task_roster', payload: unknown) =>
+      encodeEnvelope({ id: REPLY_ENVELOPE_ID, type, ts: FIXED_TS, payload,
+        ...(type === 'error' ? { in_reply_to: request.id } : {}) })
+    if (answer === 'refused') return [frame('error', {
+      code: 'background_task.refused', message: 'Synthetic refusal', retryable: false,
+      conversation_id: 'deliberately-unrelated-conversation'
+    })]
+    if (answer === 'stopped') return [frame('background_task_updated', {
+      ...request.payload, patch: '', status: 'stopped', summary: 'Synthetic stop outcome', truncated_fields: null
+    })]
+    return [frame('background_task_roster', {
+      conversation_id: request.payload.conversation_id, tasks: answer.roster, dropped_tasks: 0
+    })]
+  }
 
   // The workspace-rename mutation, written once and reached two ways: the `rename_workspace` arm below
   // calls it with the request's envelope id (the daemon's CORRELATED answer to a client that asked,
@@ -370,6 +400,13 @@ export function conversationStateFake(
         return [mcpStatusFrame(answer, env.id)]
       }
 
+      case 'stop_background_task': {
+        const payload = env.payload as StopBackgroundTaskPayload
+        taskStopRequests.push({ id: env.id, payload: { conversation_id: payload.conversation_id, task_id: payload.task_id } })
+        return taskStopReply(taskStopRequests.length - 1,
+          taskStopAnswers.get(payload.conversation_id)?.get(payload.task_id) ?? 'silent')
+      }
+
       case 'mcp_toggle': {
         const payload = env.payload as MCPTogglePayload
         mcpToggleRequests.push({ conversation_id: payload.conversation_id, server_name: payload.server_name, enabled: payload.enabled })
@@ -406,7 +443,14 @@ export function conversationStateFake(
       if (answer === null) mcpToggleAnswers.delete(conversationId)
       else mcpToggleAnswers.set(conversationId, answer)
     },
-    mcpToggleRequests: (): readonly MCPTogglePayload[] => mcpToggleRequests.map((request) => ({ ...request }))
+    mcpToggleRequests: (): readonly MCPTogglePayload[] => mcpToggleRequests.map((request) => ({ ...request })),
+    setBackgroundTaskStopAnswer: (conversationId: string, taskId: string, answer: BackgroundTaskStopAnswer): void => {
+      const answers = taskStopAnswers.get(conversationId) ?? new Map<string, BackgroundTaskStopAnswer>()
+      answers.set(taskId, answer)
+      taskStopAnswers.set(conversationId, answers)
+    },
+    backgroundTaskStopRequests: (): readonly StopBackgroundTaskPayload[] => taskStopRequests.map(({ payload }) => ({ ...payload })),
+    replyToBackgroundTaskStop: taskStopReply
   })
 }
 

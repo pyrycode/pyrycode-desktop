@@ -27,10 +27,11 @@ test('denials arrive through IPC, expand before results, and stop naming pending
       name, input_summary: id
     }))
   }
+  await page.locator('.tool-run button').click()
   const label = page.locator('.composer-status__label')
   await expect(label).toHaveText('Running Bash…')
-  const classifier = page.locator('.tool-row').filter({ hasText: 'classifier-call' })
-  const rule = page.locator('.tool-row').filter({ hasText: 'rule-call' })
+  const classifier = page.locator('.tool-row:not(.tool-run__row)').filter({ hasText: 'classifier-call' })
+  const rule = page.locator('.tool-row:not(.tool-run__row)').filter({ hasText: 'rule-call' })
 
   // The foreign marker must not mark this conversation's identically named call.
   daemon.pushFrame(frame('tool_denied', { ...denial('classifier-call', 'rule'), conversation_id: 'other-conversation' }))

@@ -99,7 +99,7 @@ test('tool row: pending offers no toggle, resolved opens on click and on Enter',
   // Everything is scoped under `.tool-row` rather than the page root: post-#670 the sidebar is always
   // mounted beside the thread, and cheap top-level selectors are what produced #670's three Playwright
   // strict-mode collisions.
-  const row = page.locator('.tool-row')
+  const row = page.locator('.tool-row:not(.tool-run__row)')
   const chip = row.locator('.tool-row__chip')
   const toggle = row.locator('.tool-row__chip--toggle')
   const result = row.locator('.tool-row__result')
@@ -307,7 +307,7 @@ test('tool row: the header pins its trailing group flush while the headline elli
   // Two rows land on this page, so EVERY locator is scoped to one of them by index — a bare `.tool-row`
   // descendant selector would be strict-mode-ambiguous the moment the second call arrives (#670's three
   // collisions). Arrival order is the thread's order, so 0 is the long call and 1 is the short one.
-  const rows = page.locator('.tool-row')
+  const rows = page.locator('.tool-row:not(.tool-run__row)')
   const longRow = rows.nth(0)
   const shortRow = rows.nth(1)
 
@@ -386,6 +386,7 @@ test('tool row: the header pins its trailing group flush while the headline elli
   daemon.pushFrame(splitToolUseFrame(SHORT_TOOL_USE_ID, SHORT_HEADLINE))
   daemon.pushFrame(splitToolResultFrame(SHORT_TOOL_USE_ID))
   await expect(shortRow).toHaveClass(/tool-row--resolved/, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await page.locator('.tool-run button').click()
   await expect(shortRow.locator('.tool-row__chevron')).toHaveCount(1)
   // The headline genuinely fits — so the group below is flush because it was PLACED there, not because
   // its sibling's content pushed it there.
@@ -468,7 +469,7 @@ test('tool row: a described shell call starts at the hard left, an undescribed o
 
   // Three rows land on this page, so every locator is scoped by index (#670's strict-mode collisions).
   // Arrival order is the thread's order.
-  const rows = page.locator('.tool-row')
+  const rows = page.locator('.tool-row:not(.tool-run__row)')
   const describedRow = rows.nth(0)
   const undescribedRow = rows.nth(1)
   const pathRow = rows.nth(2)
@@ -486,6 +487,7 @@ test('tool row: a described shell call starts at the hard left, an undescribed o
   daemon.pushFrame(routedToolResultFrame(PATH_TOOL_USE_ID))
 
   await expect(pathRow).toHaveClass(/tool-row--resolved/, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await page.locator('.tool-run button').click()
   await expect(rows).toHaveCount(3)
 
   // --- AC1. The described call draws its description alone, and that run starts at the header's HARD
@@ -598,7 +600,7 @@ test('tool row: the result count draws before the chevron and lines up down the 
 }) => {
   const { page, daemon } = await launchPairedApp()
 
-  const rows = page.locator('.tool-row')
+  const rows = page.locator('.tool-row:not(.tool-run__row)')
   const describedRow = rows.nth(0)
   const undescribedRow = rows.nth(1)
   const pathRow = rows.nth(2)
@@ -622,6 +624,7 @@ test('tool row: the result count draws before the chevron and lines up down the 
   daemon.pushFrame(countedToolResultFrame(COUNT_HOSTILE_ID, HOSTILE_COUNT))
 
   await expect(hostileRow).toHaveClass(/tool-row--resolved/, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await page.locator('.tool-run button').click()
   await expect(rows).toHaveCount(4)
 
   // --- The carry, end to end: the count the wire sent is the count the row draws. The three header
@@ -843,7 +846,7 @@ test('tool row: an expanded row is one box with its body inside the border', asy
 
   // Two rows land on this page, so every locator is scoped by index (#670's strict-mode collisions).
   // Arrival order is the thread's order.
-  const rows = page.locator('.tool-row')
+  const rows = page.locator('.tool-row:not(.tool-run__row)')
   const plainRow = rows.nth(0)
   const shellRow = rows.nth(1)
 
@@ -853,6 +856,7 @@ test('tool row: an expanded row is one box with its body inside the border', asy
   daemon.pushFrame(failedToolResultFrame(BOX_SHELL_ID))
 
   await expect(shellRow).toHaveClass(/tool-row--error/, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await page.locator('.tool-run button').click()
   await expect(rows).toHaveCount(2)
 
   await plainRow.locator('.tool-row__chip--toggle').click()
@@ -1046,7 +1050,7 @@ test('tool row: the expanded body draws boxed field values and a bare result', a
 }) => {
   const { page, daemon } = await launchPairedApp()
 
-  const rows = page.locator('.tool-row')
+  const rows = page.locator('.tool-row:not(.tool-run__row)')
   const plainRow = rows.nth(0)
   const shellRow = rows.nth(1)
 
@@ -1056,6 +1060,7 @@ test('tool row: the expanded body draws boxed field values and a bare result', a
   daemon.pushFrame(failedToolResultFrame(BODY_SHELL_ID))
 
   await expect(shellRow).toHaveClass(/tool-row--error/, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await page.locator('.tool-run button').click()
   await expect(rows).toHaveCount(2)
 
   await plainRow.locator('.tool-row__chip--toggle').click()
@@ -1339,7 +1344,7 @@ test('tool row: consecutive rows join into one stack with a single border at eac
 }) => {
   const { page, daemon } = await launchPairedApp()
 
-  const rows = page.locator('.tool-row')
+  const rows = page.locator('.tool-row:not(.tool-run__row)')
 
   // The non-tool neighbour first, so the run lands under it.
   daemon.pushFrame(joinAssistantDeltaFrame())
@@ -1361,12 +1366,14 @@ test('tool row: consecutive rows join into one stack with a single border at eac
   const trailingRow = rows.nth(3)
   // The LAST result to arrive is the settle signal — every earlier frame is already applied by then.
   await expect(trailingRow).toHaveClass(/tool-row--resolved/, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await page.locator('.tool-run button').click()
   await expect(failedRow).toHaveClass(/tool-row--error/)
   await expect(rows).toHaveCount(4)
 
   const snapshot = await joinSnapshotOf(page)
-  const [pending, plain, failed, trailing] = snapshot.rows
+  const [header, pending, plain, failed, trailing] = snapshot.rows
   const joins = [
+    [header, pending, 'the header-to-member join'],
     [pending, plain, 'the pending-to-resolved join'],
     [plain, failed, 'the join above the failed row'],
     [failed, trailing, 'the join below the failed row']
@@ -1388,8 +1395,9 @@ test('tool row: consecutive rows join into one stack with a single border at eac
 
   // The margin that closes the gap, read against the thread's OWN gap plus the border rather than as -13px:
   // the first row of the run keeps the column's spacing, every later one cancels it and overlaps by 1.
-  expect(pending.marginTop, 'the first row of a run took a negative margin it should not have').toBe(0)
+  expect(header.marginTop, 'the header keeps the thread spacing').toBe(0)
   for (const [row, what] of [
+    [pending, 'the first member'],
     [plain, 'the second row'],
     [failed, 'the third row'],
     [trailing, 'the fourth row']
@@ -1403,7 +1411,7 @@ test('tool row: consecutive rows join into one stack with a single border at eac
   // --- AC1's other half: the run keeps the thread's 12px away from the NON-tool row above it. This is the
   // assertion that reddens if the join is implemented as a rule on `.tool-row` rather than on a join.
   expect(
-    Math.abs(pending.top - snapshot.bubbleBottom - snapshot.rowGap),
+    Math.abs(header.top - snapshot.bubbleBottom - snapshot.rowGap),
     'the run swallowed the gap between itself and the bubble above it'
   ).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
 
@@ -1412,7 +1420,8 @@ test('tool row: consecutive rows join into one stack with a single border at eac
   // catches — the design node's own render, two instances overlapped with every corner still round — differs
   // from the fix on exactly the corners a first/last-only check would skip.
   const corners = [
-    [pending, snapshot.radiusXs, SQUARE_CORNER, 'the first row of the run'],
+    [header, snapshot.radiusXs, SQUARE_CORNER, 'the run header'],
+    [pending, SQUARE_CORNER, SQUARE_CORNER, 'the first member'],
     [plain, SQUARE_CORNER, SQUARE_CORNER, 'the second row'],
     [failed, SQUARE_CORNER, SQUARE_CORNER, 'the third row'],
     [trailing, SQUARE_CORNER, snapshot.radiusXs, 'the last row of the run']
@@ -1458,12 +1467,13 @@ test('tool row: consecutive rows join into one stack with a single border at eac
   await rows.nth(1).locator('.tool-row__chip--toggle').click()
   await expect(rows.nth(1)).toHaveClass(/tool-row--expanded/)
   const expandedSnapshot = await joinSnapshotOf(page)
-  const [pendingAfter, expanded, failedAfter, trailingAfter] = expandedSnapshot.rows
+  const [headerAfter, pendingAfter, expanded, failedAfter, trailingAfter] = expandedSnapshot.rows
   expect(
     expanded.bottom - expanded.top,
     'the row did not actually grow, so the joins below are unchanged for the wrong reason'
   ).toBeGreaterThan(plain.bottom - plain.top)
   for (const [upper, lower, at] of [
+    [headerAfter, pendingAfter, 'the expanded header join'],
     [pendingAfter, expanded, 'the join above the expanded row'],
     [expanded, failedAfter, 'the join below the expanded row'],
     [failedAfter, trailingAfter, 'the join below the failed row, after expanding']

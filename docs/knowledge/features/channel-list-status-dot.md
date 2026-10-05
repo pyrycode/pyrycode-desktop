@@ -38,10 +38,15 @@ join is entirely inside this control.
 The fifth subscription reads [question-batch state](question-batch-model.md). `inputRequired` is true
 when either an outstanding permission or trust prompt or a pending question batch belongs to this row
 ([#1700](https://github.com/pyrycode/pyrycode-desktop/issues/1700)). A question alone therefore draws the
-existing amber waiting dot, even during a running turn. The question selector returns batch presence as
+gold waiting dot, even during a running turn. The question selector returns batch presence as
 a boolean, keeping its result `Object.is`-stable when batch content changes and keeping question text
 out of the row component. Answer and Cancel both dispatch `dismissed`, removing that batch; once no
 prompt or batch remains, the resolver falls back to working, new messages or idle from the other facts.
+
+The [leaf's paint contract](conversation-status-dot.md) uses a dot-only gold token for input required,
+solid primary blue for working and solid success green for new messages. Only idle has a ring, at
+opacity 0.5 with a transparent centre even on hovered/open rows. Paint does not alter the five-source
+status resolution or the centred 6px geometry.
 
 **The one wrong answer a green typecheck hides.** `resolveConversationStatus(inputRequired, activity,
 unread)` takes `boolean` in both first and third position, so a call transposing them —
@@ -142,16 +147,16 @@ checks that only the matching row is input-required and that dismissal restores 
 Teardown dispatches `reconnected` to clear all held batches. These fresh static renders prove status
 composition, not live React subscription behavior.
 
-No new e2e spec: all four ACs are statically assertable in the unit tier with seeded stores (a per-row
+The original wiring's four ACs are statically assertable in the unit tier with seeded stores (a per-row
 chunk sliced out of the markup by title, mirroring the file's existing `ROW_MARKER`/`ROW_OPEN_MARKER`
 slicing idiom), and the live path that feeds the activity store for a non-open conversation is #748's
-shipped coverage, not this ticket's. The `prefers-reduced-motion` clone of
-`e2e/composer-status-reduced-motion.spec.ts` that `channels.css:862` hands forward stays explicitly out of
-scope — a per-component e2e spec is a separate concern, filed only if wanted.
+shipped coverage. Paint requires browser checks: `e2e/sidebar-status-dot-fills.spec.ts` covers all four
+paints, working-only animation and reduced motion; `e2e/sidebar-row-geometry.spec.ts` verifies that idle
+stays an unfilled half-opacity ring on real resting, open and hovered rows.
 
 **Every idle row's status dot is still announced.** Since [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801)
 wired the [status dot](conversation-status-dot.md) into every row, a long sidebar of mostly-idle
-conversations announces "Idle" once per row (`role="img" aria-label="Idle"` ships on all three
+conversations announces "Idle" once per row (`role="img" aria-label="Idle"` ships on all four
 statuses). Built exactly as #799/#800/#801's specs intend and confirmed in #801's code review;
 the cheap fix, if wanted, is `aria-hidden` on the dot's idle branch — a change to
 `ConversationStatusDot` alone, not a conditional wrapper here. Not filed as a follow-up ticket yet.

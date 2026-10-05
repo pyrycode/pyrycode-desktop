@@ -511,43 +511,16 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   narrower than the PR's own mutation run showed). Shipped dormant; #800/#873 are its consumers (a type
   import only), #801 wired the first three states and #874 (shipped) composed the fourth, so
   `input-required` is now reachable in production.
-- [Conversation status dot](features/conversation-status-dot.md) — #800, split from #676:
-  `ConversationStatusDot({ status })`, a single `<span role="img" aria-label>` drawing #799's resolved
-  `ConversationStatus` — idle an unpainted 6×6 box, new messages a green ring, working a blue ring with a
-  slow fading blink (`opacity` floors at 0.3, never reaches 0, so a blinked-out dot never misreads as idle)
-  stilled to a steady ring under `prefers-reduced-motion: reduce`. The ring is `box-shadow: inset` rather
-  than `border` — this repo has no global `box-sizing` reset, so a border would grow the 6px box and shift
-  the row title in exactly the two painted states this component must not shift it in. Its working-ring
-  colour deliberately declines the Figma node's own bound variable (`Schemes/Inverse Primary`, `#32628d`):
-  code review found the shipped comment mis-recorded that value as the node's literal stroke color when it
-  is actually a variable the design binds, and traced the real reason `--color-primary` ships instead to
-  [#719](codebase/719.md)'s prior, unrelated rejection of that same value at 2.90:1 contrast against
-  `--color-surface` for the sidebar's relay-leg dot — a documentary PASS, not a behavioural one; the
-  corrected rationale is written up in the feature doc rather than the CSS comment. No store, no call site
-  yet — [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801) wires it into
-  [Channel List](features/channel-list.md)'s rows. #799/#800 code review PASS, one SHOULD FIX (the
-  colour-comment correction above, non-gating) / two NIT (idle ships labelled despite being unpainted, per
-  the spec's own Open Question 2; the directory's "no wrapper needed" centring claim doesn't hold for this
-  node's own Figma metadata — flagged for #801 to measure rather than inherit).
-  [#873](https://github.com/pyrycode/pyrycode-desktop/issues/873) (shipped) added the fourth colour: an
-  amber ring (`--color-warning`, 12.3:1 against `--color-surface`) for `input-required`, `STATUS_LABELS['input-required'] = 'Input required'`,
-  and a matching `--input-required` CSS rule — no `background`, so it can't be mistaken for the filled
-  `.conn-dot--in-progress` (also `--color-warning`, but reporting machine reachability six pixels above in
-  the sidebar) — and deliberately no blink/reduced-motion entry, since a dot blocked on the operator has no
-  reason to animate. `STATUS_LABELS` is a `Record<ConversationStatus, string>` exhaustive by type, which is
-  why the union member and its label had to ship in the same commit as this ticket's whole scope. Colour
-  itself stays an untestable CSS-level guarantee, same standing as the other three; no DOM environment
-  added. [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) (shipped) composed
-  `selectHasOutstandingFor` at the sidebar's one production call site, so this status is reachable from a
-  row for the first time — see the #801 entry below.
-  [#1174](https://github.com/pyrycode/pyrycode-desktop/issues/1174) (shipped) repainted all of the above to
-  the redrawn Channel list frame: the ring is no longer per-status — it moved to the base rule as a shared
-  `--color-primary` ring every status wears, idle included — and each status now contributes a `background`
-  alone (`--color-tertiary` working, `--color-success` new-messages, `--color-warning` input-required); idle
-  gained a conditional fill while its row is hovered or open. The paint-per-status description two
-  paragraphs up is superseded; see [the feature doc](features/conversation-status-dot.md) for the current
-  model and why moving the ring to a shared rule made a dropped fill binding render a correct-looking idle
-  dot instead of a visibly missing one — the reason #1174 shipped this component's first e2e coverage.
+- [Conversation status dot](features/conversation-status-dot.md) — `ConversationStatusDot({ status })`,
+  a pure `<span role="img" aria-label>` for the four resolved conversation states, consumed by each
+  sidebar row. The current redraw ([#1735](https://github.com/pyrycode/pyrycode-desktop/issues/1735),
+  Figma 106:3077) keeps all dots 6px: idle is an unfilled primary ring at opacity 0.5 even on hovered/open
+  rows; working is solid primary blue with a 2s fading blink; new messages is solid success green;
+  input required is solid gold through `--color-status-dot-input-required` (`#d8b85a`). Only idle has a
+  ring; only working animates, becoming steady under reduced motion. Connection `--color-warning`
+  remains amber. The inset ring preserves geometry without a box-sizing reset. Browser paint tests
+  cover all four paints, animation and reduced motion; real-row geometry tests cover idle hover/open.
+  The feature doc records accessible labels, exhaustive typing, positioning and testing boundaries.
 - [Channel List home screen § The row's status dot](features/channel-list-status-dot.md#the-row-s-status-dot-channellist-tsx-added-by-801-874)
   — #801, closing the #676 split (#799 resolver, #800 leaf, #801 wiring): every sidebar row in both trees
   now leads with a `ConversationStatusDot`, composed per row by a new module-private

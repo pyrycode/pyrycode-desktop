@@ -1198,31 +1198,6 @@
   border-radius: var(--radius-xs);
 }
 
-/* #1174 — AN IDLE STATUS DOT FILLS --color-primary WHILE ITS ROW IS HOVERED OR OPEN, and is the base
-   rule's bare ring otherwise. The drawing carries it (Channel list 103:2985: the two rows wearing a row
-   fill are the two whose dots are filled light blue, and both are otherwise resting rows), and Juhana
-   ruled it 2026-09-06.
-
-   DECLARED HERE RATHER THAN IN THE DOT'S OWN BLOCK, because the two selectors it hangs off are the row's
-   and not the dot's: the `:hover` carrier and the `:has()` open selector directly above, both settled by
-   #1171. That follows the split this file already makes for this component — the dot's positioning is a
-   call-site rule at `.channel-list__row > .conversation-status-dot` while its box and paint live with the
-   component — and it means an edit to either carrier sees this rule adjacent instead of 600 lines away.
-
-   SCOPED TO `--idle`, WHICH IS LOAD-BEARING AND NOT TIDINESS. Written against the base class these
-   selectors would be (0,3,0) and (0,4,0) against each painted modifier's (0,1,0), so hovering a working
-   or unread row would repaint its dot --color-primary and destroy exactly the reading the fill exists to
-   give. Scoped, the two never compete: a dot cannot be `--idle` and `--working` at once.
-
-   `>` in both, matching the `:has()` above: the dot is a direct child of the row wrapper (#801 put it
-   there as a SIBLING of the open button, so its `role="img"` name stays out of the button's), and the
-   descendant form would also reach a dot nested in some future row-level popover. */
-.channel-list__row:hover > .conversation-status-dot--idle,
-.channel-list__row:has(> .channel-list__row-open[aria-current='true'])
-  > .conversation-status-dot--idle {
-  background: var(--color-primary);
-}
-
 /* #1171 DELETED `.channel-list__row-open[aria-current='true']:hover { background: none }` from here. It
    suppressed the button's own opaque hover, which would otherwise have painted over the wrapper's open
    fill across the button's share of an open row; the button stopped painting on hover when the fill moved
@@ -2268,54 +2243,24 @@
   font-weight: var(--text-body-medium-weight);
 }
 
-/* #800 — the status dot leading each chat and channel row (Figma 106:3051), drawn from #799's resolved
-   `ConversationStatus`. The drawn instance is a 6px circle stroked 1px in #9DCBFC — exactly
-   --color-primary — and #1174 read the redrawn Channel list frame (103:2985) as carrying that stroke in
-   EVERY state, so the ring moved here onto the base rule and each status now contributes a fill alone.
-   Its ring remains distinct from the shared connection-category background bindings.
-
-   GEOMETRY IS IDENTICAL IN ALL FIVE STATES (#800's AC4, and #1174's AC2 restates it) — the horizontal
-   advance is 6px whatever the status and whatever the row is doing, so a row's title never shifts. Both
-   6px values are literals rather than tokens, the `.conn-dot { width: 8px }` precedent for structural
-   component geometry.
-
-   THE RING IS AN INSET BOX-SHADOW, NOT A `border`, and that is what makes the paragraph above true rather
-   than aspirational. This repo has no global box-sizing reset (recorded at conversation.css:750), so a 1px
-   border would grow the 6px box to 8px and shift every row's title by 2px — and since #1174 that would be
-   every row, idle ones included, rather than only the three that used to paint. An inset shadow has zero
-   layout effect by construction, so the claim holds without depending on a `box-sizing` declaration a
-   later edit could drop.
-
-   Token names only. Do not paste the hex, and do not reach for a Figma export's #32628d, which is the
-   light scheme's primary (desktop is dark-only, ADR 0003). */
+/* Figma Status dot variants: only idle has a ring; the other states are solid discs.
+   An inset shadow preserves the 6px box without depending on a box-sizing reset.
+   Row positioning remains in the `.channel-list__row > .conversation-status-dot` rule. */
 .conversation-status-dot {
   width: 6px;
   height: 6px;
   flex: 0 0 auto;
   border-radius: var(--radius-full);
-  box-shadow: inset 0 0 0 1px var(--color-primary);
 }
 
-/* THE FILL INSIDE THAT RING, per status — the whole of what #1174 changed here. Each modifier used to
-   restate the ring in its own colour and paint nothing; now the ring is shared above and each of these
-   sets `background` alone.
+/* Idle stays an unfilled half-opacity ring even when its row is hovered or open. */
+.conversation-status-dot--idle {
+  box-shadow: inset 0 0 0 1px var(--color-primary);
+  opacity: 0.5;
+}
 
-   That inverts which regression is cheap to miss, which is why `e2e/sidebar-status-dot-fills.spec.ts`
-   exists. A dropped binding used to leave a visibly missing dot; now it leaves a correct-looking IDLE one
-   — the single wrong reading available, and one no renderer test can reach (`environment: 'node'`, no
-   stylesheet, no cascade).
-
-   These bindings are this component's OWN and must not be swapped for `.conn-dot--up` — that family is the
-   connection contract, deliberately kept to one copy in this stylesheet since #962.
-   It reports whether a machine is reachable. This dot reports what
-   a conversation is DOING: a different concept, a different form, and a class whose substring two other
-   test files already assert on.
-
-   --color-tertiary #ffb59f is the frame's `tertiary-fixed-dim` binding, read off the drawing rather than
-   chosen: a working dot is the one state that must not read as either of its neighbours' colours while it
-   blinks through them. */
 .conversation-status-dot--working {
-  background: var(--color-tertiary);
+  background: var(--color-primary);
   animation: conversation-status-dot-blink 2s ease-in-out infinite;
 }
 
@@ -2323,28 +2268,10 @@
   background: var(--color-success);
 }
 
-/* #873 — input required, the highest-precedence state and the only one blocked on the operator. Amber from
-   the operator's design-notes table (2026-08-21), not from a node: the drawing has no input-required
-   instance, so there is no amber node to read and none missing.
-
-   #1174 SETTLED THE RING-VS-DISC QUESTION THIS RULE USED TO TURN ON, and in the opposite direction to the
-   one #873 wrote down. It reasoned that this dot had to stay a ring because `.conn-dot--in-progress`
-   binds the same --color-warning background. Connection dots no longer appear on host rows;
-   conversation activity keeps its existing filled state and primary ring.
-   Contrast is unaffected: #ffca45 reads 12.3:1 against --color-surface.
-
-   NO ANIMATION, and deliberately no `prefers-reduced-motion` entry below: the blink and its fallback belong
-   to --working alone. A dot waiting on the operator has no reason to blink. */
+/* Gold is specific to conversation input; connection warning retains its amber token. */
 .conversation-status-dot--input-required {
-  background: var(--color-warning);
+  background: var(--color-status-dot-input-required);
 }
-
-/* `--idle` HAS NO UNCONDITIONAL RULE ON PURPOSE, and the missing declaration is still the design: a
-   resting idle dot is the base rule's ring around nothing — present, holding its place in the row,
-   unfilled. The class ships on the element so a dropped modifier fails a unit test rather than rendering
-   as idle, and since #1174 it also carries the conditional fill: an idle dot on a HOVERED or OPEN row
-   fills --color-primary, declared with the row's own two fill carriers rather than here (search
-   `.conversation-status-dot--idle`, beside the `:hover` and `:has()` rules #1171 settled). */
 
 /* AC3 — the slow fading blink on the working dot. The `.bubble__cursor` three-part shape
    (conversation.css:727-741): animation, keyframes, reduced-motion guard. Two deliberate departures from
@@ -2362,11 +2289,9 @@
   }
 }
 
-/* AC3's fallback — the working dot still RENDERS under reduced motion as a steady blue ring, it just does
-   not blink. The .bubble__cursor guard's shape verbatim (conversation.css:737). It touches the working
-   modifier ALONE: the base class and the other three modifiers have no animation to cancel. No vitest
-   detector reaches a media query (`environment: 'node'`, no CSSOM), so this is a CSS-level guarantee here;
-   the e2e coverage lands with #801's call site, cloning e2e/composer-status-reduced-motion.spec.ts. */
+/* AC3's fallback — the working dot still RENDERS under reduced motion as a steady blue disc, it just does
+   not blink. Only working has an animation to cancel. The browser media-query assertion lives in
+   `sidebar-status-dot-fills.spec.ts`; static renderer tests cannot observe the CSS cascade. */
 @media (prefers-reduced-motion: reduce) {
   .conversation-status-dot--working {
     animation: none;

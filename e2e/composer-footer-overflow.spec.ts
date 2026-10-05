@@ -1,4 +1,7 @@
 import type { Locator, Page } from '@playwright/test'
+import { mkdir } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type {
@@ -31,8 +34,8 @@ import type {
 // frames here are `session_settings` (the reply to the app's own `request_session_settings`) and
 // `model_list` (which the daemon pushes unprovoked). Only the VALUES are this test's.
 //
-// THE DRIVE IS READ-ONLY. It opens no menu and sends no `set_session_settings`; the longest permission
-// label is only rendered, never submitted.
+// The longest permission label is only rendered, never submitted. The final keyboard drive opens
+// Attach through the real IPC picker path, with the native dialog replaced by a cancelled selection.
 //
 // SECRET HYGIENE (the sibling specs' rule, carried verbatim): every assertion reads geometry, counts or
 // DOM text. SESSION_ID, the published identifiers and the token figures are non-secret display/routing
@@ -139,9 +142,34 @@ const footerOverflowPx = (page: Page): Promise<number> =>
     .locator('.composer__footer')
     .evaluate((el) => el.scrollWidth - el.clientWidth)
 
+async function expectAttachmentGeometry(page: Page): Promise<void> {
+  const footer = page.locator('.composer__footer')
+  await expect(footer.locator(':scope > button')).toHaveCount(1)
+  await expect(footer.locator(':scope > button')).toHaveAccessibleName('Attach file')
+  expect(await footer.evaluate((el) => {
+    const style = getComputedStyle(el)
+    return [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft]
+  })).toEqual(['4px', '16px', '0px', '12px'])
+  const [row, button, glyph] = await Promise.all([
+    footer.boundingBox(),
+    page.getByRole('button', { name: 'Attach file', exact: true }).boundingBox(),
+    page.locator('.composer__attach svg').boundingBox()
+  ])
+  if (!row || !button || !glyph) throw new Error('the attachment control did not lay out')
+  expect(row.height).toBe(20)
+  expect(button.width).toBe(24)
+  expect(button.height).toBe(16)
+  expect(glyph.width).toBe(11)
+  expect(glyph.height).toBe(12)
+  expect(button.y - row.y).toBeCloseTo(4, 1)
+  expect(row.x + row.width - button.x - button.width).toBeCloseTo(16, 1)
+  expect(glyph.y - button.y).toBeCloseTo(0, 1)
+  expect(button.x + button.width - glyph.x - glyph.width).toBeCloseTo(0, 1)
+}
+
 test('composer footer: the row compresses instead of overflowing at the 800px minimum (AC1-AC3)', async ({
   launchPairedApp
-}, testInfo) => {
+}) => {
   const { page, app, daemon } = await launchPairedApp({
     buildReplyFrames: (inbound) => {
       const env = decodeEnvelope(inbound)
@@ -201,6 +229,21 @@ test('composer footer: the row compresses instead of overflowing at the 800px mi
   // geometry read polls: layout settles a frame after the content does.
   await expect.poll(() => footerOverflowPx(page)).toBeLessThanOrEqual(0)
 
+  await expectAttachmentGeometry(page)
+  const evidenceDir = join(tmpdir(), 'builder-1727')
+  await mkdir(evidenceDir, { recursive: true })
+  // Compare the actual footer at the Figma node's 785px logical width.
+  const currentFooterWidth = (await footer.boundingBox())!.width
+  await app.evaluate(({ BrowserWindow }, delta) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    const [width, height] = window.getSize()
+    window.setSize(width + delta, height)
+  }, Math.round(785 - currentFooterWidth))
+  await expect.poll(async () => (await footer.boundingBox())?.width).toBe(785)
+  await expectAttachmentGeometry(page)
+  await footer.screenshot({ path: join(evidenceDir, 'footer-785.png'), animations: 'disabled' })
+  await page.screenshot({ path: join(evidenceDir, 'app-design-width.png'), animations: 'disabled' })
+
   // --- 3. Narrow to the app's own minimum. 800 is AT the shipped floor, so `setMinimumSize` is never
   // called and there is nothing to restore — a mid-drive failure leaves the window's constraint exactly as
   // it shipped. ---
@@ -208,6 +251,8 @@ test('composer footer: the row compresses instead of overflowing at the 800px mi
     ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size.width, size.height),
     { width: NARROW_WIDTH_PX, height: NARROW_HEIGHT_PX }
   )
+
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(NARROW_WIDTH_PX)
 
   // --- 4. AC1. The row's content is inside its box at the documented minimum window. ---
   await expect.poll(() => footerOverflowPx(page)).toBeLessThanOrEqual(0)
@@ -251,6 +296,37 @@ test('composer footer: the row compresses instead of overflowing at the 800px mi
 
   // The row still holds its hard height at the narrow width — it compressed, it did not wrap or grow.
   expect((await footer.boundingBox())?.height).toBe(20)
+  await expectAttachmentGeometry(page)
+
+  // Every inline setting remains reachable by keyboard at the supported minimum.
+  const controls = [actionsAnchor, permissionAnchor, modelAnchor, effortAnchor].map((anchor) =>
+    anchor.locator('button').first()
+  )
+  for (let index = 0; index < controls.length; index += 1) {
+    if (index === 0) await controls[index].focus()
+    else await page.keyboard.press('Tab')
+    await expect(controls[index]).toBeFocused()
+    expect((await controls[index].boundingBox())!.width).toBeGreaterThan(0)
+  }
+  await page.keyboard.press('Tab') // context breakdown
+  await page.keyboard.press('Tab') // sole trailing control: Attach
+  await expect(attach).toBeFocused()
+
+  await app.evaluate(({ dialog }) => {
+    Object.defineProperty(dialog, 'showOpenDialog', {
+      configurable: true,
+      value: async () => {
+        ;(globalThis as unknown as { footerPickerOpened: boolean }).footerPickerOpened = true
+        return { canceled: true, filePaths: [] }
+      }
+    })
+  })
+  await page.keyboard.press('Enter')
+  await expect.poll(() =>
+    app.evaluate(() =>
+      (globalThis as unknown as { footerPickerOpened?: boolean }).footerPickerOpened
+    )
+  ).toBe(true)
 
   // And the shipped 800px floor is unchanged: this drive fits the row to the window rather than the window
   // to the row. A future edit that starts borrowing the minimum the way composer-options-clamp.spec.ts
@@ -260,5 +336,6 @@ test('composer footer: the row compresses instead of overflowing at the 800px mi
   )
   expect(minWidth).toBe(NARROW_WIDTH_PX)
   await expect(page.getByRole('button', { name: WIDEST_LABEL, exact: true })).toBeVisible()
-  await page.screenshot({ path: testInfo.outputPath('permission-footer-800.png'), animations: 'disabled' })
+  await page.screenshot({ path: join(evidenceDir, 'app-800.png'), animations: 'disabled' })
+  await footer.screenshot({ path: join(evidenceDir, 'footer-800.png'), animations: 'disabled' })
 })

@@ -3201,34 +3201,17 @@ button.top-overlay-pill {
   opacity: 0.41;
 }
 
-/* #811 — the input footer row (Figma node 110:3494, 780x20), the composer's second sub-row, beneath the
-   message box (#968 retired .composer__hint, which used to be the first). Four more tickets fill it
-   (#680 Actions, #682 permission mode, #683 model and effort, #685 attach); today it carries the context
-   reading alone and NOTHING stands in for the rest.
-
-   The height is the whole point (AC4). flex: 0 0 auto so it never claims a competing flex region, and
-   NO vertical padding, so 20px is the exact box under this repo's absent global box-sizing reset — the
-   .composer-status rule above, verbatim. The row is reserved whether or not a reading is inside it,
-   which is what stops the message box moving when the figure appears and disappears.
-
-   height: 20px as a literal rather than var(--space-5) (also 20px): a component's own height is
-   structural geometry, not spacing — the .composer-status / .conn-dot / .run-config__context-bar
-   precedent in this file.
-
-   Horizontal padding --space-4, NOT .composer-status's --space-3. The two rows are deliberately inset
-   differently in the design: this row's content starts at x=16, exactly where the message box's own text
-   starts, so it aligns with the INPUT'S TEXT rather than with the composer's box edge (which is what
-   .composer-status aligns to, its own node starting at x=0). Do not "fix" one to match the other.
+/* The revised input footer (Figma Input area 347:5408) is a 20px border box with
+   4px top, 16px right, no bottom and 12px left padding. Border-box sizing includes
+   the top inset in the reserved height; top alignment leaves a 16px content row.
+   Existing spacing tokens carry the insets, and the inline controls keep their
+   shared body-small styling and shrink policy.
 
    margin-top: --space-1 completes the design's 8px gap between the message box and this row: .composer
    is a column with gap: var(--space-1), so 4 + 4 = 8. The split is kept as it stands. It was a margin
    rather than a wider column gap because that gap also had to separate .composer__hint from
    .composer__row; #968 retired the caption, so the column now has only these two children and the pair
    could fold into one 8px gap — but folding it would move a settled spacing for no behavioural gain.
-
-   align-items: center puts the 16px line 2/2 in the 20px row. The Figma's own inset is asymmetric
-   (pt-[4px], nothing below); centring is 2px off that and one declaration instead of two — the same
-   trade .composer-status took against its node's py-[4px].
 
    THE ROW'S SHRINK POLICY (#1107) — whitespace gives first, then every labelled control gives together,
    and the context reading never gives. Until this ticket NOTHING in the row could give: the five gaps
@@ -3266,11 +3249,12 @@ button.top-overlay-pill {
    labels give the rest. */
 .composer__footer {
   flex: 0 0 auto;
+  box-sizing: border-box;
   height: 20px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   column-gap: min(3.5%, var(--space-5));
-  padding: 0 var(--space-4);
+  padding: var(--space-1) var(--space-4) 0 var(--space-3);
   margin-top: var(--space-1);
 }
 
@@ -3509,40 +3493,19 @@ button.top-overlay-pill {
   cursor: pointer;
 }
 
-/* #863 — the attach trigger (Figma 115:3654), the footer row's LAST item and the fifth control the row's
-   own comment was written to expect. Its treatment is .composer__footer-button's; this rule is what is
-   left after that.
-
-   THE SHARED CLASS WAS EVALUATED RATHER THAN ASSUMED, since this is the first consumer with no label. Its
-   reset (padding, border and background off), its flex centring and its `color: var(--color-primary)` are
-   exactly what an icon-only button needs; its type block and its `gap` are inert here, which is harmless
-   and consistent with the rule's own note that it is named for the ROW rather than for a consumer.
-   Declaring a private rule instead would duplicate a six-declaration reset to avoid five inert ones. No
-   shipped element is re-classed.
-
-   margin-left: auto IS THE RIGHT-ALIGNMENT, and it is the declaration .composer__footer's comment has
-   reserved for this control since #811. The design makes the point structurally: this node is a SIBLING of
-   the `Info and buttons` group (115:3660) rather than its fifth member, so it does not join that group's
-   20px rhythm — it sits at x=714 in a 741-wide row, and 714 + 11 = 725, exactly the right edge of the
-   content box under the row's 16px inset. An auto margin reproduces that without a number: it absorbs
-   whatever the four controls and the reading leave, and collapses to 0 when they leave nothing, so a
-   narrow window degrades by squeezing rather than by overflowing.
-
-   cursor: pointer is the operable half, the .composer__actions declaration verbatim — the shared class
-   deliberately omits it, because #988's inert model label wears that class while opening nothing.
-
-   flex: 0 0 auto so the row cannot squeeze the glyph. The four menu triggers do not declare this and do
-   not need to; this one does, and the difference is that they hold a label whose own max-width absorbs a
-   narrow row while this button's whole width IS its 11px glyph. Without it the icon is the first thing the
-   row gives up when the reading grows.
-
-   NO GLYPH RULE OF ITS OWN. The four chevrons each carry a one-declaration .composer__*-icon rule; this
-   button's only child is the glyph and the button is already flex: 0 0 auto, so nothing can squeeze it.
-   Declining it also keeps the standing four-rule tidy-up (.composer__actions-icon's note) from growing to
-   five for a rule that would be inert on arrival. */
+/* Attach is the footer's sole trailing control. Its 24x16 visual box holds the
+   existing 11x12 paperclip at the top right (Figma Attach button 668:5565).
+   The shared footer-button class supplies the reset and primary ink; these local
+   alignments override its centring. The auto margin keeps the button against the
+   footer's 16px right inset, while fixed flex sizing preserves its box when the
+   inline settings compress at minimum window width. */
 .composer__attach {
   margin-left: auto;
   flex: 0 0 auto;
+  width: var(--space-6);
+  height: var(--space-4);
+  align-items: flex-start;
+  justify-content: flex-end;
   cursor: pointer;
 }
 

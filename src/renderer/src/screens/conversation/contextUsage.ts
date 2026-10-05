@@ -39,19 +39,20 @@ export function contextUsagePercent(usedTokens: number, windowTokens: number): n
 }
 
 /**
- * #1062: how full is full enough to say so. The reading's severity as a coarse step, named for the ROLE
- * rather than for the colour — `warning` and `error` are exactly the `--color-*` token suffixes and
- * exactly the `.composer__context--*` class modifiers, so the mapping from step to paint is nominal at
- * every layer and a fourth step would be one obvious edit rather than three lookups.
+ * #1062: how full is full enough to say so — amber from 70% and red from 85% since #1728. The reading's
+ * severity as a coarse step, named for the ROLE rather than for the colour — `warning` and `error` are
+ * exactly the `--color-*` token suffixes and exactly the `.composer__context--*` class modifiers, so the
+ * mapping from step to paint is nominal at every layer and a fourth step would be one obvious edit rather
+ * than three lookups.
  *
  * Beside `contextUsagePercent` rather than inline at the reading, and not in the stylesheet at all,
- * because the two boundaries are VALUES: a `.ts` + `.test.ts` pair can assert 49 → primary and 50 →
+ * because the two boundaries are VALUES: a `.ts` + `.test.ts` pair can assert 69 → primary and 70 →
  * warning directly, where a CSS rule could only be asserted through a rendered colour. It is also what
  * leaves the run-configuration sheet's gauge one class away from following the same ladder later — that
  * bar is deliberately still `--color-success` at every value, and #1062 did not change it.
  *
  * ONE DESCENDING LADDER, so each boundary is written exactly once and no gap between the arms is
- * expressible. Inclusive at both: 49 is primary, 50 is warning, 69 is warning, 70 is error. The literals
+ * expressible. Inclusive at both: 69 is primary, 70 is warning, 84 is warning, 85 is error. The literals
  * stay literals and are NOT exported as named constants — a test naming the same symbol the ladder is
  * written from would pin nothing, so `contextUsage.test.ts` hard-codes both pairs instead.
  *
@@ -64,7 +65,7 @@ export function contextUsagePercent(usedTokens: number, windowTokens: number): n
 export type ContextUsageStep = 'primary' | 'warning' | 'error'
 
 export function contextUsageStep(percent: number): ContextUsageStep {
-  if (percent >= 70) return 'error'
-  if (percent >= 50) return 'warning'
+  if (percent >= 85) return 'error'
+  if (percent >= 70) return 'warning'
   return 'primary'
 }

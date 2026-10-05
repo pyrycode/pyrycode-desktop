@@ -4082,14 +4082,15 @@ function Composer({
           does not already give. The attach button is a SIBLING of that group in the design too (115:3654
           against 115:3660), which is what makes it right-aligned rather than the group's fifth member.
 
-          #680: Actions is the row's FIRST item (Figma 115:3677 at x=0), ahead of the reading. It takes
+          #680: Actions is the row's first CONTROL (Figma 115:3677), after only the context circle since
+          #1728. It takes
           `sendText`, so a picked command travels the identical path a typed one does — the same gate, the
           same submitMessage call, the same optimistic echo and the same scroll follow (AC3, AC4). No
           `canSend` prop goes down with it: the gate stays in one place.
 
           #682: the permission-mode menu (Figma 115:3678), the row's SECOND item, now at the design's
           x=76 — it is the control the two notes below were holding the slot for, so the row finally
-          matches Figma's own order (Actions · mode · model · effort · reading).
+          matches Figma's own order (reading · Actions · mode · model · effort since #1728).
 
           #1022 gave it `conversationId`, which it did not take until then. Its VOCABULARY is still
           client-owned rather than daemon-published, but one entry of it is now conditional: a row's
@@ -4107,7 +4108,7 @@ function Composer({
           reads its own four store slices, so a snapshot tick re-renders this leaf rather than the textarea
           beside it.
 
-          #989: the effort menu (Figma 115:3688), the row's LAST control before the reading, at the
+          #989: the effort menu (Figma 115:3688), the row's last menu before attach, at the
           design's x=197. Same shape as the model menu beside it and the same four store slices, but its
           label is the session's effort VALUE rather than a looked-up name: claude publishes these levels
           byte-identical to what it accepts, so there is nothing to relabel — where the permission menu
@@ -4122,6 +4123,9 @@ function Composer({
           no conversation and no file — the picker, the path and the bytes all stay in the background
           process. */}
       <div className="composer__footer">
+        {/* #1728: the context circle is the row's FIRST item (Figma 347:5408 → Context, at the left
+            group's 4px inset and 16px before Actions); everything after it keeps its order. */}
+        <ContextUsageControl conversationId={activeConversationId} />
         <ComposerActionsMenu
           conversationId={activeConversationId}
           onCommand={sendText}
@@ -4136,7 +4140,6 @@ function Composer({
             and this is where that conversation id is already in hand and where its lifetime is the open
             chat's. */}
         <EffortDefaultData conversationId={activeConversationId} />
-        <ContextUsageControl conversationId={activeConversationId} />
         <ComposerAttachButton onAttach={attach.requestAttach} />
       </div>
       {/* #863: the attach outcome, the composer column's last child and NOT a member of the footer row
@@ -4860,8 +4863,8 @@ const NO_TASK_COUNT = (): number => 0
 // #1494: the same constant for the MCP failure read, hoisted for the same reason.
 const NO_MCP_FAILURE = (): string | null => null
 
-// #811: the context-window reading, first occupant of the composer footer row (Figma 110:3497,
-// "Context: 84%"). The percentage USED, not remaining. Its arithmetic is contextUsagePercent —
+// #811: the context-window reading, since #1728 the composer footer row's first item and a ring
+// rather than text (Figma 347:5408 → Context). The percentage USED, not remaining. Its arithmetic is contextUsagePercent —
 // deliberately the SAME function the run-configuration sheet's gauge calls, so the two surfaces cannot
 // disagree about either the number or whether there is one to show.
 //
@@ -4873,41 +4876,44 @@ const NO_MCP_FAILURE = (): string | null => null
 // so a <p>'s UA margin is a live layout hazard against AC4 for no semantic gain (the ComposerErrorChip
 // ruling above, verbatim).
 //
-// NOTHING beyond className — no onClick, no tabIndex, no role, no title, no href. That is AC3 ("a
-// reading, not a control"), and it is structural: the emitted markup is short enough that the test pins
-// it EXACTLY, so nothing can be added here without a failing assertion.
+// NOTHING beyond className on the span — no onClick, no tabIndex, no role, no title, no href. That is
+// AC3 ("a reading, not a control"), and it is structural: the test pins the emitted markup EXACTLY, so
+// nothing can be added here without a failing assertion.
 //
 // NO LIVE REGION — no role="status", no aria-live. The ComposerErrorChip ruling applies and is stronger
 // here: since #810 these figures refresh on every connect and every turn end, so a polite region would
 // announce a percentage after every turn.
 //
-// A SINGLE text run, one template literal — not `Context: {pct}%` split across JSX children. The
+// A SINGLE text run in the label, one template literal — not `Context: {pct}%` split across JSX children. The
 // .composer-status__label discipline: one run has one predictable serialisation, which is what makes the
 // exact-markup assertion stable. The prefix is a client-owned literal and the only interpolated value is
 // an integer in [0, 100], so no daemon-supplied STRING reaches this surface at all — there is nothing to
-// escape and nothing to length-bound. No copy constant for an 18-character string with one call site: the
+// escape and nothing to length-bound. No copy constant for a short string with one call site: the
 // module's copy constants exist for strings asserted across files or that must be provably free of
 // daemon text, and neither applies.
 //
-// #1062 — THE SEVERITY LADDER. The colour is emphasis on a fact the reader can already read, so the
-// arithmetic stays where it was and only the presentation branches. Two derived values, both from
+// #1062 — THE SEVERITY LADDER, retuned by #1728 to 70% and 85%. Two derived values, both from
 // contextUsageStep (the boundaries live there as values, never here as inline conditionals):
 //
-//   CLASS. The base token stays LEADING and the modifier is APPENDED, never swapped in — six assertions
-//   in this file's footer-order describes locate the reading by `composer__context` as a substring, and
-//   all of them survive a suffix. The primary arm emits the bare class, byte-identical to the markup
-//   this component shipped before #1062: the step that means "nothing to see" must not move at all.
+//   CLASS. The base token stays LEADING and the modifier is APPENDED, never swapped in — the footer-order
+//   tests locate the reading by `composer__context` as a substring, and all of them survive a suffix. The
+//   modifier sets `color`, which the arc paints through `currentColor`; the track never changes.
 //
-//   TEXT. The word rides the TOP step alone. Below 70% the percentage is already legible as text, so
-//   amber is emphasis and WCAG 1.4.1 is satisfied without a second channel; at 70% the message becomes
-//   actionable ("you are running out"), which is the one step where a reader who cannot separate amber
-//   from the row's blue would lose something real. A WORD, not a glyph: a glyph inside a text run cannot
-//   be hidden from a screen reader. NOT an aria-label — name-from-author is not supported on a generic
-//   role — and still no live region, for the reason stated above.
+//   TEXT. Since #1728 no percentage is visible, so the colour would be the warning's only channel. The
+//   hidden label therefore names BOTH raised steps in words ("high", "nearly full"). A WORD in a text run,
+//   NOT an aria-label — name-from-author is not supported on a generic role — and still no live region.
 //
-// The copy stays HERE rather than in contextUsage.ts: that module maps a number to a step, and the step
-// is a role, not a string. Everything the ruling above forbids is still forbidden and still structural —
-// the three renderings are each pinned as exact markup, so nothing can be added to any of them silently.
+// #1728 — THE RING (Figma 347:5408 → Context). A dark full track and, over it, the used arc. The arc is the
+// reading itself: its dash is that share of the circumference, followed by a whole circumference of gap, so
+// 0% draws no arc and 100% a whole ring. In user units rather than through pathLength="100", because
+// Chromium's pathLength scaling on a circle is inexact — measured: a 100-unit dash left a gap at the top,
+// and a 100-unit period drew a sliver past the start. A circle's path starts at 3 o'clock and runs
+// clockwise; CONTEXT_ARC_TRANSFORM reflects it across the 3-to-12 diagonal through the centre, so it starts
+// at 12 o'clock and runs counterclockwise, as the design draws it. The SVG is aria-hidden; the label beside it is the accessible text, visually hidden in
+// CSS, and in the popover arm it is the trigger button's accessible name.
+const CONTEXT_ARC_TRANSFORM = 'matrix(0 -1 -1 0 15 15)'
+const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * 6.5
+
 export function ContextUsageReading({
   usedTokens,
   windowTokens
@@ -4920,8 +4926,28 @@ export function ContextUsageReading({
   const step = contextUsageStep(pct)
   const className =
     step === 'primary' ? 'composer__context' : `composer__context composer__context--${step}`
-  const label = step === 'error' ? `Context high: ${pct}%` : `Context: ${pct}%`
-  return <span className={className}>{label}</span>
+  const label =
+    step === 'error' ? `Context nearly full: ${pct}%`
+    : step === 'warning' ? `Context high: ${pct}%`
+    : `Context: ${pct}%`
+  return (
+    <span className={className}>
+      <svg className="composer__context-ring" width="15" height="15" viewBox="0 0 15 15" aria-hidden="true">
+        <circle className="composer__context-track" cx="7.5" cy="7.5" r="6.5" />
+        <circle
+          className="composer__context-arc"
+          cx="7.5"
+          cy="7.5"
+          r="6.5"
+          strokeDasharray={
+            `${((pct * CONTEXT_RING_CIRCUMFERENCE) / 100).toFixed(3)} ${CONTEXT_RING_CIRCUMFERENCE.toFixed(3)}`
+          }
+          transform={CONTEXT_ARC_TRANSFORM}
+        />
+      </svg>
+      <span className="composer__context-label">{label}</span>
+    </span>
+  )
 }
 
 // The store-bound container for the reading (#811) — the ComposerErrorChipControl shape. A container

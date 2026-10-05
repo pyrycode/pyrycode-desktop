@@ -55,19 +55,25 @@ this file never restated. [#1092](https://github.com/pyrycode/pyrycode-desktop/i
 both: `interrupt` stopped being bare, gained a **required** `InterruptCommandPayload{conversation_id}`,
 and dropped `serverId` entirely. See the growth-log entry further down for the current shape.
 
-The union grew a twelfth member in [#391](../codebase/391.md): a **payload-carrying** `notify`
-command (`NotifyPayload{kind}`, `kind: 'turn-complete' | 'prompt'`) — the renderer-invokable trigger
-for the [push notifications](push-notifications.md) delivery primitive. Unlike every prior member,
-`NotifyPayload` is **defined in this file**, not imported from `../wire/types` — it is a **main-local
-side-effect command that never reaches the transport** (the `AnswerModalCommandPayload` precedent).
-Its guard, `isNotifyPayload`, is also the first to depart from the sibling `is*Payload` shape: every
-other guard checks `typeof value.field === 'string'` (accepting any string); this one tests
-**closed-set membership** (`kind === 'turn-complete' || kind === 'prompt'`) — the by-construction
-guarantee that no daemon-relayed text can ride into an OS notification. Ships dormant — #392 is the
-not-yet-built consumer. [#1597](../codebase/1597.md) added a second, independent optional field,
-`token?: string`, admitted by a new sibling guard `isNotificationToken` (`^[A-Za-z0-9-]{1,64}$`) rather
-than `isNotifyPayload`'s closed-set check — opaque and renderer-minted, so main only ever echoes it
-back on click; see [Push notifications § Resolving the click to its own
+The `notify` member introduced in [#391](../codebase/391.md) drives
+[push notifications](push-notifications.md) as a **main-local side effect**, with no transport call.
+`NotifyPayload` is defined in `commands.ts`, not the wire types. It carries the closed
+`kind: 'turn-complete' | 'prompt'`, optional conversation `name` for the title, optional opaque
+`token` for click correlation, and optional body `preview` since
+[#1737](https://github.com/pyrycode/pyrycode-desktop/issues/1737).
+
+`isNotifyPayload`'s closed-set kind check guarantees exhaustive fixed **fallback** copy, replacing
+the original restriction that no daemon text could reach the body. Defined `name` and `preview`
+values must be strings; `preview.length` must also be at most 4000 UTF-16 units. Absent or
+`undefined` text fields are accepted; wrong types or an oversized preview reject the whole command
+before dispatch. Main independently cleans and caps the title/body, constructing plain-text options
+without logging content. Renderer preview truncation keeps legitimate long replies below the IPC
+bound, but never substitutes for main's cleaner. See
+[ADR 0011](../decisions/0011-notification-preview-boundary.md) for this display-boundary decision.
+
+The independent `token` field passes `isNotificationToken` (`^[A-Za-z0-9-]{1,64}$`) when defined.
+Main echoes it unread on click; the renderer revalidates and resolves it to the notification's own
+conversation. See [Push notifications § Resolving the click to its own
 conversation](push-notifications.md#resolving-the-click-to-its-own-conversation-1597).
 
 The union grew a thirteenth and fourteenth member in

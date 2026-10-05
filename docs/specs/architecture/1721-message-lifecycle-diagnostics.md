@@ -55,3 +55,7 @@ Estimated total written work: 760 lines including plan/tests; 4 new exported typ
 - Threat alignment: compromised renderer strings fail UUID/event validation; hostile daemon ids cannot create records or bypass host/conversation correlation; relay drop/delay leaves delivery unknown and does not trigger invented retries.
 **Reviewer:** builder, self-review per builder/security-review.md
 **Date:** 2026-10-05
+
+## Revisions
+2026-10-05: Cancellation is a separately deduplicated local request, not a terminal delivery fact. A message still in the existing rekey buffer can subsequently be written or acknowledged, and diagnostics must observe those facts without changing that buffer. No new reject branch or exported type.
+2026-10-05: Add a focused fake-transport Playwright spec for idle/running submission and queued-row cancellation, proving the production renderer diagnostic wiring reaches the real sink. Unit coverage remains responsible for classified failures and rekey.

@@ -62,9 +62,9 @@ function makeFakeSession(config: NoiseSessionConfig, sealed: Uint8Array): FakeSe
         fake.received.push(frame)
         fake.receivedTypes.push(innerType)
       },
-      sendMessage() {
+      sendMessage(_plaintext, observe) {
         fake.calls.push('sendMessage')
-        config.sendFrame(sealed) // → the driver tags it noise_msg
+        config.sendFrame(sealed, observe) // → the driver tags it noise_msg
       },
       close() {
         fake.calls.push('close')
@@ -149,9 +149,10 @@ function fakeSupervisorFactory(): {
         throwOnSend: false,
         emit: (event) => config.onEvent(event),
         handle: {
-          send(frame) {
+          send(frame, observe) {
             if (fake.throwOnSend) throw new RelayNotConnectedError()
             fake.sent.push(frame as string)
+            observe?.({ type: 'sent', connectionId: '12345678-1234-4123-8123-123456789abc' })
           },
           stop() {
             fake.stopCalls++
@@ -712,4 +713,24 @@ describe('createNoiseRelayDriver', () => {
       for (const spy of spies) spy.mockRestore()
     }
   })
+})
+
+it('observes only the own frame write, including refusal and caught failure', async () => {
+  const factory = resolvedSessionFactory()
+  const { driver, supervisor } = setup({ createSession: factory.createSession })
+  const observe = vi.fn()
+  driver.sendMessage(new Uint8Array([1]), observe)
+  expect(observe).toHaveBeenLastCalledWith({ type: 'dropped', reason: 'send-refused' })
+  supervisor().emit({ type: 'connected' })
+  await tick()
+  observe.mockClear()
+  driver.sendMessage(new Uint8Array([1]), observe)
+  expect(observe).toHaveBeenCalledTimes(1)
+  expect(observe).toHaveBeenCalledWith({ type: 'sent', connectionId: '12345678-1234-4123-8123-123456789abc' })
+  observe.mockClear()
+  supervisor().throwOnSend = true
+  driver.sendMessage(new Uint8Array([1]), observe)
+  expect(observe).toHaveBeenCalledTimes(1)
+  expect(observe).toHaveBeenCalledWith({ type: 'dropped', reason: 'write-failed' })
+  driver.stop()
 })

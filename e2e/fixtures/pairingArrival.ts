@@ -71,7 +71,7 @@ export async function pairFromUnpairedLaunch(
  *
  * The second entry point this module gained. The first pairing enters at the welcome CTA; a session
  * that is ALREADY paired reaches the very same `PairingScreen` through the shell's `pairServer` route,
- * behind the gear button and then the Settings row — the navigation `paired-shell-navigation.spec.ts`
+ * behind the sidebar menu and then the Settings row — the navigation `paired-shell-navigation.spec.ts`
  * already drives. Only the form tail below is common, which is exactly why it is now factored out
  * rather than transcribed a second time: invariant 2 is the reason. A copied tail would be a SECOND
  * place for a payload-bearing assertion to creep in, and there is no gate in this repo that would
@@ -89,10 +89,9 @@ export async function pairAnotherServerFromSettings(
   payload: string,
   label?: string
 ): Promise<void> {
-  // `aria-label="Settings"` is unique in the whole renderer, so the gear is reachable from the list or
-  // the thread alike — the two-pane shell keeps the sidebar carrying it mounted either way. `exact` on
-  // both, this file's idiom.
-  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  // The always-mounted sidebar menu is reachable from both list and thread.
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
   await page.getByRole('button', { name: 'Pair another server', exact: true }).click()
 
   await drivePairingForm(page, payload, label, true)

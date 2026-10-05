@@ -29,13 +29,14 @@ test('push-notification toggle persists across an app relaunch', async ({ launch
   // --- Launch 1: flip the toggle away from its ENABLED default. ---
   const { page, app, daemon, userDataDir } = await launchPairedApp()
 
-  // Straight to Settings via the gear. The fixture's default drive ends on the thread, and #670's two-pane
+  // Straight to Settings via the sidebar menu. The fixture's default drive ends on the thread, and #670's two-pane
   // shell keeps the sidebar — and so the gear — on screen there, so no navigation step precedes this click.
   // #1064 deleted the back arrow that used to open this drive, and its `.conversation` count gate went with
   // it: that gate existed only to keep the gear click from racing the arrow's route flip, and with no flip
-  // there is nothing to race. `aria-label="Settings"` is unique in the whole renderer (the sidebar gear),
+  // there is nothing to race. the sidebar menu supplies a unique Settings menu item,
   // so the by-role query stays unambiguous with the thread mounted.
-  await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
   await expect(page.locator(settings)).toBeVisible()
 
   // The switch starts CHECKED (default-empty ⇒ ENABLED, #408). Flip it to DISABLED — this persists the
@@ -58,7 +59,8 @@ test('push-notification toggle persists across an app relaunch', async ({ launch
 
   // --- Launch 2: paired-from-persistence at the list, no drive, no connection. Navigate list → Settings
   // directly (no thread→back this time — the reuse arm returns at the list). ---
-  await page2.getByRole('button', { name: 'Settings' }).click()
+  await page2.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page2.getByRole('menuitem', { name: 'Settings', exact: true }).click()
   await expect(page2.locator(settings)).toBeVisible()
 
   // ⭐ The assertion. A reset-to-default regression would render this CHECKED; unchecked proves the

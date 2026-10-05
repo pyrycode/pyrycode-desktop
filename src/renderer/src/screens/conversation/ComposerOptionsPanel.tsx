@@ -367,7 +367,8 @@ export function ComposerOptionsMenu({
   triggerContent,
   triggerClassName,
   triggerAriaLabel,
-  placement = 'footer'
+  placement = 'footer',
+  consumeOutsideClick = false
 }: {
   options: readonly ComposerOptionsPanelOption[]
   currentId: string | null
@@ -376,7 +377,8 @@ export function ComposerOptionsMenu({
   triggerContent: ReactNode
   triggerClassName: string
   triggerAriaLabel?: string
-  placement?: 'footer' | 'bottom-end'
+  placement?: 'footer' | 'bottom-end' | 'bottom-start'
+  consumeOutsideClick?: boolean
 }): JSX.Element {
   // Component-local useState, never the session store (ADR 0006, the `sheetOpen` precedent), so the panel
   // resets to closed on remount for free — the same reason #276's container gets that property.
@@ -482,7 +484,7 @@ export function ComposerOptionsMenu({
   // where the user clicked rather than on the trigger. That is the correct outcome — returning focus to a
   // trigger the user just clicked away from would steal it — which is why no preventDefault is added here.
   useEffect(() => {
-    if (!open) return
+    if (!open || consumeOutsideClick) return
     const onMouseDown = (event: DocumentEventMap['mousedown']): void => {
       const target = event.target
       if (target instanceof Node && anchorRef.current && !anchorRef.current.contains(target)) {
@@ -493,14 +495,16 @@ export function ComposerOptionsMenu({
     return () => {
       document.removeEventListener('mousedown', onMouseDown)
     }
-  }, [open])
+  }, [open, consumeOutsideClick])
 
   return (
     <div
       ref={anchorRef}
-      className={placement === 'bottom-end'
-        ? 'composer-options-anchor composer-options-anchor--bottom-end'
-        : 'composer-options-anchor'}
+      className={[
+        'composer-options-anchor',
+        placement === 'footer' ? '' : `composer-options-anchor--${placement}`,
+        consumeOutsideClick ? 'composer-options-anchor--consume-outside' : ''
+      ].filter(Boolean).join(' ')}
       onKeyDown={handleKeyDown}
     >
       <button
@@ -516,6 +520,21 @@ export function ComposerOptionsMenu({
       </button>
       {/* A real <button>, so Enter and Space activate the trigger natively — no handler of their own, and
           none is wanted: one would double-fire on top of the native activation. */}
+      {open && consumeOutsideClick && (
+        // Keep the layer through mousedown: unmounting then would expose the tree to click.
+        <div
+          className="composer-options-dismiss-layer"
+          aria-hidden="true"
+          onMouseDown={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+          }}
+          onClick={(event) => {
+            event.stopPropagation()
+            close()
+          }}
+        />
+      )}
       {open && (
         <ComposerOptionsPanel
           options={options}

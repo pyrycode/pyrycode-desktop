@@ -47,7 +47,8 @@ test('each Settings row unpairs its own server, and only the last one routes to 
 }) => {
   const { page } = await launchPairedApp({}, { secondServer: {} })
 
-  await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
   const settings = page.locator('section[aria-label="Settings screen"]')
   await expect(settings).toBeVisible()
 
@@ -119,7 +120,8 @@ test('each Settings row unpairs its own server, and only the last one routes to 
   // --- AC4: unpairing the LAST paired server routes to the pairing screen, as the whole-collection
   // path does. `rows.nth(0)` is the survivor now — addressed by position, so the substring-shared ids
   // cannot select the wrong one. ---
-  await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
   await expect(settings).toBeVisible()
   const lastRow = rows.nth(0)
   await lastRow.getByRole('button', { name: 'Unpair', exact: true }).click()

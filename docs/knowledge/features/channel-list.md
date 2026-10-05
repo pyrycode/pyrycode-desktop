@@ -38,8 +38,12 @@ their respective confirmation dialogs, including on an empty host. Confirmation 
 host with `cwd: null`, letting that daemon workspace choose its default folder; Cancel sends no
 create. Disconnected hosts cannot create. The section labels are fixed and have no rename action.
 The host hover control is **Edit host**; the sidebar has no Add workspace or Edit workspace action.
-The [toolbar](channel-list-section-header-pair-control.md) still holds Settings, Archive and Pair
-new host above a fixed rule, outside the scrollport.
+The [toolbar](channel-list-section-header-pair-control.md) holds a 24px **Sidebar menu** ellipsis
+at the left and **Pair new host** at the right above a fixed rule, outside the scrollport.
+The menu lists Settings then Archive, with no selected row, in loading, empty and populated
+states. Selection closes it and invokes the existing `onOpenSettings` or `onOpenArchive`
+callback once. Its popup paints above the rule and tree; the first outside click dismisses
+without opening a conversation or folding a host, and the next click operates normally.
 
 Conversation rows retain their title, status dot, selection, edit and
 [Save-as-channel](save-as-channel-dialog.md) controls. The Channels pen opens
@@ -351,10 +355,8 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
 - [Conversation shell](conversation-shell.md) — the thread view every row opens into via `onOpen`.
 - [The create → nav bridge, formerly the new-discussion FAB](new-discussion-fab.md) / [#242](../codebase/242.md)
   — the FAB was deleted in #1426; the bridge survives as the nav wiring behind this screen's create controls.
-- [Settings screen](settings-screen.md) / [#333](../codebase/333.md) — the settings entry button
-  rendered as a sibling of this screen's rows, and the `settings` route it navigates to.
-- [Archive screen](archive-screen.md) / [#347](../codebase/347.md) — the archive button in the card's
-  Top bar since #1443, and the `archive` route it opens.
+- [Settings screen](settings-screen.md) — the first Sidebar menu item and its `settings` route.
+- [Archive screen](archive-screen.md) — the second Sidebar menu item and its `archive` route.
 - [Save-as-channel dialog](save-as-channel-dialog.md) / [#274](../codebase/274.md) — the per-row
   save affordance and naming dialog; restructured `Row` into the open-action + save-affordance
   sibling shape described above.

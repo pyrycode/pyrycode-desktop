@@ -10,7 +10,7 @@ src/renderer/src/
 ├── PairedShell.tsx                       # + case 'settings', + onOpenSettings threading; + case 'pairServer' (#152); + onUnpaired threading (#1162)
 ├── applyPairingChange.ts                 # comment-only: the 'unpaired' arm's docblock names its second, conditional caller (#1162)
 └── screens/
-    ├── channels/ChannelList.tsx          # + SettingsButton entry (in-file, unexported)
+    ├── channels/ChannelList.tsx          # Sidebar menu Settings item → onOpenSettings
     ├── pairing/PairingScreen.tsx          # reused as-is on the new 'pairServer' route (#152, no edit)
     └── settings/
         ├── SettingsScreen.tsx            # scaffold (#333) + mounts ServerInfoData/ServerRowControl (#334) + Defaults section (#404) + Notifications section (#409) + Thread section + Storage section (#351) + About section (#350) + PairAnotherServerRow (#152) + onUnpaired threading (#1162)
@@ -94,15 +94,14 @@ from [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md
 
 ## The entry affordance (`ChannelList.tsx`)
 
-`ChannelList`/`ChannelListView` both gain a required `onOpenSettings: () => void` prop, threaded
-straight through (the `onOpen` precedent). `SettingsButton` is an in-file, unexported sibling of
-`NewConversationFab`, cloning its shape exactly: a native `<button type="button" aria-label="Settings">`
-holding an `aria-hidden` inline 24px Material `settings` (gear) glyph SVG. No `window.pyry`, no store —
-`onOpenSettings` is a pure injected nav effect. Placement is a **desktop-invented** affordance (like the
-FAB before it): ChannelList has no top app bar yet, and no Figma node on the list scope (15-8) pins a
-settings entry, so it's rendered as the section's first child and pinned top-right via CSS
-(`position: sticky; top; align-self: flex-end`) so it stays reachable while a long list scrolls under
-it.
+`ChannelList`/`ChannelListView` retain the required `onOpenSettings: () => void` prop, threaded
+straight through. The toolbar's `ComposerOptionsMenu` renders Settings then Archive with
+`currentId={null}`; selecting id `settings` closes the menu and calls `onOpenSettings` once.
+The Sidebar menu trigger stays outside the tree scrollport, with Pair new host at the right.
+No `window.pyry` or store mutation participates in this entry: `onOpenSettings` remains a pure
+injected navigation effect. The former standalone gear button is removed. See the
+[toolbar](channel-list-section-header-pair-control.md) for Figma geometry, keyboard behavior
+and consumed outside-click dismissal.
 
 ## The scaffold view (`SettingsScreen.tsx`)
 
@@ -557,7 +556,7 @@ it belongs to.
 ## Data flow
 
 ```
-ChannelList SettingsButton.onClick
+ChannelList Sidebar menu → Settings menuitem → ComposerOptionsMenu.onSelect('settings')
   → PairedShell onOpenSettings  = dispatch({ type: 'openSettings' })
   → nextPairedRoute('list', openSettings) = 'settings'
   → PairedShellView route='settings' → <SettingsScreen onBack={dispatch back} onUnpaired={dispatch-bound applyPairingChange('unpaired')} />

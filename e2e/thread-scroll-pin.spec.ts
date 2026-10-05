@@ -657,7 +657,8 @@ test('re-opening a discussion lands at the most recent messages and leaves the t
   // and the thread were mutually exclusive. The list is now always on screen, so that assertion would pass
   // instantly and the re-entry could race the unmount — reading the thread's OWN disappearance restores
   // the gate, and it still reddens correctly here because the Settings route replaces the whole shell.
-  await page.locator('.channel-list__settings').click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
   await expect(page.locator('.conversation')).toHaveCount(0)
   await page.locator('.settings__back').click()
 

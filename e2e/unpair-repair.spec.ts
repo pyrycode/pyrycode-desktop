@@ -151,7 +151,8 @@ test('re-pair with a second server preserves both hosts in the paired shell', as
   await recovery.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(recovery).toHaveCount(0)
   await expect(page.locator('.conversation')).toBeVisible()
-  await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
   await expect(page.locator('.settings__server-row-id')).toHaveText([serverA.serverId, serverB.serverId])
 
   await expect(pairingBox).toHaveCount(0)
@@ -229,7 +230,8 @@ for (const closeCode of [4421, 4401]) {
     await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
     await expect(page.getByPlaceholder('Message…')).toHaveValue('Retained draft')
     await expect(page.locator('.channel-list__row-open').filter({ hasText: rowName(SECOND_SEEDED_ROW) })).toBeVisible()
-    await page.getByRole('button', { name: 'Settings' }).click()
+    await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+    await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
     await expect(page.locator('.settings__server-row-id')).toHaveText([serverA.serverId, serverB.serverId])
     expect(await recoveryCounts(app)).toEqual({
       reconnect: [serverA.serverId], connected: [serverA.serverId], unpair: 0

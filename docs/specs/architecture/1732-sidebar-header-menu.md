@@ -64,3 +64,13 @@ Remote branch overlaps: #1658 (create model), #1726 (queued controls), #1729 (qu
 Final main merge brought #1765’s Settings navigation scenarios; update their three entry selectors too, preserving all preference assertions.
 
 Final written scope: approximately 360 added lines including the initial plan and focused spec, zero new exports and unchanged production navigation callback contracts.
+
+2026-10-05 rework, verifier finding 1: Update `toolbar controls show their existing name-pill treatment on hover and keyboard focus` in `e2e/sidebar-section-header-plus-name-pill.spec.ts` to expect Sidebar menu and Pair new host. Retain every Pair new host hover, style, pointer-placement, keyboard-focus, blur and overflow assertion; establish keyboard modality by tabbing back to Sidebar menu and then forward to Pair new host. The retired Settings/Archive buttons no longer participate in either check. No production contract changes. Run the focused scenario and the full fake-transport gate requested by the verifier, plus pre-verify and build after the final main merge.
+
+## Documentation handoff
+
+Pending for the documentation stage, carried forward from the verifier review:
+
+- `docs/knowledge/features/channel-list.md`, `channel-list-section-header-pair-control.md`, `settings-screen.md` and `archive-screen.md`: update the Sidebar menu navigation entry, unchanged destination callbacks and retained Pair new host control; the toolbar name-pill regression now covers Pair new host.
+- `docs/knowledge/features/conversation-shell-composer-options-panel.md`: document opt-in `bottom-start` placement and consumed outside-click dismissal while preserving existing consumers' defaults.
+- `docs/knowledge/features/development-verification.md`: record two-viewport interaction and visual evidence after verification completes.

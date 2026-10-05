@@ -172,7 +172,7 @@ case is now a filter, not a plain copy, and `ThreadEvent.apiRetry` is the side t
 `compacting` copies `active`, `compactResult` and `compactError`; `compactionBoundary`
 copies `trigger`, `preTokens` and `postTokens`. Both omit the conversation id from the
 `ThreadEvent`; live routing uses the original event's id. The reducer owns edge detection,
-failure classification and [delayed metadata association](conversation-timeline-store.md#what-it-does);
+failure classification and [delayed metadata association](conversation-timeline-store-compaction.md#what-it-does);
 the bridge neither synthesizes completion on reconnect nor correlates by row index.
 
 `thinkingProgress` ([#1313](https://github.com/pyrycode/pyrycode-desktop/issues/1313), decoded at

@@ -73,7 +73,7 @@ rule, not `stalled`'s: the wire's `compacting` frame also carries an explicit fa
 on that edge or a reconnect/reset and survives turn activity. It stays `boolean`:
 completion outcomes and delayed counts belong to retained `compactionBoundary` rows,
 with `pendingCompaction` identifying the row awaiting metadata. See
-[compaction lifetime](conversation-timeline-store.md#what-it-does).
+[compaction lifetime](conversation-timeline-store-compaction.md#what-it-does).
 **`localSendPending` ([#650](../codebase/650.md)) is a fifth such
 scalar** — set by local `userText` (the composer's own accept signal, no separate event);
 live and history receipts carry `received: true` and preserve either pending value. It is cleared
@@ -358,7 +358,7 @@ turn activity.
 shape as `apiRetry`**: turn activity carries it through unchanged. Its own falling
 edge also appends a retained divider; reconnect clears the flag directly without
 synthesizing that edge. Rows and pending metadata survive reconnect. See
-[association rules and retention limits](conversation-timeline-store.md#what-it-does).
+[association rules and retention limits](conversation-timeline-store-compaction.md#what-it-does).
 **`thinkingTokens` ([#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314)) is a sixth,
 independent axis with a clearing rule that matches neither of the two shapes above** — not
 `stalled`'s self-clear-on-turn-activity (every content arm carries it through unchanged: `stalled` is

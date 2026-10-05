@@ -42,6 +42,50 @@ and replacement across the old deadline. Its paused browser clock checks visibil
 absence at 4000ms from display. Same-copy replacement is essential: a timer keyed only to kind/copy
 could pass a remote-to-timeout case while expiring a timeout-to-timeout replacement early.
 
+Session-error regressions exercise three distinct traps. In
+[`savedTimelineRestorer.test.ts`](../../../src/renderer/src/store/savedTimelineRestorer.test.ts),
+hold the local read while replacing or clearing the notice, then settle stored,
+missing, invalid and failed results. Slice identity cannot own the request: transient
+changes replace the slice and would strand loading. Settlement must retain the
+current sidecars, never resurrect a cleared notice, and reject repeated settlement.
+The [host-bound read owner](conversation-timeline-holder.md#local-timeline-admission)
+preserves this distinction without admitting another host's content.
+
+Reset coverage must drive the real `sessionTransition(reason: 'clear')` →
+`sessionBoundary` route, retaining its divider and the other conversation's notice.
+A reducer test that sends only synthetic `reset` misses daemon resets from another client.
+[`timelineBridge.test.ts`](../../../src/renderer/src/store/timelineBridge.test.ts) checks routing
+and host-specific off-screen reconnect clearing; the encrypted fake-frame reset in
+[`session-error-notice.spec.ts`](../../../e2e/session-error-notice.spec.ts) waits for
+“Session reset” before checking notice absence.
+
+Production React does not replay effects, so a passing production browser test cannot
+prove StrictMode-safe notice consumption. The development case builds the actual
+renderer with development React, asserts `commitDoubleInvokeEffectsInDEV` is present,
+and checks held-notice opening, replacement, navigation and Settings exit. Serve the
+scratch build on loopback and launch it once through `LaunchControl.rendererUrl` and
+the existing `ELECTRON_RENDERER_URL` path, checking the loaded URL. Re-navigating the
+already-loading window with `loadFile` failed with `ERR_FAILED` before assertions on
+the gate host; startup through the normal path preserves Electron confinement,
+sandbox and context isolation.
+
+Keep the staged actual-send assertions in
+[`status-icon-local-send.spec.ts`](../../../e2e/status-icon-local-send.spec.ts):
+“Sending…” before any reply, “Waiting for Claude” only after the queue lists the
+sent message id, and “Thinking…” only after daemon turn state. Another device's or
+id-less queued item cannot acknowledge this send; an emptied queue cannot end the
+acknowledged wait. Session-error coverage adds a pill as the positive receipt barrier
+before checking absent label/spin, retaining the idle icon. Replacing all post-send
+expectations with “Thinking…” would erase the pre-response proof established by
+[the local-send design](conversation-shell-working-indicator.md).
+
+Recorded evidence: the [final session-error verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1784#issuecomment-6001709338)
+confirms the development StrictMode case was present and passed at `648fa5fc` on
+2026-10-05: 1 executed, 1 passed, 0 failed, 0 skipped within the full browser run
+(268 executed, 268 passed, 0 failed, 4 skipped). Both production session-error cases
+and the staged local-send test also passed in that run. Unit evidence is 8,756
+executed/passed, 0 failed, 3 skipped. No live-Claude proof is claimed.
+
 The end-to-end directory has historically been outside the project's TypeScript
 configurations. Playwright strips types when it loads a spec. Check the current
 configurations before claiming that a green build typechecks a changed spec.

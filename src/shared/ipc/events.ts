@@ -463,6 +463,8 @@ type BaseDaemonEvent =
   // added field brings no dedup or timer state with it. Consumed by the render slice #317 (not yet
   // built), so all three exhaustive bridges no-op it for now — the sessionSettingsRejected-was-a-no-op
   // precedent.
+  // Transient status only. Daemon message/extras never cross IPC; code is compared to client literals.
+  | { type: 'sessionError'; conversationId: string; code: string }
   | { type: 'stallDetected'; conversationId: string }
   // The api-retry arm (#492, widened by #737) — claude is retrying against an API error. It carries the
   // edge (`active` — true is the rising edge, false the explicit falling one) and the attempt counter

@@ -58,6 +58,7 @@ test('silent stops survive navigation and settle on stopped, omission and correl
   expect(fake.backgroundTaskStopRequests()).toHaveLength(1)
   await page.screenshot({ path: '/tmp/builder-1771/stop-pending-1280.png', animations: 'disabled' })
   await page.setViewportSize({ width: 800, height: 600 })
+  await terminalButton().scrollIntoViewIfNeeded()
   await expect(terminalButton()).toBeVisible()
   await page.screenshot({ path: '/tmp/builder-1771/stop-pending-800.png', animations: 'disabled' })
   await page.setViewportSize({ width: 1280, height: 800 })

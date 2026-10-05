@@ -178,7 +178,8 @@ Renderer web storage remains prohibited for conversation content.
 Apart from explicit Retry of a failed page, history downloads require trusted
 upward wheel/trackpad input over the thread, or
 ArrowUp/PageUp/Home with the thread itself focused. The current offset must be
-within the existing 200px near-top band before that input scrolls. Input outside
+within the near-top band — two viewport heights, scaled by the thread's own measured
+height — before that input scrolls. Input outside
 the band only scrolls locally; entering the band needs another qualifying input.
 The same focusable region contains empty and short threads, so first-page demand
 does not depend on overflow. Composer navigation, synthetic events, ordinary
@@ -203,7 +204,7 @@ even when the server's failure classification is nonretryable. The separate
 [composer Retry action](conversation-shell-composer-status.md#history-page-failure-and-retry)
 requires `retryable: true`, the displayed conversation and its connected owning host,
 and the same held failure at activation. It calls `requestOlderHistory` with the
-same cursor and `limit: 0`; pending state removes the failure affordance and rejects
+same cursor and `limit: 200` (`HISTORY_PAGE_LIMIT`); pending state removes the failure affordance and rejects
 duplicate demand without changing rows or successful coverage. A partial history walk
 never restarts itself at the newest page. Offline scrolling only exposes held
 content. Host-stamped requests cannot borrow another host's cursor, and stale

@@ -296,12 +296,13 @@ re-ask), and `null` (nothing held) belongs to the opening path, never restarting
 is the only stop a page can produce: nothing counts entries or compares a page against the `limit` it was
 asked with, so neither an empty page nor a short one is ever read as the end of the log. "Near the top" is
 `isNearTop(metrics)`, a new pure predicate beside `isAtBottom` in `threadScrollPosition.ts` — a band of
-`HISTORY_ASK_BAND_PX` (200) above the scroll wall, not the wall itself, because Chromium suppresses scroll
-anchoring at a scroll offset of exactly zero and anchoring is the mechanism that holds the reader's place
-when the page lands above them; see [Conversation shell § Thread scroll
-pin](conversation-shell-scroll-pin.md) for the band's full arithmetic and the discovered scroll-event
-cascade (a small prepend that doesn't clear the band is itself a scroll event, so the walk can take several
-steps for one operator scroll). `ConversationScreen`'s `useThreadScrollPin` calls the new asker from
+`HISTORY_ASK_BAND_VIEWPORTS` (2 viewport heights, widened from a fixed 200px band by
+[#1752](https://github.com/pyrycode/pyrycode-desktop/issues/1752)) above the scroll wall, not the wall
+itself, because Chromium suppresses scroll anchoring at a scroll offset of exactly zero and anchoring is
+the mechanism that holds the reader's place when the page lands above them; see [Conversation shell §
+Thread scroll pin](conversation-shell-scroll-pin.md) for the band's full arithmetic and the discovered
+scroll-event cascade (a small prepend that doesn't clear the band is itself a scroll event, so the walk
+can take several steps for one operator scroll). `ConversationScreen`'s `useThreadScrollPin` calls the new asker from
 `onScroll`, right after its existing pin write, passing the container's own `conversationId`.
 
 The same ticket corrects a premise the render layer had inherited rather than earned. `Timeline` had keyed

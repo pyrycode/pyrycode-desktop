@@ -261,6 +261,13 @@ export interface HistoryAskDeps {
   markRequested: (conversationId: string) => void
 }
 
+/**
+ * Entries asked for per older-history page (#1752), on every ask including Retry. The daemon clamps a
+ * limit above its own ceiling rather than rejecting it (pyrycode `docs/protocol-mobile.md` § Page size),
+ * so this is a request, not a promise; a page can still come back shorter.
+ */
+export const HISTORY_PAGE_LIMIT = 200
+
 export function requestOlderHistory(
   deps: HistoryAskDeps,
   conversationId: string | null,
@@ -275,7 +282,7 @@ export function requestOlderHistory(
   deps.sendCommand({
     type: 'requestHistory',
     payload: { conversation_id: conversationId,
-      cursor: coverage?.status === 'received' ? coverage.cursor : '', limit: 0 }
+      cursor: coverage?.status === 'received' ? coverage.cursor : '', limit: HISTORY_PAGE_LIMIT }
   })
 }
 

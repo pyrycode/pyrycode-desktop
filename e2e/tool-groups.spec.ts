@@ -119,7 +119,7 @@ test('visible tool rows keep joined borders across collapsed descendants', async
         top: box.top, bottom: box.bottom, margin: parseFloat(css.marginTop),
         corners: [css.borderTopLeftRadius, css.borderTopRightRadius, css.borderBottomLeftRadius, css.borderBottomRightRadius],
         shadow: css.boxShadow, topColor: css.borderTopColor, bottomColor: css.borderBottomColor,
-        sideColor: css.borderLeftColor, failed: element.classList.contains('tool-row--error'),
+        sideColor: css.borderLeftColor,
         radius: theme.getPropertyValue('--radius-xs').trim()
       }
     }))
@@ -133,8 +133,9 @@ test('visible tool rows keep joined borders across collapsed descendants', async
           previous ? '0px' : current.radius, previous ? '0px' : current.radius,
           next ? '0px' : current.radius, next ? '0px' : current.radius
         ])
-        expect(current.topColor).toBe(previous?.failed ? previous.sideColor : current.sideColor)
-        expect(current.bottomColor).toBe(next?.failed ? next.sideColor : current.sideColor)
+        expect(current.sideColor).toBe(readings[0].sideColor)
+        expect(current.topColor).toBe(readings[0].sideColor)
+        expect(current.bottomColor).toBe(readings[0].sideColor)
         if (next) expect(current.shadow).toBe('none')
         else expect(current.shadow).not.toBe('none')
         if (previous) {

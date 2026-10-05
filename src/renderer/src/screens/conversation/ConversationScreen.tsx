@@ -1139,9 +1139,7 @@ export function Timeline({
     const below = next?.depth === group.depth ? rows[next.index]?.item : undefined
     return [group.index, [
       above?.kind === 'toolCall' && 'tool-group-row--joined-above',
-      below?.kind === 'toolCall' && 'tool-group-row--joined-below',
-      above?.kind === 'toolCall' && above.denial === undefined && above.result?.isError && 'tool-group-row--error-above',
-      below?.kind === 'toolCall' && below.denial === undefined && below.result?.isError && 'tool-group-row--error-below'
+      below?.kind === 'toolCall' && 'tool-group-row--joined-below'
     ].filter(Boolean).join(' ')]
   }))
   return (
@@ -1704,7 +1702,7 @@ export function ModelRefusalRow({ refusal, defaultExpanded = false }: {
 //
 // #230: the row resolves in place when `result` fills. `tool-row--resolved` iff resolved (lifts
 // .tool-row's 50% pending dimming, both outcomes); `tool-row--error` on top iff `result.isError` (the
-// error accent). #230 additionally declined to draw `resultSummary` at all, because the Figma mock has
+// failure hook). #230 additionally declined to draw `resultSummary` at all, because the Figma mock has
 // no result-text slot. #696 REVERSED that: the result text already reaches the renderer and was thrown
 // away at the last step, and a tool row that never shows what the tool returned makes the reader leave
 // the app to find out (operator's decision, 2026-08-21). The mock still has no expanded state, so the
@@ -2023,6 +2021,13 @@ export function ToolRow({
           {!group && result && result.resultDetail !== undefined && result.resultDetail !== '' && (
             <span className="tool-row__count">{result.resultDetail}</span>
           )}
+          {denial === undefined && result?.isError && <svg
+            className="tool-row__failed"
+            viewBox="0 0 16 16" width="16" height="16" fill="currentColor"
+            role="img" aria-label="Failed"
+          >
+            <path d="M7.33333 10H8.66667V11.3333H7.33333V10ZM7.33333 4.66667H8.66667V8.66667H7.33333V4.66667ZM7.99333 1.33333C4.31333 1.33333 1.33333 4.32 1.33333 8C1.33333 11.68 4.31333 14.6667 7.99333 14.6667C11.68 14.6667 14.6667 11.68 14.6667 8C14.6667 4.32 11.68 1.33333 7.99333 1.33333ZM8 13.3333C5.05333 13.3333 2.66667 10.9467 2.66667 8C2.66667 5.05333 5.05333 2.66667 8 2.66667C10.9467 2.66667 13.3333 5.05333 13.3333 8C13.3333 10.9467 10.9467 13.3333 8 13.3333Z" />
+          </svg>}
           {/* The .status-row__chevron / .composer__actions-icon idiom: a bare inline <svg> sized by its
               own width/height, fill="currentColor" so it takes the ink from CSS, and aria-hidden so it
               adds no accessible name — the button's name stays exactly its text runs, three of them

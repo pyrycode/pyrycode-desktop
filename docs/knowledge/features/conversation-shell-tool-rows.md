@@ -90,20 +90,44 @@ wrapper `className`; the chip's inner markup — the two spans — is **byte-ide
 
 `tool-row--resolved` lifts the pending 50% dimming (`opacity: 1`) for **both** outcomes — the
 resolved-success treatment is exactly the mock's chip with the dimming lifted, no accent added.
-`tool-row--error` layers on top only when `result.isError` and no explicit denial is attached,
-retinting `.tool-row__chip`'s border from
-the neutral `--color-outline-variant` to a new token, `--color-error` (`#ffb4ab` — M3 default dark
-error role, tone 80; desktop's **first** error-family token, mirrored from the same M3 scheme
-`tokens.css`'s header names as the palette's source, since no Figma node in this file references an
-error scheme to copy from directly). `result.resultSummary` is **deliberately not rendered** — the
-Figma mock has no result-text slot, and not-surfacing it (rather than surfacing-then-escaping) keeps
-the untrusted-text surface at exactly `name` + `inputSummary`, unchanged from #218. `Timeline`'s
-array-index key strategy is untouched: `fillResult` replaces the `toolCall` at its own index, so a
-resolving row never remounts.
+`tool-row--error` layers on top only when `result.isError` and no explicit denial is attached.
+It remains a failure-state hook; since #1748 it changes no border colour. All row borders and
+joins use the plain `--color-primary-container` treatment. Failure is indicated by the header
+icon below. The error token `--color-error` originated in #230; the former chip/row border
+retints are removed. `result.resultSummary`, originally hidden, is now available in the
+[expandable result](#expandable-tool-call-result-696-toggle-697).
 
 Was dormant until [#179](../codebase/179.md) flipped `interactive`, the same posture as every other
 structured-stream render slice; now live. See [#230 codebase notes](../codebase/230.md) for the full
 design, the token-provenance rationale, and patterns established.
+
+### Failed icon
+
+A failed, non-denied result draws Material `error_outline` as an inline SVG in
+`.tool-row__right`, with `class="tool-row__failed"`, `role="img"` and the client-owned
+`aria-label="Failed"`. Its width and height are 16px; `fill="currentColor"` takes
+`--color-error` from CSS. The trailing order is count (when present), Failed icon,
+chevron, with the existing `--space-3` gaps. The icon cannot shrink; the count remains
+the right group's shrinkable, ellipsizing member.
+
+The same header renders collapsed and expanded, so opening the result retains the
+icon. An absent or empty count does not hide it. Success, pending and explicitly
+denied rows have no Failed icon, even when a denied row also carries an error result;
+the denial keeps its separate `Denied` treatment.
+
+`ConversationScreen.test.tsx` pins accessibility, SVG size attributes, count/icon/chevron
+order in both initial expansion states, presence without a count, and exclusion for
+success, pending and denial. It also proves that timeline joins retain the joined
+classes without error modifiers. Static markup cannot establish colour or rendered
+geometry: `e2e/tool-row-toggle.spec.ts` checks the error token, 16px bounds, trailing
+order and retained icon through real toggles, plus plain borders on all four sides
+of every row in a pending / successful / failed / successful stack.
+`e2e/tool-groups.spec.ts` covers plain joins across collapsed descendants.
+
+The [reviewed visual evidence](https://github.com/pyrycode/pyrycode-desktop/pull/1759#issuecomment-5991656074)
+compares the 1100×773 fake-transport stack at `528dfca1` with
+[Figma's Failed variant](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG/Pyrycode-Client?node-id=796-11663):
+plain stacked borders and the error icon match, with desktop's existing trailing alignment.
 
 ## Expandable tool-call result (#696, toggle #697)
 
@@ -171,8 +195,8 @@ var(--font-sans)` (load-bearing: `.tool-row__summary` inherits it from `.convers
 `<button>` would silently re-parent that to the UA font), `color`, `text-align: left`, `box-sizing:
 content-box` (a UA button defaults to border-box; holding content-box keeps both chip branches bounded
 identically so a resolving row doesn't shift width), `cursor: pointer` and a hover tint lifted from
-`.unrecognized-row__summary`. Deliberately silent on `border`, so `.tool-row--error .tool-row__chip`'s
-higher-specificity border retint keeps winning on failed rows.
+`.unrecognized-row__summary`. The later box redraw moved the border onto `.tool-row`;
+failed headers now share its plain border and use the [Failed icon](#failed-icon).
 
 **Security posture (both tickets).** `name`, `inputSummary`, `toolUseId` and `resultSummary` are all
 daemon-supplied and untrusted; the only sanctioned sink is React text children, never

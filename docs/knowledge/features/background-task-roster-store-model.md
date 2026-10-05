@@ -72,9 +72,20 @@ Deliberately **not** a [session store](session-store.md) or [timeline store](con
 facet: like `queue_state`, this family is daemon *state* (SSOT pyrycode #720), not part of claude's turn
 stream, so it gets its own store rather than folding into `reduceTimeline`.
 
-On the `connected` daemon edge, the store drops the **reconnecting server's own** held rosters, started-
-sourced and roster-sourced tasks alike — and, since #569, the daemon's own reconcile repopulates them
-safely rather than leaving the drop as the last word. Upstream (pyrycode#2077-#2080),
+The same store owns renderer-only `pendingStops`, keyed by conversation and then task id, for the
+[separate Stop task button](conversation-shell-background-tasks.md#stop-task). Claiming a wait disables
+only that pair and never changes membership, status or the live count. Accepted stops are silent: there
+is no acknowledgement or timeout, so lack of a reply cannot imply a refusal or a finished task.
+Nonterminal updates, progress and rosters that still list the task retain its wait. Exact terminal
+`completed`/`failed`/`stopped` updates, roster omission and the typed send-time-correlated
+`backgroundTaskStopRejected` settle it. A refusal affects only its named pair, including when another
+conversation uses the same task id. Drawer closure and conversation navigation do not clear waits;
+the app-mounted bridge continues settlement without a panel. See [pending stop
+waits](background-task-roster-store-internals.md#pending-stop-waits) for claim and copy-on-write rules.
+
+On the `connected` daemon edge, the store drops the **reconnecting server's own** held rosters, tasks
+of either provenance, and stop waits. Since #569, the daemon's reconcile repopulates rosters safely
+rather than leaving the drop as the last word. Upstream (pyrycode#2077-#2080),
 `background_task_roster` joined the daemon's reconcile-on-connect set (beside outstanding `modal_shown`
 per pyrycode#877 and `queue_state` per non-empty backlog per pyrycode#878): on any (re)connection the
 daemon unicasts one roster per conversation whose bound session has reported one, snapshot-shaped and
@@ -102,8 +113,8 @@ one week earlier. Scoping the edge retired the self-heal that had kept this stor
 [`clearPairingScopedState`](paired-shell.md#related): a new pairing's first `connected` resolves an empty
 conversation list, matches no held roster, and would otherwise drop nothing at all. So the store also
 joined that set — a second, nullary setter drops **every** conversation's held roster wholesale at a
-pairing boundary (unpairing, or pairing another server), closing the gap the scoped edge opened. This
-family had no re-assertion path of any kind, so unlike `queueStore`'s drained-conversation case, every
+pairing boundary (unpairing; pairing another server adds a host since #1141), closing the gap the scoped
+edge opened. This family had no re-assertion path of any kind, so unlike `queueStore`'s drained-conversation case, every
 roster latched for the life of the process until this clear was added. Since #569 the daemon's reconcile
 re-asserts a roster, but only for the conversations of the *pairing that reported them* — a new pairing's
 first `connected` still resolves an empty conversation list and drops nothing — so the clear remains

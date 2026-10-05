@@ -1069,3 +1069,34 @@ describe("BackgroundTaskPanelView — a running task's progress (#1640)", () => 
     expect(markup).not.toMatch(/\stitle="/)
   })
 })
+
+describe('Stop task button', () => {
+  it('follows progress, latest update and its cut marker without exposing identity', () => {
+    const id = '<hostile-task-id>'
+    const markup = renderToStaticMarkup(<BackgroundTaskPanelView
+      entry={entry([task({ taskId: id, progress: { currentActivity: 'Working', subagentType: '', lastToolName: '', totalTokens: 1, toolUses: 1, durationMs: 1, truncatedFields: null }, latestUpdate: { patch: 'Synthetic patch', truncatedFields: ['patch', 'task_id'] } })])}
+      onStopTask={noop} onClose={noop} />)
+    expect(markup).toContain('>Stop task</button>')
+    expect(markup.indexOf('background-task-panel__stop')).toBeGreaterThan(markup.indexOf('background-task-panel__cut-patch'))
+    expect(markup).not.toContain(id)
+    expect(markup).not.toContain('&lt;hostile-task-id&gt;')
+    expect(markup).not.toContain('disabled=""')
+  })
+
+  it('disables only the pending row and retains its label', () => {
+    const markup = renderToStaticMarkup(<BackgroundTaskPanelView
+      entry={entry([task(), task({ taskId: 'other' })])} pendingTaskIds={new Set(['task-1'])}
+      onStopTask={noop} onClose={noop} />)
+    expect(markup.match(/>Stop task<\/button>/g)).toHaveLength(2)
+    expect(markup.match(/disabled=""/g)).toHaveLength(1)
+  })
+
+  it.each(['finished', 'codex', 'cut', 'unsupported'])('hides stop on %s rows', reason => {
+    const markup = renderToStaticMarkup(<BackgroundTaskPanelView
+      entry={entry([task({ truncatedFields: reason === 'cut' ? ['task_id'] : null })])}
+      finishedTaskIds={reason === 'finished' ? new Set(['task-1']) : null}
+      agent={reason === 'codex' ? 'codex' : 'claude'}
+      onStopTask={reason === 'unsupported' ? undefined : noop} onClose={noop} />)
+    expect(markup).not.toContain('>Stop task</button>')
+  })
+})

@@ -56,11 +56,15 @@ The original focused ordering scenarios captured queued/delivered states success
 
 A compact fourth mounted scenario now captures the final queued and delivered presentation at `/tmp/builder-1731/visual-queued.png` and `/tmp/builder-1731/visual-settled.png`; both were viewed and compared with the design reference. All four mounted scenarios pass, including the expanded-group behavioral assertions. Final written work is about 635 added lines including this plan, below every sizing boundary.
 
+2026-10-05 (verifier rework): Finding 1 corrects receipt selection in `reduceTimeline`: metadata-bearing receipts first match a bound queue ID, then may associate an unsettled, unbound local record by nonempty message ID. Settled unbound records cannot shadow that association; metadata-free receipts retain their legacy same-reference idempotence. Regression cases cover both settled and unsettled older collisions and delivery before snapshot association.
+
+Finding 2 corrects the trust-boundary assumption in the original review: `QueueData` runs with the preload's trusted receipt origin, but `ConversationTimelineStore.markLocalSendQueued` must check `receiptHost` against the held slice's `serverId` before correlating or releasing echoes. Another host's colliding snapshot leaves the complete held state unchanged; absent origins retain older event compatibility. The regression covers hostile binding and removal snapshots followed by legitimate settlement. The refreshed branch overlap is #1723, a separate reconnect comment edit in `threadTimeline`; no dependency. Rework adds about 75 lines, staying below the 800-line ceiling.
+
 ## Security review
 
 **Verdict:** PASS
 
-- [Trust boundaries] `parseMessagePayload` admits only typed fields; queue correlation requires a local record and nonempty ID, with bound queue identity scoped by retained conversation/host routing.
+- [Trust boundaries] Corrected MUST FIX from verifier finding 2: `ConversationTimelineStore.markLocalSendQueued` rejects snapshots whose trusted `receiptHost` differs from the held `serverId` before any correlation or release. This origin comes from the preload's dispatch context, never a daemon payload. `parseMessagePayload` admits typed fields; local records and nonempty IDs establish ownership, and exact queue identity takes precedence over unbound message-ID fallback.
 - [Tokens/secrets] No credential generation, storage or exposure; IDs are non-secret equality comparands, never logged or rendered.
 - [File/storage] No new file operations or web storage; sidecars remain in memory and history rows do not acquire ownership.
 - [Electron] Existing typed IPC carries parsed optional fields; no new API, window, navigation or raw markup sink. Transport remains in main.

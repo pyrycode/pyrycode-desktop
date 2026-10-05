@@ -600,9 +600,11 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
   const echoes = state.localEchoes ?? []
   if (event.type === 'userText' && event.received === true) {
     if (event.queuedMsgId !== undefined && state.receivedQueueIds?.includes(event.queuedMsgId)) return state
-    const own = echoes.find(e => event.queuedMsgId !== undefined && e.queuedMsgId !== undefined
-      ? e.queuedMsgId === event.queuedMsgId
-      : !!event.messageId && e.messageId === event.messageId)
+    const own = event.queuedMsgId === undefined
+      ? echoes.find(e => !!event.messageId && e.messageId === event.messageId)
+      : echoes.find(e => e.queuedMsgId === event.queuedMsgId) ??
+        echoes.find(e => e.queuedMsgId === undefined && !e.settled &&
+          !!event.messageId && e.messageId === event.messageId)
     if (own !== undefined) {
       if (own.settled) return state
       if (own.queuedMsgId === undefined && event.queuedMsgId === undefined) {

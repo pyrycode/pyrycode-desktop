@@ -1142,6 +1142,35 @@ describe('conversationTimelineStore — markLocalSendQueued (#1725)', () => {
     expect(timelineFor(store, 'conv-a')?.localSendPending).toEqual({ messageId: 'm1', queued: true })
   })
 
+  it('ignores another host’s colliding snapshots before binding and after removal', () => {
+    let origin = 'host-a'
+    const store = createConversationTimelineStore(undefined, () => origin)
+    store.getState().dispatchFor('same-conversation', delta('first', 'first reply'))
+    store.getState().dispatchFor('same-conversation', { type: 'userText', text: 'own', messageId: 'm' })
+    const held = store.getState()
+    origin = 'host-b'
+    store.getState().markLocalSendQueued('same-conversation', [{ ...queuedItem('m'), queued_msg_id: 99 }])
+    expect(store.getState()).toBe(held)
+    origin = 'host-a'
+    store.getState().markLocalSendQueued('same-conversation', [{ ...queuedItem('m'), queued_msg_id: 7 }])
+    expect(timelineFor(store, 'same-conversation')?.localEchoes?.[0].queuedMsgId).toBe(7)
+    const bound = store.getState()
+    origin = 'host-b'
+    store.getState().markLocalSendQueued('same-conversation', [])
+    expect(store.getState()).toBe(bound)
+    origin = 'host-a'
+    store.getState().dispatchFor('same-conversation', { type: 'turnEnd', turnId: 'first', stopReason: 'end_turn' })
+    store.getState().markLocalSendQueued('same-conversation', [])
+    store.getState().dispatchFor('same-conversation', delta('answer', 'answer'))
+    store.getState().dispatchFor('same-conversation', {
+      type: 'userText', received: true, text: 'receipt', messageId: 'm', queuedMsgId: 7
+    })
+    const settled = timelineFor(store, 'same-conversation')!
+    expect(settled.localEchoes?.[0]).toMatchObject({ queuedMsgId: 7, settled: true })
+    expect(settled.items.map(item => 'text' in item ? item.text : item.kind))
+      .toEqual(['first reply', 'turnBoundary', 'own', 'answer'])
+  })
+
   it('returns the same state for an unmatched id, and never creates a slice', () => {
     const store = createConversationTimelineStore({ timelines: new Map() })
     store.getState().dispatchFor('conv-a', { type: 'userText', text: 'typed', messageId: 'm1' })

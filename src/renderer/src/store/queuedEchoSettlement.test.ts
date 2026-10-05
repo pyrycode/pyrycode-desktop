@@ -126,6 +126,35 @@ describe('queued own echo settlement', () => {
     expect(s.localEchoes?.[0].settled).toBe(true)
   })
 
+  it.each([
+    { confirmed: true, nextId: 'm', bound: true },
+    { confirmed: true, nextId: 'm', bound: false },
+    { confirmed: false, nextId: 'new', bound: true }
+  ])('prioritizes queue identity over an older echo: %j', ({ confirmed, nextId, bound }) => {
+    const legacy: ThreadEvent = { type: 'userText', received: true, messageId: 'm', text: 'legacy receipt' }
+    let s = reduceTimeline(initialTimelineState, { type: 'userText', messageId: 'm', text: 'older own' })
+    if (confirmed) {
+      s = reduceTimeline(s, legacy)
+      expect(reduceTimeline(s, legacy)).toBe(s)
+    }
+    s = reduceTimeline(s, delta('first', 'first reply'))
+    s = reduceTimeline(s, { type: 'userText', messageId: nextId, text: 'newer own', createdAt: 123 })
+    const own = s.items.at(-1)
+    const key = s.rowKeys?.at(-1)
+    if (bound) s = markLocalSendQueued(s, [queue(7, nextId)])
+    s = reduceTimeline(s, end('first'))
+    s = markLocalSendQueued(s, [])
+    s = reduceTimeline(s, delta('answer', 'answer'))
+    s = reduceTimeline(s, receipt())
+    expect(text(s, [])).toEqual(['older own', 'first reply', 'turnBoundary', 'newer own', 'answer'])
+    expect(s.items[3]).toBe(own)
+    expect(s.rowKeys?.[3]).toBe(key)
+    expect(s.localEchoes?.[1]).toMatchObject({ queuedMsgId: 7, settled: true })
+    expect(s.localEchoes?.[0].queuedMsgId).toBeUndefined()
+    expect(reduceTimeline(s, receipt())).toBe(s)
+    if (confirmed) expect(reduceTimeline(s, legacy)).toBe(s)
+  })
+
   it('late confirmation cannot move an older echo into a later completed reply', () => {
     let s = reduceTimeline(waiting(), end('first'))
     s = reduceTimeline(s, delta('answer', 'answer'))

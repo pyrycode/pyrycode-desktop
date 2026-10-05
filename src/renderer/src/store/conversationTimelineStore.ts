@@ -667,6 +667,8 @@ export function createConversationTimelineStore(
       set((s) => {
         const held = s.timelines.get(conversationId)
         if (held === undefined) return s
+        const origin = receiptHost()
+        if (typeof origin === 'string' && held.serverId !== undefined && held.serverId !== origin) return s
         const timeline = markLocalSendQueued(held.timeline, queued)
         if (timeline === held.timeline) return s
         const next = new Map(s.timelines)

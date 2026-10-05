@@ -146,6 +146,7 @@ export function translateTimelineEvent(
         turnId: event.turnId,
         seq: event.seq,
         text: event.text,
+        parentToolUseId: event.parentToolUseId,
         createdAt: now?.()
       }
     case 'turnEnd':

@@ -32,7 +32,7 @@ Part of [Thread timeline](thread-timeline.md).
   ([#1223](../codebase/1223.md)) does exactly that, and array-index keys broke under it —
   [#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260) gave the render layer its own
   origin-relative key for this reason; see [Conversation timeline store § Edge
-  cases](conversation-timeline-store.md#edge-cases-and-limitations).
+  cases](conversation-timeline-store-limits.md#edge-cases-and-limitations).
 - **`stalled` is onset-only with no daemon "cleared" signal** ([#317](../codebase/317.md)) — the daemon
   sends a one-shot `stall` frame and never repeats it or clears it, so the reducer derives the clear
   entirely client-side on the next turn-activity arm. A stall with no following activity stays shown
@@ -47,7 +47,7 @@ Part of [Thread timeline](thread-timeline.md).
 - **Compaction status survives turn activity.** Its falling edge clears the boolean
   and retains a divider; reconnect clears status directly without creating one.
   Delayed count metadata belongs to the row, not the liveness flag. See
-  [compaction association and lifetime](conversation-timeline-store.md#what-it-does).
+  [compaction association and lifetime](conversation-timeline-store-compaction.md#what-it-does).
 - **`thinkingTokens` is a reading, never a value to compare against a maximum** ([#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314)) — the daemon's own docs call it "approximate progress for
   spinners/pills, not the authoritative billed output_tokens", and it restarts near zero at every
   inference-request boundary (observed four times inside one committed single-turn capture). A monotonic

@@ -19,8 +19,32 @@ A **proactive** twin of that escape hatch landed in [#167](../codebase/167.md): 
 
 A **Top overlay of pills** landed in [#1604](https://github.com/pyrycode/pyrycode-desktop/issues/1604): a right-aligned stack pinned over the message area's top edge, shared with mobile, that takes no space and renders no element when it has no pills. Two occupants moved into it out of the composer status row's single-occupant slot, where each used to compete with every other slot occupant for the same space: the [usage-limit notice](conversation-shell-composer-usage-limit-notice.md#the-usage-limit-notice-now-a-top-overlay-pill-1321-moved-by-1604) (#1321) — now a Default pill with a dismiss X for exactly `allowed_warning`, an Error pill with no X for every other status, shown whatever the slot holds and whatever the connection state — and the pairing-error [Re-pair button](conversation-shell-composer-repair-button.md) (#963), now an Error pill with no X. `TopOverlay` (the pure view) lives in `TopOverlay.tsx`, and `TopOverlayControl` (its store-bound container) lives in `ConversationScreen.tsx`; the thread and the overlay together are wrapped in an always-rendered `.conversation__message-area`, so the overlay — Re-pair especially — still has somewhere to sit when an offline host leaves `Timeline` nothing to draw.
 
-The [permission resolution notice](#permission-resolution-notices) occupies the middle of this stack,
-between usage and Re-pair, with client-owned copy and a dismiss X.
+The [permission resolution notice](#permission-resolution-notices) follows usage,
+with client-owned copy and a dismiss X. A session-error notice follows resolution
+and precedes Re-pair, using the existing Error treatment with no dismiss control.
+`TopOverlayControl` selects only the open conversation's latest `sessionError` from
+the keyed timeline. `TopOverlay` compares its code to client literals; daemon codes
+and message text never enter displayed text, attributes or classes.
+
+| Session-error code | Fixed pill copy |
+| --- | --- |
+| `session.blocked` | Claude did not pick up your last message. It was not delivered. |
+| `session.child_crashing` | Claude keeps failing to start. Your message is waiting. |
+| Any other string, including empty | Claude stopped responding. |
+
+A newer error replaces the one pill. Receipt ends that conversation's stale send/turn
+feedback, retaining thread rows and the reported queue without a resend or drop action.
+An error for another chat changes neither this pill nor the open send window.
+Accepted local send, non-idle turn state, conversation reset and reconnect of its host
+clear the notice; idle states and received user echoes preserve it. Daemon reset
+uses the routed `sessionTransition(reason: 'clear')` boundary; workspace changes and
+idle eviction preserve it. Leaving the displayed chat or exiting the screen consumes
+its notice, so returning does not replay it. Unopened notices stay held, including
+through same-host saved-history reads; host reconnect clears them even off-screen
+without touching other hosts. Cleanup defers consumption through a microtask to
+distinguish actual departure from StrictMode replay. See
+[timeline lifetime](conversation-timeline-store.md#what-it-does) and
+[verification boundaries](development-verification.md#what-each-test-tier-proves).
 
 The thread overflow menu's bottom-end anchor uses level 2 above the Top overlay's
 level 1; equal levels let the later pills paint over the menu. Sheets and dialogs
@@ -114,7 +138,7 @@ The seams this screen exposes are in [Seams](conversation-shell-seams.md).
 
 `TopOverlay.tsx` is the pure view; `TopOverlayControl` in `ConversationScreen.tsx` selects the open
 chat's resolution from the [modal store](modal-store-bridge.md#permission-resolution-feedback).
-The pill sits below usage and above Re-pair, using the existing Default treatment and exact 8px X.
+The pill sits below usage and above session errors and Re-pair, using the existing Default treatment and exact 8px X.
 Its only copies are “Resolved on another device” (`remote`) and “Request timed out” (`timeout`);
 the X is named “Dismiss permission resolution notice”. Outcome, raw source and daemon-authored text
 never enter this notice's DOM. An unknown/already-removed prompt, local answer/cancel or reconnect

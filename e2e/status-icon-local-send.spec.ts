@@ -10,8 +10,8 @@ import type {
 } from '../src/shared/wire/types'
 
 // #1725: the local window now reads `Sending…` until a `queue_state` lists the sent `message_id`, then
-// `Waiting for Claude` until the daemon's first `turn_state`; `Thinking…` comes only from the daemon. This
-// is the only fake-transport spec that asserts the Thinking label right after a send.
+// `Waiting for Claude` until the daemon's first `turn_state`; `Thinking…` comes only from the daemon. The
+// staged assertions here distinguish local acceptance, queue acknowledgement and daemon activity.
 //
 // #1556 AC1: the snowflake turns as soon as the local label appears — on the composer's own
 // accept, BEFORE any server phase — keeps turning when the daemon's first `turn_state{thinking}` arrives,
@@ -161,4 +161,17 @@ test('the status row reads Sending, then Waiting for Claude, then Thinking, with
   await expect(spinningIcon).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(icon).toBeVisible()
   await expect(label).toHaveCount(0)
+
+  // A session failure can also arrive before the queue acknowledgement.
+  await page.getByPlaceholder('Message…').fill('A second locally accepted message')
+  await page.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect(label).toHaveText('Sending…')
+  await expect(spinningIcon).toBeVisible()
+  daemon.pushFrame(encodeEnvelope({ id: REPLY_ENVELOPE_ID, type: 'session_error', ts: FIXED_TS,
+    payload: { conversation_id: SEEDED_ROW.id, code: 'session.blocked', message: 'Ignored daemon text' } }))
+  await expect(page.locator('.top-overlay-pill--error')).toHaveText(
+    'Claude did not pick up your last message. It was not delivered.')
+  await expect(label).toHaveCount(0)
+  await expect(spinningIcon).toHaveCount(0)
+  await expect(icon).toBeVisible()
 })

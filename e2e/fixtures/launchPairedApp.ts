@@ -149,6 +149,9 @@ export type LaunchControl = {
   onLaunched?: (app: ElectronApplication) => Promise<void>
   /** Return at Welcome so mounted pairing tests can control authentication delivery. */
   skipPairing?: boolean
+  /** Load the window from this loopback URL through createWindow's unpackaged dev-renderer path, so a
+   *  spec can run an alternate renderer build. Absent = the built `out/renderer` every other spec uses. */
+  rendererUrl?: string
   /** Reuse this exact `--user-data-dir` (typically a prior launch's `userDataDir`) instead of minting a
    *  fresh throwaway. The persisted pairing blob in the dir boots the app straight to the ChannelList, so
    *  the fixture skips the pairing drive and returns at the list (no row click, no Send-enabled wait —
@@ -339,6 +342,7 @@ export const test = base.extend<PairedAppFixtures>({
       // isPackaged-gated dev flags and the isolated user-data dir.
       const env = { ...process.env }
       delete env.ELECTRON_RENDERER_URL
+      if (control.rendererUrl !== undefined) env.ELECTRON_RENDERER_URL = control.rendererUrl
       env[LOOPBACK_RELAY_ENV_FLAG] = '1'
       env[TEST_SECRET_BACKEND_ENV_FLAG] = '1'
       // #1067: through the shared launch, not `electron.launch` directly — it adds the desktop isolation

@@ -1676,6 +1676,13 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               daemonTs: inbound.ts
             })
             return
+          case 'session-error':
+            emitDaemonEvent(sink, {
+              type: 'sessionError',
+              conversationId: inbound.sessionError.conversation_id,
+              code: inbound.sessionError.code
+            })
+            return
           case 'stall':
             // The stall-liveness data path (#315, widened by #732). Emit a fresh literal carrying
             // `conversationId`, copied BY NAME from the already-decoded, already-validated payload —

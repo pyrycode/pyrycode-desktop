@@ -41,7 +41,7 @@ test('history failure supports explicit same-page Retry and preserves pending ro
   await retry.click()
   await expect.poll(() => asks.length).toBe(3)
   expect(asks[2].payload).toEqual(asks[1].payload)
-  expect(asks[2].payload).toEqual({ conversation_id: SEEDED_ROW.id, cursor: 'opaque/cursor==', limit: 0 })
+  expect(asks[2].payload).toEqual({ conversation_id: SEEDED_ROW.id, cursor: 'opaque/cursor==', limit: 200 })
   expect(asks[2].id).not.toBe(asks[1].id)
   await expect(failure).toHaveCount(0)
   await expect(retry).toHaveCount(0)

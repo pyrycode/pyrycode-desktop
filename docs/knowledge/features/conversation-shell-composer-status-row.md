@@ -91,7 +91,7 @@ restart Claude. The container reads the open conversation's agent through
 `selectConversationAgentFor(host, id)` and passes it down as `ThinkingIndicator`'s
 `agent` prop, which defaults to `'claude'` when omitted — the one prop on this
 component that is optional rather than required, breaking the "all four required"
-posture the [thinking/working indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)
+posture the [thinking/working indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967-splits-the-local-send-window-into-sending-and-waiting-for-claude-since-1725)
 doc records for `toolName`/`retry`/`thinkingTokens`/`resetting`, because an absent
 agent already means Claude on the wire and in the #1649 selector alike, so the
 default restates an existing contract instead of guessing. The wrapping-up phase,
@@ -112,7 +112,7 @@ compaction superseded the label (per #493/#496) while the raw phase reading (`is
 turning regardless, and the held height was what made that read as intentional rather than broken.
 [**#967**](https://github.com/pyrycode/pyrycode-desktop/issues/967) **closed that state as a side effect
 of folding retry, compacting and stall into the label's own union** (see [Thinking / working
-indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)
+indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967-splits-the-local-send-window-into-sending-and-waiting-for-claude-since-1725)
 below) rather than by coupling the two gates: through #1517 the icon turned on the raw `isRunning`, and
 whenever that held the label was non-null in every case (resetting, retrying, compacting, stalled, or
 thinking/working), so the icon could no longer turn beside nothing.
@@ -126,18 +126,29 @@ view structurally cannot receive the store enum, so `'idle'` is not representabl
 branch and no daemon string can reach this prop. Through #1517 the container supplied `isTurnRunning(phase)`
 directly, the same exported predicate the composer's stop-button variant gates on.
 [**#1556**](https://github.com/pyrycode/pyrycode-desktop/issues/1556) widened the source one step: the
-container now supplies `isStatusIconTurning(phase, state)` — `isTurnRunning(phase) || state === 'thinking'`
+container now supplies `isStatusIconTurning(phase, state)` — through #1556 this was
+`isTurnRunning(phase) || state === 'thinking'`
 — where `state` is the very `workingIndicatorStateWithLocalSend` result the label already renders, hoisted
 once into a `const` beside the container's existing `openTool`, so the icon reads the label's own answer
 rather than re-deriving `localSendPending` a second time. `isTurnRunning(phase)` alone stays the stop
 affordance's sole gate (`ComposerSendButton`, and the Escape branch's `shouldInterruptOnKeyDown`) — only
-this mount's icon moved. Widening by `state === 'thinking'` adds no daemon-sourced render:
+this mount's icon moved. Widening by `state === 'thinking'` added no daemon-sourced render:
 `workingIndicatorState` reaches `'thinking'` only past `shouldShowThinking`, which already requires
-`isTurnRunning`, so the clause's only new inhabitant is #650's locally-opened window — the interval between
+`isTurnRunning`, so the clause's only new inhabitant was #650's locally-opened window — the interval between
 the composer accepting a submit and the daemon's first `turn_state`, which previously left the label reading
 Thinking beside a still mark for one round trip. The four superseding labels (reset, retry, compaction,
 stall) are excluded on purpose and still show beside a still mark at `idle`, restating the converse two
 paragraphs up.
+
+**[#1725](https://github.com/pyrycode/pyrycode-desktop/issues/1725) widened the clause again, in step with
+[Thinking / working indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967-splits-the-local-send-window-into-sending-and-waiting-for-claude-since-1725)
+splitting the local window's label into two stages.** `isStatusIconTurning` now reads
+`isTurnRunning(phase) || state === 'sending' || state === 'waiting'` — the local window no longer ever
+produces `'thinking'` (that label comes only from the daemon's own `turn_state{thinking}` now), so the
+two states that replaced it inherit its clause instead of a third one being added beside it. The icon's
+turning condition is unchanged in substance: it still turns for exactly the interval the locally-opened
+window covers, from the composer's accept to the daemon's first `turn_state`, through both of that
+window's stages.
 
 **`children`, not a `label: string` prop — the `StatusSheet({ onClose, children })` precedent.** Keeps the
 row independent of where its text comes from. `children` is the activity group's slot (`<ThinkingIndicator/>`);
@@ -231,7 +242,7 @@ what reopened it: those three views, their mount site, their bubbles, and seven 
 the precedence they used to hold via separate DOM adjacency now lives entirely inside
 `workingIndicatorState`'s order (now reset first, followed by retry, compaction, stall and
 thinking/working) — see [Thinking / working
-indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)
+indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967-splits-the-local-send-window-into-sending-and-waiting-for-claude-since-1725)
 above for the retirement and the new order.
 
 One second-order consequence that predates #967 and is unaffected by it: `.conversation__thinking` no

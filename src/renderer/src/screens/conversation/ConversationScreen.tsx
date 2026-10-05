@@ -66,6 +66,7 @@ import {
   type TurnPhase,
   type ApiRetryStatus,
   type ResettingStatus,
+  type LocalSendPending,
   type UnrecognizedSite,
   type MessageAttachment
 } from '../../store/threadTimeline'
@@ -2367,6 +2368,13 @@ export const THINKING_COPY = 'Thinking…'
 // string — the wire carries no label for this state, so the guarantee holds by construction.
 export const WORKING_COPY = 'Working…'
 
+// #1725: the two stages of the locally-opened send window, before the daemon reports a turn. "Sending…"
+// until a `queue_state` lists the sent `message_id`, then "Waiting for Claude" until the first
+// `turn_state`, so a daemon whose claude never starts no longer reads as claude thinking. Client-owned,
+// apostrophe-free; the second has no ellipsis, as the ticket words it.
+export const SENDING_COPY = 'Sending…'
+export const WAITING_COPY = 'Waiting for Claude'
+
 // #649: the label that names the tool the daemon currently has open — the answer to the operator's
 // remaining complaint, that WORKING_COPY reads identically for a 40 ms file read and a four-minute build.
 // A function rather than a constant because this copy has a hole, but BOTH fixed runs (the leading verb
@@ -2471,6 +2479,9 @@ export type WorkingIndicatorState =
   | 'compacting'
   | 'stalled'
   | 'resetting'
+  // #1725: the local send window's two stages, which replace its former `'thinking'` answer.
+  | 'sending'
+  | 'waiting'
 
 // #967: the label for each of the five states — a total switch with NO default, so a sixth member is a
 // `tsc` error here rather than a silently unlabelled row. Every arm returns a client-owned constant; only
@@ -2500,6 +2511,10 @@ function statusRowCopy(
       return thinkingLabel(thinkingTokens)
     case 'working':
       return WORKING_COPY
+    case 'sending':
+      return SENDING_COPY
+    case 'waiting':
+      return WAITING_COPY
   }
 }
 
@@ -2988,14 +3003,21 @@ export function workingIndicatorState(status: ThreadStatus): WorkingIndicatorSta
 // from #307's standalone interrupt control to the composer's send button, which now wears the stop
 // variant), so a locally opened window structurally cannot arm a stop button for a turn the daemon has not
 // started (AC4).
+//
+// #1725 REPLACES (b): the honest reading of "nothing produced yet" turned out to be the daemon's, not
+// ours. On 2026-10-03 a crash-looping claude left the row reading `Thinking…` for minutes. The gate's
+// `'thinking'` answer is now mapped to the window's own stage — `'sending'` until a `queue_state` listed
+// the sent id, `'waiting'` after — so `Thinking…` comes only from a daemon `turn_state{thinking}`.
 export function workingIndicatorStateWithLocalSend(
   status: ThreadStatus,
-  localSendPending: boolean
+  localSendPending: LocalSendPending | null
 ): WorkingIndicatorState | null {
   const daemonState = workingIndicatorState(status)
   if (daemonState !== null) return daemonState
-  if (!localSendPending) return null
-  return workingIndicatorState({ ...status, phase: 'thinking' })
+  if (localSendPending === null) return null
+  const local = workingIndicatorState({ ...status, phase: 'thinking' })
+  if (local !== 'thinking') return local
+  return localSendPending.queued ? 'waiting' : 'sending'
 }
 
 // #649: the `name` of the most recently started still-open main-thread tool call, or null if none is open.
@@ -3086,8 +3108,12 @@ export function isTurnRunning(phase: TurnPhase): boolean {
 //
 // The animation stops on its own: any `turn_state`, `idle` included, clears `localSendPending`
 // (threadTimeline's turnState arm), so the local window closes with the turn and needs no second rule.
+//
+// #1725: the local window now answers `'sending'` or `'waiting'` rather than `'thinking'`, so those two
+// carry the widening instead; a `'thinking'` answer is daemon-sourced and already covered by the first
+// clause.
 export function isStatusIconTurning(phase: TurnPhase, state: WorkingIndicatorState | null): boolean {
-  return isTurnRunning(phase) || state === 'thinking'
+  return isTurnRunning(phase) || state === 'sending' || state === 'waiting'
 }
 
 // #1214 DELETED `QueuedBacklog` AND ITS `.conversation__queued` REGION. #294 drew the backlog as a

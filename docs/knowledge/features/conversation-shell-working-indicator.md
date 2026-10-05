@@ -2,7 +2,7 @@
 
 Part of [Turn status surfaces](conversation-shell-turn-status.md).
 
-## Thinking / working indicator (#215, held for the whole running turn since #648, tool-named since #649, opens on send since #650, folds in retry, compacting and stall since #967)
+## Thinking / working indicator (#215, held for the whole running turn since #648, tool-named since #649, opens on send since #650, folds in retry, compacting and stall since #967, splits the local send window into Sending… and Waiting for Claude since #1725)
 
 `Timeline`'s structural twin over the coarse `phase` scalar (`TurnPhase`, [ADR 0008](../decisions/0008-thread-timeline-model.md))
 rather than the `items` list. Through #796 it mounted immediately after `Timeline`; **since
@@ -50,8 +50,12 @@ prop's only inhabitants were two client-owned literals and `null`. #649 named th
 tool in the label (per the operator's 2026-08-20 decision: the tool row two lines above the indicator
 already renders the same `name` as an escaped inert React child, so the indicator adds no new exposure)
 and had to reverse that guarantee to do it. What survives, narrowed rather than dropped: the **label
-choice** (`state`) is still a closed client-owned union — **widened to five by #967 and six by #1517**
-(`'thinking' | 'working' | 'retrying' | 'compacting' | 'stalled' | 'resetting'`).
+choice** (`state`) is still a closed client-owned union — **widened to five by #967, six by #1517, and
+eight by #1725**
+(`'thinking' | 'working' | 'retrying' | 'compacting' | 'stalled' | 'resetting' | 'sending' | 'waiting'`).
+`'sending'` and `'waiting'` are the two stages of the locally-opened send window (see below); they never
+come from `workingIndicatorState` itself, only from `workingIndicatorStateWithLocalSend` remapping its
+`'thinking'` answer.
 The original fold's comment is explicit
 that this is a *different* act from the one #649 refused: every added member is another client-owned
 literal, so the label choice stays a closed set of this file's own constants rather than dissolving into
@@ -81,7 +85,7 @@ splitting at that cascade.
 `state === null` guard was what enforced #493's and #496's supersede rules, and the tool name then won
 over the phase-derived copy: `toolName !== null ? toolWorkingCopy(toolName) : …`, safe only because a
 live retry or compaction made `state` null and the component returned before reaching the label. Now
-that all six states share the one slot, `state === 'retrying'` with a tool still open is *reachable*,
+that all eight states share the one slot, `state === 'retrying'` with a tool still open is *reachable*,
 and the old order would have rendered the tool name where the row must say `API_RETRY_COPY`. So one
 `const toolLabel = (state === 'thinking' || state === 'working') && toolName !== null ?
 toolWorkingCopy(toolName) : null` now drives both the label and the `--tool` modifier — one expression
@@ -97,7 +101,7 @@ moved the label off the daemon-bubble surface into the fixed-height row above th
 one genuinely new piece, a turning icon; see [Composer status
 row](conversation-shell-composer-status-row.md#composer-status-row-796) below.
 
-**The label is a single text child in every one of the six states, never constant-plus-span.** That is
+**The label is a single text child in every one of the eight states, never constant-plus-span.** That is
 load-bearing for the truncation bound: one text run ellipsizes as one unit, so on overflow the client `…`
 is truncated away and replaced by the ellipsis the truncation itself draws — two runs would render two
 ellipses. `ApiRetryIndicator`'s retired bubble *did* render constant-plus-span (`.api-retry__counter`,
@@ -114,24 +118,55 @@ shipped order and appends at most one modifier: `conversation__thinking composer
 indicator stayed dark from Enter until the daemon's first event — the composer's optimistic echo
 landed as a `userText` timeline item, but `phase` stayed `idle` until `turn_state{thinking}`
 arrived, so a slow network round-trip looked identical to a dead app. #650 closes that window with
-a new [timeline-store](conversation-timeline-store.md) scalar, `localSendPending: boolean`, set by
+a new [timeline-store](conversation-timeline-store.md) scalar, `localSendPending`
+([retyped by #1725](thread-timeline-internals.md#types), see below), set by
 the same `userText` dispatch that posts the echo (no new event: that dispatch already *is* the
 composer's accept signal). `phase` itself stays daemon-only — a wire mirror, and the one field the
 composer's stop variant reads (`InterruptControl` read it here until [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678)
 folded the affordance into `Composer`'s own send button; see [Interrupt envelope § The render
 affordance](interrupt-envelope.md#the-render-affordance-307-merged-into-the-send-button-by-678)) — so the
 local open cannot arm the interrupt affordance. The mount site
-now calls a second exported derivation, `workingIndicatorStateWithLocalSend(status,
+calls a second exported derivation, `workingIndicatorStateWithLocalSend(status,
 localSendPending)`, composed *on top of* `workingIndicatorState` rather than folded into
 `ThreadStatus`: the daemon's answer wins when non-null, otherwise a pending local send re-calls the
 same gate with `phase: 'thinking'` substituted, inheriting #493's/#496's supersede clauses for
-free and picking the flicker-free `'thinking'` label (the daemon's first real `turn_state{thinking}`
-then changes nothing at the seam). Closes on any daemon `turn_state`, on a reconnect reconcile (the
+free. Closes on any daemon `turn_state`, on a reconnect reconcile (the
 sharpest form of the #538 hazard — a locally-opened window has no daemon-side edge to wait for at
 all if the send never arrives, corroborated by pyrycode #1062), and for free on a timeline `reset`
 (conversation switch, unpair). `ThreadStatus`, `shouldShowThinking` and `workingIndicatorState`
 stay textually untouched. See [#650 codebase notes](../codebase/650.md) for the full reducer
 arm-by-arm classification and the e2e mount-timing repair it also required.
+
+**[#1725](https://github.com/pyrycode/pyrycode-desktop/issues/1725) splits the local window's single
+flicker-free `'thinking'` label into two honest stages, keyed on the daemon's own queue.** On
+2026-10-03 the daemon accepted a message while its claude child was crash-looping — the message was
+enqueued but claude never started, and #650's local window had no way to tell that apart from an
+ordinary in-flight send, so the row read "Thinking…" for minutes. The daemon already says when it
+holds a message: every `send_message` is enqueued, and each enqueue pushes a `queue_state` whose
+items carry the client's own `message_id` (pyrycode#2092, [queue store](queue-store.md)). So
+`localSendPending` retypes from `boolean` to `LocalSendPending | null`
+([Thread timeline § Types](thread-timeline-internals.md#types)) — an open window now names the
+newest send's `messageId` and a sticky `queued` flag, set by
+[`markLocalSendQueued`](thread-timeline-internals.md#the-reducer) the moment a `queue_state` for this
+conversation lists that id. `workingIndicatorStateWithLocalSend`'s local re-call is otherwise
+unchanged — same gate, same `phase: 'thinking'` substitution, same supersede clauses — but where it
+used to return that gate's `'thinking'` answer directly, it now maps it to `localSendPending.queued ?
+'waiting' : 'sending'`: `SENDING_COPY` ("Sending…") until the queue confirms receipt, then
+`WAITING_COPY` ("Waiting for Claude") until the daemon's own `turn_state{thinking}` arrives and
+`workingIndicatorState` answers directly. **`Thinking…` now comes only from the daemon** — the local
+window can no longer produce it. The window's open/close rules, `InterruptControl`'s and
+`isTurnRunning`'s indifference to it, and the reconnect/reset closes are all unchanged; only the
+label the open window itself picks changed. `e2e/status-icon-local-send.spec.ts` is the only
+fake-transport spec asserting `Thinking…` immediately after a send, and it now drives the whole
+Sending… → Waiting for Claude → Thinking… sequence, including a foreign/id-less `queue_state` that
+must leave the label alone and an empty snapshot that must not un-stick `queued`. See [Composer
+status row § `isRunning: boolean`…](conversation-shell-composer-status-row.md#composer-status-row-796)
+for the icon-turning gate's matching widen.
+
+**`WAITING_COPY` ("Waiting for Claude") names Claude specifically; a Codex conversation reads the same
+copy.** The ticket worded the copy for Claude alone and left choosing it by agent — the precedent is
+the `agent?: WireAgent` prop `ResettingStatus`'s own restarting-phase copy already selects on (above)
+— to a follow-up rather than widening this one.
 
 Was dormant until [#179](../codebase/179.md) flipped `interactive` (`phase` stayed `idle` in
 production until then, the same posture as `Timeline`); now live. Code review flagged one non-gating
@@ -334,11 +369,14 @@ view used, never `current / total` (`NaN` at `0/0`). Both integers are guarantee
 strings: `parseApiRetryPayload` (`src/main/transport/inboundMessage.ts`) narrows them with
 `requireNumber` and throws `WireDecodeError` otherwise, which is also what bounds the interpolation's
 length — a JS number stringifies to at most 24 characters. A module-private `statusRowCopy(state, retry,
-thinkingTokens, resetting)` is the total switch that picks among all six labels, with **no `default`**, so a new
+thinkingTokens, resetting)` is the total switch that picks among all eight labels — `'sending'` and
+`'waiting'` return the bare `SENDING_COPY`/`WAITING_COPY` constants, same shape as `'working'` — with
+**no `default`**, so a new
 `WorkingIndicatorState` member is a `tsc` error here rather than a silently unlabelled row. **The estimate
 reaches the `'thinking'` arm alone** — AC2 froze the other four states verbatim, so a retry, a compaction,
 a stall and the generic working label never carry it, and neither does the tool-named label (the tool name
-already supersedes the thinking copy unconditionally).
+already supersedes the thinking copy unconditionally); `'sending'`/`'waiting'` carry no estimate for the
+same reason — the daemon has not yet opened a turn, so there is no reading to show.
 
 **`thinkingLabel(thinkingTokens: number | null): string`** ([#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314)) is `apiRetryLabel`'s sibling, written to the identical shape — the constant, one
 hole, one client-owned unit — and reads `` `${THINKING_COPY} ~${shown} tokens}` `` when a reading is held,
@@ -385,7 +423,7 @@ function whose result now actually picks between the four.
 `.bubble--stall` visibility check for one **exact-text** assertion on the row's label
 (`.conversation__thinking`, still the identity hook) plus a class check for
 `composer-status__label--stalled` — exact rather than `toBeVisible`, because the label element is now
-shared by all six states, so mere visibility proves nothing. `thread-scroll-pin.spec.ts` needed two
+shared by all eight states, so mere visibility proves nothing. `thread-scroll-pin.spec.ts` needed two
 separate repairs, covered in the **Thread scroll pin** edge case of [Conversation
 shell](conversation-shell.md#edge-cases-and-limitations): its fourth criterion (chrome mounting shrinks
 the thread's viewport without un-pinning it) moved off the now-empty stall block onto the queued backlog,

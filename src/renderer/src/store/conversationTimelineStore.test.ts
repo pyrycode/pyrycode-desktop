@@ -53,7 +53,7 @@ const emptyTimeline: TimelineState = {
   stalled: false,
   apiRetry: null,
   compacting: false,
-  localSendPending: false
+  localSendPending: null
 }
 
 const delta = (turnId: string, text: string): ThreadEvent => ({
@@ -157,7 +157,7 @@ describe('conversationTimelineStore', () => {
       stalled: true,
       apiRetry: { current: 1, total: 3 },
       compacting: true,
-      localSendPending: true,
+      localSendPending: { messageId: '', queued: false },
       thinkingTokens: 512,
       resetting: { phase: 'restarting', handoff: 'written' }
     })
@@ -171,7 +171,7 @@ describe('conversationTimelineStore', () => {
       stalled: false,
       apiRetry: null,
       compacting: false,
-      localSendPending: false,
+      localSendPending: null,
       thinkingTokens: null,
       resetting: null
     })
@@ -711,7 +711,7 @@ describe('conversationTimelineStore', () => {
       expect(held?.stalled).toBe(true)
       expect(held?.apiRetry).toEqual({ current: 1, total: 3 })
       expect(held?.compacting).toBe(true)
-      expect(held?.localSendPending).toBe(false)
+      expect(held?.localSendPending).toBeNull()
     })
 
     it('adds no rows for an empty page, and churns no subscriber', () => {
@@ -1126,5 +1126,27 @@ describe('conversationTimelineStore — the live join keys (#1225)', () => {
 
     store.getState().dispatchFor('next', delta('t1', 'a'), 'assistantDelta next')
     expect(keysFor(store, 'victim').size).toBe(0)
+  })
+})
+
+// #1725: a queue snapshot advances only a held slice's open send window, and only for its own sent id.
+describe('conversationTimelineStore — markLocalSendQueued (#1725)', () => {
+  const queuedItem = (message_id: string) => ({ queued_msg_id: 1, text: 'typed', ts: 'ts', message_id })
+
+  it('marks the held slice queued when the snapshot lists the sent id', () => {
+    const store = createConversationTimelineStore({ timelines: new Map() })
+    store.getState().dispatchFor('conv-a', { type: 'userText', text: 'typed', messageId: 'm1' })
+    store.getState().markLocalSendQueued('conv-a', [queuedItem('m1')])
+    expect(timelineFor(store, 'conv-a')?.localSendPending).toEqual({ messageId: 'm1', queued: true })
+  })
+
+  it('returns the same state for an unmatched id, and never creates a slice', () => {
+    const store = createConversationTimelineStore({ timelines: new Map() })
+    store.getState().dispatchFor('conv-a', { type: 'userText', text: 'typed', messageId: 'm1' })
+    const before = store.getState()
+    store.getState().markLocalSendQueued('conv-a', [queuedItem('m2')])
+    store.getState().markLocalSendQueued('conv-b', [queuedItem('m1')])
+    expect(store.getState()).toBe(before)
+    expect(timelineFor(store, 'conv-b')).toBeNull()
   })
 })

@@ -50,10 +50,11 @@ does not turn.** Figma draws the collapsed state only (the Body frame is hidden 
 plus the body appearing below already carry the open state, so a turning glyph would be design invented
 here rather than implemented. If one is ever wanted it's a one-rule follow-up keyed on the
 `.tool-row--expanded` class that already ships — not read from `expanded` inside `ToolRow`. The chevron is
-purely decorative: no `aria-label`, no `<title>`, no `role="img"`, no `aria-controls`/`id` pair — the
-SAFETY block's existing clauses (`ConversationScreen.tsx:704-781`) apply verbatim since this adds one
-element into the same chip and no untrusted string (the path is a client-owned constant, the two runs are
-unedited) — so the resolved chip's accessible name stays exactly its two text runs (WCAG 2.5.3).
+purely decorative: no `aria-label`, no `<title>`, no `role="img"`, no `aria-controls`/`id` pair.
+The separate [Failed icon](conversation-shell-tool-rows.md#failed-icon) is meaningful:
+it has `role="img"` and the client-owned label `Failed`, after the count and before the
+chevron. Tool text and count remain escaped text children; the glyph path and label
+are client-owned constants.
 
 **Both groups are `<span>`, never `<div>`.** A resolved chip is a real `<button>`, which admits phrasing
 content only; a `<div>` inside it is invalid HTML and a React DOM-nesting warning. `<svg>` is phrasing
@@ -62,7 +63,7 @@ content and is fine. Layout comes from `display: flex` in the CSS, not from the 
 **Tests.** Two byte-level assertions in `ConversationScreen.test.tsx` were updated in place (not
 loosened) to expect the new wrapper spans and the chevron as the right group's last child; new cases pin
 that a pending leaf draws neither `.tool-row__right` nor `.tool-row__chevron` nor a gap where either would
-be, that the chevron carries `aria-hidden="true"` and nothing else exposes an accessible name, that an
+be, that the chevron carries `aria-hidden="true"`, that an
 error row still draws the chevron (it follows the body, never the outcome), and that an expanded row's
 header markup is byte-identical to the collapsed row's (no rotation class, no `--expanded` variant). A new
 sibling `test(...)` in `e2e/tool-row-toggle.spec.ts` (its own `launchPairedApp`, since a second row on the
@@ -119,8 +120,12 @@ collapsed descendants and undrawn `turnBoundary` items. A visible non-tool row o
 change in indentation ends the stack. Direct `.tool-row + .tool-row` selectors alone
 cannot implement this: the mounted wrappers interrupt DOM adjacency even for ordinary
 calls with no children. Client-owned wrapper classes extend the existing join rules
-for flattened internal corners, overlapping borders, adjacent error edges and a shadow
-only on the stack's last row.
+for flattened internal corners, overlapping plain borders and a shadow only on the
+stack's last row. `Timeline`'s `joins` map emits only `tool-group-row--joined-above`
+and `tool-group-row--joined-below`; #1748 removed `tool-group-row--error-above` and
+`tool-group-row--error-below` and their CSS retints. Failure stays local to the
+header's [Failed icon](conversation-shell-tool-rows.md#failed-icon), without changing
+stack geometry or its neighbours' border colour.
 
 Visible wrappers are flex columns so the child's negative join margin reduces wrapper
 height without collapsing through it. Hidden wrappers retain `display: none`, consuming
@@ -132,7 +137,8 @@ neither height nor thread gap. See [tool-row box treatment](conversation-shell-t
 distinct counts, denial completion and reducer/history attribution. Static markup
 cannot prove retained interaction or border geometry. `e2e/tool-groups.spec.ts` drives
 interleaved live calls, nested expansion, result resolution and history regrouping;
-it also measures joins through collapse and child-result expansion. Keep the ordinary
+it also measures joins through collapse and child-result expansion, including plain
+borders on both sides of a failed row at a collapsed-group boundary. Keep the ordinary
 stack assertion in `e2e/tool-row-toggle.spec.ts`: unchanged inner ToolRow markup did
 not prevent the wrapper regression. Fake transport proves this client behavior; no
 additional live-Claude acceptance gate is needed.

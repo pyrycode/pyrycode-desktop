@@ -641,17 +641,37 @@ describe('Timeline — the streamed assistant text', () => {
     expect(markup).not.toContain('tool-row__chip--toggle')
   })
 
-  // Markup-level insurance for the CSS specificity argument: `.tool-row--error .tool-row__chip`
-  // (:943, specificity 0,2,0) out-ranks `.tool-row__chip--toggle` (0,1,0) and keeps retinting the
-  // border — but only while the wrapper still carries tool-row--error and the button still carries
-  // tool-row__chip. The cascade itself is invisible to a server render; these two class names are the
-  // half of the claim this tier CAN pin.
-  it('keeps the error-accent selector intact once the chip is a button (#697)', () => {
-    const markup = renderToStaticMarkup(
-      <ToolRow item={toolItem({ isError: true, resultSummary: 'ENOENT' })} />
-    )
-    expect(markup).toContain('class="tool-row tool-row--resolved tool-row--error"')
-    expect(markup).toContain('<button type="button" class="tool-row__chip tool-row__chip--toggle"')
+  it.each([false, true])('names the failed icon between the count and chevron (expanded=%s)', (expanded) => {
+    const markup = renderToStaticMarkup(<ToolRow
+      item={toolItem({ isError: true, resultSummary: 'ENOENT', resultDetail: 'no matches' })}
+      defaultExpanded={expanded}
+    />)
+    expect(markup).toContain('tool-row--error')
+    expect(markup).toContain('role="img" aria-label="Failed"')
+    expect(markup).toContain('viewBox="0 0 16 16" width="16" height="16"')
+    expect(markup.indexOf('tool-row__count')).toBeLessThan(markup.indexOf('aria-label="Failed"'))
+    expect(markup.indexOf('aria-label="Failed"')).toBeLessThan(markup.indexOf('tool-row__chevron'))
+  })
+
+  it('shows the Failed icon without a count and keeps it off success, pending and denied rows', () => {
+    const failed = toolItem({ isError: true, resultSummary: 'ENOENT' })
+    expect(renderToStaticMarkup(<ToolRow item={failed} />)).toContain('aria-label="Failed"')
+    for (const item of [
+      toolItem(null), toolItem({ isError: false, resultSummary: 'done' }),
+      { ...failed, denial: { toolName: 'read_file', decisionReasonType: 'rule', decisionReason: 'Denied by rule',
+        message: 'Denied', truncatedFields: null, droppedFields: null } }
+    ]) {
+      expect(renderToStaticMarkup(<ToolRow item={item} />)).not.toContain('aria-label="Failed"')
+    }
+  })
+
+  it('joins a failed row with plain neighbours without error join modifiers', () => {
+    const items = [toolItem(null), toolItem({ isError: true, resultSummary: 'ENOENT' }),
+      toolItem({ isError: false, resultSummary: 'done' })]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    expect(markup).toContain('tool-group-row--joined-above')
+    expect(markup).toContain('tool-group-row--joined-below')
+    expect(markup).not.toContain('tool-group-row--error-')
   })
 
   // #705: the headline swap. The rules themselves are toolHeadline.test.ts's; what these cases pin is
@@ -749,7 +769,7 @@ describe('Timeline — the streamed assistant text', () => {
       <ToolRow item={toolItem({ isError: true, resultSummary: 'ENOENT' })} />
     )
     expect(markup).toContain('tool-row__chevron')
-    // The error accent is untouched: same wrapper classes, same retinting selector.
+    // The failure-state hook stays on the wrapper; the icon supplies the visible treatment.
     expect(markup).toContain('class="tool-row tool-row--resolved tool-row--error"')
   })
 

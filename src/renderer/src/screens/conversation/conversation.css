@@ -2065,20 +2065,9 @@ button.top-overlay-pill {
    these modifiers to the wrapper. Placed immediately after the base .tool-row so source order gives the
    equal-specificity modifier precedence over the pending opacity. tool-row--resolved lifts the pending
    dimming for BOTH outcomes (the success state is the mock's chip with dimming lifted — no accent
-   added); tool-row--error additionally retints the border to signal the failure. */
+   added). Failed rows use a small error icon and keep the plain border. */
 .tool-row--resolved {
   opacity: 1;
-}
-
-/* #1102 — the retint FOLLOWED THE BOX OUTWARD, from `.tool-row--error .tool-row__chip` to the row itself,
-   because the chip no longer has a border to retint and the failure is a property of the whole row rather
-   than of its header. THE PLACEMENT IS NOW LOAD-BEARING: at (0,1,0) this is equal specificity with the
-   base .tool-row, so it wins on SOURCE ORDER alone and must stay after it — the outgoing descendant
-   selector won at (0,2,0) and could have sat anywhere. e2e/tool-row-toggle.spec.ts compares a failed
-   row's computed border colour against a successful one's, so a selector left on the chip goes red rather
-   than silently drawing no failure device at all. */
-.tool-row--error {
-  border-color: var(--color-error);
 }
 
 /* #1073 — CONSECUTIVE TOOL ROWS JOIN INTO ONE STACK (Figma "Consequent tool uses" 384:7103), so a run of
@@ -2120,21 +2109,8 @@ button.top-overlay-pill {
    group shadow is; and it can stay because an outer shadow is clipped to outside its own border box and
    starts 4 − 2.5 = 1.5px below that box's top, so it cannot paint back up across the join above it.
 
-   THE JOIN'S COLOUR IS A RULE RATHER THAN A CONSEQUENCE OF PAINT ORDER, and that is the subtle part. Two
-   facts pull opposite ways. A later sibling paints its background and border over an earlier one's, so by
-   default the row below a failed row would erase that row's red bottom edge and a row above one would gain a
-   red edge it should not have. AND .tool-row's pending opacity: 0.5 makes a pending row an atomic paint
-   group, which paints above every non-dimmed sibling regardless of DOM order — so the direction reverses the
-   moment a pending row is one of the pair. Making both coincident borders carry the same colour is what makes
-   the drawn line independent of which row happens to paint last. Neither rule leaks past the shared edge: a
-   failed row's own four sides stay red through .tool-row--error above, and each neighbour is retinted on
-   exactly one edge.
-
-   A PENDING/RESOLVED JOIN NEEDS NO RULE. A 50% border painted over a 100% border of the same colour at the
-   same pixels composites back to full strength, so that join reads as one full line rather than a half one.
-   And a failed row is always --resolved as well (ToolRow's rowClass adds tool-row--error only on top of
-   tool-row--resolved), so a dimmed row and a red border are never the same element — only ever the two sides
-   of a join.
+   ALL ROWS KEEP THE SAME BORDER COLOUR, including failures. Pending opacity still composites the
+   coincident borders; failure is shown by the header icon rather than by retinting the shared edge.
 
    :has() SHIPPED IN CHROMIUM 105 and this app runs Electron 33 (Chromium 130) with no other renderer.
    e2e/tool-row-toggle.spec.ts drives a run of four resolving pending/resolved/failed/resolved, which is the
@@ -2152,16 +2128,6 @@ button.top-overlay-pill {
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
   box-shadow: none;
-}
-
-.tool-row--error + .tool-row,
-.tool-group-row--error-above > .tool-row {
-  border-top-color: var(--color-error);
-}
-
-.tool-row:has(+ .tool-row--error),
-.tool-group-row--error-below > .tool-row {
-  border-bottom-color: var(--color-error);
 }
 
 /* #696 — the expanded row. Since #1102 the row is a column in BOTH states, so what is left on this
@@ -2258,9 +2224,8 @@ button.top-overlay-pill {
 
    1. NOT `border`, it said, because `.tool-row--error .tool-row__chip` retinted at (0,2,0) against this
       rule's (0,1,0) and kept winning only while this rule stayed silent — a `border:` here would have
-      silently killed the error accent on every failed row. That accent now lives on `.tool-row--error`,
-      a different element, so nothing here can reach it. And the declaration became REQUIRED by the same
-      move: with the border gone from the base rule, the <button> branch would inherit the UA's own grey
+      silently killed the error accent on every failed row. Failure now uses the header icon, so no error
+      border rule remains. And the declaration became REQUIRED by the same move: with the border gone from the base rule, the <button> branch would inherit the UA's own grey
       3D border and grow, while the pending <div> branch would not — breaking the "identical by
       construction" property #722 wrote this rule for. `background: none` is required for the same reason
       (button-face), and pairs with the :hover rule below rather than fighting it.
@@ -2467,6 +2432,13 @@ button.top-overlay-pill {
   color: var(--color-primary);
 }
 
+/* Material error_outline from the Failed Tool use variant. Keep the 16px SVG from shrinking. */
+.tool-row__failed {
+  display: block;
+  flex: 0 0 auto;
+  color: var(--color-error);
+}
+
 /* The tool-name run: monospace tertiary — the tool's identity, never shrinks or truncates. #218 sized it
    from the mobile mock's raw 13px (Figma 16-30) down to body-small's 12px per the ±2px convention; #722
    redraws it at the desktop design's 14/16 (Figma 134:4939), which is a raw pair bound to no type style
@@ -2630,19 +2602,8 @@ button.top-overlay-pill {
   border-radius: var(--radius-xs);
 }
 
-/* #1103 — WHERE THE ERROR RULE WAS. `.tool-row__body--error .tool-row__result` drew a 1px --color-error
-   border around the result, the chip's own error device applied to the body in the same descendant
-   shape. It is deleted rather than retuned: with the result now bare text carrying no fill and no box,
-   that rule would draw a red rectangle around loose text, which is not a device the design has. The
-   accent LIVES OUTWARD now — #1102 moved the retint to .tool-row--error, the row's own border, so
-   deleting this removes the second failure device and not the last one.
-
-   THE MODIFIER CLASS ITSELF STAYS in the markup, deliberately. Removing it from ToolRow is a markup
-   change with test churn (two ConversationScreen.test.tsx assertions pin it as a substring) and no
-   visual gain, and it remains the body's own failure hook for anything a later ticket wants to draw
-   here. e2e/tool-row-toggle.spec.ts asserts a failed result's computed border width is 0 on all four
-   sides while the row's border colour still differs from a successful row's, so restoring this rule
-   reddens and losing the row-level retint reddens separately. */
+/* Failed results stay bare text. The body modifier remains a state hook; the header icon is the
+   failure indicator in both expanded and collapsed rows. */
 
 /* #706 — one input field: its name stacked above its value. --space-1 (4px) is TIGHTER than the
    distance between fields, which is what makes a name read as belonging to the value beneath it rather

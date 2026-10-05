@@ -2186,6 +2186,25 @@ describe('subscribeTimeline — the join key reaches the dispatch (#1225)', () =
 })
 
 describe('session error routing', () => {
+  it('a daemon clear boundary consumes only its conversation notice and retains the divider', () => {
+    const holder = createConversationTimelineStore(undefined, () => 'host-a')
+    holder.getState().dispatchFor('a', { type: 'sessionError', code: 'session.blocked' })
+    holder.getState().dispatchFor('b', { type: 'sessionError', code: 'session.child_crashing' })
+    const other = holder.getState().timelines.get('b')
+    const bridge = makeFakeBridge()
+    const off = subscribeTimeline(bridge.onDaemonEvent, (thread, id) => {
+      if (id !== null) holder.getState().dispatchFor(id, thread)
+    })
+    bridge.emit({ type: 'sessionTransition', conversationId: 'a', newSessionId: 'new-session',
+      reason: 'clear', occurredAt: '2026-10-05T12:00:00.000Z', workspaceCwd: null })
+    expect(selectTimelineFor('a')(holder.getState())?.sessionError).toBeUndefined()
+    expect(selectTimelineFor('a')(holder.getState())?.items).toEqual([
+      { kind: 'sessionBoundary', reason: 'clear', occurredAt: '2026-10-05T12:00:00.000Z', workspaceCwd: null }
+    ])
+    expect(holder.getState().timelines.get('b')).toBe(other)
+    off()
+  })
+
   function makeFakeBridge() {
     let listener: ((event: DaemonEvent) => void) | undefined
     return {

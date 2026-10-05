@@ -618,6 +618,7 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
   let next = reduceTimelineContent(state, event)
   const sessionError = event.type === 'sessionError' ? { code: event.code }
     : event.type === 'sessionErrorCleared' || event.type === 'reset' ||
+      (event.type === 'sessionBoundary' && event.reason === 'clear') ||
       (event.type === 'userText' && event.received !== true) ||
       (event.type === 'turnState' && event.state !== 'idle') ? undefined : state.sessionError
   if (next.sessionError !== sessionError) next = { ...next, sessionError }

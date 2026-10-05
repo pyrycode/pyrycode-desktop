@@ -150,6 +150,8 @@ type SavedTimeline = Extract<ChatHistorySnapshot, { kind: 'timeline' }>
 export interface ConversationSlice {
   serverId?: string
   localRead?: 'loading' | 'loaded' | 'failed'
+  /** Request identity survives transient notice changes; never persisted. */
+  localReadOwner?: symbol
   /** Explicit admission evidence for the writer; never a received event. */
   restored?: Pick<SavedTimeline, 'serverId' | 'coverage'>
   timeline: TimelineState
@@ -550,12 +552,14 @@ export function createConversationTimelineStore(
   init: ConversationTimelineState = initialConversationTimelineState,
   receiptHost: () => string | null | undefined = () => undefined
 ) {
-  function receivedSlice(held: ConversationSlice | undefined): ConversationSlice | undefined {
+  function receivedSlice(held: ConversationSlice | undefined, preserveLocalRead = false): ConversationSlice | undefined {
     if (held === undefined) return undefined
     const origin = receiptHost()
     const base = typeof origin === 'string' && held.serverId !== undefined && held.serverId !== origin
       ? emptySlice : held
-    return { ...base, serverId: typeof origin === 'string' ? origin : base.serverId, localRead: undefined }
+    return { ...base, serverId: typeof origin === 'string' ? origin : base.serverId,
+      localRead: preserveLocalRead ? base.localRead : undefined,
+      localReadOwner: preserveLocalRead ? base.localReadOwner : undefined }
   }
   return createStore<ConversationTimelineStore>((set, get) => ({
     ...init,
@@ -567,24 +571,29 @@ export function createConversationTimelineStore(
       const held = get().timelines.get(conversationId)
       if (held?.serverId === serverId &&
         (held.localRead !== undefined || held.timeline.items.length > 0)) return null
-      const pending: ConversationSlice = { ...emptySlice, serverId, localRead: 'loading',
+      const owner = Symbol()
+      const pending: ConversationSlice = { ...emptySlice, serverId, localRead: 'loading', localReadOwner: owner,
         // Opening history must not consume a live notice received while this chat was off-screen.
         timeline: { ...initialTimelineState,
           sessionError: held?.serverId === serverId ? held.timeline.sessionError : undefined }
       }
       set(s => ({ timelines: withSliceAtTail(s.timelines, conversationId, pending) }))
-      const settle = (replacement: ConversationSlice | null): void => {
+      const ownsRead = (slice: ConversationSlice | undefined): slice is ConversationSlice =>
+        slice?.serverId === serverId && slice.localRead === 'loading' && slice.localReadOwner === owner
+      const settle = (replacement: ((current: ConversationSlice) => ConversationSlice) | null): void => {
         set(s => {
-          if (s.timelines.get(conversationId) !== pending) return s
+          const current = s.timelines.get(conversationId)
+          if (!ownsRead(current)) return s
           const timelines = new Map(s.timelines)
           if (replacement === null) timelines.delete(conversationId)
-          else timelines.set(conversationId, replacement)
+          else timelines.set(conversationId, { ...replacement(current), localReadOwner: undefined })
           return { timelines }
         })
       }
+      const fail = (): void => settle(current => ({ ...current, localRead: 'failed' }))
       return {
         complete: value => {
-          if (get().timelines.get(conversationId) !== pending) return
+          if (!ownsRead(get().timelines.get(conversationId))) return
           try {
             const snapshot = parseChatHistorySnapshot(value ?? {
               version: 1, kind: 'timeline', serverId, conversationId,
@@ -592,15 +601,15 @@ export function createConversationTimelineStore(
             })
             if (snapshot.kind !== 'timeline' || snapshot.serverId !== serverId ||
               snapshot.conversationId !== conversationId) {
-              settle({ ...pending, localRead: 'failed' })
+              fail()
               return
             }
-            settle({ ...emptySlice, serverId, localRead: 'loaded', coverage: snapshot.coverage, restored: { serverId, coverage: snapshot.coverage },
-              timeline: { ...pending.timeline, items: snapshot.items },
-              prependedRows: snapshot.prependedRows })
-          } catch { settle({ ...pending, localRead: 'failed' }) }
+            settle(current => ({ ...emptySlice, serverId, localRead: 'loaded', coverage: snapshot.coverage, restored: { serverId, coverage: snapshot.coverage },
+              timeline: { ...current.timeline, items: snapshot.items },
+              prependedRows: snapshot.prependedRows }))
+          } catch { fail() }
         },
-        fail: () => settle({ ...pending, localRead: 'failed' }),
+        fail,
         cancel: () => settle(null)
       }
     },
@@ -622,7 +631,15 @@ export function createConversationTimelineStore(
       }),
     dispatchFor: (conversationId, event, joinKey) =>
       set((s) => {
-        const held = receivedSlice(s.timelines.get(conversationId))
+        // This client-owned clear has no receipt host and cannot invalidate a saved-history read.
+        if (event.type === 'sessionErrorCleared') {
+          const slice = s.timelines.get(conversationId)
+          if (slice?.timeline.sessionError === undefined) return s
+          const timelines = new Map(s.timelines)
+          timelines.set(conversationId, { ...slice, timeline: reduceTimeline(slice.timeline, event) })
+          return { timelines }
+        }
+        const held = receivedSlice(s.timelines.get(conversationId), event.type === 'sessionError')
         if (held === undefined) {
           // A live reading can only update a retained call; it cannot create or evict a slice.
           if (event.type === 'toolProgress') return s

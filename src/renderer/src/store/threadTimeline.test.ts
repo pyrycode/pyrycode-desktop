@@ -1768,14 +1768,17 @@ describe('session error transient notice', () => {
   })
   it.each<ThreadEvent>([
     { type: 'turnState', state: 'idle' }, { type: 'userText', text: 'echo', received: true, messageId: 'm2' },
-    { type: 'assistantDelta', turnId: 't1', seq: 1, text: 'content' }, { type: 'reconnected' }
+    { type: 'assistantDelta', turnId: 't1', seq: 1, text: 'content' }, { type: 'reconnected' },
+    { type: 'sessionBoundary', reason: 'workspace_change', workspaceCwd: '/workspace', occurredAt: 'now' },
+    { type: 'sessionBoundary', reason: 'idle_evict', workspaceCwd: null, occurredAt: 'now' }
   ])('preserves on $type', event => {
     const held = reduceTimeline(pending, error())
     expect(reduceTimeline(held, event).sessionError).toBe(held.sessionError)
   })
   it.each<ThreadEvent>([
     { type: 'userText', text: 'next', messageId: 'm2' }, { type: 'turnState', state: 'thinking' },
-    { type: 'turnState', state: 'responding' }, { type: 'reset' }, { type: 'sessionErrorCleared' }
+    { type: 'turnState', state: 'responding' }, { type: 'reset' }, { type: 'sessionErrorCleared' },
+    { type: 'sessionBoundary', reason: 'clear', workspaceCwd: null, occurredAt: 'now' }
   ])('clears on $type', event => {
     expect(reduceTimeline(reduceTimeline(pending, error()), event).sessionError).toBeUndefined()
   })

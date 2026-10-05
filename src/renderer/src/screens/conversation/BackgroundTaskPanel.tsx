@@ -363,6 +363,13 @@ function TaskGroup({
   )
 }
 
+function formatTaskType(taskType: string): string {
+  if (taskType === 'local_agent') return 'Agent'
+  if (taskType === TASK_TYPE_SHELL) return 'Command'
+  const label = taskType.replace(/^local_/, '').replace(/_/g, ' ')
+  return label.charAt(0).toUpperCase() + label.slice(1)
+}
+
 /** #1635: one task as the drawn card: the type line with its status tag, the description, then the
  *  latest update; a finished card adds its summary under the description (#1639). Every daemon field is an
  *  auto-escaped child of its own element. */
@@ -382,7 +389,7 @@ function TaskRow({ task, finished }: { task: HeldBackgroundTask; finished: boole
           text into one node, so a description ending in those same words would be indistinguishable
           from the app's own claim. The field NAMES are matched, never displayed. */}
       <div className="background-task-panel__head">
-        <span className="background-task-panel__type">{task.taskType}</span>
+        <span className="background-task-panel__type">{formatTaskType(task.taskType)}</span>
         <TaskStatusTag status={task.status} />
       </div>
       {wasCut(task.truncatedFields, CUT_FIELD_TASK_TYPE) && (

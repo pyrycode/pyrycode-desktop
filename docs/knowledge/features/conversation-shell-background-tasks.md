@@ -47,7 +47,7 @@ any future chrome icon in this view needs the same inline treatment (the empty r
                                                        partial notice alone)
 
 each .background-task-panel__row (TaskRow, #1635):
-  .__head → .__type <taskType, mono>  +  .__tag (task.status mapped to a label + one of four classes — #1639,
+  .__head → .__type <formatTaskType(task.taskType), mono>  +  .__tag (task.status mapped to a label + one of four classes — #1639,
                                                    see § Status tag and summary)
   .__cut-type "Truncated by the daemon" when task.truncatedFields names task_type — #582
   .__description <description, mono for local_bash, body text otherwise; muted on a finished row>
@@ -238,6 +238,31 @@ membership (a boolean), never the `status` string itself; mapping the daemon's a
 Capped Figma frames also show still belong to #1640, and are not drawn here. `tokens.css` gained
 `--color-secondary` (#bac8da, M3 Secondary, dark scheme) for the group headers — the palette had no
 existing token that matched it.
+
+## Task type labels (#1746)
+
+`TaskRow` renders a readable label in `.background-task-panel__type` through the module-private,
+pure `formatTaskType` in `BackgroundTaskPanel.tsx`:
+
+- Exact `local_agent` → Agent; exact `local_bash` → Command.
+- Other values remove one leading `local_`, replace every underscore with a space, and uppercase
+  only the first character: `local_file_watch` → File watch, `agent_search` → Agent search.
+  `remote_local_agent` → Remote local agent and `local_local_agent` → Local agent show that only
+  one leading prefix is removed. Later words retain their casing.
+- Empty results stay empty, including inputs `''` and `local_`.
+
+Formatting is confined to that span's auto-escaped React text child; a markup-shaped unknown type
+stays text and never enters an attribute. The span retains its mono font and primary color. The wire
+payload, raw `task.taskType` and held roster state stay unchanged. Description styling still compares
+the raw type with `local_bash` to select mono; using the display label for that comparison would lose
+command styling. Grouping and truncation markers keep their existing rules.
+
+`BackgroundTaskPanel.test.tsx` covers the mapping with independently stated expected labels in static
+renders, including prefix handling and empty values. Each case renders a frozen task, compares the
+entry with its pre-render clone, and checks task identity and the raw type. A markup-shaped unknown
+type checks escaping and absence from attributes; separate assertions retain command-versus-agent
+description styling. Computing expected labels with the same transformation would let a wrong mapping
+pass on both sides; these tests pin the rendered span instead. See [renderer test boundaries](development-verification.md#what-each-test-tier-proves).
 
 ## Status tag and summary (#1639)
 

@@ -76,9 +76,9 @@ describe('BackgroundTaskPanelView — the background-task panel (#581)', () => {
     )
     expect(markup.match(/background-task-panel__row/g)?.length ?? 0).toBe(2)
     expect(markup).toContain('npm run build')
-    expect(markup).toContain('local_bash')
+    expect(markup).toContain('<span class="background-task-panel__type">Command</span>')
     expect(markup).toContain('index the repository')
-    expect(markup).toContain('agent_search')
+    expect(markup).toContain('<span class="background-task-panel__type">Agent search</span>')
     // Roster order — the held Map preserves insertion order, and the view iterates values() as-is.
     expect(markup.indexOf('npm run build')).toBeLessThan(markup.indexOf('index the repository'))
   })
@@ -164,7 +164,7 @@ describe('BackgroundTaskPanelView — the background-task panel (#581)', () => {
       />
     )
     expect(markup).toContain('&lt;img')
-    expect(markup).toContain('a&lt;b&amp;c')
+    expect(markup).toContain('A&lt;b&amp;c')
     // The tag never opens: `<` is escaped, so the description cannot become an element.
     expect(markup).not.toContain('<img')
     // The structural guard — attribute-SHAPED, not substring-shaped. React escapes markup
@@ -564,6 +564,46 @@ describe('BackgroundTaskPanelView — the latest reported change (#583)', () => 
     expect(markup).toContain('background-task-panel__cut-patch')
     expect(markup).toContain('background-task-panel__no-change')
     expect(markup).not.toMatch(/completed|complete|failed|failure|succeeded|success|finished|error/i)
+  })
+})
+
+describe('BackgroundTaskPanelView — readable task types (#1746)', () => {
+  it.each([
+    ['local_agent', 'Agent'],
+    ['local_bash', 'Command'],
+    ['local_file_watch', 'File watch'],
+    ['agent_search', 'Agent search'],
+    ['remote_local_agent', 'Remote local agent'],
+    ['local_local_agent', 'Local agent'],
+    ['local', 'Local'],
+    ['local_', ''],
+    ['', '']
+  ])('renders %j as %j without altering the held task', (taskType, label) => {
+    const heldTask = Object.freeze(task({ taskType }))
+    const heldEntry = entry([heldTask])
+    const before = structuredClone(heldEntry)
+    const markup = renderToStaticMarkup(
+      <BackgroundTaskPanelView entry={heldEntry} onClose={noop} />
+    )
+
+    expect(markup).toContain(`<span class="background-task-panel__type">${label}</span>`)
+    expect(heldEntry).toEqual(before)
+    expect(heldEntry.tasks.get(heldTask.taskId)).toBe(heldTask)
+    expect(heldTask.taskType).toBe(taskType)
+  })
+
+  it('keeps formatted unknown types escaped and confined to the type text', () => {
+    const markup = renderToStaticMarkup(
+      <BackgroundTaskPanelView
+        entry={entry([task({ taskType: 'local_<b>file_watch</b>' })])}
+        onClose={noop}
+      />
+    )
+    expect(markup).toContain(
+      '<span class="background-task-panel__type">&lt;b&gt;file watch&lt;/b&gt;</span>'
+    )
+    expect(markup).not.toContain('<b>')
+    expect(markup).not.toMatch(/="[^"]*file watch/)
   })
 })
 

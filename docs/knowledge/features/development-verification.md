@@ -124,6 +124,61 @@ before assigning a cause. Repeated green checks do not establish that an intermi
 pre-existing; retain an undiagnosed classification when no causal defect was found. See the
 [footer review's evaluation diagnosis](https://github.com/pyrycode/pyrycode-desktop/pull/1762#issuecomment-5993150705).
 
+### Message lifecycle diagnostics
+
+[Outbound lifecycle diagnostics](outbound-send-path.md#message-lifecycle-diagnostics)
+need evidence from the write boundary. A fake driver's nonthrowing return cannot
+prove sent: hold its observer, assert queued only, then report the actual write.
+[`daemonConnection.test.ts`](../../../src/main/daemonConnection.test.ts) does this
+before driving decoded snapshots from matching and unrelated hosts/conversations,
+missing/empty/hostile ids, repeated acknowledgment, cancellation and closure. Its
+unavailable-driver, driver-failure and encode-failure cases require a classified
+drop without sent.
+
+[`messageLifecycle.test.ts`](../../../src/main/messageLifecycle.test.ts) uses the
+real diagnostic serializer with a capture sink to check held UUID correlation,
+duplicate suppression, queue disappearance, silent retirement at the 1024-entry
+cap and hostile IPC-field exclusion. It rejects forged reserved lifecycle events
+and planted main-only fields through `onDiagnostic`, then checks serialized lines
+rather than only projection results. Cancellation must permit the later sequence
+queued → dropped (`user-cancel-request`) → sent → acknowledged: a terminal
+cancellation flag could make the diagnostic trail pass ordinary cancellation
+coverage while hiding a buffered message's eventual write.
+
+[`noiseSession.test.ts`](../../../src/main/transport/noiseSession.test.ts) holds
+and releases the rekey handshake with controlled peers and the real serializer.
+Waiting must emit no sent record; flush observes each write; overflow drops only
+the incoming entry; abandonment and repeated teardown discard retained entries
+once. Closing after flush leaves sent-without-acknowledgment unchanged.
+[`noiseRelayDriver.test.ts`](../../../src/main/transport/noiseRelayDriver.test.ts)
+checks observer forwarding, refusal and caught write failure.
+[`relayConnection.test.ts`](../../../src/main/transport/relayConnection.test.ts)
+drives OPEN, pre-open/post-close refusal, an injected socket-write throw and a
+throwing observer, with distinct socket UUIDs across repeated connections.
+The [oversize regression](../../../src/main/transport/relayConnection.oversize.test.ts)
+retains the exact content-free close field set, numeric 1009 and static
+classification while validating a UUIDv4 shared with its open record. An additive
+safe field must update these exact assertions without weakening content exclusion.
+
+Injected composer/drop effects prove ordering, bridge failures and nonthrowing
+diagnostics, but cannot prove React passed the optional callback. The single test
+“idle and running composer submissions reach diagnostics, and drop is a local
+request” in [`message-lifecycle-diagnostics.spec.ts`](../../../e2e/message-lifecycle-diagnostics.spec.ts)
+uses production `ConversationScreen` wiring, encrypted fake transport and the real
+stdout sink. It exercises blank refusal, idle and running submissions, held/repeated
+queue acknowledgment, queued-row cancellation and production route refusal.
+Poll for the observed lifecycle/dequeue before checking counts or content absence;
+an immediate absence assertion can pass before the IPC record arrives.
+
+Recorded evidence: the [final verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1782#issuecomment-6002754916)
+at `dfef34da3fc70cc5062e03b0a65a0d713af2c64b` on 2026-10-05 confirms the lifecycle
+spec was present and passed: its one named test executed/passed, 0 failed,
+0 skipped. The dispatcher’s full fake-transport run executed 271 tests, all 271
+passed, 0 failed and 4 skipped. The verdict records aggregate unit evidence of
+8,792 executed/passed, 0 failed and 3 skipped, plus passing build and docs guard.
+Controlled transports and snapshots establish this diagnostic contract; no
+live-Claude result is claimed.
+
 ## Evidence that cannot pass too early
 
 A closing absence assertion can pass before an action completes.

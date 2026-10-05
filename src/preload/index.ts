@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'ele
 import { CHAT_HISTORY_CHANNEL, CHAT_HISTORY_FLUSH_CHANNEL, type ChatHistoryRequest, type ChatHistoryResult } from '../shared/chatHistory'
 import { DAEMON_EVENT_CHANNEL, type StampedDaemonEvent } from '../shared/ipc/events'
 import { COMMAND_CHANNEL, type RendererCommand } from '../shared/ipc/commands'
-import { DIAGNOSTIC_CHANNEL, type RendererDiagnosticEvent } from '../shared/ipc/diagnostics'
+import { DIAGNOSTIC_CHANNEL, type RendererDiagnosticEvent, type MessageLifecycleDiagnostic } from '../shared/ipc/diagnostics'
 import {
   PAIRING_CHANNEL,
   type PairingSubmitResponse,
@@ -107,7 +107,7 @@ const api = {
    * fixed here so the renderer cannot address arbitrary IPC channels, and ipcRenderer never crosses
    * the bridge. No consumer is wired yet — the state-store instrumentation is #134.
    */
-  sendDiagnostic: (record: RendererDiagnosticEvent): void => {
+  sendDiagnostic: (record: RendererDiagnosticEvent | MessageLifecycleDiagnostic): void => {
     ipcRenderer.send(DIAGNOSTIC_CHANNEL, record)
   },
 

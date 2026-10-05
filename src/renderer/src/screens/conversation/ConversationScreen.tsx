@@ -132,6 +132,7 @@ import {
 import { dropQueuedMessage } from './dropQueuedMessage'
 import { foldQueuedRows, type QueuedRowHandle } from './foldQueuedRows'
 import { groupToolRows } from './groupToolRows'
+import { foldToolRuns, type ToolRun } from './foldToolRuns'
 import { copyMessageText } from './copyMessageText'
 import { formatMessageTime } from './messageTime'
 import { turnStatsByItemIndex } from './turnStats'
@@ -526,6 +527,7 @@ export function ConversationScreen({
       {(!offline || items.length > 0 || visibleQueued.length > 0) && <Timeline
         key={openConversationId}
         items={items}
+        foldTools
         scrollPin={scrollPin}
         // #1260: NEGATED, so the first held row's key is minus the number of rows history has already
         // put ahead of it. A prepend of N lowers this by N while every surviving row's index rises by N,
@@ -539,6 +541,7 @@ export function ConversationScreen({
         onDropQueued={actionsAvailable ? (queuedMsgId, messageId) => {
           if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
           dropQueuedMessage(openConversationId, queuedMsgId, messageId, {
+            diagnose: window.pyry.sendDiagnostic,
             sendCommand: window.pyry.sendCommand,
             dispatch: dispatchTimeline,
             dispatchFor: dispatchTimelineFor
@@ -1094,6 +1097,7 @@ export function SavedTimelineNotice({ status }: {
 
 export function Timeline({
   items,
+  foldTools = false,
   scrollPin,
   queued,
   onDropQueued,
@@ -1104,6 +1108,8 @@ export function Timeline({
   agent
 }: {
   items: readonly ThreadItem[]
+  /** Presentation only; absent or false retains ordinary tool rows. */
+  foldTools?: boolean
   scrollPin?: ThreadScrollPin
   queued?: readonly QueuedItem[]
   onDropQueued?: (queuedMsgId: number, messageId: string | undefined) => void
@@ -1124,23 +1130,32 @@ export function Timeline({
   // #1566: keyed by item index, which is the row index below items.length (foldQueuedRows).
   const turnStats = turnStatsByItemIndex(items)
   const [expandedTools, setExpandedTools] = useState<ReadonlySet<number>>(() => new Set())
+  const [expandedRuns, setExpandedRuns] = useState<ReadonlySet<number>>(() => new Set())
   const projection = groupToolRows(rows.map((row) => row.item))
-  const hiddenRows = new Set(projection.filter((group) =>
-    group.ancestors.some((index) => !expandedTools.has(firstRowKey + index))
-  ).map((group) => group.index))
-  // Hidden descendants stay mounted; only undrawn boundaries are skipped when joining tool rows.
-  const visible = projection.filter((group) => {
+  const drawn = projection.filter((group) => {
     const item = rows[group.index]?.item
-    return !hiddenRows.has(group.index) &&
+    return !(foldTools && item?.kind === 'banner' && item.level === 'info') &&
       (item?.kind !== 'turnBoundary' || stoppedTurnText(item) !== null)
   })
+  const runs = foldTools ? foldToolRuns(rows.map((row) => row.item), drawn) : []
+  const runByMember = new Map(runs.flatMap((run) => run.members.map((index) => [index, run] as const)))
+  const runByStart = new Map(runs.map((run) => [run.index, run]))
+  const runIsExpanded = (run: ToolRun) => run.members.some((index) => expandedRuns.has(firstRowKey + index))
+  const expandedRunStarts = new Set(runs.filter(runIsExpanded).map((run) => run.index))
+  const hiddenRows = new Set(projection.filter((group) => {
+    const run = runByMember.get(group.index)
+    return group.ancestors.some((index) => !expandedTools.has(firstRowKey + index)) ||
+      (run !== undefined && !expandedRunStarts.has(run.index))
+  }).map((group) => group.index))
+  // Hidden descendants stay mounted; undrawn rows are skipped when joining tool rows.
+  const visible = drawn.filter((group) => !hiddenRows.has(group.index))
   const joins = new Map(visible.map((group, index) => {
     const previous = visible[index - 1]
     const next = visible[index + 1]
     const above = previous?.depth === group.depth ? rows[previous.index]?.item : undefined
     const below = next?.depth === group.depth ? rows[next.index]?.item : undefined
     return [group.index, [
-      above?.kind === 'toolCall' && 'tool-group-row--joined-above',
+      (above?.kind === 'toolCall' || runByStart.has(group.index)) && 'tool-group-row--joined-above',
       below?.kind === 'toolCall' && 'tool-group-row--joined-below'
     ].filter(Boolean).join(' ')]
   }))
@@ -1149,7 +1164,7 @@ export function Timeline({
       aria-label="Conversation history" tabIndex={0} onWheel={scrollPin?.onWheel} onKeyDown={scrollPin?.onKeyDown}>
       {rows.length === 0 && <EmptyThread />}
       {olderSaved && <p className="conversation__banner">Older messages require a connection.</p>}
-      {projection.map((group) => {
+      {projection.flatMap((group) => {
         const row = rows[group.index]
         if (!row) return null
         const key = firstRowKey + group.index
@@ -1180,12 +1195,23 @@ export function Timeline({
         )
         // Origin-relative identity survives history prepends and display regrouping. Keep hidden
         // descendants mounted so their own result expansion survives an outer collapse.
-        return (
+        const run = runByStart.get(group.index)
+        const expanded = expandedRunStarts.has(group.index)
+        return [
+          run && <div key={`run${key}`} className={`tool-group-row tool-run${expanded ? ' tool-group-row--joined-below' : ''}`}>
+            <ToolRunHeader run={run} expanded={expanded} onToggle={() => setExpandedRuns((previous) => {
+              const next = new Set(previous)
+              if (run.members.some((index) => previous.has(firstRowKey + index))) {
+                for (const index of run.members) next.delete(firstRowKey + index)
+              } else next.add(key)
+              return next
+            })} />
+          </div>,
           <div key={group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
             className={`tool-group-row tool-group-row--depth-${group.depth} ${joins.get(group.index) ?? ''}`} hidden={hidden}>
             {content}
           </div>
-        )
+        ]
       })}
     </div>
   )
@@ -1913,6 +1939,43 @@ export function ComposerBannerReport({ report, agent }: {
   return <div className="composer-status__error composer-status__banner" role="status">{bannerDisplayText(report, agent)}</div>
 }
 
+function ToolRunHeader({ run, expanded, onToggle }: {
+  run: ToolRun; expanded: boolean; onToggle: () => void
+}): JSX.Element {
+  return <div className="tool-row tool-row--resolved tool-run__row">
+    <button type="button" className="tool-row__chip tool-row__chip--toggle" aria-expanded={expanded} onClick={onToggle}>
+      <span className="tool-row__left">
+        <span className="tool-row__summary">Using tools: {run.count}</span>
+        <svg className={`tool-row__chevron tool-run__chevron${expanded ? ' tool-run__chevron--expanded' : ''}`}
+          viewBox="0 0 4 8" width="4" height="8" fill="currentColor" aria-hidden="true">
+          <path d={TOOL_ROW_CHEVRON_PATH} />
+        </svg>
+      </span>
+      <span className="tool-run__status">
+        {run.failed > 0 && <><span className="tool-run__failures">{run.failed} failed</span><ToolFailedIcon /></>}
+        {run.running && <svg className="tool-run__spinner composer-status__icon--spinning" viewBox="0 0 16 16"
+          width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" role="img" aria-label="Running">
+          <path d="M8 2a6 6 0 1 1-6 6" />
+        </svg>}
+        {!run.running && run.failed === 0 && <svg className="tool-run__done" viewBox="0 0 16 16"
+          width="16" height="16" fill="currentColor" role="img" aria-label="Done">
+          <path d="M6 10.78L3.22 8L2.27333 8.94L6 12.6667L14 4.66667L13.06 3.72667L6 10.78Z" />
+        </svg>}
+      </span>
+    </button>
+  </div>
+}
+
+function ToolFailedIcon(): JSX.Element {
+  return <svg
+    className="tool-row__failed"
+    viewBox="0 0 16 16" width="16" height="16" fill="currentColor"
+    role="img" aria-label="Failed"
+  >
+    <path d="M7.33333 10H8.66667V11.3333H7.33333V10ZM7.33333 4.66667H8.66667V8.66667H7.33333V4.66667ZM7.99333 1.33333C4.31333 1.33333 1.33333 4.32 1.33333 8C1.33333 11.68 4.31333 14.6667 7.99333 14.6667C11.68 14.6667 14.6667 11.68 14.6667 8C14.6667 4.32 11.68 1.33333 7.99333 1.33333ZM8 13.3333C5.05333 13.3333 2.66667 10.9467 2.66667 8C2.66667 5.05333 5.05333 2.66667 8 2.66667C10.9467 2.66667 13.3333 5.05333 13.3333 8C13.3333 10.9467 10.9467 13.3333 8 13.3333Z" />
+  </svg>
+}
+
 export function ToolRow({
   item,
   defaultExpanded = false,
@@ -2023,13 +2086,7 @@ export function ToolRow({
           {!group && result && result.resultDetail !== undefined && result.resultDetail !== '' && (
             <span className="tool-row__count">{result.resultDetail}</span>
           )}
-          {denial === undefined && result?.isError && <svg
-            className="tool-row__failed"
-            viewBox="0 0 16 16" width="16" height="16" fill="currentColor"
-            role="img" aria-label="Failed"
-          >
-            <path d="M7.33333 10H8.66667V11.3333H7.33333V10ZM7.33333 4.66667H8.66667V8.66667H7.33333V4.66667ZM7.99333 1.33333C4.31333 1.33333 1.33333 4.32 1.33333 8C1.33333 11.68 4.31333 14.6667 7.99333 14.6667C11.68 14.6667 14.6667 11.68 14.6667 8C14.6667 4.32 11.68 1.33333 7.99333 1.33333ZM8 13.3333C5.05333 13.3333 2.66667 10.9467 2.66667 8C2.66667 5.05333 5.05333 2.66667 8 2.66667C10.9467 2.66667 13.3333 5.05333 13.3333 8C13.3333 10.9467 10.9467 13.3333 8 13.3333Z" />
-          </svg>}
+          {denial === undefined && result?.isError && <ToolFailedIcon />}
           {/* The .status-row__chevron / .composer__actions-icon idiom: a bare inline <svg> sized by its
               own width/height, fill="currentColor" so it takes the ink from CSS, and aria-hidden so it
               adds no accessible name — the button's name stays exactly its text runs, three of them
@@ -3850,6 +3907,7 @@ function Composer({
     // this function: that would move the dereference into the render path, where `window.pyry` does not
     // exist under renderToStaticMarkup, and every container smoke test would throw.
     const sent = submitMessage(value, activeConversationId, {
+      diagnose: window.pyry.sendDiagnostic,
       sendCommand: window.pyry.sendCommand,
       dispatch,
       dispatchFor: (conversationId, event) => {

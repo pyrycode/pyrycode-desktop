@@ -40,7 +40,7 @@ See [Subagent tool groups](#subagent-tool-groups) below.
 aria-hidden="true">`, the same idiom every chevron in this file already follows
 (`.status-row__chevron`, `.composer__actions-icon`) — sized from its own attributes, no wrapper frame, no
 extracted shared component (three call sites, three different glyphs). Its path is
-`TOOL_ROW_CHEVRON_PATH`, a module-level `const` beside `ToolRow`, not exported (no second caller), the
+`TOOL_ROW_CHEVRON_PATH`, a module-level `const` beside `ToolRow`, shared with the folded-run header, the
 right-pointing sibling of `ComposerActionsMenu.tsx`'s `CHEVRON_PATH` — same family, same construction,
 same slight overflow past its nominal box, reproduced rather than corrected by leaving the `viewBox`
 un-padded. Ink is `--color-primary` via `color:` + `currentColor`, an exact match to the Figma export
@@ -111,12 +111,24 @@ leaf when history gives it its first child. Tool wrappers stay under one React p
 and remain mounted while hidden, preserving child-result and inner-group expansion
 through outer collapse, results, history prepends and regrouping. The mounted timeline
 is keyed by conversation, so this UI state cannot leak into another conversation.
+
+Run expansion uses a separate local `expandedRuns` set with the same origins. Opening
+marks the first root origin; a run stays expanded when **any** surviving member origin
+is marked. A history prepend can introduce an earlier root or a previously missing
+Agent owner, changing the header's key without changing existing member origins.
+Checking only the current first root would close the run in that case. Closing clears
+markers for **all** current run members, so an older mark cannot reopen it. Appends,
+results and closing/reopening the run preserve each member's independent expansion;
+run membership never depends on whether an inner Agent group is open.
 See [history prepend identity](conversation-timeline-store-limits.md#edge-cases-and-limitations).
 
 ### Visible tool-row joins
 
 Join decisions follow visible neighbours at the same **capped** indentation, skipping
-collapsed descendants and undrawn `turnBoundary` items. A visible non-tool row or a
+collapsed descendants and undrawn `turnBoundary` items. With `foldTools` enabled,
+undrawn informational banners are skipped too; optional-off joins retain their prior
+reading. An expanded run header joins its first root member using the same wrapper
+classes, with the header above the member stack. A visible non-tool row or a
 change in indentation ends the stack. Direct `.tool-row + .tool-row` selectors alone
 cannot implement this: the mounted wrappers interrupt DOM adjacency even for ordinary
 calls with no children. Client-owned wrapper classes extend the existing join rules
@@ -145,3 +157,88 @@ additional live-Claude acceptance gate is needed.
 
 Source: [subagent tool groups design](../../specs/architecture/1239-subagent-tool-groups.md)
 and [reviewed implementation](https://github.com/pyrycode/pyrycode-desktop/pull/1328).
+
+
+## Adjacent tool runs
+
+`ConversationScreen` enables folding in its open-conversation `Timeline`. The optional
+`Timeline.foldTools` prop defaults to false: absent or false retains ordinary tool
+rendering and joins for other callers. This is the preference boundary for Settings
+sibling [#1765](https://github.com/pyrycode/pyrycode-desktop/issues/1765); the current
+conversation screen enables it directly. Folding and expansion are local presentation,
+with no Settings, store, persistence, IPC or wire changes.
+
+### Membership and boundaries
+
+[`foldToolRuns.ts`](../../../src/renderer/src/screens/conversation/foldToolRuns.ts)
+projects the output of `foldQueuedRows` and `groupToolRows` into runs of at least two
+adjacent root tool rows. An Agent/Task counts as one root and retains all its owned
+descendants and indentation. A lone root keeps its existing row. Each new run starts
+collapsed as “Using tools: N”, where N counts roots only.
+
+Every drawn non-tool ends a run: user/assistant messages, queued rows, warning/error
+notices, unrecognized-message notices, session/compaction delimiters and stopped-turn
+records. Undrawn turn boundaries and informational banners do not split visually
+adjacent roots. Filter for what `TimelineRow` actually draws before deriving runs;
+an invisible notice would otherwise create two headers with no visible separator.
+Agent expansion does not change membership or N.
+
+### Status and disclosure
+
+The header shows a Primary spinner with the client-owned accessible name `Running`
+while any root is running. Agent/Task roots use their existing descendant-inclusive
+running reading: a completed parent with an unfinished child keeps the spinner.
+“K failed” and the existing `tool-row__failed` glyph (`Failed`) count roots with a
+result error **or** denial once each, even if a denied root later receives an error
+result. Descendant failures stay on existing member/group surfaces and do not add
+to K. A concurrent failure and running root show both failure and spinner; only a
+fully complete run with no failed roots shows the `Done` check. That check uses
+`--color-on-surface-variant`, while the spinner reuses `composer-status-spin`.
+Copy and accessible labels are client-owned apart from N and K; member tool names
+remain escaped React children.
+
+The header is a native button: click, Enter and Space toggle it and `aria-expanded`
+reflects the local state. Its chevron follows the label, pointing down when collapsed
+and up when expanded; member-row chevrons keep their existing treatment. It shares
+the Desktop tool outline, fill and joins. Headers are keyed **siblings** of the
+existing mounted tool wrappers, rather than containers that reparent members.
+Hidden members consume no space but retain their result and nested-group state;
+see [Expansion identity](#expansion-identity) and [Visible tool-row joins](#visible-tool-row-joins).
+
+### Coverage and recorded evidence
+
+[`toolRuns.test.tsx`](../../../src/renderer/src/screens/conversation/toolRuns.test.tsx)
+pins optional-off equivalence, lone tools, drawn/undrawn boundaries (including queued
+rows and informational banners), Agent ownership and root status combinations.
+Static renders cannot exercise disclosure, state retention or geometry.
+[`e2e/tool-runs.spec.ts`](../../../e2e/tool-runs.spec.ts) covers click/Enter/Space,
+member expansion through outer collapse, appends and an earlier-root history prepend,
+collapsed count/status changes, denial plus result without double counting, and the
+header/member join at both 800px and 1280px window widths.
+
+Adjacent-tool setups in [`tool-row-toggle`](../../../e2e/tool-row-toggle.spec.ts),
+[`tool-groups`](../../../e2e/tool-groups.spec.ts) and
+[`tool-denied`](../../../e2e/tool-denied.spec.ts) open the run before retaining their
+member joins, failure, result expansion and history-regrouping assertions; stack
+geometry includes the header. Existing lone-tool proof remains in
+[`thread-shadow`](../../../e2e/thread-shadow.spec.ts),
+[`tool-progress`](../../../e2e/tool-progress.spec.ts) and
+[`thread-scroll-pin`](../../../e2e/thread-scroll-pin.spec.ts).
+
+The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1788#issuecomment-6002244618)
+records the 2026-10-05 gate at `fcf41f3d19adcaf639cbdd0c1017364af077b0ad`:
+270 Playwright tests executed, 270 passed, 0 failed and 4 skipped. It confirms all
+12 tests across tool-runs/tool-row-toggle/tool-groups/tool-denied executed and passed,
+including “tool runs retain expansion and update collapsed status at 800px” and its
+1280px counterpart. No live-Claude acceptance is required for this renderer feature.
+
+The same verdict records comparison of ten integrated captures with
+[Figma row states](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=726-5376):
+collapsed success, expanded, running, failure and concurrent failure/running at
+800×800 and 1280×800 windows (800×773 and 1280×773 content viewports). Scratch evidence
+was retained at `/tmp/verifier-1788/{800,1280}-{collapsed,expanded,running,failure,failure-running}.png`;
+the linked verdict is the durable record. The 38px header meets the design's 36px ±2px
+convention, with Desktop geometry, joined borders and Agent indentation retained and
+no unresolved visual deviation.
+
+Design: [fold tool runs](../../specs/architecture/1764-fold-tool-runs.md).

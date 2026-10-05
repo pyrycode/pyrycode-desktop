@@ -1,3 +1,6 @@
+import { createMessageLifecycle } from './messageLifecycle'
+import { createDiagnosticLog } from './diagnosticLog'
+import type { SendOutcome } from './transport/sendObservation'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createHash } from 'node:crypto'
 import { onCommand, type CommandSource } from './receiveCommand'
@@ -103,6 +106,7 @@ interface FakeDriver {
   stopped: boolean
   /** Every plaintext handed to the driver's sendMessage, in order. */
   sent: Uint8Array[]
+  observations: Array<(outcome: SendOutcome) => void>
   handle: NoiseRelayDriver
   /** Drive a RelaySessionEvent back into the consumer's onEvent handler. */
   emit(event: RelaySessionEvent): void
@@ -120,14 +124,16 @@ function makeDriverFactory(options: { throwOnSend?: boolean } = {}): {
         config,
         stopped: false,
         sent: [],
+        observations: [],
         emit: (event) => config.onEvent(event),
         handle: {
           // Record what the connection forwards. The driver's own inertness (pre-handshake /
           // post-terminal) is NOT modelled here — that contract is proven by
           // noiseRelayDriver.test.ts:304-358; this layer only tests what it hands the driver.
-          sendMessage(plaintext) {
+          sendMessage(plaintext, observe) {
             if (options.throwOnSend) throw new Error('driver send boom')
             fake.sent.push(plaintext)
+            if (observe) fake.observations.push(observe)
           },
           stop() {
             fake.stopped = true
@@ -218,6 +224,7 @@ function build(
     save?: () => Promise<void>
     throwOnSend?: boolean
     diagnosticLog?: DiagnosticLog
+    messageLifecycle?: DaemonConnectionDeps['messageLifecycle']
     mintToken?: () => string
     timing?: DaemonConnectionDeps['timing']
     serverId?: string | null
@@ -243,6 +250,7 @@ function build(
     now: () => FIXED_TS,
     createDriver: factory.createDriver,
     diagnosticLog: overrides.diagnosticLog,
+    messageLifecycle: overrides.messageLifecycle,
     // The retrieval idle-deadline seam (#996). Left undefined by default so every pre-existing test
     // keeps the real setTimeout; the retrieval block injects a fake scheduler.
     timing: overrides.timing,
@@ -12998,6 +13006,47 @@ it('host prompt local send failures settle both operations without leaking text'
   ])
   expect(JSON.stringify(emitted(sink))).not.toContain('private instructions')
   connection.stop()
+})
+
+describe('composer diagnostics through the daemon connection', () => {
+  const id = '12345678-1234-4123-8123-123456789abc'
+  it('requires own write evidence and correlates decoded snapshots to originating host and conversation', async () => {
+    const lines: string[] = []
+    const log = createDiagnosticLog({ sink: { write: line => lines.push(line) } })
+    const lifecycle = createMessageLifecycle(log)
+    const local = build({ serverId: 'host', messageLifecycle: lifecycle })
+    const other = build({ serverId: 'other-host', messageLifecycle: lifecycle })
+    for (const ctx of [local, other]) { ctx.connection.start(); await tick(); ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() }) }
+    lifecycle.queued(id, 'chat')
+    local.connection.send({ message_id: id, conversation_id: 'chat', text: 'TEXT_SECRET', attachment_ids: ['ATTACHMENT_SECRET'] })
+    expect(lines.map(line => JSON.parse(line).event)).toEqual(['message-queued'])
+    local.drivers[0].observations[0]({ type: 'sent', connectionId: '22345678-1234-4123-8123-123456789abc' })
+    const snapshot = (ctx: typeof local, conversation: string, message_id: string | undefined) => ctx.drivers[0].emit({ type: 'message', plaintext: queueStatePlaintext({ conversation_id: conversation, queued: [{ queued_msg_id: 1, message_id, text: 'WIRE_SECRET', ts: FIXED_TS }] }) })
+    snapshot(other, 'chat', id)
+    snapshot(local, 'other-chat', id)
+    for (const value of [undefined, '', 'WIRE_SECRET']) snapshot(local, 'chat', value)
+    expect(lines).toHaveLength(2)
+    snapshot(local, 'chat', id)
+    snapshot(local, 'chat', id)
+    expect(lines.map(line => JSON.parse(line).event)).toEqual(['message-queued', 'message-sent', 'message-acknowledged'])
+    lifecycle.cancel(id, 'chat')
+    expect(JSON.parse(lines[3]).code).toBe('user-cancel-request')
+    expect(lines.join()).not.toContain('SECRET')
+    for (const ctx of [local, other]) ctx.connection.stop()
+    expect(lines).toHaveLength(4)
+  })
+  it.each(['unavailable', 'driver-failure', 'encode-failure'] as const)('records %s without inventing sent', async mode => {
+    const lines: string[] = []
+    const lifecycle = createMessageLifecycle(createDiagnosticLog({ sink: { write: line => lines.push(line) } }))
+    const ctx = build({ messageLifecycle: lifecycle, throwOnSend: mode === 'driver-failure' })
+    if (mode !== 'unavailable') { ctx.connection.start(); await tick() }
+    lifecycle.queued(id, 'chat')
+    ctx.connection.send({ message_id: id, conversation_id: 'chat', text: mode === 'encode-failure' ? 'SECRET'.repeat(20000) : 'SECRET' })
+    expect(lines.map(line => JSON.parse(line).event)).toEqual(['message-queued', 'message-dropped'])
+    expect(JSON.parse(lines[1]).code).toBe(mode === 'unavailable' ? 'send-refused' : 'send-failed')
+    expect(lines.join()).not.toContain('SECRET')
+    ctx.connection.stop()
+  })
 })
 
 describe('session_error IPC emission', () => {

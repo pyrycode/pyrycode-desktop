@@ -31,7 +31,7 @@ type Equals<X, Y> =
   (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false
 const _allowlistPin: Equals<
   RendererDiagnosticEvent,
-  Omit<DiagnosticEvent, 'safeBytes' | 'appVersion' | 'noiseProtocol' | 'protocolVersion'>
+  Omit<DiagnosticEvent, 'messageId' | 'connectionId' | 'safeBytes' | 'appVersion' | 'noiseProtocol' | 'protocolVersion'>
 > = true
 void _allowlistPin
 

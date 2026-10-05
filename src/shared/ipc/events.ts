@@ -114,7 +114,7 @@ export type ModelRefusalEvent = {
  */
 export type HistoryTimelineEvent =
   | ModelRefusalEvent
-  | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
+  | { type: 'assistantDelta'; turnId: string; seq: number; text: string; parentToolUseId?: string }
   | ({ type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string } & TurnEndMetrics)
   | { type: 'turnState'; state: WireTurnState }
   | {
@@ -419,7 +419,7 @@ type BaseDaemonEvent =
   // Stateless and un-coalesced: N frames produce N events in arrival order, `seq` rides along for wire
   // fidelity but is not consulted, and merging slices into one bubble is the reducer's job. The added
   // field brings no per-id buffer, dedup, last-seq memo or ordering check with it.
-  | { type: 'assistantDelta'; turnId: string; seq: number; text: string; conversationId: string }
+  | { type: 'assistantDelta'; turnId: string; seq: number; text: string; parentToolUseId?: string; conversationId: string }
   // turnEnd closes the turn and carries turnId / stopReason plus `conversationId` (#752) — the frame's
   // `conversation_id`, copied BY NAME at the emit from an already-validated payload, never by spreading
   // the decoded payload. It crosses for the reason the delta arm above carries it, on the same terms:

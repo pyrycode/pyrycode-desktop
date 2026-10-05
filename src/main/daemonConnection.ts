@@ -1674,6 +1674,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               turnId: inbound.delta.turn_id,
               seq: inbound.delta.seq,
               text: inbound.delta.text,
+              parentToolUseId: inbound.delta.parent_tool_use_id,
               conversationId: inbound.delta.conversation_id,
               daemonTs: inbound.ts
             })

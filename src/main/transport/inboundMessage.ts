@@ -1631,7 +1631,7 @@ type DecodedModelRefusalEvent = {
  */
 export type DecodedHistoryEvent =
   | DecodedModelRefusalEvent
-  | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
+  | { type: 'assistantDelta'; turnId: string; seq: number; text: string; parentToolUseId?: string }
   | ({ type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string } & TurnEndMetrics)
   | { type: 'turnState'; state: WireTurnState }
   | {
@@ -1736,7 +1736,7 @@ function decodeHistoryEvent(
   switch (type) {
     case 'assistant_delta': {
       const p = parseAssistantDeltaPayload(payload)
-      return { type: 'assistantDelta', turnId: p.turn_id, seq: p.seq, text: p.text }
+      return { type: 'assistantDelta', turnId: p.turn_id, seq: p.seq, text: p.text, parentToolUseId: p.parent_tool_use_id }
     }
     case 'turn_end': {
       const p = parseTurnEndPayload(payload)
@@ -1895,7 +1895,7 @@ function decodeHistoryPage(page: HistoryPagePayload): { page: DecodedHistoryPage
  * Narrow an opaque payload into an AssistantDeltaPayload (#199). Fail-closed: every field is
  * required-present — `seq:0` and `text:''` are valid VALUES
  * (a turn's first slice / an empty slice), never absences, so requireNumber / requireString check the
- * TYPE not truthiness. Returns only the four known fields; unknown server-added keys are tolerated
+ * TYPE not truthiness. Returns only the known fields; unknown server-added keys are tolerated
  * (forward-compat) but not copied through. Its messages name the failure category only — the `text` /
  * `turn_id` could echo conversation content, so no field value is interpolated.
  */
@@ -1907,7 +1907,8 @@ function parseAssistantDeltaPayload(payload: unknown): AssistantDeltaPayload {
   const turn_id = requireString(payload, 'turn_id')
   const seq = requireNumber(payload, 'seq')
   const text = requireString(payload, 'text')
-  return { conversation_id, turn_id, seq, text }
+  const parent_tool_use_id = optionalString(payload, 'parent_tool_use_id') || undefined
+  return { conversation_id, turn_id, seq, text, parent_tool_use_id }
 }
 
 /**

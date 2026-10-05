@@ -1536,6 +1536,16 @@ describe('createDaemonConnection — structured stream (assistant_delta / turn_e
     return ctx
   }
 
+  it('forwards assistant parent attribution through live IPC', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+    drivers[0].emit({ type: 'message', plaintext: assistantDeltaPlaintext({ ...DELTA, parent_tool_use_id: 'agent-parent' }) })
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'assistantDelta', turnId: 'turn-1', seq: 3, text: 'a reply slice',
+        conversationId: 'conv-1', daemonTs: FIXED_TS, parentToolUseId: 'agent-parent' }
+    ])
+  })
+
   it('decodes an inbound assistant_delta into one camelCase assistantDelta, conversation id and all', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
@@ -11276,6 +11286,16 @@ describe('createDaemonConnection — requestHistory (history page request/reply,
 
     expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
     expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
+  })
+
+  it('forwards a stored assistant parent hint through correlated history IPC', async () => {
+    const { sink, drivers, replyTo } = await requested()
+    drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext({ ...PAGE, entries: [
+      { ...ENTRY, payload: { ...ENTRY.payload, parent_tool_use_id: 'historical-agent' } }
+    ] }, replyTo) })
+    expect(emitted(sink).filter(event => event.type === 'historyPageReceived')).toMatchObject([
+      { conversationId: CONV, entries: [{ event: { parentToolUseId: 'historical-agent' } }] }
+    ])
   })
 
   it('decodes a correlated history_page into historyPageReceived, attributed to the ASKED conversation', async () => {

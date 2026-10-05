@@ -31,6 +31,7 @@ import { canRespondToPromptNow, usePromptResponseAvailability } from './promptRe
 // (dual-write, Strangler Fig). Its six selectors are gone with the reads below; retiring the store
 // itself is its own ticket.
 import { useTimelineStore } from '../../store/timelineStore'
+import { useCollapseToolUsesPrefStore, selectCollapseToolUses } from '../../store/collapseToolUsesPrefStore'
 import {
   conversationTimelineStore,
   useConversationTimelineStore,
@@ -253,6 +254,7 @@ export function ConversationScreen({
   // #758 moved it ABOVE the timeline read, which now needs its id: same hook, same selector, same single
   // subscription, only its position in the hook list changed (stable across renders).
   const activeConversation = useActiveConversationStore(selectActiveConversation)
+  const collapseToolUses = useCollapseToolUsesPrefStore(selectCollapseToolUses)
   // #758: the thread on screen is the OPEN conversation's own retained timeline, not the flat
   // single-thread store — which `activateConversation` still resets on every switch, into a store nothing
   // reads any more. That is the whole of "leaving a chat and coming back keeps both threads": the rows
@@ -527,7 +529,7 @@ export function ConversationScreen({
       {(!offline || items.length > 0 || visibleQueued.length > 0) && <Timeline
         key={openConversationId}
         items={items}
-        foldTools
+        foldTools={collapseToolUses}
         scrollPin={scrollPin}
         // #1260: NEGATED, so the first held row's key is minus the number of rows history has already
         // put ahead of it. A prepend of N lowers this by N while every surviving row's index rises by N,
@@ -1144,8 +1146,11 @@ export function Timeline({
   const expandedRunStarts = new Set(runs.filter(runIsExpanded).map((run) => run.index))
   const hiddenRows = new Set(projection.filter((group) => {
     const run = runByMember.get(group.index)
-    return group.ancestors.some((index) => !expandedTools.has(firstRowKey + index)) ||
-      (run !== undefined && !expandedRunStarts.has(run.index))
+    return group.ancestors.some((index) => {
+      const ancestorRun = runByMember.get(index)
+      return !expandedTools.has(firstRowKey + index) ||
+        (ancestorRun !== undefined && !expandedRunStarts.has(ancestorRun.index))
+    }) || (run !== undefined && !expandedRunStarts.has(run.index))
   }).map((group) => group.index))
   // Hidden descendants stay mounted; undrawn rows are skipped when joining tool rows.
   const visible = drawn.filter((group) => !hiddenRows.has(group.index))
@@ -1169,16 +1174,24 @@ export function Timeline({
         if (!row) return null
         const key = firstRowKey + group.index
         const hidden = hiddenRows.has(group.index)
-        if (row.item.kind !== 'toolCall') return (
-          <TimelineRow key={group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
+        if (row.item.kind !== 'toolCall') {
+          const rowKey = group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`
+          const content = <TimelineRow key={rowKey}
             item={row.item} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(group.index)}
             onOpenMarkdownPath={onOpenMarkdownPath} agent={agent}
             inProgress={!saved && group.index === items.length - 1 && row.item.kind === 'assistantText'} />
-        )
+          // Keep attributed text mounted through collapse and late-owner history regrouping.
+          if (row.item.kind === 'assistantText' && row.item.parentToolUseId) return (
+            <div key={rowKey} className={`tool-group-row tool-group-row--depth-${group.depth}`} hidden={hidden}>
+              {content}
+            </div>
+          )
+          return content
+        }
         const content = (
           <ToolRow
             item={row.item}
-            group={group.count > 0 ? {
+            group={group.hasChildren ? {
               count: group.count,
               running: !saved && group.running
             } : undefined}

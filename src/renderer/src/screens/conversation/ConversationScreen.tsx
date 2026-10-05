@@ -2932,8 +2932,9 @@ export function workingIndicatorStateWithLocalSend(
   return workingIndicatorState({ ...status, phase: 'thinking' })
 }
 
-// #649: the `name` of the most recently started still-open tool call, or null if none is open. A pure read
-// over the `items` slice the container already holds — "a tool is running right now" is `result === null`
+// #649: the `name` of the most recently started still-open main-thread tool call, or null if none is open.
+// Subagent calls carry parentToolUseId and do not describe the main conversation's composer activity.
+// A pure read over the `items` slice the container already holds — "a tool is running right now" is `result === null`
 // on a `toolCall` item, so this needs no new wire field, no daemon change, no new store state and no new
 // subscription. It lives here beside `workingIndicatorState` rather than in threadTimeline.ts, following
 // this file's own precedent that pure derivations over store types live with the view that consumes them
@@ -2962,7 +2963,12 @@ export function openToolName(items: readonly ThreadItem[]): string | null {
 function openToolCall(items: readonly ThreadItem[]): Extract<ThreadItem, { kind: 'toolCall' }> | null {
   for (let i = items.length - 1; i >= 0; i--) {
     const item = items[i]
-    if (item.kind === 'toolCall' && item.result === null && item.denial === undefined) return item
+    if (
+      item.kind === 'toolCall' &&
+      item.parentToolUseId === undefined &&
+      item.result === null &&
+      item.denial === undefined
+    ) return item
   }
   return null
 }

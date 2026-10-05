@@ -3336,6 +3336,44 @@ describe('openToolName — which tool the running turn currently has open (#649)
     expect(openToolName([openCall('u1', 'Read'), openCall('u2', 'Bash')])).toBe('Bash')
   })
 
+  it('keeps the newest open main-thread tool when a subagent starts a newer call', () => {
+    const items: ThreadItem[] = [
+      openCall('u1', 'Read'),
+      openCall('u2', 'Bash'),
+      {
+        kind: 'toolCall', turnId: 't1', toolUseId: 'child', parentToolUseId: 'agent',
+        name: 'Grep', inputSummary: 'src/', result: null
+      }
+    ]
+    expect(openToolName(items)).toBe('Bash')
+  })
+
+  it('returns no tool when only subagent calls remain open', () => {
+    const child: ThreadItem = {
+      kind: 'toolCall', turnId: 't1', toolUseId: 'child', parentToolUseId: 'agent',
+      name: 'Grep', inputSummary: 'src/', result: null
+    }
+    const denied: ThreadItem = {
+      kind: 'toolCall', turnId: 't1', toolUseId: 'denied', name: 'Bash',
+      inputSummary: 'npm test', result: null,
+      denial: {
+        toolName: 'Bash', decisionReasonType: 'rule', decisionReason: 'Denied',
+        message: 'Permission required', truncatedFields: null, droppedFields: null
+      }
+    }
+    expect(openToolName([child])).toBeNull()
+    expect(openToolName([resolvedCall('agent', 'Agent'), child])).toBeNull()
+    expect(openToolName([denied, child])).toBeNull()
+  })
+
+  it('treats an explicitly undefined parent ID as a main-thread call', () => {
+    const item: ThreadItem = {
+      kind: 'toolCall', turnId: 't1', toolUseId: 'u1', parentToolUseId: undefined,
+      name: 'Read', inputSummary: 'src/a.ts', result: null
+    }
+    expect(openToolName([item])).toBe('Read')
+  })
+
   it('selects on result === null, not on position — a later resolved call does not win', () => {
     // The discriminating case: a naive "last toolCall" read would answer Bash here.
     expect(openToolName([openCall('u1', 'Read'), resolvedCall('u2', 'Bash')])).toBe('Read')

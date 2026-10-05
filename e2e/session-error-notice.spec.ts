@@ -1,4 +1,4 @@
-import { writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { Envelope, EnvelopeType, SendMessagePayload } from '../src/shared/wire/types'
@@ -49,6 +49,7 @@ test('session errors end actual send feedback, retain the queue, replace copy an
   await expect(page.locator('[data-thread-role="queued"]')).toHaveText(payload.text)
   await expect(notice(page).getByRole('button')).toHaveCount(0)
   await expect(page.locator('.conversation')).not.toContainText('PRIVATE')
+  await mkdir('/tmp/builder-1724', { recursive: true })
   for (const [width, height] of [[1280, 800], [800, 600]]) {
     await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size[0], size[1]), [width, height])
     const png = await app.evaluate(async ({ BrowserWindow }) => {

@@ -2213,6 +2213,16 @@ describe('session error routing', () => {
     expect(selectTimelineFor('other')(holder.getState())?.sessionError).toEqual({ code: 'future' })
     off()
   })
+  it('preserves an unseen notice while the same host opens its saved-history read', () => {
+    const holder = createConversationTimelineStore(undefined, () => 'host-a')
+    holder.getState().dispatchFor('other', { type: 'sessionError', code: 'session.blocked' })
+    const read = holder.getState().beginLocalTimelineRead('host-a', 'other')
+    expect(selectTimelineFor('other')(holder.getState())?.sessionError).toEqual({ code: 'session.blocked' })
+    read?.complete(null)
+    expect(selectTimelineFor('other')(holder.getState())?.sessionError).toEqual({ code: 'session.blocked' })
+    holder.getState().beginLocalTimelineRead('host-b', 'other')
+    expect(selectTimelineFor('other')(holder.getState())?.sessionError).toBeUndefined()
+  })
   it('reconnect clears held notices only for its stamped host, including with no open thread', () => {
     let host = 'host-a'
     const holder = createConversationTimelineStore(undefined, () => host)

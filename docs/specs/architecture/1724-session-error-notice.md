@@ -78,3 +78,5 @@ None. A cleaner shape was considered: a separate error store would duplicate con
 ## Revisions
 
 2026-10-05: Typechecking identified `modalBridge.translateModalEvent` and `questionBridge.translateQuestionEvent` as additional exhaustive consumers; both explicitly ignore the timeline-owned event. No contract change. The inherited malformed-frame path emits no diagnostic record; tests pin that silence and category-only parser errors. Native Electron `webContents.capturePage` supplies integrated captures because Playwright screenshots timed out on this runtime. Final work is about 450 inserted lines, below the estimate and all sizing limits.
+
+2026-10-05: The navigation browser regression exposed `beginLocalTimelineRead` replacing an empty live slice with cache-loading state. Preserve the same-host `sessionError` through its pending and completed history read, while a different host still starts without the prior notice. This is required for held off-screen errors to display once when opened.

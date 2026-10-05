@@ -567,7 +567,11 @@ export function createConversationTimelineStore(
       const held = get().timelines.get(conversationId)
       if (held?.serverId === serverId &&
         (held.localRead !== undefined || held.timeline.items.length > 0)) return null
-      const pending: ConversationSlice = { ...emptySlice, serverId, localRead: 'loading' }
+      const pending: ConversationSlice = { ...emptySlice, serverId, localRead: 'loading',
+        // Opening history must not consume a live notice received while this chat was off-screen.
+        timeline: { ...initialTimelineState,
+          sessionError: held?.serverId === serverId ? held.timeline.sessionError : undefined }
+      }
       set(s => ({ timelines: withSliceAtTail(s.timelines, conversationId, pending) }))
       const settle = (replacement: ConversationSlice | null): void => {
         set(s => {
@@ -592,7 +596,7 @@ export function createConversationTimelineStore(
               return
             }
             settle({ ...emptySlice, serverId, localRead: 'loaded', coverage: snapshot.coverage, restored: { serverId, coverage: snapshot.coverage },
-              timeline: { ...initialTimelineState, items: snapshot.items },
+              timeline: { ...pending.timeline, items: snapshot.items },
               prependedRows: snapshot.prependedRows })
           } catch { settle({ ...pending, localRead: 'failed' }) }
         },

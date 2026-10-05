@@ -1,6 +1,6 @@
 // #1604: the conversation's Top overlay (Figma 132:4171, frame "Top overlay"; the pill is 347:6617) — a
 // right-aligned stack of pills pinned to the top of the message area while the timeline scrolls beneath
-// it. Shared with mobile. Occupants: usage, permission resolution, then pairing-error Re-pair.
+// it. Shared with mobile. Occupants: usage, permission resolution, session failure, then pairing-error Re-pair.
 //
 // A PURE VIEW: the markup is a function of the reading, the instant, the dismissed triple, resolution
 // kind and repair flag, which is what lets every arm be a static render in this repo's node-environment specs. The

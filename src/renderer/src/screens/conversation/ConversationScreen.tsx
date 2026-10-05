@@ -4804,6 +4804,15 @@ function TopOverlayControl({ onRepairHost }: {
     open === null ? NO_USAGE_LIMIT_READING : selectUsageLimitFor(open.id, nowSeconds)
   )
   const dismissed = useUsagePillDismissalStore(s => s.dismissed)
+  const sessionError = useConversationTimelineStore(s =>
+    open === null ? undefined : s.timelines.get(open.id)?.timeline.sessionError)
+  const conversationId = open?.id
+  useEffect(() => {
+    if (conversationId === undefined) return
+    return () => {
+      conversationTimelineStore.getState().dispatchFor(conversationId, { type: 'sessionErrorCleared' })
+    }
+  }, [conversationId])
   const resolution = useModalStore(s =>
     open === null ? null : s.resolutions.find(r => r.conversationId === open.id) ?? null)
   useEffect(() => {
@@ -4833,6 +4842,7 @@ function TopOverlayControl({ onRepairHost }: {
   }
   return (
     <TopOverlay
+      sessionError={sessionError?.code}
       resolution={resolution?.phase === 'displayed' ? resolution.kind : null}
       onDismissResolution={() => {
         if (resolution !== null) modalStore.getState().dispatch({ type: 'resolutionDismissed', resolution })

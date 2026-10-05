@@ -323,6 +323,8 @@ export function translateModalEvent(
       // which stringifies the WHOLE event into an Error message and would otherwise put every
       // claude-authored string on the frame there.
       return null
+    case 'sessionError':
+      return null // Owned by the conversation timeline, never an error diagnostic here.
     default:
       return assertNever(event)
   }

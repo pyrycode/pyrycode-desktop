@@ -74,3 +74,7 @@ None. A cleaner shape was considered: a separate error store would duplicate con
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-05
+
+## Revisions
+
+2026-10-05: Typechecking identified `modalBridge.translateModalEvent` and `questionBridge.translateQuestionEvent` as additional exhaustive consumers; both explicitly ignore the timeline-owned event. No contract change. The inherited malformed-frame path emits no diagnostic record; tests pin that silence and category-only parser errors. Native Electron `webContents.capturePage` supplies integrated captures because Playwright screenshots timed out on this runtime. Final work is about 450 inserted lines, below the estimate and all sizing limits.

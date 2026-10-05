@@ -2184,3 +2184,50 @@ describe('subscribeTimeline — the join key reaches the dispatch (#1225)', () =
     )
   })
 })
+
+describe('session error routing', () => {
+  function makeFakeBridge() {
+    let listener: ((event: DaemonEvent) => void) | undefined
+    return {
+      onDaemonEvent: (next: (event: DaemonEvent) => void) => {
+        listener = next
+        return () => { listener = undefined }
+      },
+      emit: (event: DaemonEvent) => listener?.(event)
+    }
+  }
+  it('routes by the frame conversation, with no history identity', () => {
+    const event: DaemonEvent = { type: 'sessionError', conversationId: 'other', code: 'future' }
+    expect(translateTimelineEvent(event)).toEqual({ type: 'sessionError', code: 'future' })
+    expect(timelineTargetFor(event)).toBe('other')
+    expect(liveJoinKeyFor(event)).toBeUndefined()
+    const holder = createConversationTimelineStore(undefined, () => 'host-a')
+    holder.getState().dispatchFor('open', { type: 'userText', text: 'open pending', messageId: 'm' })
+    const open = selectTimelineFor('open')(holder.getState())
+    const bridge = makeFakeBridge()
+    const off = subscribeTimeline(bridge.onDaemonEvent, (thread, id) => {
+      if (id !== null) holder.getState().dispatchFor(id, thread)
+    })
+    bridge.emit(event)
+    expect(selectTimelineFor('open')(holder.getState())).toBe(open)
+    expect(selectTimelineFor('other')(holder.getState())?.sessionError).toEqual({ code: 'future' })
+    off()
+  })
+  it('reconnect clears held notices only for its stamped host, including with no open thread', () => {
+    let host = 'host-a'
+    const holder = createConversationTimelineStore(undefined, () => host)
+    holder.getState().dispatchFor('a', { type: 'sessionError', code: 'session.blocked' })
+    host = 'host-b'
+    holder.getState().dispatchFor('b', { type: 'sessionError', code: 'session.child_crashing' })
+    const b = holder.getState().timelines.get('b')
+    const aRows = selectTimelineFor('a')(holder.getState())?.items
+    const bridge = makeFakeBridge()
+    const off = subscribeTimeline(bridge.onDaemonEvent, () => {}, undefined,
+      serverId => holder.getState().clearSessionErrorsForHost(serverId))
+    bridge.emit({ type: 'connected', ack: ack, serverId: 'host-a' } as DaemonEvent)
+    expect(selectTimelineFor('a')(holder.getState())?.sessionError).toBeUndefined()
+    expect(selectTimelineFor('a')(holder.getState())?.items).toBe(aRows)
+    expect(holder.getState().timelines.get('b')).toBe(b)
+    off()
+  })
+})

@@ -332,6 +332,7 @@ export type ConversationTimelineStore = ConversationTimelineState & {
     retryable: boolean
   ) => void
   markViewed: (conversationId: string) => void
+  clearSessionErrorsForHost: (serverId: string) => void
   clearAllTimelines: () => void
   clearTimelineFor: (conversationId: string) => void
 }
@@ -769,6 +770,16 @@ export function createConversationTimelineStore(
     // for nothing. DELETE, never overwrite: `set(id, initialTimelineState)` type-checks identically and
     // would collapse "nothing is held" into "observed; nothing in the thread" — the exact distinction
     // :115-120 and `selectTimelineFor` exist to preserve.
+    clearSessionErrorsForHost: (serverId) => set(s => {
+      const timelines = new Map(s.timelines)
+      let changed = false
+      for (const [id, slice] of s.timelines) {
+        if (slice.serverId !== serverId || slice.timeline.sessionError === undefined) continue
+        timelines.set(id, { ...slice, timeline: reduceTimeline(slice.timeline, { type: 'sessionErrorCleared' }) })
+        changed = true
+      }
+      return changed ? { timelines } : s
+    }),
     clearAllTimelines: () => set((s) => (s.timelines.size === 0 ? s : { timelines: new Map() })),
     // One conversation deleted or archived out from under the operator; his other threads are still
     // live and still his. Same clone-then-delete-on-the-clone shape as the twin's `dropConversation`

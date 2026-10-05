@@ -306,6 +306,8 @@ export type ThreadEvent =
   // control event, never translated from a wire frame, so `timelineBridge` never produces it. Nullary
   // following the ThreadEvent `stallDetected` (:136): a reset carries no payload, so there is no field
   // a caller can get wrong. `sessionStore`'s `reset` (#166) is the same arm for the session facet.
+  | { type: 'sessionError'; code: string }
+  | { type: 'sessionErrorCleared' }
   | { type: 'reset' }
   // #538: the connection came back — reconcile the transient chrome against the fresh handshake. The
   // SECOND non-content arm, and distinct from `reset` (:133) in where it comes from: `reset` is
@@ -413,6 +415,8 @@ export interface LocalSendPending {
 
 /** The whole timeline state: ordered content + the coarse lifecycle phase + the five chrome scalars. */
 export interface TimelineState {
+  /** Transient daemon failure; code is only compared to renderer-owned copy constants. */
+  sessionError?: { code: string }
   /** Latest stopping report, retired only by a local optimistic send or timeline reset. */
   stoppingBanner?: Omit<Extract<ThreadItem, { kind: 'banner' }>, 'kind'>
   /** Reference identity survives intervening content, echo removal and history prepend. */
@@ -612,6 +616,11 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
     return state
   }
   let next = reduceTimelineContent(state, event)
+  const sessionError = event.type === 'sessionError' ? { code: event.code }
+    : event.type === 'sessionErrorCleared' || event.type === 'reset' ||
+      (event.type === 'userText' && event.received !== true) ||
+      (event.type === 'turnState' && event.state !== 'idle') ? undefined : state.sessionError
+  if (next.sessionError !== sessionError) next = { ...next, sessionError }
   const stoppingBanner = event.type === 'userText' || event.type === 'reset' ? undefined
     : event.type === 'banner' && event.stopsTurn
       ? { level: event.level, text: event.text, stopsTurn: event.stopsTurn, truncated: event.truncated }
@@ -671,6 +680,12 @@ function reduceRefusalOffer(
 
 function reduceTimelineContent(state: TimelineState, event: ThreadEvent): TimelineState {
   switch (event.type) {
+    case 'sessionError':
+      // A daemon failure ends stale turn feedback without changing content or queue state.
+      return { ...state, phase: 'idle', localSendPending: null, stalled: false,
+        apiRetry: null, compacting: false, thinkingTokens: null }
+    case 'sessionErrorCleared':
+      return state
     case 'banner':
       return { ...state, items: [...state.items, {
         kind: 'banner', level: event.level, text: event.text,

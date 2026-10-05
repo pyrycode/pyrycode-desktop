@@ -64,3 +64,7 @@ Vitest only (no UI, no interaction):
 ## Open Questions
 
 - Whether `toolHeadline` returning `''` should count as a match. Leaning yes (the row matched); main trims the trailing space.
+
+## Revisions
+
+- 2026-10-05 — Open question resolved without a design change: an empty `toolHeadline` still counts as a match (the row matched); the renderer's trim, and main's again, leave `Wants to run <tool>:`.

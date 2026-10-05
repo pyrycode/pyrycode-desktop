@@ -66,3 +66,7 @@ None. Scope count: one deliverable, four observable acceptance groups, no new pr
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-05
+
+## Revisions
+
+2026-10-05: reuse the existing `.button-small` shared shape with a local outlined treatment. Figma Background maps to `--color-surface`, the existing dark scheme token (#101418); there is no separate background token. The integrated capture uses the harness's documented `PYRY_E2E_SHOW_WINDOW=1` on Linux's virtual display because hidden Linux windows do not produce screenshot frames. These choices retain the planned behavior and geometry.

@@ -854,6 +854,7 @@ export type InboundDaemonMessage =
   | ({ kind: 'assistant-delta'; delta: AssistantDeltaPayload } & FrameTimestamp)
   | ({ kind: 'turn-end'; turnEnd: TurnEndPayload } & FrameTimestamp)
   | ({ kind: 'turn-state'; turnState: TurnStatePayload } & FrameTimestamp)
+  | { kind: 'session-error'; sessionError: { conversation_id: string; code: string } }
   | ({ kind: 'stall'; stall: StallPayload } & FrameTimestamp)
   | ({ kind: 'api-retry'; apiRetry: ApiRetryPayload } & FrameTimestamp)
   | ({ kind: 'compacting'; compacting: CompactingPayload } & FrameTimestamp)
@@ -4245,6 +4246,17 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'turn-state', turnState, ts: envelope.ts }
+    }
+    case 'session_error': {
+      if (!isRecord(envelope.payload)) throw new WireDecodeError('malformed session_error payload')
+      const sessionError = {
+        conversation_id: requireString(envelope.payload, 'conversation_id'),
+        code: requireString(envelope.payload, 'code')
+      }
+      // Ignore message/extras; neither required string is a diagnostic value.
+      diagnosticLog?.event({ event: 'inbound-decoded', code: 'session_error',
+        bytes: plaintext.length, hash: hashPlaintext(plaintext) })
+      return { kind: 'session-error', sessionError }
     }
     case 'stall': {
       // Narrow BEFORE logging so a malformed frame (an absent / non-string conversation_id) throws

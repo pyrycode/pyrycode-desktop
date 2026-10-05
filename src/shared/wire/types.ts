@@ -98,6 +98,7 @@ export type EnvelopeType =
   | 'assistant_delta'
   | 'turn_end'
   | 'turn_state'
+  | 'session_error'
   | 'stall'
   | 'api_retry'
   | 'compacting'

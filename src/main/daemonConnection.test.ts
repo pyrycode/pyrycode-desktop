@@ -12999,3 +12999,28 @@ it('host prompt local send failures settle both operations without leaking text'
   expect(JSON.stringify(emitted(sink))).not.toContain('private instructions')
   connection.stop()
 })
+
+describe('session_error IPC emission', () => {
+  it('emits only conversation id and code, and malformed diagnostics expose no content', async () => {
+    const records: DiagnosticEvent[] = []
+    const log = { event: (event: DiagnosticEvent) => records.push(event) } as DiagnosticLog
+    const { connection, sink, drivers } = build({ diagnosticLog: log })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    const before = emitted(sink).length
+    drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 7, ts: FIXED_TS, type: 'session_error',
+      payload: { conversation_id: 'PRIVATE-ID', code: 'future.PRIVATE-CODE', message: 'PRIVATE-MESSAGE', extra: 'PRIVATE-EXTRA' } }) })
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'sessionError', conversationId: 'PRIVATE-ID', code: 'future.PRIVATE-CODE' }
+    ])
+    const after = emitted(sink).length
+    const logsBefore = records.length
+    drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 8, ts: FIXED_TS, type: 'session_error',
+      payload: { conversation_id: 'PRIVATE-ID', code: 3, message: 'PRIVATE-MESSAGE' } }) })
+    expect(emitted(sink)).toHaveLength(after)
+    expect(records.length).toBe(logsBefore)
+    expect(JSON.stringify(records)).not.toContain('PRIVATE')
+    connection.stop()
+  })
+})

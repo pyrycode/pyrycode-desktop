@@ -19,8 +19,9 @@ unchanged, and `ChannelList.tsx`'s call site needed no edit.
 
 ## What it does
 
-All four states the sidebar's design calls for are now buildable: input required (amber), working (blue
-slow-blink), new messages (green), idle (empty). Each of the two consumers would otherwise join the source
+All four states the sidebar's design calls for are now buildable: input required (gold), working (blue
+slow-blink), new messages (green), idle (unfilled half-opacity ring). The [dot component](conversation-status-dot.md)
+owns these paints. Each of the two consumers would otherwise join the source
 facts itself, in two places, with two chances to get the precedence backwards. This module ships the join
 once.
 

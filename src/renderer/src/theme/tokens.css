@@ -88,6 +88,8 @@
                                sits in), clearly distinct from --color-success green and --color-error
                                peach so the three dot categories are colour-separable. */
 
+  --color-status-dot-input-required: #d8b85a; /* Conversation waiting dot; separate from connection warning. */
+
   /* Type families: Roboto and Roboto Mono ship inside the app (theme/fonts.css),
      which the self-only CSP allows, so every platform renders the same metrics.
      The system fallbacks cover only characters outside the bundled subsets. */

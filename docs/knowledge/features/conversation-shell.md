@@ -22,6 +22,13 @@ A **Top overlay of pills** landed in [#1604](https://github.com/pyrycode/pyrycod
 The [permission resolution notice](#permission-resolution-notices) occupies the middle of this stack,
 between usage and Re-pair, with client-owned copy and a dismiss X.
 
+The thread overflow menu's bottom-end anchor uses level 2 above the Top overlay's
+level 1; equal levels let the later pills paint over the menu. Sheets and dialogs
+also use level 2 and retain precedence through later DOM placement. See
+[chrome stacking](conversation-shell-chrome.md#structure) and
+[browser stacking proof](development-verification.md#layout-and-input) for the
+regression's overlap, hit-testing and click requirements.
+
 A **third, prominent** read of the connection status landed in [#279](../codebase/279.md): a disconnected-only banner across the top of the thread, between the header row and the message list — distinct from both the composer's terse inline gate and the still-separate #149 two-dot indicator. See [Connection banner](conversation-shell-chrome.md#connection-banner-279) below.
 
 A **pre-first-message workspace chip** landed in [#278](../codebase/278.md) and was **removed in [#1486](https://github.com/pyrycode/pyrycode-desktop/issues/1486)**: a Material 3 pill above the empty new-discussion thread showing the workspace `cwd` the discussion will run in, with a disabled "Change" placeholder reserved for the #157 Workspace Picker sheet, gone once the thread had its first message. By the time it was removed, the sidebar's workspace-start plus (#1178) and Add workspace (#1189) had made every chat start in a chosen directory, so the row only restated a choice already made; the empty thread's copy is now the first thing below the banner row. See [Workspace chip](conversation-shell-workspace-chip-and-picker.md#workspace-chip-278-deleted-by-1486) below.

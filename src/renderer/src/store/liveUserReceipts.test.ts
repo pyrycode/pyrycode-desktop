@@ -63,19 +63,19 @@ describe('live user receipts', () => {
     expect(state.items).toHaveLength(1)
     expect(state.items[0]).toMatchObject({ kind: 'userText', text: 'From phone' })
     expect(state.items[0]).toHaveProperty('createdAt', undefined)
-    expect(state.localSendPending).toBe(false)
+    expect(state.localSendPending).toBeNull()
   })
 
-  it.each([false, true])('preserves localSendPending=%s for a fresh receipt', localSendPending => {
+  it.each([null, { messageId: 'm1', queued: false }])('preserves localSendPending=%o for a fresh receipt', localSendPending => {
     const state = reduceTimeline({ ...initialTimelineState, localSendPending }, translated())
-    expect(state.localSendPending).toBe(localSendPending)
-    expect(reduceTimeline(initialTimelineState, { type: 'userText', text: 'Local' }).localSendPending).toBe(true)
+    expect(state.localSendPending).toEqual(localSendPending)
+    expect(reduceTimeline(initialTimelineState, { type: 'userText', text: 'Local' }).localSendPending).not.toBeNull()
   })
 
   it('returns the exact held state before any content or sidecar mutations for a duplicate', () => {
     const attachments = [{ attachmentId: 'file', filename: 'held.txt' }]
     const state: TimelineState = {
-      ...initialTimelineState, localSendPending: true, phase: 'thinking', stalled: true,
+      ...initialTimelineState, localSendPending: { messageId: 'm1', queued: false }, phase: 'thinking', stalled: true,
       apiRetry: { current: 1, total: 3 }, compacting: true, thinkingTokens: 42,
       latestTurnEnd: { type: 'turnEnd', turnId: 't', stopReason: 'error', isError: true },
       stoppingBanner: { level: 'error', text: 'Held banner', stopsTurn: true, truncated: false },

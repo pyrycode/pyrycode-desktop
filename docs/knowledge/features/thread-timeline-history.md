@@ -236,21 +236,21 @@ Nothing imports this module yet.
 - [#317 codebase notes](../codebase/317.md) — the render slice: the `stalled` scalar, the
   `stallDetected` arm, and `StallIndicator` (retired, folded into `ThinkingIndicator` by #967 — see
   [Conversation shell § Thinking / working indicator § Retired by
-  #967](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)).
+  #967](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967-splits-the-local-send-window-into-sending-and-waiting-for-claude-since-1725)).
 - [#492 codebase notes](../codebase/492.md) — the transport slice: decodes `api_retry` into the
   non-nullary `apiRetry` `DaemonEvent` (`active`/`current`/`total`), shipped dormant.
 - [#493 codebase notes](../codebase/493.md) — the render slice: the `apiRetry` scalar, the `apiRetry`
   arm (clearing semantics inverted from `stalled`), `ApiRetryIndicator`, and the `shouldShowThinking`
   supersede predicate (`ApiRetryIndicator` retired, folded into `ThinkingIndicator` by #967 — see
   [Conversation shell § Thinking / working indicator § Retired by
-  #967](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)).
+  #967](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967-splits-the-local-send-window-into-sending-and-waiting-for-claude-since-1725)).
 - [#495 codebase notes](../codebase/495.md) — the transport slice: decodes `compacting` into the
   non-nullary `compacting` `DaemonEvent` (`active`), shipped dormant.
 - [#496 codebase notes](../codebase/496.md) — the render slice: the `compacting` scalar, the
   `compacting` arm (`apiRetry`'s clearing inversion, minus the counter), `CompactingIndicator`, and the
   second `shouldShowThinking` clause (`CompactingIndicator` retired, folded into `ThinkingIndicator` by
   #967 — see [Conversation shell § Thinking / working indicator § Retired by
-  #967](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)).
+  #967](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967-splits-the-local-send-window-into-sending-and-waiting-for-claude-since-1725)).
 - [#528 codebase notes](../codebase/528.md) — the nullary `reset` arm, ported from [`sessionStore`'s
   `reset` (#166)](../codebase/166.md); capability-only, no dispatch site until #530/#531.
 - [#530 codebase notes](../codebase/530.md) — `reset`'s first production dispatch site: a conversation

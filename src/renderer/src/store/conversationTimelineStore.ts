@@ -79,8 +79,10 @@ import { parseChatHistorySnapshot, type ChatHistorySnapshot } from '@shared/chat
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
 import type { HistoryRequestFailure } from '@shared/ipc/events'
+import type { QueuedItem } from '@shared/wire/types'
 import {
   reduceTimeline,
+  markLocalSendQueued,
   initialTimelineState,
   type TimelineState,
   type ThreadEvent,
@@ -320,6 +322,7 @@ export type ConversationTimelineStore = ConversationTimelineState & {
   } | null
   dispatchLocalEcho: (serverId: string, conversationId: string, event: Extract<ThreadEvent, { type: 'userText' }>) => void
   dispatchFor: (conversationId: string, event: ThreadEvent, joinKey?: string) => void
+  markLocalSendQueued: (conversationId: string, queued: readonly QueuedItem[]) => void
   prependHistoryFor: (conversationId: string, items: readonly ThreadItem[]) => void
   markHistoryRequested: (conversationId: string, serverId?: string) => void
   recordHistoryPage: (conversationId: string, cursor: string, atStart: boolean) => void
@@ -656,6 +659,18 @@ export function createConversationTimelineStore(
           timeline: folded,
           liveKeys: withJoinKey(held.liveKeys, joinKey)
         })
+        return { timelines: next }
+      }),
+    // #1725 — a queue snapshot can only advance a held slice's open send window. It never creates a
+    // slice, and an unchanged fold returns the state object so no subscriber wakes.
+    markLocalSendQueued: (conversationId, queued) =>
+      set((s) => {
+        const held = s.timelines.get(conversationId)
+        if (held === undefined) return s
+        const timeline = markLocalSendQueued(held.timeline, queued)
+        if (timeline === held.timeline) return s
+        const next = new Map(s.timelines)
+        next.set(conversationId, { ...held, timeline })
         return { timelines: next }
       }),
     // #1223 — a page's rows land AHEAD of the rows already held. Three branches, mirroring

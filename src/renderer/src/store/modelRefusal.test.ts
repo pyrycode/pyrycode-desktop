@@ -17,7 +17,7 @@ describe('refusal timeline', () => {
   it('routes only the named conversation and leaves the turn lifecycle intact', () => {
     expect(timelineTargetFor(live)).toBe('a')
     expect(timelineTargetFor({ ...live, conversationId: '' })).toBeNull()
-    const before = { ...initialTimelineState, phase: 'responding' as const, localSendPending: true,
+    const before = { ...initialTimelineState, phase: 'responding' as const, localSendPending: { messageId: 'm1', queued: false },
       stalled: true, compacting: true, thinkingTokens: 23,
       latestTurnEnd: { type: 'turnEnd' as const, turnId: 't', stopReason: 'error', isError: true } }
     const after = reduceTimeline(before, refusal)

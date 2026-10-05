@@ -51,8 +51,9 @@ type ThreadEvent =
   | { type: 'dropUserText'; messageId: string }
   | { type: 'thinkingProgress'; estimatedTokens: number }
 
-interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase; stalled: boolean; apiRetry: ApiRetryStatus | null; compacting: boolean; localSendPending: boolean; thinkingTokens: number | null; latestTurnEnd?: Extract<ThreadEvent, { type: 'turnEnd' }>; pendingCompaction?: Extract<ThreadItem, { kind: 'compactionBoundary' }> }
+interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase; stalled: boolean; apiRetry: ApiRetryStatus | null; compacting: boolean; localSendPending: LocalSendPending | null; thinkingTokens: number | null; latestTurnEnd?: Extract<ThreadEvent, { type: 'turnEnd' }>; pendingCompaction?: Extract<ThreadItem, { kind: 'compactionBoundary' }> }
 interface ApiRetryStatus { current: number; total: number }
+interface LocalSendPending { messageId: string; queued: boolean }
 ```
 
 `ThreadItem` is the durable, ordered content; `ThreadEvent` is the renderer-local (camelCase,
@@ -78,8 +79,43 @@ scalar** — set by local `userText` (the composer's own accept signal, no separ
 live and history receipts carry `received: true` and preserve either pending value. It is cleared
 only by the daemon's own turn-activity edge; its full rationale, the working-indicator consumer, and
 what a `dropUserText` removal (below) deliberately leaves it as live in [Conversation shell §
-Thinking / working indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967),
+Thinking / working indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967-splits-the-local-send-window-into-sending-and-waiting-for-claude-since-1725),
 not restated here.
+
+**[#1725](https://github.com/pyrycode/pyrycode-desktop/issues/1725) retypes the scalar from `boolean` to
+`LocalSendPending | null`**, so the open window can distinguish "sent, not yet seen by the daemon" from
+"the daemon's queue has it." `null` is the closed window, unchanged in meaning. An open window names the
+newest local send's composer-minted `messageId` (`''` when the `userText` event carried none — a value no
+queue item can match) and a `queued` flag that starts `false`. On 2026-10-03 the daemon accepted a message
+while its claude child was crash-looping, and the pre-#1725 boolean gave the working indicator no way to
+tell that apart from an ordinary in-flight send — the row read "Thinking…" for minutes. The daemon already
+says when it holds a message: every `send_message` is enqueued, and each enqueue pushes a `queue_state`
+whose items carry the client's own `message_id` (pyrycode#2092), so
+the window's `queued` flag is this scalar's honest proxy for "the daemon has it," independent of whether
+claude itself has started.
+
+The pure `markLocalSendQueued(state, queued: readonly QueuedItem[]): TimelineState`, exported beside the
+selectors (below), is the sole writer of `queued`. It is a no-op (same-reference) unless the window is
+open, not yet `queued`, its `messageId !== ''`, and some item's `message_id` strictly equals it — so
+another device's item, an item with an empty or absent `message_id`, and a closed window all leave the
+state untouched. **`queued` is sticky: nothing ever sets it back to `false`.** Claude can commit the item,
+and a later snapshot without it can arrive, before `turn_state{thinking}` does, so re-reading `false` from
+an item's absence would be a regression, not a correction. `markLocalSendQueued` is not itself a
+`reduceTimeline` arm — no `ThreadEvent` carries a queue snapshot — it is called directly by
+[`ConversationTimelineStore.markLocalSendQueued`](conversation-timeline-holder.md#how-it-works) from the
+[queue bridge](queue-store.md#the-data-path-srcrenderersrcstorequeuebridgets)'s snapshot callback. See
+[Conversation shell § Thinking / working
+indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967-splits-the-local-send-window-into-sending-and-waiting-for-claude-since-1725)
+for the "Sending…" / "Waiting for Claude" labels this feeds.
+
+**Retyping a scalar from `boolean` to a record is invisible to `expect(...).toBe(true)`.** `toBe` accepts
+any type, so every pre-existing assertion comparing `localSendPending` (or a value derived from it)
+against the literal `true` kept compiling after this retype — `tsc` gave no signal, unlike the
+`required`-prop retypes elsewhere in this file and in the [working
+indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967-splits-the-local-send-window-into-sending-and-waiting-for-claude-since-1725)
+that `tsc` does catch. Only running the suite surfaced the one assertion #1725 left stale. A boolean
+scalar's tests are worth grepping for `toBe(true)`/`toBe(false)` before a retype, not just for the
+type's own usage sites.
 
 **`thinkingTokens` ([#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314), decoded at
 [#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312), carried by
@@ -294,7 +330,7 @@ pins these joins, exact-reference rejection and both pending-send values.
 | `turnState` | set `phase`; same reference if unchanged (no-churn); clears `thinkingTokens` to `null` when `event.state !== 'thinking'` (the widened guard below lets a repeat `turn_state{idle}` through when a reading is still held, rather than early-outing and leaving it stale) — [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) |
 | `turnEnd` | append a `turnBoundary`, copying the event's six `TurnEndMetrics` fields onto it by name ([#1565](https://github.com/pyrycode/pyrycode-desktop/issues/1565)); does **not** touch `phase`; clears `thinkingTokens` to `null` — the think this reading measured is over even though `phase` itself resets separately on the daemon's own `turn_state: idle` — [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) |
 | `thinkingProgress` | assign `thinkingTokens: event.estimatedTokens` verbatim (same reference on a verbatim repeat — the wire has no dedup and re-fires as the count climbs); `items`/`phase`/every other scalar untouched — [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) |
-| `userText` | Append a whole user row with `createdAt`, `messageId` and attachment references unchanged; never coalesce. Local submission sets `localSendPending: true`; `received: true` preserves it. Phase and activity scalars stay unchanged. Duplicate receipts are rejected before this fold. Fresh rows clear `latestTurnEnd` and `stoppingBanner` in the wrapper. |
+| `userText` | Append a whole user row with `createdAt`, `messageId` and attachment references unchanged; never coalesce. Local submission (not `received: true`) opens the window: `localSendPending: { messageId: event.messageId ?? '', queued: false }`, replacing any prior window — the label follows the newest sent id when a second message goes out before the first turn starts. `received: true` preserves whatever window is already held. Phase and activity scalars stay unchanged. Duplicate receipts are rejected before this fold. Fresh rows clear `latestTurnEnd` and `stoppingBanner` in the wrapper. — [#650](../codebase/650.md), retyped by [#1725](https://github.com/pyrycode/pyrycode-desktop/issues/1725) |
 | `sessionBoundary` | append a fresh `sessionBoundary` item (never coalesced); does **not** touch `phase` — the `/clear`/idle-eviction/workspace-change marker, sourced from the daemon's `sessionTransition` event via the bridge since [#286](../codebase/286.md) |
 | `stallDetected` | set `stalled: true`; `items`/`phase` untouched. Same reference if `stalled` is already `true` (no-churn) — [#317](../codebase/317.md) |
 | `apiRetry` | `active: true` → hold `{ current, total }` (same reference if unchanged, no-churn); `active: false` → `null`, discarding the event's counter unconditionally. `items`/`phase`/`stalled` untouched — [#493](../codebase/493.md) |
@@ -335,10 +371,13 @@ it and one deliberately does not: `turnState`'s guard gains `(event.state === 't
 `reconnected`'s `nothingLive` guard gains `&& state.thinkingTokens === null` for the same reason; `toolResult`'s
 orphan/duplicate guard does **not** widen, since a tool result is not one of this scalar's three clearing
 edges and must stay the same-reference no-op it already is.
-`initialTimelineState = { items: [], phase: 'idle', stalled: false, apiRetry: null, compacting: false, localSendPending: false, thinkingTokens: null }`;
+`initialTimelineState = { items: [], phase: 'idle', stalled: false, apiRetry: null, compacting: false, localSendPending: null, thinkingTokens: null }`
+(`localSendPending` retyped from `false` to `null` by [#1725](https://github.com/pyrycode/pyrycode-desktop/issues/1725));
 pure selectors `selectItems`, `selectPhase`, `selectStalled`, `selectApiRetry`, `selectCompacting`,
 `selectLocalSendPending`, `selectThinkingTokens` read these fields. Recovery reads
-`latestTurnEnd` directly from the open conversation's held timeline.
+`latestTurnEnd` directly from the open conversation's held timeline. `markLocalSendQueued` (above) is a
+transform, not a selector — it is exported alongside these but takes a `queued` snapshot and returns a
+`TimelineState`, never read through `useTimelineStore`.
 
 ### Internal helpers (unexported)
 

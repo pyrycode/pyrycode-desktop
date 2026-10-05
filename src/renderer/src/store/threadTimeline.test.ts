@@ -8,12 +8,13 @@ import {
   selectApiRetry,
   selectCompacting,
   selectLocalSendPending,
+  markLocalSendQueued,
   type MessageAttachment,
   type ThreadEvent,
   type ThreadItem,
   type TimelineState
 } from './threadTimeline'
-import type { WireResetPhase, WireResetHandoff } from '@shared/wire/types'
+import type { QueuedItem, WireResetPhase, WireResetHandoff } from '@shared/wire/types'
 
 // Fixture builders — plain renderer-local events, no transport/wire involved. Mirror
 // sessionStore.test.ts's `msg(...)` idiom: sensible defaults, override only what a case asserts.
@@ -486,7 +487,7 @@ describe('reduceTimeline — a user message’s attachments (#1039)', () => {
     const state = reduceTimeline(thinking, userTextWith('with a file', [REPORT]))
     expect(state.items.map((i) => i.kind)).toEqual(['userText'])
     expect(state.phase).toBe('thinking')
-    expect(state.localSendPending).toBe(true)
+    expect(state.localSendPending).not.toBeNull()
   })
 
   // The two optional fields are independent: one carried without the other must not drop it.
@@ -876,7 +877,7 @@ describe('reduceTimeline — compaction status (#496)', () => {
 describe('reduceTimeline — the locally-opened working indicator (#650)', () => {
   it('userText opens the window from the initial state (AC1)', () => {
     const state = run([userText('hello')])
-    expect(state.localSendPending).toBe(true)
+    expect(state.localSendPending).not.toBeNull()
     // The orthogonality this file documents SURVIVES: the content event still never touches `phase`,
     // it touches chrome — exactly as `assistantDelta` already writes `stalled`.
     expect(state.phase).toBe('idle')
@@ -884,9 +885,9 @@ describe('reduceTimeline — the locally-opened working indicator (#650)', () =>
   })
 
   it('the initial state holds no locally-opened window', () => {
-    expect(initialTimelineState.localSendPending).toBe(false)
-    expect(selectLocalSendPending(initialTimelineState)).toBe(false)
-    expect(selectLocalSendPending(run([userText('typed')]))).toBe(true)
+    expect(initialTimelineState.localSendPending).toBeNull()
+    expect(selectLocalSendPending(initialTimelineState)).toBeNull()
+    expect(selectLocalSendPending(run([userText('typed')]))).not.toBeNull()
   })
 
   it('a second userText while already pending still appends — never a same-reference no-op', () => {
@@ -896,12 +897,12 @@ describe('reduceTimeline — the locally-opened working indicator (#650)', () =>
     const next = reduceTimeline(opened, userText('two'))
     expect(next).not.toBe(opened)
     expect(next.items).toHaveLength(2)
-    expect(next.localSendPending).toBe(true)
+    expect(next.localSendPending).not.toBeNull()
   })
 
   it('every turnState closes it — the daemon has spoken, its phase is authoritative (AC2)', () => {
     for (const phase of ['idle', 'thinking', 'responding'] as const) {
-      expect(run([userText('typed'), { type: 'turnState', state: phase }]).localSendPending).toBe(false)
+      expect(run([userText('typed'), { type: 'turnState', state: phase }]).localSendPending).toBeNull()
     }
   })
 
@@ -915,14 +916,14 @@ describe('reduceTimeline — the locally-opened working indicator (#650)', () =>
     const next = reduceTimeline(opened, { type: 'turnState', state: 'idle' })
 
     expect(next).not.toBe(opened)
-    expect(next.localSendPending).toBe(false)
+    expect(next.localSendPending).toBeNull()
     expect(next.phase).toBe('idle')
     expect(next.items).toBe(opened.items)
   })
 
   it('does not latch closed — a second send re-opens the window', () => {
     const state = run([userText('one'), { type: 'turnState', state: 'idle' }, userText('two')])
-    expect(state.localSendPending).toBe(true)
+    expect(state.localSendPending).not.toBeNull()
   })
 
   it('a reconnect closes it even when it is the ONLY live chrome (AC3)', () => {
@@ -938,7 +939,7 @@ describe('reduceTimeline — the locally-opened working indicator (#650)', () =>
     const next = reduceTimeline(opened, reconnected())
 
     expect(next).not.toBe(opened)
-    expect(next.localSendPending).toBe(false)
+    expect(next.localSendPending).toBeNull()
     // Mode A survives the Mode B clear, as for the other four scalars.
     expect(next.items).toBe(opened.items)
   })
@@ -946,31 +947,31 @@ describe('reduceTimeline — the locally-opened working indicator (#650)', () =>
   it('a reset closes it, for free, via the shared initial constant (AC5)', () => {
     const next = reduceTimeline(run([userText('typed')]), reset())
     expect(next).toBe(initialTimelineState)
-    expect(next.localSendPending).toBe(false)
+    expect(next.localSendPending).toBeNull()
   })
 
   it('content events do NOT close it — the deliberate inverse of `stalled`', () => {
     // Content can arrive before any turn_state, so clearing here would blank the indicator mid-turn
     // while `phase` is still idle. Only a daemon lifecycle edge closes the window.
-    expect(run([userText('typed'), delta('A', 'hi')]).localSendPending).toBe(true)
-    expect(run([userText('typed'), toolUse('A', 't1')]).localSendPending).toBe(true)
+    expect(run([userText('typed'), delta('A', 'hi')]).localSendPending).not.toBeNull()
+    expect(run([userText('typed'), toolUse('A', 't1')]).localSendPending).not.toBeNull()
     expect(
       run([userText('typed'), toolUse('A', 't1'), toolResult('A', 't1')]).localSendPending
-    ).toBe(true)
+    ).not.toBeNull()
   })
 
   it('turnEnd does NOT close it — the paired turn_state{idle} is what clears', () => {
     // Clearing here would regress: a send issued while the previous turn is finishing would have its
     // fresh window closed by the PREVIOUS turn's boundary.
-    expect(run([userText('typed'), turnEnd('A')]).localSendPending).toBe(true)
+    expect(run([userText('typed'), turnEnd('A')]).localSendPending).not.toBeNull()
   })
 
   it('the independent chrome facts and markers leave it alone', () => {
-    expect(run([userText('typed'), stall()]).localSendPending).toBe(true)
-    expect(run([userText('typed'), apiRetry(true, 1, 3)]).localSendPending).toBe(true)
-    expect(run([userText('typed'), compacting(true)]).localSendPending).toBe(true)
-    expect(run([userText('typed'), sessionBoundary()]).localSendPending).toBe(true)
-    expect(run([userText('typed'), unrecognized()]).localSendPending).toBe(true)
+    expect(run([userText('typed'), stall()]).localSendPending).not.toBeNull()
+    expect(run([userText('typed'), apiRetry(true, 1, 3)]).localSendPending).not.toBeNull()
+    expect(run([userText('typed'), compacting(true)]).localSendPending).not.toBeNull()
+    expect(run([userText('typed'), sessionBoundary()]).localSendPending).not.toBeNull()
+    expect(run([userText('typed'), unrecognized()]).localSendPending).not.toBeNull()
   })
 
   it('the carry-through no-op arms stay same-reference with the window open', () => {
@@ -980,7 +981,7 @@ describe('reduceTimeline — the locally-opened working indicator (#650)', () =>
     expect(reduceTimeline(opened, toolResult('A', 'orphan'))).toBe(opened) // orphan result
     const stalled = reduceTimeline(opened, stall())
     expect(reduceTimeline(stalled, stall())).toBe(stalled) // redundant stall onset
-    expect(stalled.localSendPending).toBe(true)
+    expect(stalled.localSendPending).not.toBeNull()
   })
 })
 
@@ -1056,7 +1057,7 @@ describe('reduceTimeline — reset', () => {
     expect(state.stalled).toBe(true)
     expect(state.apiRetry).not.toBeNull()
     expect(state.compacting).toBe(true)
-    expect(state.localSendPending).toBe(true)
+    expect(state.localSendPending).not.toBeNull()
     expect(state.thinkingTokens).not.toBeNull()
 
     const next = reduceTimeline(state, reset())
@@ -1118,7 +1119,7 @@ describe('reduceTimeline — reconnected', () => {
     expect(state.stalled).toBe(true)
     expect(state.apiRetry).not.toBeNull()
     expect(state.compacting).toBe(true)
-    expect(state.localSendPending).toBe(true)
+    expect(state.localSendPending).not.toBeNull()
     expect(state.thinkingTokens).not.toBeNull()
 
     const next = reduceTimeline(state, reconnected())
@@ -1127,7 +1128,7 @@ describe('reduceTimeline — reconnected', () => {
     expect(next.stalled).toBe(false)
     expect(next.apiRetry).toBeNull()
     expect(next.compacting).toBe(false)
-    expect(next.localSendPending).toBe(false)
+    expect(next.localSendPending).toBeNull()
     expect(next.thinkingTokens).toBeNull()
   })
 
@@ -1504,12 +1505,12 @@ describe('reduceTimeline — dropUserText (#1213)', () => {
     // The userText arm OPENS it; this arm is not a second userText producer, so it must leave the scalar
     // exactly as it found it — clearing it would hide the indicator for a DIFFERENT pending message.
     const pending = run([userTextWithId('pending', 'm1'), userTextWithId('other', 'm2')])
-    expect(pending.localSendPending).toBe(true)
-    expect(reduceTimeline(pending, dropUserText('m1')).localSendPending).toBe(true)
+    expect(pending.localSendPending).not.toBeNull()
+    expect(reduceTimeline(pending, dropUserText('m1')).localSendPending).not.toBeNull()
 
     const idle = run([{ type: 'turnState', state: 'idle' }])
-    expect(idle.localSendPending).toBe(false)
-    expect(reduceTimeline(idle, dropUserText('m1')).localSendPending).toBe(false)
+    expect(idle.localSendPending).toBeNull()
+    expect(reduceTimeline(idle, dropUserText('m1')).localSendPending).toBeNull()
   })
 
   it('is idempotent — a second drop for the same id finds nothing and returns the same reference', () => {
@@ -1674,13 +1675,13 @@ describe('reduceTimeline — an offered attachment (#1621)', () => {
       ...initialTimelineState,
       phase: 'responding',
       stalled: true,
-      localSendPending: true,
+      localSendPending: { messageId: 'm1', queued: false },
       apiRetry: { current: 1, total: 3 }
     }
     const after = reduceTimeline(before, offer('id-1'))
     expect(selectPhase(after)).toBe('responding')
     expect(selectStalled(after)).toBe(true)
-    expect(selectLocalSendPending(after)).toBe(true)
+    expect(selectLocalSendPending(after)).toBe(before.localSendPending)
     expect(selectApiRetry(after)).toBe(before.apiRetry)
   })
 
@@ -1689,5 +1690,65 @@ describe('reduceTimeline — an offered attachment (#1621)', () => {
     const state = reduceTimeline(initialTimelineState, event)
     const item = selectItems(state)[0] as Extract<ThreadItem, { kind: 'attachmentOffer' }>
     expect(event.type === 'attachmentOffered' && item.attachment === event.attachment).toBe(false)
+  })
+})
+
+// #1725: the window's two stages. It opens naming the sent id, and a queue_state listing that id moves it
+// to queued — stickily, since claude can commit the item before turn_state{thinking} arrives.
+describe('the local send window stages — Sending, then Waiting for Claude (#1725)', () => {
+  const item = (message_id?: string): QueuedItem => ({ queued_msg_id: 1, text: 'typed', ts: 'ts', message_id })
+
+  it('opens naming the sent message_id, not yet queued', () => {
+    expect(run([userTextWithId('typed', 'm1')]).localSendPending).toEqual({ messageId: 'm1', queued: false })
+  })
+
+  it('follows the newest send when a second message goes out before the turn starts', () => {
+    const queued = markLocalSendQueued(run([userTextWithId('one', 'm1')]), [item('m1')])
+    expect(reduceTimeline(queued, userTextWithId('two', 'm2')).localSendPending)
+      .toEqual({ messageId: 'm2', queued: false })
+  })
+
+  it('a received receipt leaves the window naming the local send', () => {
+    const opened = run([userTextWithId('typed', 'm1')])
+    const next = reduceTimeline(opened, { type: 'userText', text: 'other device', messageId: 'm9', received: true })
+    expect(next.localSendPending).toEqual({ messageId: 'm1', queued: false })
+  })
+
+  it('a queue_state listing the sent id marks it queued', () => {
+    const opened = run([userTextWithId('typed', 'm1')])
+    expect(markLocalSendQueued(opened, [item('other'), item('m1')]).localSendPending)
+      .toEqual({ messageId: 'm1', queued: true })
+  })
+
+  it('sticks across a later snapshot that no longer lists the item', () => {
+    const queued = markLocalSendQueued(run([userTextWithId('typed', 'm1')]), [item('m1')])
+    expect(markLocalSendQueued(queued, [])).toBe(queued)
+    expect(markLocalSendQueued(queued, [item('other')]).localSendPending).toEqual({ messageId: 'm1', queued: true })
+  })
+
+  it('another device item, an empty id or an absent id does not advance it', () => {
+    const opened = run([userTextWithId('typed', 'm1')])
+    for (const queued of [[item('m2')], [item('')], [item()], []]) {
+      expect(markLocalSendQueued(opened, queued)).toBe(opened)
+    }
+  })
+
+  it('a send with no minted id can never match, even an item with an empty id', () => {
+    const opened = run([userText('typed')])
+    expect(opened.localSendPending).toEqual({ messageId: '', queued: false })
+    expect(markLocalSendQueued(opened, [item(''), item()])).toBe(opened)
+  })
+
+  it('does nothing with the window closed', () => {
+    const closed = run([userTextWithId('typed', 'm1'), { type: 'turnState', state: 'idle' }])
+    expect(markLocalSendQueued(closed, [item('m1')])).toBe(closed)
+    expect(markLocalSendQueued(initialTimelineState, [item('m1')])).toBe(initialTimelineState)
+  })
+
+  it('the first turn_state still closes a queued window', () => {
+    const queued = markLocalSendQueued(run([userTextWithId('typed', 'm1')]), [item('m1')])
+    const next = reduceTimeline(queued, { type: 'turnState', state: 'thinking' })
+    expect(next.localSendPending).toBeNull()
+    expect(next.phase).toBe('thinking')
   })
 })

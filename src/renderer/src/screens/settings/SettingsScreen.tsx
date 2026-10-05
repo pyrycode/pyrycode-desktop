@@ -3,6 +3,7 @@ import { ServerInfoData } from '../../store/serverInfoLoader'
 import { ServerRowControl } from './ServerRow'
 import { DefaultWorkspaceRowControl } from './DefaultWorkspaceRow'
 import { PushNotificationRowControl } from './PushNotificationRow'
+import { CollapseToolUsesRowControl } from './CollapseToolUsesRow'
 import { ArchivedCountRowControl } from './ArchivedCountRow'
 
 // Client-owned copy — module-level constants (the EMPTY_THREAD_COPY idiom), never daemon strings. The
@@ -14,6 +15,7 @@ const SETTINGS_COPY = {
   connection: 'Connection',
   defaults: 'Defaults for new conversations',
   notifications: 'Notifications',
+  thread: 'Thread',
   storage: 'Storage',
   about: 'About',
   pairAnother: 'Pair another server'
@@ -102,6 +104,12 @@ export function SettingsScreen({
           <h2 className="settings__section-header">{SETTINGS_COPY.notifications}</h2>
           <div className="settings__section-body">
             <PushNotificationRowControl />
+          </div>
+        </section>
+        <section className="settings__section">
+          <h2 className="settings__section-header">{SETTINGS_COPY.thread}</h2>
+          <div className="settings__section-body">
+            <CollapseToolUsesRowControl />
           </div>
         </section>
         {/* #351: the Storage section (Figma 17-91…17-97) — sits between Connection and About to preserve

@@ -24,6 +24,20 @@ it('keeps optional-off rendering and lone tools unchanged', () => {
   expect(render([done('lone')])).toBe(render([done('lone')], false))
 })
 
+it('switches between folded headers and ordinary joined tool rows with the existing markup', () => {
+  const items = [done('a'), done('b')]
+  const ordinary = render(items, false)
+  expect(headers(ordinary)).toEqual([])
+  expect(ordinary).not.toContain('hidden=""')
+  expect(ordinary).toContain('tool-group-row--joined-below')
+  expect(ordinary).toContain('tool-group-row--joined-above')
+  expect(ordinary.match(/class="tool-row__left"/g)).toHaveLength(2)
+  expect(ordinary.match(/class="tool-row__right"/g)).toHaveLength(2)
+  const folded = render(items)
+  expect(headers(folded)).toEqual(['Using tools: 2'])
+  expect(folded.match(/hidden=""/g)).toHaveLength(2)
+})
+
 it.each<ThreadItem>([
   { kind: 'assistantText', turnId: 't', text: 'message' },
   { kind: 'userText', text: 'message' },

@@ -776,7 +776,7 @@ const BOX_SHELL_ID = 'tool-use-1102-shell'
 const BOX_INPUT_PATH = '.../pyrycode/internal/e2e'
 
 /** A FAILED result — AC4's row. `routedToolResultFrame` above is hardcoded to the success branch. */
-function failedToolResultFrame(toolUseId: string): Uint8Array {
+function failedToolResultFrame(toolUseId: string, resultDetail?: string): Uint8Array {
   return encodeEnvelope({
     id: PUSH_ENVELOPE_ID,
     type: 'tool_result',
@@ -786,7 +786,8 @@ function failedToolResultFrame(toolUseId: string): Uint8Array {
       turn_id: 'turn-1102',
       tool_use_id: toolUseId,
       is_error: true,
-      result_summary: 'one line of failed result text'
+      result_summary: 'one line of failed result text',
+      result_detail: resultDetail
     }
   })
 }
@@ -947,11 +948,9 @@ test('tool row: an expanded row is one box with its body inside the border', asy
     'the command block does not fill to the trailing edge'
   ).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
 
-  // --- AC4. The failure device followed the box outward: the ROW's border is retinted, and the chip has
-  // no border left to retint. Asserted COMPARATIVELY against the successful row rather than against a
-  // hardcoded colour, so a token retune cannot redden it — while the one mistake this consequence invites,
-  // leaving the selector at `.tool-row--error .tool-row__chip`, must: that leaves both rows' borders the
-  // same colour.
+  // Failed rows use the accessible icon and keep the successful row's border.
+  await expectFailedIcon(shellRow)
+  await expect(plainRow.getByRole('img', { name: 'Failed' })).toHaveCount(0)
   async function bordersOf(
     row: Locator
   ): Promise<{ color: string; width: string; chipWidth: number }> {
@@ -966,13 +965,11 @@ test('tool row: an expanded row is one box with its body inside the border', asy
   }
   const plainBorders = await bordersOf(plainRow)
   const shellBorders = await bordersOf(shellRow)
-  expect(shellBorders.color).not.toBe(plainBorders.color)
-  // The retint is a colour change and nothing else — a failed row is the same box, not a thicker one.
+  expect(shellBorders.color).toBe(plainBorders.color)
+  // A failed row keeps the same box dimensions.
   expect(shellBorders.width).toBe(plainBorders.width)
   expect(plainBorders.width).toBe('1px')
-  // And the chip carries no border in either row, which is what makes the row the failure device for the
-  // WHOLE row rather than for its header alone. It is also the assertion that catches the <button>
-  // branch inheriting the UA's own border once the chip stops declaring one.
+  // Neither button inherits a UA border.
   expect(plainBorders.chipWidth).toBe(0)
   expect(shellBorders.chipWidth).toBe(0)
 })
@@ -1145,10 +1142,7 @@ test('tool row: the expanded body draws boxed field values and a bare result', a
     "the body's blocks do not sit 12px apart"
   ).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
 
-  // --- AC4. A failed tool's result carries NO box of its own — the red rectangle around bare text that
-  // the outgoing `.tool-row__body--error .tool-row__result` rule would now draw. The row's retinted
-  // border stays the single failure device, asserted comparatively against the successful row so a token
-  // retune cannot redden it.
+  // A failed result remains bare text, with the header icon providing its failure indicator.
   const failedBody = shellRow.locator('.tool-row__body--error')
   await expect(failedBody, 'the failed body lost its modifier class').toHaveCount(1)
   const failedResult = await styleOf(failedBody.locator('.tool-row__result'), "the failed row's result")
@@ -1160,12 +1154,8 @@ test('tool row: the expanded body draws boxed field values and a bare result', a
   ] as const) {
     expect(drawn, `the failed result still draws a ${side} border of its own`).toBe('0px')
   }
-  const borderColorOf = (row: Locator): Promise<string> =>
-    row.evaluate((element) => getComputedStyle(element).borderTopColor)
-  expect(
-    await borderColorOf(shellRow),
-    'the row-level failure device went with the result border'
-  ).not.toBe(await borderColorOf(plainRow))
+  await expectFailedIcon(shellRow)
+  await expect(plainRow.getByRole('img', { name: 'Failed' })).toHaveCount(0)
 
   // --- AC5. Nothing that bounds a hostile payload moved. The 240px cap and its scroll are what keep one
   // 64KB result from eating the thread viewport, and `white-space: pre` is what keeps machine output's
@@ -1364,7 +1354,7 @@ test('tool row: consecutive rows join into one stack with a single border at eac
   daemon.pushFrame(routedToolUseFrame(JOIN_FAILED_ID, 'Bash', { command: SHELL_COMMAND }))
   daemon.pushFrame(routedToolUseFrame(JOIN_TRAILING_ID, 'read_file'))
   daemon.pushFrame(routedToolResultFrame(JOIN_PLAIN_ID))
-  daemon.pushFrame(failedToolResultFrame(JOIN_FAILED_ID))
+  daemon.pushFrame(failedToolResultFrame(JOIN_FAILED_ID, 'no matches'))
   daemon.pushFrame(routedToolResultFrame(JOIN_TRAILING_ID))
 
   const failedRow = rows.nth(2)
@@ -1447,49 +1437,20 @@ test('tool row: consecutive rows join into one stack with a single border at eac
   }
   expect(trailing.boxShadow, 'the run casts no shadow at all').not.toBe('none')
 
-  // --- AC4's join half. `plainColour` is the pending row's TOP edge: the one edge in this run that no join
-  // rule reaches, so it is the base border colour by construction rather than by assumption. Asserted
-  // comparatively, #1102's convention, so a token retune cannot redden this.
+  // All four borders remain plain, including the failed row and its shared edges.
   const plainColour = pending.borderTopColor
-  const failureColour = failed.borderTopColor
-  expect(failureColour, 'the failed row draws no failure device at all').not.toBe(plainColour)
-
-  // A failed row's outline stays CLOSED and red on all four sides — the join squares two of its corners, it
-  // does not open the box.
-  for (const [side, drawn] of [
-    ['top', failed.borderTopColor],
-    ['right', failed.borderRightColor],
-    ['bottom', failed.borderBottomColor],
-    ['left', failed.borderLeftColor]
-  ] as const) {
-    expect(drawn, `the failed row's ${side} edge is not the error colour`).toBe(failureColour)
+  for (const row of [pending, plain, failed, trailing]) {
+    expect([row.borderTopColor, row.borderRightColor, row.borderBottomColor, row.borderLeftColor])
+      .toEqual([plainColour, plainColour, plainColour, plainColour])
   }
-
-  // The single line drawn at a join is the error colour whichever side the failed row is on — the row below
-  // gains a red top edge, the row above gains a red bottom edge, and `expectOneLineAtJoin` has already
-  // pinned that the two halves agree.
-  expect(plain.borderBottomColor, 'the row above the failed one kept the plain colour at the join').toBe(
-    failureColour
-  )
-  expect(trailing.borderTopColor, 'the row below the failed one kept the plain colour at the join').toBe(
-    failureColour
-  )
-  // And the pending/resolved join reads the plain colour, so the tint is the FAILURE's and not the join's.
-  expect(pending.borderBottomColor, 'a join with no failed row drew the error colour').toBe(plainColour)
-
-  // Two controls that the tint stops at the shared edge rather than smearing down the run: the neighbours
-  // keep the plain colour on their other three sides.
-  for (const [row, what] of [
-    [plain, 'the row above the failed one'],
-    [trailing, 'the row below the failed one']
-  ] as const) {
-    expect(row.borderLeftColor, `${what} took the error colour on its leading edge`).toBe(plainColour)
-    expect(row.borderRightColor, `${what} took the error colour on its trailing edge`).toBe(plainColour)
-  }
-  expect(plain.borderTopColor, 'the error colour smeared past the join onto the row above').toBe(plainColour)
-  expect(trailing.borderBottomColor, 'the error colour smeared past the join onto the row below').toBe(
-    plainColour
-  )
+  await expectFailedIcon(failedRow)
+  await failedRow.locator('.tool-row__chip').click()
+  await expect(failedRow.locator('.tool-row__result')).toBeVisible()
+  await expectFailedIcon(failedRow)
+  await failedRow.locator('.tool-row__chip').click()
+  await expect(failedRow.locator('.tool-row__result')).toHaveCount(0)
+  await expect(rows.getByRole('img', { name: 'Failed' })).toHaveCount(1)
+  await page.screenshot({ path: '/tmp/builder-1748/failed-stack.png', animations: 'disabled' })
 
   // --- AC5. Expanding a row INSIDE the run does not break the stack: the body stays inside its own border
   // (#1102's test proves the containment; what this proves is that the row still joins on both sides after
@@ -1510,3 +1471,21 @@ test('tool row: consecutive rows join into one stack with a single border at eac
     expectOneLineAtJoin(upper, lower, at)
   }
 })
+
+async function expectFailedIcon(row: Locator): Promise<void> {
+  const icon = row.getByRole('img', { name: 'Failed' })
+  await expect(icon).toBeVisible()
+  const error = await row.evaluate((element) => getComputedStyle(element).getPropertyValue('--color-error').trim())
+  await expect(icon).toHaveCSS('color', rgbOf(error))
+  const glyph = await boxOf(icon, 'the Failed icon')
+  expect(glyph.width).toBe(16)
+  expect(glyph.height).toBe(16)
+  const count = row.locator('.tool-row__count')
+  if (await count.count()) {
+    const box = await boxOf(count, 'the failed result count')
+    expect(glyph.x).toBeGreaterThanOrEqual(box.x + box.width)
+  }
+  const chevron = await boxOf(row.locator('.tool-row__chevron'), 'the failed row chevron')
+  expect(chevron.x).toBeGreaterThanOrEqual(glyph.x + glyph.width)
+  await expect(row.locator('.tool-row__right > [role="img"]')).toHaveCount(1)
+}

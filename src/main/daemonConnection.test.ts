@@ -62,7 +62,8 @@ import {
   type ChangeWorkspacePayload,
   type RenameWorkspacePayload,
   type SetSessionSettingsPayload,
-  type DequeueMessagePayload
+  type DequeueMessagePayload,
+  type SendQueuedNowPayload
 } from '../shared/wire/types'
 
 // This consumer is a pure in-process composition, so its tests inject fakes at the three seams
@@ -7923,6 +7924,48 @@ describe('createDaemonConnection — dequeueMessage (dequeue_message request, un
   })
 })
 
+describe('createDaemonConnection — sendQueuedNow (send_queued_now, the dequeueMessage twin, #1726)', () => {
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.sendQueuedNow({ conversation_id: 'c1', queued_msg_id: 7 })).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('sends exactly one send_queued_now envelope carrying only the two fields', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.sendQueuedNow({
+      conversation_id: 'c1',
+      queued_msg_id: 7,
+      message_id: 'smuggled'
+    } as unknown as SendQueuedNowPayload)
+
+    expect(drivers[0].sent).toHaveLength(1)
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    expect(envelope.type).toBe('send_queued_now')
+    expect(envelope.id).toBe(2)
+    expect(envelope.payload).toEqual({ conversation_id: 'c1', queued_msg_id: 7 })
+  })
+
+  it('does not throw out of the module when the driver sendMessage throws', async () => {
+    const { connection, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(() => connection.sendQueuedNow({ conversation_id: 'c1', queued_msg_id: 7 })).not.toThrow()
+  })
+})
+
 describe('createDaemonConnection — interrupt (named interrupt control frame, fire-and-forget, #306/#1092)', () => {
   /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
   async function connected(): Promise<ReturnType<typeof build>> {
@@ -8977,13 +9020,16 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
   ])('maps the capability flags of %s onto runConfigReceived (#1654)', async (_label, flag) => {
     const { sink, drivers, replyTo } = await requested()
     const capabilities = {
-      interrupt: true, mid_turn_input: true, slash_commands: flag, mcp_servers: flag, context_usage_detail: flag,
+      interrupt: true, mid_turn_input: flag, slash_commands: flag, mcp_servers: flag, context_usage_detail: flag,
       effort_levels: ['low'], permission_modes: ['default'], attachment_types: ['*/*'], models: ['private-model']
     }
     drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, capabilities }, replyTo) })
 
     const events = emitted(sink).filter((e) => e.type === 'runConfigReceived')
-    expect(events).toEqual([{ ...BASE_EVENT, slashCommands: flag, mcpServers: flag, contextUsageDetail: flag }])
+    expect(events).toEqual([
+      { ...BASE_EVENT, slashCommands: flag, mcpServers: flag, contextUsageDetail: flag, midTurnInput: flag }
+    ])
+    expect(events[0]).not.toHaveProperty('mid_turn_input')
     expect(events[0]).not.toHaveProperty('capabilities')
     expect(events[0]).not.toHaveProperty('slash_commands')
     expect(events[0]).not.toHaveProperty('interrupt')
@@ -9000,23 +9046,32 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     expect(event.slashCommands).toBeUndefined()
     expect(event.mcpServers).toBeUndefined()
     expect(event.contextUsageDetail).toBeUndefined()
+    expect(event.midTurnInput).toBeUndefined()
   })
 
   it.each([
     ['slash_commands', 'slashCommands'],
     ['mcp_servers', 'mcpServers'],
-    ['context_usage_detail', 'contextUsageDetail']
+    ['context_usage_detail', 'contextUsageDetail'],
+    ['mid_turn_input', 'midTurnInput']
   ] as const)('carries no value for a missing %s, distinct from false (#1654)', async (wire, ipc) => {
     const { sink, drivers, replyTo } = await requested()
-    const capabilities: Record<string, boolean> = { slash_commands: false, mcp_servers: false, context_usage_detail: false }
+    const capabilities: Record<string, boolean> = {
+      slash_commands: false, mcp_servers: false, context_usage_detail: false, mid_turn_input: false
+    }
     delete capabilities[wire]
     drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, capabilities }, replyTo) })
 
     const event = emitted(sink).find((e) => e.type === 'runConfigReceived')
     if (event?.type !== 'runConfigReceived') throw new Error('expected runConfigReceived')
-    const flags = { slashCommands: event.slashCommands, mcpServers: event.mcpServers, contextUsageDetail: event.contextUsageDetail }
+    const flags = {
+      slashCommands: event.slashCommands,
+      mcpServers: event.mcpServers,
+      contextUsageDetail: event.contextUsageDetail,
+      midTurnInput: event.midTurnInput
+    }
     expect(flags[ipc]).toBeUndefined()
-    expect(Object.values(flags).filter((v) => v === false)).toHaveLength(2)
+    expect(Object.values(flags).filter((v) => v === false)).toHaveLength(3)
   })
 
   it.each([

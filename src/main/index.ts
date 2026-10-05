@@ -916,6 +916,11 @@ app.whenReady().then(() => {
         // its queue_state as the observable effect, #294). Inert no-op when not connected (#300).
         router.route(command.payload.conversation_id)?.dequeueMessage(command.payload)
         return
+      case 'sendQueuedNow':
+        // #1726: the dequeueMessage route, verbatim — routed by conversation, fire-and-forget, inert when
+        // not connected. The daemon's next queue_state and its user `message` push are the effect.
+        router.route(command.payload.conversation_id)?.sendQueuedNow(command.payload)
+        return
       case 'interrupt': {
         // ROUTED BY CONVERSATION (#1092), mirroring the newSession arm below and no longer by server —
         // an interrupt stops the turn in ONE conversation, so the conversation id is the address and

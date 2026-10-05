@@ -10196,12 +10196,12 @@ describe('parseInboundMessage — session_settings recognition (#491)', () => {
   )
 
   it.each([
-    ['a Claude reply', { slash_commands: true, mcp_servers: true, context_usage_detail: true }],
-    ['a Codex reply', { slash_commands: false, mcp_servers: false, context_usage_detail: false }]
-  ])('carries the three capability flags of %s and ignores the other keys (#1654)', (_label, flags) => {
+    ['a Claude reply', { slash_commands: true, mcp_servers: true, context_usage_detail: true, mid_turn_input: true }],
+    ['a Codex reply', { slash_commands: false, mcp_servers: false, context_usage_detail: false, mid_turn_input: false }]
+  ])('carries the capability flags of %s and ignores the other keys (#1654, #1726)', (_label, flags) => {
     const decoded = parseInboundMessage(encodeSessionSettings({
       ...RUN_CONFIG,
-      capabilities: { interrupt: true, mid_turn_input: false, ...flags, effort_levels: ['low'], models: [], evil: 'x' }
+      capabilities: { interrupt: true, ...flags, effort_levels: ['low'], models: [], evil: 'x' }
     }))
     expect(decoded).toEqual({
       kind: 'session-settings',
@@ -10210,7 +10210,7 @@ describe('parseInboundMessage — session_settings recognition (#491)', () => {
     })
     if (decoded?.kind !== 'session-settings') throw new Error('expected session settings')
     expect(Object.keys(decoded.sessionSettings.capabilities ?? {}).sort())
-      .toEqual(['context_usage_detail', 'mcp_servers', 'slash_commands'])
+      .toEqual(['context_usage_detail', 'mcp_servers', 'mid_turn_input', 'slash_commands'])
   })
 
   it('leaves capabilities undefined when the reply carries none (#1654)', () => {
@@ -10219,9 +10219,11 @@ describe('parseInboundMessage — session_settings recognition (#491)', () => {
     expect(decoded.sessionSettings.capabilities).toBeUndefined()
   })
 
-  it.each(['slash_commands', 'mcp_servers', 'context_usage_detail'])(
+  it.each(['slash_commands', 'mcp_servers', 'context_usage_detail', 'mid_turn_input'])(
     'leaves a missing %s undefined, distinct from false, and keeps the others (#1654)', (missing) => {
-      const flags: Record<string, boolean> = { slash_commands: false, mcp_servers: false, context_usage_detail: false }
+      const flags: Record<string, boolean> = {
+        slash_commands: false, mcp_servers: false, context_usage_detail: false, mid_turn_input: false
+      }
       delete flags[missing]
       const decoded = parseInboundMessage(encodeSessionSettings({ ...RUN_CONFIG, capabilities: flags }))
       if (decoded?.kind !== 'session-settings') throw new Error('expected session settings')
@@ -10237,6 +10239,7 @@ describe('parseInboundMessage — session_settings recognition (#491)', () => {
     expect(decoded.sessionSettings.capabilities?.slash_commands).toBeUndefined()
     expect(decoded.sessionSettings.capabilities?.mcp_servers).toBeUndefined()
     expect(decoded.sessionSettings.capabilities?.context_usage_detail).toBeUndefined()
+    expect(decoded.sessionSettings.capabilities?.mid_turn_input).toBeUndefined()
   })
 
   it('narrows a full session_settings into { kind: session-settings } with all seven fields', () => {
@@ -10347,7 +10350,7 @@ describe('parseInboundMessage — session_settings fail-closed (#491)', () => {
     }
   )
 
-  it.each(['slash_commands', 'mcp_servers', 'context_usage_detail'].flatMap((flag) =>
+  it.each(['slash_commands', 'mcp_servers', 'context_usage_detail', 'mid_turn_input'].flatMap((flag) =>
     ['true', 1, 0, null, {}, []].map((value) => ({ flag, value }))))(
     'rejects a non-boolean $flag $value without logging content (#1654)', ({ flag, value }) => {
       const { log, lines } = captureLog()

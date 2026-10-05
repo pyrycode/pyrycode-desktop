@@ -54,6 +54,7 @@ import { buildChangeWorkspace } from './transport/changeWorkspaceEnvelope'
 import { buildRenameWorkspace } from './transport/renameWorkspaceEnvelope'
 import { buildSetSessionSettings } from './transport/setSessionSettingsEnvelope'
 import { buildDequeueMessage } from './transport/dequeueMessageEnvelope'
+import { buildSendQueuedNow } from './transport/sendQueuedNowEnvelope'
 import { buildInterrupt } from './transport/interruptEnvelope'
 import { buildAttachmentChunk } from './transport/attachmentChunkEnvelope'
 import { buildRequestAttachment } from './transport/requestAttachmentEnvelope'
@@ -111,6 +112,7 @@ import {
   type ModalAnswerPayload,
   type ModalCancelPayload,
   type DequeueMessagePayload,
+  type SendQueuedNowPayload,
   type QuestionAnswerPayload,
   type QuestionRefusedPayload,
   type AttachmentChunkPayload,
@@ -398,6 +400,13 @@ export interface DaemonConnection {
    * (#296); this slice only wires the command path. NEVER throws out of the module (parity #490).
    */
   dequeueMessage(payload: DequeueMessagePayload): void
+  /**
+   * Encrypt a `send_queued_now` control envelope onto the live session (#1726, pyrycode#2729) — asks
+   * the daemon to deliver one queued message into the running turn. The `dequeueMessage` twin: inert
+   * when not connected, ungated, fire-and-forget (the acknowledgement is the next `queue_state` and the
+   * user `message` push), and it NEVER throws out of the module.
+   */
+  sendQueuedNow(payload: SendQueuedNowPayload): void
   /**
    * Encrypt a payload-carrying `interrupt` control envelope onto the live session — the "stop the
    * running turn in the conversation it names" signal, which the daemon maps to the neutral
@@ -1482,10 +1491,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               permissionMode: inbound.sessionSettings.permission_mode,
               used_tokens: inbound.sessionSettings.used_tokens,
               window_tokens: inbound.sessionSettings.window_tokens,
-              // The three capability flags only (#1654), by name; the wire object itself never crosses.
+              // The capability flags only (#1654, #1726), by name; the wire object itself never crosses.
               slashCommands: inbound.sessionSettings.capabilities?.slash_commands,
               mcpServers: inbound.sessionSettings.capabilities?.mcp_servers,
               contextUsageDetail: inbound.sessionSettings.capabilities?.context_usage_detail,
+              midTurnInput: inbound.sessionSettings.capabilities?.mid_turn_input,
               memorySearch: inbound.sessionSettings.memory_search
             })
             return
@@ -3281,6 +3291,26 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function sendQueuedNow(payload: SendQueuedNowPayload): void {
+    // dequeueMessage's twin, guard and all: inert when not connected, a fresh two-field literal so no
+    // renderer-smuggled key reaches the wire, the shared id counter, and every throw dropped unlogged.
+    if (driver === null) return
+    try {
+      const bytes = buildSendQueuedNow({
+        id: nextEnvelopeId,
+        ts: now(),
+        payload: {
+          conversation_id: payload.conversation_id,
+          queued_msg_id: payload.queued_msg_id
+        }
+      })
+      nextEnvelopeId += 1
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490); the caught object could echo the payload.
+    }
+  }
+
   function interrupt(conversationId: string): void {
     // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
     // mid-bootstrap, or bootstrap-failed). An interrupt has no consumer to fail and is
@@ -4097,6 +4127,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     createConversation,
     createWorkspaceFolder,
     dequeueMessage,
+    sendQueuedNow,
     interrupt,
     newSession,
     promoteConversation,

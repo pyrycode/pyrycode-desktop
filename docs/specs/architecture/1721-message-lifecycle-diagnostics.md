@@ -59,3 +59,4 @@ Estimated total written work: 760 lines including plan/tests; 4 new exported typ
 ## Revisions
 2026-10-05: Cancellation is a separately deduplicated local request, not a terminal delivery fact. A message still in the existing rekey buffer can subsequently be written or acknowledged, and diagnostics must observe those facts without changing that buffer. No new reject branch or exported type.
 2026-10-05: Add a focused fake-transport Playwright spec for idle/running submission and queued-row cancellation, proving the production renderer diagnostic wiring reaches the real sink. Unit coverage remains responsible for classified failures and rekey.
+2026-10-05: Verifier rework: update the exact oversize close diagnostic assertion in `relayConnection.oversize.test.ts` to validate a UUIDv4 connection id shared with its open record, retaining the numeric 1009, static classification and content-free field checks. Production contracts and implementation are unchanged.

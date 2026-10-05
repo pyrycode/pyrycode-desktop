@@ -25,6 +25,17 @@ Gives the composition root **one factory** — `createDaemonConnection(deps): Da
 - **The per-dial provider `loadDialConfig`** ([#83](../codebase/83.md)) is *constructed here* (this module owns the store) and **injected into the driver**, so the supervisor's own **automatic** transient-drop reconnect also re-sources the record — for both the connection headers and the Noise session material. See § Reload-per-dial below.
 - **On the driver's `handshake-complete{helloAck}`**, it parses the ack via `parseHelloAck` and emits a typed `connected{ack: HelloAckPayload}` on the daemon-event channel — the load-bearing "live, authenticated link" signal.
 - **On the driver's `message{plaintext}`**, it decodes the app-envelope via [`parseInboundMessage`](inbound-message-decode.md) and emits `messageReceived{message, daemonTs}` (a `message` envelope) or `messagesReceived{messages}` (a `message_chunk` batch). Live confirmed user messages include deliveries from other clients and the sender's own receipt. Main forwards the envelope time verbatim; the [timeline bridge](conversation-timeline-store.md#live-user-receipts) owns routing, display conversion and held-row identity. The batch arm is unchanged. Malformed/oversized/mistyped bytes are dropped without an event; an unmodeled envelope type is ignored. **Added in [#68](../codebase/68.md), message timestamp forwarding in [#1702](https://github.com/pyrycode/pyrycode-desktop/issues/1702).**
+- **`session_error` delivery** requires an object payload with string `conversation_id`
+  and `code`; arrays, primitives and missing/mistyped required fields fail decoding.
+  Unknown and empty string codes are accepted. The decoder discards daemon `message`
+  and all extras, and main builds a fresh named-field `sessionError` event whose
+  report data is only `conversationId` and `code`, with the normal client-stamped host
+  origin. No message correlation, replay identity or timestamp is added. Successful
+  diagnostics contain only the static `session_error` frame type, byte count and
+  hash; malformed frames emit neither IPC nor a diagnostic record, and decoder
+  errors contain only categories/field names. Raw ids, codes, messages and extras
+  never enter logs. The [timeline](conversation-timeline-store.md#what-it-does)
+  owns the transient notice and [fixed display copy](conversation-shell.md#what-it-does).
 - **Every non-clean outcome** — no paired record, a malformed record, a bad/wrong-length server key, a rejected keychain read, a malformed `hello_ack`, a driver `error`, or a fatal `terminal` — surfaces as a `failed{error}` event with a **static category code**, never a crash or an unhandled rejection.
 - **`stop()`** tears the driver down idempotently and **suppresses** the clean-stop `terminal` (the window is going away on quit, so there is nothing to report).
 - **On the driver's `relay-link-up`/`relay-link-down{code}`** ([#328](../codebase/328.md)), it emits a `relayLinkChanged{status}` event carrying the relay-**socket** leg — distinct from the combined session status above. This is the single point that classifies the relay-controlled raw close `code` into the closed `RelayLinkStatus` enum (`connected`/`offline`/`daemon-absent`, `4404` → `daemon-absent`); the code itself never crosses IPC. Ships **dormant** (see the driver-event mapping table below).

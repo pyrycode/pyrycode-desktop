@@ -1,0 +1,66 @@
+# Queued own message settlement
+
+## Files read
+
+- `CLAUDE.md`, `docs/knowledge/INDEX.md`, `docs/knowledge/features/development-verification.md`: repository and verification constraints.
+- `docs/knowledge/features/conversation-shell-conversation-and-modals.md`, `queue-store.md`, `thread-timeline-internals.md`, `inbound-message-decode-contract.md`: replacement snapshots, optimistic echoes, content/chrome separation and parsing.
+- `src/shared/wire/types.ts` → `MessagePayload`; `src/main/transport/inboundMessage.ts` → `parseMessagePayload`: admitted receipt contract.
+- `src/renderer/src/store/timelineBridge.ts` → `translateTimelineEvent`; `threadTimeline.ts` → `reduceTimeline`, `markLocalSendQueued`: named routing and local receipt settlement.
+- `src/renderer/src/store/conversationTimelineStore.ts` → `prependHistoryFor`; `queueBridge.ts` → snapshot subscription: host-scoped correlation and history identity.
+- `src/renderer/src/screens/conversation/composerSend.ts` → `submitMessage`; `foldQueuedRows.ts` → `foldQueuedRows`; `ConversationScreen.tsx` → `Timeline`; `turnStats.ts` → `turnStatsByItemIndex`: echo origin and display-index assumptions.
+- `e2e/live-user-receipts.spec.ts`, `e2e/real-claude-queue-delivery.spec.ts`: mounted receipt barriers and credentialed queue scenarios.
+- Daemon `docs/protocol-mobile.md` → message entry and Queue (v2): queue IDs identify entries; ordinary echoed delivery precedes its answering stream, but late fallback and Codex receipts do not establish that timing.
+
+## Design source
+
+Figma: https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=132-4171 (context and screenshot read). Message area stacks assistant bubbles on the left, user bubbles on the right and outlined tool rows, using existing scheme colours and body-medium/body-small tokens. Preserve shipped queued treatment, Drop, attachment rendering and actions; no new visual state or assets.
+
+## Context
+
+Queued echoes retain tap-time placement and receipts currently deduplicate before settlement. One ordering deliverable, estimated at 720–790 written lines including tests and this plan, zero exported declarations, fewer than ten production consumer changes, five observable criteria and no new error state machine. Codegraph index is unavailable; repository/QMD searches supply context. Overlap with #1721, #1723, #1724, #1726, #1729, #1738 and #1764 is additive and local; no dependency. A simpler snapshot-only fold cannot survive removal-before-receipt or distinguish received rows, so retain local facts independently.
+
+## Design
+
+- Admit optional `queued_msg_id` as a positive safe integer and `sent_now` as a boolean without coercion; omitted fields stay absent. Forward them through the existing typed message event and translation.
+- Keep optional timeline sidecars for stable numeric row keys and locally minted echoes. A local record names its row key, nonempty message ID, whether it waited behind running content, observed predecessor boundary, queue entry ID when associated, and settled status. Received/history rows never create local records.
+- Assign snapshots one-to-one to unbound local records using nonempty message IDs. Once bound, only that queue ID matches; duplicate message IDs never alias entries. Queue snapshots remain replacement truth in `queueStore`.
+- Project unconfirmed waiting echoes below continuing content, in local submission order. Removal alone leaves their placement facts alive. Preserve snapshot-controlled queued treatment and Drop, including after receipt but before snapshot removal. Foreign entries remain independent tail rows.
+- A matching receipt settles once: ordinary waiting sends use their observed predecessor turn boundary if available, otherwise the stream delivery point; Send now uses the stream point. Move the held item with its row key, text, timestamp and attachments. Observe the first boundary after submission before a fallback receipt can arrive, so late receipts cannot enter a subsequent reply. Receipts change no activity or chrome state. Metadata-free repeats retain legacy no-op semantics.
+- `FoldedRow` carries its source item index. `Timeline` uses that for stats and cursor selection, and stable row keys for React identity and tool expansion. History prepends add new keys while preserving all held keys.
+
+## State + concurrency model
+
+Pure synchronous reducer and snapshot correlation; no new store, timer, subscription or asynchronous job. Existing host/conversation routing, reset/eviction and unsubscribe paths own lifetime. The pending-send indicator remains separate from the local inventory. Drops remove the corresponding own row and its correlation facts.
+
+## Error handling
+
+Malformed optional receipt fields use existing `WireDecodeError` catch/drop handling and static diagnostics. No new error UI; no coercion, inference from text or inference of Send now from disappearance.
+
+## Testing strategy
+
+- Decoder tests reject wrong types, fractional/out-of-range queue IDs and preserve absent/false fields.
+- Reducer/fold tests cover both event orders, continuing deltas/tools, multiple sends, late/fallback/Send now and duplicate receipts, ID collisions, received/history ownership, preserved content/time/attachments, keys and history prepends.
+- Mounted fake-transport scenarios drive composer sends and receipt/snapshot orders through the encrypted stream; positive output barriers prove dispatch, ordering and one row per send. Capture queued and settled states at 1280×800 for comparison.
+- Extend all three existing live queue scenarios with transcript-order assertions. Dispatcher owns credentialed execution and must record dedicated `PYRY_BIN` revision containing `8581e740` and `29f1ab04` or a descendant. Pending live acceptance is not a builder pass.
+- Run focused tests, final main merge, pre-verify check, build and focused fake Playwright spec. No dependency or full Playwright sweep.
+
+## Open Questions
+
+None. Optional sidecars avoid changing the durable row schema and preserve existing callers.
+
+## Security review
+
+**Verdict:** PASS
+
+- [Trust boundaries] `parseMessagePayload` admits only typed fields; queue correlation requires a local record and nonempty ID, with bound queue identity scoped by retained conversation/host routing.
+- [Tokens/secrets] No credential generation, storage or exposure; IDs are non-secret equality comparands, never logged or rendered.
+- [File/storage] No new file operations or web storage; sidecars remain in memory and history rows do not acquire ownership.
+- [Electron] Existing typed IPC carries parsed optional fields; no new API, window, navigation or raw markup sink. Transport remains in main.
+- [Cryptography] No changes to Noise, keys, nonces or random ID generation.
+- [Network/I/O] Existing frame caps and socket lifecycle apply; positive safe integers avoid lossy queue identity, boolean validation rejects truthy strings.
+- [Errors/logs] Existing content-free decode diagnostics; never log text, IDs, attachments or secrets.
+- [Concurrency] Synchronous association/settlement, immutable state and one-time settlement survive duplicate/reordered snapshots and receipts. Reset destroys local facts.
+- [Threat model] Hostile daemon collisions cannot turn received/history/non-user rows into own echoes; compromised relay cannot forge Noise plaintext. No added disk-token or renderer capability exposure.
+
+**Reviewer:** builder (self-review per `builder/security-review.md`)
+**Date:** 2026-10-05

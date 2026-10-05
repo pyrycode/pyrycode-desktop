@@ -1559,6 +1559,23 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand({ type: t, payload: { kind: 'prompt', name: ['a'] } })).toBe(false)
   })
 
+  it('accepts a notify carrying a string preview up to 4000 characters, or none (#1737)', () => {
+    const t = 'notify'
+    const previewed: RendererCommand = { type: t, payload: { kind: 'turn-complete', preview: 'Done.' } }
+    expect(isRendererCommand(previewed)).toBe(true)
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', preview: 'x'.repeat(4000) } })).toBe(true)
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', preview: '' } })).toBe(true)
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', preview: undefined } })).toBe(true)
+  })
+
+  it('rejects a notify whose preview is not a string or is over 4000 characters (#1737)', () => {
+    const t = 'notify'
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', preview: 'x'.repeat(4001) } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', preview: 42 } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', preview: null } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', preview: ['a'] } })).toBe(false)
+  })
+
   it('accepts a notify carrying a bounded opaque token, or none (#1597)', () => {
     const tokened: RendererCommand = {
       type: 'notify',

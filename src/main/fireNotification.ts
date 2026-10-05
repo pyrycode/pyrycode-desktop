@@ -33,11 +33,11 @@ export interface OsNotificationConstructor {
 }
 
 /**
- * The main-owned copy table (AC5): the notification BODY lives HERE, keyed by `kind`, never in the
- * command. `Record<NotifyKind, …>` makes it exhaustive by construction — a future kind won't
- * type-check until it has copy. Copy wording is provisional (no Figma, no daemon source); the
- * load-bearing invariant is that the body is static and main-owned, never sourced from the wire. The
- * title is the one place host text may appear (#1593): see notificationTitle.
+ * The main-owned copy table (AC5): the fallback notification BODY, keyed by `kind`. `Record<NotifyKind,
+ * …>` makes it exhaustive by construction — a future kind won't type-check until it has copy. Copy
+ * wording is provisional (no Figma, no daemon source). Host text may reach the title (#1593, see
+ * notificationTitle) and, since #1737, the body as a preview — but only through notificationBody, which
+ * cleans and caps it and falls back to this copy when nothing usable is left. Mobile shares this copy.
  */
 const NOTIFICATION_COPY: Record<NotifyKind, string> = {
   'turn-complete': 'Your turn is complete.',
@@ -75,13 +75,42 @@ export function notificationTitle(name: string | undefined): string {
   return title === '' ? DEFAULT_TITLE : title
 }
 
+/** The most characters of a preview a body keeps, the trailing `…` included (#1737; mobile's cap too). */
+const MAX_BODY_CHARS = 200
+
+/** A whitespace character, the control ones (`\n`, `\t`, `\r`…) included (#1737). */
+const WHITESPACE = /\s/u
+
+/**
+ * The notification body for `kind` and an optional preview (#1737). The preview is untrusted
+ * daemon-derived text that crossed the renderer→main boundary, and isNotifyPayload only proved it is a
+ * bounded string, so it is cleaned here whatever the renderer did: every control character is dropped,
+ * except that a whitespace one (a line break, a tab) counts as whitespace, so two lines never glue into
+ * one word; each run of whitespace collapses to one space and the ends are trimmed. Text longer than
+ * MAX_BODY_CHARS code points keeps its first MAX_BODY_CHARS - 1 and ends in `…`, so a surrogate pair is
+ * never split. An absent preview, or one with nothing left once cleaned, falls back to the kind's
+ * NOTIFICATION_COPY. Plain text only, and never logged.
+ */
+export function notificationBody(kind: NotifyKind, preview: string | undefined): string {
+  if (preview === undefined) return NOTIFICATION_COPY[kind]
+  let cleaned = ''
+  for (const char of preview) {
+    if (WHITESPACE.test(char)) cleaned += ' '
+    else if (!CONTROL_CHAR.test(char)) cleaned += char
+  }
+  const chars = [...cleaned.replace(/\s+/gu, ' ').trim()]
+  if (chars.length === 0) return NOTIFICATION_COPY[kind]
+  if (chars.length <= MAX_BODY_CHARS) return chars.join('')
+  return `${chars.slice(0, MAX_BODY_CHARS - 1).join('').trimEnd()}…`
+}
+
 /**
  * Raise the OS notification for `kind` — but only when the window is unfocused. Synchronous, no
  * return value: if `deps.isWindowFocused()` is true, return without firing; otherwise construct a
  * Notification, register `deps.onClick` as its `'click'` listener BEFORE showing (a click could arrive
- * the instant the notification is shown), and `show()` it. The body comes solely from the closed enum
- * via NOTIFICATION_COPY, so no command field can supply body text; the title is the conversation
- * `name` cleaned by notificationTitle (#1593), or DEFAULT_TITLE without one. `onClick` is opaque to
+ * the instant the notification is shown), and `show()` it. The body is the `preview` cleaned by
+ * notificationBody (#1737), or the kind's NOTIFICATION_COPY without a usable one; the title is the
+ * conversation `name` cleaned by notificationTitle (#1593), or DEFAULT_TITLE without one. `onClick` is opaque to
  * this module (the composition root supplies window activation + the nav signal), keeping this unit
  * free of any window/IPC knowledge (#393).
  */
@@ -92,10 +121,11 @@ export function fireNotification(
     Notification: OsNotificationConstructor
     onClick: () => void
   },
-  name?: string
+  name?: string,
+  preview?: string
 ): void {
   if (deps.isWindowFocused()) return
-  const notification = new deps.Notification({ title: notificationTitle(name), body: NOTIFICATION_COPY[kind] })
+  const notification = new deps.Notification({ title: notificationTitle(name), body: notificationBody(kind, preview) })
   notification.on('click', deps.onClick)
   notification.show()
 }

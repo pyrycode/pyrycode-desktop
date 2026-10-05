@@ -1,8 +1,11 @@
-import { useEffect, useMemo } from 'react'
-import type { WireAgent } from '@shared/wire/types'
+import { useCallback, useEffect, useMemo } from 'react'
+import { CAPABILITY_STOP_BACKGROUND_TASK, type WireAgent } from '@shared/wire/types'
+import { sessionStore, useSessionStore, selectStatusFor, type ConnectionStatus } from '../../store/sessionStore'
 import { shouldInterruptOnKeyDown, type ComposerKeyEvent } from './composerSend'
 import {
+  backgroundTaskRosterStore,
   useBackgroundTaskRosterStore,
+  selectPendingTaskStopsFor,
   selectRosterFor,
   selectFinishedTasksFor,
   type BackgroundTaskRosterEntry,
@@ -32,7 +35,8 @@ import {
 //
 // It mounts NO data path. Unlike WorkspacePickerSheet (which mounts RecentWorkspacesData inside itself),
 // the roster bridge is already app-wide — <BackgroundTaskRosterData /> is the seventh headless leaf in
-// App.tsx — so a mount here would be a second, wrong write path. This file is a pure reader.
+// App.tsx — so a mount here would be a second, wrong write path. The app listener also settles stop
+// waits; the separate button sends only its routing ids.
 //
 // #1634: the chrome is #580's drawing (Figma 565:2966): a NON-modal drawer on the right of the message
 // area, with no scrim, so the thread scrolls and the composer takes input while it is open. It replaced
@@ -44,8 +48,8 @@ import {
 // claude ran — untrusted, model-influenced text the daemon bounds but does not sanitize. It is rendered as
 // auto-escaped React children and NOTHING else: never dangerouslySetInnerHTML, never into an attribute
 // (not even `title=`), never an `href`/`src`, never a React key, never parsed, never executed or re-shelled.
-// The rows are deliberately non-interactive — a `<button>` row would advertise an affordance that does not
-// exist and would be the natural place for a "run this" handler to grow later. And the LIST shape is not an
+// The rows stay non-interactive list items. Only the separate Stop task button sends the two routing
+// ids; task ids never reach a log, attribute or key beyond the existing row key. And the LIST shape is not an
 // invitation: `entry.tasks` is iterated once into `<li>` children, and the only thing derived from it is
 // #1635's Running / Finished partition by id — no join, no clipboard, no export, no `data-*` attribute
 // carrying a task field (the obligation the store's own header names this ticket as inheriting).
@@ -225,12 +229,16 @@ export function BackgroundTaskPanelView({
   entry,
   finishedTaskIds = null,
   agent = 'claude',
+  pendingTaskIds = null,
+  onStopTask,
   onClose
 }: {
   entry: BackgroundTaskRosterEntry | null
   finishedTaskIds?: ReadonlySet<string> | null
   /** #1656 — the conversation's agent; absent reads Claude. */
   agent?: WireAgent
+  pendingTaskIds?: ReadonlySet<string> | null
+  onStopTask?: (taskId: string) => void
   onClose: () => void
 }): JSX.Element {
   return (
@@ -304,7 +312,8 @@ export function BackgroundTaskPanelView({
               </p>
             </div>
           ) : (
-            <TaskGroups tasks={[...entry.tasks.values()]} finishedTaskIds={finishedTaskIds} />
+            <TaskGroups tasks={[...entry.tasks.values()]} finishedTaskIds={finishedTaskIds}
+              pendingTaskIds={pendingTaskIds} onStopTask={agent === 'claude' ? onStopTask : undefined} />
           )}
       </div>
     </section>
@@ -318,10 +327,14 @@ export function BackgroundTaskPanelView({
  *  nothing, header included. */
 function TaskGroups({
   tasks,
-  finishedTaskIds
+  finishedTaskIds,
+  pendingTaskIds,
+  onStopTask
 }: {
   tasks: readonly HeldBackgroundTask[]
   finishedTaskIds: ReadonlySet<string> | null
+  pendingTaskIds: ReadonlySet<string> | null
+  onStopTask?: (taskId: string) => void
 }): JSX.Element {
   const isFinished = (task: HeldBackgroundTask): boolean => finishedTaskIds?.has(task.taskId) === true
   const running = tasks.filter((task) => !isFinished(task))
@@ -329,10 +342,11 @@ function TaskGroups({
   return (
     <div className="background-task-panel__groups">
       {running.length > 0 && (
-        <TaskGroup label={BACKGROUND_TASK_PANEL_RUNNING_LABEL} tasks={running} finished={false} />
+        <TaskGroup label={BACKGROUND_TASK_PANEL_RUNNING_LABEL} tasks={running} finished={false}
+          pendingTaskIds={pendingTaskIds} onStopTask={onStopTask} />
       )}
       {finished.length > 0 && (
-        <TaskGroup label={BACKGROUND_TASK_PANEL_FINISHED_LABEL} tasks={finished} finished={true} />
+        <TaskGroup label={BACKGROUND_TASK_PANEL_FINISHED_LABEL} tasks={finished} finished={true} pendingTaskIds={null} />
       )}
     </div>
   )
@@ -341,22 +355,27 @@ function TaskGroups({
 function TaskGroup({
   label,
   tasks,
-  finished
+  finished,
+  pendingTaskIds,
+  onStopTask
 }: {
   label: string
   tasks: readonly HeldBackgroundTask[]
   finished: boolean
+  pendingTaskIds: ReadonlySet<string> | null
+  onStopTask?: (taskId: string) => void
 }): JSX.Element {
   return (
     <section className="background-task-panel__group">
       <h3 className="background-task-panel__group-header">{`${label} · ${tasks.length}`}</h3>
-      {/* A <ul>/<li>, the honest semantics for "one entry per task" — and NOT interactive rows: there is
-          no action on a task. */}
+      {/* A <ul>/<li>, the honest semantics for "one entry per task" — and NOT interactive rows: only the
+          separate button can ask for a stop. */}
       <ul className="background-task-panel__list">
         {tasks.map((task) => (
           // key = taskId: unique by map-key construction. The description is never a key — a key is not
           // a place for untrusted text.
-          <TaskRow key={task.taskId} task={task} finished={finished} />
+          <TaskRow key={task.taskId} task={task} finished={finished}
+            pending={pendingTaskIds?.has(task.taskId) === true} onStopTask={onStopTask} />
         ))}
       </ul>
     </section>
@@ -373,7 +392,12 @@ function formatTaskType(taskType: string): string {
 /** #1635: one task as the drawn card: the type line with its status tag, the description, then the
  *  latest update; a finished card adds its summary under the description (#1639). Every daemon field is an
  *  auto-escaped child of its own element. */
-function TaskRow({ task, finished }: { task: HeldBackgroundTask; finished: boolean }): JSX.Element {
+function TaskRow({ task, finished, pending, onStopTask }: {
+  task: HeldBackgroundTask
+  finished: boolean
+  pending: boolean
+  onStopTask?: (taskId: string) => void
+}): JSX.Element {
   const trimmedDescription = task.description.trim()
   const descriptionClass =
     task.taskType === TASK_TYPE_SHELL
@@ -453,6 +477,12 @@ function TaskRow({ task, finished }: { task: HeldBackgroundTask; finished: boole
           )}
         </div>
       )}
+      {!finished && onStopTask !== undefined && !wasCut(task.truncatedFields, 'task_id') && (
+        <button type="button" className="button-small background-task-panel__stop" disabled={pending}
+          onClick={() => { if (!pending) onStopTask(task.taskId) }}>
+          Stop task
+        </button>
+      )}
     </li>
   )
 }
@@ -512,7 +542,7 @@ function ReadingRing({ variant }: { variant: 'dashed' | 'solid' }): JSX.Element 
 }
 
 // #581: the panel's thin interaction container (the WorkspacePickerSheet container idiom minus its bridge
-// mount and its dispatch — this surface sends nothing and has no wire traffic at all). It reads the roster
+// mount; the app listener owns stop settlement). It reads the roster
 // store for one conversation and attaches an Escape document-listener. In-file, exported at the foot.
 //
 // `conversationId` rather than the whole ConversationCreatedPayload: the id is all this needs. The `''`
@@ -521,11 +551,13 @@ function ReadingRing({ variant }: { variant: 'dashed' | 'solid' }): JSX.Element 
 // read carries, since #1009 retired the control this used to name).
 function BackgroundTaskPanel({
   conversationId,
+  serverId,
   turnRunning,
   agent,
   onClose
 }: {
   conversationId: string | null
+  serverId: string | null
   turnRunning: boolean
   agent?: WireAgent
   onClose: () => void
@@ -540,6 +572,18 @@ function BackgroundTaskPanel({
   // this component alone on a write for another conversation.
   const selectFinished = useMemo(() => selectFinishedTasksFor(conversationId ?? ''), [conversationId])
   const finishedTaskIds = useBackgroundTaskRosterStore(selectFinished)
+  const selectPending = useMemo(() => selectPendingTaskStopsFor(conversationId ?? ''), [conversationId])
+  const pendingTaskIds = useBackgroundTaskRosterStore(selectPending)
+  const supported = useSessionStore(state => serverId !== null &&
+    backgroundTaskStopSupported(selectStatusFor(serverId)(state), agent ?? 'claude'))
+  const onStopTask = useCallback((taskId: string): void => {
+    if (conversationId === null || serverId === null ||
+        !backgroundTaskStopSupported(selectStatusFor(serverId)(sessionStore.getState()), agent ?? 'claude')) return
+    if (!backgroundTaskRosterStore.getState().beginTaskStop(conversationId, taskId)) return
+    window.pyry.sendCommand({ type: 'stopBackgroundTask', payload: {
+      conversation_id: conversationId, task_id: taskId
+    } })
+  }, [conversationId, serverId, agent])
   useEffect(() => {
     // #1634: a CAPTURE listener on `document`, which runs before React's root listener and before any
     // bubble-phase document listener. A press the drawer takes is stopped right here, so the options
@@ -556,7 +600,8 @@ function BackgroundTaskPanel({
     document.addEventListener('keydown', onKeyDown, true)
     return () => document.removeEventListener('keydown', onKeyDown, true)
   }, [onClose, turnRunning])
-  return <BackgroundTaskPanelView entry={entry} finishedTaskIds={finishedTaskIds} agent={agent} onClose={onClose} />
+  return <BackgroundTaskPanelView entry={entry} finishedTaskIds={finishedTaskIds} agent={agent}
+    pendingTaskIds={pendingTaskIds} onStopTask={supported ? onStopTask : undefined} onClose={onClose} />
 }
 
 // #1634: the two elements that carry #1072's Escape-stops-the-turn binding — the message box and the
@@ -578,3 +623,9 @@ export function drawerClosesOnKeyDown(
 }
 
 export { BackgroundTaskPanel }
+
+/** Capability belongs to the owning connection ack, never another host's last-written status. */
+export function backgroundTaskStopSupported(status: ConnectionStatus | undefined, agent: WireAgent): boolean {
+  return agent === 'claude' && status?.type === 'connected' &&
+    status.ack.capabilities.includes(CAPABILITY_STOP_BACKGROUND_TASK)
+}

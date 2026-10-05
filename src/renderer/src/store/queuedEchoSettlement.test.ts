@@ -68,11 +68,12 @@ describe('queued own echo settlement', () => {
     expect(text(s, [])).toEqual(['first reply', 'turnBoundary', 'own', 'answer continued'])
   })
 
-  it('Send now settles at its stream point and does not wait for a boundary', () => {
-    let s = reduceTimeline(waiting(), delta('first', 'before delivery'))
+  it('Send now settles at its stream point despite an older observed boundary', () => {
+    let s = reduceTimeline(waiting(), end('first'))
+    s = reduceTimeline(s, delta('intervening', 'before delivery'))
     s = reduceTimeline(s, receipt(7, true))
-    s = reduceTimeline(s, delta('first', 'after delivery'))
-    expect(text(s, [])).toEqual(['first reply', 'before delivery', 'own', 'after delivery'])
+    s = reduceTimeline(s, delta('intervening', 'after delivery'))
+    expect(text(s, [])).toEqual(['first reply', 'turnBoundary', 'before delivery', 'own', 'after delivery'])
   })
 
   it('keeps submission order and isolates distinct queue entries with colliding message IDs', () => {

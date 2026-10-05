@@ -56,7 +56,8 @@ for (const order of ['removal-first', 'receipt-first', 'sent-now'] as const) {
     const deliver = (index: number, sent_now = false) => push('message', {
       ...entries[index], role: 'user', text: 'receipt must preserve own copy', sent_now
     })
-    if (order !== 'sent-now') end('first')
+    end('first')
+    if (order === 'sent-now') delta('intervening', 'Running turn before Send now')
     if (order === 'removal-first') push('queue_state', { queued: entries.slice(1) })
     deliver(0, order === 'sent-now')
     delta('answer', 'Answer to first follow-up')
@@ -72,7 +73,7 @@ for (const order of ['removal-first', 'receipt-first', 'sent-now'] as const) {
     await expect(page.getByText('Preserved tool result', { exact: true })).toBeVisible()
     end('answer')
     push('queue_state', { queued: [] })
-    deliver(1)
+    deliver(1, order === 'sent-now')
     delta('last', 'Answer to second follow-up')
     // Duplicate/late receipts must not split or terminate the current reply.
     deliver(0)
@@ -82,6 +83,7 @@ for (const order of ['removal-first', 'receipt-first', 'sent-now'] as const) {
     const transcript = await orderOf()
     const position = (text: string) => transcript.findIndex(row => row.includes(text))
     expect(position('First reply final output')).toBeLessThan(position('Own follow-up one'))
+    if (order === 'sent-now') expect(position('Running turn before Send now')).toBeLessThan(position('Own follow-up one'))
     expect(position('Own follow-up one')).toBeLessThan(position('Answer to first follow-up'))
     expect(position('Answer to first follow-up')).toBeLessThan(position('Own follow-up two'))
     expect(position('Own follow-up two')).toBeLessThan(position('Answer to second follow-up'))

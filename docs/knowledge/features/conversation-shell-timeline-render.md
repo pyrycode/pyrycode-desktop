@@ -36,7 +36,8 @@ on each item's `kind`; wire-to-render translation belongs to the bridge.
   why it stays plain text permanently rather than gaining markdown once "enough" of it has streamed in.
 - `toolCall` → the tool-row chip ([#218](conversation-shell-tool-rows.md#pending-tool-call-row-218), below) — no longer a no-op as
   of that ticket; the resolved success/error treatment ([#230](conversation-shell-tool-rows.md#resolved-tool-call-row-230), below)
-  lifted the pending dimming and added the error accent.
+  lifts the pending dimming. Failed, non-denied calls now use the accessible
+  [Failed icon](conversation-shell-tool-rows.md#failed-icon); borders and visible joins stay plain.
 - `turnBoundary` → a stopped-turn label when eligible (below), otherwise `null`.
 
 **Streaming cursor** (Figma `16:56`, glyph `▎` U+258E): a trailing `<span class="bubble__cursor"

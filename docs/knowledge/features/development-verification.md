@@ -111,7 +111,19 @@ A sticky offset is relative to the scrollport content box.
 Read the running window's boxes when a padded scroller is involved.
 Flow arithmetic alone can predict the wrong boundary.
 An overlay can paint beneath a later positioned sibling when both use automatic
-stacking. Check the complete ancestor and sibling arrangement.
+stacking or equal explicit levels. Check the complete ancestor and sibling arrangement.
+
+Stacking proof needs positive rectangle overlap before `elementFromPoint` checks,
+then a real click on a menu item inside the overlap that opens its destination.
+Visibility and bounding boxes can pass while the item is covered; a hit-test outside
+the intersection cannot prove precedence. The
+[`thread-overflow-overlay.spec.ts`](../../../e2e/thread-overflow-overlay.spec.ts)
+regression also checks that the computed menu anchor level exceeds the Top overlay.
+It covers usage at 1280×800 and 800×600 windows, and Re-pair alone at 1280×800.
+The pairing-rejection banner pushes the second pill below the popup, so the fixture
+dismisses usage before testing Re-pair and measures actual overlap in each state.
+Drive Re-pair with a sealed non-retryable `error` envelope carrying `auth.invalid_token`;
+a terminal socket closure offers Reconnect and cannot establish that pill's stacking.
 
 Resolution-pill visual evidence covers four states: remote and timeout at both 1280×800 and
 800×600 window sizes (1280×772 and 800×572 content viewports). The

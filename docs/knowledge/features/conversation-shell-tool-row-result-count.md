@@ -8,8 +8,11 @@ keep every section under the size cap; see that document for the layout arc as a
 
 Draws `ToolResult.resultDetail` — the daemon's short précis of what a call returned, `"265 lines"` or
 `"110 of 1676 lines"` — as [#854](conversation-shell-tool-row-header-groups.md#tool-row-header-groups-854)'s right group's first child, 12px before
-the chevron. The field has carried on the item since #773, which deliberately deferred every display
-decision to this ticket, including whether absent and empty differ at all. They don't, here: this row is
+the next glyph. For a failed, non-denied result, the
+[Failed icon](conversation-shell-tool-rows.md#failed-icon) sits between count and
+chevron in both collapsed and expanded headers. The field has carried on the item since
+\#773, which deliberately deferred every display decision to this ticket, including whether
+absent and empty differ at all. They don't, here: this row is
 the one place upstream's carefully-kept distinction is allowed to collapse.
 
 **The predicate is written out, not collapsed into a truthiness check:**
@@ -66,7 +69,8 @@ The group keeps `flex: 0 0 auto` — the cap clamps its *base* size without maki
 headline rather than squeezing the chevron. `.tool-row__count` alone takes `flex: 0 1 auto; min-width: 0`
 (Figma says `shrink-0`, and the deviation *is* the control) plus the summary's own
 `overflow: hidden; text-overflow: ellipsis; white-space: nowrap` — the group's only shrink candidate, so
-all the negative free space the cap creates lands on it and none on the chevron. In every real case
+all the negative free space the cap creates lands on it and none on the chevron or
+Failed icon, both of which keep `flex: 0 0 auto`. In every real case
 (the design's longest example, `"110 of 1676 lines"`, is an order of magnitude short of 50% even at the
 800px minimum window) the group is nowhere near its cap and the rendered box is exactly Figma's `shrink-0`
 box. The ellipsis is a **visual** clip only: the DOM text node stays the verbatim, untrimmed string (AC3)

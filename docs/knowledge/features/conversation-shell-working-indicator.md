@@ -235,17 +235,27 @@ one is actually open**, closing the operator's remaining complaint that `WORKING
 for a 40 ms file read and a four-minute build. This doesn't reopen the lie #215 avoided, because it isn't
 derived from `phase` at all — it's a direct, independent read of `items` (`openToolName`): a `toolCall`
 item carries `name` and starts `result: null`, filled in place when the
-correlated `toolResult` arrives. The scan requires both `result === null` and no explicit `denial`,
-so "a tool is open right now" and "which one, if more than one" (the
+correlated `toolResult` arrives. The scan requires `result === null`, no explicit `denial`,
+and, since [#1750](https://github.com/pyrycode/pyrycode-desktop/issues/1750),
+`parentToolUseId === undefined`. A present parent ID excludes a subagent's call;
+an omitted or explicitly undefined ID remains eligible. Transcript nesting does
+not remove child calls from the flat `items` array, so scanning only for an
+unresolved result would let a newer background-agent tool replace the main
+conversation's activity. Thus "a main-thread tool is open right now" and "which one,
+if more than one" (the
 last such item in array order — `items` is append-only, `fillResult` fills in place without reordering)
-are both facts already sitting in the store, not an inference over `phase`. `openToolName(items)` is
-computed alongside `workingIndicatorState` at the same call site and passed as the indicator's second,
-required `toolName: string | null` prop; when it is non-null it replaces the phase-derived copy with
+are both facts already sitting in the store, not an inference over `phase`. The
+container computes `openToolCall(items)` alongside its working-state derivation
+and passes the selected name as the indicator's required `toolName: string | null`
+prop; when it is non-null it replaces the phase-derived copy with
 `` `Running ${name}…` `` (`toolWorkingCopy`) rather than sitting beside it, and reverts to the generic copy
 the moment no eligible tool remains — a result or an explicit
 [denial](conversation-shell-tool-rows.md#permission-denied-tool-call-row) retires a call from
 the scan immediately, without another `turn_state`. Denial leaves the turn's working state
-and priority rules intact. Renders through a
+and priority rules intact. If only subagent calls remain open, the lookup returns
+null: thinking/working keeps its generic copy, and an idle conversation gains no
+tool label. Background activity does not change the status precedence or turn gate.
+Renders through a
 `.tool-row__summary`-style one-line-ellipsis bound (not `.tool-row__name`'s never-truncates one — see
 [#649 codebase notes](../codebase/649.md)) so a long tool name never wraps to a second line or moves the
 composer — through #796 via `.bubble--tool-label`, backstopped by `.bubble`'s own `max-width: min(680px,
@@ -253,7 +263,8 @@ composer — through #796 via `.bubble--tool-label`, backstopped by `.bubble`'s 
 gone from this label's ancestry, so the bound is now a three-link flex chain instead — see [Composer
 status row § the truncation bound](conversation-shell-composer-status-row.md#composer-status-row-796) below for the replacement and why it had to
 be re-derived rather than copied. One deliberately undefended edge: an interrupted turn can leave a
-`toolCall` permanently `result: null`, so the *next* turn's indicator could name that stale tool — the
+main-thread `toolCall` permanently `result: null`, so the *next* turn's indicator
+could name that stale tool — the
 timeline already shows that call as a permanently pending, dimmed row (#230), so the label would mirror
 what's already on screen rather than contradict it; the fix if ever observed is scoping the scan to stop
 at the current turn's `turnBoundary`.
@@ -262,12 +273,25 @@ at the current turn's `turnBoundary`.
 
 The container selects one `openToolCall(items)` for both name and elapsed reading;
 `openToolName` remains a wrapper over that same lookup. The scan chooses the latest
-pending, non-denied call. When its tool label is active (thinking or working), the
+pending, non-denied main-thread call (`parentToolUseId === undefined`). When its
+tool label is active (thinking or working), the
 optional `toolElapsedSeconds` appends the [shared elapsed format](conversation-shell-tool-rows.md#live-elapsed-reading)
 after a space: `Running Bash… 1m 05s`. The whole label remains one ellipsizing text
 run. An absent reading keeps the previous copy; retrying, compacting, stalled and
 hidden states retain their existing behavior regardless of the elapsed prop.
 Name and seconds must come from the same call, especially with overlapping tools.
+An open subagent call supplies neither reading, even after its parent Agent call
+has resolved.
+
+### Selector regression coverage
+
+`ConversationScreen.test.tsx` tests `openToolName` directly over injected timeline
+items, exercising the shared `openToolCall` lookup. It pins the newest eligible
+main-thread call winning despite a newer subagent call, null for subagent-only
+timelines (also alongside resolved or denied main-thread calls), and eligibility
+for an explicitly undefined parent ID. Static container renders start from the
+initial store and cannot establish this populated-timeline selection; keep this
+coverage at the pure selector seam.
 
 ### Retired by #967: `ApiRetryIndicator` (#493), `CompactingIndicator` (#496), `StallIndicator` (#317)
 

@@ -7038,3 +7038,25 @@ button.top-overlay-pill {
   letter-spacing: var(--text-body-large-tracking);
   font-weight: var(--text-body-large-weight);
 }
+
+/* Secondary small button (Figma 347:6645); the card's gap places it after every report/cut marker. */
+.background-task-panel__stop {
+  padding: calc(var(--space-2) - 1px) var(--space-4);
+  border: 1px solid var(--color-primary);
+  background: var(--color-surface);
+  color: var(--color-primary);
+}
+
+.background-task-panel__stop:hover:not(:disabled) {
+  background: var(--color-on-primary);
+}
+
+.background-task-panel__stop:focus-visible {
+  outline: 1px solid var(--color-primary);
+  outline-offset: var(--space-1);
+}
+
+.background-task-panel__stop:disabled {
+  opacity: 0.38;
+  cursor: default;
+}

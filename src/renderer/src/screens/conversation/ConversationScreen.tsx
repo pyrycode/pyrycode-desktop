@@ -556,6 +556,7 @@ export function ConversationScreen({
         <BackgroundTaskPanel
           conversationId={activeConversation?.id ?? null}
           turnRunning={isTurnRunning(phase)}
+          serverId={selectedHost}
           agent={openAgent}
           onClose={() => setPanelOpen(false)}
         />

@@ -31,6 +31,7 @@ import { canRespondToPromptNow, usePromptResponseAvailability } from './promptRe
 // (dual-write, Strangler Fig). Its six selectors are gone with the reads below; retiring the store
 // itself is its own ticket.
 import { useTimelineStore } from '../../store/timelineStore'
+import { useCollapseToolUsesPrefStore, selectCollapseToolUses } from '../../store/collapseToolUsesPrefStore'
 import {
   conversationTimelineStore,
   useConversationTimelineStore,
@@ -253,6 +254,7 @@ export function ConversationScreen({
   // #758 moved it ABOVE the timeline read, which now needs its id: same hook, same selector, same single
   // subscription, only its position in the hook list changed (stable across renders).
   const activeConversation = useActiveConversationStore(selectActiveConversation)
+  const collapseToolUses = useCollapseToolUsesPrefStore(selectCollapseToolUses)
   // #758: the thread on screen is the OPEN conversation's own retained timeline, not the flat
   // single-thread store — which `activateConversation` still resets on every switch, into a store nothing
   // reads any more. That is the whole of "leaving a chat and coming back keeps both threads": the rows
@@ -527,7 +529,7 @@ export function ConversationScreen({
       {(!offline || items.length > 0 || visibleQueued.length > 0) && <Timeline
         key={openConversationId}
         items={items}
-        foldTools
+        foldTools={collapseToolUses}
         scrollPin={scrollPin}
         // #1260: NEGATED, so the first held row's key is minus the number of rows history has already
         // put ahead of it. A prepend of N lowers this by N while every surviving row's index rises by N,

@@ -205,9 +205,9 @@ export interface ConversationSlice {
 
 /**
  * How many live join keys one conversation retains (#1225). Chosen to comfortably exceed the entry count
- * of any single page this client asks for — it sends `limit: 0`, "you choose", and the daemon's answer
- * is bounded by its own frame cap — so the opening ask's page can be fully joined against what the live
- * lane drew while it was in flight.
+ * of any single page this client asks for — it sends `HISTORY_PAGE_LIMIT` (200), and the daemon's answer
+ * is bounded by that and by its own frame cap — so the opening ask's page can be fully joined against what
+ * the live lane drew while it was in flight.
  *
  * IT IS A MEMORY BOUND ON REMOTE-KEYED STATE, and the number is a trade rather than a limit the protocol
  * imposes: `MAX_RETAINED_TIMELINES` slices each holding this many keys of at most

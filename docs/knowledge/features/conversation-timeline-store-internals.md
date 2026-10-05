@@ -233,7 +233,7 @@ reorder the holder. Restoration seeds coverage through its explicit read handle.
 `requestOlderHistory(deps, conversationId, nearTop)` is the sole asker. It declines
 unaddressable ids, input outside the band, pending local reads/requests and received
 `atStart`. Otherwise it marks synchronously before sending the exact successful
-cursor, or `''` for unknown coverage, with `limit: 0`. The production dependency
+cursor, or `''` for unknown coverage, with `limit: HISTORY_PAGE_LIMIT` (200). The production dependency
 reads current host ownership on each invocation; no coverage is captured at mount.
 
 `subscribeHistoryPage` owns both page and failure events independently of the live
@@ -482,7 +482,7 @@ trusted upward thread input near top, connected owner →
    requestOlderHistory(historyAskDeps, conversationId, nearTop)
    → pending local read/request or received atStart ? return
      : markHistoryRequested(id, host)
-       → sendCommand(requestHistory, cursor: last successful cursor or '', limit: 0)
+       → sendCommand(requestHistory, cursor: last successful cursor or '', limit: 200)
    // Opening, scroll events, page settlement and reconnect do not initiate requests.
 
 served history page ─(#1222 ask + transport decode, #1227 per-entry decode)→ DaemonEvent{historyPageReceived,

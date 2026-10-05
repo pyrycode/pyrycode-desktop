@@ -165,8 +165,10 @@ growth **below** the reader (their own last bubble); that gap is unaffected and 
 separates local scroll measurement from download intent. `onScroll` updates bottom
 following only. Trusted upward wheel input or ArrowUp/PageUp/Home targeted at the
 thread itself checks host availability and `isNearTop` before the browser scrolls.
-The band includes offsets from zero through `HISTORY_ASK_BAND_PX` (200). Crossing
-into it does not queue demand. See [history admission](chat-history.md#received-state-admission-and-ownership)
+The band includes offsets from zero through `HISTORY_ASK_BAND_VIEWPORTS` (2) viewport
+heights, scaled by the thread's own measured `clientHeight` rather than a fixed pixel
+rim (widened from a fixed 200px band by [#1752](https://github.com/pyrycode/pyrycode-desktop/issues/1752)).
+Crossing into it does not queue demand. See [history admission](chat-history.md#received-state-admission-and-ownership)
 for first-page coverage, pending-read gates and retry policy.
 
 `Timeline` keeps its empty content inside the same focusable scroll region
@@ -200,3 +202,11 @@ on send. Index-addressed assertions can pass while a reused DOM node displays a
 different row. The nonzero case alone can also pass while zero-offset prepends
 remain broken. Native ArrowUp scrolling animates after release, so that case issues
 demand at zero before parking the nonzero anchor and releasing the held reply.
+
+[`history-walk.spec.ts`](../../../e2e/history-walk.spec.ts) proves the band edge: an
+input parked at exactly `HISTORY_ASK_BAND_VIEWPORTS * clientHeight` asks, one pixel
+further out sends nothing. The "sends nothing" half cannot be ordered behind a later
+in-band ask in the same test — `requestOlderHistory`'s single-request-in-flight guard
+would swallow the in-band ask if the out-of-band input had (wrongly) already asked, so
+the two cases would be indistinguishable by request count. The absence is read after a
+fixed settle instead, before the in-band input fires.

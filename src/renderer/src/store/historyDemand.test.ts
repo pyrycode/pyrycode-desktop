@@ -23,7 +23,7 @@ describe('explicit history demand', () => {
     h.ask()
     expect(h.deps.sendCommand).toHaveBeenCalledTimes(1)
     expect(h.deps.sendCommand).toHaveBeenCalledWith({
-      type: 'requestHistory', payload: { conversation_id: 'c', cursor: '', limit: 0 }
+      type: 'requestHistory', payload: { conversation_id: 'c', cursor: '', limit: 200 }
     })
   })
 

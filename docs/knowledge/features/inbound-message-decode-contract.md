@@ -74,7 +74,7 @@ non-negative safe integer to survive as a number. Invalid counts become `undefin
 without dropping the boundary; null stays null and zero stays zero. Unknown fields
 are discarded, and diagnostics contain only static type, byte count and hash.
 The new boundary is live-only; history retains its existing compacting arm.
-See [timeline association](conversation-timeline-store.md#what-it-does) and
+See [timeline association](conversation-timeline-store-compaction.md#what-it-does) and
 [count display](conversation-shell-session-and-channel-info.md#compaction-dividers).
 
 **Extended by [#116](../codebase/116.md), additively.** The `message` / `message_chunk` recognition and narrowing described below are unchanged byte-for-byte. Three more kinds are now recognized *before* the `default` (unmodeled) branch: `debug_bundle_chunk` → `{ kind: 'bundle-chunk', seq, data }` (base64-decoded via the codec's **strict** `base64StdDecode` right at this boundary, so the [reassembler](debug-bundle-reassembly.md) downstream stays byte-pure), `debug_bundle_done` → `{ kind: 'bundle-done', total }`, and `error` → `{ kind: 'daemon-error' }` (content-free — no `ErrorPayload` field is narrowed). A new `requireNumber` helper sits beside `requireString` for the two numeric fields (`seq`/`total`). Modeling `error` is a deliberate, generally-applicable change: it moves from silently-dropped `inbound-unmodeled` to a modeled, content-free `inbound-decoded(code: 'error')` for **every** `error` frame, bundle-related or not — see the diagnostic-logging table below.

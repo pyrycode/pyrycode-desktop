@@ -324,7 +324,7 @@ key; a prepend of N lowers `firstRowKey` by N while every surviving row's index 
 already-drawn row's key is unchanged and React inserts N new nodes at the head — which is what makes
 anchoring's measurement correct. The queued tail's `q`-prefixed keys are a separate namespace and cannot
 collide with a negative numeric key. See [Edge cases and
-limitations](conversation-timeline-store.md#edge-cases-and-limitations) on the parent page for the current
+limitations](conversation-timeline-store-limits.md#edge-cases-and-limitations) for the current
 state of this fix, and [Thread timeline § Edge cases](thread-timeline-limits.md#edge-cases-and-limitations) for
 why the original premise still holds for the reducer's own array.
 

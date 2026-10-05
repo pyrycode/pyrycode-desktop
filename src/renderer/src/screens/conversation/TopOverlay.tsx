@@ -1,6 +1,6 @@
 // #1604: the conversation's Top overlay (Figma 132:4171, frame "Top overlay"; the pill is 347:6617) — a
 // right-aligned stack of pills pinned to the top of the message area while the timeline scrolls beneath
-// it. Shared with mobile. Occupants: usage, permission resolution, then pairing-error Re-pair.
+// it. Shared with mobile. Occupants: usage, permission resolution, session failure, then pairing-error Re-pair.
 //
 // A PURE VIEW: the markup is a function of the reading, the instant, the dismissed triple, resolution
 // kind and repair flag, which is what lets every arm be a static render in this repo's node-environment specs. The
@@ -29,8 +29,10 @@ export function TopOverlay({
   onDismissUsage,
   onRepair,
   resolution,
-  onDismissResolution
+  onDismissResolution,
+  sessionError
 }: {
+  sessionError?: string
   resolution: ModalResolution['kind'] | null
   onDismissResolution: () => void
   reading: UsageLimitReading | null
@@ -42,7 +44,7 @@ export function TopOverlay({
 }): JSX.Element | null {
   const usage = reading === null || isUsageReadingDismissed(reading, dismissed) ? null : reading
   // No pills, no element: the overlay takes no space and leaves nothing in the tree.
-  if (usage === null && resolution === null && !repair) return null
+  if (usage === null && resolution === null && sessionError === undefined && !repair) return null
   const notice = usage === null ? null : usageLimitNotice(usage, nowSeconds)
   return (
     <div className="conversation__top-overlay">
@@ -91,6 +93,17 @@ export function TopOverlay({
               />
             </svg>
           </button>
+        </div>
+      )}
+      {sessionError !== undefined && (
+        <div className="top-overlay-pill top-overlay-pill--error">
+          <span className="top-overlay-pill__text">
+            {sessionError === 'session.blocked'
+              ? 'Claude did not pick up your last message. It was not delivered.'
+              : sessionError === 'session.child_crashing'
+                ? 'Claude keeps failing to start. Your message is waiting.'
+                : 'Claude stopped responding.'}
+          </span>
         </div>
       )}
       {repair && (

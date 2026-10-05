@@ -4810,6 +4810,23 @@ function TopOverlayControl({ onRepairHost }: {
     open === null ? NO_USAGE_LIMIT_READING : selectUsageLimitFor(open.id, nowSeconds)
   )
   const dismissed = useUsagePillDismissalStore(s => s.dismissed)
+  const sessionError = useConversationTimelineStore(s =>
+    open === null ? undefined : s.timelines.get(open.id)?.timeline.sessionError)
+  const conversationId = open?.id
+  const mountedConversation = useRef<string>()
+  useEffect(() => {
+    mountedConversation.current = conversationId
+    if (conversationId === undefined) return
+    return () => {
+      mountedConversation.current = undefined
+      // StrictMode immediately sets up the same effect again. Consume only after a real departure.
+      queueMicrotask(() => {
+        if (mountedConversation.current !== conversationId) {
+          conversationTimelineStore.getState().dispatchFor(conversationId, { type: 'sessionErrorCleared' })
+        }
+      })
+    }
+  }, [conversationId])
   const resolution = useModalStore(s =>
     open === null ? null : s.resolutions.find(r => r.conversationId === open.id) ?? null)
   useEffect(() => {
@@ -4839,6 +4856,7 @@ function TopOverlayControl({ onRepairHost }: {
   }
   return (
     <TopOverlay
+      sessionError={sessionError?.code}
       resolution={resolution?.phase === 'displayed' ? resolution.kind : null}
       onDismissResolution={() => {
         if (resolution !== null) modalStore.getState().dispatch({ type: 'resolutionDismissed', resolution })

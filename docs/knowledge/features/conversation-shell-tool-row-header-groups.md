@@ -111,7 +111,7 @@ leaf when history gives it its first child. Tool wrappers stay under one React p
 and remain mounted while hidden, preserving child-result and inner-group expansion
 through outer collapse, results, history prepends and regrouping. The mounted timeline
 is keyed by conversation, so this UI state cannot leak into another conversation.
-See [history prepend identity](conversation-timeline-store.md#edge-cases-and-limitations).
+See [history prepend identity](conversation-timeline-store-limits.md#edge-cases-and-limitations).
 
 ### Visible tool-row joins
 

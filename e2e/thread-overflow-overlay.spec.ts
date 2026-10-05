@@ -50,7 +50,7 @@ test('thread overflow menu paints and receives clicks above Top overlay pills', 
     await capturePairedApp(app, page, `/tmp/builder-1745/menu-${size.kind}-${size.width}.png`)
 
     // Positive overlap plus hit-testing proves paint order; visibility alone passes when covered.
-    for (const pill of await pills.all()) {
+    for (const pill of size.kind === 'usage' ? await pills.all() : []) {
       const overlap = await pill.evaluate((element) => {
         const menuElement = document.querySelector('.conversation__overflow [role="menu"]')
         if (menuElement === null) throw new Error('Overflow menu missing')
@@ -73,7 +73,14 @@ test('thread overflow menu paints and receives clicks above Top overlay pills', 
     expect(anchorZ).toBeGreaterThan(overlayZ)
 
     // Click an item at a point inside the pill's box, through the real menu handler.
-    const target = await menu.evaluate((element) => {
+    const target = await menu.evaluate((element, kind) => {
+      if (kind === 'connection') {
+        // Occupied rejection-banner height now places Re-pair below this short menu.
+        const item = element.querySelector('[role="menuitem"]')
+        if (!item) throw new Error('Overflow item missing')
+        const rect = item.getBoundingClientRect()
+        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+      }
       const pillElement = document.querySelector('.conversation__top-overlay .top-overlay-pill')
       if (pillElement === null) throw new Error('Overlay pill missing')
       const pillRect = pillElement.getBoundingClientRect()
@@ -86,7 +93,7 @@ test('thread overflow menu paints and receives clicks above Top overlay pills', 
         if (right > left && bottom > top) return { x: (left + right) / 2, y: (top + bottom) / 2 }
       }
       throw new Error('No menu item overlaps the overlay pill')
-    })
+    }, size.kind)
     await page.mouse.click(target.x, target.y)
     await expect(page.getByRole('dialog')).toBeVisible()
     await expect(menu).toHaveCount(0)

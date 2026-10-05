@@ -68,3 +68,7 @@ Unchanged: `contextUsagePercent` returns `null` for an unavailable reading and t
 ## Open Questions
 
 - Whether Chromium renders `pathLength` + dash array on a `<circle>` without a hairline at 0%; settled by the footer capture.
+
+## Revisions
+
+**2026-10-05 — the arc is measured in user units, not through `pathLength`.** This settles the open question. A static capture showed Chromium's `pathLength` scaling on a `<circle>` is inexact: `stroke-dasharray="100 100"` left a visible gap at 12 o'clock at 100%, and a `pct (100-pct)` period drew a sliver past the start on partial arcs. The new contract: no `pathLength`; `stroke-dasharray="<pct × C / 100> <C>"` with C = 2π × 6.5 (40.841), both to three decimals. 0% is a zero dash (no arc) and 100% the whole circumference. Unit tests pin the dash values as literals (69 → 28.180, 70 → 28.588, 84 → 34.306, 85 → 34.715, 100 → 40.841).

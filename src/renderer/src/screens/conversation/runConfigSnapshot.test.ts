@@ -524,7 +524,7 @@ describe('applied effort readings', () => {
   })
 })
 
-// #1655: the three capability flags reach the snapshot verbatim. An unreported flag — which crosses IPC as
+// #1655, #1726: the four capability flags reach the snapshot verbatim. An unreported flag — which crosses IPC as
 // an explicitly-undefined property — is omitted, so the snapshot never holds a key the daemon did not send.
 describe('capability flags', () => {
   const FLAGS = ['slashCommands', 'mcpServers', 'contextUsageDetail', 'midTurnInput'] as const

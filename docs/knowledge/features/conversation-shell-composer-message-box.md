@@ -209,9 +209,11 @@ hidden-scrollbar policy, with its own [wheel and focus coverage](channel-list.md
 
 ## Composer footer row (#811)
 
-The desktop layout's fixed-height row **below** the message box (Figma `110:3494`, 780×20, the third
-child of the `Input area` symbol after `Status area`/`ComposerStatusArea` and `Message input`) — not to
-be confused with [Composer status row](conversation-shell-composer-status-row.md#composer-status-row-796), which sits *above* the message box.
+The desktop layout's fixed-height row **below** the message box, revised against
+[Figma Input area `347:5408`](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG/Pyrycode-Client?node-id=347-5408)
+on 2026-10-05 (#1727): a 785×20 footer in the inspected drawing, following the status area and message
+input. The [Composer status row](conversation-shell-composer-status-row.md#composer-status-row-796)
+sits *above* the message box.
 The desktop layout puts six affordances in this row — Actions (#680), permission mode (#682), model and
 effort (#683, split into a model half and an effort half by #683's own children), this ticket's
 context-usage reading, and attach (#685, split into [#862](attachment-upload.md)'s headless flow and
@@ -239,7 +241,9 @@ Composer
 └── ComposerAttachOutcome           composer column's own last child, NOT inside .composer__footer (#863)
 ```
 
-The row now matches Figma's own order (Actions · mode · model · effort · reading · attach). See
+The row matches Figma's order (Actions · mode · model · effort · reading · attach). The settings stay
+inline, and Attach is the sole trailing control. The context circle and its placement are a separate
+design change; #1727 changes only footer padding and Attach geometry. See
 [Composer permission-mode menu](composer-permission-mode-menu.md) for the one structural way it differs
 from its two menu neighbours — its entries are a client-owned constant rather than a daemon-published list, so
 it needs no model list to become operable once a mode is known and host/session availability permits.
@@ -333,10 +337,13 @@ a present claude reading whose maximum is `0` resolves there too rather than fal
 
 **`.composer__footer` reserves its own height (20px) unconditionally**, the same `.composer-status`
 guarantee ([Composer status row](conversation-shell-composer-status-row.md#composer-status-row-796) above): a null reading cannot move
-`.composer__row` because the row's box exists whether or not it holds a child. No vertical padding
-(no global box-sizing reset), `align-items: center`, `padding: 0 var(--space-4)` — aligned with the
-input's *text* start, deliberately not with `.composer-status`'s box-edge alignment; the two rows are
-inset differently by design. The row's item rhythm is `column-gap: min(3.5%, var(--space-5))` since
+`.composer__row` because the row's box exists whether or not it holds a child. Since #1727 it explicitly
+uses `box-sizing: border-box`, so the 20px includes its 4px top padding rather than becoming a 24px row.
+`align-items: flex-start` puts children at that top inset. Padding is 4/16/0/12px
+(top/right/bottom/left), written `var(--space-1) var(--space-4) 0 var(--space-3)`; the left edge is now
+12px inside the message box's edge rather than at the textarea's 16px text inset. Attach keeps its
+24×16px box at the 16px right inset, with the 11×12px paperclip at its top right; see
+[its CSS](composer-attach.md#css). The row's item rhythm is `column-gap: min(3.5%, var(--space-5))` since
 \#1107 — see below; it was a flat `gap: var(--space-5)` (the design's measured 20px) from #811 through
 \#682/#683, inert with one child and then live between the Actions trigger and the context reading.
 
@@ -361,11 +368,9 @@ it:
 
 - **`.composer__footer`** — `gap: var(--space-5)` became `column-gap: min(3.5%, var(--space-5))`.
   `column-gap` rather than the `gap` shorthand because the row is single-line `nowrap`, so `row-gap` has
-  no meaning in it. `3.5%` is derived, not chosen: the smallest tenth of a percent that still reaches the
-  20px ceiling at the app's own 1100px default window (footer content box 584px, 20/584 = 3.43%), so the
-  ceiling holds from a 1088px window up and the row is pixel-identical to its pre-#1107 self at every
-  shipped width — the gap only compresses where the row was already broken. A percentage `column-gap`
-  resolves against the row's own content box, which is definite here (a stretched child of the `.composer`
+  no meaning in it. `3.5%` was derived to reach the 20px ceiling at the app's own 1100px default window;
+  the launch-width geometry assertion still pins that ceiling after #1727's revised padding. A percentage
+  `column-gap` resolves against the row's own content box, which is definite here (a stretched child of the `.composer`
   column); at the 800px minimum with worst-case content the gap measures ~10px, about a third of the
   row's shortfall.
 - **`.composer-options-anchor` and `.composer__footer-button`** both gain `min-width: 0`, which is what
@@ -408,20 +413,20 @@ model/effort labels and full context usage. Before #1107 content silently vanish
 edge with no truncation signal; an ellipsis is a visible one. The full mode name remains in the control's
 accessible name, and selectable labels fit fully in the open dropdown. `Bypass approvals` can appear on
 the trigger but remains excluded from the menu; see the [permission-mode contract](composer-permission-mode-menu.md#the-wire-contract-is-asymmetric-and-that-asymmetry-is-the-whole-design).
-The gap's `min()` ceiling preserves its 20px spacing above a 1088px window. At 800px with
-every label maximally long the four triggers compress to roughly two or three characters each — the honest
-floor of six controls in a 284px content box — while the context reading and every control's presence,
-order, chevron and hit target are untouched; no control is ever dropped.
+The gap's `min()` ceiling preserves its 20px spacing at the default window width. In the reviewed
+\#1727 minimum-width capture the footer is 300×20px, with a 272px content width after its 12/16px side
+padding and roughly 9.5px gaps. Worst-case labels compress to roughly two or three characters each,
+while the context reading stays whole and every control remains present, ordered and keyboard reachable.
+Attach's fixed 24×16px box does not give width. Inline settings remain in the row; no control is dropped.
 
-**Two review findings shipped non-blocking, left for the next touch of this row rather than reworked**:
-the `.composer__footer-button` comment's closing paragraph still describes the Actions label as an
-untouched bare text node — stale as of the same commit that wraps it in `.composer__actions-label` — and
-`e2e/composer-footer-overflow.spec.ts`'s narrow-window checkpoint has no read that distinguishes the
-800px layout from the 1100px launch width it follows, so a first-satisfying-read `expect.poll` could in
-principle settle before the post-`setSize` relayout. The spec's launch-width rhythm assertion is a genuine
-detector and is what reddens on `main`; the narrow-width AC1 assertion is the one to harden, on the
-`e2e/composer-options-clamp.spec.ts` precedent of polling a value that changes across the resize (e.g.
-`window.innerWidth`, which `setSize` moves, rather than one that is already satisfied at launch width).
+**Wait for the resize itself before testing fit.** Since #1727,
+`e2e/composer-footer-overflow.spec.ts` polls `window.innerWidth` to 800 before reading narrow-width
+geometry. A fit assertion already satisfied at the 1100px launch width could otherwise pass before
+relayout. The spec retains worst-case label seeds, launch-width rhythm, overflow and visual-order
+checks, and adds exact padding/Attach geometry at launch, 785px footer and minimum window widths,
+plus keyboard traversal and Enter invoking the picker through IPC; see [Attach testing](composer-attach.md#testing).
+The `.composer__footer-button` comment still describes Actions as a bare text node; the rendered
+`.composer__actions-label` span and its truncation chain above are the implemented policy.
 
 ## Context breakdown popover (#1254)
 

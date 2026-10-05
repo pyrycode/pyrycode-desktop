@@ -73,6 +73,13 @@ An Electron connection failure is not an application assertion failure.
 Investigate the failing spec with repeated focused runs when the evidence suggests
 a race. Do not rerun blindly until one result is green.
 
+Playwright's Electron evaluation error “Execution context was destroyed” can be generic error wording.
+`app.evaluate` runs in the main process; the message alone does not prove renderer navigation or an app
+crash. Inspect the failing evaluation boundary and launch-fate evidence (process state, exit and teardown)
+before assigning a cause. Repeated green checks do not establish that an intermittent failure is
+pre-existing; retain an undiagnosed classification when no causal defect was found. See the
+[footer review's evaluation diagnosis](https://github.com/pyrycode/pyrycode-desktop/pull/1762#issuecomment-5993150705).
+
 ## Evidence that cannot pass too early
 
 A closing absence assertion can pass before an action completes.

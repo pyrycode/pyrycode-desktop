@@ -265,16 +265,18 @@ plus the drop-target rule below:
 
 - **`.composer__attach`** wears the shared [`.composer__footer-button`](composer-model-menu.md) treatment
   as a two-class mix — the first consumer with no label, and evaluated rather than assumed: the reset
-  (padding, border, background off), the flex centring and `color: var(--color-primary)` are exactly what
-  an icon-only button needs; the type block and `gap` are inert, which is harmless and consistent with the
-  shared rule's own note that it is named for the row rather than for any one consumer. **No shipped
-  element is re-classed.** This rule adds `margin-left: auto` — the right-alignment `.composer__footer`'s
-  comment has reserved for this control since #811, reproducing without a number that the button is a
-  *sibling* of Figma's `Info and buttons` group (`115:3660`) rather than its fifth member (x=714 in a
-  741-wide row; 714 + 11 = 725, exactly the content-box right edge under the row's 16px inset) — plus
-  `cursor: pointer` (the shared class deliberately omits it, since #988's inert model label wears it while
-  opening nothing) and `flex: 0 0 auto` (so the row cannot squeeze the glyph; the four menu triggers don't
-  need this because their label's own `max-width` absorbs a narrow row first).
+  (padding, border, background off), flex display and `color: var(--color-primary)` supply the icon-only
+  button's base; the type block and `gap` are inert. Since #1727, the local rule overrides shared centring
+  with `align-items: flex-start` and `justify-content: flex-end`: the existing 11×12px paperclip sits at
+  the top right of a fixed 24×16px visual box (`width: var(--space-6); height: var(--space-4)`). This follows
+  [Figma Input area `347:5408`](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG/Pyrycode-Client?node-id=347-5408),
+  inspected 2026-10-05, and its Attach button `668:5565`.
+  `margin-left: auto` keeps Attach as the sole trailing control, ending 16px inside the footer's right
+  edge. The footer's 4/16/0/12px padding and top alignment put the button 4px below its top within a
+  20px border box; see [footer geometry](conversation-shell-composer-message-box.md#composer-footer-row-811).
+  `flex: 0 0 auto` preserves the full visual box while inline settings compress at minimum width, and
+  `cursor: pointer` remains local because inert menu labels share the base class. The class mix, glyph,
+  `Attach file` accessible name and `onAttach` callback remain unchanged.
 - **`.composer__attach-outcome`** — `.composer__context`'s body-small-in-`--color-primary` treatment, with
   no `height`/`min-height` (see above) and deliberately no `white-space: nowrap`.
 - **`.composer__attachments` / `.composer__attachment` / `.composer__attachment-glyph` /
@@ -359,6 +361,26 @@ terminal that follows clears the in-flight element and states its own sentence �
 `.composer__footer [role="alert"]` staying at count 0 throughout, the shipped invariant this ticket had to
 not disturb. No `needs-real-claude` — every drive goes through `app.evaluate` with no live daemon and no
 live claude.
+
+`e2e/composer-footer-overflow.spec.ts` adds the integrated footer contract (#1727). It asserts
+4/16/0/12px padding, 20px outer height, a 24×16px Attach box, the 11×12px glyph, top/right glyph offsets
+and the 16px trailing inset at launch width, Figma's 785px footer width and the 800px minimum window.
+It proves Attach is the sole direct button in the row and retains the `Attach file` accessible name.
+Worst-case published labels and full context usage are positively asserted before overflow/order checks;
+the resize is confirmed by polling `window.innerWidth` before minimum-width geometry is read. Keyboard
+traversal reaches all four inline settings and Attach; Enter reaches the real IPC picker path with a
+`dialog.showOpenDialog` replacement returning `{ canceled: true, filePaths: [] }`. This proves picker
+invocation, while the native OS picker UI itself has not been manually exercised.
+
+The [reviewed captures](https://github.com/pyrycode/pyrycode-desktop/pull/1762#issuecomment-5993150705)
+compare the 785×20px integrated footer with the preserved 2026-10-05 Figma screenshot at the same logical
+width and confirm the requested padding and Attach geometry. The minimum-window capture shows a
+300×20px footer, compressed inline labels and Attach's visible focus ring in an 800×600 window
+(800×573 content viewport). Evidence is under `/tmp/verifier-1762/rework-3c732345/`:
+`figma-input-area-current.png`, `footer-785.png`, `footer-800.png`, `app-design-width.png`
+(1285×773 viewport) and `app-800.png`; builder originals are under `/tmp/builder-1727/`.
+The review covers footer padding and Attach alignment; context-circle placement belongs to a separate
+ticket. Captures establish appearance, while the executed focused test establishes geometry and interaction.
 
 **What no tier proves:** the remount forced by `ComposerAttachOutcome`'s two distinct `key`s
 (`renderToStaticMarkup` drops keys, and the fake e2e tier cannot observe a screen-reader announcement) —

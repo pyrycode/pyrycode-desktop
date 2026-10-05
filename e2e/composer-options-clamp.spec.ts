@@ -1,6 +1,6 @@
 import type { Locator, Page } from '@playwright/test'
 import { test, expect } from './fixtures/launchPairedApp'
-import { COMPOSER_OPTIONS_LABEL_INSET_PX } from '../src/renderer/src/screens/conversation/composerOptionsPlacement'
+import { COMPOSER_OPTIONS_LABEL_INSET_PX, COMPOSER_OPTIONS_WINDOW_MARGIN_PX } from '../src/renderer/src/screens/conversation/composerOptionsPlacement'
 
 // Fake-stack UI e2e for the shared options panel's RIGHT-EDGE CLAMP (#847) — the measuring half of the
 // feature #839 shipped dormant. It is the WHOLE proof: vitest runs the `node` environment
@@ -144,8 +144,8 @@ test('the options panel fits the pane and restores its width on resize', async (
   )
 
   // A narrow pane bounds the menu width before measuring its shift. It stays anchored
-  // while the right edge fits exactly; the width delta proves this is an active bound.
-  await expect.poll(overhangPastWindow).toBe(0)
+  // while retaining the existing safety margin; the width delta proves this is an active bound.
+  await expect.poll(overhangPastWindow).toBe(-COMPOSER_OPTIONS_WINDOW_MARGIN_PX)
   expect(await restingOffset()).toBe(0)
   expect((await panel.boundingBox())?.width).toBeLessThan(restingWidth)
 

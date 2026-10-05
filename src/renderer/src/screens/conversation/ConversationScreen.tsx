@@ -541,6 +541,7 @@ export function ConversationScreen({
         onDropQueued={actionsAvailable ? (queuedMsgId, messageId) => {
           if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
           dropQueuedMessage(openConversationId, queuedMsgId, messageId, {
+            diagnose: window.pyry.sendDiagnostic,
             sendCommand: window.pyry.sendCommand,
             dispatch: dispatchTimeline,
             dispatchFor: dispatchTimelineFor
@@ -3906,6 +3907,7 @@ function Composer({
     // this function: that would move the dereference into the render path, where `window.pyry` does not
     // exist under renderToStaticMarkup, and every container smoke test would throw.
     const sent = submitMessage(value, activeConversationId, {
+      diagnose: window.pyry.sendDiagnostic,
       sendCommand: window.pyry.sendCommand,
       dispatch,
       dispatchFor: (conversationId, event) => {

@@ -11,8 +11,9 @@
 // forwards ONLY that.
 //
 // Imported by relative path: src/main has no @shared alias (tsconfig.node.json).
-import { DIAGNOSTIC_CHANNEL, projectDiagnosticEvent } from '../shared/ipc/diagnostics'
+import { DIAGNOSTIC_CHANNEL, projectDiagnosticEvent, projectMessageLifecycle } from '../shared/ipc/diagnostics'
 import type { DiagnosticLog } from './diagnosticLog'
+import type { MessageLifecycle } from './messageLifecycle'
 
 /**
  * The minimal main-process surface the receiver needs. Electron's `ipcMain` satisfies this
@@ -40,9 +41,18 @@ export interface DiagnosticSource {
  *
  * The receiver never constructs a logger — it forwards to the injected one.
  */
-export function onDiagnostic(source: DiagnosticSource, logger: DiagnosticLog): () => void {
+export function onDiagnostic(source: DiagnosticSource, logger: DiagnosticLog, lifecycle?: MessageLifecycle): () => void {
   const listener = (_event: unknown, raw: unknown): void => {
     try {
+      // Reserved lifecycle events cannot pass through generic renderer logging.
+      if (typeof raw === 'object' && raw !== null && 'event' in raw &&
+          typeof raw.event === 'string' && raw.event.startsWith('message-')) {
+        const request = projectMessageLifecycle(raw)
+        if (request?.event === 'message-queued') lifecycle?.queued(request.messageId, request.conversationId)
+        if (request?.event === 'message-bridge-failed') lifecycle?.drop(request.messageId, request.conversationId, 'bridge-failed')
+        if (request?.event === 'message-cancel-requested') lifecycle?.cancel(request.messageId, request.conversationId)
+        return
+      }
       const projected = projectDiagnosticEvent(raw)
       if (projected === null) {
         console.warn('pyry:diagnostic — dropped malformed record')

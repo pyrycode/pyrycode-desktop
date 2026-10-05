@@ -8,7 +8,7 @@ import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { daemonIdentity } from './fixtures/daemonVersion'
-import { watchPhaseReconnect, readPhaseReconnect, stopPhaseReconnect } from './fixtures/phaseReconnectEvidence'
+import { watchPhaseReconnect, readPhaseReconnect, stopPhaseReconnect, hasRunningPhaseLabel } from './fixtures/phaseReconnectEvidence'
 
 // Dispatcher-owned live acceptance: PYRY_BIN must contain pyrycode#2718,
 // 25b532b6205507784a7615fe59d3c5a7bb2f5484. An all-skipped run is not acceptance.
@@ -80,8 +80,9 @@ test('real claude restores the status after reconnect during the same running tu
     // A real tool has STARTED, rather than only an optimistic local-send window being visible.
     await expect.poll(() => existsSync(entered), { timeout: TURN_TIMEOUT }).toBe(true)
     await expect.poll(async () => (await readPhaseReconnect(page)).turnIds.length).toBe(1)
-    const hasRunningLabel = () => page.locator('.composer-status__label').evaluateAll(elements =>
-      elements.some(element => /^(Thinking…|Working…)/.test(element.textContent ?? '')))
+    // The held foreground tool names Bash and may append elapsed time. Recognize its existing
+    // presentation as well as the generic phase copy, returning no daemon text to the test process.
+    const hasRunningLabel = () => page.locator('.composer-status__label').evaluateAll(hasRunningPhaseLabel)
     await expect.poll(hasRunningLabel).toBe(true)
     const before = await readPhaseReconnect(page)
     const current = before.phases.filter(phase => phase.conversationId === before.conversationId).at(-1)

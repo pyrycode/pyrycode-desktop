@@ -44,3 +44,8 @@ export function readPhaseReconnect(page: Page): Promise<Snapshot> {
 export async function stopPhaseReconnect(page: Page): Promise<void> {
   await page.evaluate(() => (window as EvidenceWindow).phaseReconnectEvidence.stop())
 }
+
+/** Self-contained for evaluateAll; return only a boolean, never the observed label. */
+export function hasRunningPhaseLabel(elements: { textContent: string | null }[]): boolean {
+  return elements.some(element => /^(Thinking…|Working…|Running Bash…)/.test(element.textContent ?? ''))
+}

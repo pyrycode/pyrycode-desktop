@@ -60,10 +60,13 @@ a focusable control lets that control receive focus.
 
 The divider's 60% opacity creates a stacking context that previously painted across
 Channel info even when the menu was visible and correctly positioned. The bottom-end
-anchor now has `z-index: 1`, raising its entire panel over the divider and positioned
-message content. `.status-sheet-overlay` uses `z-index: 2`, matching existing dialog
-overlays so sheets and dialogs remain above menus. The header itself gains no stacking
-context or clipping. See the [shared-menu design](../../specs/architecture/1542-shared-messaging-menu.md).
+anchor has `z-index: 2`, raising its entire panel over the divider, positioned message
+content and `.conversation__top-overlay` at level 1. Level 1 on the anchor tied with
+the later Top overlay, allowing pills to cover the menu. `.status-sheet-overlay` and
+existing dialog overlays retain level 2 and paint above the menu through their later
+DOM placement. The header itself gains no stacking context or clipping. See the
+[shared-menu design](../../specs/architecture/1542-shared-messaging-menu.md) and
+[pill stacking fix](../../specs/architecture/1745-thread-overflow-overlay.md).
 
 `MessageBubble` and `Composer` are **in-file functions** inside `ConversationScreen.tsx` — they are tiny. (`UnpairControl` was a third until [#1061](https://github.com/pyrycode/pyrycode-desktop/issues/1061) deleted it — see [Unpair control](#unpair-control-166-deleted-by-1061) below.) `MessageThread` and `StatusSheet` are also in-file but **exported** ([#69](../codebase/69.md), [#177](../codebase/177.md)), so tests server-render them as pure views — `RepairPrompt` joined them in [#167](../codebase/167.md) and was retired, folded into `ComposerErrorSlot`, by [#963](https://github.com/pyrycode/pyrycode-desktop/issues/963); see [Re-pair control](#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963) below. `PermissionModal`/`PermissionModalView` live in their own file, `PermissionModal.tsx` ([#224](../codebase/224.md)), the same split one level up. `ConversationScreen` is the store-bound container; `MessageThread`/`StatusSheet`/`PermissionModalView` are the props-in/markup-out views — the same container/view split `PairingScreen`/`PairingView` uses ([#55](../codebase/55.md)). The load-bearing contracts are the props/types, not the file boundaries (see Seams).
 
@@ -243,20 +246,19 @@ button in that slot rather than a second surface below the composer. `RepairProm
 Actionable-error button](conversation-shell-composer-repair-button.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963)
 for the current shape — `ComposerErrorSlot`/`ComposerErrorSlotControl`, beside `ComposerErrorChip`.
 
-The gating predicate is unchanged, reused byte-for-byte, and still lives in `composerSend.ts`
-beside `composerAvailability` (see [Composer send](composer-send.md)):
+The current `shouldOfferRepair` predicate lives in `composerSend.ts` beside
+`composerAvailability` (see [Composer send](composer-send.md)) and requires an explicit
+pairing rejection:
 
 ```ts
-status.type === 'error' && !status.error.retryable && status.error.code !== 'unpair'
+status.type === 'error' && !status.error.retryable && status.error.code === 'pairing-rejected'
 ```
 
-`!retryable` admits a terminal transport/handshake failure (`daemonConnection.ts`'s `emitFailed`
-always reports `retryable: false`) and excludes a **retryable** daemon wire-error
-(`server.binary_offline`, `rate_limited` — transient, not a broken pairing). `code !== 'unpair'`
-excludes the self-inflicted `UNPAIR_FAILED_ERROR` `runUnpair` itself dispatches on a failed clear —
-without it, a failed re-pair would immediately re-satisfy the predicate and re-offer itself in a
-loop. A transient transport drop never reaches `error` at all (the relay supervisor absorbs and
-re-dials), so it never reaches this predicate either.
+The sealed `error` envelope with code `auth.invalid_token` is classified as
+`pairing-rejected`; with `retryable: false` it shows the Top overlay's Re-pair pill.
+A terminal socket closure instead offers Reconnect through `shouldOfferReconnect`.
+The earlier broad terminal-error predicate would conflate those recovery actions.
+Retryable failures and the `unpair`/`not-paired` errors offer neither action.
 
 The button now opens the host's recovery pane without an erase or preliminary confirmation.
 The existing pairing form still requires fingerprint confirmation before saving new credentials.

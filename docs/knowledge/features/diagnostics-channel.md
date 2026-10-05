@@ -6,7 +6,14 @@ Introduced in [#131](../codebase/131.md). It is the renderer→main slice of **B
 
 ## What it does
 
-Gives the renderer **one typed function** (`window.pyry.sendDiagnostic`) to ship a content-free diagnostic record to the background process, and gives the main process **one typed seam** (`onDiagnostic`) to receive those records — after **projecting** each at the untrusted→trusted boundary down to only the allowlisted [#126 `DiagnosticEvent`](diagnostic-log.md) fields, then forwarding into the **same** logger instance the transport already writes to. Fire-and-forget: `sendDiagnostic` returns void, no reply, no throw path back into the window (a diagnostics channel must not take down the window it observes).
+Gives the renderer **one typed function** (`window.pyry.sendDiagnostic`) and the
+main process **one receiver** (`onDiagnostic`). Generic records are projected to
+the renderer-safe subset of [DiagnosticEvent](diagnostic-log.md) before forwarding
+to the same logger the transport uses. Restricted composer lifecycle requests are
+projected separately and passed to a main-owned tracker, which constructs the log
+records. Fire-and-forget: no reply channel. The receiver swallows faults; composer
+and cancellation helpers also guard diagnostic calls so bridge faults cannot
+interrupt their actions.
 
 ## The one way it diverges from the command channel
 
@@ -23,10 +30,10 @@ Four files: two new (a shared channel module + a main receiver), two one-ish-lin
 
 | Piece | File | Layer |
 |---|---|---|
-| `DIAGNOSTIC_CHANNEL` + `RendererDiagnosticEvent` type + `projectDiagnosticEvent` | `src/shared/ipc/diagnostics.ts` | shared |
-| `onDiagnostic(source, logger)` receiver seam | `src/main/receiveDiagnostic.ts` | background |
+| `DIAGNOSTIC_CHANNEL`, generic/lifecycle request types and fresh-object projections | `src/shared/ipc/diagnostics.ts` | shared |
+| `onDiagnostic(source, logger, lifecycle?)` receiver seam | `src/main/receiveDiagnostic.ts` | background |
 | `window.pyry.sendDiagnostic(record)` | `src/preload/index.ts` | preload bridge |
-| the one `onDiagnostic(ipcMain, diagnosticLog)` registration | `src/main/index.ts` | composition root |
+| the one `onDiagnostic(ipcMain, diagnosticLog, messageLifecycle)` registration | `src/main/index.ts` | composition root |
 
 ### 1. The channel module (`src/shared/ipc/diagnostics.ts`)
 
@@ -44,15 +51,73 @@ export interface RendererDiagnosticEvent {
 export function projectDiagnosticEvent(value: unknown): RendererDiagnosticEvent | null
 ```
 
-- **`RendererDiagnosticEvent` is a field-for-field mirror of [#126's `DiagnosticEvent`](diagnostic-log.md)** — the same content-free envelope fields, the same primitive types. It is **defined locally in `shared`**, not reached in from `src/main`, because that is the established convention (`commands.ts` and `events.ts` each define their record type in `shared/ipc` and never import from `src/main`; `src/shared` is a clean leaf). Its identity with the canonical type is pinned by a **compile-time equality assertion** in the test (§ Testing) so a future field added to #126 (a correlation id, etc. — the [#125](https://github.com/pyrycode/pyrycode-desktop/issues/125) roadmap) surfaces as a `npm run typecheck` failure, not a silent capability gap.
+- **`RendererDiagnosticEvent` mirrors the renderer-safe subset of [DiagnosticEvent](diagnostic-log.md)** — the same envelope fields and primitive types, excluding the main-only fields described below. It is **defined locally in `shared`**, which never imports `src/main`. A compile-time equality assertion in `receiveDiagnostic.test.ts` pins this subset, so a new logger field must be mirrored or deliberately added to the main-only `Omit` list.
   - **[#133](../codebase/133.md) relaxed the pin.** #133 added `safeBytes?: SafeBytesEncoding` to `DiagnosticEvent` — a **branded** `src/main`-only type. It cannot be mirrored here (the brand must not be reachable from `src/shared`, and the renderer holds no frame bytes to send in the first place), so the assertion in `receiveDiagnostic.test.ts` reads `Equals<RendererDiagnosticEvent, Omit<DiagnosticEvent, 'safeBytes'>>` rather than a bare `Equals<RendererDiagnosticEvent, DiagnosticEvent>`. The security-relevant direction — "the renderer cannot invent a field the allowlist doesn't name" — is unaffected; only capability-parity for a field the renderer must never produce is dropped. Any future main-only field added to `DiagnosticEvent` must be either mirrored here or added to that `Omit` list, or the pin fails typecheck.
-  - **[#132](../codebase/132.md) extended the `Omit` list a second time**, with three **plain, unbranded** `string` fields: `appVersion?`, `noiseProtocol?`, `protocolVersion?` (the once-per-session version banner). These needed no brand — they're main-only purely because their *source* (`app.getVersion()`, the shared `NOISE_PROTOCOL`/`PROTOCOL_VERSION` constants) is only ever read at the composition root, never the renderer. The pin now reads `Equals<RendererDiagnosticEvent, Omit<DiagnosticEvent, 'safeBytes' | 'appVersion' | 'noiseProtocol' | 'protocolVersion'>>` — proof that the `Omit` escape hatch is for "renderer cannot/must not produce this field" generally, not only for branded types.
+  - **[#132](../codebase/132.md) extended the `Omit` list a second time**, with three **plain, unbranded** `string` fields: `appVersion?`, `noiseProtocol?`, `protocolVersion?` (the once-per-session version banner). These needed no brand — they're main-only purely because their *source* (`app.getVersion()`, the shared `NOISE_PROTOCOL`/`PROTOCOL_VERSION` constants) is only ever read at the composition root, never the renderer. This established that the `Omit` escape hatch covers provenance restrictions as well as branded types. The current pin also excludes lifecycle correlation fields, as described below.
 - **`RendererDiagnosticEvent` is the compile-time ergonomic half of the allowlist.** It makes the correct call obvious at [#134](https://github.com/pyrycode/pyrycode-desktop/issues/134)'s call site. But it is **erased at runtime** and provides **zero** guarantee against a compromised renderer — `projectDiagnosticEvent` is the deterministic half that actually enforces it (belt-and-suspenders: an ergonomic type + a deterministic runtime projection — different fabric).
 - **`projectDiagnosticEvent` is the fail-closed boundary safety net.** It validates AND projects in one pass:
   - `event` is **required** — not a non-empty `string` → returns `null` (nothing to log).
   - each optional field is copied **only if present AND the correct primitive type** (`code`/`host`/`path`/`hash` a `string`; `status`/`bytes`/`count` a finite `number`); a wrong-typed optional is **omitted, not fatal** — a bogus `status` must not discard an otherwise-valid `event`.
   - fields are enumerated **by name** — an **allowlist / fail-closed**: a field not named here is structurally absent from the output, never a scrubbed-out denylist entry (which fails open, the posture [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md) rejects).
   - each `string` field is truncated to `MAX_STRING_LENGTH = 128` (headroom over the longest legitimate field, a 64-hex-char BLAKE2s hash) — a deterministic bound on a compromised renderer's ability to bloat the log line / debug bundle.
+
+### Restricted message lifecycle requests
+
+[#1721](https://github.com/pyrycode/pyrycode-desktop/issues/1721) adds a separate
+`MessageLifecycleDiagnostic` request on the same channel:
+
+```ts
+interface MessageLifecycleDiagnostic {
+  event: 'message-queued' | 'message-bridge-failed' | 'message-cancel-requested'
+  messageId: string
+  conversationId: string
+}
+```
+
+`projectMessageLifecycle` accepts only those three exact event values, a lowercase
+UUIDv4 `messageId` (version 4 and valid variant bits), and a nonempty string
+`conversationId` of at most 256 characters. It constructs a fresh literal with
+only those named fields. Extra content, error strings and planted connection ids
+are absent. Conversation ids are held for matching and never serialized.
+
+The receiver reserves every event starting with `message-` before generic
+projection. Invalid or unsupported lifecycle events return without logging;
+renderer-supplied `message-sent`, `message-acknowledged` or `message-dropped`
+cannot fall through to generic forwarding. Valid requests call the optional
+tracker's `queued`, `drop(..., 'bridge-failed')` or `cancel` methods. The receiver
+never forwards a lifecycle request directly to the logger: only the tracker’s
+held, validated local UUID reaches a lifecycle record. Bridge-failure and
+cancellation requests require an existing id in the same conversation.
+
+Generic `projectDiagnosticEvent` still excludes `messageId` and `connectionId`.
+The compile-time pin in `receiveDiagnostic.test.ts` is now:
+
+```ts
+Equals<RendererDiagnosticEvent, Omit<DiagnosticEvent,
+  'safeBytes' | 'appVersion' | 'noiseProtocol' | 'protocolVersion' |
+  'messageId' | 'connectionId'>>
+```
+
+Those two logger fields stay main-only even though a restricted queued request
+can admit a composer UUID. Only the relay socket mints `connectionId`; daemon
+queue ids are comparison-only. Main binds the held message to its originating
+host/conversation and writes the four [lifecycle events](outbound-send-path.md#message-lifecycle-diagnostics).
+Queue snapshots acknowledge daemon possession once, never a Claude answer.
+Rekey entries carry their own observers until write or discard. Sent without a
+matching acknowledgment remains delivery unknown after close. The tracker
+silently retires its oldest entry at the 1024-submission cap without a drop claim.
+
+`ConversationScreen` wires `diagnose` to `window.pyry.sendDiagnostic` for both
+`submitMessage` and `dropQueuedMessage`. Accepted idle/running submissions request
+queued before dispatch; blank, no-conversation and availability refusals do not.
+Cancellation requests become a separately deduplicated `message-dropped` record
+with fixed `user-cancel-request` code, even if dequeue dispatch fails. Marking that
+request as a terminal delivery discard would hide later write/acknowledgment
+evidence from a still-buffered message. The tracker therefore permits those later
+facts and never claims that cancellation removed the message from the daemon.
+Other fixed reasons are `bridge-failed`, `route-refused`, `send-refused`,
+`send-failed`, `write-failed`, `rekey-buffer-full`, `rekey-abandoned` and
+`rekey-teardown`; none comes from renderer or daemon error text.
 
 ### 2. The receiver seam (`src/main/receiveDiagnostic.ts`)
 
@@ -64,12 +129,14 @@ export interface DiagnosticSource {
   removeListener(channel: string, listener: (event: unknown, record: unknown) => void): void
 }
 
-export function onDiagnostic(source: DiagnosticSource, logger: DiagnosticLog): () => void
+export function onDiagnostic(source: DiagnosticSource, logger: DiagnosticLog,
+  lifecycle?: MessageLifecycle): () => void
 ```
 
 The registered listener:
+
 - **strips the `IpcMainEvent` first arg** — never forwarded; it exposes `.sender`/`.senderFrame`/`.ports`, a capability leak (identical to `onCommand`).
-- runs `projectDiagnosticEvent(raw)`; forwards to `logger.event(projected)` **only if non-null**; on `null`, drops with a **fixed-string** `console.warn` carrying **no** renderer data (parity with `onCommand`).
+- intercepts reserved `message-*` requests as described above; otherwise runs `projectDiagnosticEvent(raw)` and forwards **only if non-null**. A malformed generic record produces a **fixed-string** `console.warn` carrying **no** renderer data.
 - wraps its whole body in `try { … } catch { /* swallow */ }` so **no** projection/forwarding failure escapes into the window (AC3). `logger.event` already swallows sink throws internally ([#126](diagnostic-log.md)); this is the belt-and-suspenders outer net. The swallow hides a fault; it never *widens* what is logged.
 - returns an **unsubscribe** closure that removes the exact listener it registered (mirrors `onCommand`).
 
@@ -80,7 +147,7 @@ The receiver **never constructs a logger** — it forwards into the injected `Di
 One method added to the `api` object beside `sendCommand`:
 
 ```ts
-sendDiagnostic: (record: RendererDiagnosticEvent): void => {
+sendDiagnostic: (record: RendererDiagnosticEvent | MessageLifecycleDiagnostic): void => {
   ipcRenderer.send(DIAGNOSTIC_CHANNEL, record)
 }
 ```
@@ -92,11 +159,14 @@ Fire-and-forget `send` (not `invoke` — no reply channel a handler could leak b
 Beside the `onCommand` registration (`:200`), after the one `diagnosticLog` is constructed (`:153`):
 
 ```ts
-const unregisterDiagnostics = onDiagnostic(ipcMain, diagnosticLog)
+const unregisterDiagnostics = onDiagnostic(ipcMain, diagnosticLog, messageLifecycle)
 app.on('will-quit', () => unregisterDiagnostics())
 ```
 
-Reuses the **same** `diagnosticLog` instance already injected into `createDaemonConnection` — do **not** build a second logger (one `seq` counter, one file). Registered once for the app lifetime, torn down symmetrically on `will-quit`. **Inert until [#134](https://github.com/pyrycode/pyrycode-desktop/issues/134) emits** — a record arriving before any consumer is simply a logged line; no gating needed.
+Reuses the **same** `diagnosticLog` and main-owned `messageLifecycle` instances
+injected into every host's daemon connection. Registered once for the app lifetime,
+torn down symmetrically on `will-quit`. A second logger would split sequence/file
+correlation; a second tracker would lose host-bound acknowledgment matching.
 
 ### Data flow (one-way)
 
@@ -108,7 +178,10 @@ Reuses the **same** `diagnosticLog` instance already injected into `createDaemon
                                                                                   fresh allowlisted obj │ null
 ```
 
-`sendDiagnostic` is the single outbound choke point; `onDiagnostic` is the single inbound seam. **The projection in `onDiagnostic` is the untrusted→trusted checkpoint** — nothing but a freshly built allowlisted object ever reaches the logger's spread. Nothing returns to the renderer.
+`sendDiagnostic` is the single outbound choke point; `onDiagnostic` is the single
+inbound seam. The diagram shows generic records; lifecycle requests take the
+reserved projection → tracker → logger branch. Fresh objects guard both routes
+before the logger's spread. Nothing returns to the renderer.
 
 ## Edge cases and limitations
 
@@ -121,8 +194,8 @@ Reuses the **same** `diagnosticLog` instance already injected into `createDaemon
 
 **Verdict: PASS** (architect self-review + independent code-review, `security-sensitive`; see [#131 codebase notes](../codebase/131.md)). Threat model: the renderer is **untrusted at the IPC boundary** — assume a compromised or buggy renderer sends arbitrary JSON on `DIAGNOSTIC_CHANNEL`.
 
-- **The single untrusted→trusted crossing is `ipcMain.on(DIAGNOSTIC_CHANNEL)` in `onDiagnostic`.** Everything the renderer sends is `unknown` until `projectDiagnosticEvent` returns. The `RendererDiagnosticEvent` type on `sendDiagnostic` is **not** a boundary — it is erased at runtime; it is ergonomics only.
-- **No secret is available to leak, and the projection keeps that true.** The renderer holds no keys, tokens, or plaintext ([CLAUDE.md](../../../CLAUDE.md); keys/frames never cross to the web layer — [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md)), so the channel cannot forward a secret it never receives. The residual risk — a secret the renderer *fabricates or forwards from render-layer state* riding an unexpected field into the bundle — is closed by **projection as a fail-closed allowlist**: any unnamed field (`token`, `text`, `secret`, `__proto__`, …) is structurally absent from the projected object, so it is never reachable by the logger's spread. The same [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md) guarantee #126 makes at the main-side call sites, **extended to the renderer boundary**.
+- **The single untrusted→trusted crossing is `ipcMain.on(DIAGNOSTIC_CHANNEL)` in `onDiagnostic`.** Everything is `unknown` until its generic or lifecycle projection returns. Both request types are erased at runtime; the TypeScript signatures are ergonomics only.
+- **Projection excludes content fields.** Keys and raw transport frames never cross to the renderer ([ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md)), but composer text and rendered daemon content do live there. Any unnamed field (`token`, `text`, `secret`, `__proto__`, …) is structurally absent from the fresh projected object and cannot ride the logger's spread. Generic fields still require static/client-owned values at producer sites; lifecycle requests additionally validate exact events and UUID shape, and main emits held ids with fixed reasons. This extends [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md)'s allowlist enforcement to the renderer boundary.
 - **The `event()` spread foot-gun is closed structurally, not by discipline.** `projectDiagnosticEvent` returns a fresh object with no path that returns the input; the **end-to-end planted-secret test** drives the listener with `{ event: 'x', secret: 'SUPER_SECRET' }` through a **real** `createDiagnosticLog` over a capture sink and asserts the serialized JSON line contains no secret — proving the guarantee through the whole path, past the spread, not just in the pure layer.
 - **Capability leak checked.** The `IpcMainEvent` first arg is stripped; `sendDiagnostic` pins `DIAGNOSTIC_CHANNEL` so the renderer cannot address arbitrary IPC channels; `ipcRenderer` never crosses the bridge.
 - **Log integrity.** Fields land in a JSON-lines file via `JSON.stringify` in [#126](diagnostic-log.md), which escapes embedded newlines — a renderer-supplied string cannot split one record into two lines. The 128-char cap bounds a compromised renderer's line-bloat (low-severity, deterministic, near-free).
@@ -130,6 +203,7 @@ Reuses the **same** `diagnosticLog` instance already injected into `createDaemon
 
 ## Related
 
+- [Message lifecycle verification](development-verification.md#message-lifecycle-diagnostics) — real-serializer hostile-field checks and the production renderer-to-sink Playwright regression.
 - [Content-free diagnostic log](diagnostic-log.md) / [#126](../codebase/126.md) — the logger this channel feeds; the `DiagnosticEvent` allowlist `RendererDiagnosticEvent` mirrors and the `event()` spread that forces the project-not-forward-raw deviation. The renderer boundary is a **new** producer for the same single instance the transport legs ([#127](../codebase/127.md)/[#128](../codebase/128.md)) and the [decode boundary](inbound-message-decode.md) ([#130](../codebase/130.md)) write to.
 - [Session store](session-store.md) / [#134 codebase notes](../codebase/134.md) — the first real consumer: an optional `dispatch`-level observer that emits one content-free `store-transition` record per action.
 - [Command channel](command-channel.md) / [#17](../codebase/17.md) — the one-way, boundary-validated renderer→main pattern this copies end-to-end; read for the shared conventions and the trust-boundary contrast. The **one** divergence (project-not-guard) is documented above.

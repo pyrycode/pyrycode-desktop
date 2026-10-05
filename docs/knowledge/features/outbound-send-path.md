@@ -1,8 +1,17 @@
 # Outbound send path
 
-The **main / transport half of the send flow**: a validated `sendMessage` command that reaches the background process becomes an encrypted `send_message` envelope on the live Noise relay session, so a message the user composes actually reaches the pyry daemon. This is the connective tissue between three pieces that already existed but were wired by no one — the [command channel](command-channel.md)'s `onCommand` seam ([#17](../codebase/17.md)), the [daemon connection](daemon-connection.md)'s live authenticated transport ([#62](../codebase/62.md)), and the [Noise relay driver](noise-relay-driver.md)'s `sendMessage(plaintext)` ([#50](../codebase/50.md)).
+The **main / transport half of the send flow** builds and encrypts a `send_message`
+envelope from a validated command, then attempts a write through the live Noise
+relay session. Dispatch alone does not establish delivery: each layer can refuse
+or fail a send. The [command channel](command-channel.md),
+[daemon connection](daemon-connection.md) and [Noise relay driver](noise-relay-driver.md)
+carry the bytes; message lifecycle diagnostics record how far a local submission got.
 
-Introduced in [#65](../codebase/65.md). Entirely `src/main/` — no renderer surface. The renderer half (composer submit + optimistic echo) landed in [#66](../codebase/66.md) — see [Composer send](composer-send.md) — which drives this seam from the other end.
+Introduced in [#65](../codebase/65.md). Transport stays in `src/main/`.
+The renderer half is [Composer send](composer-send.md); its restricted
+[diagnostic requests](diagnostics-channel.md#restricted-message-lifecycle-requests)
+record acceptance and cancellation requests in the main-owned lifecycle trail added by
+[#1721](https://github.com/pyrycode/pyrycode-desktop/issues/1721).
 
 ## The three pieces
 
@@ -37,18 +46,25 @@ export function buildSendMessage(input: SendMessageInput): Uint8Array
 send(payload: SendMessagePayload): void
 ```
 
-The closure is small — one `driver === null` guard, one full-body `try/catch`, and a module-local `nextEnvelopeId` counter starting at **2** (the `hello` consumed id 1 in bootstrap):
+The closure binds a tracked composer submission to `deps.serverId`, obtains its
+optional observer, checks `driver === null`, then wraps building and sending in
+`try/catch`. `nextEnvelopeId` starts at **2** (the `hello` consumed id 1):
 
 ```ts
 function send(payload: SendMessagePayload): void {
-  if (driver === null) return               // before start / mid-bootstrap / bootstrap-failed
+  const observe = deps.messageLifecycle?.sending(
+    payload.message_id, payload.conversation_id, deps.serverId
+  )
+  if (driver === null) {
+    notifySend(observe, { type: 'dropped', reason: 'send-refused' })
+    return
+  }
   try {
     const bytes = buildSendMessage({ id: nextEnvelopeId, ts: now(), payload })
     nextEnvelopeId += 1                      // advance only on a successful build
-    driver.sendMessage(bytes)               // driver is inert pre-handshake / post-terminal
+    driver.sendMessage(bytes, observe)
   } catch {
-    // Never throw out of the module (parity #490). Caught object DROPPED — its message could
-    // echo the plaintext; no log, no event (classify-don't-forward, inherited #62).
+    notifySend(observe, { type: 'dropped', reason: 'send-failed' })
   }
 }
 ```
@@ -65,7 +81,9 @@ The load-bearing correctness argument: **the connection does not track handshake
 | after a fatal terminal | non-null | inert — `onTerminal` nulled `session` |
 | after `stop()` | non-null | inert — `stop()` drives terminal, nulling `session` |
 
-A `connected` flag would add state for no functional gain — the message is dropped either way; the only difference is whether an id is consumed, which is harmless.
+A `connected` flag adds no delivery capability. The optional observer classifies
+these refusals as `send-refused`; a nonthrowing call remains insufficient evidence
+that a frame was written.
 
 ### The envelope-id counter
 
@@ -73,24 +91,31 @@ A `connected` flag would add state for no functional gain — the message is dro
 
 ## 3. The single `onCommand` registration
 
-At the composition root, right after `createDaemonConnection(...)`:
+At the composition root, the conversation router selects the originating host's
+connection. The same lifecycle tracker is shared by all host connections:
 
 ```ts
 // src/main/index.ts — the single onCommand registration for the app lifetime
 const unregisterCommands = onCommand(ipcMain, (command) => {
   switch (command.type) {
-    case 'sendMessage':
-      connection.send(command.payload)
+    case 'sendMessage': {
+      const connection = router.route(command.payload.conversation_id)
+      if (connection === null) {
+        messageLifecycle.drop(command.payload.message_id, command.payload.conversation_id, 'route-refused')
+      } else {
+        connection.send(command.payload)
+      }
       return
+    }
   }
 })
 app.on('will-quit', () => unregisterCommands())
 ```
 
-- **Registered once**, at composition time — **not** gated on `did-finish-load`. The handler is inert until a driver exists (`send` is a no-op with no driver), so an early command is a safe no-op.
+- **Registered once**, at composition time, without a `did-finish-load` gate. An unavailable route or driver refuses delivery safely and diagnoses a tracked submission.
 - **`onCommand` uses `ipcMain.on` (additive)**, so the single-call discipline at this **sole registration site** is what makes "registering twice does not double-dispatch" true.
 - **Symmetric teardown** — `will-quit` removes the exact listener, mirroring `unregisterPairing`.
-- The command is **already validated** by `isRendererCommand` at the boundary ([#17](../codebase/17.md)); the handler receives typed, trusted data. A `switch` on `type` (single member today) keeps it grow-ready; the exhaustiveness tripwire (`Record<RendererCommand['type'], true>`) stays deferred until the union grows a second member.
+- The command is **already validated** by `isRendererCommand` at the boundary ([#17](../codebase/17.md)). Lifecycle logging separately requires a held, validated composer UUID; command validation alone does not admit an id to diagnostics.
 
 ## Data flow
 
@@ -99,21 +124,72 @@ renderer composer (#66)
   → window.pyry.sendCommand({ type: 'sendMessage', payload })   // #17 preload bridge
   → ipcRenderer.send(COMMAND_CHANNEL, cmd)
   → ipcMain.on → onCommand listener → isRendererCommand (validate at untrusted boundary)
-  → handler: connection.send(command.payload)                    // ← this feature
-  → buildSendMessage({ id, ts, payload }) → driver.sendMessage(bytes)
+  → handler: router.route(conversation_id) → connection.send(command.payload)
+  → buildSendMessage({ id, ts, payload }) → driver.sendMessage(bytes, observe)
   → session.sendMessage (AEAD seal) → sendFrame → InnerFrameV2 noise_msg → relay → daemon
 ```
+
+## Message lifecycle diagnostics
+
+The desktop sends immediately at idle and during a running turn; the daemon owns
+the turn queue. `createMessageLifecycle` in `src/main/messageLifecycle.ts` records
+four events through the existing [diagnostic log](diagnostic-log.md), one JSON line
+per observed transition. All records use the held local UUID as `messageId`:
+
+| Event | Evidence |
+|---|---|
+| `message-queued` | The composer accepted a submission, before command dispatch. Blank input, no active conversation and the existing availability gate produce no lifecycle. |
+| `message-sent` | The message's encrypted frame passed the socket OPEN guard and `ws.send` returned successfully. `connectionId` is the main-generated UUID also on that socket's `relay-open` and `relay-closed` records. Each new socket, across hosts and reconnects, gets a fresh UUID. |
+| `message-acknowledged` | A decoded `queue_state` lists the held local id for its bound originating host and conversation. This establishes daemon possession, not a Claude answer. |
+| `message-dropped` | A known local refusal/discard, or a separately classified user cancellation request. The `code` is one of the fixed reasons below. |
+
+Repeated snapshots acknowledge once. Missing/empty ids, other clients' ids,
+another conversation or host, and queue disappearance provide no acknowledgment.
+Wire ids are comparison-only; the record uses the tracker’s held local id.
+Closing a socket after sent without acknowledgment leaves delivery unknown. There
+is no invented drop, timeout or resend.
+
+An optional `SendOutcome` observer travels through connection → driver → session
+→ supervisor → relay connection. Existing unrelated senders may omit it.
+The session retains each observer beside its owned plaintext in the existing rekey
+buffer: waiting emits no sent event; flushing observes each item's own write after
+the cipher swap. Overflow diagnoses only the incoming send. Failed rekey or an
+interrupted flush diagnoses abandoned entries; closing diagnoses retained entries
+as teardown. Splice-before-flush and generation fencing preserve existing ownership
+and ordering. Diagnostics add no delivery queue or crypto behavior.
+
+Cancellation emits `message-dropped` with `code: 'user-cancel-request'` once for a
+tracked id, including after acknowledgment. It reports the local request even if
+the dequeue bridge fails; it does not establish daemon removal. It has a separate
+deduplication flag: treating it as a terminal discard would hide a subsequent
+write or acknowledgment from a message still in the rekey buffer. The existing
+dequeue action and buffer behavior remain the owners of delivery behavior.
+
+The synchronous tracker holds at most 1024 submissions and silently retires the
+oldest when admitting another. Retirement emits no drop and suppresses later
+observations for that retired entry. Queued, sent, acknowledged, actual discard
+and cancellation records are deduplicated. Logger and observer faults are swallowed
+so diagnosis cannot throw into sending. Host and conversation strings are held for
+matching only; message content, attachments, keys, tokens, payloads and caught error
+strings never enter these records.
 
 ## Error handling
 
 | Failure | Layer | Result |
 |---|---|---|
-| Over-cap plaintext (huge `text`) | `encodeEnvelope` → `WireEncodeError` | Caught in `send`; dropped, id **not** consumed. No log, no event. |
-| Driver / wasm throw during a connected send | `driver.sendMessage` | Caught by the full-body `try/catch`; process does not crash (parity #490). |
-| Command arrives disconnected / pre-handshake / post-terminal | `driver === null` guard **or** driver inertness | Silent no-op; message dropped. No throw. |
+| Over-cap plaintext (huge `text`) | `encodeEnvelope` → `WireEncodeError` | Caught in `send`; id **not** consumed; tracked submission gets `send-failed`. |
+| Driver / wasm throw during a connected send | `driver.sendMessage` | Caught by the full-body `try/catch`; tracked submission gets `send-failed`. |
+| Command arrives disconnected / pre-handshake / post-terminal | `driver === null` guard **or** driver/session refusal | No write or throw; tracked submission gets `send-refused`. |
 | Malformed command from the renderer | `isRendererCommand` ([#17](../codebase/17.md)) | Dropped at the boundary before `send`; never reaches this layer. |
 
-**No send-failure signal to the UI.** The `DaemonEvent` union has no "message send failed" member (`failed` means the *connection* failed, not one message). A dropped send surfaces nothing — matching the AC (drop, don't crash). Send-delivery UX (retry / "not delivered") is out of scope; it likely lands with the reconnect/status choreography ([#34](https://github.com/pyrycode/pyrycode-desktop/issues/34)/[#35](https://github.com/pyrycode/pyrycode-desktop/issues/35)).
+The closed lifecycle discard codes are `bridge-failed`, `route-refused`,
+`send-refused`, `send-failed`, `write-failed`, `rekey-buffer-full`,
+`rekey-abandoned`, `rekey-teardown` and `user-cancel-request`. The driver's caught
+frame-encoding or supervisor/socket-write failure uses `write-failed`; a refused
+or failed write never emits sent. Caught objects are discarded.
+
+These records diagnose a send without adding a per-message failure event to the
+renderer. The existing optimistic echo and delivery UI behavior are unchanged.
 
 ## The parity guard (mobile #490 / #31)
 
@@ -124,7 +200,7 @@ Mobile's first real-device run crashed because a relay command started a call wi
 Ticket carries `security-sensitive`; the architect's security-review verdict is **PASS** (no findings). Code review: **PASS** (one NIT — the already-agreed exhaustiveness-tripwire deferral).
 
 - **No secret rides this channel, by construction.** `SendMessagePayload` is `{ conversation_id, message_id, text, attachment_ids? }` — message plaintext plus, since [#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055), routing ids for uploads already stored on the daemon host; still no token/key/byte field. An `attachment_id` is explicitly not a capability on this wire (not secret, not unguessable — it names a file the daemon already has, not a right to read one), so its addition does not weaken this property. `RendererCommand` references only `SendMessagePayload` ([#17](../codebase/17.md)), so a developer cannot serialize a secret onto this path. The device token continues to live only in the `hello` early-data and the relay headers, both sourced in `bootstrap`, not here.
-- **Log-free; classify-don't-forward.** The sole `catch` **drops** the caught object — a codec error message could echo the message plaintext — and emits nothing. Pinned by a six-method `console`-spy across a happy send + an over-cap send (inherited [#5](wire-codec.md)/[#7](noise-session.md)/[#22](relay-supervisor.md)/[#50](noise-relay-driver.md)/[#62](daemon-connection.md)).
+- **Content-free; classify-don't-forward.** Catches discard the error object because its message could echo plaintext. Lifecycle records contain static events/reasons and validated local ids only; the existing console-silence assertion remains independent of the diagnostic sink. Controlled snapshots and the real serializer pin content exclusion; see [verification coverage](development-verification.md#message-lifecycle-diagnostics).
 - **No new IPC / attack surface.** The single `onCommand` registration reuses the existing `COMMAND_CHANNEL` ([#17](command-channel.md)) via `ipcMain.on` (fire-and-forget, no reply channel to leak back through). Every argument is validated before `send` sees it. `contextIsolation`/`sandbox` posture unchanged. The renderer only sends a typed payload — it never touches `driver`, `session`, or bytes.
 - **No new crypto.** This layer builds a plaintext envelope and hands it to the existing `driver.sendMessage` → `session.sendMessage`, which performs the vetted `Noise_IK_25519_ChaChaPoly_BLAKE2s` AEAD seal ([#7](noise-session.md)). No `(key, nonce)` pair is managed here.
 - **Output size bounded twice on the existing path** — `encodeEnvelope` rejects an over-cap envelope (`MAX_PLAINTEXT_BYTES`), and `encodeInnerFrame` rejects an over-cap outer frame (`MAX_FRAME_BYTES`). A hostile-relay send failure degrades to a dropped message, not a hang or crash.

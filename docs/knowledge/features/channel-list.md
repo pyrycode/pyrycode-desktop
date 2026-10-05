@@ -249,7 +249,9 @@ Split out to its own page: [the row's status dot](channel-list-status-dot.md) â€
 `ConversationStatusDotControl` every row leads with, joining five per-id store reads through
 `isConversationUnread`/`resolveConversationStatus` into the leaf `ConversationStatusDot`, and the
 placement/geometry/testing lessons from wiring it in. An outstanding permission or trust prompt,
-or a pending question batch, shows the existing amber `input-required` dot.
+or a pending question batch, shows the gold `input-required` dot. Idle stays an unfilled primary ring at
+half opacity even on hovered/open rows; working is solid primary blue and blinks; new messages is solid
+success green. See [the dot's paint contract](conversation-status-dot.md).
 
 ### CSS (`channels.css`)
 

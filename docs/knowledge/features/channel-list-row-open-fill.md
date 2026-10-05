@@ -63,15 +63,10 @@ step from body-small to `M3/body/small-emphasized` (500) — the two type tiers 
 independently still stands), and so are the trailing controls' own hover circles — the node draws no
 trailing control at all.
 
-[#1174](https://github.com/pyrycode/pyrycode-desktop/issues/1174) hung a third rule off these same two
-carriers: `.channel-list__row:hover > .conversation-status-dot--idle` and
-`.channel-list__row:has(> .channel-list__row-open[aria-current='true']) > .conversation-status-dot--idle`
-fill an idle row's [status dot](conversation-status-dot.md) `--color-primary`. Scoped to `--idle` rather
-than the bare dot class, so it never competes with the dot's own painted modifiers (`--working` etc.) — see
-[Conversation status dot § how it works](conversation-status-dot.md) for the specificity math. Declared
-beside these two rules in `channels.css` rather than in the dot's own CSS block, for the same reason the
-dot's own positioning already lives at this call site: the selectors it hangs off belong to the row
-wrapper, not the dot.
+An idle row's [status dot](conversation-status-dot.md) remains an unfilled primary ring at half opacity
+over both the open and hover fills. [#1735](https://github.com/pyrycode/pyrycode-desktop/issues/1735)
+removed #1174's row-level idle background selectors. The wrapper still carries selection and hover
+paint; neither state changes the dot's paint or geometry.
 
 **Lessons learned, folded in at their sites above:**
 
@@ -105,4 +100,4 @@ and counts per that file's secret-hygiene posture, never by seed text or `nth()`
 - [Channel List — the row's 8px inset and its hover-revealed control](channel-list-row-hover-control.md)
   (#1171) — moved the hover fill off the button and onto the wrapper, resolving this page's own "Lessons
   learned" workaround.
-- [Conversation status dot](conversation-status-dot.md) — the dot's own idle-fill rule, added by #1174.
+- [Conversation status dot](conversation-status-dot.md) — the idle ring stays unfilled over the row's paint.

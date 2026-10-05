@@ -100,7 +100,7 @@ export type ThreadItem =
   | { kind: 'banner'; level: string; text: string; stopsTurn: boolean; truncated: boolean }
   // #1013: `createdAt` is the epoch-millisecond moment this bubble first appeared — the arrival of its
   // FIRST delta, stamped in the renderer from an injected clock, not carried from the envelope `ts` (the
-  // `assistantDelta` IPC arm names four fields fail-closed and does not forward it; the two agree to within
+  // `assistantDelta` IPC arm names its fields fail-closed and does not forward it; the two agree to within
   // network latency, and the timeline is in-memory and cleared on exit and pairing end (#757), so nothing
   // replays old messages a fresh clock would mis-stamp). ABSENT means no clock was injected at the producer
   // — test `item.createdAt === undefined`, never `'createdAt' in item`, since the reducer assigns the field
@@ -109,7 +109,7 @@ export type ThreadItem =
   // `sessionBoundary.occurredAt` precedent); this store parses, compares and formats nothing.
   // Deliberately named apart from `occurredAt` below — that one is a wire-supplied ISO STRING about a
   // session rotation, this one a renderer-minted number about a message.
-  | { kind: 'assistantText'; turnId: string; text: string; createdAt?: number }
+  | { kind: 'assistantText'; turnId: string; text: string; createdAt?: number; parentToolUseId?: string }
   | {
       kind: 'toolCall'
       turnId: string
@@ -223,7 +223,7 @@ export type ThreadEvent =
   // recording: `reduceTimeline` is called by the two timeline stores, which ARE production paths, so a
   // clock parameter there would stamp every item the store-level specs assert on. Absent means the
   // producer injected no clock — see the item.
-  | { type: 'assistantDelta'; turnId: string; seq: number; text: string; createdAt?: number }
+  | { type: 'assistantDelta'; turnId: string; seq: number; text: string; parentToolUseId?: string; createdAt?: number }
   // The tool-call arm. #763 widened the `toolUse` DaemonEvent with a `conversationId` the bridge drops,
   // so the bridge stays a filter + fresh copy, not a remap.
   //
@@ -512,7 +512,7 @@ function assertNever(event: never): never {
 }
 
 /**
- * Coalesce a streamed text delta: if the tail item is an `assistantText` for the same turn,
+ * Coalesce a streamed text delta: if the tail item is an `assistantText` for the same turn and parent,
  * return a new array whose tail is a copy with the concatenated text; otherwise append a fresh
  * `assistantText`. The tail-check naturally renders text → tool → text as three items while
  * collapsing consecutive deltas into one growing bubble. Always returns a new array (a delta is
@@ -530,19 +530,21 @@ function appendDelta(
   items: readonly ThreadItem[],
   turnId: string,
   text: string,
-  createdAt: number | undefined
+  createdAt: number | undefined,
+  parentToolUseId: string | undefined
 ): readonly ThreadItem[] {
   const tail = items[items.length - 1]
-  if (tail && tail.kind === 'assistantText' && tail.turnId === turnId) {
+  if (tail && tail.kind === 'assistantText' && tail.turnId === turnId && tail.parentToolUseId === parentToolUseId) {
     const grown: ThreadItem = {
       kind: 'assistantText',
       turnId,
       text: tail.text + text,
+      parentToolUseId,
       createdAt: tail.createdAt
     }
     return [...items.slice(0, -1), grown]
   }
-  return [...items, { kind: 'assistantText', turnId, text, createdAt }]
+  return [...items, { kind: 'assistantText', turnId, text, createdAt, parentToolUseId }]
 }
 
 /**
@@ -703,7 +705,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
       return {
         // #1013: the stamp is handed through unconditionally; `appendDelta` decides which of the two
         // branches it lands on. `undefined` (no clock at the producer) is a legal value here.
-        items: appendDelta(state.items, event.turnId, event.text, event.createdAt),
+        items: appendDelta(state.items, event.turnId, event.text, event.createdAt, event.parentToolUseId),
         phase: state.phase,
         stalled: false,
         apiRetry: state.apiRetry,

@@ -1,3 +1,4 @@
+import { capturePairedApp } from './fixtures/capturePairedApp'
 import type { Locator, Page } from '@playwright/test'
 import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
@@ -68,7 +69,7 @@ test('the drawer toggles from the pill, leaves the composer usable, takes one Es
   launchPairedApp
 }) => {
   const captured: Envelope[] = []
-  const { page, daemon } = await launchPairedApp({ buildReplyFrames: capturingFake(captured) })
+  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: capturingFake(captured) })
   await page.setViewportSize({ width: 1280, height: 800 })
 
   daemon.pushFrame(roster(SEEDED_ROW.id, [task('task-seeded', SEEDED_TASK)]))
@@ -87,7 +88,7 @@ test('the drawer toggles from the pill, leaves the composer usable, takes one Es
   await expect(drawer).toContainText(SEEDED_TASK)
   await expect(page.locator('.status-sheet-overlay, .status-sheet')).toHaveCount(0)
   await expect(pill).toHaveClass(/composer-status__tasks--open/)
-  await page.screenshot({ path: '/tmp/builder-1634-drawer-open.png', animations: 'disabled' })
+  await capturePairedApp(app, page, '/tmp/builder-1634-drawer-open.png')
 
   // --- 2. No scrim: the composer takes typing and sending while the drawer is open. ---
   await box.click()

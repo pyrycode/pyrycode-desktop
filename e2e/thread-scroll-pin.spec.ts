@@ -1,3 +1,4 @@
+import { capturePairedApp } from './fixtures/capturePairedApp'
 import { createHash } from 'node:crypto'
 import type { ElectronApplication, Locator, Page } from '@playwright/test'
 import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/launchPairedApp'
@@ -84,7 +85,7 @@ const FIXED_TS = '2026-07-07T12:00:00.000Z'
 // 20 is sized for headroom over the 1100x800 window (src/main/index.ts:37-38), not measured — if
 // the thread does not overflow, the scrollHeight > clientHeight gate fails loudly, which is the gate
 // working. Raise the count; never weaken the gate.
-const REPLY_TURNS = 20
+const REPLY_TURNS = 24
 const replyText = (turn: number): string => `Streamed reply line ${turn}`
 
 // A collapsed tool row's height: 1px border + 8px chip padding + the 20px summary line + 8 + 1. Asserted
@@ -1299,7 +1300,7 @@ const viewportTopOfAssistantRowWithContent = (page: Page, content: string): Prom
 for (const [initialRows, pageRows] of [[1, 1], [1, REPLY_TURNS], [REPLY_TURNS, REPLY_TURNS]]) {
   test(`first history prepend preserves the row at zero with ${initialRows} held rows and ${pageRows} incoming rows`, async ({ launchPairedApp }) => {
     const requests: number[] = []
-    const { page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
+    const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
       const envelope = decodeEnvelope(bytes)
       if (envelope.type === 'request_history') {
         expect((envelope.payload as RequestHistoryPayload).cursor).toBe('')
@@ -1335,7 +1336,7 @@ for (const [initialRows, pageRows] of [[1, 1], [1, REPLY_TURNS], [REPLY_TURNS, R
     expect(await viewportTopOfAssistantRowWithContent(page, content)).toBeCloseTo(top, 0)
     expect(requests).toHaveLength(1)
     if (initialRows === 1) {
-      await page.screenshot({ path: `/tmp/builder-1394-zero-prepend-${pageRows}.png` })
+      await capturePairedApp(app, page, `/tmp/builder-1394-zero-prepend-${pageRows}.png`)
       await page.getByPlaceholder('Message…').fill('resume bottom following')
       await page.getByRole('button', { name: 'Send' }).click()
       await settleScrollEvent(page)

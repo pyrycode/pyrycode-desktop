@@ -294,7 +294,9 @@ export function useComposerOptionsClamp({
       // inspection — composerOptionsPlacement.ts's whole reason for taking an object rather than three
       // positionals.
       const anchorLeft = anchor.getBoundingClientRect().left
-      const windowWidth = window.innerWidth
+      // Conversation overlays fit the pane; other menu consumers retain their window boundary.
+      const chrome = anchor.closest('.conversation__input-chrome')
+      const windowWidth = chrome?.getBoundingClientRect().right ?? window.innerWidth
 
       // #940's window-relative WIDTH BOUND, written BEFORE the panel is measured — and that order is the
       // whole correctness of pairing the two. `offsetWidth` below reads the panel's laid-out width, so

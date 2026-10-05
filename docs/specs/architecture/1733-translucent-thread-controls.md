@@ -53,3 +53,13 @@ No new I/O, parsing or failure branch. Existing notices are included in occupied
 ## Open Questions
 
 None. Use measured chrome rather than duplicating height formulas; retain the existing scroll state machine.
+
+## Revisions
+
+2026-10-05: Browser resize coverage exposed a native anchoring scroll arriving before resize observation when narrowing the pane. Keep a ref of the last observed viewport dimensions; while following, a scroll with changed dimensions leaves the decision to the pending observer rather than reclassifying layout movement as reader input. The existing offset echo still handles ordinary pin writes. Synthetic native Electron captures replace the Playwright screenshot call, which timed out on this runner; wait two animation frames so captures represent the requested painted state.
+
+2026-10-05: Read `ComposerOptionsPanel.tsx` → useComposerOptionsClamp: its existing boundary is the window. In the conversation input chrome, use the pane's right edge and apply its existing measured maximum width to footer menus as well as type-ahead, retaining other consumers. This adds a third production file without a signature migration. Update composer-message-box's old viewport-shrink assertion to assert unchanged viewport plus the matching clearance-padding delta. Share native capture in `e2e/fixtures/capturePairedApp.ts` with the four affected screenshot-bearing specs; preserve their images and all interaction assertions. Written work remains below 800 lines with one new exported test helper.
+
+2026-10-05: The full-pane viewport invalidated the late-image fixture's greater-than-one-viewport parked-distance precondition (727px versus 733px). Increase its shared synthetic reply count from 20 to 24; retain all image and position assertions. Update the existing options-clamp geometry test to prove the pane-relative width bound and width restoration, rather than a window-relative left shift.
+
+2026-10-05: An empty offline thread unmounts Timeline while header notices remain; its Re-pair pill was measured 32px inside the occupied header. Give the pin a pane ref and observe chrome independently of the optional scroller. `measureThreadChrome(pane)` remains usable with no Timeline, and all following/anchor writes still require a mounted thread. The observer teardown disconnects the pane too. Footer command coverage now explicitly parks again after a successful command, which correctly resumes following like a typed send.

@@ -75,7 +75,7 @@ const wholePixels = (delta: number): number => {
   return rounded === 0 ? 0 : rounded
 }
 
-test('the options panel is clamped inside the window and released again on resize (AC1-AC4)', async ({
+test('the options panel fits the pane and restores its width on resize', async ({
   launchPairedApp
 }) => {
   const { page, app } = await launchPairedApp()
@@ -113,7 +113,7 @@ test('the options panel is clamped inside the window and released again on resiz
   const overhangPastWindow = async (): Promise<number> => {
     const [panelBox, viewportWidth] = await Promise.all([
       panel.boundingBox(),
-      page.evaluate(() => window.innerWidth)
+      page.locator('.conversation__input-chrome').evaluate(el => el.getBoundingClientRect().right)
     ])
     if (!panelBox) return Number.NaN
     return wholePixels(panelBox.x + panelBox.width - viewportWidth)
@@ -122,6 +122,8 @@ test('the options panel is clamped inside the window and released again on resiz
   // --- 1. At the 1100 launch width the panel fits, so it is NOT moved (AC2). Its left edge sits exactly
   // COMPOSER_OPTIONS_LABEL_INSET_PX left of the anchor's — #839's resting position, a shift of 0. ---
   await expect.poll(restingOffset).toBe(0)
+  const restingWidth = (await panel.boundingBox())?.width
+  if (restingWidth === undefined) throw new Error('Missing open menu geometry')
 
   // --- 2. Lift the shipped 800px floor and narrow past it. The panel stays open throughout: nothing here
   // generates a mousedown, and `src/` holds no other resize listener that could remount the screen. ---
@@ -141,16 +143,11 @@ test('the options panel is clamped inside the window and released again on resiz
     { width: NARROW_WIDTH_PX, height: startHeight }
   )
 
-  // --- 3. The panel is pulled left by exactly its overflow, so its right edge lands ON the window's
-  // (AC1) — and the resize recomputed it while the panel was already open (AC3, the narrowing
-  // direction). Every geometry read after a setSize polls: setSize resolves in the main process before
-  // the renderer has laid out the new viewport. ---
+  // A narrow pane bounds the menu width before measuring its shift. It stays anchored
+  // while the right edge fits exactly; the width delta proves this is an active bound.
   await expect.poll(overhangPastWindow).toBe(0)
-  // And it genuinely MOVED — the checkpoint above would also pass for a panel that happened to fit. This
-  // is where a unitless shift dies: it drops the panel to `left: auto` and its static position at the
-  // anchor's content edge, which is 12px RIGHT of resting, so this reads a positive offset and the
-  // overhang above reads far past the window.
-  expect(await restingOffset()).toBeLessThan(0)
+  expect(await restingOffset()).toBe(0)
+  expect((await panel.boundingBox())?.width).toBeLessThan(restingWidth)
 
   // --- 4. Widen again and the shift is RELEASED — the panel returns to its resting position (AC3's
   // second direction, the one a one-way drive would miss). ---
@@ -159,6 +156,7 @@ test('the options panel is clamped inside the window and released again on resiz
     { width: WIDE_WIDTH_PX, height: startHeight }
   )
   await expect.poll(restingOffset).toBe(0)
+  await expect.poll(async () => (await panel.boundingBox())?.width).toBe(restingWidth)
 
   // --- 5. Restore the floor this spec only borrowed. Each test launches its own app, so a mid-drive
   // failure strands nothing; the restore is intent, made explicit. ---

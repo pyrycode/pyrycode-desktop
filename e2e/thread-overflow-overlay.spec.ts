@@ -1,3 +1,4 @@
+import { capturePairedApp } from './fixtures/capturePairedApp'
 import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { encodeEnvelope } from '../src/main/transport/codec'
 import type { RateLimitedPayload } from '../src/shared/wire/types'
@@ -46,7 +47,7 @@ test('thread overflow menu paints and receives clicks above Top overlay pills', 
     await page.getByRole('button', { name: 'More actions', exact: true }).click()
     const menu = page.getByRole('menu', { name: 'More actions', exact: true })
     await expect(menu).toBeVisible()
-    await page.screenshot({ path: `/tmp/builder-1745/menu-${size.kind}-${size.width}.png`, animations: 'disabled' })
+    await capturePairedApp(app, page, `/tmp/builder-1745/menu-${size.kind}-${size.width}.png`)
 
     // Positive overlap plus hit-testing proves paint order; visibility alone passes when covered.
     for (const pill of await pills.all()) {

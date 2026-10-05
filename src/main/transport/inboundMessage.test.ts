@@ -12102,3 +12102,18 @@ describe('session_error decoding', () => {
     expect(event).not.toHaveBeenCalled()
   })
 })
+
+describe('assistant parent attribution in live and history decode', () => {
+  it.each(['agent-id', '', undefined])('normalizes parent %s in both lanes', (parent_tool_use_id) => {
+    const payload = { ...DELTA, parent_tool_use_id }
+    const live = parseInboundMessage(encodeAssistantDelta(payload))
+    expect(live).toMatchObject({ kind: 'assistant-delta', delta: { parent_tool_use_id: parent_tool_use_id || undefined } })
+    expect(decodedEntries([historyEntry('assistant_delta', payload)])[0].event)
+      .toMatchObject({ type: 'assistantDelta', parentToolUseId: parent_tool_use_id || undefined })
+  })
+  it.each([null, 42, true, [], {}])('rejects malformed parent %s without exposing its value', (parent_tool_use_id) => {
+    const payload = { ...DELTA, parent_tool_use_id }
+    expect(() => parseInboundMessage(encodeAssistantDelta(payload))).toThrow(WireDecodeError)
+    expect(decodedEntries([historyEntry('assistant_delta', payload)])).toEqual([])
+  })
+})

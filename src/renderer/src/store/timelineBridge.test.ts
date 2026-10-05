@@ -2260,3 +2260,10 @@ describe('session error routing', () => {
     off()
   })
 })
+
+it('forwards an assistant parent hint through the timeline bridge', () => {
+  expect(translateTimelineEvent({ type: 'assistantDelta', conversationId: 'chat', turnId: 't', seq: 0,
+    text: 'reply', parentToolUseId: 'agent' })).toMatchObject({
+    type: 'assistantDelta', turnId: 't', text: 'reply', parentToolUseId: 'agent'
+  })
+})

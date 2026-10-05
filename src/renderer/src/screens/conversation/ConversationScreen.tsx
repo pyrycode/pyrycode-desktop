@@ -1154,16 +1154,24 @@ export function Timeline({
         if (!row) return null
         const key = firstRowKey + group.index
         const hidden = hiddenRows.has(group.index)
-        if (row.item.kind !== 'toolCall') return (
-          <TimelineRow key={group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
+        if (row.item.kind !== 'toolCall') {
+          const rowKey = group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`
+          const content = <TimelineRow key={rowKey}
             item={row.item} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(group.index)}
             onOpenMarkdownPath={onOpenMarkdownPath} agent={agent}
             inProgress={!saved && group.index === items.length - 1 && row.item.kind === 'assistantText'} />
-        )
+          // Keep attributed text mounted through collapse and late-owner history regrouping.
+          if (row.item.kind === 'assistantText' && row.item.parentToolUseId) return (
+            <div key={rowKey} className={`tool-group-row tool-group-row--depth-${group.depth}`} hidden={hidden}>
+              {content}
+            </div>
+          )
+          return content
+        }
         const content = (
           <ToolRow
             item={row.item}
-            group={group.count > 0 ? {
+            group={group.hasChildren ? {
               count: group.count,
               running: !saved && group.running
             } : undefined}

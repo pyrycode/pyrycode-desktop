@@ -1137,6 +1137,8 @@ export function Timeline({
   const [expandedTools, setExpandedTools] = useState<ReadonlySet<number>>(() => new Set())
   const [expandedRuns, setExpandedRuns] = useState<ReadonlySet<number>>(() => new Set())
   const projection = groupToolRows(rows.map((row) => row.item))
+  const rowKeyAt = (index: number) => rowKeys?.[rows[index]?.itemIndex ?? index] ??
+    firstRowKey + (rows[index]?.itemIndex ?? index)
   const drawn = projection.filter((group) => {
     const item = rows[group.index]?.item
     return !(foldTools && item?.kind === 'banner' && item.level === 'info') &&
@@ -1145,11 +1147,11 @@ export function Timeline({
   const runs = foldTools ? foldToolRuns(rows.map((row) => row.item), drawn) : []
   const runByMember = new Map(runs.flatMap((run) => run.members.map((index) => [index, run] as const)))
   const runByStart = new Map(runs.map((run) => [run.index, run]))
-  const runIsExpanded = (run: ToolRun) => run.members.some((index) => expandedRuns.has(firstRowKey + index))
+  const runIsExpanded = (run: ToolRun) => run.members.some((index) => expandedRuns.has(rowKeyAt(index)))
   const expandedRunStarts = new Set(runs.filter(runIsExpanded).map((run) => run.index))
   const hiddenRows = new Set(projection.filter((group) => {
     const run = runByMember.get(group.index)
-    return group.ancestors.some((index) => !expandedTools.has(firstRowKey + index)) ||
+    return group.ancestors.some((index) => !expandedTools.has(rowKeyAt(index))) ||
       (run !== undefined && !expandedRunStarts.has(run.index))
   }).map((group) => group.index))
   // Hidden descendants stay mounted; undrawn rows are skipped when joining tool rows.
@@ -1172,7 +1174,7 @@ export function Timeline({
       {projection.flatMap((group) => {
         const row = rows[group.index]
         if (!row) return null
-        const key = rowKeys?.[row.itemIndex] ?? firstRowKey + row.itemIndex
+        const key = rowKeyAt(group.index)
         const hidden = hiddenRows.has(group.index)
         if (row.item.kind !== 'toolCall') return (
           <TimelineRow key={row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
@@ -1206,8 +1208,8 @@ export function Timeline({
           run && <div key={`run${key}`} className={`tool-group-row tool-run${expanded ? ' tool-group-row--joined-below' : ''}`}>
             <ToolRunHeader run={run} expanded={expanded} onToggle={() => setExpandedRuns((previous) => {
               const next = new Set(previous)
-              if (run.members.some((index) => previous.has(firstRowKey + index))) {
-                for (const index of run.members) next.delete(firstRowKey + index)
+              if (run.members.some((index) => previous.has(rowKeyAt(index)))) {
+                for (const index of run.members) next.delete(rowKeyAt(index))
               } else next.add(key)
               return next
             })} />

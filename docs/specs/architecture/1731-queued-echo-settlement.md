@@ -60,6 +60,8 @@ A compact fourth mounted scenario now captures the final queued and delivered pr
 
 Finding 2 corrects the trust-boundary assumption in the original review: `QueueData` runs with the preload's trusted receipt origin, but `ConversationTimelineStore.markLocalSendQueued` must check `receiptHost` against the held slice's `serverId` before correlating or releasing echoes. Another host's colliding snapshot leaves the complete held state unchanged; absent origins retain older event compatibility. The regression covers hostile binding and removal snapshots followed by legitimate settlement. The refreshed branch overlap is #1723, a separate reconnect comment edit in `threadTimeline`; no dependency. Rework adds about 75 lines, staying below the 800-line ceiling.
 
+2026-10-05 (restoration rework): Finding 1 initializes saved row keys as `index - prependedRows` with the next unused key at admission, before any render; reducer updates and history prepends retain those keys. After merging main's tool-run folding, all ancestor/run expansion lookups use source-row identities. Unit and mounted regressions cover live-first and prepend-first orders, expanded Agent/Read/run controls and connected DOM nodes. Overlaps with #1721, #1723, #1726, #1729 and #1789 are local changes or different behavior; no dependency. The existing security verdict holds: parsed saved rows receive only client-owned in-memory numeric keys, with no new trust boundary or capability.
+
 ## Security review
 
 **Verdict:** PASS

@@ -605,7 +605,9 @@ export function createConversationTimelineStore(
               return
             }
             settle(current => ({ ...emptySlice, serverId, localRead: 'loaded', coverage: snapshot.coverage, restored: { serverId, coverage: snapshot.coverage },
-              timeline: { ...current.timeline, items: snapshot.items },
+              timeline: { ...current.timeline, items: snapshot.items,
+                rowKeys: snapshot.items.map((_, index) => index - snapshot.prependedRows),
+                nextRowKey: snapshot.items.length - snapshot.prependedRows },
               prependedRows: snapshot.prependedRows }))
           } catch { fail() }
         },

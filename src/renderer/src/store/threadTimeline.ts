@@ -1,5 +1,5 @@
 import type { ModelRefusalEvent, TurnEndMetrics } from '@shared/ipc/events'
-import type { WireResetPhase, WireResetHandoff } from '@shared/wire/types'
+import type { QueuedItem, WireResetPhase, WireResetHandoff } from '@shared/wire/types'
 
 // The conversation timeline: a heterogeneous, ordered list of turn content (streamed
 // assistant text, tool calls with their results, turn boundaries) plus the coarse
@@ -401,6 +401,16 @@ export interface ResettingStatus {
   handoff: WireResetHandoff
 }
 
+/**
+ * #1725: an open local send window. `messageId` is the composer-minted id of the newest local send, `''`
+ * when none was minted, which no queue item can match. `queued` turns true once a `queue_state` lists it
+ * and never turns back (`markLocalSendQueued`).
+ */
+export interface LocalSendPending {
+  readonly messageId: string
+  readonly queued: boolean
+}
+
 /** The whole timeline state: ordered content + the coarse lifecycle phase + the five chrome scalars. */
 export interface TimelineState {
   /** Latest stopping report, retired only by a local optimistic send or timeline reset. */
@@ -447,7 +457,9 @@ export interface TimelineState {
   // daemon phase through `turnState`'s daemon-provenance arm. Living outside `phase` also keeps
   // `isTurnRunning` — the interrupt control's only gate — structurally unable to see this signal, so a
   // locally-opened window can never arm a stop button for a turn the daemon has not started.
-  localSendPending: boolean
+  // #1725: `null` is the closed window; an open one names the newest local send and whether a
+  // `queue_state` has listed it, so the label can say "Sending…" or "Waiting for Claude" honestly.
+  localSendPending: LocalSendPending | null
   // #1314: the latest thinking-token reading for this conversation, or `null` when none is held. The fifth
   // chrome scalar, and the second to carry a value rather than a liveness fact — `| null` follows
   // `apiRetry` for that reason, while the payload itself is a bare `number` rather than a record, because
@@ -800,7 +812,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
       // a stale phase.
       return event.state === state.phase &&
         !state.stalled &&
-        !state.localSendPending &&
+        state.localSendPending === null &&
         (event.state === 'thinking' || state.thinkingTokens === null)
         ? state
         : {
@@ -810,7 +822,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
             apiRetry: state.apiRetry,
             compacting: state.compacting,
             resetting: state.resetting,
-            localSendPending: false,
+            localSendPending: null,
             thinkingTokens: event.state === 'thinking' ? state.thinkingTokens : null
           }
     case 'turnEnd':
@@ -857,7 +869,10 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
         apiRetry: state.apiRetry,
         compacting: state.compacting,
         resetting: state.resetting,
-        localSendPending: event.received === true ? state.localSendPending : true,
+        // #1725: a second send replaces the window, so the label follows the newest sent id.
+        localSendPending: event.received === true
+          ? state.localSendPending
+          : { messageId: event.messageId ?? '', queued: false },
         // #1314: carried. A renderer-sourced echo is no more the daemon's word on the reading than it is
         // on the stall one line up; the operator sending a second message mid-turn does not un-say how
         // deep the running think is.
@@ -1191,7 +1206,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
         !state.stalled &&
         state.apiRetry === null &&
         !state.compacting &&
-        !state.localSendPending &&
+        state.localSendPending === null &&
         state.thinkingTokens === null &&
         state.resetting === null
       return nothingLive
@@ -1202,7 +1217,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
             stalled: false,
             apiRetry: null,
             compacting: false,
-            localSendPending: false,
+            localSendPending: null,
             thinkingTokens: null,
             resetting: null
           }
@@ -1218,7 +1233,7 @@ export const initialTimelineState: TimelineState = {
   stalled: false,
   apiRetry: null,
   compacting: false,
-  localSendPending: false,
+  localSendPending: null,
   thinkingTokens: null,
   resetting: null
 }
@@ -1229,5 +1244,20 @@ export const selectPhase = (s: TimelineState): TurnPhase => s.phase
 export const selectStalled = (s: TimelineState): boolean => s.stalled
 export const selectApiRetry = (s: TimelineState): ApiRetryStatus | null => s.apiRetry
 export const selectCompacting = (s: TimelineState): boolean => s.compacting
-export const selectLocalSendPending = (s: TimelineState): boolean => s.localSendPending
+export const selectLocalSendPending = (s: TimelineState): LocalSendPending | null => s.localSendPending
+
+/**
+ * #1725: the daemon has said it holds the newest local send. Every `send_message` is enqueued and each
+ * enqueue pushes a `queue_state` carrying the client's own `message_id`, so a snapshot listing the
+ * window's id moves the label from "Sending…" to "Waiting for Claude". STICKY: claude can commit the
+ * item, and a snapshot without it can arrive, before `turn_state{thinking}` does — so nothing here ever
+ * sets `queued` back. Only the window's own non-empty id matches; another device's item or an item with
+ * no id leaves the window as it is. Same reference whenever nothing changes.
+ */
+export function markLocalSendQueued(state: TimelineState, queued: readonly QueuedItem[]): TimelineState {
+  const pending = state.localSendPending
+  if (pending === null || pending.queued || pending.messageId === '') return state
+  if (!queued.some(item => item.message_id === pending.messageId)) return state
+  return { ...state, localSendPending: { messageId: pending.messageId, queued: true } }
+}
 export const selectThinkingTokens = (s: TimelineState): number | null => s.thinkingTokens

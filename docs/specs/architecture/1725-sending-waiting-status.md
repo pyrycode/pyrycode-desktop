@@ -68,3 +68,10 @@ Playwright (`e2e/status-icon-local-send.spec.ts`, rewritten): idle control → r
 
 - Do any other fake-transport specs assert "Thinking…" right after a send? Grep showed only this spec asserts it after a send; confirm during implementation.
 - A Codex conversation will read "Waiting for Claude". The ticket names Claude's copy only; noted for a follow-up rather than widened here.
+
+## Revisions
+
+**2026-10-05, Phase B.** Open questions resolved, design unchanged:
+- No other fake-transport spec asserts "Thinking…" right after a send: `thinking-progress-estimate.spec.ts` pushes `turn_state{thinking}` with no send, and `thread-scroll-pin.spec.ts` sends mid-turn, where the daemon phase wins.
+- The Codex copy stays out of scope; a Codex conversation reads "Waiting for Claude" until a follow-up selects it by agent, as `resettingLabel` does.
+- The e2e spec gates each "label unchanged" read on the queued rows a snapshot draws (`[data-thread-role="queued"]` count), so the read happens after the snapshot was applied rather than passing before it lands.

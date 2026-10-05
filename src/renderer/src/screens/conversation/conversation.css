@@ -7060,3 +7060,38 @@ button.top-overlay-pill {
   opacity: 0.38;
   cursor: default;
 }
+
+/* Run headers share the existing box and joins; members retain their flat mounted wrappers. */
+.tool-run__row {
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+}
+.tool-run__chevron {
+  transform: rotate(90deg);
+  margin-inline: var(--space-1);
+}
+.tool-run__chevron--expanded {
+  transform: rotate(-90deg);
+}
+.tool-run__status {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: calc(var(--space-3) / 2);
+}
+.tool-run__spinner,
+.tool-run__done {
+  display: block;
+  flex: 0 0 auto;
+  color: var(--color-primary);
+}
+.tool-run__done {
+  color: var(--color-on-surface-variant);
+}
+.tool-run__failures {
+  color: var(--color-error);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight-emphasized);
+}

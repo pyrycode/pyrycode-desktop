@@ -526,6 +526,8 @@ export function ConversationScreen({
       {(!offline || items.length > 0 || visibleQueued.length > 0) && <Timeline
         key={openConversationId}
         items={items}
+        rowKeys={thread.rowKeys}
+        localEchoes={thread.localEchoes}
         scrollPin={scrollPin}
         // #1260: NEGATED, so the first held row's key is minus the number of rows history has already
         // put ahead of it. A prepend of N lowers this by N while every surviving row's index rises by N,
@@ -1080,7 +1082,7 @@ function MessageBubble({ message }: { message: Message }): JSX.Element {
 // row's drop control calls; a render that supplies queued rows without it draws them undroppable rather
 // than throwing, which is the honest degradation for a view whose container owns the conversation id.
 //
-// Timeline is still pure props-in / markup-out: the fold is a pure function of the two lists, evaluated
+// Timeline is still pure props-in / markup-out: the fold is a pure function of content, snapshots and local facts, evaluated
 // during render, holding no state between renders. That is what makes a replacement snapshot free (see
 // foldQueuedRows) and what keeps this subtree server-renderable with no store and no bridge.
 export function SavedTimelineNotice({ status }: {
@@ -1094,6 +1096,8 @@ export function SavedTimelineNotice({ status }: {
 
 export function Timeline({
   items,
+  rowKeys,
+  localEchoes,
   scrollPin,
   queued,
   onDropQueued,
@@ -1104,6 +1108,8 @@ export function Timeline({
   agent
 }: {
   items: readonly ThreadItem[]
+  rowKeys?: TimelineState['rowKeys']
+  localEchoes?: TimelineState['localEchoes']
   scrollPin?: ThreadScrollPin
   queued?: readonly QueuedItem[]
   onDropQueued?: (queuedMsgId: number, messageId: string | undefined) => void
@@ -1120,13 +1126,13 @@ export function Timeline({
    *  `scrollPin` reason: absent reads Claude, so the existing render sites stay byte-identical. */
   agent?: WireAgent
 }): JSX.Element {
-  const rows = foldQueuedRows(items, queued ?? EMPTY_QUEUED)
-  // #1566: keyed by item index, which is the row index below items.length (foldQueuedRows).
+  const rows = foldQueuedRows(items, queued ?? EMPTY_QUEUED, localEchoes, rowKeys)
+  // Stats use source item indices; projection may move waiting echoes.
   const turnStats = turnStatsByItemIndex(items)
   const [expandedTools, setExpandedTools] = useState<ReadonlySet<number>>(() => new Set())
   const projection = groupToolRows(rows.map((row) => row.item))
   const hiddenRows = new Set(projection.filter((group) =>
-    group.ancestors.some((index) => !expandedTools.has(firstRowKey + index))
+    group.ancestors.some((index) => !expandedTools.has(rowKeys?.[rows[index]?.itemIndex ?? -1] ?? firstRowKey + (rows[index]?.itemIndex ?? index)))
   ).map((group) => group.index))
   // Hidden descendants stay mounted; only undrawn boundaries are skipped when joining tool rows.
   const visible = projection.filter((group) => {
@@ -1152,13 +1158,13 @@ export function Timeline({
       {projection.map((group) => {
         const row = rows[group.index]
         if (!row) return null
-        const key = firstRowKey + group.index
+        const key = rowKeys?.[row.itemIndex] ?? firstRowKey + row.itemIndex
         const hidden = hiddenRows.has(group.index)
         if (row.item.kind !== 'toolCall') return (
-          <TimelineRow key={group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
-            item={row.item} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(group.index)}
+          <TimelineRow key={row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
+            item={row.item} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(row.itemIndex)}
             onOpenMarkdownPath={onOpenMarkdownPath} agent={agent}
-            inProgress={!saved && group.index === items.length - 1 && row.item.kind === 'assistantText'} />
+            inProgress={!saved && row.itemIndex === items.length - 1 && row.item.kind === 'assistantText'} />
         )
         const content = (
           <ToolRow
@@ -1181,7 +1187,7 @@ export function Timeline({
         // Origin-relative identity survives history prepends and display regrouping. Keep hidden
         // descendants mounted so their own result expansion survives an outer collapse.
         return (
-          <div key={group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
+          <div key={row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
             className={`tool-group-row tool-group-row--depth-${group.depth} ${joins.get(group.index) ?? ''}`} hidden={hidden}>
             {content}
           </div>

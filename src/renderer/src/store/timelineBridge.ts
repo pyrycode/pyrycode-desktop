@@ -335,6 +335,8 @@ export function translateTimelineEvent(
       return {
         type: 'userText', received: true, text: event.message.text,
         messageId: event.message.message_id,
+        queuedMsgId: event.message.queued_msg_id,
+        sentNow: event.message.sent_now,
         createdAt: Number.isFinite(parsed) ? parsed : undefined
       }
     }

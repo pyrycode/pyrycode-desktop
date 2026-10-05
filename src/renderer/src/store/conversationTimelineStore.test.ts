@@ -152,6 +152,7 @@ describe('conversationTimelineStore', () => {
     store.getState().dispatchFor('c2', delta('t2', 'quiet'))
 
     expect(timelineFor(store, 'c1')).toEqual({
+      rowKeys: [0], nextRowKey: 1, localEchoes: [],
       items: [{ kind: 'userText', text: 'hi' }],
       phase: 'thinking',
       stalled: true,
@@ -166,6 +167,7 @@ describe('conversationTimelineStore', () => {
     // how deep a think in ANOTHER conversation had got. #1517's reset is the second of that kind — a leak
     // there would tell the operator a chat they are watching is restarting when a different one is.
     expect(timelineFor(store, 'c2')).toEqual({
+      rowKeys: [0], nextRowKey: 1, localEchoes: [],
       items: [{ kind: 'assistantText', turnId: 't2', text: 'quiet' }],
       phase: 'idle',
       stalled: false,

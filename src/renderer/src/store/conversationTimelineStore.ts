@@ -721,7 +721,10 @@ export function createConversationTimelineStore(
         const next = new Map(s.timelines)
         next.set(conversationId, {
           ...held,
-          timeline: { ...held.timeline, items: [...fresh, ...held.timeline.items] },
+          timeline: { ...held.timeline, items: [...fresh, ...held.timeline.items],
+            rowKeys: [...fresh.map((_, i) => (held.timeline.nextRowKey ?? held.timeline.items.length) + i),
+              ...(held.timeline.rowKeys ?? held.timeline.items.map((_, i) => i))],
+            nextRowKey: (held.timeline.nextRowKey ?? held.timeline.items.length) + fresh.length },
           // `fresh.length`, NOT `items.length`: rows dropped by `withoutHeldEchoes` never entered the
           // list, so counting the ask rather than the insertion would shift every drawn row's key by the
           // number of echoes the page happened to duplicate.

@@ -1470,7 +1470,8 @@ describe('reduceTimeline — dropUserText (#1213)', () => {
       items: [
         { kind: 'userText', text: 'a', messageId: 'dup' },
         { kind: 'userText', text: 'b', messageId: 'dup' }
-      ]
+      ],
+      localEchoes: [{ rowKey: 0, messageId: 'dup', waiting: false }]
     }
     const after = reduceTimeline(seeded, dropUserText('dup'))
     expect(after.items).toEqual([{ kind: 'userText', text: 'b', messageId: 'dup' }])
@@ -1722,7 +1723,7 @@ describe('the local send window stages — Sending, then Waiting for Claude (#17
 
   it('sticks across a later snapshot that no longer lists the item', () => {
     const queued = markLocalSendQueued(run([userTextWithId('typed', 'm1')]), [item('m1')])
-    expect(markLocalSendQueued(queued, [])).toBe(queued)
+    expect(markLocalSendQueued(queued, []).localSendPending).toBe(queued.localSendPending)
     expect(markLocalSendQueued(queued, [item('other')]).localSendPending).toEqual({ messageId: 'm1', queued: true })
   })
 
@@ -1741,7 +1742,7 @@ describe('the local send window stages — Sending, then Waiting for Claude (#17
 
   it('does nothing with the window closed', () => {
     const closed = run([userTextWithId('typed', 'm1'), { type: 'turnState', state: 'idle' }])
-    expect(markLocalSendQueued(closed, [item('m1')])).toBe(closed)
+    expect(markLocalSendQueued(closed, [item('m1')]).localSendPending).toBeNull()
     expect(markLocalSendQueued(initialTimelineState, [item('m1')])).toBe(initialTimelineState)
   })
 

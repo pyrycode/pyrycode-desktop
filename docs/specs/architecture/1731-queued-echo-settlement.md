@@ -48,6 +48,14 @@ Malformed optional receipt fields use existing `WireDecodeError` catch/drop hand
 
 None. Optional sidecars avoid changing the durable row schema and preserve existing callers.
 
+## Revisions
+
+2026-10-05: Bind the predecessor boundary to the observed running turn rather than advancing it on every later turn end; late fallback receipts otherwise relocate old echoes into subsequent replies. Remaining queued entries start waiting behind the next answering turn after ordinary settlement. Carry queue identity on `dropUserText` so dropping one colliding entry cannot remove another own echo or a received row. These are local correlation facts; no queue snapshot is copied into the timeline. Track admitted foreign receipt queue IDs separately for idempotence when a different bound local entry shares its message ID. Metadata-free immediate confirmations mark local records settled without changing row content; subsequent snapshots cannot claim them.
+
+The original focused ordering scenarios captured queued/delivered states successfully at 1280×800. The expanded-group scenarios timed out inside Electron screenshot capture after their assertions; retain the earlier reviewed captures (renderer presentation unchanged) and remove capture calls from the behavioral regression. Expanded-group recapture is missing evidence, not a passed capture.
+
+A compact fourth mounted scenario now captures the final queued and delivered presentation at `/tmp/builder-1731/visual-queued.png` and `/tmp/builder-1731/visual-settled.png`; both were viewed and compared with the design reference. All four mounted scenarios pass, including the expanded-group behavioral assertions. Final written work is about 635 added lines including this plan, below every sizing boundary.
+
 ## Security review
 
 **Verdict:** PASS

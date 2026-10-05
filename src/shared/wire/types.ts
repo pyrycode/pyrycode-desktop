@@ -559,6 +559,8 @@ export interface MessagePayload {
   message_id: string
   role: WireRole
   text: string
+  queued_msg_id?: number
+  sent_now?: boolean
 }
 
 export interface MessageChunkPayload {

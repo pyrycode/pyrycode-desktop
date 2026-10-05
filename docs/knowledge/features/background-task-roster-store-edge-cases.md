@@ -8,10 +8,20 @@ qualify, and [Related](background-task-roster-store-related.md) for cross-refere
 
 ## Edge cases and limitations
 
-- **No two-way binding.** `setRoster`/`setStartedTask`/`setUpdatedTask`/`resetRostersFor`/`clearAllRosters`
+- **No two-way binding.** `setRoster`/`setStartedTask`/`setUpdatedTask`/`setTaskProgress`/`resetRostersFor`/`clearAllRosters`
   are invoked only by `subscribeBackgroundTaskRoster`'s wiring and `clearPairingScopedState`; components
-  read exclusively through `selectRosterFor` (the panel) and, since #1561, `selectLiveTaskCountFor` (the
-  pill) — neither selector can be written from a component.
+  read roster, finished and pending slices through narrow selectors, and the pill reads
+  `selectLiveTaskCountFor`. The separate Stop task handler claims renderer-only state through
+  `beginTaskStop` before sending; only daemon lifecycle events and cleanup settle that wait.
+- **Silent acceptance is not completion.** Stop waits have no timeout or retry. A nonterminal update,
+  progress report or roster still listing the task cannot re-enable it. Keeping waits in drawer-local
+  state or clearing them on unmount would allow another request while the first is still outstanding.
+  The [app-lifetime pending set](background-task-roster-store-internals.md#pending-stop-waits) prevents
+  that across closure/navigation and isolates equal task ids in different conversations.
+- **Only the task's own cut identity blocks a stop.** `beginTaskStop` rejects a listed task whose
+  `truncatedFields` names `task_id`; the panel hides its action. Update/progress cut lists describe their
+  own reports and cannot substitute for this identity check. IDs stay in routing/state and the existing
+  row key, never in logs or attributes; descriptions and patches remain escaped text children.
 - **No coercion or validation on either write path.** The store trusts #566's and #564's fail-closed
   decode completely. The wire row → `HeldBackgroundTask` mapping inside `setRoster` is a straight,
   named-field copy with no defaulting or derivation except `toolCallId: null` for a roster-sourced row —

@@ -78,7 +78,8 @@ export interface BackgroundTaskProgressSnapshot {              // progress write
 export interface BackgroundTaskRosterState {
   rosters: ReadonlyMap<string, BackgroundTaskRosterEntry>          // key absent = no roster has arrived (#1563)
   unlistedStarts: ReadonlyMap<string, ReadonlyMap<string, HeldBackgroundTask>>   // conv -> taskId -> started-sourced hold no roster has listed yet (#1563); no surface reads it
-  finishedTasks: ReadonlyMap<string, ReadonlySet<string>>          // conv -> taskId claude reported terminal (#1561); read only by selectLiveTaskCountFor
+  finishedTasks: ReadonlyMap<string, ReadonlySet<string>>          // conv -> taskId claude reported terminal; count + panel grouping
+  pendingStops: ReadonlyMap<string, ReadonlySet<string>>           // conv -> taskId with an outstanding user stop; renderer-only
 }
 export type BackgroundTaskRosterStore = BackgroundTaskRosterState & {
   setRoster: (snapshot: BackgroundTaskRosterSnapshot) => void
@@ -87,6 +88,8 @@ export type BackgroundTaskRosterStore = BackgroundTaskRosterState & {
   setTaskProgress: (snapshot: BackgroundTaskProgressSnapshot) => void   // #1640; never touches finishedTasks or droppedTasks
   resetRostersFor: (conversationIds: ReadonlySet<string>) => void   // connected edge, scoped (#1139)
   clearAllRosters: () => void                                       // pairing-boundary drop, nullary (#1139)
+  beginTaskStop: (conversationId: string, taskId: string) => boolean  // synchronous claim before send
+  endTaskStopWait: (conversationId: string, taskId: string) => void    // correlated refusal settlement
 }
 
 createBackgroundTaskRosterStore(init?)     // vanilla createStore — one isolated instance per test (DI seam)
@@ -95,21 +98,22 @@ useBackgroundTaskRosterStore(selector)     // narrow-slice React binding: useSto
 selectRosterFor(conversationId)(state)          // selector FACTORY — the panel's read surface (#568), returns `?? null`
 selectLiveTaskCountFor(conversationId)(state)   // selector FACTORY — the pill's read surface (#1561), returns a primitive count
 selectFinishedTasksFor(conversationId)(state)   // selector FACTORY — the panel's grouping read (#1635), returns `?? null`
+selectPendingTaskStopsFor(conversationId)(state) // selector FACTORY — the panel's held wait set, returns `?? null`
 ```
 
 Keyed by `conversationId`, not a flat slot, for the same reason [`queueStore`](queue-store.md) is: the
 daemon fans these frames out to every interactive connection and each carries `conversation_id`, so
 frames for *different* conversations can arrive back-to-back and a flat "hold the latest" slot would let
-one clobber another. **Six named setters** (`setRoster`, `setStartedTask`, `setUpdatedTask`,
-`setTaskProgress`, `resetRostersFor`, `clearAllRosters`), not a reducer — six operations still don't
-justify a discriminated-union action set; #1561 added no extra setter, only a third state field
+one clobber another. **Eight named mutation methods** (`setRoster`, `setStartedTask`, `setUpdatedTask`,
+`setTaskProgress`, `resetRostersFor`, `clearAllRosters`, `beginTaskStop`, `endTaskStopWait`) preserve the
+existing store contract. #1561 added no extra setter, only a third state field
 (`finishedTasks`) three of the setters also maintain, and #1640's `setTaskProgress` is a fourth "record"
 setter beside `setRoster`/`setStartedTask`/`setUpdatedTask`, not a fourth state field — its report lives
 on `HeldBackgroundTask` itself. Mirrors `queueStore`'s DI-factory → singleton → hook → selector structure
 and its `ReadonlyMap` copy-on-write idiom throughout: clone the outer map, clone the inner map, replace;
 never mutate `s.rosters`, an entry, or an entry's `tasks` in place — and, since #1563, never mutate
 `s.unlistedStarts` or one of its per-conversation inner maps in place either, a rule #1561 extends to
-`s.finishedTasks`; it is the same conversation-keyed-map shape one level further in, copy-on-write
+`s.finishedTasks` and `s.pendingStops`; it is the same conversation-keyed-map shape one level further in, copy-on-write
 throughout. Also mirrors `queueStore`'s setter
 PAIR for the pairing-lifecycle problem ([#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138) /
 [#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139)): a scoped `…For` reset beside a
@@ -283,8 +287,8 @@ same property `selectRosterFor`'s stable-reference return already had. This is n
 of "alive" for anything that counts live background tasks — the composer pill reads it in place of its old
 inline `roster.tasks.size + roster.droppedTasks` arithmetic (see [Conversation shell — composer status row
 § Background-task count pill](conversation-shell-composer-status.md#background-task-count-pill-the-slots-last-occupant-1435)) — so a later surface counting the same thing cannot silently disagree with the pill about
-what counts as finished. The panel itself is unchanged: it still reads `selectRosterFor` and still lists a
-finished task until a roster omits it, `finishedTasks` is invisible to it.
+what counts as finished. The panel still lists a finished task until a roster omits it, and reads
+`finishedTasks` separately for Running/Finished grouping through `selectFinishedTasksFor` below.
 
 ### The panel's grouping read, `selectFinishedTasksFor` (#1635)
 
@@ -310,6 +314,42 @@ no roster (`selectRosterFor` returning `null`) there is no populated arm to grou
 reader from this ticket — `setRoster`'s prune and `setUpdatedTask`'s terminal-status write are unchanged,
 and `resetRostersFor`/`clearAllRosters` drop it exactly as before this selector existed.
 
+### Pending stop waits
+
+`pendingStops: ReadonlyMap<string, ReadonlySet<string>>` holds one outstanding user stop per listed
+conversation/task pair, in memory only. `beginTaskStop(conversationId, taskId)` reads current state and
+returns false for a missing listed task, its own cut `task_id`, a finished id or an already-pending pair.
+Otherwise it copies that conversation's set and the outer map, records the wait, and returns true.
+The [panel handler](conversation-shell-background-tasks.md#stop-task) claims before its existing void
+send, with no intervening await, so repeated activation or a stale render cannot send twice. The claim
+does not change rosters or finished membership; host capability and connection checks belong to the
+panel, not this store.
+
+`selectPendingTaskStopsFor(conversationId)` returns the held set by reference or `null`. A write for
+another conversation preserves this set's identity. `keepTaskStopWaits` prunes only the named
+conversation, preserves the outer map on no change, and deletes an empty set's conversation key.
+`endTaskStopWait` uses it to clear exactly one pair; an unknown pair is a same-state no-op.
+
+Accepted stops produce no reply and have no timeout. Settlement uses existing app-owned lifecycle:
+
+- `setRoster` intersects waits with the rebuilt listed task map; omission, including an empty roster,
+  settles a pair, while a roster still listing it keeps the wait.
+- `setUpdatedTask` clears its pair on an exact `completed`/`failed`/`stopped` hit, alongside recording
+  finished membership. Nonterminal updates and `setTaskProgress` retain waits.
+- The bridge passes `backgroundTaskStopRejected`'s send-time-recorded `conversationId`/`taskId` to
+  `endTaskStopWait`. Another task or the same id in another conversation is untouched.
+- `resetRostersFor` deletes waits for the reconnecting server's listed conversation ids alongside the
+  other maps; `clearAllRosters` clears every map at the pairing boundary.
+
+Neither drawer closure nor conversation unmount clears these waits. A drawer-local subscription or
+the MCP sheet's unmount cleanup would re-enable a button before daemon settlement; the existing
+app-mounted `BackgroundTaskRosterData` listener owns this path throughout navigation.
+`backgroundTaskStop.test.ts` covers duplicate claims, pair isolation, terminal statuses, nonterminal
+preservation, omission, cut-id refusal, scoped reset and pairing clear. Its injected bridge test settles
+waits with no drawer and uses a client `serverId` stamp conflicting with `ack.server_id` to pin reset
+scope. The [panel testing section](conversation-shell-background-tasks.md#stop-task-testing) records
+static-render snapshot requirements and fake-transport interaction proof.
+
 `resetRostersFor(conversationIds)` ([#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139),
 the `connected`-edge reset) iterates the **held** map's own keys, not the id set, and deletes the ones
 that are members — work bounded by what this store holds, not by the server's conversation count.
@@ -321,7 +361,8 @@ it independently deletes the same conversation ids from `unlistedStarts`, so a s
 listed does not outlive its server's reconnect either — the two maps are filtered separately (a
 conversation can be a member of one, the other, both, or neither), and both drops are copy-on-write.
 Since #1561 it filters `finishedTasks` the same third way, so a departed server's finished ids do not
-latch past its own reconnect either. When no held key **in any of the three maps** is listed — a first
+latch past its own reconnect either. It filters `pendingStops` independently by the same ids. When no
+held key **in any of the four maps** is listed — a first
 connect, a reconnect of a server holding nothing here, or a map holding only conversations outside the id
 set — the state object is handed straight back, generalising the original `resetRosters`' `size === 0`
 short-circuit so zustand's `Object.is` fires and no listener wakes. A
@@ -333,8 +374,8 @@ whose list has not arrived), pinned by a test rather than left to drift wider la
 **pairing-boundary** drop) is nullary — the `clearAllBacklogs`/`clearAllConversations` shape — so no
 daemon-supplied conversation id or server origin can steer which command lines and patches survive a
 boundary the operator crossed deliberately. It returns `initialBackgroundTaskRosterState` by reference and
-carries the same short-circuit, widened since #1563 to both maps and since #1561 to all three: it returns
-`s` only when `rosters`, `unlistedStarts` and `finishedTasks` are all already empty, since a store holding
+carries the same short-circuit across all four maps: it returns
+`s` only when `rosters`, `unlistedStarts`, `finishedTasks` and `pendingStops` are all already empty, since a store holding
 only unlisted holds or only finished ids is not an empty store and the same `local_bash` command text they
 carry must not survive the boundary either — a departed pairing's finished task ids must not latch onto a
 later pairing's roster either. It is invoked only from
@@ -358,9 +399,10 @@ translateBackgroundTaskProgress(event: DaemonEvent): BackgroundTaskProgressSnaps
 
 originOf(event: DaemonEvent): ConversationListOrigin   // since #1139 — reads #1068's stamp, never event.ack
 
-subscribeBackgroundTaskRoster(onDaemonEvent, setRoster, resetRostersForServer, setStartedTask, setUpdatedTask, setTaskProgress): () => void   // sixth param, #1640; fifth param since #577; third param re-typed by #1139
+subscribeBackgroundTaskRoster(onDaemonEvent, setRoster, resetRostersForServer, setStartedTask, setUpdatedTask, setTaskProgress, endTaskStopWait?): () => void   // optional trailing refusal writer; app composition supplies it
 // onDaemonEvent(event => {
 //   if (event.type === 'connected') { resetRostersForServer(originOf(event)); return }
+//   if (event.type === 'backgroundTaskStopRejected') { endTaskStopWait?.(event.conversationId, event.taskId); return }
 //   const roster = translateBackgroundTaskRoster(event); if (roster !== null) { setRoster(roster); return }
 //   const started = translateBackgroundTaskStarted(event); if (started !== null) { setStartedTask(started); return }
 //   const updated = translateBackgroundTaskUpdated(event); if (updated !== null) { setUpdatedTask(updated); return }
@@ -373,8 +415,9 @@ BackgroundTaskRosterData(): null
 // calls backgroundTaskRosterStore.getState().resetRostersFor(ids) — see below
 ```
 
-Reactive-only — like `queueBridge` and `sessionIdBridge`, the daemon pushes all four frames unsolicited,
-so there is no request half. Each translator is a pure single-arm filter, unconditional: there is
+The daemon pushes roster/start/update/progress frames unsolicited. The panel separately sends stop
+commands; the bridge consumes their typed refusal without raw error text, while successful settlement
+uses the ordinary roster/update path. Each translator remains a pure single-arm filter, unconditional: there is
 deliberately no `if (event.tasks.length === 0) return null` on the roster side, since an empty roster is
 the frame's payoff signal (AC5, ex-AC4), not "no news"; there is likewise no `if (event.patch)` on the
 update side, since `patch: ''` always arrives on the wire (no `omitempty`) and is a value meaning "claude
@@ -385,7 +428,7 @@ posture, not one of the three typecheck-gating exhaustive bridges — which alre
 from #564/#565/#566/#1638. `translateBackgroundTaskRoster` is behaviourally unchanged by the #576/#577 reshapes
 — the row → `HeldBackgroundTask` mapping happens inside `setRoster`, not the translator, because that is
 where the prior state the join needs lives. The four arms are mutually exclusive, so the subscriber's
-branches short-circuit in order (`connected` → roster → started → updated → progress) and each matched
+branches short-circuit in order (`connected` → stop refusal → roster → started → updated → progress) and each matched
 branch returns; order is a readability choice, not a correctness one. `translateBackgroundTaskProgress`
 (#1640) copies all nine fields verbatim, the same posture as its three siblings, and reads `truncatedFields`
 straight across (`null` never collapses into `[]`).
@@ -434,15 +477,15 @@ daemon → background_task_roster frame → parseBackgroundTaskRosterPayload →
     → backgroundTaskRosterStore.setRoster(snapshot)
       [rebuilds the task map in row order; keeps a started-sourced record unchanged, rebuilds every other
        row fresh with toolCallId: null — membership stays replacement truth regardless of provenance]
-  → selectRosterFor(openId) / useBackgroundTaskRosterStore   (read by #568, not yet built)
+  → selectRosterFor(openId) / useBackgroundTaskRosterStore   (the panel's read)
 
 daemon → background_task_started frame → parseBackgroundTaskStartedPayload → backgroundTaskStarted DaemonEvent [#564]
   → DAEMON_EVENT_CHANNEL → subscribeBackgroundTaskRoster listener (roster translator returns null first)
     → translateBackgroundTaskStarted → { conversationId, taskId, toolCallId, taskType, description, truncatedFields }
     → backgroundTaskRosterStore.setStartedTask(snapshot)
-      [upserts in place — creates the conversation's entry if none exists; preserves droppedTasks
+      [upgrades a listed task in place, otherwise holds it unseen in unlistedStarts; preserves droppedTasks
        AND a held latestUpdate; description/taskType/truncatedFields replace whatever the task held]
-  → selectRosterFor(openId) / useBackgroundTaskRosterStore   (read by #568, not yet built)
+  → selectRosterFor(openId) / useBackgroundTaskRosterStore   (the panel's read; unlisted holds stay invisible)
 
 daemon → background_task_updated frame → parseBackgroundTaskUpdatedPayload → backgroundTaskUpdated DaemonEvent [#565]
   (the DaemonEvent gained status/summary under #1560, both crossing verbatim, '' included; #1561 carries
@@ -470,12 +513,19 @@ daemon → background_task_progress frame → parseBackgroundTaskProgressPayload
   → selectRosterFor(openId) / useBackgroundTaskRosterStore   (the panel's read — now also reads
     task.progress per running row, #1640)
 
+Stop task click → recheck owning host status/capability → beginTaskStop(conversationId, taskId)
+  → if claimed: stopBackgroundTask command → main → stop_background_task frame
+  → selectPendingTaskStopsFor(openId) disables only that pair; acceptance is silent
+  → backgroundTaskStopRejected → endTaskStopWait(conversationId, taskId) clears only its correlated pair
+  → or ordinary terminal update / roster omission above clears its wait
+  [app listener continues through drawer closure and conversation switches; no timeout]
+
 relay (re)handshake → daemonConnection.ts emits connected DaemonEvent, stamped with its origin (#1068)
   → DAEMON_EVENT_CHANNEL (in-order) → subscribeBackgroundTaskRoster listener
     → originOf(event) → ConversationListOrigin (#1068's stamp, never event.ack)   [#1139]
     → selectConversationIdsFor(origin)(conversationListStore.getState())   [#1086, this server's ids]
     → backgroundTaskRosterStore.resetRostersFor(ids)   [only the listed keys dropped — started-sourced
-                                                         tasks and recorded patches go with them — or
+                                                         tasks, recorded patches and stop waits go with them — or
                                                          same-ref no-op if none match]
   → then the daemon's reconcile burst arrives on the SAME channel, one background_task_roster per
     conversation whose bound session has reported one (pyrycode#2077-#2080, #569): each lands through
@@ -486,6 +536,6 @@ relay (re)handshake → daemonConnection.ts emits connected DaemonEvent, stamped
     toolCallId and fuller label do not survive — it comes back roster-sourced only
 
 pairing ends (unpair only, since #1141 — pairing another server adds a server rather than ending one) → clearPairingScopedState()   [#1139]
-  → backgroundTaskRosterStore.clearAllRosters()   [every conversation's roster dropped, or same-ref
+  → backgroundTaskRosterStore.clearAllRosters()   [every conversation's roster and stop waits dropped, or same-ref
                                                     no-op if already empty]
 ```

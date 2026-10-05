@@ -6,8 +6,9 @@ Part of [Turn status surfaces](conversation-shell-turn-status.md).
 
 An openable surface listing the tasks claude has running in the background for the open conversation
 — the first reader of [`backgroundTaskRosterStore`](background-task-roster-store.md), shipped and
-unread since #573. The store joins three daemon frames (roster, started, updated); this slice reads
-only two of the held per-task fields, `description` and `taskType`. Split from #568 (whose panel work
+unread since #573. The store joins roster, started, updated and progress frames; the panel reads
+task labels, status, summary, progress and latest update, and offers a separate Stop task action.
+Split from #568 (whose panel work
 was itself split three ways: #581 → #582 → #583). It shipped with no Figma node — desktop-only
 (pyrycode#1241), the canonical mobile file has no counterpart — so the shell reused the shared
 `.status-sheet__*` overlay vocabulary as an interim placeholder, deliberately reused rather than
@@ -60,11 +61,14 @@ each .background-task-panel__row (TaskRow, #1635):
                                  (repeated summaries and their cut chips are hidden together — #1754)
   task.latestUpdate !== null → .__update ("Latest update" label + .__update-block > .__no-change | .__patch) + .__cut-patch
                                  when update.truncatedFields (not task.truncatedFields) names "patch" — #583
+  eligible running row → .button-small.background-task-panel__stop "Stop task"
+                         (after all reports and cut markers; disabled while its pair is pending)
 ```
 
 **No bridge mount.** Unlike `WorkspacePickerSheet` (which mounts `RecentWorkspacesData` inside itself),
-`<BackgroundTaskRosterData />` is already the seventh headless leaf in `App.tsx` — this panel is a pure
-reader, and mounting a second data path here would be a second, wrong write path.
+`<BackgroundTaskRosterData />` is already the seventh headless leaf in `App.tsx` and owns roster updates
+and stop-wait settlement even while the drawer is closed. The panel sends the separate stop command;
+mounting another event listener here would create a second write path and lose settlement on closure.
 
 **The three-way branch is the ticket's hardest AC**, and is deliberately written on two different
 things in this order: `entry === null` (no background-task frame has ever arrived) before
@@ -146,8 +150,9 @@ wanted, remains open.
 **SECURITY.** For `taskType: local_bash`, `description` is the literal shell command claude ran —
 untrusted, model-influenced text the daemon bounds but does not sanitize. Rendered as auto-escaped
 React children only: never `dangerouslySetInnerHTML`, never an attribute (not even `title=`), never a
-key, never executed or re-shelled. Rows are deliberately non-interactive (no `<button>`, no `onClick`)
-so there is no handler for a future "run this" affordance to grow from. The list itself is not treated
+key, never executed or re-shelled. Rows remain inert `<li>` elements with no row-level handler; only
+the separate Stop task button sends the conversation/task routing ids. Task ids never reach a log,
+an attribute (including `data-*` or `aria-*`), or a key beyond the existing row key. The list is not treated
 as a work list: `entry.tasks.values()` is spread once, inline, into `<li>` children — no join, no
 clipboard, no export, no `data-*` attribute carrying a task field. Architect self-review PASS (security-
 sensitive label); code review PASS with zero findings.
@@ -242,6 +247,60 @@ membership (a boolean), never the `status` string itself; mapping the daemon's a
 Capped Figma frames also show still belong to #1640, and are not drawn here. `tokens.css` gained
 `--color-secondary` (#bac8da, M3 Secondary, dark scheme) for the group headers — the palette had no
 existing token that matched it.
+
+## Stop task
+
+Each eligible Running row has a separate **Stop task** button after its progress, latest-update block
+and all cut markers. It uses the shared `.button-small` shape with the local
+`.background-task-panel__stop` outlined treatment: surface background, primary text/border, 6px radius,
+16px horizontal and 7px vertical padding, and 12/16 emphasized body-small typography. Pending retains
+the same label with `disabled` and 0.38 opacity. Finished rows and Codex conversations have no button.
+A row whose **own** `task.truncatedFields` names `task_id` also has none: a cut identity cannot route
+an action safely. An update or progress report's cut list does not hide the action.
+
+`ConversationScreen` passes `selectedHost` as the container's `serverId`. The container reads
+`selectStatusFor(serverId)` from `sessionStore` and supplies `onStopTask` only for Claude when that host
+is connected and its ack includes `CAPABILITY_STOP_BACKGROUND_TASK` (`stop_background_task`). The
+compatibility `selectStatus` cell can describe another host and must not enable this button.
+The click rechecks the owning host's current status, calls `beginTaskStop(conversationId, taskId)`
+synchronously, then sends one `stopBackgroundTask` command with `conversation_id` and `task_id`.
+There is no dialog or optimistic removal/finish. A duplicate claim sends nothing, including from a
+stale render before the disabled state paints.
+
+The container reads `selectPendingTaskStopsFor` and passes its held set as `pendingTaskIds` to the pure
+view. Only that pair's button disables. Waits survive drawer closure and conversation switches because
+the [roster store and app bridge](background-task-roster-store-internals.md#pending-stop-waits) own them.
+Acceptance is silent and has no timeout: a terminal update, roster omission, correlated refusal or
+owning-server reconnect ends the wait. A `stopped` update keeps the row in Finished with its Stopped tag
+and summary; an omission removes it; refusal re-enables its button. Composer Stop and its Escape
+binding still interrupt only the reply in progress; background tasks outlive the turn. Drawer Escape
+arbitration above remains unchanged.
+
+### Stop task testing
+
+`BackgroundTaskPanel.test.tsx` statically checks visible/hidden/disabled states, footer placement after
+the cut patch, unchanged pending label and absence of a hostile task id from markup. The owning-host
+container test in `backgroundTaskStop.test.ts` supplies populated roster and session snapshots through
+spies on **`getInitialState`**: Zustand's server render reads that snapshot, so setting only a singleton's
+current state does not seed the render. Keep the positive visible-button case alongside negative host
+gates; an empty roster would otherwise make every hidden-button assertion pass without proving gating.
+Static renders do not run click handlers or effects; see [test boundaries](development-verification.md#what-each-test-tier-proves).
+
+`e2e/fixtures/conversationStateFake.ts` records stop payloads in arrival order through
+`backgroundTaskStopRequests()`. Silence is the default; `setBackgroundTaskStopAnswer` configures an exact
+conversation/task pair with `'silent'`, `'stopped'`, `'refused'` or `{ roster: [...] }`.
+`replyToBackgroundTaskStop(index, answer)` can settle a recorded request later. Its refusal uses that
+request's envelope id as `in_reply_to` and deliberately names an unrelated conversation in the error
+body, proving that main's send-time pair correlation reaches the renderer.
+
+`e2e/background-task-stop.spec.ts` drives the actual Noise/IPC command/event path: one silent request
+remains disabled through repeated activation, progress/update frames, drawer close/reopen and switching
+away/back; another row stays enabled. It then checks Stopped grouping without a button, roster omission,
+and correlated refusal re-enabling, with exactly three recorded payloads for the three stops.
+The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1777#issuecomment-5997471002)
+accepted the focused result (one selected, executed and passed), dispatcher full-suite gates, and
+integrated synthetic Figma comparisons at 1280×800 and 800×600. This ticket requires the fake-transport
+tier; no live-Claude acceptance is required.
 
 ## Task type labels (#1746)
 

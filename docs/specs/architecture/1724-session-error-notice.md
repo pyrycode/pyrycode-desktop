@@ -89,6 +89,8 @@ None. A cleaner shape was considered: a separate error store would duplicate con
 
 Security re-check: PASS. Request owners are process-local symbols, absent from saved snapshots and diagnostics. Deferred cleanup changes no trust boundary, IPC API, credential handling, frame validation or renderer security setting; old reads cannot settle into a different host or request. Total branch work remains below 800 written lines, with no new exported type/component/store or consumer migration. Existing overlaps remain in distinct blocks.
 
+2026-10-05 (verifier rework, StrictMode fixture): The development test re-navigated the already-loading window with `loadFile` to a scratch `/tmp` file, which failed with `ERR_FAILED` on the dispatcher's host before any assertion. It now serves the development build from a loopback Vite preview server and launches through `createWindow`'s existing unpackaged `ELECTRON_RENDERER_URL` path, so the window loads it once at startup with its normal `will-navigate` confinement, sandbox and context isolation. `LaunchControl` gains an optional `rendererUrl`; absent, the fixture keeps stripping the variable. The test asserts the window URL is the preview URL; reverting to unconditional cleanup consumption fails it. No production change.
+
 ## Documentation handoff
 
 - Pending documentation stage: `docs/knowledge/features/daemon-connection.md` § What it does — document `session_error` decoding and IPC: only conversation id/code survive; unknown codes are accepted; daemon message/extras are discarded and diagnostics remain content-free.

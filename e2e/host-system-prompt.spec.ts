@@ -1,4 +1,10 @@
 import { writeFileSync } from 'node:fs'
+import { mkdtemp, readFile, readdir } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { build, loadConfigFromFile, preview } from 'vite'
+import { HOST_LABEL_SET_CHANNEL } from '../src/shared/ipc/hostLabel'
+import { UNPAIR_SERVER_CHANNEL } from '../src/shared/ipc/unpair'
 import { test, expect, SEEDED_ROW, SECOND_SEEDED_ROW } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
@@ -39,7 +45,7 @@ function hostFake(seed: typeof SEEDED_ROW, initial: string) {
   } }
 }
 
-test('selected-host prompt read, reset, durable save, failures and modal lifetime', async ({ launchPairedApp }) => {
+test('selected-host prompt read, reset, durable save, failures and modal lifetime', async ({ launchPairedApp }, testInfo) => {
   test.setTimeout(90_000)
   const a = hostFake(SEEDED_ROW, 'host A instructions'), b = hostFake(SECOND_SEEDED_ROW, '')
   const { page, app, servers } = await launchPairedApp(
@@ -52,7 +58,7 @@ test('selected-host prompt read, reset, durable save, failures and modal lifetim
     })
     await paint()
     await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
-    writeFileSync(`/tmp/builder-1738/${name}.png`, Buffer.from(await paint(), 'base64'))
+    writeFileSync(testInfo.outputPath(`${name}.png`), Buffer.from(await paint(), 'base64'))
   }
   const dialog = page.getByRole('dialog', { name: 'Edit host', exact: true })
   const field = dialog.getByRole('textbox', { name: 'Host system prompt:' })
@@ -136,3 +142,110 @@ test('selected-host prompt read, reset, durable save, failures and modal lifetim
   await expect(field).toHaveValue('interrupted write'); await expect(field).toBeEnabled()
   await expect(dialog).toBeVisible(); await cancel.click()
 })
+
+test('each opening reads once under development StrictMode effect replay', async ({ launchPairedApp }) => {
+  test.setTimeout(90_000)
+  const loaded = await loadConfigFromFile({ command: 'build', mode: 'development' }, resolve('electron.vite.config.ts'))
+  const renderer = loaded!.config.renderer
+  const outDir = await mkdtemp(join(tmpdir(), 'builder-1738-strict-mode-'))
+  await build({ ...renderer, configFile: false, root: resolve('src/renderer'), base: './',
+    define: { ...renderer.define, 'process.env.NODE_ENV': JSON.stringify('development') },
+    build: { ...renderer.build, outDir, minify: false }, logLevel: 'silent' })
+  const assets = join(outDir, 'assets')
+  const bundle = (await readdir(assets)).find(name => name.endsWith('.js'))!
+  expect(await readFile(join(assets, bundle), 'utf8')).toContain('commitDoubleInvokeEffectsInDEV')
+  const server = await preview({ configFile: false, root: resolve('src/renderer'), build: { outDir },
+    preview: { host: '127.0.0.1', port: 0 }, logLevel: 'silent' })
+  try {
+    const rendererUrl = server.resolvedUrls!.local[0]
+    const fake = hostFake(SEEDED_ROW, 'Stored prompt')
+    const { page, daemon } = await launchPairedApp({ buildReplyFrames: fake.buildReplyFrames }, { rendererUrl })
+    expect(page.url()).toBe(rendererUrl)
+    const pen = page.locator('.channel-list__host-edit').first()
+    const dialog = page.getByRole('dialog', { name: 'Edit host', exact: true })
+    const field = dialog.getByRole('textbox', { name: 'Host system prompt:' })
+    await pen.click()
+    await expect(field).toHaveValue('Stored prompt')
+    expect(fake.reads).toHaveLength(1)
+    await page.setViewportSize({ width: 800, height: 240 })
+    await dialog.getByRole('textbox', { name: 'Host name:' }).focus()
+    await page.keyboard.press('Tab')
+    await expect(field).toBeFocused()
+    await expect(field).toBeInViewport()
+    await page.keyboard.press('Tab')
+    await expect(dialog.getByRole('button', { name: 'Reset to default', exact: true })).toBeFocused()
+    await expect(dialog.getByRole('button', { name: 'Reset to default', exact: true })).toBeInViewport()
+    await field.fill('Unsent draft')
+    daemon.pushFrame(answer(fake.reads[0].id, 'Duplicate'))
+    await expect(field).toHaveValue('Unsent draft')
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+    fake.state.holdRead = true
+    await pen.click()
+    await expect.poll(() => fake.reads.length).toBe(2)
+    await expect(field).toBeDisabled()
+    daemon.pushFrame(answer(fake.reads[0].id, 'Dismissed interaction'))
+    daemon.pushFrame(answer(fake.reads[1].id, 'Fresh opening'))
+    await expect(field).toHaveValue('Fresh opening')
+    expect(fake.reads).toHaveLength(2)
+  } finally {
+    await server.close()
+  }
+})
+
+for (const nameResult of ['stored', 'error']) {
+  test(`late ${nameResult} name save cannot unlock an outstanding unpair after disconnect`, async ({ launchPairedApp }) => {
+    const fake = hostFake(SEEDED_ROW, 'Stored prompt')
+    const { app, page, forwarder } = await launchPairedApp({ buildReplyFrames: fake.buildReplyFrames })
+    await app.evaluate(({ ipcMain }, { nameChannel, unpairChannel, nameResult }) => {
+      const original = (ipcMain as typeof ipcMain & {
+        _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, request: unknown) => Promise<unknown>>
+      })._invokeHandlers.get(nameChannel)!
+      ipcMain.removeHandler(nameChannel)
+      ipcMain.handle(nameChannel, async (event, request) => {
+        await new Promise<void>(resolve => ipcMain.once('test:release-name-save', () => resolve()))
+        return nameResult === 'stored' ? original(event, request) : { status: 'error' }
+      })
+      ipcMain.removeHandler(unpairChannel)
+      ipcMain.handle(unpairChannel, async () => {
+        await new Promise<void>(resolve => ipcMain.once('test:release-unpair', () => resolve()))
+        return { result: 'error' }
+      })
+    }, { nameChannel: HOST_LABEL_SET_CHANNEL, unpairChannel: UNPAIR_SERVER_CHANNEL, nameResult })
+    try {
+      await page.locator('.channel-list__host-edit').first().click()
+      const dialog = page.getByRole('dialog', { name: 'Edit host', exact: true })
+      const name = dialog.getByRole('textbox', { name: 'Host name:' })
+      const prompt = dialog.getByRole('textbox', { name: 'Host system prompt:' })
+      const ok = dialog.getByRole('button', { name: 'OK', exact: true })
+      await expect(prompt).toHaveValue('Stored prompt')
+      await name.fill('Persisted late name')
+      await ok.click()
+      await expect(name).toBeDisabled()
+      forwarder.closeClientLeg(4404)
+      await expect(dialog.getByText('Could not save the host system prompt')).toBeVisible()
+      await dialog.getByRole('button', { name: 'Unpair host', exact: true }).click()
+      await dialog.getByRole('button', { name: 'Confirm', exact: true }).click()
+      const forgetting = dialog.getByRole('button', { name: 'Forgetting…', exact: true })
+      await expect(forgetting).toBeDisabled()
+      await app.evaluate(({ ipcMain }) => { ipcMain.emit('test:release-name-save') })
+      // Drain the actual invoke continuation before checking that the unpair lock survived it.
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+      if (nameResult === 'stored') await expect(page.locator('.channel-list__host-label').first()).toHaveText('Persisted late name')
+      await expect(forgetting).toBeDisabled()
+      await expect(name).toBeDisabled()
+      await expect(prompt).toBeDisabled()
+      await expect(ok).toBeDisabled()
+      await expect(dialog.getByRole('button', { name: 'Reset to default', exact: true })).toBeDisabled()
+      await expect(dialog.locator('.modal__action--cancel')).toBeEnabled()
+      await app.evaluate(({ ipcMain }) => { ipcMain.emit('test:release-unpair') })
+      await expect(dialog.getByText('Could not unpair this host')).toBeVisible()
+      await expect(name).toBeEnabled()
+      expect(fake.writes).toHaveLength(0)
+    } finally {
+      await app.evaluate(({ ipcMain }) => {
+        ipcMain.emit('test:release-name-save')
+        ipcMain.emit('test:release-unpair')
+      })
+    }
+  })
+}

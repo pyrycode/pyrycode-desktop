@@ -291,6 +291,7 @@ export function ChannelList({
   // what makes AC2's "the dialog reopens idle" true with no reset code of its own.
   const [editHostStatus, setEditHostStatus] = useState<EditHostStatus>('idle')
   const editHostInteraction = useRef(0)
+  const editHostOperation = useRef(0)
   // The Add-workspace dialog's open cell (#1308) — ONE cell, not the pairs above it, because the path and
   // the round-trip status live in the dialog container rather than here: it is mounted only while this
   // holds a server id, so its subscription's lifetime IS the dialog's open lifetime, which is what makes
@@ -605,16 +606,20 @@ export function ChannelList({
           onCancel={() => { editHostInteraction.current++; setEditHostServerId(null) }}
           onSaveName={async () => {
             const interaction = editHostInteraction.current
+            const operation = ++editHostOperation.current
             const serverId = editHostServerId
             const next = await requestSetHostLabel(window.pyry.setHostLabelFor, serverId, editHostName)
             if (next !== null) hostLabelStore.getState().setHostLabelFor(serverId, next)
-            if (interaction === editHostInteraction.current) setEditHostStatus(next === null ? 'failed' : 'idle')
+            // A disconnected save may settle after this interaction has started unpairing or retrying.
+            if (interaction === editHostInteraction.current && operation === editHostOperation.current) {
+              setEditHostStatus(next === null ? 'failed' : 'idle')
+            }
             return next !== null
           }}
           // #1422 — the unpair slot. Arm and cancel are pure cell moves; only confirm acts.
           unpair={{
-            onArm: () => setEditHostStatus('confirming-unpair'),
-            onCancel: () => setEditHostStatus('idle'),
+            onArm: () => { editHostOperation.current++; setEditHostStatus('confirming-unpair') },
+            onCancel: () => { editHostOperation.current++; setEditHostStatus('idle') },
             onConfirm: () => {
               // ⭐ THE ERASE IS KEYED BY THE ID CAPTURED IN THIS CLOSURE, fixed BEFORE the await and never
               // re-read from state after it — the save arrow's rule above, applied to the destructive
@@ -622,6 +627,7 @@ export function ChannelList({
               // erase, or report against, another machine's record.
               const serverId = editHostServerId
               const interaction = editHostInteraction.current
+              const operation = ++editHostOperation.current
               void runEditHostUnpair({
                 // `window.pyry` is dereferenced HERE, at interaction time, never during render — the
                 // `onCreateChat` discipline, so this container stays server-renderable.
@@ -653,20 +659,13 @@ export function ChannelList({
                     },
                     serverId
                   ),
-                // ⭐ BOTH ARMS ARE FUNCTIONAL UPDATERS, and that is load-bearing rather than stylistic.
-                // AC4 keeps the footer Cancel enabled during the flight (the invoke has no timeout), so
-                // the operator can dismiss this dialog mid-erase and reopen it against a DIFFERENT host
-                // before the answer lands — at which point these arrows still hold the departed host's
-                // cells. The erase itself is immune by construction, keyed by the id captured above; the
-                // MESSAGE is not, and unguarded it would close host B's freshly opened dialog or report a
-                // failure against it. Reading `prev` closes both: in that case it is B's id and `idle`
-                // respectively, so each is a no-op, and on the ordinary path both behave exactly as the
-                // unguarded calls would. The updaters are pure, so StrictMode's double invoke is inert.
+                // Dismissal remains available during erase. Both callbacks belong to this interaction
+                // and operation; a late outcome must not update or close a reopened dialog.
                 setStatus: (next) => {
-                  if (interaction === editHostInteraction.current) setEditHostStatus(next)
+                  if (interaction === editHostInteraction.current && operation === editHostOperation.current) setEditHostStatus(next)
                 },
                 close: () => {
-                  if (interaction === editHostInteraction.current) {
+                  if (interaction === editHostInteraction.current && operation === editHostOperation.current) {
                     editHostInteraction.current++; setEditHostServerId(null)
                   }
                 }

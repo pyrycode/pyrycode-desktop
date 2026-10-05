@@ -1,6 +1,8 @@
-import { mkdirSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
+import type { ElectronApplication, Page } from '@playwright/test'
 import { HOST_LABEL_SET_CHANNEL } from '../src/shared/ipc/hostLabel'
 import { SERVER_INFO_CHANNEL } from '../src/shared/ipc/serverInfo'
+import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import {
   test,
   expect,
@@ -20,9 +22,8 @@ import {
 // owns the pen's own reveal and drawn box and must pass with its assertions untouched, so the dialog gets
 // its own launch exactly as that one did.
 //
-// ⭐ NOTHING ON THIS PATH REACHES THE DAEMON, which is the claim step 6 exists to prove. The write goes
-// through `window.pyry.setHostLabelFor` (#1186) to the background process's at-rest store; there is no
-// wire type, no command, and no `sendCommand` call anywhere in the dialog or its container's save arrow.
+// Name writes stay local through `window.pyry.setHostLabelFor`. Opening also reads the host prompt;
+// saving an unchanged prompt must send no additional frame, which step 6 proves.
 //
 // ⭐ `hostLabel` AND `secondServer` LIVE ON THE SECOND ARGUMENT. Nothing typechecks `e2e/`, so one placed
 // in the first is dropped SILENTLY with no gate red — leaving a drive that passes without ever having had
@@ -78,9 +79,20 @@ const RELAY_CAPTION = 'Relay address:'
 // still print only what the harness wrote, never operator or daemon text.
 const relayUrlOf = (url: string): string => `${url}/v1/client`
 
+async function capture(app: ElectronApplication, page: Page, path: string): Promise<void> {
+  // The Linux fixture keeps its window hidden; capturePage paints it without showing or focusing it.
+  const paint = () => app.evaluate(async ({ BrowserWindow }) => {
+    const image = await BrowserWindow.getAllWindows()[0].capturePage(undefined, { stayHidden: true, stayAwake: true })
+    return image.toPNG().toString('base64')
+  })
+  await paint()
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  writeFileSync(path, Buffer.from(await paint(), 'base64'))
+}
+
 test('the host row’s pen renames the machine, clears it, and the name outlives a sidebar remount', async ({
   launchPairedApp
-}) => {
+}, testInfo) => {
   // ONE launch for the drive, a SECOND for the relaunch criterion. The ordering inside launch 1 is
   // load-bearing throughout: every absence or unchanged-state assertion sits AFTER a positive,
   // auto-waiting read of the same gesture's own effect.
@@ -90,10 +102,15 @@ test('the host row’s pen renames the machine, clears it, and the name outlives
   // added is a tally of how many frames the client sent. Step 6 reads that tally; nothing else does, and it
   // records a NUMBER, never a byte of any frame.
   let inboundFrames = 0
-  const { page, servers } = await launchPairedApp(
+  const { app, page, servers } = await launchPairedApp(
     {
-      buildReply: () => {
+      buildReply: (bytes) => {
         inboundFrames += 1
+        const env = decodeEnvelope(bytes)
+        if (env.type === 'request_host_system_prompt') return encodeEnvelope({
+          id: 900, ts: '2026-10-05T00:00:00Z', type: 'host_system_prompt', in_reply_to: env.id,
+          payload: { system_prompt: 'Stored instructions', default_system_prompt: 'Default instructions' }
+        })
         return seedConversationsFrame()
       }
     },
@@ -163,9 +180,8 @@ test('the host row’s pen renames the machine, clears it, and the name outlives
   await expect(dialog.locator('img')).toHaveCount(1)
   await expect(dialog.locator('img')).toHaveAttribute('alt', '')
   expect(await dialog.locator('a').count()).toBe(0)
-  mkdirSync('/tmp/builder-1348-modal', { recursive: true })
-  await page.screenshot({ path: '/tmp/builder-1348-modal/normal-1280x800.png' })
-  await expect(dialog).toHaveCSS('width', '646px')
+  await capture(app, page, testInfo.outputPath('normal-1280x800.png'))
+  await expect(dialog).toHaveCSS('width', '640px')
   await expect(nameField).not.toBeFocused()
   await page.locator('.edit-host-overlay__scrim').click({ position: { x: 4, y: 4 } })
   await expect(dialog).toBeVisible()
@@ -173,9 +189,11 @@ test('the host row’s pen renames the machine, clears it, and the name outlives
   await page.keyboard.press('Escape')
   await expect(dialog).toBeVisible()
   await nameField.fill('Discard this draft')
-  // TWO tabs since #1422: the Unpair host button sits between the field and the footer. Stepping THROUGH
-  // it rather than onto it is the point of the intermediate assertion — an Enter one tab early would arm
-  // the confirmation instead of dismissing the draft, and this step is about the draft.
+  // Traverse the ready prompt and its reset before Unpair host and the footer.
+  await page.keyboard.press('Tab')
+  await expect(dialog.getByRole('textbox', { name: 'Host system prompt:' })).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(dialog.getByRole('button', { name: 'Reset to default', exact: true })).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(dialog.getByRole('button', { name: 'Unpair host', exact: true })).toBeFocused()
   await page.keyboard.press('Tab')
@@ -217,6 +235,7 @@ test('the host row’s pen renames the machine, clears it, and the name outlives
   // would put the generic word in the box here. ---
   await pens.first().click()
   await expect(nameField).toHaveValue('')
+  await expect(dialog.getByRole('textbox', { name: 'Host system prompt:' })).toHaveValue('Stored instructions')
 
   // --- 5. AC2/AC4: type a name, press Save, and BOTH of machine A's host rows show it — while machine B's
   // two rows keep their own answer, which is the isolation claim. Every hop ran for real: the click
@@ -229,7 +248,7 @@ test('the host row’s pen renames the machine, clears it, and the name outlives
   await expect(dialog).toHaveCount(0)
   await expectLabels(NEW_LABEL, FALLBACK_LABEL)
 
-  // --- 6. AC4's last clause: NO daemon command left the window. The tally is compared only AFTER step 5's
+  // --- 6. No frame leaves for a name-only save after its prompt read. The tally is compared AFTER step 5's
   // positive read has settled, so this is a mutation check on a value that had every opportunity to move —
   // not a read taken before the work happened. A rename routed through `sendCommand` instead would have
   // sealed a frame to the fake and incremented it. ---
@@ -313,8 +332,7 @@ for (const exit of ['Cancel', 'Close dialog']) {
   })
 }
 
-test('long host details wrap at minimum width and all controls remain reachable in a short window', async ({ launchPairedApp }) => {
-  mkdirSync('/tmp/builder-1348-modal', { recursive: true })
+test('long host details wrap at minimum width and all controls remain reachable in a short window', async ({ launchPairedApp }, testInfo) => {
   const { app, page } = await launchPairedApp()
   const server = { serverId: `host-${'x'.repeat(900)}`, relayUrl: `wss://relay.example/${'y'.repeat(1400)}` }
   await app.evaluate(({ ipcMain }, { channel, server }) => {
@@ -327,13 +345,13 @@ test('long host details wrap at minimum width and all controls remain reachable 
   const dialog = page.getByRole('dialog', { name: 'Edit host' })
   const values = dialog.locator('.edit-host__detail-value')
   await expect(values).toHaveText([server.serverId, server.relayUrl])
-  await expect(dialog).toHaveCSS('width', '646px')
+  await expect(dialog).toHaveCSS('width', '640px')
   expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
   for (const value of await values.all()) {
     expect(await value.evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThan(20)
     expect(await value.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
   }
-  await page.screenshot({ path: '/tmp/builder-1348-modal/long-800x600.png' })
+  await capture(app, page, testInfo.outputPath('long-800x600.png'))
   await page.setViewportSize({ width: 800, height: 240 })
   await expect(dialog).toBeVisible()
   expect(await dialog.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true)
@@ -344,6 +362,8 @@ test('long host details wrap at minimum width and all controls remain reachable 
   const field = dialog.getByRole('textbox', { name: 'Host name:' })
   await expect(field).toBeFocused()
   await expect(field).toBeInViewport()
+  // The synthetic identity has no paired transport, so its failed prompt read stays outside tab order.
+  await expect(dialog.getByRole('textbox', { name: 'Host system prompt:' })).toBeDisabled()
   // #1422 inserted the Unpair host button between the field and the footer — it sits in the content
   // area below the field, so document order puts it here. Asserted rather than skipped over: this is the
   // one place the new control's KEYBOARD reachability is proven, and at 800x240 it must scroll into view
@@ -357,14 +377,14 @@ test('long host details wrap at minimum width and all controls remain reachable 
   await page.keyboard.press('Tab')
   await expect(dialog.getByRole('button', { name: 'OK', exact: true })).toBeFocused()
   await expect(dialog.getByRole('button', { name: 'OK', exact: true })).toBeInViewport()
-  await page.screenshot({ path: '/tmp/builder-1348-modal/short-footer-800x240.png' })
+  await capture(app, page, testInfo.outputPath('short-footer-800x240.png'))
   await page.keyboard.press('Shift+Tab')
   await page.keyboard.press('Shift+Tab')
   await page.keyboard.press('Shift+Tab')
   await page.keyboard.press('Shift+Tab')
   await expect(close).toBeFocused()
   await expect(close).toBeInViewport()
-  await page.screenshot({ path: '/tmp/builder-1348-modal/short-header-800x240.png' })
+  await capture(app, page, testInfo.outputPath('short-header-800x240.png'))
   await page.keyboard.press('Enter')
   await expect(dialog).toHaveCount(0)
 })

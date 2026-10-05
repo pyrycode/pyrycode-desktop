@@ -12113,7 +12113,7 @@ describe('assistant parent attribution in live and history decode', () => {
   })
   it.each([null, 42, true, [], {}])('rejects malformed parent %s without exposing its value', (parent_tool_use_id) => {
     const payload = { ...DELTA, parent_tool_use_id }
-    expect(() => parseInboundMessage(encodeAssistantDelta(payload))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeAssistantDelta(payload))).toThrow('malformed optional field: parent_tool_use_id')
     expect(decodedEntries([historyEntry('assistant_delta', payload)])).toEqual([])
   })
 })

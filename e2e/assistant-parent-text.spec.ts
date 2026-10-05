@@ -59,6 +59,7 @@ test('streamed assistant text folds under its owner and follows expansion withou
       window.setSize(size, 800)
       window.show()
     }, width)
+    await page.locator('.conversation__thread').evaluate(element => { element.scrollTop = 0 })
     await page.screenshot({ path: `/tmp/builder-1789/expanded-${width}.png`, animations: 'disabled' })
   }
   await b.locator('.tool-row__chip').click()
@@ -66,4 +67,25 @@ test('streamed assistant text folds under its owner and follows expansion withou
   await expect(reply('Mixed last')).toBeHidden()
   await expect(owner('nested-read')).toBeHidden()
   await expect(reply('Main thread reply')).toBeVisible()
+})
+
+test('attributed text follows its owner when an enclosing tool run collapses', async ({ launchPairedApp }) => {
+  const { page, daemon } = await launchPairedApp()
+  for (const [tool_use_id, name] of [['run-read', 'Read'], ['run-agent', 'Agent']]) {
+    daemon.pushFrame(frame('tool_use', { ...common, tool_use_id, name, input_summary: tool_use_id }))
+  }
+  daemon.pushFrame(frame('assistant_delta', { ...common, seq: 0, text: 'Reply inside tool run', parent_tool_use_id: 'run-agent' }))
+  const run = page.locator('.tool-run button')
+  const agent = page.locator('.tool-row').filter({ has: page.locator('.tool-row__summary', { hasText: /^run-agent$/ }) })
+  const reply = page.locator('[data-thread-role="assistant"]').filter({ hasText: 'Reply inside tool run' })
+  await expect(run).toContainText('Using tools: 2')
+  await expect(reply).toBeHidden()
+  await run.click()
+  await agent.locator('.tool-row__chip').click()
+  await expect(reply).toBeVisible()
+  await run.click()
+  await expect(agent).toBeHidden()
+  await expect(reply).toBeHidden()
+  await run.click()
+  await expect(reply).toBeVisible()
 })

@@ -69,3 +69,7 @@ None. The cleaner shape is to extend the existing projection with `hasChildren`,
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-05
+
+## Revisions
+
+2026-10-05: Final merge brought #1764's folded tool runs into `Timeline`. A failing fake-transport regression showed an expanded agent's newly attributed text stayed visible after its enclosing run collapsed: text is not a tool-run member. Extend `hiddenRows` to check each ancestor's enclosing run as well as its own expand state. This keeps the existing run projection untouched and preserves text expansion when reopening the run. The focused spec now covers both nesting controls. Capture the test window shown, since Linux hidden-window screenshot capture timed out after the interaction assertions passed. Written work remains below 400 lines, with the same nine production files and no new exported surfaces.

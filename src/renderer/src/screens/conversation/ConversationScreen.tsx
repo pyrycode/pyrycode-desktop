@@ -1143,8 +1143,11 @@ export function Timeline({
   const expandedRunStarts = new Set(runs.filter(runIsExpanded).map((run) => run.index))
   const hiddenRows = new Set(projection.filter((group) => {
     const run = runByMember.get(group.index)
-    return group.ancestors.some((index) => !expandedTools.has(firstRowKey + index)) ||
-      (run !== undefined && !expandedRunStarts.has(run.index))
+    return group.ancestors.some((index) => {
+      const ancestorRun = runByMember.get(index)
+      return !expandedTools.has(firstRowKey + index) ||
+        (ancestorRun !== undefined && !expandedRunStarts.has(ancestorRun.index))
+    }) || (run !== undefined && !expandedRunStarts.has(run.index))
   }).map((group) => group.index))
   // Hidden descendants stay mounted; undrawn rows are skipped when joining tool rows.
   const visible = drawn.filter((group) => !hiddenRows.has(group.index))

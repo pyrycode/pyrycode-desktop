@@ -99,15 +99,38 @@ still resolves by the result's own `toolUseId`, never the parent id, and adds no
 A result may supply a missing parent but cannot erase or replace a known one;
 orphan and duplicate result behavior is unchanged.
 
-Attribution is an in-memory grouping hint, never authorization or diagnostic content.
+Attribution is a display grouping hint, never authorization or diagnostic content.
 Stored arrival order remains unchanged; the [tool-group display projection](conversation-shell-tool-row-header-groups.md#subagent-tool-groups)
-handles orphan recovery and nesting. Assistant-text attribution is outside this feature.
+handles orphan recovery and nesting. Tool and assistant parent hints also survive
+[saved history](chat-history.md#snapshot-contract).
 
 History fixtures need timestamps distinct from live events unless testing replay
 deduplication intentionally: the existing history/live join compares event type and
 timestamp, so a reused timestamp can suppress the historical result being tested.
 The replay unit test and `e2e/tool-groups.spec.ts` verify that attribution survives
 history and that a replayed result actually fills its call.
+
+## Assistant parent attribution
+
+Live and history `assistant_delta` share
+[optional parent validation](inbound-message-decode.md#optional-assistant-parent-attribution).
+`daemonConnection` copies the live hint by name; `DecodedHistoryEvent` and
+`HistoryTimelineEvent` retain the history hint. Both reach `translateTimelineEvent`
+as `parentToolUseId`, which forwards it onto `ThreadEvent.assistantDelta` and then
+`ThreadItem.assistantText`, without consulting the current agent roster.
+
+The reducer coalesces only adjacent assistant deltas with equal turn **and** parent,
+keeping the first stamp. Main-thread text and two helpers sharing a turn must not
+merge into one bubble. Stored rows remain in arrival order; loaded Agent/Task calls,
+including completed calls, own matching text in the
+[display projection](conversation-shell-tool-row-header-groups.md#subagent-tool-groups).
+An absent owner or a matching ordinary tool leaves the reply top-level. Prepending
+history with the owner recomputes grouping over the same retained reply, without
+creating a duplicate or rewriting attribution.
+
+`toolGroups.test.tsx` covers parent-aware coalescing, two interleaved parents,
+history translation and late completed-owner recovery. Snapshot round trips retain
+the hint without changing version 1; older parentless rows retain their reading.
 
 ## Live tool progress
 

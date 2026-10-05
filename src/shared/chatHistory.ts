@@ -7,7 +7,7 @@ export const CHAT_HISTORY_FLUSH_CHANNEL = 'pyry:chat-history-flush'
 
 /** Display records only: no running state, permissions, retry offers or attachment bodies. */
 export type DurableThreadItem =
-  | { kind: 'assistantText'; turnId: string; text: string; createdAt?: number }
+  | { kind: 'assistantText'; turnId: string; text: string; createdAt?: number; parentToolUseId?: string }
   | {
       kind: 'userText'; text: string; createdAt?: number; messageId?: string
       attachments?: readonly { attachmentId: string; filename: string }[]
@@ -126,7 +126,7 @@ function refusal(value: unknown): ModelRefusalEvent {
 function threadItem(value: unknown): DurableThreadItem {
   const v = record(value)
   switch (v.kind) {
-    case 'assistantText': return { kind: v.kind, turnId: id(v.turnId), text: string(v.text), createdAt: optional(v.createdAt, number) }
+    case 'assistantText': return { kind: v.kind, turnId: id(v.turnId), text: string(v.text), createdAt: optional(v.createdAt, number), parentToolUseId: optional(v.parentToolUseId, id) }
     case 'userText': return {
       kind: v.kind, text: string(v.text), createdAt: optional(v.createdAt, number),
       messageId: optional(v.messageId, id),

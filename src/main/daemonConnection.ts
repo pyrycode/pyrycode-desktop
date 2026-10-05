@@ -36,6 +36,7 @@ import { buildRequestContextUsage } from './transport/requestContextUsageEnvelop
 import { buildRequestMcpStatus } from './transport/requestMcpStatusEnvelope'
 import { buildMcpReconnect } from './transport/mcpReconnectEnvelope'
 import { buildMcpToggle } from './transport/mcpToggleEnvelope'
+import { buildStopBackgroundTask } from './transport/stopBackgroundTaskEnvelope'
 import { buildRequestSystemPrompt } from './transport/requestSystemPromptEnvelope'
 import { buildSetSystemPrompt } from './transport/setSystemPromptEnvelope'
 import { buildSetConversationMuted } from './transport/setConversationMutedEnvelope'
@@ -91,6 +92,7 @@ import {
   MAX_FRAME_BYTES,
   CAPABILITY_INTERACTIVE,
   CAPABILITY_MULTI_AGENT,
+  CAPABILITY_STOP_BACKGROUND_TASK,
   type HelloAckPayload,
   type SendMessagePayload,
   type CreateConversationPayload,
@@ -162,6 +164,10 @@ const MAX_PENDING_MCP_RECONNECTS = 32
 
 /** Outstanding MCP toggles kept for refusal correlation (#1586), bounded like the reconnects above. */
 const MAX_PENDING_MCP_TOGGLES = 32
+
+/** Outstanding background-task stops kept for refusal correlation (#1770). An accepted stop gets no reply,
+ *  so only a refusal, eviction or the next dial removes an entry. The 33rd evicts the oldest. */
+const MAX_PENDING_BACKGROUND_TASK_STOPS = 32
 
 /**
  * Injected dependencies. The stores + sink are constructed at the composition root; `deviceName`
@@ -314,6 +320,10 @@ export interface DaemonConnection {
    * toggles answer with an mcp_status; any correlated refusal emits mcpToggleRejected. The server name and
    * the requested state are only put on the wire, never logged or stored. Inert when unavailable. No retry. */
   toggleMcpServer(conversationId: string, serverName: string, enabled: boolean): void
+  /** Ask once for a stop_background_task of one task (#1770). Accepted stops get no reply; a correlated
+   * refusal emits backgroundTaskStopRejected with the ids recorded here. Neither id is logged. Inert when
+   * unavailable. No retry. */
+  stopBackgroundTask(conversationId: string, taskId: string): void
   /**
    * Ask the daemon for one backward step of a scroll-back walk over a conversation's on-disk history
    * (#1222). Takes the whole PAYLOAD rather than a scalar — unlike its two neighbours above, this verb
@@ -959,6 +969,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // MCP toggle correlation (#1586): envelope id → conversation, never the server name or requested state.
   // Its own map, so a toggle refusal can never settle as a reconnect one; ids share one sequence.
   const pendingMcpToggles = new Map<number, string>()
+  // Background-task stop correlation (#1770): envelope id → the ids this app named. The refusal carries no
+  // task id, so the event is built from this entry alone.
+  const pendingBackgroundTaskStops = new Map<number, { conversationId: string; taskId: string }>()
   // Wire envelope id to the optional renderer attempt; reset with each connection generation.
   const pendingWorkspaceRenames = new Map<number, string>()
   // Wire envelope id → the renderer attempt of a set_conversation_muted write (#1595). Keyed by a
@@ -1368,6 +1381,15 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
                 pendingMcpToggles.delete(inReplyTo)
                 deps.diagnosticLog?.event({ event: 'mcp-toggle-rejected' })
                 emitDaemonEvent(sink, { type: 'mcpToggleRejected', conversationId: refusedMcpToggle })
+                return
+              }
+              // Background-task stop refusal (#1770): any code settles it, and nothing is read from the frame.
+              const refusedStop = pendingBackgroundTaskStops.get(inReplyTo)
+              if (refusedStop !== undefined) {
+                pendingBackgroundTaskStops.delete(inReplyTo)
+                deps.diagnosticLog?.event({ event: 'background-task-stop-rejected' })
+                emitDaemonEvent(sink, { type: 'backgroundTaskStopRejected',
+                  conversationId: refusedStop.conversationId, taskId: refusedStop.taskId })
                 return
               }
               const failedRename = pendingWorkspaceRenames.get(inReplyTo)
@@ -2835,7 +2857,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // echoes the accepted intersection back in hello_ack.capabilities (surfaced on `connected`).
       // Advertise `multi_agent` too (#1657): without it the daemon withholds Codex conversations,
       // their frames and Codex model rows, all of which the window now decodes per agent (#1649).
-      capabilities: [CAPABILITY_INTERACTIVE, CAPABILITY_MULTI_AGENT]
+      // Advertise `stop_background_task` (#1770), detection only: the echo says the daemon takes the verb.
+      capabilities: [CAPABILITY_INTERACTIVE, CAPABILITY_MULTI_AGENT, CAPABILITY_STOP_BACKGROUND_TASK]
     })
     return {
       connection: {
@@ -3089,6 +3112,29 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     } catch {
       // Drop the exception and never retry: every refusal is final, and a failed send must not become a loop.
       deps.diagnosticLog?.event({ event: 'mcp-toggle-failed', code: 'build-or-send-failed' })
+    }
+  }
+
+  function stopBackgroundTask(conversationId: string, taskId: string): void {
+    if (driver === null || !authenticated) {
+      deps.diagnosticLog?.event({ event: 'background-task-stop-refused', code: 'unavailable' })
+      return
+    }
+    try {
+      const envelopeId = nextEnvelopeId
+      const bytes = buildStopBackgroundTask({ id: envelopeId, ts: now(), conversationId, taskId })
+      nextEnvelopeId += 1
+      driver.sendMessage(bytes)
+      // Record after the send, so a throwing build or send leaves no entry to correlate.
+      if (pendingBackgroundTaskStops.size >= MAX_PENDING_BACKGROUND_TASK_STOPS) {
+        const oldest = pendingBackgroundTaskStops.keys().next()
+        if (oldest.done !== true) pendingBackgroundTaskStops.delete(oldest.value)
+      }
+      pendingBackgroundTaskStops.set(envelopeId, { conversationId, taskId })
+      deps.diagnosticLog?.event({ event: 'background-task-stop-sent' })
+    } catch {
+      // Drop the exception and never retry: a failed send must not become a loop.
+      deps.diagnosticLog?.event({ event: 'background-task-stop-failed', code: 'build-or-send-failed' })
     }
   }
 
@@ -4040,6 +4086,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     pendingMcpStatusRequests.clear()
     pendingMcpReconnects.clear()
     pendingMcpToggles.clear()
+    pendingBackgroundTaskStops.clear()
     pendingWorkspaceRenames.clear()
     pendingMuteWrites.clear()
     // Abandon any in-flight bundle stream (#505), the fourth per-connection reset: its daemon-side
@@ -4090,6 +4137,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     requestMcpStatus,
     reconnectMcpServer,
     toggleMcpServer,
+    stopBackgroundTask,
     requestSystemPrompt,
     requestHistory,
     requestConversations,

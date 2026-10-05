@@ -87,6 +87,7 @@ interface BuiltConnection {
   mcpStatusRequests: string[]
   mcpReconnects: Array<[string, string]>
   mcpToggles: Array<[string, string, boolean]>
+  taskStops: Array<[string, string]>
   /**
    * The conversation ids this connection's `interrupt` was handed (#1092), recorded beside `calls` for
    * the reason `newSessions` is: `calls.interrupt` survives as this file's lifecycle-delegation probe
@@ -109,6 +110,7 @@ function createFactoryFake() {
     const mcpStatusRequests: string[] = []
     const mcpReconnects: Array<[string, string]> = []
     const mcpToggles: Array<[string, string, boolean]> = []
+    const taskStops: Array<[string, string]> = []
     const interrupts: string[] = []
     built.push({
       serverId: spec.serverId,
@@ -119,6 +121,7 @@ function createFactoryFake() {
       mcpStatusRequests,
       mcpReconnects,
       mcpToggles,
+      taskStops,
       interrupts
     })
     const noop = (): void => {}
@@ -148,6 +151,7 @@ function createFactoryFake() {
       toggleMcpServer: (conversationId, serverName, enabled) => {
         mcpToggles.push([conversationId, serverName, enabled])
       },
+      stopBackgroundTask: (conversationId, taskId) => { taskStops.push([conversationId, taskId]) },
       requestHistory: noop,
       requestSystemPrompt: noop,
       requestConversations: noop,
@@ -549,6 +553,14 @@ describe('createConnectionRegistry', () => {
       registry.connectionFor('beta')?.toggleMcpServer('conv-42', 'docs', true)
       expect(factory.for('beta').mcpToggles).toEqual([['conv-42', 'docs', false], ['conv-42', 'docs', true]])
       expect(factory.for('alpha').mcpToggles).toEqual([])
+    })
+
+    it('forwards background-task stops with both ids only to the named host (#1770)', async () => {
+      const { factory, registry } = harness([record('alpha'), record('beta')])
+      await settle()
+      registry.connectionFor('beta')?.stopBackgroundTask('conv-42', 'task-7')
+      expect(factory.for('beta').taskStops).toEqual([['conv-42', 'task-7']])
+      expect(factory.for('alpha').taskStops).toEqual([])
     })
 
     it('reaches the named server, not the most recently paired one', async () => {

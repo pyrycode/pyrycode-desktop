@@ -199,12 +199,15 @@ and [implementation](https://github.com/pyrycode/pyrycode-desktop/pull/1791).
 
 ## Adjacent tool runs
 
-`ConversationScreen` enables folding in its open-conversation `Timeline`. The optional
-`Timeline.foldTools` prop defaults to false: absent or false retains ordinary tool
-rendering and joins for other callers. This is the preference boundary for Settings
-sibling [#1765](https://github.com/pyrycode/pyrycode-desktop/issues/1765); the current
-conversation screen enables it directly. Folding and expansion are local presentation,
-with no Settings, store, persistence, IPC or wire changes.
+`ConversationScreen` subscribes to the client-wide
+[collapse assistant tool uses preference](collapse-tool-uses-preference-store.md)
+and passes it to `Timeline.foldTools`. Settings → Thread defaults the switch on;
+off restores ordinary tool rows and existing joins without “Using tools: N” headers.
+Turning it on restores folding without restarting, including retained conversations
+and those on another paired host. The optional `Timeline.foldTools` prop still
+defaults to false: absent or false retains ordinary rendering and joins for other
+callers. The persisted preference and expansion remain local presentation, with no
+IPC, transport or wire changes.
 
 ### Membership and boundaries
 
@@ -250,6 +253,10 @@ see [Expansion identity](#expansion-identity) and [Visible tool-row joins](#visi
 pins optional-off equivalence, lone tools, drawn/undrawn boundaries (including queued
 rows and informational banners), Agent ownership and root status combinations.
 Static renders cannot exercise disclosure, state retention or geometry.
+The [preference spec](../../../e2e/collapse-tool-uses-preference.spec.ts) covers
+Settings off/on round trips, keyboard activation, retained chats, another host,
+ordinary joined-stack geometry and off after full relaunch; see the
+[preference coverage and evidence](collapse-tool-uses-preference-store.md#coverage-and-evidence).
 [`e2e/tool-runs.spec.ts`](../../../e2e/tool-runs.spec.ts) covers click/Enter/Space,
 member expansion through outer collapse, appends and an earlier-root history prepend,
 collapsed count/status changes, denial plus result without double counting, and the

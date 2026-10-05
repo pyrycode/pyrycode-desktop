@@ -132,6 +132,9 @@ Two behaviors:
 
 ## Related
 
+- [Collapse assistant tool uses preference](collapse-tool-uses-preference-store.md) — follows this
+  injected boolean-storage pattern under a separate key. Both distinguish missing storage from
+  explicit `false`, so enabling one preference never overwrites the other's choice.
 - [Default-workspace store](default-workspace-store.md) / [#403 codebase notes](../codebase/403.md) —
   the direct structural precedent this store clones (DI-factory → singleton → hook → selector; the
   `fakeStorage()` test idiom).

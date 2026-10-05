@@ -73,6 +73,13 @@ Both launch sites — `launchPairedApp.ts` and `smoke.spec.ts` — now go throug
 
 **Show-window opt-out for headless Linux (2026-10-04).** On Linux under Xvfb, as in the pyrybox dispatcher container, a window that is never shown produces no frames, so every `page.screenshot` and `locator.screenshot` waits out its 30-second timeout. Measured: three specs went from 3 failed in 2.3 minutes with the window hidden to 4 passed in 10 seconds with it shown. Setting `PYRY_E2E_SHOW_WINDOW=1` (`SHOW_WINDOW_E2E_ENV_FLAG` in `desktopIsolation.ts`) makes both launch sites, `launchIsolatedApp` and `realDaemon.ts`, leave `HIDDEN_WINDOW_ENV_FLAG` off. The throttling switches still apply, and `expectDesktopIsolated` and the isolation spec skip only the not-visible clause. Only the harness reads the variable, so the app's own gate is unchanged. Leave it unset on a machine someone is using: a shown window takes focus.
 
+The [collapse-tool preference review](https://github.com/pyrycode/pyrycode-desktop/pull/1793#issuecomment-6003905659)
+records the same trap for Settings on/off captures: a hidden Linux window reached
+correct DOM state but emitted no screenshot frames. Under the virtual display,
+`PYRY_E2E_SHOW_WINDOW=1` enabled captures from the existing focused spec at 800×800
+and 1280×800 windows. DOM assertions alone cannot establish screenshot readiness;
+use the harness option for capture work rather than adding another launch path.
+
 ### Two-server launches
 
 [#1091](https://github.com/pyrycode/pyrycode-desktop/issues/1091) gave `launchPairedApp` an opt-in

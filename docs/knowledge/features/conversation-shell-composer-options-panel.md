@@ -109,12 +109,16 @@ wider). #838 shipped no `position`, no offset and no `z-index` anywhere in the b
 deliberately: the panel cannot be an in-flow child of `.composer__footer`, which holds a hard
 `height: 20px`, and #839 (below) is the ticket that fills the gap in. The panel and footer
 anchors still have no explicit `z-index`. The top-bar consumer requires a different
-stacking relationship: `.composer-options-anchor--bottom-end` has `z-index: 1` so its
-whole panel paints above the later opacity divider and positioned message content.
-`.status-sheet-overlay` has `z-index: 2`, matching the existing dialog overlays above
-menus. Raising only this anchor preserves the title row's layout and avoids a stacking
-context on the whole header. The old outlined `.conversation__overflow-menu` surface
-has been removed; the top bar uses this same panel.
+stacking relationship: `.composer-options-anchor--bottom-end` has `z-index: 2` so its
+whole panel paints above the later opacity divider, positioned message content and
+Top overlay pills at level 1. At level 1 the anchor tied with the later overlay,
+letting the pills cover its popup. `.status-sheet-overlay` and existing dialog
+overlays retain level 2; their later DOM placement keeps them above the menu.
+Raising only this anchor preserves the title row's layout and avoids a stacking
+context on the whole header. See the
+[pill stacking fix](../../specs/architecture/1745-thread-overflow-overlay.md).
+The old outlined `.conversation__overflow-menu` surface has been removed; the top bar
+uses this same panel.
 
 **One shipped deviation from the architecture spec, confirmed correct in review.** The spec read the
 node as drawing no radius; `get_design_context` on `121:3879` returns `rounded-[6px]` on the frame

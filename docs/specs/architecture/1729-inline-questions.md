@@ -4,6 +4,7 @@
 - `ConversationScreen.tsx` → `Timeline`, `ComposerSlot`, `QuestionPanelSlot`, `useThreadScrollPin`: owning chat, composer coverage and resize observations.
 - `conversation.css` → question controls and permission overrides: preserve shared permission styling.
 - `questionBatches.ts`, `questionBatchStore.ts`, `questionBridge.ts`, `questionPicksStore.ts` → reducers, selectors, dispatch ordering: memory-only lifecycle and redelivery.
+- `src/main/index.ts` → question response correlation routing; `activeConversationStore.ts` → current navigation identity: stale callbacks retain their original owner and must reject after navigation.
 - `questionResolution.ts`, `promptResponseAvailability.ts` → resolution and activation gate: optimistic sends, trimmed complete answers and owning-host availability.
 - `composerSlot.test.tsx`, `QuestionPanel.test.tsx`, question/offline/permission and live specs under `e2e/`: existing coverage to adapt.
 - `docs/knowledge/INDEX.md`, `CLAUDE.md`, conversation-shell question-panel and scroll-pin overviews, development-verification: leaf subscriptions, static-render limitations and resize pin behavior.
@@ -61,3 +62,13 @@ None. Cleaner-shape check: compose the existing history leaf and pure controls; 
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-05
+
+## Revisions
+
+2026-10-05: Retired-pick cleanup belongs in `questionBatchStore.dispatch` before publishing the reducer's replacement, rather than in the bridge. This covers every request installer and keeps the bridge's existing signature and subscription unchanged.
+
+2026-10-05: The screen also reads pending-batch presence to omit the empty-history welcome while questions are present. Picks remain leaf-only. Visual comparison scopes the Other label/input width and body-large actions to `.question-batch`, preserving permission styling.
+
+2026-10-05: `createQuestionBatchStore` receives a retirement callback; only the app singleton wires it to the picks store, preserving isolated factory tests. Captures are consolidated in the inline-question spec; legacy permission/offline scratch captures timed out in this runtime and are removed without removing behavioral assertions. Final written additions are below 800 lines (about 590), with one new component and no new state machine.
+
+2026-10-05: Guard retained callbacks against active-conversation identity as well, so navigation invalidates old handlers even while their batch remains pending for later return. Main independently routes responses by its existing question correlation owner.

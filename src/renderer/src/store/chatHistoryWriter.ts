@@ -147,7 +147,7 @@ export function createChatHistoryWriter(deps: {
       const changed = items !== previousItems
       const receipt = deps.receipt()
       const tail = items[items.length - 1]
-      const echo = receipt === null && slice.timeline.localSendPending && tail?.kind === 'userText' &&
+      const echo = receipt === null && slice.timeline.localSendPending !== null && tail?.kind === 'userText' &&
         tail.messageId !== undefined && items.length === previousItems.length + 1 &&
         previousItems.every((item, index) => item === items[index])
       // removeUserEcho removes one row; restored arrays cannot confer local echo identity.

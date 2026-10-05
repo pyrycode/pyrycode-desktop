@@ -12,6 +12,7 @@
 import { useEffect } from 'react'
 import type { DaemonEvent } from '@shared/ipc/events'
 import { queueStore, type QueueSnapshot } from './queueStore'
+import { conversationTimelineStore } from './conversationTimelineStore'
 import {
   conversationListStore,
   selectConversationIdsFor,
@@ -129,7 +130,11 @@ export function QueueData(): null {
     // synchronous dispatch, with no await between them.
     return subscribeQueue(
       window.pyry.onDaemonEvent,
-      (snapshot) => queueStore.getState().setBacklog(snapshot),
+      (snapshot) => {
+        queueStore.getState().setBacklog(snapshot)
+        // #1725: the same snapshot tells the open send window the daemon now holds the message.
+        conversationTimelineStore.getState().markLocalSendQueued(snapshot.conversationId, snapshot.queued)
+      },
       (origin) =>
         queueStore
           .getState()

@@ -15,7 +15,7 @@ const wire: DaemonEvent = { type: 'banner', conversationId: 'a', ...report }
 describe('retained banner reports', () => {
   it('appends every arrival and replaces only the latest stopping reading without changing lifecycle', () => {
     const state = { ...initialTimelineState, phase: 'thinking' as const, stalled: true,
-      localSendPending: true, compacting: true, thinkingTokens: 4, apiRetry: { current: 1, total: 2 } }
+      localSendPending: { messageId: 'm1', queued: false }, compacting: true, thinkingTokens: 4, apiRetry: { current: 1, total: 2 } }
     const first = reduceTimeline(state, banner)
     expect(first).toEqual({ ...state, items: [{ kind: 'banner', ...report }], stoppingBanner: report })
     const duplicate = reduceTimeline(first, banner)

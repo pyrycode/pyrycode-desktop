@@ -9,6 +9,8 @@ import {
   ComposerStatusArea,
   THINKING_COPY,
   WORKING_COPY,
+  SENDING_COPY,
+  WAITING_COPY,
   workingIndicatorState,
   workingIndicatorStateWithLocalSend,
   openToolName,
@@ -2424,6 +2426,19 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
     expect(markup).not.toContain(THINKING_COPY)
   })
 
+  // #1725: the local send window's two stages, on the same element and class as every other label.
+  it.each([
+    ['sending', SENDING_COPY, 'Sending…'],
+    ['waiting', WAITING_COPY, 'Waiting for Claude']
+  ] as const)('shows the %s stage of the local send window on the same surface (#1725)', (state, copy, text) => {
+    const markup = renderToStaticMarkup(
+      <ThinkingIndicator state={state} toolName={null} retry={null} resetting={null} thinkingTokens={null} />
+    )
+    expect(copy).toBe(text)
+    expect(markup).toContain(`<span class="conversation__thinking composer-status__label">${text}</span>`)
+    expect(markup).not.toContain(THINKING_COPY)
+  })
+
   it('carries five client-owned labels, lexically distinct from each other (AC2, AC5, #967)', () => {
     // Reachable without rendering (AC5) — all five exported since #967 moved STALL_COPY up beside its
     // siblings and exported it, so no test asserts a duplicated literal any more.
@@ -2937,15 +2952,22 @@ describe('workingIndicatorState — which label the rows one slot shows (#648, #
 // gate, while a stall sits in the MIDDLE of the order and could not be expressed that way without
 // re-reading the two supersede facts here. See workingIndicatorStateWithLocalSend's own comment.
 describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650)', () => {
-  it('opens the window at idle while a local send is pending, labelled thinking (AC1)', () => {
-    expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null }, true)
-    ).toBe('thinking')
+  // #1725: the window now carries the sent id and whether a queue_state has listed it.
+  const SENT = { messageId: 'm1', queued: false }
+  const QUEUED = { messageId: 'm1', queued: true }
+  const IDLE_STATUS = { phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null } as const
+
+  it('opens the window at idle while a local send is pending, labelled sending (#1725 AC1)', () => {
+    expect(workingIndicatorStateWithLocalSend(IDLE_STATUS, SENT)).toBe('sending')
+  })
+
+  it('reads waiting once a queue_state has listed the sent id (#1725 AC1)', () => {
+    expect(workingIndicatorStateWithLocalSend(IDLE_STATUS, QUEUED)).toBe('waiting')
   })
 
   it('opens nothing at idle with no local send pending — todays behaviour, unchanged (AC1)', () => {
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null }, false)
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null }, null)
     ).toBeNull()
   })
 
@@ -2953,7 +2975,7 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     // The daemon's answer wins: for every phase and both pending values, a non-null daemon answer is
     // returned byte-identical, so no daemon-opened case changed behaviour at all.
     for (const phase of ['thinking', 'responding', 'idle'] as const) {
-      for (const pending of [true, false]) {
+      for (const pending of [SENT, QUEUED, null]) {
         const status = { phase, apiRetry: null, compacting: false, stalled: false, resetting: null }
         const daemon = workingIndicatorState(status)
         if (daemon !== null) {
@@ -2967,7 +2989,7 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     expect(
       workingIndicatorStateWithLocalSend(
         { phase: 'responding', apiRetry: null, compacting: false, stalled: false, resetting: null },
-        true
+        SENT
       )
     ).toBe('working')
   })
@@ -2983,7 +3005,7 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     expect(
       workingIndicatorStateWithLocalSend(
         { phase: 'idle', apiRetry: { current: 3, total: 10 }, compacting: false, stalled: false, resetting: null },
-        true
+        SENT
       )
     ).toBe('retrying')
   })
@@ -2992,14 +3014,14 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     expect(
       workingIndicatorStateWithLocalSend(
         { phase: 'idle', apiRetry: { current: 0, total: 0 }, compacting: false, stalled: false, resetting: null },
-        true
+        SENT
       )
     ).toBe('retrying')
   })
 
   it('inherits the compaction supersede rule too (#967)', () => {
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: true, stalled: false, resetting: null }, true)
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: true, stalled: false, resetting: null }, SENT)
     ).toBe('compacting')
   })
 
@@ -3007,7 +3029,7 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     expect(
       workingIndicatorStateWithLocalSend(
         { phase: 'idle', apiRetry: { current: 3, total: 10 }, compacting: true, stalled: false, resetting: null },
-        true
+        SENT
       )
     ).toBe('retrying')
   })
@@ -3016,21 +3038,21 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     // The middle of the order, and the case a wrapper composed on the gate could not have expressed
     // without re-reading `apiRetry` and `compacting` itself — the reason #967 took the fourth field.
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: true, resetting: null }, true)
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: true, resetting: null }, SENT)
     ).toBe('stalled')
     // And with no local send pending either: the three folded statuses were never gated on a send.
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: true, resetting: null }, false)
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: true, resetting: null }, null)
     ).toBe('stalled')
   })
 
-  it('hands over to the daemon with no label flicker at the seam (AC2)', () => {
-    // The local window is labelled exactly what the daemon's first turn_state says, so the moment the
-    // daemon takes over is invisible. `working` would have flipped Working → Thinking → Working at the
-    // one seam this ticket exists to smooth.
-    expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null }, true)
-    ).toBe(workingIndicatorState({ phase: 'thinking', apiRetry: null, compacting: false, stalled: false, resetting: null }))
+  it('never answers thinking itself — that label comes only from the daemon phase (#1725 AC2)', () => {
+    // #1725 reverses #650's flicker-free seam on purpose: a crash-looping claude left the local
+    // `Thinking…` up for minutes. The daemon's own `thinking` phase is still `thinking`.
+    for (const pending of [SENT, QUEUED]) {
+      expect(workingIndicatorStateWithLocalSend(IDLE_STATUS, pending)).not.toBe('thinking')
+    }
+    expect(workingIndicatorStateWithLocalSend({ ...IDLE_STATUS, phase: 'thinking' }, QUEUED)).toBe('thinking')
   })
 
   it('opens the window WITHOUT arming the stop variant (AC4)', () => {
@@ -3043,7 +3065,7 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     // `phase` alone, isTurnRunning admits only a TurnPhase, and ComposerSendButton takes
     // `isRunning: boolean` — the new scalar has no path into any of the three.
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null }, true)
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null }, SENT)
     ).not.toBeNull()
     expect(isTurnRunning('idle')).toBe(false)
   })
@@ -3111,7 +3133,7 @@ describe('the resetting label — the rows sixth state (#1517)', () => {
     expect(
       workingIndicatorStateWithLocalSend(
         { phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: WRAPPING },
-        true
+        { messageId: 'm1', queued: false }
       )
     ).toBe('resetting')
   })
@@ -3451,20 +3473,24 @@ describe('isTurnRunning — the stop-variant gate (broader than the thinking ind
 // every other test in this block and silently spin all four.
 describe('isStatusIconTurning — the status icon gate widened by the local window (#1556)', () => {
   const IDLE = { phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null } as const
+  const SENT = { messageId: 'm1', queued: false }
+  const QUEUED = { messageId: 'm1', queued: true }
 
   it('turns while the daemon reports a running turn, in both phases (AC1)', () => {
     expect(isStatusIconTurning('thinking', 'thinking')).toBe(true)
     expect(isStatusIconTurning('responding', 'working')).toBe(true)
   })
 
-  it('turns at idle for the locally opened Thinking window, before any server phase (AC1)', () => {
+  it('turns at idle for both stages of the locally opened window, before any server phase (AC1)', () => {
     // Composed through the label's own derivation, never a hand-written state: what this ticket claims is
     // that the icon follows the LABEL, so the label's function is what has to produce the input.
-    expect(isStatusIconTurning('idle', workingIndicatorStateWithLocalSend(IDLE, true))).toBe(true)
+    // #1725: the window's two stages, Sending and Waiting, both turn the glyph.
+    expect(isStatusIconTurning('idle', workingIndicatorStateWithLocalSend(IDLE, SENT))).toBe(true)
+    expect(isStatusIconTurning('idle', workingIndicatorStateWithLocalSend(IDLE, QUEUED))).toBe(true)
   })
 
   it('is still at idle with no local send — the control arm (AC1)', () => {
-    expect(isStatusIconTurning('idle', workingIndicatorStateWithLocalSend(IDLE, false))).toBe(false)
+    expect(isStatusIconTurning('idle', workingIndicatorStateWithLocalSend(IDLE, null))).toBe(false)
     expect(isStatusIconTurning('idle', null)).toBe(false)
   })
 
@@ -3476,12 +3502,17 @@ describe('isStatusIconTurning — the status icon gate widened by the local wind
 
   it("keeps turning across the seam the daemon's first turn_state crosses (AC1)", () => {
     // The local window (idle + pending) and the daemon's first thinking phase are consecutive renders of
-    // the same visible turn. Neither the gate nor the label changes value across them — that is the whole
-    // "the animation continues when the running phase arrives" half.
-    const local = workingIndicatorStateWithLocalSend(IDLE, true)
-    const daemon = workingIndicatorStateWithLocalSend({ ...IDLE, phase: 'thinking' }, false)
-    expect(local).toBe(daemon)
+    // the same visible turn. #1725 changes the label across them (Waiting for Claude → Thinking…), but
+    // the gate keeps its value — the "animation continues when the running phase arrives" half.
+    const local = workingIndicatorStateWithLocalSend(IDLE, QUEUED)
+    const daemon = workingIndicatorStateWithLocalSend({ ...IDLE, phase: 'thinking' }, null)
+    expect(local).toBe('waiting')
+    expect(daemon).toBe('thinking')
     expect(isStatusIconTurning('idle', local)).toBe(isStatusIconTurning('thinking', daemon))
+  })
+
+  it('does not turn for a thinking answer at idle — the local window never produces one (#1725)', () => {
+    expect(isStatusIconTurning('idle', 'thinking')).toBe(false)
   })
 })
 
@@ -4882,7 +4913,7 @@ describe('selectOpenTimelineFor', () => {
     expect(thread?.items).toEqual([{ kind: 'userText', text: 'alpha' }])
     // The chrome travels with the rows — the whole slice is one value, so the phase and the four
     // scalars can no more come from another conversation than the rows can.
-    expect(thread?.localSendPending).toBe(true)
+    expect(thread?.localSendPending).not.toBeNull()
     // The HELD timeline itself, not a copy. That `Object.is` identity is what makes the switch cheap: a
     // write for another conversation rebuilds the outer map but copies every survivor by reference, so
     // this screen does not re-render (`withNewSliceAtHead`'s by-reference survivor copy). Since #1259 a

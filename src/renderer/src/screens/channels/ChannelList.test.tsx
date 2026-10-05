@@ -259,12 +259,7 @@ describe('host-first sidebar', () => {
   })
 })
 
-// The Settings entry affordance's accessible name (#333) — present in every list state.
-const SETTINGS_ENTRY_MARKER = 'aria-label="Settings"'
-
-// The Archive entry affordance's accessible name (#347) — present in every list state, like the Settings
-// entry, and DISTINCT from the gear's aria-label="Settings".
-const ARCHIVE_ENTRY_MARKER = 'aria-label="Archive"'
+const SIDEBAR_MENU_MARKER = 'aria-label="Sidebar menu"'
 
 // The per-row Save-as-channel affordance's accessible name (#274) — present on Recent (unpromoted)
 // discussion rows, absent on saved Channel rows (AC1).
@@ -799,12 +794,16 @@ describe('ChannelListView', () => {
     }
   })
 
-  it('renders the Settings entry with its accessible name in all three list states (#333 AC1)', () => {
-    // The Settings entry is a sibling of the list body, so it is reachable whether the list is
-    // not-loaded, empty, or populated.
-    expect(render(null)).toContain(SETTINGS_ENTRY_MARKER)
-    expect(render([])).toContain(SETTINGS_ENTRY_MARKER)
-    expect(render([row({ id: 'd1', name: 'a discussion' })])).toContain(SETTINGS_ENTRY_MARKER)
+  it('keeps one collapsed sidebar menu in loading, empty and populated states', () => {
+    for (const html of [render(null), render([]), render([row({ id: 'd1' })])]) {
+      expect(countOf(html, SIDEBAR_MENU_MARKER)).toBe(1)
+      expect(html).toContain('aria-haspopup="menu" aria-expanded="false"')
+      expect(html).not.toContain('aria-label="Settings"')
+      expect(html).not.toContain('aria-label="Archive"')
+      expect(html).not.toContain('role="menuitem"')
+      expect(html).not.toContain('channel-list__settings')
+      expect(html).not.toContain('channel-list__archive')
+    }
   })
 
   it('does not render an archived row in the active list — regression for #366 AC (#469)', () => {
@@ -835,14 +834,6 @@ describe('ChannelListView', () => {
     expect(countOf(markup, HOST_ROW_MARKER)).toBe(1)
   })
 
-  it('renders the Archive entry with its accessible name in all three list states (#347 AC1)', () => {
-    // Like the Settings entry, the Archive entry lives in the top-right actions cluster — a sibling of
-    // the list body — so it is reachable whether the list is not-loaded, empty, or populated.
-    expect(render(null)).toContain(ARCHIVE_ENTRY_MARKER)
-    expect(render([])).toContain(ARCHIVE_ENTRY_MARKER)
-    expect(render([row({ id: 'd1', name: 'a discussion' })])).toContain(ARCHIVE_ENTRY_MARKER)
-  })
-
   describe('the toolbar pairing control', () => {
     it('keeps one named native button before the tree in every list state', () => {
       for (const markup of [render(null, null, []), render(null), render([]),
@@ -854,8 +845,7 @@ describe('ChannelListView', () => {
         expect(tags).toHaveLength(1)
         expect(tags[0]).toContain('<button type="button"')
         expect(tags[0]).not.toContain('disabled')
-        expect(markup.indexOf('aria-label="Settings"')).toBeLessThan(markup.indexOf('aria-label="Archive"'))
-        expect(markup.indexOf('aria-label="Archive"')).toBeLessThan(markup.indexOf(PAIR_NEW_HOST_MARKER))
+        expect(markup.indexOf(SIDEBAR_MENU_MARKER)).toBeLessThan(markup.indexOf(PAIR_NEW_HOST_MARKER))
         expect(markup.indexOf(PAIR_NEW_HOST_MARKER)).toBeLessThan(markup.indexOf('class="channel-list__tree"'))
         expect(markup).toContain('class="channel-list__pair-icon" aria-hidden="true"')
       }

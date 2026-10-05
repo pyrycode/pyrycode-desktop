@@ -6,6 +6,7 @@
 - `src/renderer/src/screens/channels/channels.css` — toolbar, divider and tree: separate scrollport and stacking geometry.
 - `src/renderer/src/screens/conversation/ComposerOptionsPanel.tsx` — `ComposerOptionsMenu`, `ComposerOptionsPanel`: local opening, roving focus, activation and listener teardown.
 - `src/renderer/src/screens/conversation/conversation.css` — shared panel surface and placement modifiers.
+- `src/renderer/src/screens/conversation/ConversationScreen.tsx` — `ThreadOverflowMenu`: exact existing Figma ellipsis glyph to reuse.
 - `src/renderer/src/screens/conversation/composerOptionsKeyboard.ts` — `resolveComposerOptionsKey`: wrapped arrows, Enter, native Space and Escape.
 - `src/renderer/src/screens/channels/ChannelList.test.tsx` — `render`: static collapsed toolbar assertions in loading, empty and populated states.
 - `e2e/paired-shell-navigation.spec.ts`, `e2e/sidebar-pair-new-host.spec.ts`, `e2e/fixtures/pairingArrival.ts` — navigation and pairing assertions needing the extra menu step; source search found remaining direct entry selectors.
@@ -55,3 +56,11 @@ None. Shared component plus opt-in placement/dismissal is the smallest shape; a 
 One deliverable, three observable acceptance criteria, approximately 520–650 written lines including plan, tests and mechanical navigation updates; zero new exported types/components/stores and zero error branches. Production callbacks stay intact. The direct e2e entry updates exceed ten sites and stay with the menu under the sizing floor: a selector-only sibling cannot pass independently. No new dependencies.
 
 Remote branch overlaps: #1658 (create model), #1726 (queued controls), #1729 (question styles), #1738 (host prompt). Read their diffs: none changes this toolbar/shared menu block or supplies a dependency; keep edits local and additive.
+
+## Revisions
+
+2026-10-05: Match the sidebar popup's Figma surface locally: on-primary background and on-primary-fixed hover, keeping the shared footer/thread/reader surface unchanged. Reuse the exact existing thread 6×24px ellipsis SVG. Capture under the documented Linux Xvfb show-window harness option; hidden Linux windows do not produce screenshot frames. Gated selector updates affect three existing real-daemon specs, so run all three through the targeted launcher and report counts.
+
+Final main merge brought #1765’s Settings navigation scenarios; update their three entry selectors too, preserving all preference assertions.
+
+Final written scope: approximately 360 added lines including the initial plan and focused spec, zero new exports and unchanged production navigation callback contracts.

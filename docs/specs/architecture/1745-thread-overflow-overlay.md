@@ -24,3 +24,9 @@ Raise `.composer-options-anchor--bottom-end` from z-index 1 to the existing dial
 - Add `e2e/thread-overflow-overlay.spec.ts` before changing CSS. Inject a usage warning and terminal connection failure through the existing fake transport, open the overflow menu and prove non-empty overlap with each pill. Browser hit-testing at each overlap must target the menu; computed anchor z-index must exceed the overlay. Exercise an overlapping menu item with a real click.
 - Run the focused spec against the unchanged CSS to observe the reported failure, then repeat after the fix at 1280×800 and 800×600 window sizes.
 - Run `npm run build`; static-render unit tests cannot observe CSS stacking. Capture the integrated menu/pill state under `/tmp/builder-1745/` and compare its relevant geometry and layering with the Figma screenshot.
+
+## Revisions
+
+2026-10-05: The first fixture run confirmed that a terminal socket close offers Reconnect, while `shouldOfferRepair` requires an explicit pairing rejection. Drive the connection pill with the existing sealed `error` envelope (`auth.invalid_token`, non-retryable), as the recovery specs do, instead of a socket close. The CSS design is unchanged.
+
+2026-10-05: Captured geometry shows the pairing-rejection banner pushes the second pill below the popup, and wraps further at minimum width. Prove actual overlap with usage at both sizes while connected, then dismiss usage and prove Re-pair overlap at 1280×800. Each scenario requires positive overlap, menu hit-testing, higher computed anchor z-index and an actual click opening a dialog. No synthetic CSS positioning is introduced.

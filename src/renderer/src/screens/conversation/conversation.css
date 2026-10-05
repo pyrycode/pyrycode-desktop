@@ -6125,11 +6125,11 @@ button.top-overlay-pill {
   min-width: 0;
 }
 
-/* The top-bar icon anchor cannot shrink. Level 1 lifts its panel over the later opacity divider
-   and positioned thread content; status sheets and existing dialog overlays use level 2. */
+/* The top-bar icon anchor cannot shrink. Dialog level 2 lifts its panel above the later
+   Top overlay pills at level 1, as well as the divider and positioned thread content. */
 .composer-options-anchor--bottom-end {
   flex: 0 0 auto;
-  z-index: 1;
+  z-index: 2;
 }
 
 /* Right alignment keeps the three fixed action labels inside the window at its 800px minimum.

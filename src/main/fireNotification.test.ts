@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   fireNotification,
+  notificationBody,
   notificationTitle,
   activateWindow,
   windowHasFocus,
@@ -140,6 +141,19 @@ describe('fireNotification (#391)', () => {
     expect(Notification).toHaveBeenCalledWith({ title: 'buildops', body: 'Your turn is complete.' })
   })
 
+  it('uses the cleaned preview as the body when one comes with the command (#1737)', () => {
+    const { Notification } = fakeNotification()
+
+    fireNotification(
+      'turn-complete',
+      { isWindowFocused: () => false, Notification, onClick: vi.fn() },
+      'deploy-bot',
+      'All\n\ttests  pass.\u0007'
+    )
+
+    expect(Notification).toHaveBeenCalledWith({ title: 'deploy-bot', body: 'All tests pass.' })
+  })
+
   // #393: the fired notification is actionable — a click invokes the injected onClick.
   it('registers a click listener that invokes onClick when the fired notification is clicked', () => {
     const { Notification, on, click } = fakeNotification()
@@ -193,6 +207,44 @@ describe('fireNotification (#391)', () => {
     click()
     expect(show).toHaveBeenCalledTimes(1)
     expect(focus).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('notificationBody (#1737)', () => {
+  it('falls back to the fixed copy for each kind when no preview is given', () => {
+    expect(notificationBody('turn-complete', undefined)).toBe('Your turn is complete.')
+    expect(notificationBody('prompt', undefined)).toBe('Waiting for your response.')
+  })
+
+  it('cuts a 4000-character preview to 200 code points ending in an ellipsis', () => {
+    const body = notificationBody('turn-complete', 'a'.repeat(4000))
+    expect([...body]).toHaveLength(200)
+    expect(body).toBe(`${'a'.repeat(199)}…`)
+  })
+
+  it('keeps a preview of exactly 200 characters whole', () => {
+    expect(notificationBody('turn-complete', 'b'.repeat(200))).toBe('b'.repeat(200))
+  })
+
+  it('drops control characters and collapses newlines and whitespace runs to one space', () => {
+    const preview = '  \u0000Fixed\u001b the\n\nflaky\r\n\ttest\u007f\u0085 now.  '
+    expect(notificationBody('turn-complete', preview)).toBe('Fixed the flaky test now.')
+  })
+
+  it('falls back to the fixed copy when nothing is left once cleaned', () => {
+    expect(notificationBody('turn-complete', '')).toBe('Your turn is complete.')
+    expect(notificationBody('prompt', ' \n\t\u0000\u0007 ')).toBe('Waiting for your response.')
+  })
+
+  it('counts by code point, so a surrogate pair is never split at the cut', () => {
+    const body = notificationBody('turn-complete', '😀'.repeat(300))
+    expect([...body]).toHaveLength(200)
+    expect(body).toBe(`${'😀'.repeat(199)}…`)
+  })
+
+  it('does not leave a space before the ellipsis', () => {
+    const body = notificationBody('turn-complete', `${'c'.repeat(198)} ${'d'.repeat(50)}`)
+    expect(body).toBe(`${'c'.repeat(198)}…`)
   })
 })
 

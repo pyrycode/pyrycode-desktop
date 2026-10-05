@@ -34,8 +34,8 @@ import type {
 // frames here are `session_settings` (the reply to the app's own `request_session_settings`) and
 // `model_list` (which the daemon pushes unprovoked). Only the VALUES are this test's.
 //
-// THE DRIVE IS READ-ONLY. It opens no menu and sends no `set_session_settings`; the longest permission
-// label is only rendered, never submitted.
+// The longest permission label is only rendered, never submitted. The final keyboard drive opens
+// Attach through the real IPC picker path, with the native dialog replaced by a cancelled selection.
 //
 // SECRET HYGIENE (the sibling specs' rule, carried verbatim): every assertion reads geometry, counts or
 // DOM text. SESSION_ID, the published identifiers and the token figures are non-secret display/routing
@@ -144,6 +144,8 @@ const footerOverflowPx = (page: Page): Promise<number> =>
 
 async function expectAttachmentGeometry(page: Page): Promise<void> {
   const footer = page.locator('.composer__footer')
+  await expect(footer.locator(':scope > button')).toHaveCount(1)
+  await expect(footer.locator(':scope > button')).toHaveAccessibleName('Attach file')
   expect(await footer.evaluate((el) => {
     const style = getComputedStyle(el)
     return [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft]
@@ -297,8 +299,9 @@ test('composer footer: the row compresses instead of overflowing at the 800px mi
   await expectAttachmentGeometry(page)
 
   // Every inline setting remains reachable by keyboard at the supported minimum.
-  const controls = [actionsAnchor, permissionAnchor, modelAnchor, effortAnchor]
-    .map((anchor) => anchor.locator('button').first())
+  const controls = [actionsAnchor, permissionAnchor, modelAnchor, effortAnchor].map((anchor) =>
+    anchor.locator('button').first()
+  )
   for (let index = 0; index < controls.length; index += 1) {
     if (index === 0) await controls[index].focus()
     else await page.keyboard.press('Tab')
@@ -319,9 +322,11 @@ test('composer footer: the row compresses instead of overflowing at the 800px mi
     })
   })
   await page.keyboard.press('Enter')
-  await expect.poll(() => app.evaluate(() =>
-    (globalThis as unknown as { footerPickerOpened?: boolean }).footerPickerOpened
-  )).toBe(true)
+  await expect.poll(() =>
+    app.evaluate(() =>
+      (globalThis as unknown as { footerPickerOpened?: boolean }).footerPickerOpened
+    )
+  ).toBe(true)
 
   // And the shipped 800px floor is unchanged: this drive fits the row to the window rather than the window
   // to the row. A future edit that starts borrowing the minimum the way composer-options-clamp.spec.ts

@@ -5,7 +5,7 @@ import { bubbleTextExactly } from './fixtures/bubbleText'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import {
   AT_BOTTOM_TOLERANCE_PX,
-  HISTORY_ASK_BAND_PX
+  HISTORY_ASK_BAND_VIEWPORTS
 } from '../src/renderer/src/screens/conversation/threadScrollPosition'
 import { ATTACHMENT_UPLOAD_EVENT_CHANNEL } from '../src/shared/ipc/attachmentUpload'
 import type { AttachmentUploadEvent } from '../src/shared/ipc/attachmentUpload'
@@ -1167,7 +1167,7 @@ test('a thumbnail resolving in the last row leaves a bottom-resting reader at th
 //
 // THIS IS THE POSITION THE WALK ACTUALLY FIRES FROM, and that is why the case belongs here rather than
 // beside the walk drive in `history-walk.spec.ts`. The two anchoring tests above drive a growth in the
-// MIDDLE of the thread, from a park at 40%; the walk fires from inside `HISTORY_ASK_BAND_PX` of the top,
+// MIDDLE of the thread, from a park at 40%; the walk fires from inside `HISTORY_ASK_BAND_VIEWPORTS` of the top,
 // where nothing had measured the reader's place. The band is above zero for exactly that reason —
 // Chromium suppresses scroll anchoring at a scroll offset of exactly zero, so an ask that only fired at
 // the wall would fire where the mechanism holding the reader's place is off.
@@ -1364,8 +1364,9 @@ test('a page walked back above the reader leaves them looking at the same row', 
 
   // Park inside the band and ABOVE zero — the offset the walk fires from. Programmatic for the reasons the
   // tests above give; the rAF settle is not optional, because the flag is still `true` at the instant of
-  // the assignment and the scroll event that clears it is what also fires the ask.
-  const parked = HISTORY_ASK_BAND_PX / 2
+  // the assignment and the scroll event that clears it is what also fires the ask. One viewport deep
+  // (#1752): inside the viewport-sized band, and far past the fixed 200px rim it replaced.
+  const parked = await page.locator('.conversation__thread').evaluate(el => el.clientHeight)
   await page.locator('.conversation__thread').evaluate((el, top) => {
     el.scrollTop = top
   }, parked)
@@ -1383,7 +1384,7 @@ test('a page walked back above the reader leaves them looking at the same row', 
   const before = await readThreadMetrics(page)
   expect(before.scrollTop).toBe(parked)
   expect(before.scrollTop).toBeGreaterThan(0)
-  expect(before.scrollTop).toBeLessThanOrEqual(HISTORY_ASK_BAND_PX)
+  expect(before.scrollTop).toBeLessThanOrEqual(HISTORY_ASK_BAND_VIEWPORTS * before.clientHeight)
   expect(distanceFromBottom(before)).toBeGreaterThan(before.clientHeight)
 
   // The reference row: the first assistant bubble resting entirely inside the visible band, remembered by

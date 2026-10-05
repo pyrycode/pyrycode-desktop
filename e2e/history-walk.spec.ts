@@ -1,7 +1,7 @@
 import type { Page } from '@playwright/test'
 import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
-import { HISTORY_ASK_BAND_PX } from '../src/renderer/src/screens/conversation/threadScrollPosition'
+import { HISTORY_ASK_BAND_VIEWPORTS } from '../src/renderer/src/screens/conversation/threadScrollPosition'
 import type {
   Envelope,
   HistoryPagePayload,
@@ -28,8 +28,9 @@ import type {
 // touched. That also makes the drawn-row assertions unambiguous: there is no optimistic echo to confuse
 // with a replayed entry.
 //
-// HISTORY_ASK_BAND_PX IS IMPORTED, never hardcoded, so the park below is inside the band by construction
-// rather than by a copied literal that a retune would silently strand. That module has zero imports and no
+// HISTORY_ASK_BAND_VIEWPORTS IS IMPORTED, never hardcoded, and every park is derived from the thread's
+// MEASURED `clientHeight` (#1752), so the parks below are inside the band by construction rather than by a
+// copied literal that a retune or a window resize would silently strand. That module has zero imports and no
 // React or DOM reference, so it resolves under Playwright's Node transform with no alias config — the
 // argument `thread-scroll-pin.spec.ts` already makes for `AT_BOTTOM_TOLERANCE_PX`.
 //
@@ -182,16 +183,23 @@ const scrollBack = async (page: Page, offset: number): Promise<void> => {
   await page.keyboard.press('ArrowUp')
 }
 
+/** The ask band in CSS pixels for this window, from the real scroll container's own viewport. */
+const askBandPx = (page: Page): Promise<number> =>
+  page
+    .locator('.conversation__thread')
+    .evaluate((el, viewports) => viewports * el.clientHeight, HISTORY_ASK_BAND_VIEWPORTS)
+
 async function walkBackUntilAskFor(
   page: Page,
   captured: Envelope[],
   cursor: string
 ): Promise<void> {
-  let offset = HISTORY_ASK_BAND_PX / 2
+  const band = await askBandPx(page)
+  let offset = band / 2
   await expect
     .poll(
       async () => {
-        offset = offset === HISTORY_ASK_BAND_PX / 2 ? HISTORY_ASK_BAND_PX / 4 : HISTORY_ASK_BAND_PX / 2
+        offset = offset === band / 2 ? band / 4 : band / 2
         await scrollBack(page, offset)
         return historyAsks(captured).some((ask) => ask.cursor === cursor)
       },
@@ -231,7 +239,7 @@ test('scrolling back walks the thread page by page and stops at the start of the
   expect(historyAsks(captured)[1]).toEqual({
     conversation_id: SEEDED_ROW.id,
     cursor: CURSOR_AFTER_OPENING,
-    limit: 0
+    limit: 200
   } satisfies RequestHistoryPayload)
 
   // --- AC3, first half: the EMPTY page. It draws nothing, so there is no row count to wait on — the ask
@@ -282,4 +290,75 @@ test('scrolling back walks the thread page by page and stops at the start of the
   // asked for, or applied, more than once". `prependHistoryFor` is deliberately non-idempotent, so a
   // duplicate ask would show up here as duplicated rows rather than as a silent no-op.
   await expect(userBubbles).toHaveCount(OPENING_ENTRIES + 2)
+})
+
+// #1752 — the band's two edges on the real scroll container. The walk above only ever parks well inside
+// the band; this drive pins where it ENDS: an upward input from exactly two viewport heights asks, and one
+// from a pixel further down sends nothing. The opening page is tall enough that the thread scrolls past
+// the band at all, which is gated below rather than assumed, and the ask the in-band input fires is
+// withheld so no prepend moves the geometry between the two parks.
+
+/** Rows enough to scroll the thread more than three viewports deep in the 1100x800 window. */
+const BOUNDARY_ENTRIES = 40
+const BOUNDARY_CURSOR = 'cursor-past-the-boundary-page'
+/** How long the out-of-band input is given to reach the daemon before its absence is read. A real ask is
+ *  one synchronous keydown handler plus one IPC hop, so this is orders of magnitude of headroom. */
+const NO_ASK_SETTLE_MS = 1_000
+
+function boundaryFake(captured: Envelope[]): (inbound: Uint8Array) => Uint8Array[] {
+  return (inbound) => {
+    const env = decodeEnvelope(inbound)
+    captured.push(env)
+    if (env.type === 'request_history') {
+      if ((env.payload as RequestHistoryPayload).cursor !== '') return []
+      const entries = Array.from({ length: BOUNDARY_ENTRIES }, (_, i) =>
+        storedMessageEntry(100 + i, openingText(BOUNDARY_ENTRIES - i))
+      )
+      return [historyPageFrame(env.id, entries, BOUNDARY_CURSOR, false)]
+    }
+    return [seedConversationsFrame()]
+  }
+}
+
+test('an upward input asks from up to two viewport heights below the top and not one pixel further', async ({
+  launchPairedApp
+}) => {
+  const captured: Envelope[] = []
+  const { page } = await launchPairedApp({ buildReplyFrames: boundaryFake(captured) })
+  const thread = page.locator('.conversation__thread')
+
+  await scrollBack(page, 0)
+  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveCount(BOUNDARY_ENTRIES, {
+    timeout: ROUNDTRIP_TIMEOUT_MS
+  })
+  expect(historyAsks(captured)).toHaveLength(1)
+
+  // NON-VACUITY: the thread must scroll past the band, or the "beyond" park below would be clamped back
+  // inside it and the absence would prove nothing.
+  const band = await askBandPx(page)
+  const { scrollHeight, clientHeight } = await thread.evaluate((el) => ({
+    scrollHeight: el.scrollHeight,
+    clientHeight: el.clientHeight
+  }))
+  expect(band).toBe(2 * clientHeight)
+  expect(scrollHeight - clientHeight).toBeGreaterThan(band + 1)
+
+  // One pixel beyond the band: the input is genuine, and nothing goes out.
+  await scrollBack(page, band + 1)
+  await expect.poll(() => thread.evaluate((el) => el.scrollTop)).toBeLessThan(band + 1)
+  await page.waitForTimeout(NO_ASK_SETTLE_MS)
+  expect(historyAsks(captured)).toHaveLength(1)
+
+  // Exactly at the band: the same input asks, carrying the opening page's cursor and the page size.
+  await page.locator('.conversation__thread').evaluate((el, top) => {
+    el.scrollTop = top
+  }, band)
+  expect(await thread.evaluate((el) => el.scrollTop)).toBe(band)
+  await page.keyboard.press('ArrowUp')
+  await expect.poll(() => historyAsks(captured).length, { timeout: ROUNDTRIP_TIMEOUT_MS }).toBe(2)
+  expect(historyAsks(captured)[1]).toEqual({
+    conversation_id: SEEDED_ROW.id,
+    cursor: BOUNDARY_CURSOR,
+    limit: 200
+  } satisfies RequestHistoryPayload)
 })

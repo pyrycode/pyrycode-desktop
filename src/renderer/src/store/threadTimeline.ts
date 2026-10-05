@@ -1171,10 +1171,10 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
       // Nothing live to clear ⇒ the SAME state reference, so a first connect, or a reconnect with clean
       // chrome, churns no subscriber (the #415 `modalPrompts` shape).
       //
-      // Accepted residual: the daemon re-asserts only the outstanding modal (#877) and the queued
-      // backlog (#878) on connect — never `api_retry` / `compacting` / `turn_state` — so a status still
-      // genuinely live across the reconnect shows nothing until the daemon's next edge. A briefly-missing
-      // banner over a permanently-stuck one; do not engineer around it here.
+      // After replay, the daemon re-asserts a running turn's current `turn_state` without an event ID
+      // (pyrycode #2712). That later event restores the open conversation's phase; silence keeps idle
+      // when the turn ended offline. `api_retry` / `compacting` still have no connect-time reassertion,
+      // so those cleared statuses wait for their next wire edge.
       // #1314 is that classification for the seventh field, and it is Mode B: a thinking-token reading is
       // transient chrome about a turn that was running on the OTHER side of the disconnect, and the daemon
       // re-asserts no `thinking_progress` on connect. Held across the reconcile it would report the depth

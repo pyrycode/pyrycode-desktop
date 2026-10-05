@@ -78,3 +78,9 @@ Pending documentation stage: `docs/knowledge/features/conversation-timeline-stor
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-05
+
+## Revisions
+
+2026-10-05 — Baseline resolved: unchanged desktop restores both thinking and responding from event-ID-free handshake-tail reassertions, preserves the transcript, and stays idle on silence after a positively observed reconnect. The negative control withheld both phase reassertions: two expected missing-label failures, while the idle case passed. No production behavior changed; only the obsolete reducer comment was corrected. The real spec records the before-drop phase and restoration during the same gate-held turn when the dispatcher executes it.
+
+2026-10-05 — Capture setup: screenshots in this Linux runtime timed out while the fixture kept the Electron window hidden, after the phase assertions had passed. Capture only in the fixture's supported `PYRY_E2E_SHOW_WINDOW=1` mode; the behavioral regression remains runnable in default hidden mode. Visible captures at 1280×800 (`/tmp/builder-1723/thinking.png`, `/tmp/builder-1723/responding.png`) were inspected against the Figma status row: existing Pyry mark, small primary label and composer placement match, with no visual changes.

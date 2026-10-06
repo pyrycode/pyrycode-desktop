@@ -146,6 +146,75 @@ test('pointer and keyboard replies append current source, focus once, and send t
   expect(await app.evaluate(({ clipboard }) => clipboard.readText())).toBe(USER)
 })
 
+test('covered replies focus when permission clears once, and pending focus is discarded on chat switch', async ({ launchPairedApp }) => {
+  const other = { ...SEEDED_ROW, id: 'other-reply-chat', name: 'Other reply discussion' }
+  const { page, daemon } = await launchPairedApp({
+    buildReplyFrames: conversationStateFake({ conversations: [SEEDED_ROW] })
+  })
+  daemon.pushFrame(encodeEnvelope({ id: 39, type: 'conversations', ts: TS,
+    payload: { conversations: [SEEDED_ROW, other] } }))
+  const input = page.locator('.composer__input')
+  const reply = page.getByRole('button', { name: 'Reply to message' })
+  const permission = page.locator('.permission-panel')
+  const showPermission = (id: string): void => daemon.pushFrame(encodeEnvelope({
+    id: 40, type: 'modal_shown', ts: TS, payload: {
+      conversation_id: SEEDED_ROW.id, modal_id: id, class: 'permission',
+      title: 'Read a file', prompt: 'Allow reading the file?', default_to_no: true,
+      options: [{ id: 'deny', label: 'Deny' }], default_option_id: 'deny'
+    }
+  }))
+  const dismissPermission = (id: string): void => daemon.pushFrame(encodeEnvelope({
+    id: 41, type: 'modal_dismissed', ts: TS,
+    payload: { modal_id: id, outcome: 'remote', source: 'remote' }
+  }))
+  daemon.pushFrame(assistant(SOURCE))
+  daemon.pushFrame(turnEnd())
+  await expect(reply).toBeVisible()
+  await input.fill(DRAFT)
+  showPermission('covered-reply')
+  await expect(permission).toBeVisible()
+  await expect(input).toBeHidden()
+  await reply.click()
+  await reply.press('Enter')
+  const draft = `${DRAFT}\n${quote('Assistant', SOURCE)}${quote('Assistant', SOURCE)}`
+  await expect(input).toHaveValue(draft)
+  await expect(input).not.toBeFocused()
+  await expect(permission).toBeVisible()
+  dismissPermission('covered-reply')
+  await expect(permission).toHaveCount(0)
+  await expectDraftEnd(input, draft)
+
+  // Once consumed, neither typing nor a later permission dismissal replays the request.
+  await input.evaluate((node: HTMLTextAreaElement) => node.setSelectionRange(0, 0))
+  await page.keyboard.type('prefix ')
+  expect(await input.evaluate((node: HTMLTextAreaElement) => node.selectionStart)).toBe(7)
+  showPermission('no-new-reply')
+  await expect(permission.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
+  dismissPermission('no-new-reply')
+  await expect(permission).toHaveCount(0)
+  await expect(input).not.toBeFocused()
+  await expect(input).toHaveValue('prefix ' + draft)
+
+  // Leaving the intended pane cancels the request even if its permission clears elsewhere.
+  showPermission('leaving-reply')
+  await expect(permission).toBeVisible()
+  await reply.click()
+  const retained = 'prefix ' + draft + quote('Assistant', SOURCE)
+  await expect(input).toHaveValue(retained)
+  await openRow(page, other.name)
+  await expect(input).toBeVisible()
+  await expect(input).toHaveValue('')
+  await expect(input).not.toBeFocused()
+  await input.fill('Other draft')
+  dismissPermission('leaving-reply')
+  await openRow(page, SEEDED_ROW.name as string)
+  await expect(input).toBeVisible()
+  await expect(input).toHaveValue(retained)
+  await expect(input).not.toBeFocused()
+  await openRow(page, other.name)
+  await expect(input).toHaveValue('Other draft')
+})
+
 test('reply isolates equal conversation ids across hosts', async ({ launchPairedApp }) => {
   const secondRow = { ...SECOND_SEEDED_ROW, id: SEEDED_ROW.id }
   const { page, servers } = await launchPairedApp({

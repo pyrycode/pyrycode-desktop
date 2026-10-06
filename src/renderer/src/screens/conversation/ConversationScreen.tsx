@@ -4104,13 +4104,14 @@ function Composer({
   })
   const consumedReplyFocus = useRef(0)
   useThreadLayoutEffect(() => {
-    if (replyFocusRequest === consumedReplyFocus.current) return
-    consumedReplyFocus.current = replyFocusRequest
+    // Permission coverage keeps the request pending until this pane's composer is visible.
+    if (covered || replyFocusRequest === consumedReplyFocus.current) return
     const input = typeAhead.inputRef.current
     if (input === null) return
+    consumedReplyFocus.current = replyFocusRequest
     input.focus()
     input.setSelectionRange(input.value.length, input.value.length)
-  }, [replyFocusRequest, typeAhead.inputRef])
+  }, [covered, replyFocusRequest, typeAhead.inputRef])
 
   /**
    * #1033: the PASTE entry into the attach flow, and the third gesture that reaches it.

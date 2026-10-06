@@ -140,6 +140,9 @@ export function decodeEnvelope(bytes: Uint8Array): Envelope {
 /** The `<app>` half of the hello's `client_version`. */
 const CLIENT_APP_NAME = 'pyrycode-desktop'
 
+/** Public, app-owned feature report; independent of negotiated capabilities. */
+const CLIENT_FEATURES = "Markdown links to absolute paths of markdown files under the daemon's served folders open in-app. Paths with spaces need angle brackets: [Note](</Users/me/My Vault/note.md>). Bare paths in backticks do not open. Attached files and photos upload to the daemon; on Send, Claude receives daemon-host paths and instructions to read them, not inline content."
+
 /**
  * The one default-injecting constructor. TS interfaces carry no runtime defaults, so the
  * non-literal default `protocol_versions` (["v2"]) must be injected here (mobile's
@@ -174,6 +177,7 @@ export function makeHelloClientPayload(input: {
     role: 'client',
     device_name: input.deviceName,
     client_version: `${CLIENT_APP_NAME}/${input.clientVersion}`,
+    client_features: CLIENT_FEATURES,
     protocol_versions: [PROTOCOL_VERSION],
     token: input.token,
     capabilities: input.capabilities ? [...input.capabilities] : []

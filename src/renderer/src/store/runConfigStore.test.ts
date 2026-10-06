@@ -6,6 +6,7 @@ import {
   sessionSupports,
   selectSlashCommandsSupported,
   selectMcpServersSupported,
+  selectMidTurnInputSupported,
   type RunConfigSnapshot
 } from './runConfigStore'
 
@@ -292,5 +293,21 @@ describe('sessionSupports (#1655)', () => {
     store.getState().setSnapshot({ ...BASE, slashCommands: true })
     expect(selectSlashCommandsSupported(store.getState())).toBe(true)
     expect(selectMcpServersSupported(store.getState())).toBe(true)
+  })
+})
+
+// #1726: Send now is opt-in — only the daemon's explicit `true` offers it.
+describe('selectMidTurnInputSupported (#1726)', () => {
+  const BASE: RunConfigSnapshot = {
+    model: '', effort: '', yolo: false, permissionMode: 'default', usedTokens: 0, windowTokens: 0
+  }
+
+  it.each([
+    ['no snapshot yet', null, false],
+    ['an absent flag', BASE, false],
+    ['an explicit false', { ...BASE, midTurnInput: false }, false],
+    ['an explicit true', { ...BASE, midTurnInput: true }, true]
+  ] as const)('reads %s as %j', (_label, snapshot, expected) => {
+    expect(selectMidTurnInputSupported({ snapshot })).toBe(expected)
   })
 })

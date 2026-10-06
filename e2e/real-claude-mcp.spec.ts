@@ -53,6 +53,13 @@ test.use({ skipPermissions: false, interactiveRunner: 'stream-json' })
 // dispatcher's configuration, not in this repo; this is one more executed spec, and the bump is the
 // operator's. The runbook's § Current real-claude gate state records the counts.
 //
+// EVERY MCP READING IS SCOPED TO THE CHAT THIS TEST CREATES (#1786). The fixture seeds a bootstrap
+// conversation, and the daemon spawns that conversation's claude child at startup, before pairing. That
+// child publishes its own spawn-time `mcp_status` to every interactive client. Whether it lands before or
+// after the watcher subscribes depends on how fast pairing beats claude's MCP initialize, so a global
+// report log held a second conversation in roughly one run in five. The chat id therefore comes from the
+// app's own `conversationCreated`, and reports, refusals, waits and the status word read only that chat.
+//
 // SECRET HYGIENE: the pairing payload is referenced nowhere but the arrival step. Row assertions match
 // the two daemon-owned names below exactly, so a failure prints a constant and never claude text.
 
@@ -83,15 +90,23 @@ const TOGGLE_REFUSED = 'The daemon refused to change the MCP server.'
 const STATUS_WORD_BOUND = 64
 
 // Counts and routing ids, plus the one status word the toggle drive records: the one `TOGGLE_TARGET`
-// had in each report (null when absent). No other row string is copied out of the page.
-type McpSeen = { reports: string[]; refusals: string[]; toggleRefusals: string[]; targetStatus: (string | null)[] }
+// had in each report (null when absent). No other row string is copied out of the page. `reports` and
+// `targetStatus` stay index-aligned, and `created` holds every `conversationCreated` id seen.
+type McpSeen = {
+  created: string[]
+  reports: string[]
+  refusals: string[]
+  toggleRefusals: string[]
+  targetStatus: (string | null)[]
+}
 type McpProof = McpSeen & { off: () => void }
 type DriveWindow = typeof window & { mcpProof: McpProof }
 
 async function watchMcp(page: Page): Promise<void> {
   await page.evaluate(({ target, bound }) => {
-    const proof: McpProof = { reports: [], refusals: [], toggleRefusals: [], targetStatus: [], off: () => {} }
+    const proof: McpProof = { created: [], reports: [], refusals: [], toggleRefusals: [], targetStatus: [], off: () => {} }
     proof.off = window.pyry.onDaemonEvent((event) => {
+      if (event.type === 'conversationCreated') proof.created.push(event.conversation.id)
       if (event.type === 'mcpStatus') {
         proof.reports.push(event.conversationId)
         const status = event.servers.find((server) => server.name === target)?.status
@@ -104,11 +119,26 @@ async function watchMcp(page: Page): Promise<void> {
   }, { target: TOGGLE_TARGET, bound: STATUS_WORD_BOUND })
 }
 
-function readMcp(page: Page): Promise<McpSeen> {
-  return page.evaluate(() => {
-    const { reports, refusals, toggleRefusals, targetStatus } = (window as DriveWindow).mcpProof
-    return { reports: [...reports], refusals: [...refusals], toggleRefusals: [...toggleRefusals], targetStatus: [...targetStatus] }
-  })
+/** The proof narrowed to one conversation, so another chat's publication can neither fail nor settle a wait. */
+function readMcp(page: Page, conversationId: string): Promise<McpSeen> {
+  return page.evaluate((id) => {
+    const { created, reports, refusals, toggleRefusals, targetStatus } = (window as DriveWindow).mcpProof
+    const mine = reports.flatMap((reportId, index) => (reportId === id ? [index] : []))
+    return {
+      created: [...created],
+      reports: mine.map((index) => reports[index]),
+      refusals: refusals.filter((refusalId) => refusalId === id),
+      toggleRefusals: toggleRefusals.filter((refusalId) => refusalId === id),
+      targetStatus: mine.map((index) => targetStatus[index])
+    }
+  }, conversationId)
+}
+
+/** The id of the one chat this test created, from the app's own create reply. */
+async function createdChatId(page: Page): Promise<string> {
+  const created = await page.evaluate(() => [...(window as DriveWindow).mcpProof.created])
+  expect(created, 'the test should have created exactly one chat').toHaveLength(1)
+  return created[0]
 }
 
 /** Non-empty assistant replies, counted and never read out. */
@@ -168,10 +198,11 @@ test('real claude: the Channel info sheet shows the daemon’s own MCP servers',
   await pairAndConnect(page, relay, daemon.pairFields)
   await watchMcp(page)
   await createChat(page)
+  const conversationId = await createdChatId(page)
   await spawnChild(page, `What is 2 plus 2? run=${Date.now()}`)
 
   // The operator's own route to the sheet. Opening it is what sends `mcp_status_request`.
-  const beforeOpen = (await readMcp(page)).reports.length
+  const beforeOpen = (await readMcp(page, conversationId)).reports.length
   await page.locator('.conversation__overflow-trigger').click()
   await page.getByRole('menuitem', { name: CHANNEL_INFO_ROW }).click()
   const sheet = page.getByRole('dialog')
@@ -197,14 +228,12 @@ test('real claude: the Channel info sheet shows the daemon’s own MCP servers',
 
   // #1583's drive. Wait for the sheet-open ask's answer so it cannot be read as the reconnect's.
   await expect
-    .poll(async () => (await readMcp(page)).reports.length, {
+    .poll(async () => (await readMcp(page, conversationId)).reports.length, {
       timeout: REPORT_TIMEOUT_MS,
       message: 'the daemon never answered the sheet-open mcp_status_request'
     })
     .toBeGreaterThan(beforeOpen)
-  const held = await readMcp(page)
-  const conversationId = held.reports[held.reports.length - 1]
-  expect(held.reports.every((id) => id === conversationId), 'every report names the one chat').toBe(true)
+  const held = await readMcp(page, conversationId)
   expect(held.refusals).toEqual([])
 
   await page.evaluate(
@@ -214,8 +243,8 @@ test('real claude: the Channel info sheet shows the daemon’s own MCP servers',
   let outcome: 'report' | 'refused' | null = null
   await expect
     .poll(async () => {
-      const now = await readMcp(page)
-      const refused = now.refusals.includes(conversationId)
+      const now = await readMcp(page, conversationId)
+      const refused = now.refusals.length > 0
       const answered = now.reports.length > held.reports.length
       outcome = refused && !answered ? 'refused' : answered && !refused ? 'report' : null
       return refused || answered
@@ -234,7 +263,7 @@ test('real claude: the Channel info sheet shows the daemon’s own MCP servers',
   for (const name of BUILT_IN_SERVERS) await expect(sheet.getByText(name, { exact: true })).toBeVisible()
 
   // #1587's drive: flip `pyry_files` off through its switch, the operator's own control.
-  const beforeToggle = await readMcp(page)
+  const beforeToggle = await readMcp(page, conversationId)
   expect(beforeToggle.toggleRefusals).toEqual([])
   const filesSwitch = sheet.getByRole('switch', { name: TOGGLE_TARGET, exact: true })
   await expect(filesSwitch, `the ${TOGGLE_TARGET} switch should read on before the flip`).toBeChecked()
@@ -243,8 +272,8 @@ test('real claude: the Channel info sheet shows the daemon’s own MCP servers',
   let toggleOutcome: 'report' | 'refused' | null = null
   await expect
     .poll(async () => {
-      const now = await readMcp(page)
-      const refused = now.toggleRefusals.includes(conversationId)
+      const now = await readMcp(page, conversationId)
+      const refused = now.toggleRefusals.length > 0
       const answered = now.reports.length > beforeToggle.reports.length
       toggleOutcome = refused && !answered ? 'refused' : answered && !refused ? 'report' : null
       return refused || answered
@@ -255,7 +284,7 @@ test('real claude: the Channel info sheet shows the daemon’s own MCP servers',
 
   const toggleNotice = sheet.getByText(TOGGLE_REFUSED, { exact: true })
   if (toggleOutcome === 'report') {
-    const answered = await readMcp(page)
+    const answered = await readMcp(page, conversationId)
     const word = answered.targetStatus[beforeToggle.reports.length] ?? null
     // Recorded before the assertion, so a word other than `disabled` is on the report either way.
     test.info().annotations.push({ type: 'mcp-toggle-status-word', description: word ?? `${TOGGLE_TARGET} absent from the report` })

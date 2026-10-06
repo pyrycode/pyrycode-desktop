@@ -181,20 +181,25 @@ replace the remembered choice. Carriage currently ends at IPC; renderer snapshot
 footer selection and remembered-choice handling belong to
 [#1549](https://github.com/pyrycode/pyrycode-desktop/issues/1549).
 
-`runConfigReceived` also carries three flat optional booleans —
-`slashCommands`, `mcpServers`, `contextUsageDetail` (pyrycode#2670, decoded at
+`runConfigReceived` also carries four flat optional booleans —
+`slashCommands`, `mcpServers`, `contextUsageDetail` (pyrycode#2670) and
+`midTurnInput` (pyrycode#2730, desktop [#1726](https://github.com/pyrycode/pyrycode-desktop/issues/1726)), decoded at
 [inbound message decode](inbound-message-decode.md#optional-session-capability-flags),
-\#1654) — the daemon's own statement of which Claude-only features the resolved
+\#1654/#1726 — the daemon's own statement of which Claude-only features the resolved
 session answers: true for Claude, false for Codex. `undefined` means not reported
 (no `capabilities` on the reply, or a daemon predating the flags), distinct from
 `false`; check `=== undefined`, the same posture as `effectiveEffort` above. Each
 is copied by name from `inbound.sessionSettings.capabilities?.<flag>` — flat
 rather than nested, so there is no partially-populated `capabilities` object for a
 consumer to interpret. This is a statement of support, not a permission: the
-daemon re-checks every request regardless of what these flags say. Ships dormant —
-this app doesn't advertise `multi_agent` yet, so the flags won't arrive in
-production until it does; [#1655](https://github.com/pyrycode/pyrycode-desktop/issues/1655)
-is the first consumer.
+daemon re-checks every request regardless of what these flags say. Production
+`loadDialConfig` advertises `multi_agent`, and the
+[run-config store](run-config-store.md#session-capability-flags-1655) consumes the
+flags through `toRunConfigSnapshot`. For Send now, `midTurnInput: true` offers
+the queued-row affordance; `false` or `undefined` hides it, including replies
+without capabilities. This explicit-true rule differs from the other three
+flags, whose absence preserves existing surfaces. Conversation attribution and
+snapshot clearing keep the reading scoped to the open chat.
 
 `runConfigReceived.memorySearch?` carries the optional
 [daemon memory-search report](inbound-message-decode.md#optional-memory-search-report)

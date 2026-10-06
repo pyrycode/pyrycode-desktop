@@ -302,6 +302,8 @@ export type RelayLinkStatus = 'connected' | 'offline' | 'daemon-absent'
  * `DaemonEventTimestamp` for why the field is added by intersection rather than per arm.
  */
 type BaseDaemonEvent =
+  | { type: 'hostSystemPromptReceived'; requestId: string; operation: 'read' | 'write'; systemPrompt: string; defaultSystemPrompt: string }
+  | { type: 'hostSystemPromptFailed'; requestId: string; operation: 'read' | 'write' }
   | (ModelRefusalEvent & { conversationId: string })
   | { type: 'connecting' }
   | { type: 'connected'; ack: HelloAckPayload }
@@ -389,6 +391,9 @@ type BaseDaemonEvent =
       slashCommands?: boolean
       mcpServers?: boolean
       contextUsageDetail?: boolean
+      /** #1726: whether the session takes a queued message into the running turn (`send_queued_now`).
+       *  undefined = not reported, which the renderer reads as unsupported. */
+      midTurnInput?: boolean
       /** Daemon-owned memory-search status; undefined when omitted by an older daemon. */
       memorySearch?: MemorySearchPayload
     }

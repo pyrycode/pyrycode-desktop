@@ -848,6 +848,16 @@ app.whenReady().then(() => {
         // retry — the reply is one `history_page` the inbound path correlates back to this ask.
         router.route(command.payload.conversation_id)?.requestHistory(command.payload)
         return
+      case 'requestHostSystemPrompt':
+      case 'setHostSystemPrompt': {
+        const connection = servers.route(command.serverId)
+        if (connection === null) {
+          emitDaemonEvent(bindServerOrigin(live.sink, command.serverId), { type: 'hostSystemPromptFailed', requestId: command.requestId,
+            operation: command.type === 'requestHostSystemPrompt' ? 'read' : 'write' })
+        } else if (command.type === 'requestHostSystemPrompt') connection.requestHostSystemPrompt(command.requestId)
+        else connection.setHostSystemPrompt(command.payload.system_prompt, command.requestId)
+        break
+      }
       case 'requestSystemPrompt': {
         // ROUTED BY CONVERSATION, mirroring the cases above — a system prompt belongs to one
         // conversation, so the frame goes to the server that hosts it or to no wire at all (#1230).
@@ -927,6 +937,11 @@ app.whenReady().then(() => {
         // ungated fire-and-forget. Sends dequeue_message; no reply is expected (the daemon re-broadcasts
         // its queue_state as the observable effect, #294). Inert no-op when not connected (#300).
         router.route(command.payload.conversation_id)?.dequeueMessage(command.payload)
+        return
+      case 'sendQueuedNow':
+        // #1726: the dequeueMessage route, verbatim — routed by conversation, fire-and-forget, inert when
+        // not connected. The daemon's next queue_state and its user `message` push are the effect.
+        router.route(command.payload.conversation_id)?.sendQueuedNow(command.payload)
         return
       case 'interrupt': {
         // ROUTED BY CONVERSATION (#1092), mirroring the newSession arm below and no longer by server —

@@ -65,7 +65,8 @@ import {
   type ChangeWorkspacePayload,
   type RenameWorkspacePayload,
   type SetSessionSettingsPayload,
-  type DequeueMessagePayload
+  type DequeueMessagePayload,
+  type SendQueuedNowPayload
 } from '../shared/wire/types'
 
 // This consumer is a pure in-process composition, so its tests inject fakes at the three seams
@@ -7941,6 +7942,48 @@ describe('createDaemonConnection — dequeueMessage (dequeue_message request, un
   })
 })
 
+describe('createDaemonConnection — sendQueuedNow (send_queued_now, the dequeueMessage twin, #1726)', () => {
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.sendQueuedNow({ conversation_id: 'c1', queued_msg_id: 7 })).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('sends exactly one send_queued_now envelope carrying only the two fields', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.sendQueuedNow({
+      conversation_id: 'c1',
+      queued_msg_id: 7,
+      message_id: 'smuggled'
+    } as unknown as SendQueuedNowPayload)
+
+    expect(drivers[0].sent).toHaveLength(1)
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    expect(envelope.type).toBe('send_queued_now')
+    expect(envelope.id).toBe(2)
+    expect(envelope.payload).toEqual({ conversation_id: 'c1', queued_msg_id: 7 })
+  })
+
+  it('does not throw out of the module when the driver sendMessage throws', async () => {
+    const { connection, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(() => connection.sendQueuedNow({ conversation_id: 'c1', queued_msg_id: 7 })).not.toThrow()
+  })
+})
+
 describe('createDaemonConnection — interrupt (named interrupt control frame, fire-and-forget, #306/#1092)', () => {
   /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
   async function connected(): Promise<ReturnType<typeof build>> {
@@ -9171,13 +9214,16 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
   ])('maps the capability flags of %s onto runConfigReceived (#1654)', async (_label, flag) => {
     const { sink, drivers, replyTo } = await requested()
     const capabilities = {
-      interrupt: true, mid_turn_input: true, slash_commands: flag, mcp_servers: flag, context_usage_detail: flag,
+      interrupt: true, mid_turn_input: flag, slash_commands: flag, mcp_servers: flag, context_usage_detail: flag,
       effort_levels: ['low'], permission_modes: ['default'], attachment_types: ['*/*'], models: ['private-model']
     }
     drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, capabilities }, replyTo) })
 
     const events = emitted(sink).filter((e) => e.type === 'runConfigReceived')
-    expect(events).toEqual([{ ...BASE_EVENT, slashCommands: flag, mcpServers: flag, contextUsageDetail: flag }])
+    expect(events).toEqual([
+      { ...BASE_EVENT, slashCommands: flag, mcpServers: flag, contextUsageDetail: flag, midTurnInput: flag }
+    ])
+    expect(events[0]).not.toHaveProperty('mid_turn_input')
     expect(events[0]).not.toHaveProperty('capabilities')
     expect(events[0]).not.toHaveProperty('slash_commands')
     expect(events[0]).not.toHaveProperty('interrupt')
@@ -9194,23 +9240,32 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     expect(event.slashCommands).toBeUndefined()
     expect(event.mcpServers).toBeUndefined()
     expect(event.contextUsageDetail).toBeUndefined()
+    expect(event.midTurnInput).toBeUndefined()
   })
 
   it.each([
     ['slash_commands', 'slashCommands'],
     ['mcp_servers', 'mcpServers'],
-    ['context_usage_detail', 'contextUsageDetail']
+    ['context_usage_detail', 'contextUsageDetail'],
+    ['mid_turn_input', 'midTurnInput']
   ] as const)('carries no value for a missing %s, distinct from false (#1654)', async (wire, ipc) => {
     const { sink, drivers, replyTo } = await requested()
-    const capabilities: Record<string, boolean> = { slash_commands: false, mcp_servers: false, context_usage_detail: false }
+    const capabilities: Record<string, boolean> = {
+      slash_commands: false, mcp_servers: false, context_usage_detail: false, mid_turn_input: false
+    }
     delete capabilities[wire]
     drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, capabilities }, replyTo) })
 
     const event = emitted(sink).find((e) => e.type === 'runConfigReceived')
     if (event?.type !== 'runConfigReceived') throw new Error('expected runConfigReceived')
-    const flags = { slashCommands: event.slashCommands, mcpServers: event.mcpServers, contextUsageDetail: event.contextUsageDetail }
+    const flags = {
+      slashCommands: event.slashCommands,
+      mcpServers: event.mcpServers,
+      contextUsageDetail: event.contextUsageDetail,
+      midTurnInput: event.midTurnInput
+    }
     expect(flags[ipc]).toBeUndefined()
-    expect(Object.values(flags).filter((v) => v === false)).toHaveLength(2)
+    expect(Object.values(flags).filter((v) => v === false)).toHaveLength(3)
   })
 
   it.each([
@@ -12943,6 +12998,89 @@ describe('reconnect replay cursor', () => {
     expect(await hello(b)).toHaveProperty('last_event_id', 99)
     registry.stop()
   })
+})
+
+describe('host prompt request ownership', () => {
+  const reply = (id: number, text = '', type: EnvelopeType = 'host_system_prompt') => encodeEnvelope({
+    id: 91, type, ts: FIXED_TS, in_reply_to: id,
+    payload: type === 'error' ? { code: 'host_system_prompt.unavailable', message: 'never forward' }
+      : { system_prompt: text, default_system_prompt: 'default' }
+  })
+  it('correlates reads and durable writes separately and consumes once', async () => {
+    const { connection, drivers, sink } = await reachConnected()
+    connection.requestHostSystemPrompt('read-1')
+    connection.setHostSystemPrompt('  new\n', 'write-1')
+    const frames = drivers[0].sent.map(decodeEnvelope)
+    const read = frames.find(e => e.type === 'request_host_system_prompt')!
+    const write = frames.find(e => e.type === 'set_host_system_prompt')!
+    expect(read.payload).toEqual({})
+    expect(write.payload).toEqual({ system_prompt: '  new\n' })
+    drivers[0].emit({ type: 'message', plaintext: reply(1000) })
+    drivers[0].emit({ type: 'message', plaintext: reply(write.id, '  new\n') })
+    drivers[0].emit({ type: 'message', plaintext: reply(read.id) })
+    drivers[0].emit({ type: 'message', plaintext: reply(read.id, 'duplicate') })
+    expect(emitted(sink).filter(e => e.type === 'hostSystemPromptReceived')).toEqual([
+      { type: 'hostSystemPromptReceived', operation: 'write', requestId: 'write-1', systemPrompt: '  new\n', defaultSystemPrompt: 'default' },
+      { type: 'hostSystemPromptReceived', operation: 'read', requestId: 'read-1', systemPrompt: '', defaultSystemPrompt: 'default' }
+    ])
+    connection.stop()
+  })
+  it('rejects over-limit multibyte writes locally while exact bytes reach the wire', async () => {
+    const { connection, drivers, sink } = await reachConnected()
+    connection.setHostSystemPrompt('é'.repeat(4096), 'exact')
+    const count = drivers[0].sent.length
+    connection.setHostSystemPrompt('é'.repeat(4097), 'over')
+    expect(drivers[0].sent).toHaveLength(count)
+    expect(emitted(sink)).toContainEqual({ type: 'hostSystemPromptFailed', operation: 'write', requestId: 'over' })
+    connection.stop()
+  })
+  it('settles rejection, disconnect and late old-driver replies without reuse', async () => {
+    const { connection, drivers, sink } = await reachConnected()
+    connection.requestHostSystemPrompt('read')
+    const id = decodeEnvelope(drivers[0].sent.at(-1)!).id
+    drivers[0].emit({ type: 'message', plaintext: reply(id, '', 'error') })
+    connection.setHostSystemPrompt('new', 'write')
+    const writeId = decodeEnvelope(drivers[0].sent.at(-1)!).id
+    connection.reconnect()
+    drivers[0].emit({ type: 'message', plaintext: reply(writeId, 'late') })
+    expect(emitted(sink).filter(e => e.type === 'hostSystemPromptFailed')).toEqual([
+      { type: 'hostSystemPromptFailed', operation: 'read', requestId: 'read' },
+      { type: 'hostSystemPromptFailed', operation: 'write', requestId: 'write' }
+    ])
+    expect(emitted(sink).filter(e => e.type === 'hostSystemPromptReceived')).toEqual([])
+    connection.stop()
+  })
+  it('expires a withheld reply and discards its eventual answer', async () => {
+    const ctx = await reachConnected()
+    vi.useFakeTimers()
+    ctx.connection.requestHostSystemPrompt('timeout')
+    const id = decodeEnvelope(ctx.drivers[0].sent.at(-1)!).id
+    vi.advanceTimersByTime(15_000)
+    ctx.drivers[0].emit({ type: 'message', plaintext: reply(id) })
+    expect(emitted(ctx.sink).filter(e => e.type.startsWith('hostSystemPrompt'))).toEqual([
+      { type: 'hostSystemPromptFailed', operation: 'read', requestId: 'timeout' }
+    ])
+    ctx.connection.stop()
+    vi.useRealTimers()
+  })
+})
+
+it('host prompt local send failures settle both operations without leaking text', async () => {
+  const { connection, drivers, sink } = build({ throwOnSend: true })
+  connection.requestHostSystemPrompt('offline-read')
+  connection.setHostSystemPrompt('private instructions', 'offline-write')
+  connection.start(); await tick()
+  drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+  connection.requestHostSystemPrompt('send-read')
+  connection.setHostSystemPrompt('private instructions', 'send-write')
+  expect(emitted(sink).filter(e => e.type === 'hostSystemPromptFailed')).toEqual([
+    { type: 'hostSystemPromptFailed', operation: 'read', requestId: 'offline-read' },
+    { type: 'hostSystemPromptFailed', operation: 'write', requestId: 'offline-write' },
+    { type: 'hostSystemPromptFailed', operation: 'read', requestId: 'send-read' },
+    { type: 'hostSystemPromptFailed', operation: 'write', requestId: 'send-write' }
+  ])
+  expect(JSON.stringify(emitted(sink))).not.toContain('private instructions')
+  connection.stop()
 })
 
 describe('composer diagnostics through the daemon connection', () => {

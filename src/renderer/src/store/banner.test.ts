@@ -17,7 +17,7 @@ describe('retained banner reports', () => {
     const state = { ...initialTimelineState, phase: 'thinking' as const, stalled: true,
       localSendPending: { messageId: 'm1', queued: false }, compacting: true, thinkingTokens: 4, apiRetry: { current: 1, total: 2 } }
     const first = reduceTimeline(state, banner)
-    expect(first).toEqual({ ...state, items: [{ kind: 'banner', ...report }], stoppingBanner: report })
+    expect(first).toEqual({ ...state, items: [{ kind: 'banner', ...report }], stoppingBanner: report, rowKeys: [0], nextRowKey: 1, localEchoes: [] })
     const duplicate = reduceTimeline(first, banner)
     expect(duplicate.items).toEqual([first.items[0], first.items[0]])
     const passive = reduceTimeline(duplicate, { ...banner, text: 'passive', stopsTurn: false })

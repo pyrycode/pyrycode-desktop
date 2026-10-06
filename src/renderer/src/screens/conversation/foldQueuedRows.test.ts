@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { QueuedItem } from '@shared/wire/types'
 import type { ThreadItem } from '../../store/threadTimeline'
-import { foldQueuedRows } from './foldQueuedRows'
+import { foldQueuedRows as projectQueuedRows } from './foldQueuedRows'
+
+// These fixtures explicitly represent local echoes. Received rows use an empty inventory.
+const foldQueuedRows = (items: readonly ThreadItem[], queued: readonly QueuedItem[]) => projectQueuedRows(
+  items, queued, items.flatMap((item, rowKey) => item.kind === 'userText' && item.messageId
+    ? [{ rowKey, messageId: item.messageId, waiting: false }] : []))
 
 // #1214: the correlation contract between the timeline's optimistic echoes and the daemon's replacement-
 // truth backlog. A pure function of two lists, so every branch is provable here and nothing about it needs

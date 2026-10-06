@@ -1968,7 +1968,10 @@ button.top-overlay-pill {
    opacity is a compositing group a child opacity cannot escape — it was the region's until the queued rows
    moved into the thread) — consistent with the "waiting / not yet run" treatment; the hover-surface +
    focus outline carry the affordance, not full brightness. */
-.queued-row__drop {
+/* #1726: Send now (.queued-row__send-now) shares the drop control's idiom by decision — the design file
+   draws no queued state — so it joins each rule below rather than restating it. */
+.queued-row__drop,
+.queued-row__send-now {
   flex: 0 0 auto;
   align-self: center;
   display: inline-flex;
@@ -1982,16 +1985,19 @@ button.top-overlay-pill {
   cursor: pointer;
 }
 
-.queued-row__drop:hover {
+.queued-row__drop:hover,
+.queued-row__send-now:hover {
   background: var(--color-surface-container-high);
   color: var(--color-on-surface);
 }
 
-.queued-row__drop:focus-visible {
+.queued-row__drop:focus-visible,
+.queued-row__send-now:focus-visible {
   outline: 1px solid var(--color-outline);
 }
 
-.queued-row__drop-icon {
+.queued-row__drop-icon,
+.queued-row__send-now-icon {
   display: block;
 }
 
@@ -7104,6 +7110,62 @@ button.top-overlay-pill {
 .background-task-panel__stop:disabled {
   opacity: 0.38;
   cursor: default;
+}
+
+/* Inline batch only: permission controls retain their existing shared treatment. */
+.question-batch {
+  padding: 0;
+  gap: var(--space-3);
+}
+.question-batch__heading {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  font-weight: var(--text-body-medium-weight-emphasized);
+}
+.question-batch__question {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.question-batch .question-panel__actions {
+  justify-content: center;
+  gap: var(--space-5);
+}
+.question-batch .question-panel__options {
+  gap: var(--space-5);
+}
+.question-batch .question-panel__question {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.question-batch__other {
+  --question-other-width: 308px;
+  flex: 0 1 var(--question-other-width);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.question-batch__other-label {
+  margin: 0;
+  color: var(--color-on-primary-container);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  font-weight: var(--text-title-small-weight-emphasized);
+}
+.question-batch .question-panel__actions .button-small {
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight-emphasized);
+  padding-inline: var(--space-5);
+}
+.question-batch .question-panel__continue:disabled {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  opacity: 0.38;
 }
 
 /* Run headers share the existing box and joins; members retain their flat mounted wrappers. */

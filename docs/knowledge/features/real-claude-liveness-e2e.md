@@ -111,8 +111,8 @@ using any other tool, so what must be shown (the answers map reaching claude) is
 what claude says next. It asserts reply content, deliberately against #432's closing instruction not
 to — that instruction assumed a tool effect to fall back on, which this slice does not have. The
 non-vacuity argument is `expectNamesChoiceFirst`: the spec always clicks the **last** offered
-`.question-panel__option-label` of every question in the batch (stepping the whole batch via the
-panel's own trailing Next/Continue control, never just the first), then asserts the post-answer
+`.question-panel__option-label` of every inline `.question-batch__question`, then presses the single
+Continue control after completing the whole batch, then asserts the post-answer
 continuation names that label **before** any of the question's unchosen labels, case-insensitively —
 a claude that never read the answers can still restate its own question, but a restatement lists
 labels in offer order, where the chosen one was deliberately put last. Two real-stack failure modes
@@ -513,7 +513,7 @@ overrides the resolved `pyry` binary when it isn't on `PATH` (e.g. a sibling-rep
   option and, as a fallout fix, anchored both configs' `real-*` filename patterns to a path boundary.
 - [Conversation shell — question panel](conversation-shell-question-panel.md) — the panel surface
   `real-claude-question-answer.spec.ts` (#928) drives by structure only
-  (`.question-panel__option-label`, `.question-panel__continue`, `.question-panel__labels`); its
+  (`.question-batch__question`, `.question-panel__option-label`, `.question-panel__continue`); its
   fake-stack twin `e2e/question-answer-continue.spec.ts` (#922) is what first proved that surface.
 - [Live e2e runbook](live-e2e-runbook.md) / [#13](../codebase/13.md) — the manual, live-**relay**
   operator gate; this scenario automates the real-daemon+real-claude half but still uses a local relay,

@@ -1,3 +1,9 @@
+import { useEffect, useState, type ComponentProps } from 'react'
+import { useStore } from 'zustand'
+import { MAX_SYSTEM_PROMPT_BYTES } from '@shared/wire/types'
+import { createHostPromptController, type HostPromptState } from '../../store/hostPromptController'
+import { sessionStore } from '../../store/sessionStore'
+import { systemPromptOverLimit } from './CreateChannelDialog'
 import { MAX_HOST_LABEL_LENGTH } from '@shared/ipc/pairing'
 import type { HostLabelResult } from '@shared/ipc/hostLabel'
 import { Modal } from '../../components/Modal'
@@ -143,7 +149,10 @@ export function EditHostDialogView({
   onNameChange,
   onCancel,
   onSave,
-  unpair
+  unpair,
+  prompt,
+  onPromptChange,
+  onResetPrompt
 }: {
   name: string
   status: EditHostStatus
@@ -152,18 +161,24 @@ export function EditHostDialogView({
   onCancel: () => void
   onSave: () => void
   unpair: EditHostUnpair
+  prompt: HostPromptState
+  onPromptChange: (next: string) => void
+  onResetPrompt: () => void
 }): JSX.Element {
   // #1422 widened `busy` from one arm to two, and that one line is the whole of AC4's freeze on the
   // rename half: an erase in flight disables the Host name field and OK exactly as a save in flight does,
   // because both are round trips this dialog is waiting on and neither may be raced by the other.
-  const busy = status === 'saving' || status === 'unpairing'
-  const refused = busy || name.trim().length > MAX_HOST_LABEL_LENGTH
+  const busy = status === 'saving' || status === 'unpairing' || prompt.type === 'saving-name' || prompt.type === 'saving-prompt'
+  const reading = prompt.type === 'saving-name' || prompt.type === 'saving-prompt' ? prompt.previous : prompt
+  const ready = reading.type === 'ready' ? reading : null
+  const overLimit = ready !== null && systemPromptOverLimit(ready.draft)
+  const refused = busy || overLimit || name.trim().length > MAX_HOST_LABEL_LENGTH
   return (
     <div className="edit-host-overlay">
       <div className="edit-host-overlay__scrim" aria-hidden="true" />
       <Modal
         title="Edit host"
-        width={646}
+        width={640}
         cancelAction={{ label: 'Cancel', onClick: onCancel }}
         confirmAction={{ label: 'OK', onClick: onSave, disabled: refused }}
         onClose={onCancel}
@@ -192,7 +207,28 @@ export function EditHostDialogView({
             disabled={busy}
           />
         </label>
-        <UnpairSlot status={status} unpair={unpair} />
+        <div className="edit-host__prompt">
+          <label className="edit-host__field">
+            <span className="edit-host__label">Host system prompt:</span>
+            <textarea className="edit-host__textarea"
+              rows={Math.max(4, Math.min(14, (ready?.draft.split('\n').length ?? 0) + 1))}
+              value={ready === null ? '' : ready.draft}
+              disabled={busy || ready === null}
+              onChange={(e) => onPromptChange(e.target.value)} />
+          </label>
+          <div className="edit-host__helper-row">
+            <p className="edit-host__helper">Added to every conversation on this host, before the channel system prompt. A change takes effect from each conversation's next session.</p>
+            {ready !== null && ready.draft !== ready.defaultText && (
+              <button type="button" className="edit-host__unpair edit-host__reset"
+                disabled={busy} onClick={onResetPrompt}>Reset to default</button>
+            )}
+          </div>
+          {reading.type === 'reading' && <p className="edit-host__helper">Reading the stored prompt from the daemon</p>}
+          {reading.type === 'read-failed' && <p className="edit-host__error">Could not read the host system prompt</p>}
+          {ready?.saveFailed && <p className="edit-host__error">Could not save the host system prompt</p>}
+          {overLimit && <p className="edit-host__error">Over the {MAX_SYSTEM_PROMPT_BYTES}-byte limit. Shorten it before saving.</p>}
+        </div>
+        <UnpairSlot status={status === 'unpairing' ? status : busy ? 'saving' : status} unpair={unpair} />
         {/* ONE message slot, two mutually exclusive arms (#1422). The union above is what makes them
             exclusive by construction, so neither a stacked pair nor a lost message is representable. */}
         {status === 'failed' && <p className="edit-host__error">{EDIT_HOST_ERROR_COPY}</p>}
@@ -379,4 +415,42 @@ export async function runEditHostUnpair(deps: EditHostUnpairDeps): Promise<void>
     return
   }
   deps.setStatus('unpair-failed')
+}
+
+
+/** Mounting defines the draft lifetime. Name persistence stays injected by ChannelList. */
+export function EditHostDialog(props: Omit<ComponentProps<typeof EditHostDialogView>,
+  'prompt' | 'onPromptChange' | 'onResetPrompt' | 'onSave'> & {
+    serverId: string
+    onSaveName: () => Promise<boolean>
+  }): JSX.Element {
+  const [controller] = useState(() => createHostPromptController(
+    props.serverId, (command) => window.pyry.sendCommand(command), props.onCancel))
+  const prompt = useStore(controller.store)
+  useEffect(() => {
+    let disposed = false
+    const removeEvents = window.pyry.onDaemonEvent(controller.receive)
+    const removeSession = sessionStore.subscribe((state, previous) => {
+      const status = state.statuses.get(props.serverId)
+      if (status !== previous.statuses.get(props.serverId) && status?.type !== 'connected') {
+        controller.connectionLost()
+      }
+    })
+    // Effect replay cleans up its first setup before this runs. Only the surviving setup reads.
+    queueMicrotask(() => { if (!disposed) controller.open() })
+    return () => { disposed = true; controller.dispose(); removeEvents(); removeSession() }
+  }, [controller, props.serverId])
+  const busy = (): boolean => {
+    const state = controller.store.getState()
+    return props.status === 'saving' || props.status === 'unpairing' ||
+      state.type === 'saving-name' || state.type === 'saving-prompt'
+  }
+  return <EditHostDialogView {...props} prompt={prompt}
+    onPromptChange={controller.edit} onResetPrompt={controller.reset}
+    onSave={() => { if (!busy()) void controller.save(props.onSaveName) }}
+    unpair={{
+      onArm: () => { if (!busy()) props.unpair.onArm() },
+      onCancel: () => { if (!busy()) props.unpair.onCancel() },
+      onConfirm: () => { if (!busy()) props.unpair.onConfirm() }
+    }} />
 }

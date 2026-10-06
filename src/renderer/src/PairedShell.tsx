@@ -33,7 +33,7 @@ import {
   type ExitActiveConversationDeps
 } from './exitActiveConversation'
 import { requestRunConfigSnapshot } from './screens/conversation/runConfigSnapshot'
-import { requestContextUsage } from './screens/conversation/requestContextUsage'
+import { requestContextUsage, subscribeResetContextUsage } from './screens/conversation/requestContextUsage'
 import { requestModelList } from './store/modelListBridge'
 import { requestSystemPrompt } from './store/systemPromptBridge'
 import { activeConversationStore } from './store/activeConversationStore'
@@ -405,6 +405,7 @@ export function PairedShellView(props: {
  * `conversation` route).
  */
 export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Element {
+  useEffect(() => subscribeResetContextUsage(conversationActivityStore, window.pyry.sendCommand), [])
   useEffect(() => createSavedListRestorer({
     lists: conversationListStore, servers: serverInfoStore,
     read: window.pyry.chatHistory, log: window.pyry.sendDiagnostic

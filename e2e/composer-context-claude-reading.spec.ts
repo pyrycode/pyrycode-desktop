@@ -4,6 +4,7 @@ import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type {
   ContextUsagePayload,
   Envelope,
+  ResettingPayload,
   SessionSettingsPayload,
   TurnStatePayload,
   WireTurnState
@@ -85,7 +86,7 @@ function sessionSettingsFrame(inReplyTo: number): Uint8Array {
 // The three inventories go out EMPTY and their dropped counts zero — a real, if degenerate, shape the
 // daemon emits, and the one this ticket's two integers are the whole of. `[]` and `0` are values here, not
 // absences: the frame positively reports that claude listed no rows.
-function contextUsageFrame(inReplyTo?: number): Uint8Array {
+function contextUsageFrame(inReplyTo?: number, totalTokens = REPORTED.totalTokens): Uint8Array {
   return encodeEnvelope({
     id: REPLY_ENVELOPE_ID,
     type: 'context_usage',
@@ -94,7 +95,7 @@ function contextUsageFrame(inReplyTo?: number): Uint8Array {
     payload: {
       conversation_id: SEEDED_ROW.id,
       model: 'seeded-model',
-      total_tokens: REPORTED.totalTokens,
+      total_tokens: totalTokens,
       max_tokens: REPORTED.maxTokens,
       percentage: UNDISPLAYED_PERCENTAGE,
       categories: [],
@@ -149,6 +150,72 @@ test('composer footer: claude’s reported reading displaces the settings-derive
   // Claude's own `percentage` is held and not displayed. Asserted on the whole footer rather than on the
   // reading alone, so the figure cannot have leaked into a sibling control either.
   await expect(page.locator('.composer__footer')).not.toContainText(`${UNDISPLAYED_PERCENTAGE}%`)
+})
+
+test('reset completion requests context once and refreshes footer and gauge without a message', async ({ launchPairedApp }) => {
+  const requests: Envelope[] = []
+  const messages: Envelope[] = []
+  const resets: Envelope[] = []
+  const { page, daemon } = await launchPairedApp({
+    buildReplyFrames: (inbound) => {
+      const env = decodeEnvelope(inbound)
+      if (env.type === 'list_conversations') return [seedConversationsFrame()]
+      if (env.type === 'request_session_settings') return [sessionSettingsFrame(env.id)]
+      if (env.type === 'request_context_usage') requests.push(env)
+      if (env.type === 'send_message') messages.push(env)
+      if (env.type === 'new_session') resets.push(env)
+      return []
+    }
+  })
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const reading = page.locator('.composer__context')
+  const gauge = page.getByRole('progressbar', { name: 'Context window usage' })
+  const openGauge = async (): Promise<void> => {
+    await page.locator('.conversation__overflow-trigger').click()
+    await page.getByRole('menuitem', { name: 'Run configuration', exact: true }).click()
+  }
+  const resetFrame = (active: boolean, phase: ResettingPayload['phase'], handoff: ResettingPayload['handoff']): Uint8Array =>
+    encodeEnvelope({ id: REPLY_ENVELOPE_ID, type: 'resetting', ts: FIXED_TS,
+      payload: { conversation_id: SEEDED_ROW.id, active, phase, handoff } satisfies ResettingPayload })
+  await expect.poll(() => requests.length).toBe(1)
+  daemon.pushFrame(contextUsageFrame(requests[0].id))
+  await expect(reading).toHaveText(REPORTED.text)
+  await openGauge()
+  await expect(gauge).toHaveAttribute('aria-valuenow', '40')
+  await page.getByRole('button', { name: 'Close', exact: true }).click()
+  await page.getByRole('button', { name: 'Actions', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Reset session', exact: true }).click()
+  await expect.poll(() => resets.length).toBe(1)
+  daemon.pushFrame(resetFrame(true, 'wrapping_up', 'pending'))
+  await expect(page.locator('.composer-status__label')).toHaveText('Resetting: writing the handoff note…')
+  daemon.pushFrame(resetFrame(true, 'restarting', 'written'))
+  await expect(page.locator('.composer-status__label')).toHaveText('Resetting: restarting claude… handoff note written')
+  expect(requests).toHaveLength(1)
+  daemon.pushFrame(resetFrame(false, '', ''))
+  await expect.poll(() => requests.length).toBe(2)
+  expect(requests[1].payload).toEqual({ conversation_id: SEEDED_ROW.id })
+  await expect(reading).toHaveText(REPORTED.text)
+  await openGauge()
+  await expect(gauge).toHaveAttribute('aria-valuenow', '40')
+  expect(requests).toHaveLength(2)
+
+  // The later reply is a processing barrier for both repeated inactive frames.
+  daemon.pushFrame(resetFrame(false, '', ''))
+  daemon.pushFrame(resetFrame(false, '', ''))
+  daemon.pushFrame(contextUsageFrame(requests[1].id, 10_000))
+  await expect(reading).toHaveText('Context: 5%')
+  await expect(gauge).toHaveAttribute('aria-valuenow', '5')
+  await expect(page.locator('.run-config__context-usage')).toHaveText('5% used (10K of 200K tokens)')
+  expect(requests).toHaveLength(2)
+  expect(messages).toHaveLength(0)
+  await page.screenshot({ path: '/tmp/builder-1749/gauge.png', animations: 'disabled' })
+  await page.getByRole('button', { name: 'Close', exact: true }).click()
+  await page.screenshot({ path: '/tmp/builder-1749/footer.png', animations: 'disabled' })
+  await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await expect.poll(() => requests.length).toBe(3)
+  expect(requests[2].payload).toEqual({ conversation_id: SEEDED_ROW.id })
+  await expect(reading).toHaveText('Context: 5%')
+  expect(messages).toHaveLength(0)
 })
 
 test('chat activation requests context once and replaces both readings before a turn', async ({ launchPairedApp }) => {

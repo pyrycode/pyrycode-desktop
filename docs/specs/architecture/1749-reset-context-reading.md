@@ -10,7 +10,7 @@
 - `src/renderer/src/screens/conversation/requestContextUsage.test.ts` — sender tests provide the home for subscription tests.
 - `e2e/composer-context-claude-reading.spec.ts` — existing synthetic frames and wire-to-footer/gauge proof.
 - `docs/knowledge/features/conversation-shell.md`, `reported-context-store.md` (How it works), and `development-verification.md` (Evidence that cannot pass too early) — reuse existing rendering and passive replies; observe a positive processing barrier before absence assertions.
-- `docs/specs/architecture/1504-request-context-usage.md` — nearest analogue: activation and correlated reply proof, approximately 180 written lines.
+- `docs/specs/architecture/1504-context-reading-on-chat-open.md` — nearest analogue: activation and correlated reply proof, approximately 180 written lines.
 
 ## Design source
 

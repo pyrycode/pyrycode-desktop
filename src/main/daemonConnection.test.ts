@@ -13170,3 +13170,128 @@ describe('session_error IPC emission', () => {
     connection.stop()
   })
 })
+
+describe('reply suggestion IPC', () => {
+  it('forwards only validated named fields and drops invalid suggestion frames', async () => {
+    const ctx = build({ serverId: 'srv-1' })
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    ctx.sink.send.mockClear()
+    const payload = { conversation_id: 'c', session_id: 's', revision: 4, suggested_reply: 'Private display text' }
+    const emit = (value: unknown) => ctx.drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({
+      id: 91, type: 'reply_suggestion', ts: FIXED_TS, payload: value
+    }) })
+    emit({ ...payload, raw: 'must not cross' })
+    emit({ ...payload, suggested_reply: '' })
+    emit({ ...payload, revision: 5, suggested_reply: null })
+    expect(ctx.sink.send.mock.calls.map(call => call[1])).toEqual([
+      { type: 'replySuggestion', conversationId: 'c', sessionId: 's', revision: 4, suggestedReply: payload.suggested_reply, serverId: 'srv-1' },
+      { type: 'replySuggestion', conversationId: 'c', sessionId: 's', revision: 5, suggestedReply: null, serverId: 'srv-1' }
+    ])
+    ctx.connection.stop()
+  })
+})
+
+describe('createDaemonConnection — switchAgent', () => {
+  it('refuses unknown or absent owners without falling back to another host', async () => {
+    const connections = new Map<string, DaemonConnection>()
+    const router = createConversationRouter({ connectionFor: id => connections.get(id) ?? null })
+    const owner = build({ serverId: 'host-A', wrapSink: router.observe })
+    const other = build({ serverId: 'host-B', wrapSink: router.observe })
+    connections.set('host-A', owner.connection)
+    connections.set('host-B', other.connection)
+    for (const ctx of [owner, other]) ctx.connection.start()
+    await tick()
+    for (const ctx of [owner, other]) ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    owner.drivers[0].emit({ type: 'message', plaintext: conversationCreatedPlaintext({
+      id: 'conv-1', is_promoted: false, cwd: '/workspace', name: null, last_used_at: '', workspace_label: null
+    }) })
+    const source = { on: vi.fn(), removeListener: vi.fn() } satisfies CommandSource
+    const off = onCommand(source, command => {
+      if (command.type === 'switchAgent') router.route(command.payload.conversation_id)?.switchAgent(command.payload)
+    })
+    const receive = source.on.mock.calls[0][1]
+    receive({}, { type: 'switchAgent', payload: { ...payload, conversation_id: 'unknown' } })
+    connections.delete('host-A')
+    receive({}, { type: 'switchAgent', payload })
+    expect(owner.drivers[0].sent).toEqual([])
+    expect(other.drivers[0].sent).toEqual([])
+    off()
+    for (const ctx of [owner, other]) ctx.connection.stop()
+  })
+  const payload = { conversation_id: 'conv-1', agent: 'codex' as const, model: '' }
+  it('drops requests before start, before handshake, after relay-down and after stop', async () => {
+    const { connection, drivers } = build()
+    expect(() => connection.switchAgent(payload)).not.toThrow()
+    expect(drivers).toHaveLength(0)
+    connection.start()
+    await tick()
+    connection.switchAgent(payload)
+    expect(drivers[0].sent).toEqual([])
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    drivers[0].emit({ type: 'relay-link-down', code: 1006 })
+    connection.switchAgent(payload)
+    expect(drivers[0].sent).toEqual([])
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    connection.stop()
+    connection.switchAgent(payload)
+    expect(drivers[0].sent).toEqual([])
+  })
+  it.each([
+    { type: 'terminal' as const, code: 1006, reason: 'closed' },
+    { type: 'error' as const, reason: 'outbound-frame-encode-failed' as const }
+  ])('drops requests after a connection failure: %j', async (event) => {
+    const { connection, drivers } = await reachConnected()
+    drivers[0].emit(event)
+    connection.switchAgent(payload)
+    expect(drivers[0].sent).toEqual([])
+  })
+  it('sends once with the shared envelope counter, clock and fresh payload', async () => {
+    const { connection, drivers } = await reachConnected()
+    connection.newSession('conv-1')
+    connection.switchAgent({ ...payload, effort: '', extra: 'discard' } as typeof payload)
+    const envelopes = drivers[0].sent.map(decodeEnvelope)
+    expect(envelopes).toHaveLength(2)
+    expect(envelopes[1]).toEqual({ id: envelopes[0].id + 1, ts: FIXED_TS, type: 'switch_agent',
+      payload: { ...payload, effort: '' } })
+  })
+  it('contains encoding errors without sending or consuming an envelope id', async () => {
+    const { connection, drivers } = await reachConnected()
+    expect(() => connection.switchAgent({ ...payload, model: 'x'.repeat(MAX_PLAINTEXT_BYTES) })).not.toThrow()
+    expect(drivers[0].sent).toEqual([])
+    connection.switchAgent(payload)
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+  })
+  it('logs only static lifecycle categories for unavailable, sent and encoding-failed requests', async () => {
+    const entries: DiagnosticEvent[] = []
+    const { connection, drivers } = build({ diagnosticLog: { event: e => { entries.push(e) } } })
+    connection.switchAgent(payload)
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    connection.switchAgent({ ...payload, model: 'private-model', effort: 'private-effort' })
+    connection.switchAgent({ ...payload, model: 'x'.repeat(MAX_PLAINTEXT_BYTES) })
+    expect(entries.filter(e => e.event.startsWith('switch-agent'))).toEqual([
+      { event: 'switch-agent-refused', code: 'unavailable' },
+      { event: 'switch-agent-sent' },
+      { event: 'switch-agent-failed', code: 'build-or-send-failed' }
+    ])
+    connection.stop()
+  })
+  it('contains a throwing send without retries or logging supplied content', async () => {
+    const entries: DiagnosticEvent[] = []
+    const { connection, drivers } = build({ throwOnSend: true, diagnosticLog: { event: e => { entries.push(e) } } })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    const send = vi.spyOn(drivers[0].handle, 'sendMessage')
+    expect(() => connection.switchAgent(payload)).not.toThrow()
+    await tick()
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(entries.filter(e => e.event.startsWith('switch-agent'))).toEqual([
+      { event: 'switch-agent-failed', code: 'build-or-send-failed' }
+    ])
+    connection.stop()
+  })
+})

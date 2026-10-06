@@ -9,6 +9,7 @@ import { useQuestionBridge } from './store/questionBridge'
 import { useHistoryPageBridge } from './store/historyPageBridge'
 import { useChatHistoryWriter } from './store/chatHistoryWriter'
 import { ConversationListData } from './store/conversationListBridge'
+import { ReplySuggestionData } from './store/replySuggestionBridge'
 import { SessionIdData } from './store/sessionIdBridge'
 import { RunSettingsWriteData } from './store/runSettingsWriteBridge'
 import { QueueData } from './store/queueBridge'
@@ -314,6 +315,7 @@ function App(): JSX.Element {
     <>
       <ConversationListData />
       <SessionIdData />
+      <ReplySuggestionData />
       <RunSettingsWriteData />
       <QueueData />
       <RelayLinkData />

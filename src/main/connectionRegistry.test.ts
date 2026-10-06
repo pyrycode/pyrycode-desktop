@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createConnectionRegistry } from './connectionRegistry'
 import type { DaemonConnection } from './daemonConnection'
 import type { PairedServerRecord, PairedServerStore } from './pairedServerStore'
+import type { SwitchAgentPayload } from '../shared/wire/types'
 import type { DiagnosticEvent } from './diagnosticLog'
 
 /** A record whose four fields are all derived from `server`, so a mix-up is visible in an assertion. */
@@ -82,6 +83,7 @@ interface BuiltConnection {
    * cascade into assertions about lifecycle counting — which this is not about — and this one needs
    * the argument, not a count: the delegate that dropped it would still count right.
    */
+  switches: SwitchAgentPayload[]
   newSessions: string[]
   contextRequests: string[]
   mcpStatusRequests: string[]
@@ -105,6 +107,7 @@ function createFactoryFake() {
     pairedServer: PairedServerStore
   }): DaemonConnection => {
     const calls = { start: 0, stop: 0, reconnect: 0, interrupt: 0 }
+    const switches: SwitchAgentPayload[] = []
     const newSessions: string[] = []
     const contextRequests: string[] = []
     const mcpStatusRequests: string[] = []
@@ -116,6 +119,7 @@ function createFactoryFake() {
       serverId: spec.serverId,
       pairedServer: spec.pairedServer,
       calls,
+      switches,
       newSessions,
       contextRequests,
       mcpStatusRequests,
@@ -144,6 +148,7 @@ function createFactoryFake() {
       newSession: (conversationId: string) => {
         newSessions.push(conversationId)
       },
+      switchAgent: (payload) => { switches.push(payload) },
       send: noop,
       requestSessionSettings: noop,
       requestModelList: noop,
@@ -602,6 +607,16 @@ describe('createConnectionRegistry', () => {
 
       expect(factory.for('alpha').newSessions).toEqual(['conv-1'])
       expect(factory.for('beta').newSessions).toEqual([])
+    })
+
+    it('forwards switchAgent payload unchanged only to the named server', async () => {
+      const { factory, registry } = harness([record('alpha'), record('beta')])
+      await settle()
+      const payload: SwitchAgentPayload = { conversation_id: 'conv-1', agent: 'claude', model: '', effort: '' }
+      registry.connectionFor('alpha')?.switchAgent(payload)
+      expect(factory.for('alpha').switches).toEqual([payload])
+      expect(factory.for('alpha').switches[0]).toBe(payload)
+      expect(factory.for('beta').switches).toEqual([])
     })
 
     it('answers null for an unheld server, and for every id when nothing is paired', async () => {

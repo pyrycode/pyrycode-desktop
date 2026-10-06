@@ -73,6 +73,7 @@ export interface InnerFrameV2 {
 }
 
 export type EnvelopeType =
+  | 'reply_suggestion'
   | 'request_host_system_prompt'
   | 'set_host_system_prompt'
   | 'host_system_prompt'
@@ -224,6 +225,7 @@ export type EnvelopeType =
   // app's one Reset-session action dispatches; a typed `/clear` still goes down the message path.)
   // SSOT pyrycode docs/protocol-mobile.md § New session (v2), widened by pyrycode#2099.
   | 'new_session'
+  | 'switch_agent'
   | 'modal_shown'
   | 'modal_dismissed'
   | 'modal_answer'
@@ -4060,9 +4062,26 @@ export interface ModelRefusalFallbackPayload extends ModelRefusalNoFallbackPaylo
   scope: string
 }
 
+/** Transient interactive v2 state; never a history entry. */
+export interface ReplySuggestionPayload {
+  conversation_id: string
+  session_id: string
+  revision: number
+  suggested_reply: string | null
+}
+
 /** Daemon-wide instructions; only the empty string clears, never null. */
 export interface SetHostSystemPromptPayload { system_prompt: string }
 export interface HostSystemPromptPayload {
   system_prompt: string
   default_system_prompt: string
+}
+
+/** Outbound v2 agent switch; empty model selects the target template default. */
+export interface SwitchAgentPayload {
+  conversation_id: string
+  agent: WireAgent
+  model: string
+  /** Undefined omits effort; an explicit empty string clears it. */
+  effort?: string
 }

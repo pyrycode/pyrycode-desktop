@@ -49,37 +49,32 @@ test('permission and trust retain selection offline, including pre-opened confir
   for (const kind of ['permission', 'trust']) {
     await permission(app, kind)
     if (kind === 'permission') await panel.getByRole('checkbox').press('Space')
-    await panel.getByRole('radio', { name: 'Allow', exact: true }).press('Space')
-    await panel.getByRole('button', { name: 'Continue', exact: true }).click()
-    await panel.getByRole('button', { name: 'Confirm', exact: true }).focus()
+    await panel.getByRole('button', { name: 'Allow', exact: true }).press('Space')
+    await panel.getByRole('button', { name: 'Allow', exact: true }).focus()
     const before = (await read()).length
     await connection(app, 'disconnected')
-    await expect(panel.getByRole('button', { name: 'Confirm', exact: true })).toBeDisabled()
+    await expect(panel.getByRole('button', { name: 'Allow', exact: true })).toBeDisabled()
     await page.keyboard.press('Enter')
     await page.keyboard.press('Space')
-    await expect(panel).toContainText('Send "Allow"?')
+    await expect(panel.getByRole('status')).toContainText('Activate this choice again to confirm.')
     if (kind === 'permission') await expect(panel.getByRole('checkbox')).toBeChecked()
     expect(await read()).toHaveLength(before)
     await event(app, { type: 'modalAnswerRejected', serverId: FIRST_SERVER_ID, modalId: 'held-' + SEEDED_ROW.id })
     await expect(page.getByRole('alert')).toContainText('Your answer was rejected.')
     await page.getByRole('button', { name: 'Dismiss', exact: true }).click()
     await expect(page.getByRole('alert')).toHaveCount(0)
-    await panel.getByRole('button', { name: 'Back', exact: true }).click()
-    await expect(panel.getByRole('radio', { name: 'Allow', exact: true })).toBeChecked()
-    await panel.getByRole('radio', { name: 'Deny Default', exact: true }).press('Space')
-    for (const name of ['Continue', 'Cancel']) {
+    for (const name of ['Allow', 'Deny', 'Cancel']) {
       const button = panel.getByRole('button', { name, exact: true })
       await expect(button).toBeDisabled()
       await button.dispatchEvent('click')
     }
-    await expect(panel.getByRole('radio', { name: 'Deny Default', exact: true })).toBeChecked()
+    await expect(panel.getByRole('status')).toBeVisible()
     expect(await read()).toHaveLength(before)
     await connection(app, 'connected')
     await permission(app, kind)
     expect(await read()).toHaveLength(before)
-    await expect(panel.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled()
-    await panel.getByRole('radio', { name: 'Deny Default', exact: true }).press('Space')
-    await panel.getByRole('button', { name: 'Continue', exact: true }).click()
+    await expect(panel.getByRole('status')).toHaveCount(0)
+    await panel.getByRole('button', { name: 'Deny', exact: true }).press('Space')
     await expect.poll(async () => (await read()).length).toBe(before + 1)
     await expect(panel).toHaveCount(0)
     // Clear resolved suppression before reusing the synthetic nonce for the next class.
@@ -145,16 +140,20 @@ test('all unavailable statuses and missing or ambiguous ownership block both pro
     if (family === 'permission') await permission(app)
     else await questions(app)
     const panel = page.locator(family === 'permission' ? '.permission-panel' : '.question-panel:not(.permission-panel)')
-    await panel.getByRole('radio').first().press('Space')
+    if (family === 'permission') await panel.getByRole('button', { name: 'Allow', exact: true }).press('Space')
+    else await panel.getByRole('radio').first().press('Space')
     if (family === 'question') {
       await panel.locator('.question-batch__question').nth(1).getByRole('radio').first().press('Space')
     }
     async function blocked() {
-      for (const name of ['Continue', 'Cancel']) {
+      for (const name of family === 'permission' ? ['Allow', 'Deny', 'Cancel'] : ['Continue', 'Cancel']) {
         await expect(panel.getByRole('button', { name, exact: true })).toBeDisabled()
         await panel.getByRole('button', { name, exact: true }).dispatchEvent('click')
       }
-      await expect(panel.getByRole('radio').first()).toBeChecked()
+      if (family === 'permission') {
+        await expect(panel.getByRole('checkbox')).toBeDisabled()
+        await panel.getByRole('checkbox').dispatchEvent('click')
+      } else await expect(panel.getByRole('radio').first()).toBeChecked()
       expect(await read()).toEqual([])
     }
     for (const type of ['connecting', 'failed', 'disconnected']) {

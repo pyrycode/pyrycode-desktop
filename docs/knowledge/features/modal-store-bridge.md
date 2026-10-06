@@ -179,6 +179,23 @@ daemon frame ─(#201/#248 transport, snake→camel; `modal_shown`'s `conversati
   production before then — the store and bridge were built and tested against injected `DaemonEvent`s
   only. Now live.
 
+## Choice and consent lifetime
+
+The app-wide store retains requests and feedback across chat navigation; permission arm/checked
+consent belong to the mounted pane and clear on navigation. The
+[choice controller](conversation-shell-permission-modal.md#selection-and-confirmation) subscribes
+synchronously to this store plus active conversation, conversation list and session stores, observing
+interrupted offers and ownership even when React paints only the restored state. The reducer's
+[continuous choice/offer identities](modal-prompt-model.md#continuous-choice-and-offer-identity)
+include ordered option IDs/labels, supplied default, class, eligibility and ordered rules.
+
+Scoped reconnect removes the owning server's held request before re-delivery, discarding its draft;
+pairing reset discards all requests/drafts. Fresh answer, checkbox and Cancel handlers require the
+exact displayed request in the active chat and its unique stamped connected owner. Another connected
+host is never a fallback. Construction/subscription reads perform no diagnostic IPC; action paths
+retain content-free diagnostics. Inline placement and navigation-retained grants remain #1818's scope.
+The bridge, response envelopes and daemon remote-permission authority are unchanged.
+
 ## Permission resolution feedback
 
 The bridge already forwards `modalDismissed` source; no new wire or IPC behavior is needed.

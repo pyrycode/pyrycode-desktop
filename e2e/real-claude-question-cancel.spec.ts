@@ -256,15 +256,15 @@ async function findArtefacts(root: string, base: string): Promise<string[]> {
   return entries.filter((entry) => entry.includes(base))
 }
 
-// Choose an affirmative supplied permission row, Continue, then Confirm if non-default.
+// Activate a supplied affirmative choice again only when it is non-default.
 async function answerAllow(dialog: Locator): Promise<void> {
-  await dialog
-    .locator('.question-panel__option').filter({ hasText: /^(yes|allow|approve|accept|grant)\b/i })
-    .first()
-    .click()
-  await dialog.getByRole('button', { name: 'Continue', exact: true }).click()
-  const confirm = dialog.getByRole('button', { name: 'Confirm', exact: true })
-  if ((await confirm.count()) > 0) await confirm.click()
+  const choice = dialog.getByRole('button', { name: /^(yes|allow|approve|accept|grant)\b/i }).first()
+  const requiresSecond = !(await choice.evaluate(button => button.classList.contains('permission-panel__choice--default')))
+  await choice.click()
+  if (requiresSecond) {
+    await expect(dialog.getByRole('status')).toBeVisible()
+    await choice.click()
+  }
 }
 
 /** What the drive has had to absorb since the refusal. Both counts are expected to stay at their

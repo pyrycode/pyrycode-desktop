@@ -4059,19 +4059,45 @@ button.top-overlay-pill {
   overflow-wrap: anywhere;
 }
 
-.permission-panel__default {
-  margin-left: var(--space-2);
-  color: var(--color-tertiary);
-  font-weight: var(--text-label-medium-weight);
+.permission-panel__choices { display: flex; flex-direction: column; gap: var(--space-2); }
+.permission-panel__choice {
+  box-sizing: border-box;
+  width: 100%;
+  padding: calc(var(--space-2) - 1px) calc(var(--space-5) - 1px);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-primary);
+  font: inherit;
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-title-medium-weight);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: pointer;
 }
+.permission-panel__choice--default { background: var(--color-primary); color: var(--color-on-primary); }
+.permission-panel__choice--armed { background: var(--color-secondary-container); color: var(--color-on-secondary-container); border-color: var(--color-secondary-container); }
+.permission-panel__choice:disabled { color: var(--color-on-surface-variant); cursor: default; }
+.permission-panel__instruction { margin: var(--space-2) 0 0; font-size: var(--text-body-small-size); line-height: var(--text-body-small-line); color: var(--color-on-secondary-container); }
+.permission-panel .permission-panel__title { color: var(--color-on-background); text-transform: none; font-size: var(--text-title-medium-size); line-height: var(--text-title-medium-line); font-weight: var(--text-title-medium-weight); letter-spacing: var(--text-title-medium-tracking); white-space: pre-wrap; overflow-wrap: anywhere; }
+.permission-panel .permission-panel__explanation { font-size: var(--text-body-large-size); line-height: var(--text-body-large-line); font-weight: var(--text-body-large-weight); color: var(--color-on-primary-container); }
+.permission-panel > .permission-modal__cancel { padding: calc(var(--space-2) - 1px) calc(var(--space-5) - 1px); align-self: flex-start; flex: 0 0 auto; font-size: var(--text-body-large-size); line-height: var(--text-body-large-line); }
+.permission-panel .permission-panel__context-text, .permission-panel__rules { font-size: var(--text-body-medium-size); line-height: var(--text-body-medium-line); color: var(--color-on-primary-container); }
 
 .permission-panel__session-offer {
   min-width: 0;
 }
+.permission-panel__session-offer .question-panel__option {
+  min-height: calc(var(--space-6) * 2);
+  align-items: center;
+}
 
 .permission-panel__rules {
   margin: var(--space-2) 0 0;
-  padding-left: var(--space-8);
+  padding-left: 0;
+  list-style: none;
   font-size: var(--text-body-small-size);
   line-height: var(--text-body-small-line);
   letter-spacing: var(--text-body-small-tracking);

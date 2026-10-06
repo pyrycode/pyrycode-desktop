@@ -35,6 +35,6 @@ export default defineConfig({
     // vitest's, `.spec.ts` is Playwright's. Deliberately NOT `e2e/**/*.spec.ts` —
     // that glob would hand vitest the whole Playwright suite. The other half of the
     // invariant is the matching `testMatch` in playwright.config.ts.
-    include: ['src/**/*.{test,spec}.{ts,tsx}', 'e2e/**/*.test.ts']
+    include: ['src/**/*.{test,spec}.{ts,tsx}', 'e2e/**/*.test.ts', 'scripts/**/*.test.ts']
   }
 })

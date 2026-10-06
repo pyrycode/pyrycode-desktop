@@ -1939,3 +1939,31 @@ describe('setConversationMuted (#1595)', () => {
     expect(isRendererCommand({ ...valid, attemptId: 'x'.repeat(128) })).toBe(true)
   })
 })
+
+describe('switchAgent command guard', () => {
+  const payload = { conversation_id: 'conv-1', agent: 'codex', model: '' }
+  it.each([
+    payload,
+    { ...payload, agent: 'claude', model: '  opus  ', effort: ' high ' },
+    { ...payload, effort: '' },
+    { ...payload, effort: undefined },
+    { ...payload, extra: 'discard me' }
+  ])('accepts valid settings without normalizing them: %j', (value) => {
+    expect(isRendererCommand({ type: 'switchAgent', payload: value })).toBe(true)
+  })
+  it.each([
+    undefined, null, [], 'payload', 1,
+    {}, { agent: 'codex', model: '' }, { ...payload, conversation_id: '' },
+    { ...payload, conversation_id: 1 }, { ...payload, conversation_id: null },
+    { conversation_id: 'conv-1', model: '' }, { ...payload, agent: 'other' },
+    { ...payload, agent: null }, { ...payload, agent: 1 },
+    { conversation_id: 'conv-1', agent: 'codex' }, { ...payload, model: undefined },
+    { ...payload, model: null }, { ...payload, model: 1 },
+    { ...payload, effort: null }, { ...payload, effort: 1 }, { ...payload, effort: false }
+  ])('rejects invalid payload: %j', (value) => {
+    expect(isRendererCommand({ type: 'switchAgent', payload: value })).toBe(false)
+  })
+  it('rejects a missing payload', () => {
+    expect(isRendererCommand({ type: 'switchAgent' })).toBe(false)
+  })
+})

@@ -302,6 +302,7 @@ export type RelayLinkStatus = 'connected' | 'offline' | 'daemon-absent'
  * `DaemonEventTimestamp` for why the field is added by intersection rather than per arm.
  */
 type BaseDaemonEvent =
+  | { type: 'replySuggestion'; conversationId: string; sessionId: string; revision: number; suggestedReply: string | null }
   | { type: 'hostSystemPromptReceived'; requestId: string; operation: 'read' | 'write'; systemPrompt: string; defaultSystemPrompt: string }
   | { type: 'hostSystemPromptFailed'; requestId: string; operation: 'read' | 'write' }
   | (ModelRefusalEvent & { conversationId: string })

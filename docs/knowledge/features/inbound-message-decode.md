@@ -40,6 +40,13 @@ relay socket → supervisor → noiseRelayDriver (Noise decrypt)
           → DAEMON_EVENT_CHANNEL → #19 bridge → #2 store (appendUnique: dedupe + order)
 ```
 
+Interactive v2 `reply_suggestion` follows the same main-only decode boundary but
+returns `{ kind: 'reply-suggestion', replySuggestion }`. The connection copies
+only `conversation_id`, `session_id`, `revision` and `suggested_reply` into the
+[named-field IPC event](daemon-event-channel.md#reply-suggestions), which feeds
+transient composer state rather than message history. Generation and handshake
+reconciliation remain daemon-owned; receiving a suggestion sends no request.
+
 ## Error handling
 
 | Layer | Result | Failure behavior |
@@ -47,6 +54,26 @@ relay socket → supervisor → noiseRelayDriver (Noise decrypt)
 | `parseInboundMessage` (transport) | `InboundDaemonMessage \| null` | Throws a single type — `WireDecodeError` — on oversized / malformed / unparseable / mistyped. `null` for a well-formed but unmodeled envelope type (**not** a failure). |
 | `case 'message'` arm (consumer) | `void` | `try/catch` → a throw is **dropped silently** (no event, no log, caught object not forwarded); `null` → ignored; a result → exactly one `DaemonEvent`. **Never throws out of the module.** |
 | UI | — | A dropped inbound frame surfaces **nothing** (no `failed`, no banner). A single malformed *message* frame is not connection-fatal — the session continues. Deliberately different from a malformed `hello_ack`, which **is** fatal (`failed('malformed-hello-ack')`) because the handshake cannot complete without it. |
+
+### Reply-suggestion validation
+
+`ReplySuggestionPayload` requires string `conversation_id` and `session_id`
+(empty strings are accepted), a positive safe-integer `revision`, and
+`suggested_reply: string | null`. Text must be nonblank, single-line Unicode scalar
+text of at most 1024 UTF-8 bytes. The validator rejects CR, LF, U+2028 and U+2029,
+lone UTF-16 surrogates, whitespace-only text and overlong strings; valid text,
+including surrounding spaces, survives verbatim. The envelope's existing fatal
+UTF-8 decoder and plaintext size cap apply before payload validation.
+
+Only explicit null represents a clear. Omission, empty text, mistyped fields or
+invalid revisions reject the whole frame without emitting IPC or altering held
+suggestions. Extra payload keys are discarded by named-field reconstruction.
+Payload rejection emits only `{ event: 'inbound-rejected',
+code: 'reply-suggestion-invalid' }` and throws the static
+`WireDecodeError('invalid reply suggestion')`; the connection drops the caught
+object. Valid diagnostics carry only `inbound-decoded`, static code
+`reply_suggestion`, byte count and whole-frame hash. Neither path logs suggestion
+text, routing IDs or raw payload, or embeds them in exception messages.
 
 ### Pairing rejection classification
 
@@ -255,6 +282,15 @@ carries the result as `memorySearch`.
 
 ## Testing
 
+[Reply-suggestion decoder tests](../../../src/main/transport/replySuggestion.test.ts)
+cover text/null preservation, missing and mistyped fields, unsafe revisions,
+blank/multiline/surrogate text, exact multibyte byte limits, invalid UTF-8 and
+content-free diagnostics/exceptions. The
+[connection tests](../../../src/main/daemonConnection.test.ts) drive encoded frames
+through main to assert the exact host-stamped IPC fields and that malformed
+suggestions emit nothing. Renderer lifecycle and mounted interaction coverage
+are linked from the [message box](conversation-shell-composer-message-box.md#suggested-next-reply).
+
 In `inboundMessage.test.ts`, wrap malformed array payloads in object rows such as
 `{ effectiveEffort: [] }` before passing them to `it.each`. Vitest expands bare array
 rows into callback arguments: `[]` can test `undefined`, and `['private-effort']`
@@ -276,7 +312,7 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 
 - **A single explicit boundary.** The outer `payload: unknown` never escapes `parseInboundMessage`; downstream holds narrowed payloads and explicitly carried envelope metadata. Permission `reason` deliberately remains opaque JSON requiring consumer narrowing. For example, live `turnEnd.daemonTs` carries the envelope timestamp for the history/live join; its report strings remain display-only.
 - **Fail-closed on declared shapes.** Malformed / oversized / unparseable frames, mistyped required fields, unknown `role`, non-array `messages`, or one bad element in a message chunk drop the frame. Present malformed permission-context fields also drop the frame; optional stopped-turn reports are independently discarded as described above.
-- **Content-free-log by construction, secret-safe.** No `console.*` on any path; category-only `WireDecodeError` messages carry no field value; the consumer drops the caught object. Since [#130](../codebase/130.md) the module *does* log — but only a content-free record (type + `seq` + length + one-way hash), never a payload byte or a decoded field: the modeled arms log a static type literal, the unmodeled arm a **capped** peer type, and every record's `hash` is a full-frame BLAKE2s digest implicitly salted by the server-assigned `id`/`ts`/`message_id` (so the log can't confirm a guessed message). Pinned by a six-method `console`-spy (still green — #130 logs via the injected sink, never `console`), an assertion that a thrown message never contains the `role` / `text` / `conversation_id` value, and an AC4 test asserting the serialized log line contains the hash but **neither** planted secret. Message *content* reaching the renderer is the **intended data path**, not a leak — the [#18](../codebase/18.md) `DaemonEvent` union cannot hold a token/key/raw frame by construction.
+- **Content-free-log by construction, secret-safe.** No `console.*` on any path; category-only `WireDecodeError` messages carry no field value; the consumer drops the caught object. Since [#130](../codebase/130.md) the module *does* log — but only content-free records: successful decodes carry type + `seq` + length + one-way hash, while rejected reply-suggestion payloads carry only a static rejection code, never a payload byte or a decoded field: the modeled arms log a static type literal, the unmodeled arm a **capped** peer type, and every record's `hash` is a full-frame BLAKE2s digest implicitly salted by the server-assigned `id`/`ts`/`message_id` (so the log can't confirm a guessed message). Pinned by a six-method `console`-spy (still green — #130 logs via the injected sink, never `console`), an assertion that a thrown message never contains the `role` / `text` / `conversation_id` value, and an AC4 test asserting the serialized log line contains the hash but **neither** planted secret. Message *content* reaching the renderer is the **intended data path**, not a leak — the [#18](../codebase/18.md) `DaemonEvent` union cannot hold a token/key/raw frame by construction.
 - **Bounded per-frame work.** The size cap makes work O(size) with size capped; a `message_chunk` array is inherently small (each complete message > 60 bytes, cap 65519) and aborts on the first bad element. A hostile daemon cannot flood an unbounded frame; deep-nesting JSON fails closed via the codec's `RangeError` catch.
 
 ## Related

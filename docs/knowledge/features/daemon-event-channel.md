@@ -159,6 +159,47 @@ Three pieces, three layers:
 
 `src/shared/ipc/` is the new IPC-contract module, mirroring how `src/shared/wire/` is the wire module. #18 creates one file in it; #17 later adds its command file (recommended: a sibling `commands.ts` with its own `COMMAND_CHANNEL`, so the two tickets never edit the same file).
 
+### Reply suggestions
+
+Main projects a [validated `reply_suggestion`](inbound-message-decode.md#reply-suggestion-validation)
+into `{ type: 'replySuggestion', conversationId, sessionId, revision, suggestedReply }`
+by copying named fields only. `bindServerOrigin` supplies the client-owned
+`serverId`; payload extras cannot choose the host. This is unsolicited session
+state with no `turn_id` or `event_id`, never a history/timeline row.
+`translateDaemonEvent`, `translateTimelineEvent`, `translateModalEvent` and
+`translateQuestionEvent` explicitly return null, keeping suggestion content out
+of their exhaustive error paths.
+
+`ReplySuggestionData` mounts once in App, subscribes synchronously to the ordered
+event channel and returns its unsubscribe as effect cleanup. The in-memory
+`replySuggestionStore` uses nested host/conversation Maps, with current-session
+identity and per-producing-session text/revision records. Off-screen chats keep
+receiving events; the open-chat-only `sessionIdStore` cannot establish their
+identity. The composer selects only the destination host/conversation's known
+current-session text. Suggestions and watermarks have no persistence.
+
+| Event | Suggestion state change |
+| --- | --- |
+| `replySuggestion` | Accept only a strictly higher revision for its conversation/session pair; duplicates and lower revisions cannot replace text or resurrect a clear. A known current identity rejects mismatched sessions. |
+| Newer `suggestedReply: null` | Clear the producing session's text and retain its watermark. If current identity is unknown, keep it unknown. |
+| `sessionTransition` | Clear all text in that conversation and set authoritative `newSessionId`, including the empty string; retain every session's watermark. |
+| Non-idle `turnState` | Clear held text for that conversation, preserving identity and watermarks. Idle preserves suggestions. |
+| `connected` after a fresh successful handshake | Delete that host's whole suggestion map, including off-screen text and watermarks, before connect-time reconciliation. A restarted daemon's lower revisions can then be accepted. |
+
+**A reconciled clear identifies its producer, not the current session.** Another
+client can rotate an off-screen chat while Desktop is disconnected, and reconnect
+can supply only the retired session's retained null. Treating that null as current
+identity would reject every subsequent suggestion from the new session. Unknown
+identity is therefore `null`, distinct from an authoritative empty-string session
+ID. The first accepted non-null suggestion establishes unknown identity; non-idle
+activity leaves it unknown. Explicit transitions remain authoritative, and retained
+watermarks prevent stale text returning if identity later cycles back to a session.
+
+Every invalidation leaves other hosts/conversations and the independent
+[retained drafts](composer-send.md#3-the-controlled-composer--conversationscreentsx) intact, including
+text already accepted with Tab. See the [message-box behavior and coverage](conversation-shell-composer-message-box.md#suggested-next-reply)
+and [revised plan](../../specs/architecture/1761-reply-suggestion.md#revisions).
+
 ### Run-configuration report
 
 `runConfigReceived.effectiveEffort?: string | null` carries the daemon's confirmed

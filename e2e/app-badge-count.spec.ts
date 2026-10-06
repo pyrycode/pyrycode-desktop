@@ -85,7 +85,8 @@ test('unpairing the last host clears the badge', async ({ launchPairedApp }) => 
   daemon.pushFrame(shown(OPEN, 'badge-unpair-prompt'))
   await expect.poll(badge(app)).toBe(1)
 
-  await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
   const row = page.locator('.settings__server-row').nth(0)
   await row.getByRole('button', { name: 'Unpair', exact: true }).click()
   await row.getByRole('button', { name: 'Confirm', exact: true }).click()

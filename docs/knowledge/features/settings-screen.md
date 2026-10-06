@@ -1,7 +1,8 @@
 # Settings screen (scaffold + Connection + Defaults + Notifications + Thread + Storage + About sections)
 
 The paired region's third view — `settings`, a sibling of [`list`](channel-list.md) and
-[`thread`](conversation-shell.md) — reachable from a new entry button on the Channel List home. A
+[`thread`](conversation-shell.md) — reachable through Sidebar menu → Settings in the
+always-mounted [Channel List](channel-list.md) toolbar. A
 top-bar (back + "Settings" title) above six sections: "Connection", whose body renders one Server row
 per paired server (each showing its own `serverId` + `relayUrl` and an empty host slot for the future
 two-dot status indicator — #1148), plus a "Pair another server" nav row that adds another; "Defaults for new
@@ -49,10 +50,13 @@ review PASS) — not security-sensitive except for #152's navigation-only reach 
 
 ## What it does
 
-- A new icon-only **Settings** entry button (gear glyph, `aria-label="Settings"`) renders as the first
-  child of the [Channel List](channel-list.md)'s root `<section>`, pinned top-right via CSS, present in
-  all three list states (not-yet-loaded / loaded-zero / non-empty).
-- Clicking it navigates the [paired shell](paired-shell.md) to a new `settings` route.
+- **Settings** is the first `menuitem` in the left **Sidebar menu** ellipsis popup, before Archive.
+  The trigger is present in loading, empty and populated sidebar states; **Pair new host** remains
+  at the right with its hover/focus name pill. The standalone gear button has been removed.
+- Selecting Settings closes the menu and calls the existing `onOpenSettings` callback once,
+  navigating the [paired shell](paired-shell.md) to `settings`. Keyboard opening focuses Settings;
+  Enter/Space select it, and Escape closes without navigating and returns focus to the trigger.
+  See the [toolbar contract](channel-list-section-header-pair-control.md) for placement and dismissal.
 - The Settings screen shows a top-bar: a back affordance (`aria-label="Back"`, the same 48px
   `arrow_back` glyph as `ConversationScreen`'s `BackControl`) and a "Settings" title.
 - Below the top-bar, one section: a "Connection" heading (`--color-primary`, **not** the muted
@@ -183,14 +187,12 @@ link points at the right file.
   `unattributed` run) because nothing dropped its `conversationListStore` slot — see [Unpair channel §
   The two renderer callers](unpair-channel.md#the-two-renderer-callers) for the fix,
   `clearServerScopedState`.
-- **Marker collision, worth knowing before writing more `PairedShellView` tests.** The `thread` view
-  already renders `aria-label="Connection status"` (the two-dot indicator, [#330](../codebase/330.md)),
-  and `list` now renders a button with `aria-label="Settings"` — so neither `"Connection"` nor
-  `"Settings"` alone discriminates the `settings` view in a `PairedShellView` render test. Use the root
-  `aria-label="Settings screen"` (or `class="settings"`) instead — see
-  [#333 codebase notes](../codebase/333.md#lessons-learned).
-- **Settings entry corner is a free CSS swap.** Top-right sticky was the developer's call against the
-  mobile home mock; no Figma node pins it, and the AC only required presence + an accessible name.
+- **Assert the destination, not an entry label.** An open sidebar popup also contains Settings.
+  Use `aria-label="Settings screen"` (or `class="settings"`) to prove navigation rather than
+  matching Settings text alone. Static rendering sees only the collapsed Sidebar menu; Playwright
+  owns opening and selecting it. The [pairing-arrival helper](../../../e2e/fixtures/pairingArrival.ts)'s
+  `pairAnotherServerFromSettings` opens Sidebar menu, selects the Settings `menuitem`, then clicks
+  Pair another server, retaining its pairing-form and confirmation assertions.
 - **A `define` added to `electron.vite.config.ts` alone is invisible to `npm test`.** `vitest.config.ts`
   is a separate Vite config; any future compile-time renderer constant needs the same `define` mirrored
   into both, or the render test throws `ReferenceError` at transform rather than failing the assertion

@@ -56,7 +56,8 @@ test('real daemon shows the second archived channel first, against last-used asc
   await expect(page.locator('.conversation')).toHaveCount(1)
   await page.locator('.conversation').getByRole('button', { name: 'Archive', exact: true }).click()
   await expect(page.locator('.conversation')).toHaveCount(0, { timeout: ROUNDTRIP })
-  await page.locator('.channel-list__archive').click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
   await expect(page.getByRole('tab', { name: 'Channels (1)', exact: true })).toBeVisible()
   await expect(page.locator('.archive__row-title')).toHaveText(FIRST)
   // Positive completion of the first archive precedes issuing the second archive.
@@ -67,7 +68,8 @@ test('real daemon shows the second archived channel first, against last-used asc
   await expect(page.locator('.conversation')).toHaveCount(1)
   await page.locator('.conversation').getByRole('button', { name: 'Archive', exact: true }).click()
   await expect(page.locator('.conversation')).toHaveCount(0, { timeout: ROUNDTRIP })
-  await page.locator('.channel-list__archive').click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
   await expect(page.getByRole('tab', { name: 'Channels (2)', exact: true })).toBeVisible()
   await expect(page.locator('.archive__row-title')).toHaveText([SECOND, FIRST])
 

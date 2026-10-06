@@ -231,6 +231,44 @@ dismisses usage before testing Re-pair and measures actual overlap in each state
 Drive Re-pair with a sealed non-retryable `error` envelope carrying `auth.invalid_token`;
 a terminal socket closure offers Reconnect and cannot establish that pill's stacking.
 
+Sidebar popup dismissal needs a complete gesture: closing on outside mousedown alone
+can expose the underlying tree to the following click. The
+[shared menu's opt-in dismissal layer](conversation-shell-composer-options-panel.md)
+stays mounted until click. [`sidebar-header-menu.spec.ts`](../../../e2e/sidebar-header-menu.spec.ts)
+proves dismissal leaves host expansion and the unopened conversation unchanged, then
+uses a second click to prove each underlying control still works. It also checks positive
+popup/tree overlap, `elementFromPoint` on both rows and real selection of both destinations.
+When replacing toolbar entries, search hover/focus specs as well as navigation selectors:
+the surviving Pair new host name-pill test establishes keyboard modality by Shift+Tab
+to Sidebar menu then Tab forward, retaining its pointer, style, focus, blur and overflow checks.
+
+Recorded evidence for the [sidebar header menu](../../specs/architecture/1732-sidebar-header-menu.md):
+the dispatcher verifier gate on `8e0ccffde50f9bfbb292b877a27d621a15e10cab`
+(2026-10-05, `npx playwright test --reporter=json`) executed 278 tests, with 278 passed,
+0 failed and 4 skipped. The [final verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1795#issuecomment-6005660644)
+confirms both named tests, `sidebar header menu geometry and input at 1280×800` and
+`sidebar header menu geometry and input at 800×600`, were present, executed and passed
+(2 executed/passed, 0 failed, 0 skipped). They prove exact placement, no selected row,
+first-row focus, wrapped arrows, Enter/Space selection, Escape, destinations and consumed
+dismissal. The gate report also confirms
+`toolbar controls show their existing name-pill treatment on hover and keyboard focus`
+was present and passed (1 executed/passed, 0 failed, 0 skipped). The verdict confirms
+shared regressions executed and passed: footer Actions 4/4, thread overflow 1/1 and
+Markdown reader 1/1, each with 0 failed and 0 skipped. Acceptance uses fake transport;
+no full live-Claude result is recorded for this change.
+
+The same verdict independently compared closed/open synthetic paired captures at both
+1280×800 and 800×600 against
+[Figma `756:9674`](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG/Pyrycode-Client?node-id=756-9674),
+popup `756:9837` and trigger `590:5824` (the PR also compared closed frame `102:4`).
+The 24px trigger and exact 6×24px ellipsis, 160×60px popup, 28px rows, 2px outer padding,
+−4px left offset, 32px downward gap, text and hover surface matched, with no unresolved
+menu deviation. Reviewed capture copies were `/tmp/verifier-1795/closed-1280.png`,
+`open-1280.png`, `closed-800.png` and `open-800.png` in that directory; the builder's
+corresponding captures were under `/tmp/builder-1732/`. These are scratch evidence paths,
+not committed assets. Linux Xvfb capture uses the existing `PYRY_E2E_SHOW_WINDOW=1`
+fixture option: hidden Linux windows produce no screenshot frames.
+
 Resolution-pill visual evidence covers four states: remote and timeout at both 1280×800 and
 800×600 window sizes (1280×772 and 800×572 content viewports). The
 [review of implementation revision `1b6aabfe`](https://github.com/pyrycode/pyrycode-desktop/pull/1719#issuecomment-5929842972)

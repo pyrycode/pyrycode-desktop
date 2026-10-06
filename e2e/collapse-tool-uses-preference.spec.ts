@@ -17,7 +17,8 @@ for (const width of [800, 1280]) test(`collapse choice applies immediately to re
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
   }
   const openSettings = async () => {
-    await page.getByRole('button', { name: 'Settings', exact: true }).click()
+    await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+    await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
     await expect(page.locator(settings)).toBeVisible()
   }
   const leaveSettings = () => page.locator(settings).getByRole('button', { name: 'Back', exact: true }).click()
@@ -92,7 +93,8 @@ for (const width of [800, 1280]) test(`collapse choice applies immediately to re
 
 test('explicit collapse off survives a full app relaunch', async ({ launchPairedApp }) => {
   const { page, app, daemon, userDataDir } = await launchPairedApp()
-  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
   const toggle = page.getByRole('switch', { name: label })
   await expect(toggle).toBeChecked()
   await toggle.click()
@@ -100,7 +102,8 @@ test('explicit collapse off survives a full app relaunch', async ({ launchPaired
   await app.close()
   await daemon.close()
   const { page: relaunched } = await launchPairedApp({}, { reuseUserDataDir: userDataDir })
-  await relaunched.getByRole('button', { name: 'Settings', exact: true }).click()
+  await relaunched.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await relaunched.getByRole('menuitem', { name: 'Settings', exact: true }).click()
   await expect(relaunched.getByRole('switch', { name: label })).toBeChecked({ checked: false })
   await expect(relaunched.getByRole('switch', { name: 'Push notifications when an agent responds' }))
     .toBeChecked()

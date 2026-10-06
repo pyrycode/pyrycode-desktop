@@ -7238,3 +7238,26 @@ button.top-overlay-pill {
 .conversation__input-chrome .composer-options {
   max-width: var(--composer-options-max-width, none);
 }
+
+/* Left-edge header popup: preserve footer and right-aligned consumers' offsets. */
+.composer-options-anchor--bottom-start {
+  flex: 0 0 auto;
+  z-index: 1;
+}
+
+.composer-options-anchor--bottom-start > .composer-options {
+  top: calc(100% + var(--space-8));
+  left: calc(-1 * var(--space-1));
+  right: auto;
+  bottom: auto;
+}
+
+/* An opt-in dismissal layer consumes the entire gesture before exposing underlying controls. */
+.composer-options-dismiss-layer {
+  position: fixed;
+  inset: 0;
+}
+
+.composer-options-anchor--consume-outside > .composer-options {
+  z-index: 1;
+}

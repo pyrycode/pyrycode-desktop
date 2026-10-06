@@ -10,7 +10,8 @@ overall.
 ## Composer options panel (#838, placed #839, keyboard-driven since #840, first live mount since #680, right-edge clamp wired since #847)
 
 The shared surface serves Actions, permission mode, model and effort in the footer,
-the [messaging top bar](conversation-shell-chrome.md#structure), and the
+the [messaging top bar](conversation-shell-chrome.md#structure), the
+[sidebar header menu](channel-list-section-header-pair-control.md), the Markdown reader, and the
 [slash-command type-ahead](conversation-shell-composer-options-slash-type-ahead.md).
 `ThreadOverflowMenu` uses `ComposerOptionsMenu` with `currentId={null}` for its three
 actions, so it inherits the same dark surface, 6px corners, body-small Primary text,
@@ -158,7 +159,7 @@ Code review PASS, two non-blocking NITs (the corner-clip magnitude's backdrop de
 test's coupling to exact JSX attribute order) — see [PR #841](https://github.com/pyrycode/pyrycode-desktop/pull/841).
 
 **Footer placement.** `ComposerOptionsMenu` defaults its optional
-`placement: 'footer' | 'bottom-end'` prop to `'footer'`. The four footer consumers omit
+`placement: 'footer' | 'bottom-end' | 'bottom-start'` prop to `'footer'`. The four footer consumers omit
 it and keep their upward placement and window clamp. The `.composer-options` offsets
 resolve against `.composer-options-anchor` (its own block rather than
 `.composer-options__anchor`, since it wraps a *trigger* the panel knows nothing about, and #940 in fact
@@ -211,6 +212,18 @@ on open and resize, but its `--composer-options-shift` has no effect on this pla
 this is not a general width clamp for arbitrary bottom-end consumers. Keep the
 outside-click ref on the shared anchor, so the adjacent conversation title dismisses
 the menu. Only the title clips; clipping the header row would also cut off the panel.
+
+**Sidebar placement.** Opt-in `placement="bottom-start"` adds
+`composer-options-anchor--bottom-start`: a non-shrinking level-1 anchor. Its panel uses
+`top: calc(100% + var(--space-8)); left: calc(-1 * var(--space-1)); right: auto;
+bottom: auto`, placing it 4px left of the trigger and 32px below its bottom.
+As with bottom-end, the clamp hook runs but the placement's left offset does not read
+`--composer-options-shift`. The sidebar fixes the width at 160px and locally overrides
+the ground to `--color-on-primary` and hover to `--color-on-primary-fixed`; two 28px rows
+plus the shared 2px outer padding give 60px height. `currentId={null}` keeps Settings and
+Archive unmarked while focus starts at Settings. Footer upward placement and the thread/
+reader bottom-end placement and surfaces remain unchanged. Keep the toolbar outside
+the tree scrollport and its ancestors unclipped so the popup can paint over the rule/tree.
 
 **Why the wrapper is `display: flex` with no padding and no border.** A block wrapper around an
 inline-block `<button>` establishes an inline formatting context, and the line box's strut leading
@@ -289,10 +302,20 @@ with Channel info already focused; no Tab is needed to reach the first action. E
 closes and returns focus to the trigger. The old top-bar document keydown listener was
 removed with its separate interaction state.
 
-A document `mousedown` listener handles outside clicks, attached only while open and
-removed on close or unmount. `close()` focuses the trigger before the browser's native
-mousedown focus action, allowing a clicked input to receive focus and caret placement.
-Preventing that default would steal focus from the control the user clicked.
+Outside dismissal defaults to `consumeOutsideClick={false}`. A document `mousedown`
+listener attaches only while open and is removed on close or unmount. `close()` focuses
+the trigger before the browser's native mousedown focus action, allowing a clicked input
+to receive focus and caret placement. This pass-through behavior remains the footer,
+thread and reader default.
+
+The sidebar opts into `consumeOutsideClick`: it omits that listener and mounts a
+transparent fixed `.composer-options-dismiss-layer` across the window while open.
+Mousedown prevents default and propagation but keeps the layer mounted; the following
+click stops propagation, closes and restores trigger focus. Closing on mousedown would
+expose the tree to the click from the same gesture, allowing dismissal to open a chat or
+fold a host. The panel's level 1 inside the anchor keeps its rows above the dismissal
+layer. The next gesture reaches the tree normally. Placement and consumption are
+independent options; existing consumers must opt in to change either default.
 
 **Testing is split at the DOM boundary, deliberately.** `composerOptionsKeyboard.test.ts` executes the
 whole keyboard contract with no DOM, including a totality property (every `optionCount` 1–5, every
@@ -302,6 +325,8 @@ markup half extends `ComposerOptionsPanel.test.tsx` with a `focusedIndex` parame
 static-render assertion of the container's *collapsed* markup (`aria-haspopup="menu"`,
 `aria-expanded="false"`, no `role="menu"` anywhere — reachable because `useState(false)` is what a
 static render sees). Static tests also pin the optional icon name and bottom-end class.
+`ChannelList.test.tsx` pins the collapsed Sidebar menu trigger, absent standalone entries
+and both toolbar controls across loading, empty and populated states.
 They cannot exercise `useState` transitions, document listeners or focus calls:
 `environment: 'node'` fires no clicks and runs no effects. Those belong to Playwright.
 `e2e/composer-actions.spec.ts` retains the footer activation/dismissal proof, and
@@ -312,6 +337,10 @@ destinations, Escape and outside/title dismissal. Its
 [paint-order probes](conversation-shell-chrome.md#layout-contract) detect divider and
 message occlusion that visibility and geometry alone missed, and keep a menu mounted
 under a sheet or dialog to prove overlay precedence.
+`e2e/sidebar-header-menu.spec.ts` checks the sidebar consumer at 1280×800 and 800×600:
+geometry, real overlap/hit testing, keyboard paths, both navigation callbacks' destinations,
+and outside dismissal that leaves a host fold and unopened chat untouched until the second
+click. See [interaction and visual evidence](development-verification.md#layout-and-input).
 
 Code review PASS with one deferred SHOULD FIX: the `switch (outcome.type)` in `handleKeyDown` has no
 `default: return assertNever(outcome)`, the exhaustiveness-guard convention this repo otherwise applies

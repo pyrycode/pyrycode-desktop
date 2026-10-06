@@ -66,8 +66,7 @@ test('remote and timeout resolutions use the Default pill, X and four seconds fr
   daemon.pushFrame(shown('local-answer'))
   await expect(page.locator('.permission-panel')).toBeVisible()
   await expect(notice(page)).toHaveCount(0)
-  await page.locator('.permission-panel').getByRole('radio', { name: 'Deny Default', exact: true }).press('Space')
-  await page.locator('.permission-panel').getByRole('button', { name: 'Continue', exact: true }).click()
+  await page.locator('.permission-panel').getByRole('button', { name: 'Deny', exact: true }).press('Space')
   await expect(page.locator('.permission-panel')).toHaveCount(0)
   daemon.pushFrame(dismissed('local-answer', 'timeout'))
   // Positive frame delivery after the local dismissal prevents a premature absence pass.

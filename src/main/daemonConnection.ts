@@ -1715,6 +1715,13 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               ...turnEndMetricsOf(inbound.turnEnd)
             })
             return
+          case 'reply-suggestion':
+            emitDaemonEvent(sink, {
+              type: 'replySuggestion', conversationId: inbound.replySuggestion.conversation_id,
+              sessionId: inbound.replySuggestion.session_id, revision: inbound.replySuggestion.revision,
+              suggestedReply: inbound.replySuggestion.suggested_reply
+            })
+            return
           case 'turn-state':
             // The coarse-phase data path (#214, widened by #724). Emit a fresh literal carrying `state`
             // plus `conversationId`, the latter copied BY NAME from the already-decoded, already-validated

@@ -281,9 +281,13 @@ export function reduceModal(state: ModalState, event: ModalEvent): ModalState {
       if (state.resolved.some((r) => r.modalId === event.modalId)) return state
       const previous = state.outstanding.find((p) => p.modalId === event.modalId)
       const offer = event.alwaysAllow
+      const unchangedChoices = previous?.class === event.class && previous.conversationId === event.conversationId
+        && previous.defaultOptionId === event.defaultOptionId && previous.options.length === event.options.length
+        && previous.options.every((option, index) => option.id === event.options[index]?.id
+          && option.label === event.options[index]?.label)
       // Preserve identity only while the same ordered offer stays continuously available.
       // Store-level comparison observes replacements even when React batches their renders.
-      const unchangedOffer = previous?.class === event.class && previous.conversationId === event.conversationId
+      const unchangedOffer = unchangedChoices && previous !== undefined
         && previous.alwaysAllow?.offered === offer?.offered && offer !== undefined
         && previous.alwaysAllow?.rules.length === offer.rules.length
         && previous.alwaysAllow.rules.every((rule, index) => rule === offer.rules[index])
@@ -298,7 +302,7 @@ export function reduceModal(state: ModalState, event: ModalEvent): ModalState {
         class: event.class,
         title: event.title,
         prompt: event.prompt,
-        options: event.options,
+        options: unchangedChoices && previous ? previous.options : event.options.map(option => ({ ...option })),
         defaultOptionId: event.defaultOptionId,
         ...('reason' in event ? { reason: event.reason } : {}),
         ...('reasonType' in event ? { reasonType: event.reasonType } : {}),

@@ -236,6 +236,20 @@ Flow arithmetic alone can predict the wrong boundary.
 An overlay can paint beneath a later positioned sibling when both use automatic
 stacking or equal explicit levels. Check the complete ancestor and sibling arrangement.
 
+The [create-channel model list](create-channel-dialog.md#how-it-works) escapes the modal's
+scrollport at ordinary heights by fixing only the list at measured trigger bounds. Keep modal
+overflow `auto`: a natively resized textarea can push the footer beyond even a tall window,
+so a window-height breakpoint alone cannot justify disabling modal scrolling. Drive the resize
+handle, open Model, wheel the modal, then verify both footer controls are reachable and cancel.
+Anchor updates must follow modal/field resize, window resize and modal scroll, with observer and
+listener cleanup. At heights at or below 550px this list stays in the modal's scroll flow.
+
+Small SVG imports can become Vite data URLs that the renderer CSP rejects. The create-channel
+chevron uses the unchanged raw local SVG through a lifecycle-owned blob URL, revoked on cleanup,
+as an alpha mask coloured by `--color-primary`. Loading an external image alone would preserve
+the SVG's hardcoded fill and bypass live theme changes. Interaction evidence must both load the
+mask asset and change the theme token to check computed colour; static markup proves neither.
+
 The [translucent conversation layout](conversation-shell-chrome.md#layout-contract)
 keeps the existing scroll surface across the full pane. Assert unchanged viewport
 height plus measured padding changes when status, attachments, drafts or pending

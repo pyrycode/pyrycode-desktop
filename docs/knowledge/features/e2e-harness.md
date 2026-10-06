@@ -245,9 +245,9 @@ retains the successful attempt ID for the foreign/stale-result assertions, avoid
 a second unguarded read. A one-shot injected context-loss error must recover through
 a real Electron read; listener installation, clicks and pushed events are never replayed.
 
-**The one sanctioned exception: a control action confirmed not-delivered.** "Never replayed"
-above is the default, not an absolute — a mutation can be resent, but only after the renderer
-has been watched long enough to show it does not have the effect yet.
+**Confirmed control resends.** Recovery needs evidence about the mutation's actual effect;
+an inconclusive read cannot authorize a resend. For renderer event delivery, watch the
+renderer long enough to confirm that the effect has not arrived.
 [#1569](https://github.com/pyrycode/pyrycode-desktop/issues/1569) hit this in
 `attachment-image-open.spec.ts`'s `pushCompleted`: the push is `app.evaluate` around
 `webContents.send` of an `AttachmentUploadEvent`, and a blind retry is wrong because
@@ -281,6 +281,41 @@ and one document in the resulting bubble prove that confirmation avoided a
 duplicate. A pre-push count delta could mistake the preceding upload's delayed
 tile for the current completion and is not an equivalent delivery check.
 
+Handler installation has a different confirmation boundary. In
+[`localListFailure.ts`](../../../e2e/fixtures/localListFailure.ts), the single-consumer
+`installUnreadableLocalList` helper synchronously registers the unreadable-list wrapper
+and publishes its identity in a main-process test marker. Every installation is followed
+by a read comparing that marker with the actual registered handler. Context loss after
+installation can hide a successful mutation acknowledgement, so retrying the installation
+blindly could wrap the wrapper. Only explicit absence after transient installation loss
+permits one further guarded installation; a late callback sees the marker and cannot
+replace the wrapper twice. `readMainProcess` wraps only the inspection. Recovery permits
+at most two installations and three inspections per installation; exhausted or inconclusive
+reads fail setup, and fatal errors and non-`Error` throws propagate unchanged. Moving the
+mutation to `onLaunched` alone would not resolve ambiguous acknowledgement.
+
+Before reload, `chat-history-recording.spec.ts` requires the real renderer IPC bridge to
+return exactly `{ status: 'error', code: 'unreadable' }` for the saved host and attaches
+installation, inspection and context-loss counts as `local-list-failure-setup`. Only
+`readList` is overridden; other operations delegate to the captured handler and pairing
+data stays intact. The scenario retains one saved host, its single adjacent notice reading
+“Could not read saved chats on this device.”, no conversation rows or open thread, and
+the 800-pixel capture. See [local-list failure behavior](chat-history.md#results-and-failure-preservation).
+
+[`localListFailure.test.ts`](../../../e2e/fixtures/localListFailure.test.ts) executes the
+actual callbacks against an IPC registration fake to distinguish loss before and after
+effect, inspection loss, permanent failure, late execution and fatal failures. The
+[diagnosis and regression evidence](https://github.com/pyrycode/pyrycode-desktop/issues/1794#issuecomment-6007858652)
+records 11 failures in 13 cases against the old single-evaluation setup and all 13 passing
+with confirmation. The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1802#issuecomment-6008106654)
+confirms the named local-list scenario passed ten times with retries disabled (10 executed,
+10 passed, 0 failed, 0 skipped) and in the complete recording spec (7 executed, 7 passed,
+0 failed, 1 existing macOS-only skip on Linux). The dispatcher default-tier gate also
+includes that scenario passing (286 executed, 286 passed, 0 failed, 4 skipped).
+These passes supplement the deterministic recovery proof; the reason Electron lost its
+inspection context remains unproven. The original evaluation error and running-at-outcome
+launch-fate do not establish renderer navigation, an app crash or completed installation.
+
 `readAuthentication` keeps its own private copy of the same tolerance.
 
 ## Configuration and usage
@@ -295,6 +330,13 @@ tile for the current completion and is not an equivalent delivery check.
 ## Edge cases and limitations
 
 - **Not type-checked.** `npm run typecheck` is scoped to `src/` (via `tsconfig.node.json` / `tsconfig.web.json`); `e2e/` and `playwright.config.ts` are transpiled by Playwright at run time, not by `tsc`. Acceptable for scaffolding; a follow-up could add an `e2e/tsconfig.json` if type errors there start biting. **A concrete cost of this gap:** [#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199) landed `hostLabel` on `launchPairedApp`'s wrong argument (`LaunchPairedAppOptions`, the first, daemon-reply knobs — vs. `LaunchControl`, the second, everything named above). Esbuild's transpile-only run has no excess-property check, so the misplaced property was silently dropped, the spec's premise (a name typed into the pairing form) never happened, and every assertion that didn't read that specific value still passed. The failing assertion was the *only* evidence the setup had happened, and it was also the thing the broken setup made fail — so it could never have discriminated between "the feature is broken" and "the drive never ran" — and a since-withdrawn bug report was filed against the wrong layer before an ad-hoc `tsc --noEmit` over the spec file caught it. That one-command check is cheap enough to run on any new-scenario PR that adds a `LaunchControl`/`LaunchPairedAppOptions` property; it is not run automatically anywhere in this tier.
+- **Fixture unit passes do not prove fixture types.** `npm run build` uses the same app
+  TypeScript configurations, while Vitest transpiles `e2e/**/*.test.ts` without checking
+  types. A separate fixture typecheck caught `readMainProcess` inferring `unknown` in
+  `localListFailure.ts` despite all its regression tests passing. The explicit
+  `readMainProcess<boolean>` preserves the boolean-or-sentinel inspection contract.
+  Include changed helpers in focused fixture typechecking; see
+  [test-tier boundaries](development-verification.md#what-each-test-tier-proves).
 - **No CI today.** Electron e2e on headless Linux will need `xvfb-run`. macOS (current dev env) no longer runs plain headful: since [#1067](https://github.com/pyrycode/pyrycode-desktop/issues/1067) every default-tier launch's window is never shown and its renderer is exempted from occlusion/backgrounding throttling — see [Desktop isolation](#desktop-isolation-default-tier-launches) above — which is what keeps a `workers: 1` run from being disturbed by the operator using the machine mid-run. The `forbidOnly`/`retries` knobs are CI-gated and harmless until then.
 - **No `e2e:fast` variant.** Re-building on every run is accepted; a build-skipping variant is deferred until iteration pain is actually observed.
 - **Every UI scenario, in order, lives in its own document.** [E2E test harness — scenario history](e2e-harness-scenarios.md) is the chronological log of every scenario and fixture extension built on this harness — #93/#94's first pairing+send drive through [#1091](https://github.com/pyrycode/pyrycode-desktop/issues/1091)'s two-fake-daemon launch — split out because this document sits at `check:docs`'s 50000-byte cap and that log was most of its bulk.

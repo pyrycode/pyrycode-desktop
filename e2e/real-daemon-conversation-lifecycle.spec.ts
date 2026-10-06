@@ -89,7 +89,8 @@ test('real daemon archive → restore → delete lifecycle reflects through the 
 
   // --- Baseline: the Archive view starts empty (the observed 0 of the 0→1). The promoted seed is never
   // archived, so both tabs read (0). Proves the archive-view entry and the seed-exclusion up front. ---
-  await page.locator('.channel-list__archive').click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
   await expect(page.getByRole('tab', { name: 'Channels (0)', exact: true })).toBeVisible()
   await expect(page.getByRole('tab', { name: 'Discussions (0)', exact: true })).toBeVisible()
   await page.locator('.archive__back').click()
@@ -137,7 +138,8 @@ test('real daemon archive → restore → delete lifecycle reflects through the 
 
   // Nav to the Archive view. With the manual Back gone, this click can only resolve because the app
   // navigated by itself — but it is corroboration, not the proof; the delta above is.
-  await page.locator('.channel-list__archive').click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
 
   // AC3 — Discussions 0→1: the archived non-promoted row lands in Discussions (partitionArchived filters
   // is_archived then splits promoted→channels / non-promoted→discussions). Auto-waits the archive →
@@ -214,7 +216,8 @@ test('real daemon archive → restore → delete lifecycle reflects through the 
   await expect(page.locator('.channel-list__save')).toHaveCount(0)
 
   // AC5 — gone from the Archive view: the removed row is in neither tab.
-  await page.locator('.channel-list__archive').click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
   await expect(page.getByRole('tab', { name: 'Discussions (0)', exact: true })).toBeVisible()
   await expect(page.getByRole('tab', { name: 'Channels (0)', exact: true })).toBeVisible()
 })

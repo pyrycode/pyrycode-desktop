@@ -199,12 +199,12 @@ export function reduceQuestionBatches(
         questionBatchId: event.questionBatchId,
         questions: event.questions
       }
-      // Re-delivery of a still-outstanding id: replace in place from the RE-DELIVERED fields (the
-      // latest wins) — position and length preserved, no duplicate append. Carries over the #195
-      // idempotency finding, which the array's id-addressing keeps a one-arm change.
-      const outstanding = state.outstanding.some((b) => b.questionBatchId === event.questionBatchId)
-        ? state.outstanding.map((b) => (b.questionBatchId === event.questionBatchId ? batch : b))
-        : [...state.outstanding, batch]
+      // A fresh request supersedes its conversation's old request. Same-ID redelivery retains order.
+      const retained = state.outstanding.filter(b =>
+        b.conversationId !== event.conversationId || b.questionBatchId === event.questionBatchId)
+      const outstanding = retained.some(b => b.questionBatchId === event.questionBatchId)
+        ? retained.map(b => b.questionBatchId === event.questionBatchId ? batch : b)
+        : [...retained, batch]
       return { ...state, outstanding }
     }
     case 'dismissed': {
@@ -241,11 +241,7 @@ export const selectOutstandingBatches = (s: QuestionBatchState): readonly Questi
  * several chats live, so this is the panel's central read: it finds the batch for the conversation on
  * screen while other conversations' composers stay untouched.
  *
- * WHEN MORE THAN ONE HELD BATCH MATCHES, IT ANSWERS WITH THE FIRST IN INSERTION ORDER. The reducer
- * does not enforce one batch per conversation — nothing observed says the daemon raises two
- * concurrently, and enforcing it would invent a replacement rule for traffic no one has seen. Holding
- * the batches in one ordered collection scanned by id keeps that open (ADR 0009 § "Ordered array +
- * scan-by-id, not a Map") and keeps a future one-per-conversation rule a one-arm change.
+ * Fresh requests replace the previous request for their conversation.
  *
  * An `===` scan over the ordered array, deliberately: `outstanding` is NEVER re-keyed, by this id or
  * by anything else. Comparing own field VALUES has no prototype hazard at all — a `'__proto__'` or

@@ -2,8 +2,8 @@
 
 Split out of [Question panel](conversation-shell-question-panel.md) on 2026-09-02 to keep that document
 under the size cap, the same move [Cancel refuses the batch](question-panel-cancel-refusal.md) made for
-\#921. Part of the question vertical's render slice; see that document for the panel's frame, header tabs
-and step controls, and [Question-batch model](question-batch-model.md) for the model and bridge
+\#921. Part of the question vertical's render slice; see that document for inline placement and all-question
+controls, and [Question-batch model](question-batch-model.md) for the model and bridge
 underneath both.
 
 Through #916 the Actions row's trailing button read Next on every question but the last, where it read
@@ -36,8 +36,9 @@ export function resolveQuestionAnswers(
 
 Deciding whether the batch is complete and building what is sent are the same computation: a batch with a
 gap has no entry to emit for that question, so the button's availability and the frame's contents cannot
-disagree, and a "which is it?" bug is not expressible. The container calls this once per render and feeds
-both the completeness gate and the send from the one result. Host availability is checked separately.
+disagree. The container uses this function for the render-time completeness gate and recomputes it
+from current picks at response activation. Host availability and current batch ownership are checked
+separately before that synchronous send.
 
 Iterates the **questions**, never the selections — a picks map can hold an entry for a position a
 shortened re-delivery removed, and one phantom entry would break the daemon's exact-count check on an
@@ -53,9 +54,7 @@ is the only incomplete signal — there is no partial array and no per-question 
 clears picks on a re-delivery, so a same-nonce `question_shown` carrying fewer options than before leaves
 a pick pointing past the end of the new `options` array. This function runs during render to compute the
 gate, so `question.options[position].label` would otherwise throw `undefined.label` out of the render —
-on traffic the daemon controls and the reducer explicitly supports. It is the same hazard the container's
-`activeIndex` clamp already guards one level up ([Question panel](conversation-shell-question-panel.md)
-§ Header tabs). The out-of-range position contributes no value; if that empties the question, the batch
+on traffic the daemon controls and the reducer explicitly supports. All questions now render together; there is no active-index clamp or stepping state. The out-of-range position contributes no value; if that empties the question, the batch
 is incomplete and the operator re-picks against what is on screen. This is also the concurrency finding
 the [picks store's own security review](question-batch-model.md) named and handed forward: it is
 discharged here, not by a second guard elsewhere.
@@ -134,85 +133,43 @@ up, because `useStore` compares the selector's result under `Object.is` and a fr
 would spin the panel forever. Safe to call inline in a render with no `useMemo`, exactly as the existing
 per-question selector is.
 
-`QuestionPanelSlot` keeps its existing `selectQuestionSelection` read for the **active** question rather
-than deriving it from this map — that would need the deliberately-unexported empty sentinel, and the two
-subscriptions cost nothing: the batch-wide read already re-renders the slot on every pick in this batch,
-so the narrow one is a strict subset. The returned map may hold entries for positions the batch no longer
-has, per the stale-position note above; `resolveQuestionAnswers` is where that is absorbed, not this
-selector.
+`QuestionPanelSlot` now reads only this whole-batch map and supplies it to all rendered cards.
+There is no active-question subscription. The map can hold removed question positions after same-ID
+redelivery; resolution filters them by iterating current questions, not by mutating the selector.
 
 ## The view's conjunction
 
-`QuestionPanelView` gains `canAnswer: boolean` and `onAnswer: () => void`, both required so `tsc` forces
-the one call site. The trailing button stays the **one element** [step controls](
-conversation-shell-question-panel.md#step-controls-916) already established; only its attributes vary:
+The single inline Continue button uses `disabled={!canAnswer || !responseAvailable}` and `onClick={onAnswer}`.
+Every card remains editable without stepping. `canAnswer` is computed by the container with
+`resolveQuestionAnswers`; host availability comes from `usePromptResponseAvailability`.
 
-```
-disabled={isLastQuestion && (!canAnswer || !responseAvailable)}
-onClick={isLastQuestion ? onAnswer : () => onQuestionSelected(activeIndex + 1)}
-```
-
-**The gate is a conjunction, and the second conjunct is what keeps the panel from deadlocking.** Continue
-is unavailable in its Continue role while the batch is short an answer or its host is unavailable. Gating on
-`!canAnswer || !responseAvailable` without the role check would disable Next, stranding the
-operator on question 1 with no way to reach question 2 to answer it — so the batch could never become
-complete. Stepping is never gated on what has been picked, and neither is Previous; only this one
-attribute, on this one role, varies with completeness. `canAnswer` is a prop rather than something derived
-inside the view, because the view holds only the active question's selection; the container computes both
-`canAnswer` and the payload from `resolveQuestionAnswers` in one call, which is what keeps the button's
-state and the frame's contents from disagreeing.
-
-`QuestionPanelSlot` wires both from the one `resolveQuestionAnswers(batch.questions, selections)` result,
-computed inline in the render (no `useMemo` — a pure pass over one batch's questions, and memoising it
-would need a key derived from the picks):
+At activation, `isCurrentQuestionBatch(batch)` checks the active conversation, captured object identity
+against the current owning store entry, and absence of outstanding permission/trust. Checking only the
+nonce would accept callbacks captured before a same-ID redelivery changed the available positions.
+`canRespondToPromptNow` then rereads the owning host's availability. Only after both checks does the
+handler resolve the current picks and enter `answerQuestionBatch`:
 
 ```ts
-responseAvailable={responseAvailable}
-canAnswer={answers !== null}
 onAnswer={() => {
-  if (!canRespondToPromptNow(batch.conversationId)) return
-  answerQuestionBatch(batch.questionBatchId, answers, {
-    sendCommand: window.pyry.sendCommand,
-    dispatchPicks: dispatch,
-    dispatchBatch: questionBatchStore.getState().dispatch
-  })
+  if (!isCurrentQuestionBatch(batch) || !canRespondToPromptNow(batch.conversationId)) return
+  const currentAnswers = resolveQuestionAnswers(batch.questions,
+    selectBatchSelections(batch.questionBatchId)(questionPicksStore.getState()))
+  answerQuestionBatch(batch.questionBatchId, currentAnswers, deps())
 }}
 ```
 
-`responseAvailable` comes from `usePromptResponseAvailability(batch.conversationId)`. The handler's
-fresh store read immediately precedes the synchronous helper; an unavailable response emits no
-command and clears no picks or batch, even if the rendered availability is stale.
-
-`window.pyry` is dereferenced only inside the click closure, the queued backlog's own drop-closure
-(`ConversationScreen`'s `onDrop` bind, since [#1009](https://github.com/pyrycode/pyrycode-desktop/issues/1009))
-/ `Composer.handleSubmit` discipline — never during render, so the container's smoke render still touches no
-bridge.
+A duplicate, replaced, redelivered, navigated-away, permission-covered or offline activation sends
+nothing and clears no state. `window.pyry` is dereferenced only during an accepted interaction, never
+in render. Optimistic removal still occurs on a throwing send; unresolved requests can reappear after
+reconnect, with the old picks cleared and an explicit new answer required.
 
 ## CSS — unavailable response controls
 
-**The design draws no unavailable state for Continue** — a static frame cannot express one that depends on
-what the operator has picked — so the treatment is this ticket's own rather than a design read. The house
-convention is `.composer__send:disabled`/`.log-data__download:disabled`: mute the content colour to
-`--color-on-surface-variant`, drop the pointer affordance, no opacity literal, no geometry change. Both
-precedents keep their enabled fill unchanged because that fill is already neutral
-(`--color-surface-container-high`/`--color-secondary-container`), so the content colour alone carries the
-signal.
-
-**`.question-panel__continue:disabled` cannot copy that pair verbatim, because its enabled fill is not
-neutral.** Desktop is dark-only (ADR 0003), where `--color-primary` is `#9dcbfc` — a bright light blue.
-Muting only the content would put `--color-on-surface-variant` (`#c2c7cf`) on that fill: light on light,
-a label at roughly 1.3:1 that cannot be read, on a pill that would still read as the most prominent and
-most available control in the row — the exact failure the design's own missing state was flagged to
-catch. The rule therefore mutes the **fill** as well, to `--color-surface-container-high` — this
-stylesheet's own neutral control fill, `.composer__send`'s background — beside the muted content, putting
-the label at roughly 8.6:1 and reading unmistakably de-emphasized beside the outlined Cancel and Previous.
-The convention's substance is unchanged (token pair, no opacity literal, no geometry, no border change);
-only which token pair applies is decided by the button's own enabled fill rather than assumed from the
-two precedents.
-
-Only the Continue **role** of the trailing button is gated — the same element reading Next is never `disabled`, or an
-incomplete batch could not be stepped through to complete it.
-Cancel also requires host availability and uses muted text and border tokens, preserving its outline.
+Inline batch actions use body-large typography through `.question-batch` overrides. Its disabled
+Continue retains the primary/on-primary token pair at opacity 0.38; Cancel retains its outline with
+muted text/border tokens. The base disabled Continue rule uses neutral surface-container-high and
+on-surface-variant for other shared consumers, including permissions. Scope the inline override so
+changing the questionnaire does not redraw the permission panel.
 
 ## Testing strategy
 
@@ -230,20 +187,16 @@ land picks-first and outside the `try`; a throwing send still clears both stores
 leaves that reference intact, hostile keys (`__proto__`, `constructor`, `''`) answer empty before any
 write.
 
-`QuestionPanel.test.tsx`: the disabled matrix on the trailing button — last question + incomplete is
-`disabled`, last + complete is not, a non-last question is never `disabled` and still reads Next — with
-exactly one `question-panel__continue` element in every case, so the two roles cannot become two elements.
+`QuestionPanel.test.tsx` checks the inline Continue disabled matrix for completeness and host
+availability, independent native group names and exactly one action row after all cards.
+`QuestionPanelSlot.test.tsx` checks live-pick recomputation, duplicate and stale callback rejection,
+replacement retirement, shorter same-ID delivery, reconnect, permission coverage and navigation.
 
-`e2e/question-answer-continue.spec.ts` (new) is the only place the click and the outbound frame can be
-proven — renderer specs here are static server renders with nothing to click. A three-question batch
-covering single-select, multi-select and Other, driven so the deadlock failure mode is visible if it
-existed: with nothing answered, the trailing button reads Next and steps forward through every question
-first; part-answered, Continue on the last question is `disabled`; answering the last question flips it
-available; clicking it sends exactly one `question_answer` whose entries are asserted whole, the panel
-clears, and the composer returns with its draft intact. The capture narrows to
-`{ type, question_batch_id, answers }` at capture time, so `answer_token` never enters a spec array, a
-diff, or a failure diagnostic — the same rule [Cancel](question-panel-cancel-refusal.md) established,
-unchanged.
+`e2e/question-answer-continue.spec.ts` drives all three cards at once: single-select, multi-select and
+Other. Partial answers and whitespace-only Other keep Continue disabled; completing every question
+permits one ordered, trimmed `question_answer`. Footer model selection preserves the pending picks;
+optimistic removal preserves the visible composer's draft. The frame capture keeps only
+`{ type, question_batch_id, answers }`, excluding `answer_token` from stored test diagnostics.
 
 This spec proves the click and the outbound frame against a scripted `daemon.pushFrame` — it cannot
 show a real claude ever receiving or reading the answers. [#928](real-claude-liveness-e2e.md) closed
@@ -262,14 +215,10 @@ this slice; `answerQuestions` deep-rebuilds the payload from fresh literals, so 
 depth is dropped rather than serialized. No new `contextBridge` API, no new `ipcMain` channel, no
 filesystem or persistence surface — `questionPicksStore` still refuses to persist this family.
 
-**Concurrency: one residual named rather than guarded.** `answers` is computed at render and consumed at
-click, so a same-nonce `question_shown` re-delivery landing in that window leaves the closure holding
-entries resolved against the *previous* delivery's labels. Not exploitable: the only party that could mount
-it is the daemon, which both re-delivers the batch and resolves the answer — it can already record
-whatever answer it likes, so there is no deputy to confuse. The likelier outcome, a shrunk batch, is
-rejected totally by `answerVerdict` and degrades to the swallowed-send behaviour above. Recomputing inside
-the handler would be no fresher and would split the one computation the gate and the payload deliberately
-share.
+**Concurrency is guarded at activation since #1729.** The container rejects stale captured objects
+and navigated-away owners, then recomputes answers from current picks. Same-ID redelivery no longer
+leaves a valid callback holding the previous delivery's payload. Edits share the identity/permission
+checks and validate positions, preventing cleared drafts from being recreated by retained handlers.
 
 **Threat model.** The applicable desktop threat is a hostile or degraded relay dropping the answer; the
 design fails open in the safe direction, the same posture as the refusal. A compromised renderer gains no
@@ -283,7 +232,7 @@ live-run concern owned by #923, wired blocked-by this ticket.
 ## Related
 
 - [Question panel](conversation-shell-question-panel.md) — the parent document: the panel's frame,
-  `ComposerSlot`/`QuestionPanelSlot`, header tabs (#915) and step controls (#916).
+  `QuestionHistorySlot`/`QuestionPanelSlot`, independent cards and the batch action row.
 - [Question panel — Cancel refuses the batch](question-panel-cancel-refusal.md) — the row's other sending
   control (#921), the picks-first optimistic-clear shape and `QuestionResolveDeps` (renamed from
   `QuestionRefuseDeps` by this slice) both reuse verbatim.

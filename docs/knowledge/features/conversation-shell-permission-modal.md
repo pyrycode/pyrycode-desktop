@@ -16,20 +16,21 @@ Answering, cancelling or remote dismissal advances to the next outstanding reque
 
 ## Presentation
 
-`ComposerSlot` mounts `PermissionModal` through `Composer`'s `beforeComposer` seam. The panel takes
-precedence over a waiting questionnaire and covers the normal composer. The still-outstanding
-questionnaire and its model footer remain mounted inside a native `hidden` wrapper; the composer
-also stays mounted and hidden. Resolving permissions restores the questionnaire at its active
-question with its picks and Other text, or the typed composer draft when no batch remains. See
-[Composer placement](conversation-shell-question-panel.md#composer-placement) for these lifetimes
-and keyboard/accessibility isolation.
+`ComposerSlot` mounts `PermissionModal` through `Composer`'s `beforeComposer` seam and covers the
+mounted composer only for current-chat permission/trust. Pending clarification questions render in
+history through `QuestionHistorySlot`, whose native `hidden` wrapper preserves permission precedence.
+Both questionnaire and composer are hidden from layout, keyboard focus and accessibility. Resolving
+the last permission restores the still-pending full batch with its picks/Other drafts and the composer
+with its typed draft. The desktop footer belongs to that composer rather than the questionnaire.
+See [Composer placement](conversation-shell-question-panel.md#composer-placement) for temporary
+coverage and chat-switch lifetimes.
 
 `PermissionModalView` renders a `section` with `role="region"` labelled by its title.
 There is no centred dialog, dimmed backdrop or modal focus boundary; the chat history and sidebar
 remain usable. The approved adaptation of
 [Figma node 347:6913](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=347-6913)
 uses the Pyry mark and title row, bordered content box, native single-choice rows, separator and
-trailing outlined Cancel / filled Continue actions. It omits Other, question tabs and Previous/Next.
+trailing outlined Cancel / filled Continue actions. It omits the questionnaire's Other field; each protocol retains its own response controls.
 The supplied default has visible “Default” copy; it is not preselected.
 
 Optional context appears below the prompt in muted body-small text, using the existing spacing and

@@ -124,7 +124,7 @@ function capturingQuestionFake(captured: CapturedRefusal[]): (inbound: Uint8Arra
   }
 }
 
-test('question panel: Cancel refuses the batch, the composer comes back, and the daemon’s own dismissal changes nothing', async ({
+test('question panel: Cancel refuses the batch, the composer stays available, and the daemon’s own dismissal changes nothing', async ({
   launchPairedApp
 }) => {
   const captured: CapturedRefusal[] = []
@@ -149,6 +149,8 @@ test('question panel: Cancel refuses the batch, the composer comes back, and the
   // Non-vacuity anchor: nothing has been sent before the click, so the single frame asserted below is
   // one this drive caused rather than one that was already there.
   expect(captured).toHaveLength(0)
+  await expect(page.locator('.conversation__thread .question-batch')).toHaveCount(1)
+  await expect(composer).toBeVisible()
 
   // AC1 + AC2 — the one gesture, and both halves of what it must do.
   await cancel.click()

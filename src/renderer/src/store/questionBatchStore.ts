@@ -26,6 +26,7 @@
 // memoising on `label`.
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
+import { questionPicksStore } from './questionPicksStore'
 import {
   reduceQuestionBatches,
   initialQuestionBatchState,
@@ -57,10 +58,21 @@ export type QuestionBatchStore = QuestionBatchState & {
  * does — #900 dispatches from the preload event callback and the panel slices only read — and a later
  * store-subscription-driven dispatch should be a considered choice rather than an accident.
  */
-export function createQuestionBatchStore(init: QuestionBatchState = initialQuestionBatchState) {
+export function createQuestionBatchStore(
+  init: QuestionBatchState = initialQuestionBatchState,
+  onRetiredBatch: (questionBatchId: string) => void = () => {}
+) {
   return createStore<QuestionBatchStore>((set) => ({
     ...init,
-    dispatch: (event) => set((s) => reduceQuestionBatches(s, event))
+    dispatch: (event) => set((s) => {
+      if (event.type === 'shown' && event.questions.length > 0) {
+        for (const held of s.outstanding) {
+          if (held.conversationId === event.conversationId && held.questionBatchId !== event.questionBatchId)
+            onRetiredBatch(held.questionBatchId)
+        }
+      }
+      return reduceQuestionBatches(s, event)
+    })
   }))
 }
 
@@ -69,7 +81,9 @@ export function createQuestionBatchStore(init: QuestionBatchState = initialQuest
  *
  *  NEVER ATTACH THIS TO `window` as a debug handle. `dispatch` is otherwise reachable only from module
  *  importers; a global would hand any injected script a live write path into renderer state. */
-export const questionBatchStore = createQuestionBatchStore()
+export const questionBatchStore = createQuestionBatchStore(initialQuestionBatchState, questionBatchId => {
+  questionPicksStore.getState().dispatch({ type: 'dismissed', questionBatchId })
+})
 
 /**
  * Narrow-slice React binding for the panel slices. Selecting a single slice avoids cross-facet

@@ -72,7 +72,38 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
-**Latest verified run: #1723, 2026-10-06 — 26 executed, 26 passed, 0 failed, 1 skipped.**
+**Latest verified run: #1817, 2026-10-06 — 26 executed, 26 passed, 0 failed, 1 skipped.** The
+[dispatcher PASS comment](https://github.com/pyrycode/pyrycode-desktop/issues/1817#issuecomment-6025928858)
+records `feature/1817` at `1cec087404`, integrated with main `04e1cbd95b` in run
+`2026-10-06T21-33-26-050Z`. Its sole listed skip is
+`real claude picks up a saved channel system prompt at Reset session`, with no reason recorded.
+The [named live results](https://github.com/pyrycode/pyrycode-desktop/issues/1817#issuecomment-6026040792)
+confirm all three required consumers were present, executed and passed on the first attempt in
+this same run, with `daemon-revision: 0.37.0`:
+
+| Migrated spec | Named scenario | Recorded result |
+| --- | --- | --- |
+| `real-claude-permission-modal.spec.ts` | `real claude session checkbox grants repeated Bash use only in the current session` | Passed, 14.3 s |
+| `real-claude-permission-mode.spec.ts` | `operator bypass stays confirmed through a no-op write, then the menu returns to bypass and Manual approval enforces Read` | Passed, 11.0 s |
+| `real-claude-question-cancel.spec.ts` | `real claude raises a clarifying question that refusing through Cancel stops the gated work` | Passed, 10.0 s |
+
+The consumers now activate supplied choice buttons, twice for non-defaults. The grant spec retains
+a fresh Bash witness after checked second activation, a second fresh effect with no new permission
+in the same session, then a new permission before any effect in a different session in the same
+workspace. The mode spec retains daemon-announced mode and enforced Read proof; the question-refusal
+spec retains continuation, quiescence and absence of the gated artefact while servicing permissions.
+Panel disappearance alone proves none of these daemon effects.
+
+The configured gate installed/built then ran
+`npx playwright test --config playwright.real-claude.config.ts --reporter=json`, rather than the
+requested `npm run e2e:real:gate`. The counted run and named passes satisfy its zero-execution guard
+and this ticket's live acceptance despite the command mismatch. The dispatcher removed
+`needs-real-claude` and advanced the ticket. Evidence comes from the linked gate and named-result
+comments; documentation did not read dispatcher logs or run live tests.
+See [permission interaction/capture coverage](conversation-shell-permission-modal.md#verification)
+for completed fake-tier proofs. These gate results concern the local test relay, not the production relay.
+
+**Previous verified run: #1723, 2026-10-06 — 26 executed, 26 passed, 0 failed, 1 skipped.**
 The [dispatcher PASS comment](https://github.com/pyrycode/pyrycode-desktop/issues/1723#issuecomment-6024904239)
 records `feature/1723` at `1832410096`, merged with main `d627211c4d` in run
 `2026-10-06T20-27-45-100Z`. The supplied per-test gate report confirms

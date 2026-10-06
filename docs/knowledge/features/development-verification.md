@@ -29,6 +29,23 @@ click handlers, focus changes, or layout. A removed bridge mount can leave its
 import and all unit tests green. Check that each bridge is mounted in the app.
 Use the fake-transport browser tier to prove event delivery through the app.
 
+Permission choice coverage at `1cec0874` separates controller/static proofs from native interaction.
+The [final verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1820#issuecomment-6025856890)
+confirms all 13 scoped fake scenarios present and passed: permission paths 7, offline responses 3,
+resolution notices 3, with 0 failed/skipped. Full run: 305 executed, 304 passed, 1 unrelated flaky
+failure, 4 skipped; selected rerun: 1 executed/passed, 0 failed/skipped. Unit run: 8,921
+executed/passed, 0 failed, 3 skipped, including both production snapshot-purity regressions.
+Capturing the controller during static renders detects an injected reader's render-time IPC;
+manually starting it then driving real stores proves silent subscriptions, fresh response guards
+and change-then-restoration invalidation. Static output alone proves none of those transitions.
+
+Browser cases retain default/two-activation answers, grants, FIFO, focus, hidden drafts, peer/rejection
+feedback and offline attempts. Synthetic desktop and 800×600 captures cover safe-default, armed and
+checked/unchecked offers; wrapping/reachability assertions include unbroken paths and complete rules.
+A native capture returned the preceding armed frame, so these use Playwright screenshots for painted
+state. See [permission coverage and reviewed captures](conversation-shell-permission-modal.md#verification)
+and [live evidence](live-e2e-runbook.md#current-real-claude-gate-state).
+
 Permission resolution coverage separates these proofs explicitly.
 [`modalPrompts.test.ts`](../../../src/renderer/src/store/modalPrompts.test.ts) checks held-owner
 detection, silent local/unknown dismissals, per-chat replacement, stale-object guards, reconnect

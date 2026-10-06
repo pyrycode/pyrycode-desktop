@@ -107,9 +107,13 @@ test('operator bypass stays confirmed through a no-op write, then the menu retur
       expect(modal.conversationId === initial.conversationId, 'approval belongs to the same conversation').toBe(true)
       expect(modal.read, 'approval prompt identifies the Read tool').toBe(true)
       expect(modal.allow !== null).toBe(true)
-      await panel.getByRole('radio', { name: modal.allow!, exact: true }).press('Space')
-      await panel.getByRole('button', { name: 'Continue', exact: true }).click()
-      await panel.getByRole('button', { name: 'Confirm', exact: true }).click()
+      const choice = panel.getByRole('button', { name: modal.allow!, exact: true })
+      const requiresSecond = !(await choice.evaluate(button => button.classList.contains('permission-panel__choice--default')))
+      await choice.press('Space')
+      if (requiresSecond) {
+        await expect(panel.getByRole('status')).toBeVisible()
+        await choice.click()
+      }
       await expect.poll(async () => (await proof()).turns.length, { timeout: TURN }).toBe(2)
       const after = await proof()
       expect(after.tools.length).toBeGreaterThan(0)

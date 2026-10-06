@@ -21,7 +21,10 @@ Translates owned `DaemonEvent` arms into `ThreadEvent`s and folds them through
 `reduceTimeline`. Conversation-owned deliveries update their retained slice;
 session and run-configuration state remain independent. The `connected` →
 `reconnected` reconcile clears activity chrome while preserving rows and held
-banner reports. Only accepted local `userText` opens `localSendPending`, holding
+banner reports. A post-replay running-phase reassertion restores the open
+conversation's status; silence leaves it idle when the turn ended offline. See
+[replay and phase reconciliation](conversation-timeline-store-limits.md#edge-cases-and-limitations).
+Only accepted local `userText` opens `localSendPending`, holding
 `{ messageId, queued }` or `null`; daemon receipts cannot open it. Refusal recovery
 also dispatches client-owned events into the retained slice. See
 [selectors and write paths](conversation-timeline-store-usage.md#configuration-and-usage).

@@ -65,11 +65,18 @@ Part of [Thread timeline](thread-timeline.md).
   conversation clears nothing.
 - **A retry or compaction genuinely still live across a reconnect shows no banner until the daemon's
   next edge** ([#538](../codebase/538.md)), an accepted residual, not a bug to engineer around. The
-  daemon's connect-time re-assertion set is the outstanding modal (#877) and the queued backlog (#878)
-  only — never `api_retry`/`compacting`/`turn_state` — so `reconnected`'s clear has nothing to
-  re-populate from. A briefly-missing banner (until the next rising edge, or for a compaction possibly
-  only the closing falling edge, landing as a no-op) trades against a permanently-stuck one, which is
-  the worse failure this arm exists to fix.
+  daemon does not reassert `api_retry` or `compacting` as a current-status snapshot.
+  Bounded replay may deliver retained edges, but does not guarantee their recovery.
+  A briefly-missing banner (until the next rising edge, or for a compaction possibly
+  only the closing falling edge, landing as a no-op) trades against a permanently-stuck one.
+- **A running turn's phase is reasserted after replay.** With daemon
+  [pyrycode#2718](https://github.com/pyrycode/pyrycode/pull/2718), the later attributed
+  `turn_state` restores `thinking` or `responding` after `reconnected` clears the
+  open conversation's transient status. The snapshot omits `event_id`; idle
+  conversations produce no snapshot, so an open turn that ended offline stays idle.
+  Held items survive by reference. Repeating the restored phase with other status
+  state unchanged is a same-reference reducer no-op and adds no row. See
+  [cursor, open-conversation scope and mounted regressions](conversation-timeline-store-limits.md#edge-cases-and-limitations).
 - **A late `sessionTransition`/timeline delta for the previous conversation is not suppressed by
   [#530](../codebase/530.md)'s clear.** `ThreadEvent` carries no `conversation_id` (single-active model,
   ADR 0004), so if the previous conversation is still streaming when the switch happens, its in-flight

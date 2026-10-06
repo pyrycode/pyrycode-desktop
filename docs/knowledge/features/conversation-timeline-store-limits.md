@@ -73,23 +73,20 @@ Retention, send windows and row identity in the [conversation timeline](conversa
   seam, opening a conversation already creates and promotes its slice, so a later `reconnected` reconcile
   finds an existing slice rather than minting a fresh one for any conversation that has actually been
   opened.
-- **A prepend keys off the conversation's origin, not the head of the held array**
-  ([#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260), fixing what [#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)
-  shipped). `ConversationScreen` originally keyed timeline rows by array index (see [Thread timeline §
-  Edge cases](thread-timeline-limits.md#edge-cases-and-limitations)) on the premise that the list never inserts
-  mid-list — true of `reduceTimeline`'s own array, false of a page landing at the head via
-  `prependHistoryFor`. Under an index key, prepending N rows made React match key 0 to key 0, so every
-  already-drawn row was updated in place with a *different* item's content instead of N new nodes
-  appearing at the head; Chromium's scroll anchoring then measured its anchor node's own offset before
-  and after and compensated by the wrong delta, since that node never actually moved. Not harmless
-  reconciliation churn: measured by mutation, the reader's row drifted from a viewport top of 112px to
-  848px. The slice now carries a fourth field, `prependedRows: number` (0 on every fresh slice, raised by
-  `fresh.length` — never `items.length` — only on the branch of `prependHistoryFor` that actually
-  inserts), read by `selectPrependedRowsFor(id)` and passed to `Timeline` as an optional `firstRowKey`
-  prop (`ConversationScreen` passes `firstRowKey={-prependedRows}`; every pre-#1260 render site passes
-  nothing and defaults to 0). An item row keys as `firstRowKey + index`, unchanged by an append and
-  shifted by exactly a prepend's count, so every surviving row keeps its key and only the new rows are
-  new.
+- **Row identity survives both prepends and settlement.** Array-index React keys made
+  history prepends reuse connected nodes for different content and broke scroll anchoring;
+  the origin-relative `firstRowKey + index` fix then became insufficient when queued
+  settlement began moving rows within the list. The timeline now retains numeric `rowKeys`
+  and a `nextRowKey` counter independently of item order. History prepends allocate new
+  keys from that counter and retain all held keys. `prependedRows` still tracks inserted
+  rows for the fallback `firstRowKey` path and saved-history contract.
+  Saved-timeline admission initializes keys as `index - prependedRows` and the counter as
+  `items.length - prependedRows` **before the first render**. Lazy initialization at the
+  first live update or prepend would change every restored origin, disconnect nodes and
+  transfer expansion to different rows. Queue projection carries `FoldedRow.itemIndex`;
+  statistics/cursor use source indices, and React keys plus all tool/ancestor/run expansion
+  lookups use those retained identities. Unit and mounted restoration regressions cover
+  both live-first and prepend-first updates with connected Agent/Read/run nodes.
 - **`prependHistoryFor` is not idempotent, by design** ([#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)).
   Applying the same page twice prepends its non-`userText` rows twice — only `userText` rows are
   suppressed, by the AC4 echo dedup. Unreachable today; see the

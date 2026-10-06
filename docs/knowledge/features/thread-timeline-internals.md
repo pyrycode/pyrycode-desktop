@@ -40,7 +40,7 @@ type ThreadEvent =
   | { type: 'turnEnd'; turnId: string; stopReason: string
       ; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string
       ; durationMs?: number; inputTokens?: number; cacheReadTokens?: number; cacheCreationTokens?: number; outputTokens?: number; costUsdTotal?: number }
-  | { type: 'userText'; received?: true; text: string; createdAt?: number; messageId?: string; attachments?: readonly MessageAttachment[] }
+  | { type: 'userText'; received?: true; queuedMsgId?: number; sentNow?: boolean; text: string; createdAt?: number; messageId?: string; attachments?: readonly MessageAttachment[] }
   | { type: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
   | { type: 'stallDetected' }
   | { type: 'apiRetry'; active: boolean; current: number; total: number }
@@ -48,7 +48,7 @@ type ThreadEvent =
   | { type: 'compactionBoundary'; trigger: string; preTokens?: number | null; postTokens?: number | null }
   | { type: 'reset' }
   | { type: 'reconnected' }
-  | { type: 'dropUserText'; messageId: string }
+  | { type: 'dropUserText'; messageId: string; queuedMsgId?: number }
   | { type: 'thinkingProgress'; estimatedTokens: number }
 
 interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase; stalled: boolean; apiRetry: ApiRetryStatus | null; compacting: boolean; localSendPending: LocalSendPending | null; thinkingTokens: number | null; latestTurnEnd?: Extract<ThreadEvent, { type: 'turnEnd' }>; pendingCompaction?: Extract<ThreadItem, { kind: 'compactionBoundary' }> }
@@ -95,10 +95,10 @@ the window's `queued` flag is this scalar's honest proxy for "the daemon has it,
 claude itself has started.
 
 The pure `markLocalSendQueued(state, queued: readonly QueuedItem[]): TimelineState`, exported beside the
-selectors (below), is the sole writer of `queued`. It is a no-op (same-reference) unless the window is
-open, not yet `queued`, its `messageId !== ''`, and some item's `message_id` strictly equals it — so
-another device's item, an item with an empty or absent `message_id`, and a closed window all leave the
-state untouched. **`queued` is sticky: nothing ever sets it back to `false`.** Claude can commit the item,
+selectors (below), associates local echoes with queue entries and records removal independently of
+the newest-send indicator. For that indicator, it advances `queued` only when the window is open,
+not yet queued, its id is nonempty and a snapshot item has the same `message_id`.
+**`queued` is sticky: nothing ever sets it back to `false`.** Claude can commit the item,
 and a later snapshot without it can arrive, before `turn_state{thinking}` does, so re-reading `false` from
 an item's absence would be a regression, not a correction. `markLocalSendQueued` is not itself a
 `reduceTimeline` arm — no `ThreadEvent` carries a queue snapshot — it is called directly by
@@ -159,7 +159,7 @@ optional injected renderer clock. Live user receipts instead use the daemon enve
 forwarded as `daemonTs` and parsed only when at most 64 characters and finite. Missing, empty,
 overlong or invalid times leave the row unstamped; receipts never read the arrival clock.
 History-only translation supplies no `createdAt`, even though the entry has a join timestamp.
-See [message timestamp contract](inbound-message-decode-contract.md#public-contract). Unlike `input` and
+See [message timestamp contract](inbound-message-decode-contract.md#message-receipts-and-timestamps). Unlike `input` and
 `resultDetail`, the clock is **not** threaded through `reduceTimeline` as a parameter — the field rides
 the event instead, and the reason is worth stating because it is not the one the ticket's own two
 cascade-count ceilings (55 reducer call sites, 68 event literals) would suggest: **the two timeline
@@ -219,21 +219,60 @@ carry the daemon's `message_id`; a nonempty match also suppresses a receipt or h
 preserving the held row. Empty/absent ids suppress nothing, and equal text is never identity.
 An id-less echo cannot be removed by a drop. Untrusted on the read side, on the same terms as `text`: the value it is compared against arrives
 from another client through a content-blind relay, so it is read for strict string equality only — never
-a lookup path, a cache key, a filename, a URL, a `Map` key or a React key (`selectItems`' render key stays
-array index, per § Edge cases below). Field-for-field identical between the item and the event; production
+a lookup path, a cache key, a filename, a URL, a `Map` key or a React key. Rendering uses client-owned
+numeric row keys, independently of message identity. Field-for-field identical between the item and the event; production
 always carries one (`submitMessage`'s `newMessageId` is required), but it stays optional on both types
 because the union is constructed unstamped in dozens of specs and requiring it would buy nothing an
 id-less, un-droppable row doesn't already give for free.
 
-**[#1214](https://github.com/pyrycode/pyrycode-desktop/issues/1214) gave this field a second consumer,
-for the opposite direction of the same correlation.** `dropUserText` above *removes* an item by matching
-`messageId`; `foldQueuedRows` (`src/renderer/src/screens/conversation/foldQueuedRows.ts`) *marks* one by
-the same match, joining a `ThreadItem` against the [queue store](queue-store.md)'s held `QueuedItem` rows
-so a message the daemon has queued but not yet run draws as one row rather than two. Both readers inherit
-the identical field contract stated above — strict string equality only, never a rendered value, a `Map`
-key or a React key — rather than restating it. See [Conversation shell — conversation surfaces and
-modals § Queued rows folded into the
-thread](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213).
+`foldQueuedRows` joins the [queue store](queue-store.md)'s entries only to retained local echo
+records, not to arbitrary user rows with equal ids. `dropUserText` likewise selects a local record;
+its optional queue id distinguishes colliding entries. See [queued settlement](#queued-own-echo-settlement)
+and the [render projection](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213).
+
+### Queued own echo settlement
+
+Local submission with a nonempty message id creates a `localEchoes` sidecar naming a stable
+numeric `rowKey`, the message id, whether it waited behind running content and its observed
+`waitTurnId`. Neither received/history rows nor other item kinds create ownership records;
+equal text and empty/absent ids cannot establish ownership. `localSendPending` tracks only
+the newest send and cannot serve as this inventory.
+
+Snapshots bind unbound, unsettled records one-to-one by nonempty message id, reserving queue
+ids already assigned to another record. Once bound, only that conversation's `queuedMsgId`
+matches. The holder rejects another trusted receipt host before association or release.
+`queueStore` still holds replacement snapshots; the timeline retains only local facts.
+Snapshot removal marks a bound record `released` without settling or deleting its row.
+Projection therefore keeps an unconfirmed waiting echo below continuing assistant/tool
+content, even after removal, and keeps multiple echoes in submission order. Snapshot presence
+alone controls queued styling and Drop, including receipt-before-removal.
+
+A received user event first selects an exact bound queue id, then an eligible unsettled,
+unbound local record by nonempty message id. A settled unbound echo must not shadow a newer
+colliding entry. Ordinary settlement moves the original item and key after the observed
+predecessor boundary (`afterKey`), or to the delivery point when no boundary is known.
+The first matching `turnEnd` captures that boundary; later turns cannot overwrite it.
+Idle sends retain immediate placement. `sentNow: true` instead uses the stream delivery
+point inside the running turn. Removal never implies Send now. Queue ids name entries,
+not turns: Codex commit-at-write and no-echo idle fallback do not supply ordinary Claude's
+echo-before-answer guarantee, so late receipts use the boundary already observed.
+
+After either forced or ordinary settlement, still-held unsettled successors sharing the
+predecessor start waiting behind the current turn. Released successors keep their boundary
+for late receipts. Excluding forced delivery here reverses a later ordinary delivery;
+advancing released entries instead inserts older echoes into a subsequent reply.
+Settlement preserves text, original local time, attachments and row identity, and returns
+before content/chrome reduction so it cannot split, finalize or reset the next reply.
+Later receipts and snapshots cannot move a settled row. Metadata-free confirmation of an
+unbound echo marks it settled without moving it; repeats retain legacy no-op
+identity, and later snapshots cannot claim it. Admitted foreign receipt queue ids are
+tracked separately for idempotence when a bound local entry shares their message id.
+
+`dropUserText` removes only the selected local row, key and correlation record; it cannot
+delete a received/history row through an id collision. Reset/holder eviction clears local
+facts. Reducer coverage lives in `queuedEchoSettlement.test.ts`; mounted encrypted-stream
+coverage in `e2e/queued-own-settlement.spec.ts` includes both snapshot/receipt orders,
+mixed forced/ordinary delivery, continuing output and restored row identity.
 
 **`TurnEndMetrics` ([#1565](https://github.com/pyrycode/pyrycode-desktop/issues/1565)) is a
 sixth field-pair widen, on `turnBoundary`/`turnEnd` only** — six optional numbers
@@ -312,14 +351,12 @@ there can still accompany clearing `latestTurnEnd`. If that reading is unchanged
 the wrapper returns the content fold's exact state reference, preserving legacy no-op
 identity on reconnect.
 
-Before that fold or any sidecar update, a `received: true` user event with a nonempty
-`messageId` matching any held user row returns the **exact held state**. Checking only
-the tail, or rejecting after the wrapper, would move/rewrite an earlier echo or clear
-its recovery state. The first held row keeps position, text, time and attachment
-references across repeated receipts and the sender's optimistic echo. A held history
-row also wins against a later receipt, so its absent time is not filled in. The
-[history prepend](conversation-timeline-store-history.md) and queued-row projection
-join by the same nonempty identity, never by text or timestamp.
+Before that fold, owned receipts and drops use the [settlement rules](#queued-own-echo-settlement).
+Other received user events with a held nonempty message id retain legacy exact-state
+deduplication, except metadata distinguishing a different bound queue entry admits a
+separate receipt. A held history row is not enriched by a later matching receipt.
+The [history prepend](conversation-timeline-store-history.md) still deduplicates by nonempty
+message id, never by text or timestamp; this does not grant queue ownership.
 [`liveUserReceipts.test.ts`](../../../src/renderer/src/store/liveUserReceipts.test.ts)
 pins these joins, exact-reference rejection and both pending-send values.
 
@@ -341,7 +378,7 @@ pins these joins, exact-reference rejection and both pending-send values.
 | `compactionBoundary` | Replaces the pending row by reference identity, or appends a standalone row when none matches; consumes the association. Stores counts and `manual: trigger === 'manual'`, never raw trigger text. Status fields stay unchanged. |
 | `reset` | returns `initialTimelineState`, with no `latestTurnEnd`, refusal offer or pending compaction, by reference; a second reset is a no-op — [#528](../codebase/528.md) |
 | `reconnected` | clears `phase`→`idle`, `stalled`→`false`, `apiRetry`→`null`, `compacting`→`false`, `thinkingTokens`→`null` via a hand-written six-field literal (not a spread of `initialTimelineState`); `items` preserved **by reference**. Same reference if all six (including `phase === 'idle'`) are already clean (no-churn on a first connect, or a reconnect with nothing live) — [#538](../codebase/538.md), widened for `thinkingTokens` by [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) since a reading held across a reconnect would report the depth of a think that finished on the other side of the disconnect |
-| `dropUserText` | remove the **first** `userText` item whose `messageId` strictly equals `event.messageId` (`removeUserEcho`, below); same `items` reference on no match. The **only** arm that removes an item — everything else appends or coalesces. Every chrome scalar, `localSendPending` included, is carried through unchanged; not a second `userText` producer and not its inverse — see § Edge cases — [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) |
+| `dropUserText` | Handled before the content fold: remove the first matching local echo record and its row/key, requiring the same queue id when supplied. No match returns the exact state. Every chrome scalar, including `localSendPending`, is preserved. Received/history rows are ineligible. |
 
 `items` and `phase` are orthogonal: content events never touch `phase`, `turnState` never touches
 `items`. **`stalled` ([#317](../codebase/317.md)) is a third, independent axis**: the four
@@ -393,15 +430,6 @@ transform, not a selector — it is exported alongside these but takes a `queued
   `tail.createdAt` (this function rebuilds the item as a fresh literal on every coalesced delta, so
   carrying the incoming stamp instead would silently re-date a bubble to its most recent fragment); only
   the fresh-append branch reads the incoming stamp.
-- `removeUserEcho(items, messageId)` ([#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213))
-  — `dropUserText`'s helper: removes the **first** `userText` item whose `messageId` strictly equals
-  `messageId`, `fillResult`'s discipline one shape over (a `removed` flag rather than a bare `filter`, so
-  an unmatched drop returns `items` by reference and the reducer's same-reference contract holds).
-  First-match-only rather than filter-everything: ids are unique in production (the composer mints one
-  per send), so the two agree on every real input, and the narrower rule is the one that cannot surprise
-  — a single operator click may never take two rows out of the transcript. The `kind === 'userText'`
-  guard makes "only a user echo can ever be removed" structural: no other item kind carries a
-  `messageId`, so no daemon-authored row has a path to this branch whatever the wire says.
 - `fillResult(items, toolUseId, result)` — the `toolResult` correlate-and-fill. Narrows via a
   `.map` callback whose `item.kind === 'toolCall'` guard narrows `item` so the spread
   (`{ ...item, result }`) type-checks with **no cast** — the codebase bans unchecked `as` in

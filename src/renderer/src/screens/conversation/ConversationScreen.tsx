@@ -538,6 +538,8 @@ export function ConversationScreen({
       {(!offline || items.length > 0 || visibleQueued.length > 0 || pendingBatch !== undefined) && <Timeline
         key={openConversationId}
         items={items}
+        rowKeys={thread.rowKeys}
+        localEchoes={thread.localEchoes}
         foldTools={collapseToolUses}
         scrollPin={scrollPin}
         trailing={pendingBatch && <QuestionHistorySlot conversationId={openConversationId} />}
@@ -1137,7 +1139,7 @@ function MessageBubble({ message }: { message: Message }): JSX.Element {
 // row's drop control calls; a render that supplies queued rows without it draws them undroppable rather
 // than throwing, which is the honest degradation for a view whose container owns the conversation id.
 //
-// Timeline is still pure props-in / markup-out: the fold is a pure function of the two lists, evaluated
+// Timeline is still pure props-in / markup-out: the fold is a pure function of content, snapshots and local facts, evaluated
 // during render, holding no state between renders. That is what makes a replacement snapshot free (see
 // foldQueuedRows) and what keeps this subtree server-renderable with no store and no bridge.
 export function SavedTimelineNotice({ status }: {
@@ -1151,6 +1153,8 @@ export function SavedTimelineNotice({ status }: {
 
 export function Timeline({
   items,
+  rowKeys,
+  localEchoes,
   foldTools = false,
   scrollPin,
   queued,
@@ -1166,6 +1170,8 @@ export function Timeline({
 }: {
   trailing?: ReactNode
   items: readonly ThreadItem[]
+  rowKeys?: TimelineState['rowKeys']
+  localEchoes?: TimelineState['localEchoes']
   /** Presentation only; absent or false retains ordinary tool rows. */
   foldTools?: boolean
   scrollPin?: ThreadScrollPin
@@ -1189,12 +1195,14 @@ export function Timeline({
    *  `scrollPin` reason: absent reads Claude, so the existing render sites stay byte-identical. */
   agent?: WireAgent
 }): JSX.Element {
-  const rows = foldQueuedRows(items, queued ?? EMPTY_QUEUED)
-  // #1566: keyed by item index, which is the row index below items.length (foldQueuedRows).
+  const rows = foldQueuedRows(items, queued ?? EMPTY_QUEUED, localEchoes, rowKeys)
+  // Stats use source item indices; projection may move waiting echoes.
   const turnStats = turnStatsByItemIndex(items)
   const [expandedTools, setExpandedTools] = useState<ReadonlySet<number>>(() => new Set())
   const [expandedRuns, setExpandedRuns] = useState<ReadonlySet<number>>(() => new Set())
   const projection = groupToolRows(rows.map((row) => row.item))
+  const rowKeyAt = (index: number) => rowKeys?.[rows[index]?.itemIndex ?? index] ??
+    firstRowKey + (rows[index]?.itemIndex ?? index)
   const drawn = projection.filter((group) => {
     const item = rows[group.index]?.item
     return !(foldTools && item?.kind === 'banner' && item.level === 'info') &&
@@ -1203,13 +1211,13 @@ export function Timeline({
   const runs = foldTools ? foldToolRuns(rows.map((row) => row.item), drawn) : []
   const runByMember = new Map(runs.flatMap((run) => run.members.map((index) => [index, run] as const)))
   const runByStart = new Map(runs.map((run) => [run.index, run]))
-  const runIsExpanded = (run: ToolRun) => run.members.some((index) => expandedRuns.has(firstRowKey + index))
+  const runIsExpanded = (run: ToolRun) => run.members.some((index) => expandedRuns.has(rowKeyAt(index)))
   const expandedRunStarts = new Set(runs.filter(runIsExpanded).map((run) => run.index))
   const hiddenRows = new Set(projection.filter((group) => {
     const run = runByMember.get(group.index)
     return group.ancestors.some((index) => {
       const ancestorRun = runByMember.get(index)
-      return !expandedTools.has(firstRowKey + index) ||
+      return !expandedTools.has(rowKeyAt(index)) ||
         (ancestorRun !== undefined && !expandedRunStarts.has(ancestorRun.index))
     }) || (run !== undefined && !expandedRunStarts.has(run.index))
   }).map((group) => group.index))
@@ -1233,15 +1241,15 @@ export function Timeline({
       {projection.flatMap((group) => {
         const row = rows[group.index]
         if (!row) return null
-        const key = firstRowKey + group.index
+        const key = rowKeyAt(group.index)
         const hidden = hiddenRows.has(group.index)
         if (row.item.kind !== 'toolCall') {
-          const rowKey = group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`
+          const rowKey = row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`
           const content = <TimelineRow key={rowKey}
-            item={row.item} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(group.index)}
+            item={row.item} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(row.itemIndex)}
             midTurnInput={midTurnInput} onSendQueuedNow={onSendQueuedNow}
             onOpenMarkdownPath={onOpenMarkdownPath} agent={agent}
-            inProgress={!saved && group.index === items.length - 1 && row.item.kind === 'assistantText'} />
+            inProgress={!saved && row.itemIndex === items.length - 1 && row.item.kind === 'assistantText'} />
           // Keep attributed text mounted through collapse and late-owner history regrouping.
           if (row.item.kind === 'assistantText' && row.item.parentToolUseId) return (
             <div key={rowKey} className={`tool-group-row tool-group-row--depth-${group.depth}`} hidden={hidden}>
@@ -1276,13 +1284,13 @@ export function Timeline({
           run && <div key={`run${key}`} className={`tool-group-row tool-run${expanded ? ' tool-group-row--joined-below' : ''}`}>
             <ToolRunHeader run={run} expanded={expanded} onToggle={() => setExpandedRuns((previous) => {
               const next = new Set(previous)
-              if (run.members.some((index) => previous.has(firstRowKey + index))) {
-                for (const index of run.members) next.delete(firstRowKey + index)
+              if (run.members.some((index) => previous.has(rowKeyAt(index)))) {
+                for (const index of run.members) next.delete(rowKeyAt(index))
               } else next.add(key)
               return next
             })} />
           </div>,
-          <div key={group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
+          <div key={row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
             className={`tool-group-row tool-group-row--depth-${group.depth} ${joins.get(group.index) ?? ''}`} hidden={hidden}>
             {content}
           </div>

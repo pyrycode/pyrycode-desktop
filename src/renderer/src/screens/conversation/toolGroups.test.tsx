@@ -2,6 +2,7 @@ import { expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { groupToolRows } from './groupToolRows'
 import { Timeline } from './ConversationScreen'
+import { parseChatHistorySnapshot } from '../../../../shared/chatHistory'
 import { reduceHistoryPage } from '../../store/historyPageBridge'
 import { initialTimelineState, reduceTimeline, type ThreadItem } from '../../store/threadTimeline'
 
@@ -74,4 +75,73 @@ it('denied calls clear group running status without a result', () => {
     } }
   )
   expect(groupToolRows([{ ...call('a'), result: { isError: false, resultSummary: '' } }, ...denied.items])[0]).toMatchObject({ count: 1, running: false })
+})
+
+const text = (value: string, parentToolUseId?: string): ThreadItem => ({
+  kind: 'assistantText', turnId: 't', text: value, parentToolUseId
+})
+it('projects assistant text with tools under two parents while main replies keep their order', () => {
+  const items = [call('a'), text('main before'), call('b'), text('a reply', 'a'),
+    call('child', 'a', 'Read'), text('b reply', 'b'), text('main after'), text('a later', 'a')]
+  const rows = groupToolRows(items)
+  expect(rows.map(row => row.index)).toEqual([0, 3, 4, 7, 1, 2, 5, 6])
+  expect(rows[0]).toMatchObject({ count: 1, hasChildren: true })
+  expect(rows.find(row => row.index === 2)).toMatchObject({ count: 0, hasChildren: true })
+  expect(rows.find(row => row.index === 3)).toMatchObject({ ancestors: [0], depth: 1 })
+})
+it('coalesces only adjacent deltas with equal parent and turn and preserves the first stamp', () => {
+  let state = initialTimelineState
+  for (const [value, parentToolUseId, turnId] of [
+    ['main', undefined, 't'], ['a', 'a', 't'], [' grows', 'a', 't'],
+    ['b', 'b', 't'], ['main', undefined, 't'], [' grows', undefined, 't'],
+    ['new turn', 'a', 'next']
+  ] as const) state = reduceTimeline(state, { type: 'assistantDelta', turnId, seq: 0, text: value, parentToolUseId, createdAt: 12 })
+  expect(state.items).toEqual([
+    { ...text('main'), createdAt: 12 }, { ...text('a grows', 'a'), createdAt: 12 },
+    { ...text('b', 'b'), createdAt: 12 }, { ...text('main grows'), createdAt: 12 },
+    { ...text('new turn', 'a'), turnId: 'next', createdAt: 12 }
+  ])
+})
+it('keeps orphan replies until history supplies a completed Agent owner, never an ordinary tool', () => {
+  const reply = text('orphan reply', 'owner')
+  expect(groupToolRows([reply])[0].ancestors).toEqual([])
+  expect(groupToolRows([call('owner', undefined, 'Read'), reply])[1].ancestors).toEqual([])
+  const older = reduceHistoryPage([
+    { id: 2, ts: 'new', event: { type: 'toolResult', turnId: 't', toolUseId: 'owner', isError: false, resultSummary: 'done' } },
+    { id: 1, ts: 'old', event: { type: 'toolUse', turnId: 't', toolUseId: 'owner', name: 'Task', inputSummary: '' } }
+  ])
+  const rows = groupToolRows([...older, reply])
+  expect(rows).toHaveLength(2)
+  expect(rows[0]).toMatchObject({ count: 0, running: false, hasChildren: true })
+  expect(rows[1].ancestors).toEqual([0])
+  const html = renderToStaticMarkup(<Timeline items={[...older, reply]} />)
+  expect(html).toContain('tool-group-row--depth-1')
+  expect(html).toContain('hidden=""')
+  expect(html.match(/orphan reply/g)).toHaveLength(1)
+})
+it('gives a pending text-only owner a collapse control without counting text as tools', () => {
+  const html = renderToStaticMarkup(<Timeline items={[call('a'), text('reply', 'a')]} />)
+  expect(html).toContain('aria-expanded="false"')
+  expect(html).toContain('0 tools · running')
+  expect(html).toContain('hidden=""')
+})
+it('preserves assistant history attribution through the real history bridge', () => {
+  const items = reduceHistoryPage([
+    { id: 2, ts: 'new', event: { type: 'assistantDelta', turnId: 't', seq: 0, text: 'reply', parentToolUseId: 'owner' } },
+    { id: 1, ts: 'old', event: { type: 'toolUse', turnId: 't', toolUseId: 'owner', name: 'Agent', inputSummary: '' } }
+  ])
+  expect(items[1]).toMatchObject({ parentToolUseId: 'owner' })
+  expect(groupToolRows(items)[1].ancestors).toEqual([0])
+})
+
+it('restores identical grouping from a version-1 snapshot with parented and old parentless text', () => {
+  const items = [call('a'), text('helper', 'a'), text('older main reply')]
+  const restored = parseChatHistorySnapshot(JSON.parse(JSON.stringify({
+    version: 1, kind: 'timeline', serverId: 'host', conversationId: 'chat', items,
+    prependedRows: 0, coverage: { status: 'unknown' }
+  })))
+  expect(restored.kind).toBe('timeline')
+  if (restored.kind !== 'timeline') throw new Error('expected timeline')
+  expect(groupToolRows(restored.items)).toEqual(groupToolRows(items))
+  expect(renderToStaticMarkup(<Timeline items={restored.items} saved />)).toContain('hidden=""')
 })

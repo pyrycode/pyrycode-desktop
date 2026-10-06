@@ -61,6 +61,28 @@ request-specific rejection fields, but [the connection](daemon-connection.md#pai
 consumes authentication rejection before request correlation. Decoder tests pin the exact comparison
 and ensure private daemon text cannot appear in the result.
 
+### Optional assistant parent attribution
+
+`AssistantDeltaPayload.parent_tool_use_id` names the spawning Agent/Task call for
+helper text. `parseAssistantDeltaPayload` serves both live `assistant_delta` and
+`decodeHistoryEvent`: `optionalString` preserves nonempty strings exactly, including
+whitespace, and missing or empty strings become `undefined`. Supplied non-strings,
+including `null`, throw `WireDecodeError`; live frames are dropped and malformed
+history entries are skipped individually. Errors name only the static field,
+never its value, and unknown payload keys are discarded by named-field copying.
+
+The live connection and decoded history carry it as `parentToolUseId` through
+`DaemonEvent`/`HistoryTimelineEvent` and `translateTimelineEvent` to assistant
+timeline items. A parser-only check would miss a forwarding boundary that drops
+the field: `inboundMessage.test.ts` covers both decode lanes,
+`daemonConnection.test.ts` covers live and correlated history IPC, and
+`timelineBridge.test.ts` covers renderer translation. See
+[timeline attribution](conversation-timeline-store.md#assistant-parent-attribution)
+and [version-1 persistence](chat-history.md#snapshot-contract).
+
+The parent is a conversation-local display hint, never authority, a DOM attribute,
+log content or a path. Tool-use/result decoding retains its existing contract.
+
 ### Optional permission context
 
 `parseModalShownPayload` preserves the seven required `ModalShownPayload` fields

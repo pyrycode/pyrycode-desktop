@@ -20,6 +20,8 @@ The caller-facing allowlist is a **typed shape**. Every field is a safe *envelop
 
 ```ts
 export interface DiagnosticEvent {
+  messageId?: string    // validated held local composer UUIDv4; never copied from daemon data
+  connectionId?: string // main-generated relay socket UUID; shared by its writes and open/close
   event: string    // required — the event name, a static literal at each site ('relay-closed')
   code?: string    // static classification ('pong-timeout', 'not-paired', 'malformed-hello-ack')
   status?: number  // an HTTP or WS status number (404, 1006, 1000, 1009)
@@ -54,6 +56,41 @@ The guarantee is **structural, enforced by the type system at every call site** 
 
 JSON-lines is greppable, diffable, and **injection-safe**: `JSON.stringify` escapes any embedded newline, so a string field can never split one record into two lines.
 
+### Message and socket correlation
+
+The [outbound send lifecycle](outbound-send-path.md#message-lifecycle-diagnostics)
+uses `message-queued`, `message-sent`, `message-acknowledged` and `message-dropped`
+with the same held composer UUID in `messageId`. Queued means local acceptance
+pending write, sent means successful open-socket handoff, and acknowledged means
+daemon possession established by a host/conversation-matched `queue_state`.
+Sent without acknowledgment remains delivery unknown after the socket closes.
+
+`createRelayConnection` mints a fresh `randomUUID()` for each socket, including
+reconnects and connections to different hosts. That `connectionId` appears on
+`relay-open`, `relay-closed` and the successful per-message write observation.
+It is not supplied by the renderer or daemon. `messageId` is admitted only through
+the [restricted lifecycle projection](diagnostics-channel.md#restricted-message-lifecycle-requests)
+and retained by the main tracker; daemon ids are compared to held ids, never
+serialized directly. Both fields stay outside generic renderer diagnostics and
+are excluded by the receiver test's main-only `Omit` pin.
+
+Drops use the closed codes `bridge-failed`, `route-refused`, `send-refused`,
+`send-failed`, `write-failed`, `rekey-buffer-full`, `rekey-abandoned`,
+`rekey-teardown` and `user-cancel-request`. Cancellation is independently
+deduplicated as a local request and permits later write/acknowledgment evidence.
+It cannot prove daemon removal. Rekey entries retain their own observer while
+waiting and emit sent only on their own flush write, or a classified discard.
+The tracker is capped at 1024 submissions; oldest retirement emits nothing and
+makes no claim of a drop. This state is diagnostic memory, with no retry or timer.
+
+Each transition uses the same serializer, sequence and selected sink as the
+connection records, so it reaches the existing log/debug bundle. Lifecycle lines
+carry no conversation/host routing ids, message text, attachments, tokens, keys,
+raw payloads or caught error strings. Fresh literals contain only held ids and
+client-owned events/reasons. Logger and observer calls are guarded so faults cannot
+affect delivery. [Controlled and browser coverage](development-verification.md#message-lifecycle-diagnostics)
+checks both the serializer boundary and production renderer wiring.
+
 ## The two sinks
 
 Both live in `src/main/diagnosticLogSinks.ts`, import only `node:fs` / `node:path` (no Electron), and unit-test against a capture writer / temp dir.
@@ -78,6 +115,10 @@ const diagnosticLog = createDiagnosticLog({
 createDaemonConnection({ …, diagnosticLog })
 ```
 
+The root also constructs one `createMessageLifecycle(diagnosticLog)` and injects
+it into every host's daemon connection and `onDiagnostic`. Sharing the tracker
+retains originating-host isolation while all producers share one sequence and sink.
+
 This is the choice that keeps **#127 and #128 independent** (neither `blocked-by` the other): both consume the *same* pre-built instance, and neither owns construction. Deferring construction to "the first consumer" would force the second to be `blocked-by` the first (it must read a dep the first added) — the exact serialization the split forbids. `createDaemonConnection` is the one construction point under which the whole transport stack hangs, so injecting there is what lets both legs reach it: #128 uses `deps.diagnosticLog` directly in the daemon-event choke point; [#127](../codebase/127.md) routes it the last leg by adding one property (`diagnosticLog: deps.diagnosticLog`) to the per-dial `connection` blob `loadDialConfig` builds — which already spreads verbatim through `NoiseRelayDriverConfig` → `RelaySupervisorConfig` down to `relayConnection` as `Omit<RelayConnectionConfig, 'onEvent'>`, so the optional field threads down with **no** driver/supervisor edit.
 
 **#126 adds no log call sites.** `daemonConnection.ts` gains only an optional `diagnosticLog?: DiagnosticLog` on `DaemonConnectionDeps` (+ the type import); the interface field + the root injection are the whole seam.
@@ -97,7 +138,7 @@ This is the choice that keeps **#127 and #128 independent** (neither `blocked-by
 - **MUST-NOT-log is structurally impossible.** No field carries message bodies, Noise transcripts, keys, tokens, full headers, or URL query strings. The type *is* the enforcement; a runtime scrubber is explicitly rejected (fails open).
 - **No secret is ever available to leak.** The logger generates, holds, and stores no token/key/credential (no RNG, no comparison, no persistence of a secret). A stolen `main.log` leaks nothing. The transport's classify-then-drop discipline is unchanged; the logger only ever receives the already-classified `code`.
 - **A sink throw never escapes a log call.** The core wraps `sink.write` in try/catch and swallows — a full disk / permission error silently drops the line rather than taking down the connection it observes.
-- **Main-process only.** No Electron import in the module, no IPC channel, no `contextBridge` surface, no `BrowserWindow` — unreachable from a compromised renderer. The only Electron touch is the `app.isPackaged` / `getPath('userData')` selection in the composition root.
+- **Main-process implementation.** The module imports no Electron and exposes no bridge itself. Renderer producers reach the singleton through the [diagnostics channel](diagnostics-channel.md), which projects fresh allowlisted objects. Message lifecycle requests are intercepted separately; generic renderer records cannot populate `messageId` or `connectionId` or fabricate reserved `message-*` events.
 - **Residual (documented, code-review checklist per consumer).** `event` / `code` / `host` / `path` are `string`; the type cannot forbid a *confused caller* stuffing a secret into a string field. Mitigation is a deterministic code-review checklist on the (few) call sites: static literals for `event`/`code`, `new URL(u).hostname` / `.pathname` for `host`/`path` — **never** `url.href` or `url.search`. Applied and **confirmed clean** for both consumers: [#127](../codebase/127.md)'s three relay-leg sites, and [#128](../codebase/128.md)'s three daemon-leg sites (each passes a static literal / closed-enum value for `event`/`code` and never a caught object, banner text, ack bytes, or the numeric close code — #136's review verified all three).
 
 ## Forward-compatibility — the additive-field property (partly realized in #130)
@@ -109,7 +150,8 @@ The broader Bucket-1 log is [#125](https://github.com/pyrycode/pyrycode-desktop/
 - **Shipped:** **pre-decryption raw bytes** ([#133](../codebase/133.md)) — the additive `safeBytes?` field (a **branded** `SafeBytesEncoding`, minted only by `encodeSafeBytes`), populated at the two pre-decryption failure boundaries: [`noiseSession.ts`](noise-session.md)'s three inbound-read catches (`transport-decrypt-failed`, `handshake-read-failed` ×2) and [`noiseRelayDriver.ts`](noise-relay-driver.md)'s `onMessage` framing catch (`inbound-frame-decode-failed`). The mirror image of #130: keeps the raw bytes instead of hashing them, because a pre-decryption failure's bytes are provably not plaintext. The one field whose enforcement needed a **brand**, not just an optional property — see [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md) and [#133 codebase notes](../codebase/133.md).
 - **Shipped:** **state-store transitions** ([#134](../codebase/134.md)) — the first [#131](../codebase/131.md) consumer; needed **no new field at all**, fitting entirely inside the existing `event`/`code`/`count` fields.
 - **Shipped:** **the once-per-session version banner** ([#132](../codebase/132.md)) — three additive plain-`string` fields (`appVersion?`, `noiseProtocol?`, `protocolVersion?`), populated exactly once at the composition root (`src/main/index.ts`, before `createDaemonConnection`, so the banner lands as `seq 0`) via the new `sessionBanner.ts` helper. Unlike `hash?`/`safeBytes?`, these are not derived from a runtime frame — they're build-time constants (`app.getVersion()`, `NOISE_PROTOCOL`, `PROTOCOL_VERSION`) reused verbatim, so no brand was needed. All three are **main-only**, extending the [#131 `Omit` pin](diagnostics-channel.md) a second time (after `safeBytes`). This was the **last** of the five #125 Bucket-1 splits to ship.
-- **Still deferred (#125):** a shared **correlation id** (`corr?`) linking a client record to its daemon twin — needs a daemon-side twin hash and is out of scope for this repo alone. Slots in the same additive way when built.
+- **Shipped:** local message/socket correlation through `messageId?` and `connectionId?` ([#1721](https://github.com/pyrycode/pyrycode-desktop/issues/1721)). They follow the same additive optional-field pattern but remain main-only logger fields; renderer lifecycle requests use a separate restricted shape.
+- **Still deferred (#125):** the proposed shared frame correlation field (`corr?`) linking a client record to a daemon twin hash. Local message/socket UUID correlation does not implement that frame-hash scheme.
 
 ## Related
 

@@ -19,6 +19,8 @@
 // classification code and the event name — never the caught error object, the human-readable banner
 // (messageFor), the ack/plaintext bytes, or the numeric close code (that is #127's relay leg). Every
 // failure surfaces as a non-connected DaemonEvent; nothing throws out of the module.
+import type { MessageLifecycle } from './messageLifecycle'
+import { notifySend } from './transport/sendObservation'
 import { randomUUID } from 'node:crypto'
 import { createNoiseRelayDriver } from './transport/noiseRelayDriver'
 import type {
@@ -219,6 +221,8 @@ export interface DaemonConnectionDeps {
    * daemon-leg call sites (this module) are #128 and the relay-leg threading is #127. Unused in #126.
    */
   diagnosticLog?: DiagnosticLog
+  /** Shared observer of local composer submissions; holds no message content. */
+  messageLifecycle?: MessageLifecycle
   /**
    * The retrieval idle-deadline seam (#996) — createRelaySupervisor's `timing` parameter, restated
    * for the one timer this module owns. Test-only in practice: every field defaults to the real
@@ -1625,6 +1629,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               turnId: inbound.delta.turn_id,
               seq: inbound.delta.seq,
               text: inbound.delta.text,
+              parentToolUseId: inbound.delta.parent_tool_use_id,
               conversationId: inbound.delta.conversation_id,
               daemonTs: inbound.ts
             })
@@ -2341,6 +2346,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // known fields, nothing to drop, no snake→camel on the row) — the `conversations` precedent. A
             // fresh top-level literal, never a spread of the decoded payload. Consumed by the #293 queue
             // store, not the session / timeline / modal store — queue_state is daemon state (#720).
+            deps.messageLifecycle?.acknowledge(
+              deps.serverId,
+              inbound.queueState.conversation_id,
+              inbound.queueState.queued.map(item => item.message_id)
+            )
             emitDaemonEvent(sink, {
               type: 'queueState',
               conversationId: inbound.queueState.conversation_id,
@@ -2947,19 +2957,19 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   }
 
   function send(payload: SendMessagePayload): void {
-    // No driver yet: before start(), mid-bootstrap (await not resolved), or bootstrap-failed. The
-    // driver's own sendMessage is inert pre-handshake / post-terminal (noiseRelayDriver.ts:229),
-    // so this single guard plus that inertness covers every "not connected" state — no `connected`
-    // flag needed (a flag would only change whether an id is consumed, which is harmless).
-    if (driver === null) return
+    const observe = deps.messageLifecycle?.sending(
+      payload.message_id, payload.conversation_id, deps.serverId
+    )
+    if (driver === null) {
+      notifySend(observe, { type: 'dropped', reason: 'send-refused' })
+      return
+    }
     try {
       const bytes = buildSendMessage({ id: nextEnvelopeId, ts: now(), payload })
-      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
-      driver.sendMessage(bytes)
+      nextEnvelopeId += 1
+      driver.sendMessage(bytes, observe)
     } catch {
-      // Never throw out of the module (parity #490): covers an over-cap plaintext (WireEncodeError)
-      // and any driver/wasm throw. The caught object is DROPPED — its message could echo the
-      // message plaintext; no log, no event (classify-don't-forward, inherited #62).
+      notifySend(observe, { type: 'dropped', reason: 'send-failed' })
     }
   }
 

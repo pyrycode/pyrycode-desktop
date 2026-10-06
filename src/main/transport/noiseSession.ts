@@ -37,6 +37,7 @@
 // ciphertext / Noise handshake message 2 / rekey reply — never client plaintext or a secret), so
 // they are logged content-free (capped hex) through the optional injected DiagnosticLog (#133). The
 // OUTBOUND-write catches stay byte-free — message 1 carries the device token.
+import { notifySend, type SendOutcome } from './sendObservation'
 import { type NoiseCipherState } from 'noise-c.wasm'
 import { NOISE_PROTOCOL } from '../../shared/wire/types'
 import { encodeSafeBytes, type DiagnosticLog } from '../diagnosticLog'
@@ -58,7 +59,7 @@ export interface NoiseSessionConfig {
   /** Early-data for message 1 — an opaque hello body (the sibling ticket builds it). */
   hello: Uint8Array
   /** Outbound raw-frame sink (e.g. relay.send). Must not throw back into the session. */
-  sendFrame: (frame: Uint8Array) => void
+  sendFrame: (frame: Uint8Array, observe?: (outcome: SendOutcome) => void) => void
   /** Typed event sink. Must not throw (mirrors relayConnection's onEvent discipline). */
   onEvent: (event: NoiseSessionEvent) => void
   /** Forwarded to loadNoiseLib as its load deadline; omit for the loader default. */
@@ -122,7 +123,7 @@ export interface NoiseSession {
    *  as it did pre-#532. */
   onFrame(frame: Uint8Array, innerType?: string): void
   /** Post-handshake: AEAD-seal one plaintext to sendFrame. Inert before completion / after close. */
-  sendMessage(plaintext: Uint8Array): void
+  sendMessage(plaintext: Uint8Array, observe?: (outcome: SendOutcome) => void): void
   /** Free the wasm handshake + cipher states. Idempotent; leaves every entry point inert. */
   close(): void
 }
@@ -193,7 +194,7 @@ export async function createNoiseSession(config: NoiseSessionConfig): Promise<No
   // Holds session-OWNED copies (see sendMessage) and never a sealed frame (see the flush). Bounded by
   // MAX_BUFFERED_SENDS; emptied at all three exits from that state — the swap, the reply-read
   // failure, and close() — which is why nothing can outlive one window.
-  const bufferedSends: Uint8Array[] = []
+  const bufferedSends: Array<{ plaintext: Uint8Array; observe?: (outcome: SendOutcome) => void }> = []
 
   // Free every wasm object we still own. On a handshake read/write error the library already
   // freed `hs` (and we nulled it); on a transport decrypt error the cipher states survive. Each
@@ -368,7 +369,9 @@ export async function createNoiseSession(config: NoiseSessionConfig): Promise<No
         // re-enter sendMessage, and `state` is already back to `transport` — a stale item left in the
         // buffer could otherwise be picked up by a LATER window's flush.
         const abandoned = bufferedSends.length > 0
-        bufferedSends.length = 0
+        for (const item of bufferedSends.splice(0)) {
+          notifySend(item.observe, { type: 'dropped', reason: 'rekey-abandoned' })
+        }
         failWithFrame('handshake-read-failed', frame) // `frame` is the daemon's rekey reply (pre-decryption)
         if (abandoned) fail('rekey-send-abandoned') // once per discard — never a count, which would correlate with user activity
         return
@@ -414,7 +417,7 @@ export async function createNoiseSession(config: NoiseSessionConfig): Promise<No
     config.onEvent({ type: 'handshake-complete', helloAck })
   }
 
-  function sendMessage(plaintext: Uint8Array): void {
+  function sendMessage(plaintext: Uint8Array, observe?: (outcome: SendOutcome) => void): void {
     // #533: the rekey window. Sealing here would be FATAL, not merely lossy — the client enters this
     // state only AFTER handing its own noise_init to sendFrame, so this send is TCP-ordered BEHIND
     // that frame, and the daemon swaps BOTH ciphers the moment it processes it. An old-cipher frame
@@ -431,6 +434,7 @@ export async function createNoiseSession(config: NoiseSessionConfig): Promise<No
         // Drop the INCOMING send, never evict the oldest: eviction would silently break issue
         // ordering and discard the message the user considers longest-sent, and this keeps the error
         // in 1:1 correspondence with the sendMessage call that failed.
+        notifySend(observe, { type: 'dropped', reason: 'rekey-buffer-full' })
         fail('rekey-send-buffer-full')
         return
       }
@@ -439,11 +443,19 @@ export async function createNoiseSession(config: NoiseSessionConfig): Promise<No
       // across a relay round-trip would turn that legal caller into a corruption bug with no
       // compile-time signal. The copy is also what makes "the buffer holds no plaintext" a statement
       // about memory this session owns.
-      bufferedSends.push(plaintext.slice())
+      bufferedSends.push({ plaintext: plaintext.slice(), observe })
       return
     }
-    if (state !== 'transport' || sendCipher === null) return // inert before completion / after close
-    config.sendFrame(sendCipher.EncryptWithAd(EMPTY_AD, plaintext))
+    if (state !== 'transport' || sendCipher === null) {
+      notifySend(observe, { type: 'dropped', reason: 'send-refused' })
+      return
+    }
+    try {
+      config.sendFrame(sendCipher.EncryptWithAd(EMPTY_AD, plaintext), observe)
+    } catch (error) {
+      notifySend(observe, { type: 'dropped', reason: 'send-failed' })
+      throw error // Preserve existing caller-owned failure handling.
+    }
   }
 
   // #533: drain the window buffer. Called ONLY at the end of the atomic swap — after both cipher
@@ -462,13 +474,26 @@ export async function createNoiseSession(config: NoiseSessionConfig): Promise<No
   // back through the entry point re-buffers the remaining items and flushes them after that swap,
   // still in issue order; a captured-cipher loop would seal them under a cipher no longer current.
   function flushBufferedSends(): void {
-    for (const plaintext of bufferedSends.splice(0)) sendMessage(plaintext)
+    const pending = bufferedSends.splice(0)
+    for (let i = 0; i < pending.length; i++) {
+      const item = pending[i]
+      try {
+        sendMessage(item.plaintext, item.observe)
+      } catch (error) {
+        for (const remaining of pending.slice(i + 1)) {
+          notifySend(remaining.observe, { type: 'dropped', reason: 'rekey-abandoned' })
+        }
+        throw error
+      }
+    }
   }
 
   function close(): void {
     if (state === 'closed') return
     state = 'closed'
-    bufferedSends.length = 0 // #533 AC4: release the held plaintext; ordinary teardown emits nothing
+    for (const item of bufferedSends.splice(0)) {
+      notifySend(item.observe, { type: 'dropped', reason: 'rekey-teardown' })
+    }
     freeAll()
   }
 

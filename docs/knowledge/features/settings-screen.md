@@ -1,13 +1,16 @@
-# Settings screen (scaffold + Connection + Defaults + Notifications + Storage + About sections)
+# Settings screen (scaffold + Connection + Defaults + Notifications + Thread + Storage + About sections)
 
 The paired region's third view — `settings`, a sibling of [`list`](channel-list.md) and
-[`thread`](conversation-shell.md) — reachable from a new entry button on the Channel List home. A
-top-bar (back + "Settings" title) above five sections: "Connection", whose body renders one Server row
+[`thread`](conversation-shell.md) — reachable through Sidebar menu → Settings in the
+always-mounted [Channel List](channel-list.md) toolbar. A
+top-bar (back + "Settings" title) above six sections: "Connection", whose body renders one Server row
 per paired server (each showing its own `serverId` + `relayUrl` and an empty host slot for the future
 two-dot status indicator — #1148), plus a "Pair another server" nav row that adds another; "Defaults for new
 conversations", whose body renders a Default workspace row showing the client-owned default-workspace
 preference and opens a picker to change it; "Notifications", whose body renders a single push-toggle
-row reflecting and writing the client-owned push-notification preference; "Storage", whose body renders
+row reflecting and writing the client-owned push-notification preference; "Thread", whose
+default-on “Collapse assistant tool uses” switch controls tool-run folding across every host and
+conversation on this client; "Storage", whose body renders
 a live archived-conversations count; and "About", whose body renders the running app's build version.
 Mirrors mobile #390/#398, with the relay URL as a documented desktop addition.
 
@@ -38,17 +41,22 @@ still named only whichever was paired last.
 Renderer-only throughout — no keys, sockets, or tokens touched directly (the Server row reads only the
 vetted, non-secret `serverId`/`relayUrl` pair off #340's store; the Default-workspace row reads/writes a
 renderer-local, non-secret preference and sends no daemon command; the Notifications row reads/writes
-another renderer-local, non-secret preference and sends no daemon command either; the Storage row reads
+another renderer-local, non-secret preference and sends no daemon command either; the Thread row
+reads/writes the [collapse-tool preference](collapse-tool-uses-preference-store.md) in the same way;
+the Storage row reads
 a derived count off the conversation-list store; the About row reads a compile-time constant; the
 Pair-another-server row fires pure navigation over the already-vetted pairing IPC surface, #152 security
 review PASS) — not security-sensitive except for #152's navigation-only reach into the pairing flow.
 
 ## What it does
 
-- A new icon-only **Settings** entry button (gear glyph, `aria-label="Settings"`) renders as the first
-  child of the [Channel List](channel-list.md)'s root `<section>`, pinned top-right via CSS, present in
-  all three list states (not-yet-loaded / loaded-zero / non-empty).
-- Clicking it navigates the [paired shell](paired-shell.md) to a new `settings` route.
+- **Settings** is the first `menuitem` in the left **Sidebar menu** ellipsis popup, before Archive.
+  The trigger is present in loading, empty and populated sidebar states; **Pair new host** remains
+  at the right with its hover/focus name pill. The standalone gear button has been removed.
+- Selecting Settings closes the menu and calls the existing `onOpenSettings` callback once,
+  navigating the [paired shell](paired-shell.md) to `settings`. Keyboard opening focuses Settings;
+  Enter/Space select it, and Escape closes without navigating and returns focus to the trigger.
+  See the [toolbar contract](channel-list-section-header-pair-control.md) for placement and dismissal.
 - The Settings screen shows a top-bar: a back affordance (`aria-label="Back"`, the same 48px
   `arrow_back` glyph as `ConversationScreen`'s `BackControl`) and a "Settings" title.
 - Below the top-bar, one section: a "Connection" heading (`--color-primary`, **not** the muted
@@ -70,7 +78,12 @@ review PASS) — not security-sensitive except for #152's navigation-only reach 
   single row: the label "Push notifications when claude responds" beside a trailing on/off switch
   reflecting the client-owned push-notification preference. Toggling it writes the negated value back
   through the preference store immediately — see [#409](../codebase/409.md).
-- Below the Notifications section, a "Storage" heading (same `--color-primary` treatment) precedes a single
+- Directly below Notifications and above Storage, a "Thread" heading uses the same section-header
+  treatment. Its “Collapse assistant tool uses” switch defaults on, reflects `aria-checked` and
+  changes through click, Enter or Space. The choice persists across restarts; turning it off restores
+  ordinary joined tool rows and turning it on restores folding without a restart. See the
+  [preference store](collapse-tool-uses-preference-store.md).
+- Below the Thread section, a "Storage" heading (same `--color-primary` treatment) precedes a single
   row reading "Archived conversations" with a secondary line — "N archived" for a loaded list (every N,
   including 0 and 1 — no singular/plural branch) or a neutral "—" placeholder before the conversation list
   has loaded. The count is a live derived read: it updates when an archive/restore round trip re-lists.
@@ -86,7 +99,7 @@ link points at the right file.
 
 - [How it works](settings-screen-how-it-works.md) — the route + nav arm, the second guard, the entry
   affordance, the scaffold view, and every section's own row implementation (Pair-another-server,
-  Server row(s) + the per-row Unpair action, Defaults, Notifications, Storage, About), the CSS, and
+  Server row(s) + the per-row Unpair action, Defaults, Notifications, Thread, Storage, About), the CSS, and
   the full data flow.
 
 ## Edge cases and limitations
@@ -131,6 +144,9 @@ link points at the right file.
   `aria-checked="true"` branch — the full reflect matrix (both states, the `role="switch"` + label +
   native-`<button>` assertions) is proven directly on `PushNotificationRowView` with injected props, not
   through the container, same as the Default-workspace and Storage rows above.
+  The Thread switch has the same limitation: test both values through
+  `CollapseToolUsesRowView`, and use the fake-transport preference spec to prove keyboard activation,
+  cross-host subscription behavior and off after a full relaunch.
 - **No stack-aware back.** `settings` → `back` always lands on `list`; the `pairServer` sub-route added
   by [#152](../codebase/152.md) sidesteps rather than solves this — its two exits are their own explicit
   nav arms (`pairServerCancelled`/`pairServerPaired`), not a reuse of `back`, precisely because a future
@@ -171,14 +187,12 @@ link points at the right file.
   `unattributed` run) because nothing dropped its `conversationListStore` slot — see [Unpair channel §
   The two renderer callers](unpair-channel.md#the-two-renderer-callers) for the fix,
   `clearServerScopedState`.
-- **Marker collision, worth knowing before writing more `PairedShellView` tests.** The `thread` view
-  already renders `aria-label="Connection status"` (the two-dot indicator, [#330](../codebase/330.md)),
-  and `list` now renders a button with `aria-label="Settings"` — so neither `"Connection"` nor
-  `"Settings"` alone discriminates the `settings` view in a `PairedShellView` render test. Use the root
-  `aria-label="Settings screen"` (or `class="settings"`) instead — see
-  [#333 codebase notes](../codebase/333.md#lessons-learned).
-- **Settings entry corner is a free CSS swap.** Top-right sticky was the developer's call against the
-  mobile home mock; no Figma node pins it, and the AC only required presence + an accessible name.
+- **Assert the destination, not an entry label.** An open sidebar popup also contains Settings.
+  Use `aria-label="Settings screen"` (or `class="settings"`) to prove navigation rather than
+  matching Settings text alone. Static rendering sees only the collapsed Sidebar menu; Playwright
+  owns opening and selecting it. The [pairing-arrival helper](../../../e2e/fixtures/pairingArrival.ts)'s
+  `pairAnotherServerFromSettings` opens Sidebar menu, selects the Settings `menuitem`, then clicks
+  Pair another server, retaining its pairing-form and confirmation assertions.
 - **A `define` added to `electron.vite.config.ts` alone is invisible to `npm test`.** `vitest.config.ts`
   is a separate Vite config; any future compile-time renderer constant needs the same `define` mirrored
   into both, or the render test throws `ReferenceError` at transform rather than failing the assertion
@@ -191,6 +205,8 @@ link points at the right file.
 
 ## Related
 
+- [Collapse assistant tool uses preference](collapse-tool-uses-preference-store.md) — the Thread
+  switch's persisted client-wide boolean and the conversation fold boundary.
 - [Paired shell](paired-shell.md) / [#140](../codebase/140.md) — the `list ⇄ thread ⇄ settings` router
   this screen fills the third arm of.
 - [Channel List home screen](channel-list.md) / [#141](../codebase/141.md) — hosts the new entry button;

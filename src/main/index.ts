@@ -1,3 +1,4 @@
+import { createMessageLifecycle } from './messageLifecycle'
 import {
   app,
   BrowserWindow,
@@ -405,6 +406,7 @@ app.whenReady().then(() => {
   const diagnosticLog = createDiagnosticLog({
     sink: app.isPackaged ? fileRotatingSink(join(app.getPath('userData'), 'logs')) : stdoutSink()
   })
+  const messageLifecycle = createMessageLifecycle(diagnosticLog)
   // The once-per-session diagnostics banner (#132), emitted here so it is seq 0 — the first line of
   // every bundle — attributing the bundle to this client build + wire-protocol identity. `whenReady`
   // runs once per process, so the banner is fire-once; it must NOT be re-emitted from the transport
@@ -532,6 +534,7 @@ app.whenReady().then(() => {
         serverId,
         deviceName,
         clientVersion,
+        messageLifecycle,
         diagnosticLog
       }),
     diagnosticLog
@@ -770,9 +773,12 @@ app.whenReady().then(() => {
       // refusal, not a silent shrug, and an id no server has claimed puts a frame on no wire at all.
       // The decision itself lives in `conversationRouter.ts`, where a unit test can drive it; these
       // stay the per-case one-liners they were.
-      case 'sendMessage':
-        router.route(command.payload.conversation_id)?.send(command.payload)
+      case 'sendMessage': {
+        const connection = router.route(command.payload.conversation_id)
+        if (connection === null) messageLifecycle.drop(command.payload.message_id, command.payload.conversation_id, 'route-refused')
+        else connection.send(command.payload)
         return
+      }
       case 'requestSessionSettings': {
         // Direct to the connection method (mirrors sendMessage), no facade — a run-config read
         // has no orchestrator/consumer. The optional conversation id is unwrapped here rather than
@@ -1148,7 +1154,7 @@ app.whenReady().then(() => {
   // the untrusted boundary; a non-allowlisted field never reaches the logger's spread. Registered
   // once via ipcMain.on (additive); inert until #134 emits — a record arriving before any consumer
   // is simply a logged line. `will-quit` removes the exact listener, symmetric with unregisterCommands.
-  const unregisterDiagnostics = onDiagnostic(ipcMain, diagnosticLog)
+  const unregisterDiagnostics = onDiagnostic(ipcMain, diagnosticLog, messageLifecycle)
   app.on('will-quit', () => unregisterDiagnostics())
 
   // The attach flow's composition-root edge (#862) — the ONE Electron touch the feature needs, and

@@ -1629,6 +1629,33 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
     }
   })
 
+  it('puts copy in an actions sibling beside each delivered bubble, including the streaming tail', () => {
+    const cases = [
+      { items: settled('settled'), side: 'assistant' },
+      { items: settled('```ts\nconst x = 1\n```'), side: 'assistant' },
+      { items: [{ kind: 'assistantText', turnId: 't1', text: 'streaming' }] as ThreadItem[], side: 'assistant' },
+      { items: [{ kind: 'userText', text: 'mine' }] as ThreadItem[], side: 'user' },
+      { items: [{ kind: 'userText', text: 'attached', attachments: [
+        { attachmentId: 'file', filename: 'report.pdf' },
+        { attachmentId: 'image', filename: 'chart.png' }
+      ] }] as ThreadItem[], side: 'user' }
+    ]
+    for (const { items, side } of cases) {
+      const markup = renderToStaticMarkup(<Timeline items={items} />)
+      const actions = '<div class="message-actions"><button type="button" class="bubble__copy"'
+      expect(markup).toContain(actions)
+      expect(markup).toContain('message-row--text')
+      const meta = markup.match(/<div class="bubble__meta[^"]*">(.*?)<\/div>/)?.[1]
+      expect(meta).toBeDefined()
+      expect(meta).not.toContain('<button')
+      if (side === 'assistant') {
+        expect(markup).toContain('</span></div></div>' + actions)
+      } else {
+        expect(markup).toContain('</svg></button></div><div class="bubble bubble--user"')
+      }
+    }
+  })
+
   it('appends the row at the FOOT — after the markdown container, and after the streaming cursor', () => {
     // The append-never-prepend constraint, which interactiveRoundtrip.test.tsx pins from the other side
     // (its byte string asserts the markdown container opens the bubble). Ordering assertions rather than
@@ -1705,6 +1732,8 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
     expect(markup).toContain('data-thread-role="queued"')
     expect(markup).not.toContain(META)
     expect(markup).not.toContain(COPY)
+    expect(markup).not.toContain('message-actions')
+    expect(markup).toContain('message-row--text')
     // …and the SAME item, once the daemon stops reporting it queued, draws the meta row it always did.
     const delivered = renderToStaticMarkup(
       <Timeline
@@ -1822,14 +1851,13 @@ describe('Timeline — the meta row timestamp (#1014)', () => {
     }
   })
 
-  it('adds a text child and nothing else — the slot, the row and the control are otherwise unchanged', () => {
-    // AC4. `bubble__meta-time` stays the sink: the string lands inside that span and nowhere else in the
-    // bubble, the copy control still follows it in the same row, and no new element or class appeared.
+  it('keeps the timestamp as text in the meta row without a copy control', () => {
+    // The timestamp stays in its original slot while copy moves beside the bubble.
     const markup = renderToStaticMarkup(
       <Timeline items={[{ kind: 'userText', text: 'mine', createdAt: CREATED_AT }]} />
     )
     expect(markup).toContain(
-      `<div class="bubble__meta bubble__meta--user"><span class="${TIME_SLOT}">${DRAWN}</span><button type="button" class="bubble__copy" aria-label="Copy message"`
+      `<div class="bubble__meta bubble__meta--user"><span class="${TIME_SLOT}">${DRAWN}</span></div>`
     )
     // Once, in that one sink — not duplicated into an attribute, a title or a second element.
     expect(markup.match(new RegExp(DRAWN.replace(/\./g, '\\.'), 'g'))?.length ?? 0).toBe(1)
@@ -3705,8 +3733,8 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
     expect(markup).toContain('data-thread-role="queued">still waiting')
     // …with the modifier APPENDED to the shared class run, never prepended (the whole-run assertion at
     // the userText row's own test matches the `message-row message-row--user` prefix).
-    expect(markup).toContain('class="message-row message-row--user message-row--queued"')
-    expect(markup.match(/class="message-row message-row--user"/g)?.length ?? 0).toBe(1)
+    expect(markup).toContain('class="message-row message-row--user message-row--queued message-row--text"')
+    expect(markup.match(/class="message-row message-row--user message-row--text"/g)?.length ?? 0).toBe(1)
     // …reusing the right-aligned user-bubble treatment (queued messages are the user's own sends).
     expect(markup.match(/bubble bubble--user/g)?.length ?? 0).toBe(2)
   })
@@ -3791,7 +3819,7 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
     // The optional-prop contract the 72 existing `<OwnTimeline` render sites depend on: absent `queued`
     // folds against an empty backlog and yields today's rows.
     const markup = renderToStaticMarkup(<OwnTimeline items={[echo('plain send', 'm1')]} />)
-    expect(markup).toContain('class="message-row message-row--user"')
+    expect(markup).toContain('class="message-row message-row--user message-row--text"')
     expect(markup).toContain('data-thread-role="user"')
     expect(markup).not.toContain('queued')
   })
@@ -5979,6 +6007,8 @@ describe('Timeline — a file the assistant offered (#1621)', () => {
     expect(markup).toContain('<span class="bubble__file-name">report.pdf</span>')
     expect(markup).toContain('<span class="bubble__file-ext" aria-hidden="true">PDF</span>')
     expect(markup).not.toContain('bubble__meta')
+    expect(markup).not.toContain('message-row--text')
+    expect(markup).not.toContain('message-actions')
     expect(markup).not.toContain('data-thread-role="user"')
   })
 

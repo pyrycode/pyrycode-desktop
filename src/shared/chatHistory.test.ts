@@ -98,3 +98,20 @@ describe('saved list archive timestamp', () => {
     expect(() => parseChatHistorySnapshot(list([{ ...summary, archived_at }]))).toThrow()
   })
 })
+
+describe('saved assistant attribution', () => {
+  it('round trips parented and older parentless assistant rows in version 1', () => {
+    const rows = [
+      { kind: 'toolCall', turnId: 't', toolUseId: 'agent', name: 'Agent', inputSummary: '', result: null },
+      { kind: 'assistantText', turnId: 't', text: 'helper', parentToolUseId: 'agent' },
+      { kind: 'assistantText', turnId: 't', text: 'older main reply' }
+    ]
+    expect(parseChatHistorySnapshot(JSON.parse(JSON.stringify({ ...timeline, items: rows }))))
+      .toEqual({ ...timeline, items: rows })
+  })
+  it.each([null, 7, {}, 'x'.repeat(8193)])('rejects a malformed or oversized saved assistant parent', (parentToolUseId) => {
+    expect(() => parseChatHistorySnapshot({ ...timeline, items: [
+      { kind: 'assistantText', turnId: 't', text: 'reply', parentToolUseId }
+    ] })).toThrow()
+  })
+})

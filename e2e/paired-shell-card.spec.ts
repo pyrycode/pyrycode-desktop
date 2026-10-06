@@ -239,7 +239,8 @@ test('paired shell: both panes draw the card, the backdrop draws the glow, and n
   // shows is an empty CARD, not an empty rectangle and not a placeholder. The card is on the wrapper, so
   // this costs no markup and the assertion is that it costs none. The unmount gate still reddens correctly:
   // the Settings route replaces the whole shell. ---
-  await page.locator('.channel-list__settings').click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
   await expect(thread).toHaveCount(0)
   await page.locator('.settings__back').click()
   await expect(pane).toBeVisible()

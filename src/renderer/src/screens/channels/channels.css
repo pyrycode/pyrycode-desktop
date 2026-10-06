@@ -15,18 +15,8 @@
  * card's 20px inset, the section header's spacing, the channel list's 20px indent, the trailing controls'
  * placement and the divider's 28px margins.
  *
- * ⭐ #1443 CONVERGED THE LAST OF IT AND ENDED THE MOBILE MIRRORING FOR THE CHROME. The two entries were
- * the mobile screen's surviving invention — 48px round buttons in a sticky top-RIGHT cluster with a
- * hover fill no node drew — and they are now the card's own Top bar (115:3693): 24px boxes at the
- * top-LEFT, gear first, over a 1px rule. The 48px icon-button carve-out went with them. What that
- * costs the rest of this file is the SCROLLPORT, and two habits of reading it:
- *   - `.channel-list` is no longer `overflow-y: auto`. It is the padded card column; `.channel-list__tree`
- *     inside it scrolls and, since `overflow-y: auto` forces the other axis off `visible`, clips on both
- *     axes. Every containment argument below names the TREE, because the tree is the clipper.
- *   - NOTHING IN THIS FILE IS STICKY ANY MORE. #1426 deleted the FAB and this ticket unpinned the bar,
- *     so the painting-order paragraph on `.channel-list` no longer has a positive-z child to protect —
- *     what it protects is the whole subtree against the card wash, which is what was measured all along.
- * The mobile 15-8 mirroring above now describes only the empty state.
+ * The toolbar remains outside the tree scrollport. It now has the header menu at
+ * the left and Pair new host at the right; only the tree clips and scrolls.
  */
 
 /* The shell owns the 400px sidebar width. This padded column keeps the toolbar outside
@@ -79,11 +69,7 @@
 }
 
 .channel-list__pair:hover .channel-list__control-name,
-.channel-list__pair:focus-visible .channel-list__control-name,
-.channel-list__settings:hover .channel-list__control-name,
-.channel-list__settings:focus-visible .channel-list__control-name,
-.channel-list__archive:hover .channel-list__control-name,
-.channel-list__archive:focus-visible .channel-list__control-name {
+.channel-list__pair:focus-visible .channel-list__control-name {
   display: block;
 }
 
@@ -1589,7 +1575,7 @@
   margin: var(--space-7) 0;
 }
 
-/* Figma Top bar: 4px above the 24px controls, with 20px between the left pair. */
+/* Figma Top bar: 4px above the 24px controls. */
 .channel-list__actions {
   flex: 0 0 auto;
   display: flex;
@@ -1598,20 +1584,8 @@
   padding-top: var(--space-1);
 }
 
-/* The Settings entry (115:3834) — the LEADING member since #1443, the drawing putting the gear first.
-   A --space-6 box, which is the node's 24; the glyph inside it is a different size again (22 × 24) and
-   carries its own dimensions in the markup, so this rule sizes the box and never the leaf. `padding: 0`
-   because the box IS the hit target at this size.
-
-   ⭐ DRAWN AT REST AND WITH NO GROUND, which is the one place the old treatment must not be copied. #333
-   and #347 both wore `.settings__back`'s 48px round square — transparent until `:hover`, then
-   surface-container-high, with `--radius-full` — because neither control was traced from a node. The
-   drawing fills both glyphs --color-primary in every state it draws and gives them no circle at all, so
-   the ground rule, the radius and the hover rule are all deleted rather than retuned. This is
-   `.channel-list__pair`'s posture exactly, for the same reason. The `:focus-visible` outline stays, per
-   the file convention; it no longer doubles as a reveal, because there was never anything to reveal. */
-.channel-list__settings {
-  flex: 0 0 auto;
+/* Figma sidebar header: the shared menu owns interaction, this consumer owns its size. */
+.channel-list__menu {
   width: var(--space-6);
   height: var(--space-6);
   display: flex;
@@ -1624,39 +1598,17 @@
   cursor: pointer;
 }
 
-.channel-list__settings:focus-visible {
+.channel-list__menu:focus-visible {
   outline: 1px solid var(--color-outline);
 }
 
-.channel-list__settings-icon {
+.channel-list__menu-icon {
   display: block;
 }
 
-/* The Archive entry (117:3835) — the TRAILING member, and the gear's block verbatim: same box, same ink,
-   same nothing-for-a-ground, same focus outline. Written out rather than joined onto the gear's selector
-   list, which is this file's convention — each rule names the control it draws, so the set stays readable
-   where the control is. Its glyph is 24 × 21 where the gear's is 22 × 24; both are centred by the flex
-   centring here and sized in the markup, which is why no glyph dimension appears in either rule. */
-.channel-list__archive {
-  flex: 0 0 auto;
-  width: var(--space-6);
-  height: var(--space-6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--color-primary);
-  cursor: pointer;
-}
-
-.channel-list__archive:focus-visible {
-  outline: 1px solid var(--color-outline);
-}
-
-.channel-list__archive-icon {
-  display: block;
+.channel-list__actions .composer-options {
+  width: calc(5 * var(--space-8));
+  background: var(--color-on-primary);
 }
 
 /* `.channel-list__empty` — the loaded-but-empty state — was DELETED here by #1070 along with the
@@ -2588,4 +2540,9 @@
   line-height: var(--text-body-small-line);
   letter-spacing: var(--text-body-small-tracking);
   font-weight: var(--text-body-small-weight);
+}
+
+/* Figma sidebar menu shows the darker option hover within its on-primary surface. */
+.channel-list__actions .composer-options__item:hover:not(.composer-options__item--unavailable) {
+  background: var(--color-on-primary-fixed);
 }

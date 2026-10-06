@@ -1,8 +1,19 @@
-import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
-import { encodeEnvelope } from '../src/main/transport/codec'
-import type { TurnStatePayload, WireTurnState } from '../src/shared/wire/types'
+import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
+import type {
+  Envelope,
+  QueuedItem,
+  QueueStatePayload,
+  SendMessagePayload,
+  TurnStatePayload,
+  WireTurnState
+} from '../src/shared/wire/types'
 
-// #1556 AC1: the snowflake turns as soon as the local `Thinking…` label appears — on the composer's own
+// #1725: the local window now reads `Sending…` until a `queue_state` lists the sent `message_id`, then
+// `Waiting for Claude` until the daemon's first `turn_state`; `Thinking…` comes only from the daemon. The
+// staged assertions here distinguish local acceptance, queue acknowledgement and daemon activity.
+//
+// #1556 AC1: the snowflake turns as soon as the local label appears — on the composer's own
 // accept, BEFORE any server phase — keeps turning when the daemon's first `turn_state{thinking}` arrives,
 // and stops when the turn returns to idle.
 //
@@ -58,10 +69,42 @@ function turnStateFrame(state: WireTurnState): Uint8Array {
   })
 }
 
-test('the status icon turns on the local Thinking label and keeps turning into the running phase', async ({
+// A replacement-truth queue snapshot for the seeded conversation (queued-backlog-interrupt.spec.ts's shape).
+function queueStateFrame(items: readonly QueuedItem[]): Uint8Array {
+  return encodeEnvelope({
+    id: REPLY_ENVELOPE_ID,
+    type: 'queue_state',
+    ts: FIXED_TS,
+    payload: { conversation_id: SEEDED_ROW.id, queued: [...items] } satisfies QueueStatePayload
+  })
+}
+
+function queuedItem(message_id: string, text = SENT_TEXT): QueuedItem {
+  return { queued_msg_id: 1, text, ts: FIXED_TS, message_id }
+}
+
+// Captures every outbound envelope so the spec can read back the `message_id` the composer minted; only
+// list_conversations needs a reply (the seeded launch row).
+function capturingFake(captured: Envelope[]): (inbound: Uint8Array) => Uint8Array[] {
+  return (inbound) => {
+    const env = decodeEnvelope(inbound)
+    captured.push(env)
+    return env.type === 'list_conversations' ? [seedConversationsFrame()] : []
+  }
+}
+
+function sentMessageId(captured: Envelope[]): string | undefined {
+  const frame = captured.find(
+    (e) => e.type === 'send_message' && (e.payload as SendMessagePayload).text === SENT_TEXT
+  )
+  return frame === undefined ? undefined : (frame.payload as SendMessagePayload).message_id
+}
+
+test('the status row reads Sending, then Waiting for Claude, then Thinking, with the icon turning throughout', async ({
   launchPairedApp
 }) => {
-  const { page, daemon } = await launchPairedApp()
+  const captured: Envelope[] = []
+  const { page, daemon } = await launchPairedApp({ buildReplyFrames: capturingFake(captured) })
 
   const icon = page.locator('.composer-status__icon')
   const spinningIcon = page.locator('.composer-status__icon--spinning')
@@ -78,13 +121,35 @@ test('the status icon turns on the local Thinking label and keeps turning into t
   // is this ticket's. Asserting the label too is what stops step 3 from being credited with step 2's work.
   await page.getByPlaceholder('Message…').fill(SENT_TEXT)
   await page.getByRole('button', { name: 'Send' }).click()
-  await expect(label).toHaveText('Thinking…', { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(label).toHaveText('Sending…', { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(spinningIcon).toBeVisible()
+  await expect
+    .poll(() => sentMessageId(captured), { timeout: ROUNDTRIP_TIMEOUT_MS })
+    .toEqual(expect.any(String))
+  const messageId = sentMessageId(captured) ?? ''
+
+  // --- #1725 AC4: another device's item and an id-less item do not advance the label ---
+  // The two queued rows drawing is what proves the snapshot was applied before the label is read.
+  const queuedRows = page.locator('[data-thread-role="queued"]')
+  daemon.pushFrame(queueStateFrame([
+    queuedItem('another-device-id', 'Queued from another device'),
+    queuedItem('', 'Queued with no id')
+  ]))
+  await expect(queuedRows).toHaveCount(2, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(label).toHaveText('Sending…')
+
+  // --- #1725 AC1: the daemon lists the sent id, so it holds the message ---
+  daemon.pushFrame(queueStateFrame([queuedItem(messageId)]))
+  await expect(label).toHaveText('Waiting for Claude', { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(spinningIcon).toBeVisible()
 
-  // --- 3. AC1, the seam: the daemon's first phase changes neither ---
-  // The local window closes here and the daemon's own `thinking` replaces it. The whole point of #650's
-  // synthetic label being `'thinking'` rather than `'working'` is that this transition is invisible, and
-  // with the icon reading the same derivation the mark does not blink across it either.
+  // Claude commits the item before its first turn_state: the snapshot empties and the label stays.
+  daemon.pushFrame(queueStateFrame([]))
+  await expect(queuedRows).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(label).toHaveText('Waiting for Claude')
+  await expect(spinningIcon).toBeVisible()
+
+  // --- 3. #1725 AC2: Thinking only from the daemon's turn_state{thinking}; the mark keeps turning ---
   daemon.pushFrame(turnStateFrame('thinking'))
   await expect(label).toHaveText('Thinking…', { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(spinningIcon).toBeVisible()
@@ -96,4 +161,17 @@ test('the status icon turns on the local Thinking label and keeps turning into t
   await expect(spinningIcon).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(icon).toBeVisible()
   await expect(label).toHaveCount(0)
+
+  // A session failure can also arrive before the queue acknowledgement.
+  await page.getByPlaceholder('Message…').fill('A second locally accepted message')
+  await page.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect(label).toHaveText('Sending…')
+  await expect(spinningIcon).toBeVisible()
+  daemon.pushFrame(encodeEnvelope({ id: REPLY_ENVELOPE_ID, type: 'session_error', ts: FIXED_TS,
+    payload: { conversation_id: SEEDED_ROW.id, code: 'session.blocked', message: 'Ignored daemon text' } }))
+  await expect(page.locator('.top-overlay-pill--error')).toHaveText(
+    'Claude did not pick up your last message. It was not delivered.')
+  await expect(label).toHaveCount(0)
+  await expect(spinningIcon).toHaveCount(0)
+  await expect(icon).toBeVisible()
 })

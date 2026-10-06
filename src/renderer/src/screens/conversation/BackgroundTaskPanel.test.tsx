@@ -76,9 +76,9 @@ describe('BackgroundTaskPanelView — the background-task panel (#581)', () => {
     )
     expect(markup.match(/background-task-panel__row/g)?.length ?? 0).toBe(2)
     expect(markup).toContain('npm run build')
-    expect(markup).toContain('local_bash')
+    expect(markup).toContain('<span class="background-task-panel__type">Command</span>')
     expect(markup).toContain('index the repository')
-    expect(markup).toContain('agent_search')
+    expect(markup).toContain('<span class="background-task-panel__type">Agent search</span>')
     // Roster order — the held Map preserves insertion order, and the view iterates values() as-is.
     expect(markup.indexOf('npm run build')).toBeLessThan(markup.indexOf('index the repository'))
   })
@@ -164,7 +164,7 @@ describe('BackgroundTaskPanelView — the background-task panel (#581)', () => {
       />
     )
     expect(markup).toContain('&lt;img')
-    expect(markup).toContain('a&lt;b&amp;c')
+    expect(markup).toContain('A&lt;b&amp;c')
     // The tag never opens: `<` is escaped, so the description cannot become an element.
     expect(markup).not.toContain('<img')
     // The structural guard — attribute-SHAPED, not substring-shaped. React escapes markup
@@ -567,6 +567,46 @@ describe('BackgroundTaskPanelView — the latest reported change (#583)', () => 
   })
 })
 
+describe('BackgroundTaskPanelView — readable task types (#1746)', () => {
+  it.each([
+    ['local_agent', 'Agent'],
+    ['local_bash', 'Command'],
+    ['local_file_watch', 'File watch'],
+    ['agent_search', 'Agent search'],
+    ['remote_local_agent', 'Remote local agent'],
+    ['local_local_agent', 'Local agent'],
+    ['local', 'Local'],
+    ['local_', ''],
+    ['', '']
+  ])('renders %j as %j without altering the held task', (taskType, label) => {
+    const heldTask = Object.freeze(task({ taskType }))
+    const heldEntry = entry([heldTask])
+    const before = structuredClone(heldEntry)
+    const markup = renderToStaticMarkup(
+      <BackgroundTaskPanelView entry={heldEntry} onClose={noop} />
+    )
+
+    expect(markup).toContain(`<span class="background-task-panel__type">${label}</span>`)
+    expect(heldEntry).toEqual(before)
+    expect(heldEntry.tasks.get(heldTask.taskId)).toBe(heldTask)
+    expect(heldTask.taskType).toBe(taskType)
+  })
+
+  it('keeps formatted unknown types escaped and confined to the type text', () => {
+    const markup = renderToStaticMarkup(
+      <BackgroundTaskPanelView
+        entry={entry([task({ taskType: 'local_<b>file_watch</b>' })])}
+        onClose={noop}
+      />
+    )
+    expect(markup).toContain(
+      '<span class="background-task-panel__type">&lt;b&gt;file watch&lt;/b&gt;</span>'
+    )
+    expect(markup).not.toContain('<b>')
+    expect(markup).not.toMatch(/="[^"]*file watch/)
+  })
+})
+
 // #1635: #580's drawing of the list inside the drawer body. The grouping reads the conversation's
 // finished ids, passed in as a prop so every reading stays a static render.
 describe('BackgroundTaskPanelView — the #580 list drawing (#1635)', () => {
@@ -746,6 +786,70 @@ describe('drawerClosesOnKeyDown — one Escape does one thing (#1634 AC3)', () =
       .toBe(false)
     expect(drawerClosesOnKeyDown({ ...esc, isComposing: true }, { inComposerStop: false, turnRunning: false }))
       .toBe(false)
+  })
+})
+
+describe('BackgroundTaskPanelView — repeated finish summaries (#1754)', () => {
+  const renderFinished = (held: HeldBackgroundTask): string =>
+    renderToStaticMarkup(
+      <BackgroundTaskPanelView
+        entry={entry([held])}
+        finishedTaskIds={new Set([held.taskId])}
+        onClose={noop}
+      />
+    )
+
+  it('hides template and exact summaries containing the trimmed description without changing held data', () => {
+    for (const text of ['  Agent "Review relay changes" finished  ', ' Review relay changes ']) {
+      const summary = Object.freeze({ text, truncatedFields: ['summary'] })
+      const held = Object.freeze(task({
+        taskType: 'local_agent',
+        description: '  Review relay changes  ',
+        status: 'completed',
+        summary
+      }))
+      const before = structuredClone(held)
+      const markup = renderFinished(held)
+      expect(markup).toContain('background-task-panel__description">  Review relay changes  </span>')
+      expect(markup).toContain('Completed')
+      expect(markup).not.toContain('background-task-panel__summary')
+      expect(markup).not.toContain('background-task-panel__cut-summary')
+      expect(held).toEqual(before)
+      expect(held.summary).toBe(summary)
+    }
+  })
+
+  it('shows different failure and stop reasons and preserves case-sensitive comparison', () => {
+    for (const text of ['  Exited with code 1: port already in use.  ', 'Stopped by user', 'NPM RUN BUILD finished']) {
+      const markup = renderFinished(task({
+        description: 'npm run build',
+        status: 'failed',
+        summary: { text, truncatedFields: ['summary'] }
+      }))
+      expect(markup).toContain(`<span class="background-task-panel__summary">${text}</span>`)
+      expect(markup).toContain('background-task-panel__cut-summary')
+    }
+  })
+
+  it('shows a non-empty summary for an empty or whitespace-only description', () => {
+    for (const description of ['', ' \n\t ']) {
+      const markup = renderFinished(task({
+        description,
+        summary: { text: 'Task finished', truncatedFields: null }
+      }))
+      expect(markup).toContain('<span class="background-task-panel__summary">Task finished</span>')
+    }
+  })
+
+  it('shows no summary or cut marker for empty summaries with empty or non-empty descriptions', () => {
+    for (const description of ['', 'npm run build']) {
+      const markup = renderFinished(task({
+        description,
+        summary: { text: '', truncatedFields: ['summary'] }
+      }))
+      expect(markup).not.toContain('background-task-panel__summary')
+      expect(markup).not.toContain('background-task-panel__cut-summary')
+    }
   })
 })
 
@@ -963,5 +1067,36 @@ describe("BackgroundTaskPanelView — a running task's progress (#1640)", () => 
     expect(markup).not.toContain('<img')
     expect(markup).not.toMatch(/="[^"]*(ACTHOSTILE|TOOLHOSTILE)/)
     expect(markup).not.toMatch(/\stitle="/)
+  })
+})
+
+describe('Stop task button', () => {
+  it('follows progress, latest update and its cut marker without exposing identity', () => {
+    const id = '<hostile-task-id>'
+    const markup = renderToStaticMarkup(<BackgroundTaskPanelView
+      entry={entry([task({ taskId: id, progress: { currentActivity: 'Working', subagentType: '', lastToolName: '', totalTokens: 1, toolUses: 1, durationMs: 1, truncatedFields: null }, latestUpdate: { patch: 'Synthetic patch', truncatedFields: ['patch', 'task_id'] } })])}
+      onStopTask={noop} onClose={noop} />)
+    expect(markup).toContain('>Stop task</button>')
+    expect(markup.indexOf('background-task-panel__stop')).toBeGreaterThan(markup.indexOf('background-task-panel__cut-patch'))
+    expect(markup).not.toContain(id)
+    expect(markup).not.toContain('&lt;hostile-task-id&gt;')
+    expect(markup).not.toContain('disabled=""')
+  })
+
+  it('disables only the pending row and retains its label', () => {
+    const markup = renderToStaticMarkup(<BackgroundTaskPanelView
+      entry={entry([task(), task({ taskId: 'other' })])} pendingTaskIds={new Set(['task-1'])}
+      onStopTask={noop} onClose={noop} />)
+    expect(markup.match(/>Stop task<\/button>/g)).toHaveLength(2)
+    expect(markup.match(/disabled=""/g)).toHaveLength(1)
+  })
+
+  it.each(['finished', 'codex', 'cut', 'unsupported'])('hides stop on %s rows', reason => {
+    const markup = renderToStaticMarkup(<BackgroundTaskPanelView
+      entry={entry([task({ truncatedFields: reason === 'cut' ? ['task_id'] : null })])}
+      finishedTaskIds={reason === 'finished' ? new Set(['task-1']) : null}
+      agent={reason === 'codex' ? 'codex' : 'claude'}
+      onStopTask={reason === 'unsupported' ? undefined : noop} onClose={noop} />)
+    expect(markup).not.toContain('>Stop task</button>')
   })
 })

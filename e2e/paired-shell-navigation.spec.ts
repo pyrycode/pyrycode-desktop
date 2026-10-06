@@ -118,8 +118,9 @@ test('paired shell: pair-another-server round-trip and the list/settings/archive
   //
   // 3. thread → settings (open the gear entry). It runs from the THREAD route now rather than from the
   // list, which the two-pane shell makes equivalent: the sidebar carrying the gear is mounted either way,
-  // and `aria-label="Settings"` is unique in the whole renderer.
-  await page.getByRole('button', { name: 'Settings' }).click()
+  // and the Sidebar menu owns the Settings entry.
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
   await expect(settings).toBeVisible()
 
   // 4. settings → pairServer (AC: "Pair another server" opens the in-shell pairing flow). Asserting the
@@ -141,7 +142,8 @@ test('paired shell: pair-another-server round-trip and the list/settings/archive
   await expect(list).toBeVisible()
 
   // 7. list → archive (open the archive-box entry).
-  await page.getByRole('button', { name: 'Archive' }).click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
   await expect(archive).toBeVisible()
 
   // 8. archive → list (AC: back from archive lands on list).

@@ -1,5 +1,5 @@
 import type { ModelRefusalEvent, TurnEndMetrics } from '@shared/ipc/events'
-import type { WireResetPhase, WireResetHandoff } from '@shared/wire/types'
+import type { QueuedItem, WireResetPhase, WireResetHandoff } from '@shared/wire/types'
 
 // The conversation timeline: a heterogeneous, ordered list of turn content (streamed
 // assistant text, tool calls with their results, turn boundaries) plus the coarse
@@ -100,7 +100,7 @@ export type ThreadItem =
   | { kind: 'banner'; level: string; text: string; stopsTurn: boolean; truncated: boolean }
   // #1013: `createdAt` is the epoch-millisecond moment this bubble first appeared — the arrival of its
   // FIRST delta, stamped in the renderer from an injected clock, not carried from the envelope `ts` (the
-  // `assistantDelta` IPC arm names four fields fail-closed and does not forward it; the two agree to within
+  // `assistantDelta` IPC arm names its fields fail-closed and does not forward it; the two agree to within
   // network latency, and the timeline is in-memory and cleared on exit and pairing end (#757), so nothing
   // replays old messages a fresh clock would mis-stamp). ABSENT means no clock was injected at the producer
   // — test `item.createdAt === undefined`, never `'createdAt' in item`, since the reducer assigns the field
@@ -109,7 +109,7 @@ export type ThreadItem =
   // `sessionBoundary.occurredAt` precedent); this store parses, compares and formats nothing.
   // Deliberately named apart from `occurredAt` below — that one is a wire-supplied ISO STRING about a
   // session rotation, this one a renderer-minted number about a message.
-  | { kind: 'assistantText'; turnId: string; text: string; createdAt?: number }
+  | { kind: 'assistantText'; turnId: string; text: string; createdAt?: number; parentToolUseId?: string }
   | {
       kind: 'toolCall'
       turnId: string
@@ -223,7 +223,7 @@ export type ThreadEvent =
   // recording: `reduceTimeline` is called by the two timeline stores, which ARE production paths, so a
   // clock parameter there would stamp every item the store-level specs assert on. Absent means the
   // producer injected no clock — see the item.
-  | { type: 'assistantDelta'; turnId: string; seq: number; text: string; createdAt?: number }
+  | { type: 'assistantDelta'; turnId: string; seq: number; text: string; parentToolUseId?: string; createdAt?: number }
   // The tool-call arm. #763 widened the `toolUse` DaemonEvent with a `conversationId` the bridge drops,
   // so the bridge stays a filter + fresh copy, not a remap.
   //
@@ -306,6 +306,8 @@ export type ThreadEvent =
   // control event, never translated from a wire frame, so `timelineBridge` never produces it. Nullary
   // following the ThreadEvent `stallDetected` (:136): a reset carries no payload, so there is no field
   // a caller can get wrong. `sessionStore`'s `reset` (#166) is the same arm for the session facet.
+  | { type: 'sessionError'; code: string }
+  | { type: 'sessionErrorCleared' }
   | { type: 'reset' }
   // #538: the connection came back — reconcile the transient chrome against the fresh handshake. The
   // SECOND non-content arm, and distinct from `reset` (:133) in where it comes from: `reset` is
@@ -401,8 +403,20 @@ export interface ResettingStatus {
   handoff: WireResetHandoff
 }
 
+/**
+ * #1725: an open local send window. `messageId` is the composer-minted id of the newest local send, `''`
+ * when none was minted, which no queue item can match. `queued` turns true once a `queue_state` lists it
+ * and never turns back (`markLocalSendQueued`).
+ */
+export interface LocalSendPending {
+  readonly messageId: string
+  readonly queued: boolean
+}
+
 /** The whole timeline state: ordered content + the coarse lifecycle phase + the five chrome scalars. */
 export interface TimelineState {
+  /** Transient daemon failure; code is only compared to renderer-owned copy constants. */
+  sessionError?: { code: string }
   /** Latest stopping report, retired only by a local optimistic send or timeline reset. */
   stoppingBanner?: Omit<Extract<ThreadItem, { kind: 'banner' }>, 'kind'>
   /** Reference identity survives intervening content, echo removal and history prepend. */
@@ -447,7 +461,9 @@ export interface TimelineState {
   // daemon phase through `turnState`'s daemon-provenance arm. Living outside `phase` also keeps
   // `isTurnRunning` — the interrupt control's only gate — structurally unable to see this signal, so a
   // locally-opened window can never arm a stop button for a turn the daemon has not started.
-  localSendPending: boolean
+  // #1725: `null` is the closed window; an open one names the newest local send and whether a
+  // `queue_state` has listed it, so the label can say "Sending…" or "Waiting for Claude" honestly.
+  localSendPending: LocalSendPending | null
   // #1314: the latest thinking-token reading for this conversation, or `null` when none is held. The fifth
   // chrome scalar, and the second to carry a value rather than a liveness fact — `| null` follows
   // `apiRetry` for that reason, while the payload itself is a bare `number` rather than a record, because
@@ -496,7 +512,7 @@ function assertNever(event: never): never {
 }
 
 /**
- * Coalesce a streamed text delta: if the tail item is an `assistantText` for the same turn,
+ * Coalesce a streamed text delta: if the tail item is an `assistantText` for the same turn and parent,
  * return a new array whose tail is a copy with the concatenated text; otherwise append a fresh
  * `assistantText`. The tail-check naturally renders text → tool → text as three items while
  * collapsing consecutive deltas into one growing bubble. Always returns a new array (a delta is
@@ -514,19 +530,21 @@ function appendDelta(
   items: readonly ThreadItem[],
   turnId: string,
   text: string,
-  createdAt: number | undefined
+  createdAt: number | undefined,
+  parentToolUseId: string | undefined
 ): readonly ThreadItem[] {
   const tail = items[items.length - 1]
-  if (tail && tail.kind === 'assistantText' && tail.turnId === turnId) {
+  if (tail && tail.kind === 'assistantText' && tail.turnId === turnId && tail.parentToolUseId === parentToolUseId) {
     const grown: ThreadItem = {
       kind: 'assistantText',
       turnId,
       text: tail.text + text,
+      parentToolUseId,
       createdAt: tail.createdAt
     }
     return [...items.slice(0, -1), grown]
   }
-  return [...items, { kind: 'assistantText', turnId, text, createdAt }]
+  return [...items, { kind: 'assistantText', turnId, text, createdAt, parentToolUseId }]
 }
 
 /**
@@ -600,6 +618,12 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
     return state
   }
   let next = reduceTimelineContent(state, event)
+  const sessionError = event.type === 'sessionError' ? { code: event.code }
+    : event.type === 'sessionErrorCleared' || event.type === 'reset' ||
+      (event.type === 'sessionBoundary' && event.reason === 'clear') ||
+      (event.type === 'userText' && event.received !== true) ||
+      (event.type === 'turnState' && event.state !== 'idle') ? undefined : state.sessionError
+  if (next.sessionError !== sessionError) next = { ...next, sessionError }
   const stoppingBanner = event.type === 'userText' || event.type === 'reset' ? undefined
     : event.type === 'banner' && event.stopsTurn
       ? { level: event.level, text: event.text, stopsTurn: event.stopsTurn, truncated: event.truncated }
@@ -659,6 +683,12 @@ function reduceRefusalOffer(
 
 function reduceTimelineContent(state: TimelineState, event: ThreadEvent): TimelineState {
   switch (event.type) {
+    case 'sessionError':
+      // A daemon failure ends stale turn feedback without changing content or queue state.
+      return { ...state, phase: 'idle', localSendPending: null, stalled: false,
+        apiRetry: null, compacting: false, thinkingTokens: null }
+    case 'sessionErrorCleared':
+      return state
     case 'banner':
       return { ...state, items: [...state.items, {
         kind: 'banner', level: event.level, text: event.text,
@@ -675,7 +705,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
       return {
         // #1013: the stamp is handed through unconditionally; `appendDelta` decides which of the two
         // branches it lands on. `undefined` (no clock at the producer) is a legal value here.
-        items: appendDelta(state.items, event.turnId, event.text, event.createdAt),
+        items: appendDelta(state.items, event.turnId, event.text, event.createdAt, event.parentToolUseId),
         phase: state.phase,
         stalled: false,
         apiRetry: state.apiRetry,
@@ -800,7 +830,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
       // a stale phase.
       return event.state === state.phase &&
         !state.stalled &&
-        !state.localSendPending &&
+        state.localSendPending === null &&
         (event.state === 'thinking' || state.thinkingTokens === null)
         ? state
         : {
@@ -810,7 +840,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
             apiRetry: state.apiRetry,
             compacting: state.compacting,
             resetting: state.resetting,
-            localSendPending: false,
+            localSendPending: null,
             thinkingTokens: event.state === 'thinking' ? state.thinkingTokens : null
           }
     case 'turnEnd':
@@ -857,7 +887,10 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
         apiRetry: state.apiRetry,
         compacting: state.compacting,
         resetting: state.resetting,
-        localSendPending: event.received === true ? state.localSendPending : true,
+        // #1725: a second send replaces the window, so the label follows the newest sent id.
+        localSendPending: event.received === true
+          ? state.localSendPending
+          : { messageId: event.messageId ?? '', queued: false },
         // #1314: carried. A renderer-sourced echo is no more the daemon's word on the reading than it is
         // on the stall one line up; the operator sending a second message mid-turn does not un-say how
         // deep the running think is.
@@ -1191,7 +1224,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
         !state.stalled &&
         state.apiRetry === null &&
         !state.compacting &&
-        !state.localSendPending &&
+        state.localSendPending === null &&
         state.thinkingTokens === null &&
         state.resetting === null
       return nothingLive
@@ -1202,7 +1235,7 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
             stalled: false,
             apiRetry: null,
             compacting: false,
-            localSendPending: false,
+            localSendPending: null,
             thinkingTokens: null,
             resetting: null
           }
@@ -1218,7 +1251,7 @@ export const initialTimelineState: TimelineState = {
   stalled: false,
   apiRetry: null,
   compacting: false,
-  localSendPending: false,
+  localSendPending: null,
   thinkingTokens: null,
   resetting: null
 }
@@ -1229,5 +1262,20 @@ export const selectPhase = (s: TimelineState): TurnPhase => s.phase
 export const selectStalled = (s: TimelineState): boolean => s.stalled
 export const selectApiRetry = (s: TimelineState): ApiRetryStatus | null => s.apiRetry
 export const selectCompacting = (s: TimelineState): boolean => s.compacting
-export const selectLocalSendPending = (s: TimelineState): boolean => s.localSendPending
+export const selectLocalSendPending = (s: TimelineState): LocalSendPending | null => s.localSendPending
+
+/**
+ * #1725: the daemon has said it holds the newest local send. Every `send_message` is enqueued and each
+ * enqueue pushes a `queue_state` carrying the client's own `message_id`, so a snapshot listing the
+ * window's id moves the label from "Sending…" to "Waiting for Claude". STICKY: claude can commit the
+ * item, and a snapshot without it can arrive, before `turn_state{thinking}` does — so nothing here ever
+ * sets `queued` back. Only the window's own non-empty id matches; another device's item or an item with
+ * no id leaves the window as it is. Same reference whenever nothing changes.
+ */
+export function markLocalSendQueued(state: TimelineState, queued: readonly QueuedItem[]): TimelineState {
+  const pending = state.localSendPending
+  if (pending === null || pending.queued || pending.messageId === '') return state
+  if (!queued.some(item => item.message_id === pending.messageId)) return state
+  return { ...state, localSendPending: { messageId: pending.messageId, queued: true } }
+}
 export const selectThinkingTokens = (s: TimelineState): number | null => s.thinkingTokens

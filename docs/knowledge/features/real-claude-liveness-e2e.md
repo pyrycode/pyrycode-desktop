@@ -229,11 +229,12 @@ this feature" any other way.
 
 The check necessarily runs **after** `waitForDaemonReady`, the one exception to this file's "skip
 before creating any resource" rule: reading what the daemon supports needs the daemon already
-running. Since [#1413](https://github.com/pyrycode/pyrycode-desktop/issues/1413) reordered the device
-mint to run after readiness too (see § Fixture chain and teardown), the capability check also lands
-after the mint — it consumes `pairFields`, so it necessarily stays last. The fixture's `try`/`finally`
-reaps the process group and the temp `daemonHome` on every exit path regardless, so this late skip
-leaks nothing.
+running. After readiness, the fixture mints the app's `realclaude-e2e` pairing, then, for nonempty
+requirements, a separate `capability-probe-e2e` pairing. Only the latter feeds the probe; only the
+original app fields reach the fixture's `use` callback. The app retains the spec's
+`allowRemotePermissions` grant; the probe receives no remote-permission grant. Both mints are
+sequential, each bounded to 15 seconds, inside the existing `try`/`finally` that reaps the process
+group and removes `daemonHome` on success, skip or failure.
 
 The mechanism, in `e2e/fixtures/daemonCapabilityGate.ts`:
 
@@ -245,13 +246,17 @@ The mechanism, in `e2e/fixtures/daemonCapabilityGate.ts`:
   (mirroring `daemonConnection`'s `loadDialConfig` field-for-field, with an ephemeral static key
   instead of the persisted device keypair) and **advertises exactly the declared capabilities** — the
   daemon's `negotiateCapabilities` returns the *intersection* of what's advertised with what it
-  supports, so a probe advertising nothing would read every capability as missing. It reuses the
-  fixture's own `pairFields` rather than minting a second device (the daemon's `Devices.Validate` is a
-  pure hash lookup that doesn't consume the token). It is total — it never throws or rejects — and
-  fails closed into a skip on a handshake error, a malformed ack, or a timeout, retrying a timed-out
-  attempt against an absolute deadline (not an attempt count) so the suite can never hang here; the
-  retry is load-bearing, not defensive, because the relay silently drops a client frame that beats the
-  daemon's `/v1/server` registration (the same race § Readiness describes for the app's own leg).
+  supports, so a probe advertising nothing would read every capability as missing. The daemon binds
+  a pairing to its first accepted static key (pyrycode#2734). Sharing the app token with the probe's
+  independent key would claim that pairing before the app authenticates; a token remains reusable
+  only by its bound key. The separate-pairing repair is described in the
+  [security-reviewed plan](../../specs/architecture/1785-separate-capability-probe-pairing.md).
+  One temporary probe key and its own pairing are reused across retries within a read. The read is
+  total — it never throws or rejects — and fails closed into a skip on a handshake error, malformed
+  ack or timeout. Attempts retain their 3-second timeout and 15-second absolute retry deadline.
+  Only timeouts retry, because the relay silently drops a client frame that beats the daemon's
+  `/v1/server` registration (the same race § Readiness describes for the app's own leg). Each settled
+  attempt stops its driver, including after success, so its supervisor cannot keep reconnecting.
 - The skip reason names the missing capability, names the daemon as the stale thing, and carries a
   concrete `go build -o ~/.local/bin/pyry ./cmd/pyry` (or `PYRY_BIN`) rebuild line, matching the
   concreteness of the credential skip's own `security find-generic-password …` line. It is built only
@@ -262,6 +267,17 @@ The mechanism, in `e2e/fixtures/daemonCapabilityGate.ts`:
 `vitest.config.ts` and `playwright.config.ts` each gained one line so the pure decision could be unit
 tested beside the fixture it serves without Playwright trying to collect it: `.test.ts` under `e2e/`
 is vitest's, `.spec.ts` is Playwright's — a suffix invariant, not a directory one.
+
+Pure capability-decision tests cannot detect credential sharing in fixture wiring.
+[`realDaemon.test.ts`](../../../e2e/fixtures/realDaemon.test.ts) captures the actual registered
+daemon fixture and fakes process, socket and driver boundaries while retaining pairing decoding,
+the real capability reader, independent Noise keys and temporary-directory cleanup. Its driver
+binds each minted token to the first key and refuses another key. A successful probe must still
+allow an independent app key to authenticate using the fixture's handed-off fields; sharing the
+token fails that check. Coverage also requires app grant/probe nongrant, stopped drivers, one mint
+and no probe for empty requirements, no app handoff for missing capabilities or failed reads, and
+process-group and isolated-HOME cleanup. Existing capability tests cover bounded timeout and
+invalid-key failures.
 
 [`real-daemon-multi-agent.spec.ts`](../../../e2e/real-daemon-multi-agent.spec.ts) uses
 `spawnClaude: false` and requires both `interactive` and `multi_agent`, so an older daemon skips
@@ -294,6 +310,13 @@ daemon/relay dropping:
   control socket to become dialable, and only then runs `pyry pair` under that HOME to mint
   credentials **from the running daemon**. Wrapped in `try`/`finally` so setup failure, mint failure,
   test failure, and success all reap the subprocess and remove `daemonHome`.
+
+  `runPyryPair` drains mint stderr without retaining it and reports only fixed launch, exit-code or
+  timeout diagnostics. Mint stdout is used only for decoding; neither it, stderr nor caught launch
+  errors reach reports. A malformed payload produces a fixed decoding error. Successful mint stderr
+  being empty is insufficient evidence that failure stderr cannot contain a token. The shared-fixture
+  regression injects secret-bearing second-mint exit and launch failures and checks that message,
+  stack and cause do not carry them.
 
   **This order changed with [#1413](https://github.com/pyrycode/pyrycode-desktop/issues/1413).**
   Upstream pyrycode#2393 turned bare `pyry pair` into a **running-service** operation: it resolves

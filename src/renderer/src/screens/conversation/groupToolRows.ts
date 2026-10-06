@@ -5,6 +5,7 @@ export interface GroupedToolRow {
   depth: number
   ancestors: number[]
   count: number
+  hasChildren: boolean
   running: boolean
 }
 
@@ -16,7 +17,7 @@ export function groupToolRows(items: readonly ThreadItem[]): GroupedToolRow[] {
       owners.set(item.toolUseId, index)
     }
   })
-  const parents = items.map((item) => item.kind === 'toolCall' && item.parentToolUseId
+  const parents = items.map((item) => (item.kind === 'toolCall' || item.kind === 'assistantText') && item.parentToolUseId
     ? owners.get(item.parentToolUseId) : undefined)
   // A cycle is not ancestry. Disconnect its members before projecting any rows.
   parents.forEach((_, index) => {
@@ -51,7 +52,7 @@ export function groupToolRows(items: readonly ThreadItem[]): GroupedToolRow[] {
     const entry = stack.pop()
     if (!entry) break
     const item = items[entry.index]
-    rows.push({ ...entry, depth: Math.min(entry.ancestors.length, 2), count: 0,
+    rows.push({ ...entry, depth: Math.min(entry.ancestors.length, 2), count: 0, hasChildren: children.has(entry.index),
       running: item?.kind === 'toolCall' && item.result === null && item.denial === undefined })
     for (const index of [...(children.get(entry.index) ?? [])].reverse()) {
       stack.push({ index, ancestors: [...entry.ancestors, entry.index] })

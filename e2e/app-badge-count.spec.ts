@@ -9,6 +9,10 @@ import type { ElectronApplication, Page } from '@playwright/test'
 // badge is macOS's (and Linux Unity's); on Windows the overlay path is unit-tested in appBadge.test.ts.
 //
 // Every read below is a number or a count of dots, never row text or daemon content.
+//
+// macOS only. On Linux `app.getBadgeCount()` reads back 0 outside a Unity launcher, which includes the
+// Xvfb display of the pyrybox dispatcher container, and Windows has no count badge at all.
+test.skip(process.platform !== 'darwin', 'the app icon count badge exists only on macOS')
 
 const OPEN = SEEDED_ROW.id
 const OTHER: ConversationSummary = { ...SEEDED_ROW, id: 'badge-other', name: 'Badge side chat' }
@@ -81,7 +85,8 @@ test('unpairing the last host clears the badge', async ({ launchPairedApp }) => 
   daemon.pushFrame(shown(OPEN, 'badge-unpair-prompt'))
   await expect.poll(badge(app)).toBe(1)
 
-  await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
   const row = page.locator('.settings__server-row').nth(0)
   await row.getByRole('button', { name: 'Unpair', exact: true }).click()
   await row.getByRole('button', { name: 'Confirm', exact: true }).click()

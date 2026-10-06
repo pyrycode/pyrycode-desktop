@@ -40,7 +40,7 @@ See [Subagent tool groups](#subagent-tool-groups) below.
 aria-hidden="true">`, the same idiom every chevron in this file already follows
 (`.status-row__chevron`, `.composer__actions-icon`) — sized from its own attributes, no wrapper frame, no
 extracted shared component (three call sites, three different glyphs). Its path is
-`TOOL_ROW_CHEVRON_PATH`, a module-level `const` beside `ToolRow`, not exported (no second caller), the
+`TOOL_ROW_CHEVRON_PATH`, a module-level `const` beside `ToolRow`, shared with the folded-run header, the
 right-pointing sibling of `ComposerActionsMenu.tsx`'s `CHEVRON_PATH` — same family, same construction,
 same slight overflow past its nominal box, reproduced rather than corrected by leaving the `viewBox`
 un-padded. Ink is `--color-primary` via `color:` + `currentColor`, an exact match to the Figma export
@@ -50,10 +50,11 @@ does not turn.** Figma draws the collapsed state only (the Body frame is hidden 
 plus the body appearing below already carry the open state, so a turning glyph would be design invented
 here rather than implemented. If one is ever wanted it's a one-rule follow-up keyed on the
 `.tool-row--expanded` class that already ships — not read from `expanded` inside `ToolRow`. The chevron is
-purely decorative: no `aria-label`, no `<title>`, no `role="img"`, no `aria-controls`/`id` pair — the
-SAFETY block's existing clauses (`ConversationScreen.tsx:704-781`) apply verbatim since this adds one
-element into the same chip and no untrusted string (the path is a client-owned constant, the two runs are
-unedited) — so the resolved chip's accessible name stays exactly its two text runs (WCAG 2.5.3).
+purely decorative: no `aria-label`, no `<title>`, no `role="img"`, no `aria-controls`/`id` pair.
+The separate [Failed icon](conversation-shell-tool-rows.md#failed-icon) is meaningful:
+it has `role="img"` and the client-owned label `Failed`, after the count and before the
+chevron. Tool text and count remain escaped text children; the glyph path and label
+are client-owned constants.
 
 **Both groups are `<span>`, never `<div>`.** A resolved chip is a real `<button>`, which admits phrasing
 content only; a `<div>` inside it is invalid HTML and a React DOM-nesting warning. `<svg>` is phrasing
@@ -62,7 +63,7 @@ content and is fine. Layout comes from `display: flex` in the CSS, not from the 
 **Tests.** Two byte-level assertions in `ConversationScreen.test.tsx` were updated in place (not
 loosened) to expect the new wrapper spans and the chevron as the right group's last child; new cases pin
 that a pending leaf draws neither `.tool-row__right` nor `.tool-row__chevron` nor a gap where either would
-be, that the chevron carries `aria-hidden="true"` and nothing else exposes an accessible name, that an
+be, that the chevron carries `aria-hidden="true"`, that an
 error row still draws the chevron (it follows the body, never the outcome), and that an expanded row's
 header markup is byte-identical to the collapsed row's (no rotation class, no `--expanded` variant). A new
 sibling `test(...)` in `e2e/tool-row-toggle.spec.ts` (its own `launchPairedApp`, since a second row on the
@@ -85,42 +86,76 @@ was frozen 2026-08-26, and this section is #854's only home.
 
 `groupToolRows.ts` projects the conversation's stored arrival order into display order;
 it does not reorder timeline state. Only calls named exactly `Agent` or `Task` can own
-children through `parentToolUseId`. Roots and siblings retain their relative arrival
-order, including interleaved parallel agents. Assistant text remains independent:
-this feature does not attribute or group assistant deltas.
+tool and assistant-text children through `parentToolUseId`. Owners come from loaded
+rows in this conversation, including retained completed calls, rather than current
+roster membership. Roots and mixed text/tool siblings retain their relative arrival
+order, including interleaved parallel agents. Each attributed reply appears once
+under its owner, using the existing assistant bubble and meta row at child indentation;
+parentless replies retain their ordinary rendering and relative order.
 
-A missing parent leaves the tool at the root until a history prepend supplies its
-Agent/Task owner. A reference to an ordinary tool also stays flat. Iterative traversal
+A missing parent leaves the tool or reply at the root until a history prepend supplies
+its Agent/Task owner; regrouping uses the same retained item without duplication.
+A reference to an ordinary tool also stays flat. Iterative traversal
 and disconnection of cyclic parent links keep every row reachable; identifiers are
 Map equality hints within this conversation, never authority or DOM attributes.
 Indentation uses `--space-4` per level, capped at two levels (16px and 32px with the
 current tokens). Deeper descendants retain their full ancestry for visibility and counts.
 
-New groups start collapsed. Their headers retain the call description and count distinct
-descendant tool-use ids, excluding the parent. `running` remains visible while the
-parent or any descendant has neither a result nor a denial. Both readings update while
+New groups start collapsed. `hasChildren` controls disclosure independently of the
+distinct descendant tool count: a pending Agent/Task with only text still has a
+chevron and a “0 tools · running” count. Assistant text never adds to the count.
+Headers retain the call description and count distinct descendant tool-use ids,
+excluding the parent. `running` remains visible while the parent or any descendant
+tool has neither a result nor a denial. Both readings update while
 collapsed. Expanding a pending group reveals children without drawing an empty result
-body; nested groups keep their own collapse state.
+body; nested groups keep their own collapse state. Text is hidden while its owner
+is collapsed, visible when expanded, and hidden again on collapse. Marker and
+live-row placement remain assigned to #1780/#1781; attribution reuses the existing
+group presentation independently of that work.
 
 ### Expansion identity
 
 `Timeline` controls expansion for **every** tool row, keyed by its origin-relative
 index (`firstRowKey + index`). Separate leaf and group state would close an expanded
-leaf when history gives it its first child. Tool wrappers stay under one React parent
-and remain mounted while hidden, preserving child-result and inner-group expansion
+leaf when history gives it its first child. Tool and attributed-text wrappers stay
+under one React parent and remain mounted while hidden, preserving child-result
+and inner-group expansion
 through outer collapse, results, history prepends and regrouping. The mounted timeline
 is keyed by conversation, so this UI state cannot leak into another conversation.
-See [history prepend identity](conversation-timeline-store.md#edge-cases-and-limitations).
+
+Run expansion uses a separate local `expandedRuns` set with the same origins. Opening
+marks the first root origin; a run stays expanded when **any** surviving member origin
+is marked. A history prepend can introduce an earlier root or a previously missing
+Agent owner, changing the header's key without changing existing member origins.
+Checking only the current first root would close the run in that case. Closing clears
+markers for **all** current run members, so an older mark cannot reopen it. Appends,
+results and closing/reopening the run preserve each member's independent expansion;
+run membership never depends on whether an inner Agent group is open.
+See [history prepend identity](conversation-timeline-store-limits.md#edge-cases-and-limitations).
+
+`hiddenRows` checks every ancestor's tool expansion **and** enclosing run expansion,
+as well as the row's own run. Run membership contains tool indexes only: checking
+just an assistant row's membership leaves its reply visible when an expanded owner
+is hidden by a collapsed tool run. Reopening the run restores the owner's held
+expansion and its text without another toggle. The two controls must be exercised
+together; owner-only collapse coverage cannot detect that leak.
 
 ### Visible tool-row joins
 
 Join decisions follow visible neighbours at the same **capped** indentation, skipping
-collapsed descendants and undrawn `turnBoundary` items. A visible non-tool row or a
+collapsed descendants and undrawn `turnBoundary` items. With `foldTools` enabled,
+undrawn informational banners are skipped too; optional-off joins retain their prior
+reading. An expanded run header joins its first root member using the same wrapper
+classes, with the header above the member stack. A visible non-tool row or a
 change in indentation ends the stack. Direct `.tool-row + .tool-row` selectors alone
 cannot implement this: the mounted wrappers interrupt DOM adjacency even for ordinary
 calls with no children. Client-owned wrapper classes extend the existing join rules
-for flattened internal corners, overlapping borders, adjacent error edges and a shadow
-only on the stack's last row.
+for flattened internal corners, overlapping plain borders and a shadow only on the
+stack's last row. `Timeline`'s `joins` map emits only `tool-group-row--joined-above`
+and `tool-group-row--joined-below`; #1748 removed `tool-group-row--error-above` and
+`tool-group-row--error-below` and their CSS retints. Failure stays local to the
+header's [Failed icon](conversation-shell-tool-rows.md#failed-icon), without changing
+stack geometry or its neighbours' border colour.
 
 Visible wrappers are flex columns so the child's negative join margin reduces wrapper
 height without collapsing through it. Hidden wrappers retain `display: none`, consuming
@@ -129,13 +164,127 @@ neither height nor thread gap. See [tool-row box treatment](conversation-shell-t
 ### Verification
 
 `toolGroups.test.tsx` covers projection order, depth cap, orphan recovery, cycles,
-distinct counts, denial completion and reducer/history attribution. Static markup
+distinct counts, denial completion and reducer/history attribution. It also covers
+mixed assistant/tool order, two parents sharing a turn, parent-aware
+tail growth, text-only disclosure, ordinary-tool fallback, late completed owners
+and version-1 snapshot grouping. Static markup
 cannot prove retained interaction or border geometry. `e2e/tool-groups.spec.ts` drives
 interleaved live calls, nested expansion, result resolution and history regrouping;
-it also measures joins through collapse and child-result expansion. Keep the ordinary
+it also measures joins through collapse and child-result expansion, including plain
+borders on both sides of a failed row at a collapsed-group boundary. Keep the ordinary
 stack assertion in `e2e/tool-row-toggle.spec.ts`: unchanged inner ToolRow markup did
 not prevent the wrapper regression. Fake transport proves this client behavior; no
 additional live-Claude acceptance gate is needed.
 
+[`e2e/assistant-parent-text.spec.ts`](../../../e2e/assistant-parent-text.spec.ts)
+streams deltas before the owner has a result, then checks text-only and mixed groups,
+single occurrence, arrival order, tool-only counts, collapse/expand/collapse and
+enclosing-run collapse/reopen. The
+[verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1791#issuecomment-6003391417)
+confirms both tests executed and passed in the 2026-10-05 dispatcher gate at
+`fbd9003c4775d5ce00be65917ee0ab84497e238c`: 273 executed, 273 passed, 0 failed,
+4 skipped. The tests are “streamed assistant text folds under its owner and follows
+expansion without inflating tool counts” and “attributed text follows its owner when
+an enclosing tool run collapses”. No real-Claude acceptance is required.
+The same verdict records Figma comparison of integrated expanded captures at
+1280×773 and 800×773 content viewports, retaining the assistant presentation and
+16px child indentation. Scratch captures are not a permanent artifact; the verdict
+records the reviewed visual evidence.
+
 Source: [subagent tool groups design](../../specs/architecture/1239-subagent-tool-groups.md)
-and [reviewed implementation](https://github.com/pyrycode/pyrycode-desktop/pull/1328).
+and [reviewed implementation](https://github.com/pyrycode/pyrycode-desktop/pull/1328);
+[assistant parent attribution design](../../specs/architecture/1789-assistant-parent-attribution.md)
+and [implementation](https://github.com/pyrycode/pyrycode-desktop/pull/1791).
+
+
+## Adjacent tool runs
+
+`ConversationScreen` subscribes to the client-wide
+[collapse assistant tool uses preference](collapse-tool-uses-preference-store.md)
+and passes it to `Timeline.foldTools`. Settings → Thread defaults the switch on;
+off restores ordinary tool rows and existing joins without “Using tools: N” headers.
+Turning it on restores folding without restarting, including retained conversations
+and those on another paired host. The optional `Timeline.foldTools` prop still
+defaults to false: absent or false retains ordinary rendering and joins for other
+callers. The persisted preference and expansion remain local presentation, with no
+IPC, transport or wire changes.
+
+### Membership and boundaries
+
+[`foldToolRuns.ts`](../../../src/renderer/src/screens/conversation/foldToolRuns.ts)
+projects the output of `foldQueuedRows` and `groupToolRows` into runs of at least two
+adjacent root tool rows. An Agent/Task counts as one root and retains its owned
+tool descendants and indentation. Attributed text follows ancestor visibility
+without becoming a tool-run member. A lone root keeps its existing row. Each new run
+starts collapsed as “Using tools: N”, where N counts roots only.
+
+Every drawn non-tool ends a run: user/assistant messages, queued rows, warning/error
+notices, unrecognized-message notices, session/compaction delimiters and stopped-turn
+records. Undrawn turn boundaries and informational banners do not split visually
+adjacent roots. Filter for what `TimelineRow` actually draws before deriving runs;
+an invisible notice would otherwise create two headers with no visible separator.
+Agent expansion does not change membership or N.
+
+### Status and disclosure
+
+The header shows a Primary spinner with the client-owned accessible name `Running`
+while any root is running. Agent/Task roots use their existing descendant-inclusive
+running reading: a completed parent with an unfinished child keeps the spinner.
+“K failed” and the existing `tool-row__failed` glyph (`Failed`) count roots with a
+result error **or** denial once each, even if a denied root later receives an error
+result. Descendant failures stay on existing member/group surfaces and do not add
+to K. A concurrent failure and running root show both failure and spinner; only a
+fully complete run with no failed roots shows the `Done` check. That check uses
+`--color-on-surface-variant`, while the spinner reuses `composer-status-spin`.
+Copy and accessible labels are client-owned apart from N and K; member tool names
+remain escaped React children.
+
+The header is a native button: click, Enter and Space toggle it and `aria-expanded`
+reflects the local state. Its chevron follows the label, pointing down when collapsed
+and up when expanded; member-row chevrons keep their existing treatment. It shares
+the Desktop tool outline, fill and joins. Headers are keyed **siblings** of the
+existing mounted tool wrappers, rather than containers that reparent members.
+Hidden members consume no space but retain their result and nested-group state;
+see [Expansion identity](#expansion-identity) and [Visible tool-row joins](#visible-tool-row-joins).
+
+### Coverage and recorded evidence
+
+[`toolRuns.test.tsx`](../../../src/renderer/src/screens/conversation/toolRuns.test.tsx)
+pins optional-off equivalence, lone tools, drawn/undrawn boundaries (including queued
+rows and informational banners), Agent ownership and root status combinations.
+Static renders cannot exercise disclosure, state retention or geometry.
+The [preference spec](../../../e2e/collapse-tool-uses-preference.spec.ts) covers
+Settings off/on round trips, keyboard activation, retained chats, another host,
+ordinary joined-stack geometry and off after full relaunch; see the
+[preference coverage and evidence](collapse-tool-uses-preference-store.md#coverage-and-evidence).
+[`e2e/tool-runs.spec.ts`](../../../e2e/tool-runs.spec.ts) covers click/Enter/Space,
+member expansion through outer collapse, appends and an earlier-root history prepend,
+collapsed count/status changes, denial plus result without double counting, and the
+header/member join at both 800px and 1280px window widths.
+
+Adjacent-tool setups in [`tool-row-toggle`](../../../e2e/tool-row-toggle.spec.ts),
+[`tool-groups`](../../../e2e/tool-groups.spec.ts) and
+[`tool-denied`](../../../e2e/tool-denied.spec.ts) open the run before retaining their
+member joins, failure, result expansion and history-regrouping assertions; stack
+geometry includes the header. Existing lone-tool proof remains in
+[`thread-shadow`](../../../e2e/thread-shadow.spec.ts),
+[`tool-progress`](../../../e2e/tool-progress.spec.ts) and
+[`thread-scroll-pin`](../../../e2e/thread-scroll-pin.spec.ts).
+
+The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1788#issuecomment-6002244618)
+records the 2026-10-05 gate at `fcf41f3d19adcaf639cbdd0c1017364af077b0ad`:
+270 Playwright tests executed, 270 passed, 0 failed and 4 skipped. It confirms all
+12 tests across tool-runs/tool-row-toggle/tool-groups/tool-denied executed and passed,
+including “tool runs retain expansion and update collapsed status at 800px” and its
+1280px counterpart. No live-Claude acceptance is required for this renderer feature.
+
+The same verdict records comparison of ten integrated captures with
+[Figma row states](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=726-5376):
+collapsed success, expanded, running, failure and concurrent failure/running at
+800×800 and 1280×800 windows (800×773 and 1280×773 content viewports). Scratch evidence
+was retained at `/tmp/verifier-1788/{800,1280}-{collapsed,expanded,running,failure,failure-running}.png`;
+the linked verdict is the durable record. The 38px header meets the design's 36px ±2px
+convention, with Desktop geometry, joined borders and Agent indentation retained and
+no unresolved visual deviation.
+
+Design: [fold tool runs](../../specs/architecture/1764-fold-tool-runs.md).

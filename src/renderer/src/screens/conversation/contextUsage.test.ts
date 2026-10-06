@@ -92,18 +92,18 @@ describe('contextUsagePercent (#811)', () => {
 // written from would pass against any boundary at all. These pin the boundaries as VALUES, which is the
 // one thing a stylesheet could never express and the reason the ladder is a function here rather than an
 // inline conditional at the reading.
-describe('contextUsageStep (#1062)', () => {
-  // The pair that decides the lower boundary's INCLUSIVITY. 49 and 50 differ by one, so a `> 50` slip
-  // reddens here and nowhere else.
-  it('turns warning AT 50, not past it', () => {
-    expect(contextUsageStep(49)).toBe('primary')
-    expect(contextUsageStep(50)).toBe('warning')
+describe('contextUsageStep (#1062, #1728)', () => {
+  // #1728 moved both boundaries: amber from 70%, red from 85%. The pair that decides the lower
+  // boundary's INCLUSIVITY — 69 and 70 differ by one, so a `> 70` slip reddens here and nowhere else.
+  it('turns warning AT 70, not past it', () => {
+    expect(contextUsageStep(69)).toBe('primary')
+    expect(contextUsageStep(70)).toBe('warning')
   })
 
-  // The upper boundary's own pair, read the same way: 69 is still the nudge, 70 is already the alarm.
-  it('turns error AT 70, not past it', () => {
-    expect(contextUsageStep(69)).toBe('warning')
-    expect(contextUsageStep(70)).toBe('error')
+  // The upper boundary's own pair, read the same way: 84 is still the nudge, 85 is already the alarm.
+  it('turns error AT 85, not past it', () => {
+    expect(contextUsageStep(84)).toBe('warning')
+    expect(contextUsageStep(85)).toBe('error')
   })
 
   // The ends of contextUsagePercent's own range — an empty session and a full one. Together with the two
@@ -118,7 +118,7 @@ describe('contextUsageStep (#1062)', () => {
   // a defect waiting for a second caller, and the descending form is what makes the absence of one
   // structural rather than asserted.
   it('is total: every number lands on a step', () => {
-    for (const value of [-1, -Infinity, 49.9, 50.1, 69.9, 101, Infinity, NaN]) {
+    for (const value of [-1, -Infinity, 69.9, 70.1, 84.9, 101, Infinity, NaN]) {
       expect(['primary', 'warning', 'error']).toContain(contextUsageStep(value))
     }
   })

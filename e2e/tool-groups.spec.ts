@@ -25,13 +25,14 @@ test('interleaved subagents group, update while collapsed, and retain expansion 
   const resolve = (id: string) => daemon.pushFrame(frame('tool_result', {
     ...payload(id), is_error: false, result_summary: `result of ${id}`
   }))
-  const row = (id: string) => page.locator('.tool-row').filter({
+  const row = (id: string) => page.locator('.tool-row:not(.tool-run__row)').filter({
     has: page.locator('.tool-row__summary', { hasText: new RegExp(`^${id}$`) })
   })
   use('agent-a')
   use('agent-b')
   use('child-a', 'agent-a', 'Read')
   use('child-b', 'agent-b', 'Read')
+  await page.locator('.tool-run button').click()
   const a = row('agent-a')
   const b = row('agent-b')
   await expect(a.locator('.tool-row__count')).toHaveText('1 tool · running')
@@ -47,7 +48,7 @@ test('interleaved subagents group, update while collapsed, and retain expansion 
   await row('inner').locator('.tool-row__chip').click()
   await expect(row('deep')).toBeVisible()
   await expect(row('deep').locator('..')).toHaveCSS('margin-inline-start', '32px')
-  await expect(page.locator('.tool-row__summary:visible')).toHaveText(['agent-a', 'child-a', 'inner', 'deep', 'agent-b'])
+  await expect(page.locator('.tool-row:not(.tool-run__row) .tool-row__summary:visible')).toHaveText(['agent-a', 'child-a', 'inner', 'deep', 'agent-b'])
   resolve('child-a')
   await row('child-a').locator('.tool-row__chip').click()
   await expect(row('child-a').locator('.tool-row__result')).toHaveText('result of child-a')
@@ -104,13 +105,15 @@ test('visible tool rows keep joined borders across collapsed descendants', async
   for (const id of ['a1', 'a2', 'b', 'c']) daemon.pushFrame(frame('tool_result', {
     ...payload(id), is_error: id === 'a2' || id === 'b', result_summary: `result of ${id}`
   }))
-  const row = (id: string) => page.locator('.tool-row').filter({
+  const row = (id: string) => page.locator('.tool-row:not(.tool-run__row)').filter({
     has: page.locator('.tool-row__summary', { hasText: new RegExp(`^${id}$`) })
   })
   await expect(row('c')).toHaveClass(/tool-row--resolved/)
+  await page.locator('.tool-run button').click()
 
   const expectStacks = async (stacks: string[][]) => {
-    await expect(page.locator('.tool-row__summary:visible')).toHaveText(stacks.flat())
+    await expect(page.locator('.tool-row:not(.tool-run__row) .tool-row__summary:visible')).toHaveText(stacks.flat())
+    stacks = [['header', ...stacks[0]], ...stacks.slice(1)]
     const readings = await page.locator('.tool-row:visible').evaluateAll((elements) => elements.map((element) => {
       const css = getComputedStyle(element)
       const box = element.getBoundingClientRect()
@@ -119,7 +122,7 @@ test('visible tool rows keep joined borders across collapsed descendants', async
         top: box.top, bottom: box.bottom, margin: parseFloat(css.marginTop),
         corners: [css.borderTopLeftRadius, css.borderTopRightRadius, css.borderBottomLeftRadius, css.borderBottomRightRadius],
         shadow: css.boxShadow, topColor: css.borderTopColor, bottomColor: css.borderBottomColor,
-        sideColor: css.borderLeftColor, failed: element.classList.contains('tool-row--error'),
+        sideColor: css.borderLeftColor,
         radius: theme.getPropertyValue('--radius-xs').trim()
       }
     }))
@@ -133,8 +136,9 @@ test('visible tool rows keep joined borders across collapsed descendants', async
           previous ? '0px' : current.radius, previous ? '0px' : current.radius,
           next ? '0px' : current.radius, next ? '0px' : current.radius
         ])
-        expect(current.topColor).toBe(previous?.failed ? previous.sideColor : current.sideColor)
-        expect(current.bottomColor).toBe(next?.failed ? next.sideColor : current.sideColor)
+        expect(current.sideColor).toBe(readings[0].sideColor)
+        expect(current.topColor).toBe(readings[0].sideColor)
+        expect(current.bottomColor).toBe(readings[0].sideColor)
         if (next) expect(current.shadow).toBe('none')
         else expect(current.shadow).not.toBe('none')
         if (previous) {

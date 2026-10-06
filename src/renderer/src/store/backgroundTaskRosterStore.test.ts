@@ -980,7 +980,8 @@ describe('backgroundTaskRosterStore', () => {
     const store = createBackgroundTaskRosterStore({
       rosters: seed,
       unlistedStarts: new Map(),
-      finishedTasks: new Map()
+      finishedTasks: new Map(),
+      pendingStops: new Map()
     })
     expect(heldFor(store, 'c1')).toEqual({
       tasks: new Map([['t1', heldNoCut]]),
@@ -988,11 +989,12 @@ describe('backgroundTaskRosterStore', () => {
     })
   })
 
-  it('initialBackgroundTaskRosterState holds three empty maps', () => {
+  it('initialBackgroundTaskRosterState holds four empty maps', () => {
     expect(initialBackgroundTaskRosterState).toEqual({
       rosters: new Map(),
       unlistedStarts: new Map(),
-      finishedTasks: new Map()
+      finishedTasks: new Map(),
+      pendingStops: new Map()
     })
   })
 
@@ -1147,7 +1149,8 @@ describe('selectLiveTaskCountFor — terminal status leaves the count (#1561)', 
     const store = createBackgroundTaskRosterStore({
       rosters: new Map(),
       unlistedStarts: new Map(),
-      finishedTasks: new Map([['c1', new Set(['t1'])]])
+      finishedTasks: new Map([['c1', new Set(['t1'])]]),
+      pendingStops: new Map()
     })
     store.getState().clearAllRosters()
     expect(store.getState().finishedTasks.size).toBe(0)

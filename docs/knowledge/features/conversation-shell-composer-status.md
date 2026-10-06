@@ -159,7 +159,7 @@ agent, and every pre-#1656 test are byte-identical to before.
 The next accepted typed or slash send inserts an optimistic user row and clears
 only this transient report. Empty/blocked attempts, daemon activity, trailing idle,
 reconnect and navigation preserve it; reset, clear or eviction drops it with the
-timeline. See [routing and lifetime](conversation-timeline-store.md#claude-banner-routing-and-lifetime).
+timeline. See [routing and lifetime](conversation-timeline-store-banners.md#claude-banner-routing-and-lifetime).
 The flag changes no turn or permission state and triggers no action.
 
 Claude's shipped producer subtype is `informational`, distinct from the payload

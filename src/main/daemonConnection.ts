@@ -19,6 +19,8 @@
 // classification code and the event name — never the caught error object, the human-readable banner
 // (messageFor), the ack/plaintext bytes, or the numeric close code (that is #127's relay leg). Every
 // failure surfaces as a non-connected DaemonEvent; nothing throws out of the module.
+import type { MessageLifecycle } from './messageLifecycle'
+import { notifySend } from './transport/sendObservation'
 import { randomUUID } from 'node:crypto'
 import { createNoiseRelayDriver } from './transport/noiseRelayDriver'
 import type {
@@ -36,6 +38,7 @@ import { buildRequestContextUsage } from './transport/requestContextUsageEnvelop
 import { buildRequestMcpStatus } from './transport/requestMcpStatusEnvelope'
 import { buildMcpReconnect } from './transport/mcpReconnectEnvelope'
 import { buildMcpToggle } from './transport/mcpToggleEnvelope'
+import { buildStopBackgroundTask } from './transport/stopBackgroundTaskEnvelope'
 import { buildRequestSystemPrompt } from './transport/requestSystemPromptEnvelope'
 import { buildSetSystemPrompt } from './transport/setSystemPromptEnvelope'
 import { buildSetConversationMuted } from './transport/setConversationMutedEnvelope'
@@ -54,6 +57,7 @@ import { buildChangeWorkspace } from './transport/changeWorkspaceEnvelope'
 import { buildRenameWorkspace } from './transport/renameWorkspaceEnvelope'
 import { buildSetSessionSettings } from './transport/setSessionSettingsEnvelope'
 import { buildDequeueMessage } from './transport/dequeueMessageEnvelope'
+import { buildSendQueuedNow } from './transport/sendQueuedNowEnvelope'
 import { buildInterrupt } from './transport/interruptEnvelope'
 import { buildAttachmentChunk } from './transport/attachmentChunkEnvelope'
 import { buildRequestAttachment } from './transport/requestAttachmentEnvelope'
@@ -91,6 +95,7 @@ import {
   MAX_FRAME_BYTES,
   CAPABILITY_INTERACTIVE,
   CAPABILITY_MULTI_AGENT,
+  CAPABILITY_STOP_BACKGROUND_TASK,
   type HelloAckPayload,
   type SendMessagePayload,
   type CreateConversationPayload,
@@ -111,6 +116,7 @@ import {
   type ModalAnswerPayload,
   type ModalCancelPayload,
   type DequeueMessagePayload,
+  type SendQueuedNowPayload,
   type QuestionAnswerPayload,
   type QuestionRefusedPayload,
   type AttachmentChunkPayload,
@@ -163,6 +169,10 @@ const MAX_PENDING_MCP_RECONNECTS = 32
 /** Outstanding MCP toggles kept for refusal correlation (#1586), bounded like the reconnects above. */
 const MAX_PENDING_MCP_TOGGLES = 32
 
+/** Outstanding background-task stops kept for refusal correlation (#1770). An accepted stop gets no reply,
+ *  so only a refusal, eviction or the next dial removes an entry. The 33rd evicts the oldest. */
+const MAX_PENDING_BACKGROUND_TASK_STOPS = 32
+
 /**
  * Injected dependencies. The stores + sink are constructed at the composition root; `deviceName`
  * and `clientVersion` are sourced there (os.hostname() / app.getVersion()); `now` and
@@ -213,6 +223,8 @@ export interface DaemonConnectionDeps {
    * daemon-leg call sites (this module) are #128 and the relay-leg threading is #127. Unused in #126.
    */
   diagnosticLog?: DiagnosticLog
+  /** Shared observer of local composer submissions; holds no message content. */
+  messageLifecycle?: MessageLifecycle
   /**
    * The retrieval idle-deadline seam (#996) — createRelaySupervisor's `timing` parameter, restated
    * for the one timer this module owns. Test-only in practice: every field defaults to the real
@@ -314,6 +326,10 @@ export interface DaemonConnection {
    * toggles answer with an mcp_status; any correlated refusal emits mcpToggleRejected. The server name and
    * the requested state are only put on the wire, never logged or stored. Inert when unavailable. No retry. */
   toggleMcpServer(conversationId: string, serverName: string, enabled: boolean): void
+  /** Ask once for a stop_background_task of one task (#1770). Accepted stops get no reply; a correlated
+   * refusal emits backgroundTaskStopRejected with the ids recorded here. Neither id is logged. Inert when
+   * unavailable. No retry. */
+  stopBackgroundTask(conversationId: string, taskId: string): void
   /**
    * Ask the daemon for one backward step of a scroll-back walk over a conversation's on-disk history
    * (#1222). Takes the whole PAYLOAD rather than a scalar — unlike its two neighbours above, this verb
@@ -398,6 +414,13 @@ export interface DaemonConnection {
    * (#296); this slice only wires the command path. NEVER throws out of the module (parity #490).
    */
   dequeueMessage(payload: DequeueMessagePayload): void
+  /**
+   * Encrypt a `send_queued_now` control envelope onto the live session (#1726, pyrycode#2729) — asks
+   * the daemon to deliver one queued message into the running turn. The `dequeueMessage` twin: inert
+   * when not connected, ungated, fire-and-forget (the acknowledgement is the next `queue_state` and the
+   * user `message` push), and it NEVER throws out of the module.
+   */
+  sendQueuedNow(payload: SendQueuedNowPayload): void
   /**
    * Encrypt a payload-carrying `interrupt` control envelope onto the live session — the "stop the
    * running turn in the conversation it names" signal, which the daemon maps to the neutral
@@ -959,6 +982,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // MCP toggle correlation (#1586): envelope id → conversation, never the server name or requested state.
   // Its own map, so a toggle refusal can never settle as a reconnect one; ids share one sequence.
   const pendingMcpToggles = new Map<number, string>()
+  // Background-task stop correlation (#1770): envelope id → the ids this app named. The refusal carries no
+  // task id, so the event is built from this entry alone.
+  const pendingBackgroundTaskStops = new Map<number, { conversationId: string; taskId: string }>()
   // Wire envelope id to the optional renderer attempt; reset with each connection generation.
   const pendingWorkspaceRenames = new Map<number, string>()
   // Wire envelope id → the renderer attempt of a set_conversation_muted write (#1595). Keyed by a
@@ -1370,6 +1396,15 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
                 emitDaemonEvent(sink, { type: 'mcpToggleRejected', conversationId: refusedMcpToggle })
                 return
               }
+              // Background-task stop refusal (#1770): any code settles it, and nothing is read from the frame.
+              const refusedStop = pendingBackgroundTaskStops.get(inReplyTo)
+              if (refusedStop !== undefined) {
+                pendingBackgroundTaskStops.delete(inReplyTo)
+                deps.diagnosticLog?.event({ event: 'background-task-stop-rejected' })
+                emitDaemonEvent(sink, { type: 'backgroundTaskStopRejected',
+                  conversationId: refusedStop.conversationId, taskId: refusedStop.taskId })
+                return
+              }
               const failedRename = pendingWorkspaceRenames.get(inReplyTo)
               if (failedRename !== undefined) {
                 pendingWorkspaceRenames.delete(inReplyTo)
@@ -1482,10 +1517,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               permissionMode: inbound.sessionSettings.permission_mode,
               used_tokens: inbound.sessionSettings.used_tokens,
               window_tokens: inbound.sessionSettings.window_tokens,
-              // The three capability flags only (#1654), by name; the wire object itself never crosses.
+              // The capability flags only (#1654, #1726), by name; the wire object itself never crosses.
               slashCommands: inbound.sessionSettings.capabilities?.slash_commands,
               mcpServers: inbound.sessionSettings.capabilities?.mcp_servers,
               contextUsageDetail: inbound.sessionSettings.capabilities?.context_usage_detail,
+              midTurnInput: inbound.sessionSettings.capabilities?.mid_turn_input,
               memorySearch: inbound.sessionSettings.memory_search
             })
             return
@@ -1603,6 +1639,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               turnId: inbound.delta.turn_id,
               seq: inbound.delta.seq,
               text: inbound.delta.text,
+              parentToolUseId: inbound.delta.parent_tool_use_id,
               conversationId: inbound.delta.conversation_id,
               daemonTs: inbound.ts
             })
@@ -1648,6 +1685,13 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               state: inbound.turnState.state,
               conversationId: inbound.turnState.conversation_id,
               daemonTs: inbound.ts
+            })
+            return
+          case 'session-error':
+            emitDaemonEvent(sink, {
+              type: 'sessionError',
+              conversationId: inbound.sessionError.conversation_id,
+              code: inbound.sessionError.code
             })
             return
           case 'stall':
@@ -2312,6 +2356,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // known fields, nothing to drop, no snake→camel on the row) — the `conversations` precedent. A
             // fresh top-level literal, never a spread of the decoded payload. Consumed by the #293 queue
             // store, not the session / timeline / modal store — queue_state is daemon state (#720).
+            deps.messageLifecycle?.acknowledge(
+              deps.serverId,
+              inbound.queueState.conversation_id,
+              inbound.queueState.queued.map(item => item.message_id)
+            )
             emitDaemonEvent(sink, {
               type: 'queueState',
               conversationId: inbound.queueState.conversation_id,
@@ -2835,7 +2884,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // echoes the accepted intersection back in hello_ack.capabilities (surfaced on `connected`).
       // Advertise `multi_agent` too (#1657): without it the daemon withholds Codex conversations,
       // their frames and Codex model rows, all of which the window now decodes per agent (#1649).
-      capabilities: [CAPABILITY_INTERACTIVE, CAPABILITY_MULTI_AGENT]
+      // Advertise `stop_background_task` (#1770), detection only: the echo says the daemon takes the verb.
+      capabilities: [CAPABILITY_INTERACTIVE, CAPABILITY_MULTI_AGENT, CAPABILITY_STOP_BACKGROUND_TASK]
     })
     return {
       connection: {
@@ -2917,19 +2967,19 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   }
 
   function send(payload: SendMessagePayload): void {
-    // No driver yet: before start(), mid-bootstrap (await not resolved), or bootstrap-failed. The
-    // driver's own sendMessage is inert pre-handshake / post-terminal (noiseRelayDriver.ts:229),
-    // so this single guard plus that inertness covers every "not connected" state — no `connected`
-    // flag needed (a flag would only change whether an id is consumed, which is harmless).
-    if (driver === null) return
+    const observe = deps.messageLifecycle?.sending(
+      payload.message_id, payload.conversation_id, deps.serverId
+    )
+    if (driver === null) {
+      notifySend(observe, { type: 'dropped', reason: 'send-refused' })
+      return
+    }
     try {
       const bytes = buildSendMessage({ id: nextEnvelopeId, ts: now(), payload })
-      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
-      driver.sendMessage(bytes)
+      nextEnvelopeId += 1
+      driver.sendMessage(bytes, observe)
     } catch {
-      // Never throw out of the module (parity #490): covers an over-cap plaintext (WireEncodeError)
-      // and any driver/wasm throw. The caught object is DROPPED — its message could echo the
-      // message plaintext; no log, no event (classify-don't-forward, inherited #62).
+      notifySend(observe, { type: 'dropped', reason: 'send-failed' })
     }
   }
 
@@ -3089,6 +3139,29 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     } catch {
       // Drop the exception and never retry: every refusal is final, and a failed send must not become a loop.
       deps.diagnosticLog?.event({ event: 'mcp-toggle-failed', code: 'build-or-send-failed' })
+    }
+  }
+
+  function stopBackgroundTask(conversationId: string, taskId: string): void {
+    if (driver === null || !authenticated) {
+      deps.diagnosticLog?.event({ event: 'background-task-stop-refused', code: 'unavailable' })
+      return
+    }
+    try {
+      const envelopeId = nextEnvelopeId
+      const bytes = buildStopBackgroundTask({ id: envelopeId, ts: now(), conversationId, taskId })
+      nextEnvelopeId += 1
+      driver.sendMessage(bytes)
+      // Record after the send, so a throwing build or send leaves no entry to correlate.
+      if (pendingBackgroundTaskStops.size >= MAX_PENDING_BACKGROUND_TASK_STOPS) {
+        const oldest = pendingBackgroundTaskStops.keys().next()
+        if (oldest.done !== true) pendingBackgroundTaskStops.delete(oldest.value)
+      }
+      pendingBackgroundTaskStops.set(envelopeId, { conversationId, taskId })
+      deps.diagnosticLog?.event({ event: 'background-task-stop-sent' })
+    } catch {
+      // Drop the exception and never retry: a failed send must not become a loop.
+      deps.diagnosticLog?.event({ event: 'background-task-stop-failed', code: 'build-or-send-failed' })
     }
   }
 
@@ -3278,6 +3351,26 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
       // driver/wasm throw. The caught object is DROPPED — its message could echo the payload; no log,
       // no event (classify-don't-forward, inherited #62).
+    }
+  }
+
+  function sendQueuedNow(payload: SendQueuedNowPayload): void {
+    // dequeueMessage's twin, guard and all: inert when not connected, a fresh two-field literal so no
+    // renderer-smuggled key reaches the wire, the shared id counter, and every throw dropped unlogged.
+    if (driver === null) return
+    try {
+      const bytes = buildSendQueuedNow({
+        id: nextEnvelopeId,
+        ts: now(),
+        payload: {
+          conversation_id: payload.conversation_id,
+          queued_msg_id: payload.queued_msg_id
+        }
+      })
+      nextEnvelopeId += 1
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490); the caught object could echo the payload.
     }
   }
 
@@ -4040,6 +4133,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     pendingMcpStatusRequests.clear()
     pendingMcpReconnects.clear()
     pendingMcpToggles.clear()
+    pendingBackgroundTaskStops.clear()
     pendingWorkspaceRenames.clear()
     pendingMuteWrites.clear()
     // Abandon any in-flight bundle stream (#505), the fourth per-connection reset: its daemon-side
@@ -4090,6 +4184,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     requestMcpStatus,
     reconnectMcpServer,
     toggleMcpServer,
+    stopBackgroundTask,
     requestSystemPrompt,
     requestHistory,
     requestConversations,
@@ -4097,6 +4192,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     createConversation,
     createWorkspaceFolder,
     dequeueMessage,
+    sendQueuedNow,
     interrupt,
     newSession,
     promoteConversation,

@@ -851,6 +851,7 @@ export type InboundDaemonMessage =
   | ({ kind: 'assistant-delta'; delta: AssistantDeltaPayload } & FrameTimestamp)
   | ({ kind: 'turn-end'; turnEnd: TurnEndPayload } & FrameTimestamp)
   | ({ kind: 'turn-state'; turnState: TurnStatePayload } & FrameTimestamp)
+  | { kind: 'session-error'; sessionError: { conversation_id: string; code: string } }
   | ({ kind: 'stall'; stall: StallPayload } & FrameTimestamp)
   | ({ kind: 'api-retry'; apiRetry: ApiRetryPayload } & FrameTimestamp)
   | ({ kind: 'compacting'; compacting: CompactingPayload } & FrameTimestamp)
@@ -1395,9 +1396,9 @@ function memorySearchAvailability(value: unknown): MemorySearchAvailability | nu
 }
 
 /**
- * Narrow a present `session_settings.capabilities` into its three decoded flags (#1654). A non-object
+ * Narrow a present `session_settings.capabilities` into its decoded flags (#1654, #1726). A non-object
  * rejects; each flag is optional (absent = not reported, distinct from `false`) but a present
- * non-boolean rejects through requireBoolean. Returns a fresh literal of the three flags only, so the
+ * non-boolean rejects through requireBoolean. Returns a fresh literal of the modelled flags only, so the
  * object's other upstream keys are never copied.
  */
 function parseSessionCapabilities(value: unknown): SessionCapabilitiesPayload {
@@ -1409,7 +1410,8 @@ function parseSessionCapabilities(value: unknown): SessionCapabilitiesPayload {
   return {
     slash_commands: optionalBoolean('slash_commands'),
     mcp_servers: optionalBoolean('mcp_servers'),
-    context_usage_detail: optionalBoolean('context_usage_detail')
+    context_usage_detail: optionalBoolean('context_usage_detail'),
+    mid_turn_input: optionalBoolean('mid_turn_input')
   }
 }
 
@@ -1627,7 +1629,7 @@ type DecodedModelRefusalEvent = {
  */
 export type DecodedHistoryEvent =
   | DecodedModelRefusalEvent
-  | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
+  | { type: 'assistantDelta'; turnId: string; seq: number; text: string; parentToolUseId?: string }
   | ({ type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string } & TurnEndMetrics)
   | { type: 'turnState'; state: WireTurnState }
   | {
@@ -1732,7 +1734,7 @@ function decodeHistoryEvent(
   switch (type) {
     case 'assistant_delta': {
       const p = parseAssistantDeltaPayload(payload)
-      return { type: 'assistantDelta', turnId: p.turn_id, seq: p.seq, text: p.text }
+      return { type: 'assistantDelta', turnId: p.turn_id, seq: p.seq, text: p.text, parentToolUseId: p.parent_tool_use_id }
     }
     case 'turn_end': {
       const p = parseTurnEndPayload(payload)
@@ -1891,7 +1893,7 @@ function decodeHistoryPage(page: HistoryPagePayload): { page: DecodedHistoryPage
  * Narrow an opaque payload into an AssistantDeltaPayload (#199). Fail-closed: every field is
  * required-present — `seq:0` and `text:''` are valid VALUES
  * (a turn's first slice / an empty slice), never absences, so requireNumber / requireString check the
- * TYPE not truthiness. Returns only the four known fields; unknown server-added keys are tolerated
+ * TYPE not truthiness. Returns only the known fields; unknown server-added keys are tolerated
  * (forward-compat) but not copied through. Its messages name the failure category only — the `text` /
  * `turn_id` could echo conversation content, so no field value is interpolated.
  */
@@ -1903,7 +1905,8 @@ function parseAssistantDeltaPayload(payload: unknown): AssistantDeltaPayload {
   const turn_id = requireString(payload, 'turn_id')
   const seq = requireNumber(payload, 'seq')
   const text = requireString(payload, 'text')
-  return { conversation_id, turn_id, seq, text }
+  const parent_tool_use_id = optionalString(payload, 'parent_tool_use_id') || undefined
+  return { conversation_id, turn_id, seq, text, parent_tool_use_id }
 }
 
 /**
@@ -4230,6 +4233,17 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'turn-state', turnState, ts: envelope.ts }
+    }
+    case 'session_error': {
+      if (!isRecord(envelope.payload)) throw new WireDecodeError('malformed session_error payload')
+      const sessionError = {
+        conversation_id: requireString(envelope.payload, 'conversation_id'),
+        code: requireString(envelope.payload, 'code')
+      }
+      // Ignore message/extras; neither required string is a diagnostic value.
+      diagnosticLog?.event({ event: 'inbound-decoded', code: 'session_error',
+        bytes: plaintext.length, hash: hashPlaintext(plaintext) })
+      return { kind: 'session-error', sessionError }
     }
     case 'stall': {
       // Narrow BEFORE logging so a malformed frame (an absent / non-string conversation_id) throws

@@ -91,7 +91,8 @@ test('drafts survive create/sidebar switches and screen exits while transient pa
   await expect(composer).toHaveValue('')
   await composer.fill(SECOND)
 
-  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
   await expect(page.locator('section[aria-label="Settings screen"]')).toBeVisible()
   await page.getByRole('button', { name: 'Back', exact: true }).click()
   await openRow(page, 'Untitled')

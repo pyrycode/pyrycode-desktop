@@ -52,10 +52,10 @@ to "content-sized at this site") and `.tool-row__body`'s own (which opened by ci
 pill and cannot hold this," the very reasoning #1102 supersedes) — both re-stated in place rather than
 left wrong.
 
-**`.tool-row--error` replaces `.tool-row--error .tool-row__chip`** as the border retint, since the chip no
-longer has a border to retint. At `.tool-row--error` alone the selector is (0,1,0) — equal specificity to
-the base `.tool-row` — so it now wins by source order rather than by outspecifying it, and must stay
-declared after the base rule.
+**The row border is plain for every outcome.** #1102 moved the error retint from the
+chip onto the row, but #1748 removed it along with neighbour retints. `tool-row--error`
+remains a state hook; the [Failed icon](conversation-shell-tool-rows.md#failed-icon)
+in the shared header indicates failure in collapsed and expanded rows.
 
 **`.tool-row__chip--toggle` gained the two declarations its own comment used to forbid: `border: none` and
 `background: none`.** With the border and fill gone from the chip, the resolved branch — a real
@@ -86,9 +86,8 @@ re-derived (not deleted) against the row's *content* width rather than its bound
 now the row less 2px of border — a shift the spec's 0.5px tolerance does not absorb. A new fifth sibling
 test asserts the geometry `renderToStaticMarkup` cannot see: the 8/12/12/12 insets read against computed
 tokens (not literal pixels), every body block filling the row's content width including a shell call's
-command block, the error retint living on the row's border rather than the chip's (asserted comparatively
-against a resolved row, so a token retune can't redden it), and the focus ring's negative
-`outline-offset`. One implementation-time correction: the design's insets land on the body's *content*
+command block, the Failed icon (replacing the former row-border error comparison),
+and the focus ring's negative `outline-offset`. One implementation-time correction: the design's insets land on the body's *content*
 box, not its border box, since the body itself supplies the padding — the first draft measured the wrong
 box and read 0 where it expected 12.
 
@@ -144,10 +143,9 @@ introduced element regardless of its name.
 
 **The error rule is deleted, not retuned.** `.tool-row__body--error .tool-row__result`'s 1px
 `--color-error` border would draw a red rectangle around loose text now that the result carries no box; the
-failure device has been `.tool-row--error`'s border retint since #1102, so this removes a second device
-rather than the last one. `tool-row__body--error` stays on `ToolRow`'s markup as the body's own failure
-hook — two `ConversationScreen.test.tsx` substring assertions pin it, and dropping it would be markup churn
-with no visual gain.
+failure indicator is now the header's [Failed icon](conversation-shell-tool-rows.md#failed-icon),
+which replaced #1102's row-border retint in #1748. `tool-row__body--error` stays on
+`ToolRow`'s markup as the body's failure hook and does not style the result.
 
 **`--space-bubble-x` is down to one consumer**, `.unrecognized-row__raw`; `.bubble`'s comment enumerating
 both was corrected in the same edit rather than left to claim a consumer that moved off it.
@@ -165,8 +163,8 @@ corner, size and leading, each read off the row's own custom properties rather t
 absent fill (`rgba(0, 0, 0, 0)`), zero corner and zero padding on all four sides, plus its fit across the
 body's full content width; both gaps, measured between adjacent bounding boxes rather than read off a `gap`
 declaration, which is what makes the assertion indifferent to wrapper-vs-correction; the failed result's
-zero border width on all four sides against the row's still-differing border colour (comparative, so a
-token retune can't redden it); and that the cap, both overflow axes and `white-space: pre` survive on both
+zero border width on all four sides together with the header's Failed icon; and that
+the cap, both overflow axes and `white-space: pre` survive on both
 classes, alongside the shell call's `.code-block__body` treatment leading the body unchanged.
 \#1102's `.tool-row__body > *` geometry test needed no edit — with no wrapper introduced it matches the same
 elements it did before, though the result losing 24px of padding does change the height of the last block,

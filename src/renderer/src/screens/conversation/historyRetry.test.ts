@@ -38,7 +38,7 @@ describe('history Retry', () => {
     requestOlderHistory(h.deps, 'chat', true)
     expect(h.deps.sendCommand).toHaveBeenCalledTimes(1)
     expect(h.deps.sendCommand).toHaveBeenCalledWith({ type: 'requestHistory',
-      payload: { conversation_id: 'chat', cursor: 'opaque/oldest==', limit: 0 } })
+      payload: { conversation_id: 'chat', cursor: 'opaque/oldest==', limit: 200 } })
     expect(h.deps.logRequested).toHaveBeenCalledTimes(1)
     expect(h.getHeld('chat')?.timeline).toBe(before.timeline)
     expect(h.getHeld('chat')?.coverage).toBe(before.coverage)

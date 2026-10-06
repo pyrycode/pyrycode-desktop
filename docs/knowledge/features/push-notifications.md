@@ -17,8 +17,8 @@ conversation](#resolving-the-click-to-its-own-conversation-1597) below.
 
 ## What it does
 
-Given a `notify` command carrying a closed `kind` (`'turn-complete' | 'prompt'`) and an optional
-conversation `name` ([#1593](https://github.com/pyrycode/pyrycode-desktop/issues/1593)), the main
+Given a `notify` command carrying a closed `kind` (`'turn-complete' | 'prompt'`), an optional
+conversation `name`, an optional body `preview`, and an optional opaque click `token`, the main
 process:
 
 1. Reads the window's focus state via `windowHasFocus(live.window)` **at fire-time** — no separate
@@ -26,33 +26,51 @@ process:
    destroyed window reports unfocused without touching `isFocused()`. Since [#519](../codebase/519.md),
    `live.window` is the [live-window](live-window.md) holder's current-window face, not a captured
    `BrowserWindow`, so a dock-reopened window is queried correctly instead of a destroyed original.)
-2. Unfocused → looks up `kind` in a main-owned copy table for the **body**, cleans `name` into the
-   **title** (`notificationTitle`, falling back to "Pyrycode"), constructs an Electron `Notification`
+2. Unfocused → cleans and caps `preview` into the **body** (`notificationBody`, falling back to the
+   main-owned copy for `kind`), cleans `name` into the **title** (`notificationTitle`, falling back to
+   "Pyrycode"), constructs an Electron `Notification`
    with that title/body, registers the [click handler](#clicking-the-notification-393) on it, then
    calls `.show()`.
 
+Since [#1737](https://github.com/pyrycode/pyrycode-desktop/issues/1737), the body previews the ending
+turn's last assistant text, or `Wants to run <tool>: <target>` for a permission prompt. Missing or
+unusable previews, trust prompts and question batches use the fixed copy. Renderer selection and
+main cleaning each cap the preview at 200 code points, including a trailing `…` when cut. Mobile
+shares that cap, fallback copy and "Wants to run" wording.
+
 ## Why the command is main-local, not wire
 
-Every other `RendererCommand` member carries a payload reused verbatim from `src/shared/wire/types.ts`
-because it eventually serializes to the daemon (see [Command channel](command-channel.md)). `notify`
-is the exception: it is a pure client-side side-effect that never reaches the transport, so
+Commands that serialize to the daemon generally reuse payloads from `src/shared/wire/types.ts`
+(see [Command channel](command-channel.md)). `notify` is a pure client-side side effect that never
+reaches the transport, so
 `NotifyKind`/`NotifyPayload` are defined in `src/shared/ipc/commands.ts` itself — the same posture as
-the derived `AnswerModalCommandPayload`. This matters for anyone tempted to route notification copy
-through the daemon: don't. The whole point of the closed enum is that a daemon-relayed string (a
-permission-prompt title, an assistant message, a workspace path) can never ride into an OS
-notification and appear on a lock screen — it is impossible by construction, not by convention.
+the derived `AnswerModalCommandPayload`. Preview selection reads already-received timeline data;
+notification delivery sends no daemon command and requires no refetch or wire change.
+
+The original static-body restriction was deliberately relaxed by #1737: daemon-derived reply and
+tool text may now appear in OS notifications and notification history under the existing push,
+mute and focus gates. The closed `kind` enum guarantees an exhaustive **fallback**, while main
+independently validates, cleans and bounds the optional text before constructing plain-text
+`{ title, body }` options. Displaying a preview gives it no command or navigation authority; the
+opaque click token still resolves only in the renderer. Preview, reply and tool text never reach
+logs. [ADR 0011](../decisions/0011-notification-preview-boundary.md) records this display-boundary
+decision and why renderer cleaning alone is insufficient.
 
 ## Key types and files
 
 | Piece | File |
 |---|---|
 | `NotifyKind` / `NotifyPayload` / `notify` union member | `src/shared/ipc/commands.ts` |
-| `isNotifyPayload` guard (closed-set, not `typeof === 'string'`) | `src/shared/ipc/commands.ts` |
-| `fireNotification(kind, deps, name?)` + `NOTIFICATION_COPY` table (body) + `notificationTitle` (title, #1593) + `activateWindow` (#393) | `src/main/fireNotification.ts` |
+| `isNotifyPayload` guard (closed `kind`, optional text/token validation, 4000-unit preview bound) | `src/shared/ipc/commands.ts` |
+| `fireNotification(kind, deps, name?, preview?)` + `NOTIFICATION_COPY` (fallback body) + `notificationBody` (body cleaner) + `notificationTitle` (title cleaner) + `activateWindow` | `src/main/fireNotification.ts` |
 | `case 'notify':` dispatch, incl. the `onClick` composition (#393) | `src/main/index.ts` (the single `onCommand` switch) |
 | `notificationActivated` `DaemonEvent` arm, nullary at #393, optional `token` since #1597 | `src/shared/ipc/events.ts` |
 | `notificationActivatedBridge.ts` (#393, re-validates the echoed token since #1597) | `src/renderer/src/store/notificationActivatedBridge.ts` |
 | `pushNotifyBridge.ts` — `notifyKindForEvent`, `subscribePushNotify`, `usePushNotify` (#392, `questionShown` added #1691); `createNotificationTargets`, `notificationRowFor` (#1597); `conversationMutedIn` (#1607) | `src/renderer/src/store/pushNotifyBridge.ts` |
+| `notificationPreviewIn`, `NotifyEvent`, `NOTIFICATION_PREVIEW_CHARS` — event-time preview selection and renderer cap | `src/renderer/src/store/notificationPreview.ts` |
+| `conversationTimelineStore` / `ConversationSlice.serverId` — retained per-conversation source and host stamp | `src/renderer/src/store/conversationTimelineStore.ts` |
+| `markdownPlainText` — existing remark-based plain-text extraction | `src/renderer/src/screens/conversation/MarkdownReader.tsx` |
+| `toolHeadline` — the collapsed tool row's subject, reused for permission previews | `src/renderer/src/screens/conversation/toolHeadline.ts` |
 | `isNotificationToken` guard + `NotifyPayload.token` (#1597) | `src/shared/ipc/commands.ts` |
 | `openConversation` — the shared sidebar-row/notification-click open steps (#1597) | `src/renderer/src/PairedShell.tsx` |
 
@@ -60,7 +78,9 @@ notification and appear on a lock screen — it is impossible by construction, n
 export type NotifyKind = 'turn-complete' | 'prompt'
 export interface NotifyPayload {
   kind: NotifyKind
-  name?: string   // #1593 — the conversation name, resolved renderer-side; title only, never body
+  name?: string     // untrusted conversation name; main cleans the title
+  token?: string    // opaque click correlation, resolved renderer-side
+  preview?: string  // untrusted plain-text preview; main cleans the body
 }
 
 export interface OsNotification {
@@ -74,7 +94,8 @@ export interface OsNotificationConstructor {
 export function fireNotification(
   kind: NotifyKind,
   deps: { isWindowFocused: () => boolean; Notification: OsNotificationConstructor; onClick: () => void },
-  name?: string   // #1593 — cleaned by notificationTitle before it becomes the title
+  name?: string,    // cleaned by notificationTitle
+  preview?: string // cleaned by notificationBody, with fixed-copy fallback
 ): void
 ```
 
@@ -93,14 +114,20 @@ module — `fireNotification` has no window or IPC knowledge; `index.ts`, the so
 supplies it:
 
 ```ts
+const token = command.payload.token
 fireNotification(command.payload.kind, {
   isWindowFocused: () => windowHasFocus(live.window), // #518 guard, #519 live-window target
   Notification,
   onClick: () => {
     activateWindow(live.window)
-    emitDaemonEvent(live.sink, { type: 'notificationActivated' })
+    emitDaemonEvent(
+      windowLocalSink,
+      token === undefined
+        ? { type: 'notificationActivated' }
+        : { type: 'notificationActivated', token }
+    )
   }
-})
+}, command.payload.name, command.payload.preview)
 ```
 
 Two effects, composed in one place:
@@ -239,17 +266,18 @@ below) — mobile's `HostConversationSource` alerts on the same moment. This is 
 doesn't force a matching no-op case into `modalBridge` / `timelineBridge` / `daemonEventBridge`,
 unlike the `notificationActivated` arm #393 added.
 
-`subscribePushNotify(onDaemonEvent, sendCommand, isPushEnabled, nameFor)` is the React-free data
-path: filter first (short-circuits on the common case), then — only for the two owned arms — reads
-`isPushEnabled()` and, if true, sends `{ type: 'notify', payload }` as an inline `RendererCommand`
-literal (no constructor helper added). `isPushEnabled` is a **per-event thunk**, not a boolean
+`subscribePushNotify(onDaemonEvent, sendCommand, isPushEnabled, nameFor, mintToken?, isMuted?, previewFor?)`
+is the React-free data path: filter first, then prompt dedup, push toggle and mute gates; only after
+those pass does it look up the name, mint a token and read the preview before sending
+`{ type: 'notify', payload }` as an inline `RendererCommand` literal. `isPushEnabled` is a
+**per-event thunk**, not a boolean
 captured at subscribe time — production passes
 `() => pushNotificationPrefStore.getState().pushNotificationsEnabled`, so a user who flips the
 [Settings toggle](push-notification-preference-store.md) mid-session sees the very next
-turn-end/prompt respect the new value. `usePushNotify()` mounts this in
+turn-end/prompt respect the new value. `usePushNotify(targets)` mounts this in
 [`PairedShell`](paired-shell.md) beside `useNotificationActivatedNav`, with no `useRef` — unlike its
-sibling hooks, it takes no per-render caller callback, so its dependencies (`window.pyry.*`, the
-pref-store thunk, the conversation-list lookup) can be closed over directly in an empty-dep effect.
+sibling hooks, it takes no per-render caller callback. Its effect depends on the shell's stable
+`targets` map; the preload bridge and singleton-store lookups are closed over directly.
 
 **Naming the notification ([#1593](https://github.com/pyrycode/pyrycode-desktop/issues/1593)).** The
 `onDaemonEvent` listener type widens from `DaemonEvent` to `StampedDaemonEvent` so it can read the
@@ -265,6 +293,42 @@ Keyed by the event's own server on purpose: a same-id row filed under a differen
 the notification. Production wires `nameFor` to
 `(serverId, id) => conversationNameIn(conversationListStore.getState(), serverId, id)`, `nameFor` being
 required (not defaulted) so an unwired call site is a type error, the same posture as `isPushEnabled`.
+
+### Selecting the body preview
+
+`previewFor?: (event: NotifyEvent) => string | null` is the optional seventh argument. It is called
+only after dedup, push and mute gates pass; a `null` result omits the `preview` key entirely.
+Production passes `(event) => notificationPreviewIn(conversationTimelineStore.getState(), event)`:
+a synchronous snapshot read at event time, with no new state, subscription or fetch. Deltas and
+`toolUse` arrive before the events they describe, and `timelineBridge` files them under their own
+conversation even when another conversation is open.
+
+`notificationPreviewIn` reads the slice keyed by `event.conversationId`. A missing slice, including
+one evicted past `MAX_RETAINED_TIMELINES`, yields `null`. The map is keyed only by conversation id,
+so a slice with a defined `serverId` different from `event.serverId` must also yield `null`; an
+unstamped slice remains usable, matching the store's own receipt rule. Name and mute lookups
+continue to use the event's server-scoped conversation-list slot.
+
+- **`turnEnd`:** scan backward for the newest `assistantText` with `turnId === event.turnId`.
+  Use only that item; never concatenate the turn or substitute an earlier turn's reply. Reuse
+  `markdownPlainText` from `MarkdownReader.tsx` (existing `remark-parse` + `remarkGfmSubset`) to drop
+  emphasis markers, heading hashes, fences, list bullets and link URLs, retaining link text and
+  code content. No matching text, or text empty after extraction, yields the fixed fallback.
+- **Permission `modalShown`:** treat `event.prompt` as the tool name and scan backward for the
+  newest `toolCall` whose `name` equals it and whose `result === null`. Use `toolHeadline(call)`
+  as the target, producing, for example, `Wants to run Bash: npm test`. The modal has no structured
+  command/path target; reusing the collapsed row's headline shares its field selection and path
+  shortening, including its `inputSummary` fallback, instead of making a separate JSON picker.
+  No matching row yields the fixed fallback. An empty headline still counts
+  as a match: trimming leaves `Wants to run <tool>:`.
+- **Trust `modalShown` and `questionShown`:** return `null`, keeping the fixed prompt copy.
+
+Before sending, `boundPreview` collapses whitespace, trims and caps the selected text at 200 code
+points: if longer, keep the first 199, trim trailing whitespace and append `…`. Collapse **before**
+truncation so whitespace-heavy replies do not consume the preview budget and shrink under main's
+second cleaning pass. This retains useful content and the cut marker while keeping long replies
+well below the 4000 UTF-16-unit IPC guard. Main still applies its own cleaning regardless of what
+the renderer did.
 
 ### Muting suppresses the send (#1607)
 
@@ -313,8 +377,8 @@ construction: `announceKey` is `null` for every arm besides `modalShown`/`questi
 check and the record are skipped for the rest of the union without a second rule. The `modal:`/`batch:`
 prefix is load-bearing, not decoration: a modal and a question batch that happen to share a raw id
 (unrelated id spaces on the wire) must announce independently rather than suppress each other; an
-unprefixed key would conflate them. Neither id is ever spread or interpolated into the payload (`{ kind }`
-or `{ kind, name }` since [#1593](https://github.com/pyrycode/pyrycode-desktop/issues/1593)) — the
+unprefixed key would conflate them. Neither id is ever spread or interpolated into the payload
+(closed `kind` with optional looked-up `name`, opaque `token` and selected `preview`) — the
 payload carries no batch field at all, not the id and not the question text.
 
 Two properties make this correct rather than a no-op:
@@ -337,7 +401,7 @@ while disconnected is swallowed by the transport, the renderer optimistically di
 anyway, and the daemon's genuine re-send after the handshake would then re-notify. Growth is one short
 string per distinct prompt per pairing session, not an observed failure mode, so a cap was rejected
 too. A first delivery the main-side focus gate silently drops still counts as announced — accepted, not
-a gap: the payload is `{ kind }`-only and there is no reply channel, and a focused window means the
+a gap: the command has no delivery reply channel, and a focused window means the
 prompt was already rendered in front of the user.
 
 Two independent, deterministic gates guard the same notification, in different fabric: main gates on
@@ -353,14 +417,19 @@ would defeat the whole guarantee — an arbitrary string would pass the boundary
 copy at all. This is the one guard in the command-channel family that checks value equality against
 a literal set rather than just type.
 
-The closed-set invariant covers the **body** only. [#1593](https://github.com/pyrycode/pyrycode-desktop/issues/1593)
-gave `NotifyPayload` an optional `name: string` — the conversation's name, resolved renderer-side and
-title-bound only. `isNotifyPayload` admits it as a second, independent clause: absent, `undefined`, or
-a `string`; any other type (number, `null`, object, array) fails the whole command closed. The
-conversation id itself never crosses this boundary — the renderer resolves id → name before sending,
-so main only ever sees the already-looked-up string. Main does not trust that string's *content* just
-because its *type* passed the guard: `fireNotification`'s `notificationTitle` (below) is the actual
-cleaner, belt-and-suspenders in different fabric from the guard's type check.
+The closed-set invariant guarantees a **fixed fallback body** for every kind. The payload also
+admits two independent optional text fields: `name` for the title and `preview` for the body.
+Both may be absent or `undefined`; otherwise `name` must be a string and `preview` must be a string
+with `.length <= MAX_NOTIFY_PREVIEW_LENGTH` (4000 **UTF-16 units**, not code points). A non-string
+or oversized preview fails the **whole command** closed, just like a mistyped name; it does not
+merely discard the preview. A 4000-unit preview is valid and main then caps its displayed body.
+The opaque optional `token` must pass `isNotificationToken` when defined. Extra fields are ignored.
+
+The renderer resolves the name and preview before sending, so neither a conversation nor a server
+id crosses as a routing field. The guard checks shape and bounds, leaving content cleaning to
+main's `notificationTitle` and `notificationBody`. Renderer markdown extraction and truncation
+are presentation steps, never a guarantee main trusts. Malformed commands are rejected before
+dispatch with a fixed warning; notification text is never logged.
 
 ## The copy table holds the body only
 
@@ -372,9 +441,17 @@ const NOTIFICATION_COPY: Record<NotifyKind, string> = {
 const DEFAULT_TITLE = 'Pyrycode'
 ```
 
-`Record<NotifyKind, …>` means a future `kind` won't type-check until it has body copy — the table
-can't silently fall out of sync with the enum. Copy wording is **provisional** (client-invented, no
-Figma, no daemon source); only the shape (static, main-owned, keyed by `kind`) is load-bearing.
+`Record<NotifyKind, …>` means a future `kind` won't type-check until it has fallback body copy — the
+table can't silently fall out of sync with the enum. These are main-owned fixed fallbacks shared
+with mobile, used when `preview` is absent or nothing usable survives cleaning.
+
+`notificationBody(kind, preview)` independently cleans whatever arrives: whitespace characters,
+including controls such as newline, tab and carriage return, become spaces; every other `\p{Cc}`
+control (C0, DEL, C1) is dropped. Runs of whitespace collapse to one space, and both ends are trimmed.
+If longer than 200 code points, retain the first 199, trim any trailing whitespace and append `…`;
+the result is at most 200 code points and never splits a surrogate pair. Empty text uses the copy
+for `kind`. Main does not parse markdown: the legitimate renderer supplies plain text, and main
+passes the cleaned string only to Electron's plain-text body option.
 
 The title used to live in this same table, always `'Pyrycode'` for both kinds. Since
 [#1593](https://github.com/pyrycode/pyrycode-desktop/issues/1593) the title is computed, not looked
@@ -387,11 +464,12 @@ before cleaning. `\p{Cc}` does not reach U+2028/U+2029 (line/paragraph separator
 `\p{Cf}` format characters such as the U+202E bidi override; both can pass through into the title
 uncleaned. This matches the ticket's "control characters" wording and was accepted as out of scope at
 review — the name only ever reorders or line-breaks the operator's own host's own conversation name, a
-cosmetic ceiling, not a body-injection path. Revisit only if a spoofing or rendering report surfaces.
+cosmetic display policy. The body also retains `\p{Cf}` format characters, while its whitespace
+collapse handles U+2028/U+2029 as spaces. Revisit only if a spoofing or rendering report surfaces.
 
 ## Configuration and usage
 
-`usePushNotify()` ([#392](../codebase/392.md)) is mounted in [`PairedShell`](paired-shell.md), so the
+`usePushNotify(targets)` ([#392](../codebase/392.md)) is mounted in [`PairedShell`](paired-shell.md), so the
 trigger is live for the lifetime of the paired shell — subscribed on mount, torn down on unpair
 (off-handle cleanup), fresh again on re-pair. Whether a fired notification is actually shown to the
 user is gated twice, in different fabric: main gates on window focus (#391); the trigger gates on the
@@ -403,6 +481,19 @@ navigating to the thread.
 
 ## Edge cases and limitations
 
+- **No usable preview means fixed copy.** No retained slice, a differently stamped server, no
+  assistant text from the ending turn, or no unresolved row matching the permission tool all fall
+  back. Trust prompts and question batches always use `Waiting for your response.`. Unstamped
+  slices remain eligible; an empty matching tool headline produces `Wants to run <tool>:`.
+- **Two different length units.** IPC accepts at most 4000 UTF-16 units; renderer and main each
+  retain at most 200 code points including `…`. Renderer whitespace collapse precedes truncation;
+  main independently converts whitespace controls to spaces, drops other controls, collapses and
+  trims whitespace, then truncates. A malformed preview rejects the whole notification command.
+- **The body intentionally displays daemon text.** The former static-body restriction is replaced
+  by the validated, bounded plain-text display policy in
+  [ADR 0011](../decisions/0011-notification-preview-boundary.md). Markdown extraction reuses
+  `markdownPlainText`; it creates no markup, link following or tool execution on this path. OS
+  notification history is part of the display surface. Preview, reply and tool text are never logged.
 - **No `Notification.isSupported()` gate** and **no try/catch around construct/`show()`** —
   deliberate, evidence-based omissions. No unsupported-platform failure has been observed; add the
   gate only if one surfaces.
@@ -417,7 +508,7 @@ navigating to the thread.
   the window is blurred, minimized, or hidden — exactly the notify condition — so there is nothing a
   separate tracker would add.
 - **The push toggle is read per-event, not cached.** A user flipping [Settings](push-notification-preference-store.md)
-  mid-session sees the change apply to the very next `turnEnd`/`modalShown`, not just future app
+  mid-session sees the change apply to the very next `turnEnd`/`modalShown`/`questionShown`, not just future app
   launches.
 - **`usePushNotify` is renderer-owned, like every hook mounted in `PairedShell`.** On macOS the app
   keeps running after its last window closes, so a hook that needs a live renderer to do its work
@@ -443,15 +534,35 @@ navigating to the thread.
   actually shown* — a first delivery the main-side focus gate silently drops is still recorded as
   announced, so a later re-send while unfocused stays suppressed. See [Dedup across reconnects (#514,
   extended by #1691)](#dedup-across-reconnects-514-extended-by-1691) above.
-- **A muted or question-batch `questionShown` carries no batch content into the payload
+- **A `questionShown` carries no batch content into the payload
   ([#1691](https://github.com/pyrycode/pyrycode-desktop/issues/1691)).** Like `modalShown`, the event's
-  `questionBatchId` and its `questions` are read only to build the dedup key and are never spread into
-  `notify`'s payload; the notification body is the static `'prompt'` copy, and the title is the
+  `questionBatchId` supplies the dedup key; its `questions` are never read for notification text or
+  spread into `notify`'s payload. The body uses the fixed `'prompt'` fallback, and the title is the
   conversation name via the same [#1593](https://github.com/pyrycode/pyrycode-desktop/issues/1593)
   `nameFor` lookup — no per-question text ever reaches the OS notification.
 
+## Testing
+
+Pure unit tests cover IPC preview validation (`commands.test.ts`), main cleaning and notification
+options (`fireNotification.test.ts`), timeline selection (`notificationPreview.test.ts`) and the
+send gates (`pushNotifyBridge.test.ts`). Main tests exercise a 4000-character input, control and
+newline cleaning, empty fallback and astral code points at the cut. Bridge tests assert that a
+preview is omitted on `null` and never looked up when push is disabled or the conversation muted.
+These assertions prove the options supplied to Electron; they do not observe a native OS banner
+or notification history.
+
+Host-stamp fixtures must represent a genuinely absent `ConversationSlice.serverId` for the
+unstamped case and assert its absence. Passing `undefined` to a helper with a default server
+parameter silently applies that default, so a purported unstamped test can pass while exercising
+only a stamped slice. `notificationPreview.test.ts` uses an explicit omission sentinel and
+`not.toHaveProperty('serverId')` to distinguish those cases.
+
 ## Related
 
+- [ADR 0011](../decisions/0011-notification-preview-boundary.md) — bounded notification previews
+  and the intentional change from fixed bodies to daemon-derived display text.
+- [#1737](https://github.com/pyrycode/pyrycode-desktop/issues/1737) — ending-turn and permission-action
+  previews with independent main cleaning and fixed fallback.
 - [App icon attention badge](app-badge.md) / [#1592](https://github.com/pyrycode/pyrycode-desktop/issues/1592) — the sibling main-local command mounted the same way in `PairedShell`; tells the operator *how many* things need them where this tells them *that* one just happened.
 - [Native edit context menu](edit-context-menu.md) — `editContextMenu.ts`, a later module in this one's
   injected-Electron family, copying this module's `fireNotification.test.ts` fake-constructor test idiom
@@ -479,7 +590,7 @@ navigating to the thread.
 - [#158](https://github.com/pyrycode/pyrycode-desktop/issues/158) — the parent split into
   #391/#392/#393, all merged.
 - [#1593](https://github.com/pyrycode/pyrycode-desktop/issues/1593) — the title now names the
-  conversation the notification is about; the body stays client-owned. Renderer-resolved name,
+  conversation the notification is about. Renderer-resolved name,
   main-side cleaning (`notificationTitle`), no conversation id crosses the boundary.
 - [#1607](https://github.com/pyrycode/pyrycode-desktop/issues/1607) — a conversation muted on its
   host sends neither `notify` kind; see [Muting suppresses the send](#muting-suppresses-the-send-1607)

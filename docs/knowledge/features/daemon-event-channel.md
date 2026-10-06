@@ -181,20 +181,25 @@ replace the remembered choice. Carriage currently ends at IPC; renderer snapshot
 footer selection and remembered-choice handling belong to
 [#1549](https://github.com/pyrycode/pyrycode-desktop/issues/1549).
 
-`runConfigReceived` also carries three flat optional booleans —
-`slashCommands`, `mcpServers`, `contextUsageDetail` (pyrycode#2670, decoded at
+`runConfigReceived` also carries four flat optional booleans —
+`slashCommands`, `mcpServers`, `contextUsageDetail` (pyrycode#2670) and
+`midTurnInput` (pyrycode#2730, desktop [#1726](https://github.com/pyrycode/pyrycode-desktop/issues/1726)), decoded at
 [inbound message decode](inbound-message-decode.md#optional-session-capability-flags),
-\#1654) — the daemon's own statement of which Claude-only features the resolved
+\#1654/#1726 — the daemon's own statement of which Claude-only features the resolved
 session answers: true for Claude, false for Codex. `undefined` means not reported
 (no `capabilities` on the reply, or a daemon predating the flags), distinct from
 `false`; check `=== undefined`, the same posture as `effectiveEffort` above. Each
 is copied by name from `inbound.sessionSettings.capabilities?.<flag>` — flat
 rather than nested, so there is no partially-populated `capabilities` object for a
 consumer to interpret. This is a statement of support, not a permission: the
-daemon re-checks every request regardless of what these flags say. Ships dormant —
-this app doesn't advertise `multi_agent` yet, so the flags won't arrive in
-production until it does; [#1655](https://github.com/pyrycode/pyrycode-desktop/issues/1655)
-is the first consumer.
+daemon re-checks every request regardless of what these flags say. Production
+`loadDialConfig` advertises `multi_agent`, and the
+[run-config store](run-config-store.md#session-capability-flags-1655) consumes the
+flags through `toRunConfigSnapshot`. For Send now, `midTurnInput: true` offers
+the queued-row affordance; `false` or `undefined` hides it, including replies
+without capabilities. This explicit-true rule differs from the other three
+flags, whose absence preserves existing surfaces. Conversation attribution and
+snapshot clearing keep the reading scoped to the open chat.
 
 `runConfigReceived.memorySearch?` carries the optional
 [daemon memory-search report](inbound-message-decode.md#optional-memory-search-report)
@@ -262,7 +267,7 @@ escapes it, category remains inert, and no refusal frame changes model-label aut
   IPC. Both live events route to the addressed timeline; the session, modal and
   question bridges return `null`. Emission stays stateless, one event per valid
   frame; edge idempotence and delayed association belong to the
-  [timeline reducer](conversation-timeline-store.md#what-it-does). History's existing
+  [timeline reducer](conversation-timeline-store-compaction.md#what-it-does). History's existing
   `compacting` event also carries outcomes, but has no boundary-metadata counterpart.
 - **`toolUse` had a real producer but no traffic through #178 — same capability gate.** [#217](../codebase/217.md) wired `emitDaemonEvent` for it from the same `case 'message'` choke point, giving `selectItems` a real `toolCall` source for the first time; no `tool_use` frame reached it until [#179](../codebase/179.md) flipped `interactive`. Proven only by unit tests driving `daemonConnection` and `timelineBridge` directly, and by the reducer's existing text/tool/text split test, until then. Now live.
 - **`modalShown`/`modalDismissed` had real producers but no traffic through #178 — same capability gate.** [#201](../codebase/201.md) wired `emitDaemonEvent` for both from the same `case 'message'` choke point; no `modal_shown`/`modal_dismissed` frame reached it until [#179](../codebase/179.md) flipped `interactive`. Both `daemonEventBridge`/`timelineBridge` still discard the arms as `null`; the third, independent [modal store + bridge](modal-store-bridge.md) ([#223](../codebase/223.md), shipped) is the real consumer, mounted since [#224](../codebase/224.md). Proven only by unit tests driving `daemonConnection` and all three bridges directly, until #179. Now live and answerable end to end.

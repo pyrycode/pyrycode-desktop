@@ -51,6 +51,7 @@ export function toRunConfigSnapshot(event: DaemonEvent): RunConfigSnapshot | nul
         ...(event.contextUsageDetail === undefined
           ? {}
           : { contextUsageDetail: event.contextUsageDetail }),
+        ...(event.midTurnInput === undefined ? {} : { midTurnInput: event.midTurnInput }),
         ...(event.memorySearch === undefined ? {} : { memorySearch: event.memorySearch })
       }
     default:

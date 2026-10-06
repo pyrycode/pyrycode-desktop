@@ -209,12 +209,14 @@ hidden-scrollbar policy, with its own [wheel and focus coverage](channel-list.md
 
 ## Composer footer row (#811)
 
-The desktop layout's fixed-height row **below** the message box (Figma `110:3494`, 780×20, the third
-child of the `Input area` symbol after `Status area`/`ComposerStatusArea` and `Message input`) — not to
-be confused with [Composer status row](conversation-shell-composer-status-row.md#composer-status-row-796), which sits *above* the message box.
-The desktop layout puts six affordances in this row — Actions (#680), permission mode (#682), model and
-effort (#683, split into a model half and an effort half by #683's own children), this ticket's
-context-usage reading, and attach (#685, split into [#862](attachment-upload.md)'s headless flow and
+The desktop layout's fixed-height row **below** the message box, revised against
+[Figma Input area `347:5408`](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG/Pyrycode-Client?node-id=347-5408)
+on 2026-10-05 (#1727): a 785×20 footer in the inspected drawing, following the status area and message
+input. The [Composer status row](conversation-shell-composer-status-row.md#composer-status-row-796)
+sits *above* the message box.
+The desktop layout puts six affordances in this row — context usage, Actions (#680), permission mode
+(#682), model and effort (#683, split into a model half and an effort half by #683's own children),
+and attach (#685, split into [#862](attachment-upload.md)'s headless flow and
 [#863](composer-attach.md)'s button) — and at the time #811 shipped, five of them were blocked on
 daemon work that doesn't exist yet. #811 built the row itself and landed the one occupant that wasn't
 blocked; **no placeholder element and no disabled control for the rest**. **#680 was the first of the
@@ -230,16 +232,18 @@ wires. All six of the row's slots are occupied:
 Composer
 ├── .composer__row                  (unchanged — textarea + ComposerSendButton)
 ├── .composer__footer               (second child, #811; was the third until #968 retired __hint above)
-│   ├── ComposerActionsMenu         leading item — opens the shared options panel with sendText (#680)
-│   ├── ComposerPermissionModeMenu  second item — the session's permission mode, from the same panel (#682)
-│   ├── ComposerModelMenu           third item — the session's model, from the same shared panel (#988)
-│   ├── ComposerEffortMenu          fourth item — the session's effort, from the same shared panel (#989)
-│   ├── ContextUsageControl         null until a real snapshot has loaded, then <ContextUsageReading/>
+│   ├── ContextUsageControl         first item when available — ring, with breakdown trigger if supported (#1728)
+│   ├── ComposerActionsMenu         opens the shared options panel with sendText (#680)
+│   ├── ComposerPermissionModeMenu  the session's permission mode, from the same panel (#682)
+│   ├── ComposerModelMenu           the session's model, from the same shared panel (#988)
+│   ├── ComposerEffortMenu          the session's effort, from the same shared panel (#989)
 │   └── ComposerAttachButton        last item, margin-left: auto — renders unconditionally (#863)
 └── ComposerAttachOutcome           composer column's own last child, NOT inside .composer__footer (#863)
 ```
 
-The row now matches Figma's own order (Actions · mode · model · effort · reading · attach). See
+The row matches Figma's order (context circle · Actions · mode · model · effort · attach) since #1728.
+The settings stay inline, and Attach is the sole trailing control. #1727 established footer padding
+and Attach geometry; #1728 moved the reading ahead of Actions. See
 [Composer permission-mode menu](composer-permission-mode-menu.md) for the one structural way it differs
 from its two menu neighbours — its entries are a client-owned constant rather than a daemon-published list, so
 it needs no model list to become operable once a mode is known and host/session availability permits.
@@ -268,47 +272,55 @@ surfaces structurally unable to disagree about whether a reading exists — the 
 not a convention repeated at each call site.
 
 **`ContextUsageReading({ usedTokens, windowTokens })`** — the pure view, beside `ComposerErrorChip` in
-`ConversationScreen.tsx` (the exact pair this ticket clones, [Composer error chip](#composer-error-chip-797)
-above). Returns `null` when `contextUsagePercent` does; otherwise exactly one `<span>`, its class and text
-now stepped by severity (#1062, operator ruling 2026-09-04). Every property `ComposerErrorChip` established
-still carries over unedited: a `<span>` (this repo ships no global box-sizing/margin reset, so a `<p>`'s UA
-margin is a live layout hazard against the row's held height), no attribute beyond `className` (no
-`onClick`, `tabIndex`, `role`, `title`, `aria-*` — it is a reading, not a control), and no live region
-(`aria-live` would announce a percentage after every turn once #810 made the figures live). There is no
-daemon-supplied *string* on this path at all — the only interpolated value is an integer in `[0, 100]`, so
-none of #796/#797's escaping/attribute-sink questions apply here.
+`ConversationScreen.tsx`. Returns `null` when `contextUsagePercent` does; otherwise a
+`.composer__context` span contains a 15×15px inline SVG and a visually hidden
+`.composer__context-label` (#1728). The SVG is `aria-hidden="true"`; its two circles use centre
+`(7.5, 7.5)`, radius 6.5 and a 2px stroke. The full track always paints `--color-primary-container`.
+The used arc takes the span's severity colour through `currentColor`, starting at 12 o'clock and
+growing counterclockwise via `matrix(0 -1 -1 0 15 15)`. A known 0% draws the dark track only; 100%
+draws a complete used ring. An unavailable reading renders neither, so it cannot masquerade as 0%.
+The span has no handler, `tabIndex` or role, and no live region: a live region would announce the
+percentage on every turn end. The capability-dependent button belongs to `ContextUsageControl` below.
+
+**Dash lengths use circumference, not SVG `pathLength`.** With `C = 2π × 6.5`, the arc's
+`stroke-dasharray` is `pct × C / 100` followed by a full `C` of gap, both rounded to three decimals
+(0%: `0.000 40.841`; 100%: `40.841 40.841`). Chromium's `pathLength="100"` scaling left a visible
+gap at 100%, and a percentage/complement dash period drew a sliver beyond the start on partial arcs.
+Static markup assertions passed despite those painted defects; captures of the real component at
+0%, partial readings and 100% exposed them. Keep the circumference-based form and plain butt ends
+(Figma's vector has small end notches). This is the revision recorded in the
+[#1728 plan](../../specs/architecture/1728-context-usage-circle.md#revisions).
 
 **The severity ladder — `contextUsageStep(percent): 'primary' | 'warning' | 'error'`**, beside
-`contextUsagePercent` in the same file. One descending comparison (`>= 70` → `error`, `>= 50` → `warning`,
-else `primary`), both boundaries inclusive and stated exactly once: 49 is primary, 50 and 69 are warning,
-70 is error. The two literals are not exported as named constants — `contextUsage.test.ts` hard-codes them
+`contextUsagePercent` in the same file. Since #1728 the descending ladder is `>= 85` → `error`,
+`>= 70` → `warning`, else `primary`, replacing the earlier 50%/70% boundaries. The two literals are not
+exported as named constants — `contextUsage.test.ts` hard-codes them
 so a `>`/`>=` slip at either boundary reddens a test rather than passing against its own symbol. Total over
 `number`: `NaN` falls through both comparisons to `primary`, the arm the reading has always painted, though
 the caller can't reach it anyway (`contextUsagePercent` returns `null` first). The step names are the
 `--color-*` token suffixes and the `.composer__context--*` class modifiers verbatim, so the mapping from
 step to paint is nominal at every layer.
 
-The view renders three ways: the primary step's markup is byte-identical to what shipped before #1062 —
-`<span className="composer__context">Context: {pct}%</span>` — the warning step appends the modifier
-(`composer__context composer__context--warning`, base class kept leading so substring lookups elsewhere in
-this row's tests keep matching) with the same text, and the error step appends `--error` and swaps the text
-to `Context high: {pct}%`. The word rides the top step alone: below 70% the percentage is already legible
-as text, so colour is emphasis and WCAG 1.4.1 holds without a second channel; at 70% the message becomes
-actionable, which is the one step where a reader who cannot separate amber from the row's blue would lose
-something real. A word rather than a glyph, since a glyph inside a text run can't be hidden from a screen
-reader. `.composer__context--warning`/`--error` in `conversation.css` are each a single `color` declaration
-naming `--color-warning`/`--color-error` — equal specificity to the base rule, so they must stay below it
-in source order to win. **The [run-configuration context gauge](conversation-shell-run-configuration.md#run-configuration-context-window-section-192)
-deliberately does not follow this ladder** — `.run-config__context-fill` stays `--color-success` at every
-value, so the two surfaces can show different colours for the same number today; keeping the ladder in
-`contextUsage.ts` rather than in the stylesheet is what leaves the bar one class away from adopting it
-later.
+No percentage text is visible. The hidden label carries both the percentage and the warning state,
+and supplies the accessible name when the ring is wrapped in the breakdown button:
 
-The five-character growth at the top step (`Context: 100%` → `Context high: 100%`, 13 → 18 characters, the
-`white-space: nowrap` bound `.composer__context` re-states) landed on a row that was already overflowing its
-800px-minimum-window content box before this ticket touched it — filed as its own follow-up rather than
-fixed here, since widening the row is a footer-layout change this ticket had no reason to make. See
-"Footer row shrink policy (#1107)" below for the fix.
+| Reading | Used arc token | Hidden label |
+| --- | --- | --- |
+| 0–69% | `--color-primary` | `Context: N%` |
+| 70–84% | `--color-warning` | `Context high: N%` |
+| 85–100% | `--color-error` | `Context nearly full: N%` |
+
+The warning/error modifiers keep the base class leading and each set only `color`; equal specificity
+means they must stay below the base rule in CSS. The hidden label uses the visually hidden recipe from
+`.composer-status__error-prefix`, so changing warning words never changes the ring's width.
+**The [run-configuration context gauge](conversation-shell-run-configuration.md#run-configuration-context-window-section-192)
+does not follow this ladder**: `.run-config__context-fill` remains `--color-success` at every value.
+
+`ConversationScreen.test.tsx` pins literal dash lengths, including 69/70/84/85%, zero, full and rounded
+readings, plus hidden labels and unavailable output. `e2e/composer-context-severity.spec.ts` drives
+69/70/84/85% through turn-end refreshes and checks the arc's computed stroke against each token and
+the track's unchanged dark stroke. Markup alone cannot prove the SVG's painted endpoints or direction;
+the component captures supplement those assertions.
 
 **`ContextUsageControl({ conversationId })`** — module-private container, the single-selector-read shape
 \#797's `ComposerErrorChipControl` established (since collapsed into `ComposerErrorSlotControl` by #963,
@@ -328,22 +340,31 @@ store](reported-context-store.md), then resolves the winning pair through the sh
 calls for the gauge, so the footer and the gauge cannot disagree about which figure to show for one
 conversation. `contextTokenSource` still performs the `snapshot?.usedTokens ?? 0` / `?? 0` coalescing this
 control used to spell inline — now written once — so the not-yet-loaded state and the daemon's
-`window_tokens: 0` "unavailable" signal collapse into the identical rendered absence on both surfaces, and
+`window_tokens: 0` "unavailable" signal reach each surface's existing unavailable branch, and
 a present claude reading whose maximum is `0` resolves there too rather than falling back to the snapshot.
 
 **`.composer__footer` reserves its own height (20px) unconditionally**, the same `.composer-status`
 guarantee ([Composer status row](conversation-shell-composer-status-row.md#composer-status-row-796) above): a null reading cannot move
-`.composer__row` because the row's box exists whether or not it holds a child. No vertical padding
-(no global box-sizing reset), `align-items: center`, `padding: 0 var(--space-4)` — aligned with the
-input's *text* start, deliberately not with `.composer-status`'s box-edge alignment; the two rows are
-inset differently by design. The row's item rhythm is `column-gap: min(3.5%, var(--space-5))` since
+`.composer__row` because the row's box exists whether or not it holds a child. Since #1727 it explicitly
+uses `box-sizing: border-box`, so the 20px includes its 4px top padding rather than becoming a 24px row.
+`align-items: flex-start` puts children at that top inset. Padding is 4/16/0/12px
+(top/right/bottom/left), written `var(--space-1) var(--space-4) 0 var(--space-3)`; the left edge is now
+12px inside the message box's edge. The circle adds the left group's 4px inset, so its left edge is
+16px inside the footer's border edge. Both the bare reading and `.context-breakdown-anchor` use
+`margin-left: var(--space-1)` and
+`margin-right: calc(var(--space-4) - var(--composer-footer-gap))`: subtracting the row gap keeps
+circle-to-Actions spacing at 16px as the other gaps compress. Percentage margins and gaps resolve
+against the same row content box. Attach keeps its
+24×16px box at the 16px right inset, with the 11×12px paperclip at its top right; see
+[its CSS](composer-attach.md#css). The remaining item rhythm is `column-gap: var(--composer-footer-gap)`,
+where the variable holds `min(3.5%, var(--space-5))` since #1728. That value dates from
 \#1107 — see below; it was a flat `gap: var(--space-5)` (the design's measured 20px) from #811 through
 \#682/#683, inert with one child and then live between the Actions trigger and the context reading.
 
 ## Footer row shrink policy (#1107)
 
-At the app's documented 800px minimum window the row above overflowed its content box: five fixed
-`--space-5` gaps (100px), two `nowrap` items with no give (`.composer__actions`, `.composer__context`),
+Before #1107, at the app's documented 800px minimum window the row above overflowed its content box:
+five fixed `--space-5` gaps (100px), two `nowrap` items with no give (`.composer__actions`, `.composer__context`),
 one `flex: 0 0 auto` item (`ComposerAttachButton`), and three labels whose `min-width: 0` truncation
 chains never fired because the boxes *above* each label — the `<button>` and, above that,
 `.composer-options-anchor` — both kept the default `min-width: auto`, which floors a flex item at its own
@@ -356,16 +377,14 @@ context-severity ladder, whose five-character growth was the trigger for measuri
 cause. Fixed by [`docs/specs/architecture/1107-composer-footer-row-shrink-policy.md`](../../specs/architecture/1107-composer-footer-row-shrink-policy.md).
 
 **The policy, in one line: whitespace gives first, then every labelled control gives together, and the
-context reading never gives.** Three rules, no markup change beyond one wrapper span, no new class beyond
-it:
+context reading never gives.** The circle-to-Actions gap stays 16px; the other gaps compress. The policy
+is implemented at these three levels:
 
 - **`.composer__footer`** — `gap: var(--space-5)` became `column-gap: min(3.5%, var(--space-5))`.
   `column-gap` rather than the `gap` shorthand because the row is single-line `nowrap`, so `row-gap` has
-  no meaning in it. `3.5%` is derived, not chosen: the smallest tenth of a percent that still reaches the
-  20px ceiling at the app's own 1100px default window (footer content box 584px, 20/584 = 3.43%), so the
-  ceiling holds from a 1088px window up and the row is pixel-identical to its pre-#1107 self at every
-  shipped width — the gap only compresses where the row was already broken. A percentage `column-gap`
-  resolves against the row's own content box, which is definite here (a stretched child of the `.composer`
+  no meaning in it. `3.5%` was derived to reach the 20px ceiling at the app's own 1100px default window;
+  the launch-width geometry assertion still pins that ceiling after #1727's revised padding. A percentage
+  `column-gap` resolves against the row's own content box, which is definite here (a stretched child of the `.composer`
   column); at the 800px minimum with worst-case content the gap measures ~10px, about a third of the
   row's shortfall.
 - **`.composer-options-anchor` and `.composer__footer-button`** both gain `min-width: 0`, which is what
@@ -383,11 +402,10 @@ it:
   ([Composer options panel](conversation-shell-composer-options-panel.md)) and every menu-open spec
   re-confirm green. It cannot clip a `:focus-visible` ring either — an outline is
   not clipped by the focused element's own `overflow`.
-- **`.composer__context` gains nothing.** Its guarantee is an absence: no `min-width: 0`, no non-visible
-  `overflow`, so with `white-space: nowrap` its automatic minimum size is its own full text and flexbox
-  cannot shrink it at any deficit. `flex-shrink: 0` would be exactly equivalent and therefore inert, so it
-  is not declared — the comment names the two properties whose later addition would silently retire the
-  guarantee.
+- **`.composer__context`** uses `display: flex; flex: 0 0 auto` since #1728: the 15px circle cannot
+  ellipsize, and its hidden label takes no layout width. This replaces the visible reading's former
+  `white-space: nowrap`/automatic-minimum-size guarantee. The breakdown anchor also uses
+  `flex: 0 0 auto`, so wrapping the reading in a button preserves its width.
 
 **`ComposerActionsMenu`'s label moved into `<span className="composer__actions-label">`** — a change the
 plan itself said it would not make, added after the mechanism above was proven: a bare text node inside a
@@ -408,43 +426,47 @@ model/effort labels and full context usage. Before #1107 content silently vanish
 edge with no truncation signal; an ellipsis is a visible one. The full mode name remains in the control's
 accessible name, and selectable labels fit fully in the open dropdown. `Bypass approvals` can appear on
 the trigger but remains excluded from the menu; see the [permission-mode contract](composer-permission-mode-menu.md#the-wire-contract-is-asymmetric-and-that-asymmetry-is-the-whole-design).
-The gap's `min()` ceiling preserves its 20px spacing above a 1088px window. At 800px with
-every label maximally long the four triggers compress to roughly two or three characters each — the honest
-floor of six controls in a 284px content box — while the context reading and every control's presence,
-order, chevron and hit target are untouched; no control is ever dropped.
+The gap's `min()` ceiling preserves 20px between menu items at the default window width, with the
+circle-to-Actions exception above. The #1728 visual review measured a 20px footer height and no
+horizontal overflow at both 1100px and the 800px minimum. Worst-case labels still ellipsize while the
+circle stays whole and every control remains present, ordered and keyboard reachable.
+Attach's fixed 24×16px box does not give width. Inline settings remain in the row; no control is dropped.
 
-**Two review findings shipped non-blocking, left for the next touch of this row rather than reworked**:
-the `.composer__footer-button` comment's closing paragraph still describes the Actions label as an
-untouched bare text node — stale as of the same commit that wraps it in `.composer__actions-label` — and
-`e2e/composer-footer-overflow.spec.ts`'s narrow-window checkpoint has no read that distinguishes the
-800px layout from the 1100px launch width it follows, so a first-satisfying-read `expect.poll` could in
-principle settle before the post-`setSize` relayout. The spec's launch-width rhythm assertion is a genuine
-detector and is what reddens on `main`; the narrow-width AC1 assertion is the one to harden, on the
-`e2e/composer-options-clamp.spec.ts` precedent of polling a value that changes across the resize (e.g.
-`window.innerWidth`, which `setSize` moves, rather than one that is already satisfied at launch width).
+**Wait for the resize itself before testing fit.** Since #1727,
+`e2e/composer-footer-overflow.spec.ts` polls `window.innerWidth` to 800 before reading narrow-width
+geometry. A fit assertion already satisfied at the 1100px launch width could otherwise pass before
+relayout. The spec retains worst-case label seeds, launch-width rhythm, overflow and visual-order
+checks, and adds exact padding/Attach geometry at launch, 785px footer and minimum window widths,
+plus keyboard traversal and Enter invoking the picker through IPC; see [Attach testing](composer-attach.md#testing).
+Since #1728 it also measures the ring's 15px size, 4px group inset and 16px gap to Actions, checks
+visual order starting with the circle, and traverses the context trigger before Actions, mode, model,
+effort and Attach. With no breakdown support the bare circle has no Tab stop.
+The `.composer__footer-button` comment still describes Actions as a bare text node; the rendered
+`.composer__actions-label` span and its truncation chain above are the implemented policy.
 
 ## Context breakdown popover (#1254)
 
-The reading became clickable: `ContextUsageControl` (above) now wraps the unchanged
-`<ContextUsageReading/>` span in `ContextBreakdownPopover` (new module,
-`src/renderer/src/screens/conversation/ContextBreakdownPopover.tsx`), a button that opens a read-only
-panel over the held [reported-context-store](reported-context-store.md) record. Nothing renders when
-`contextUsagePercent` is `null`, exactly as the bare reading rendered nothing before — the popover adds
-no new empty state. The container mirrors `ComposerOptionsMenu`'s open/close/focus-return/Escape/outside-
+`ContextUsageControl` (above) wraps the `<ContextUsageReading/>` span in `ContextBreakdownPopover`
+when the session supports breakdowns (see capability gating below). The module
+`src/renderer/src/screens/conversation/ContextBreakdownPopover.tsx` supplies a button that opens a read-only
+panel over the held [reported-context-store](reported-context-store.md) record. The ring is now the
+first footer trigger; its hidden percentage/warning label supplies the button's accessible name.
+Tab reaches it with visible focus, Enter opens the panel, and Escape closes it and returns focus.
+Nothing renders when `contextUsagePercent` is `null`; the popover adds no new empty state.
+The container mirrors `ComposerOptionsMenu`'s open/close/focus-return/Escape/outside-
 click lifecycle minus rows to rove; `open` is component-local so it resets on remount (ADR 0006). The
 panel's content is `reported` alone, never the settings-snapshot fallback pair — when the footer is
 showing the fallback figure, `reported` is `null` and the panel shows one client-owned pending line rather
 than recomputing a breakdown the daemon never sent.
 
-**Right-aligned in CSS, not clamped.** The shared `useComposerOptionsClamp` (window-width bound plus a
-measured left shift) is the footer menus' placement, but both its parts failed at the 800px minimum for a
-panel anchored at the row's *far right* edge: the width bound squeezed the fixed 280px panel to about
-130px, and without it the shift moved the panel to the *window's* edge — 20px past
-`.paired-shell__pane`'s own edge, whose `overflow: hidden` clipped the panel's right side. `.context-
-breakdown` instead sets `right: 0; left: auto` against its own anchor (the `--bottom-end` precedent), which
-needs no measurement: the reading's right edge is always inside the pane, and 280px to its left clears the
-sidebar at every allowed width. A trigger anchored at a row's trailing edge is the case where the fixed
-placement beats the shared clamp — reach for it first rather than re-deriving the failure.
+**Left-aligned to the footer's edge in CSS, without a clamp, since #1728.** Moving the trigger from
+the row's trailing side to its first slot reverses the safe panel alignment: the former `right: 0`
+would put most of the 280px panel outside the pane's left edge. `.context-breakdown` now uses
+`left: calc(-1 * var(--space-3) - var(--space-1)); right: auto`, undoing the footer's 12px padding and
+the circle's 4px inset. Both pending and populated panels fit at the 800px minimum. Do not substitute
+the footer menus' window-edge clamp: earlier measurements squeezed the panel to about 130px or moved
+it past the pane edge, where `.paired-shell__pane`'s `overflow: hidden` clipped it. Placement must
+follow the trigger's position and the pane boundary, not only the window boundary.
 
 **The new anchor deliberately does not wear `.composer-options-anchor`.** That class carries
 `min-width: 0`, which is exactly what lets a footer menu give width under the #1107 shrink policy — and

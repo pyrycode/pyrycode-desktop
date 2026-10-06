@@ -91,17 +91,13 @@ test('re-pair: a sealed pairing rejection opens a recovery modal', async ({
   const withChip = await readStatusRowGeometry(page)
   expect(withChip).toEqual(atRest)
 
-  // The pill sits at the message area's top edge and inside its right edge.
-  const [areaBox, pillBox] = await Promise.all([
-    page.locator('.conversation__message-area').boundingBox(),
-    repair.boundingBox()
-  ])
-  expect(areaBox).not.toBeNull()
-  expect(pillBox).not.toBeNull()
-  if (areaBox !== null && pillBox !== null) {
-    expect(Math.round(pillBox.y)).toBe(Math.round(areaBox.y))
-    expect(Math.round(pillBox.x + pillBox.width)).toBe(Math.round(areaBox.x + areaBox.width))
-  }
+  // Rejection notices count toward occupied header height, including an empty offline thread.
+  await expect.poll(() => repair.evaluate(el => {
+    const header = document.querySelector('.conversation__top-chrome')!.getBoundingClientRect()
+    const pane = document.querySelector('.conversation__message-area')!.getBoundingClientRect()
+    const pill = el.getBoundingClientRect()
+    return { belowHeader: Math.round(pill.top - header.bottom), rightInset: Math.round(pane.right - pill.right) }
+  })).toEqual({ belowHeader: 12, rightInset: 20 })
 
   // AC3's focus ring. The design draws no focus state, so the treatment is the UA's and the requirement
   // is that nothing suppresses it — `.top-overlay-pill` declines `outline: none` on purpose. A keypress
@@ -151,7 +147,8 @@ test('re-pair with a second server preserves both hosts in the paired shell', as
   await recovery.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(recovery).toHaveCount(0)
   await expect(page.locator('.conversation')).toBeVisible()
-  await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
   await expect(page.locator('.settings__server-row-id')).toHaveText([serverA.serverId, serverB.serverId])
 
   await expect(pairingBox).toHaveCount(0)
@@ -219,7 +216,7 @@ for (const closeCode of [4421, 4401]) {
     await expect(page.locator('.composer-status__error')).toHaveCount(0)
     const withButton = await readStatusRowGeometry(page)
     expect(withButton).toEqual({ rowHeight: 32, groupFromBottom: 0, iconFromBottom: atRest.iconFromBottom })
-    if (closeCode === 4421) await page.screenshot({ path: '/private/tmp/builder-1510-reconnect-800.png' })
+    if (closeCode === 4421) await page.screenshot({ path: '/tmp/builder-1510-reconnect-800.png' })
     await reconnect.click()
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
     await expect.poll(() => recoveryCounts(app)).toEqual({
@@ -229,7 +226,8 @@ for (const closeCode of [4421, 4401]) {
     await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
     await expect(page.getByPlaceholder('Message…')).toHaveValue('Retained draft')
     await expect(page.locator('.channel-list__row-open').filter({ hasText: rowName(SECOND_SEEDED_ROW) })).toBeVisible()
-    await page.getByRole('button', { name: 'Settings' }).click()
+    await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+    await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
     await expect(page.locator('.settings__server-row-id')).toHaveText([serverA.serverId, serverB.serverId])
     expect(await recoveryCounts(app)).toEqual({
       reconnect: [serverA.serverId], connected: [serverA.serverId], unpair: 0

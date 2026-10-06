@@ -88,8 +88,11 @@
                                sits in), clearly distinct from --color-success green and --color-error
                                peach so the three dot categories are colour-separable. */
 
-  /* Type families — Roboto is not bundled (self-only CSP); fall back to
-     system-ui. The M3 size/line/tracking/weight scale carries the fidelity. */
+  --color-status-dot-input-required: #d8b85a; /* Conversation waiting dot; separate from connection warning. */
+
+  /* Type families: Roboto and Roboto Mono ship inside the app (theme/fonts.css),
+     which the self-only CSP allows, so every platform renders the same metrics.
+     The system fallbacks cover only characters outside the bundled subsets. */
   --font-sans: 'Roboto', system-ui, -apple-system, sans-serif;
   --font-mono: 'Roboto Mono', ui-monospace, SFMono-Regular, monospace;
 

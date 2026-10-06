@@ -37,6 +37,10 @@ export type SafeBytesEncoding = string & { readonly [safeBytesBrand]: true }
  * for bytes that failed BEFORE decryption (#133) — never plaintext.
  */
 export interface DiagnosticEvent {
+  /** Validated held local composer UUID; never copied from daemon data. */
+  messageId?: string
+  /** Main-generated UUID of the relay socket that accepted a write. */
+  connectionId?: string
   /** Required. The event name, e.g. 'relay-closed', 'daemon-failed'. A static literal at each site. */
   event: string
   /** Static classification, e.g. 'pong-timeout', 'not-paired', 'malformed-hello-ack'. */

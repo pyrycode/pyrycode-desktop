@@ -37,11 +37,13 @@ import type {
   MCPStatusRequestPayload,
   MCPReconnectPayload,
   MCPTogglePayload,
+  StopBackgroundTaskPayload,
   RequestSystemPromptPayload,
   RequestHistoryPayload,
   InterruptPayload,
   NewSessionPayload,
   DequeueMessagePayload,
+  SendQueuedNowPayload,
   QuestionAnswerPayload,
   QuestionRefusedPayload
 } from '../wire/types'
@@ -120,11 +122,11 @@ export type RefuseQuestionsCommandPayload = Omit<QuestionRefusedPayload, 'answer
 /**
  * The closed set of push-notification kinds the renderer may ask main to raise (#391). A sealed
  * enum, NEVER free text: the main process owns the copy table that maps each kind to a static body,
- * so it is impossible by construction for daemon-relayed content (a permission-prompt title, an
- * assistant message, a workspace path) to ride into an OS notification's BODY. The title may carry
- * the conversation's name (#1593, NotifyPayload.name); the body never does. Add a kind here only
- * alongside its copy in fireNotification's NOTIFICATION_COPY (a Record<NotifyKind, …>, so a new
- * member won't type-check until it has copy).
+ * so every kind has a static fallback body. The title may carry the conversation's name (#1593,
+ * NotifyPayload.name), and since #1737 the body may carry a preview of the reply or the pending action
+ * (NotifyPayload.preview), which main cleans and caps and replaces with the kind's copy when nothing
+ * usable is left. Add a kind here only alongside its copy in fireNotification's NOTIFICATION_COPY (a
+ * Record<NotifyKind, …>, so a new member won't type-check until it has copy).
  */
 export type NotifyKind = 'turn-complete' | 'prompt'
 
@@ -132,8 +134,9 @@ export type NotifyKind = 'turn-complete' | 'prompt'
  * The `notify` command payload (#391). Defined HERE, not imported from ../wire/types — unlike every
  * other payload-bearing member, this command is a MAIN-LOCAL side-effect that never reaches the
  * transport, so its type is client-internal (like the derived AnswerModalCommandPayload above). It
- * carries the closed `kind` enum, which picks the body, and optionally the conversation's `name`
- * (#1593), which becomes the title. No body free text, no conversation id, no secret.
+ * carries the closed `kind` enum, which picks the fallback body, optionally the conversation's `name`
+ * (#1593), which becomes the title, and optionally a `preview` (#1737), which becomes the body. No
+ * conversation id, no secret.
  */
 export interface NotifyPayload {
   kind: NotifyKind
@@ -151,7 +154,18 @@ export interface NotifyPayload {
    * Bounded by isNotificationToken. Main never interprets or logs it.
    */
   token?: string
+  /**
+   * The start of the agent's reply, or "Wants to run <tool>: <target>" for a pending permission prompt
+   * (#1737) — UNTRUSTED daemon-derived plain text, already markdown-stripped and cut to 200 characters by
+   * the renderer. Bounded at the boundary by MAX_NOTIFY_PREVIEW_LENGTH. Main cleans it (fireNotification's
+   * notificationBody) before it becomes the body, falls back to the kind's copy, and never logs it.
+   */
+  preview?: string
 }
+
+/** The longest `notify` preview the main-side guard admits (#1737). Far above the renderer's own
+ *  200-character cut, so a long reply never fails closed; a longer one is not a real renderer. */
+export const MAX_NOTIFY_PREVIEW_LENGTH = 4000
 
 /** The shape a notification token may take on either side of the boundary (#1597): 1 to 64 ASCII
  *  letters, digits or hyphens, which a `crypto.randomUUID()` satisfies. The main-side notify guard and
@@ -338,6 +352,7 @@ export type RendererCommand =
   | { type: 'requestMcpStatus'; payload: MCPStatusRequestPayload }
   | { type: 'reconnectMcpServer'; payload: MCPReconnectPayload }
   | { type: 'toggleMcpServer'; payload: MCPTogglePayload }
+  | { type: 'stopBackgroundTask'; payload: StopBackgroundTaskPayload }
   | { type: 'requestHistory'; payload: RequestHistoryPayload }
   | { type: 'requestSystemPrompt'; payload: RequestSystemPromptPayload }
   | { type: 'requestConversations'; serverId?: string }
@@ -361,6 +376,7 @@ export type RendererCommand =
   | { type: 'renameWorkspace'; payload: RenameWorkspacePayload; serverId?: string; attemptId?: string }
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
   | { type: 'dequeueMessage'; payload: DequeueMessagePayload }
+  | { type: 'sendQueuedNow'; payload: SendQueuedNowPayload }
   | { type: 'interrupt'; payload: InterruptCommandPayload }
   | { type: 'newSession'; payload: NewSessionCommandPayload }
   | { type: 'notify'; payload: NotifyPayload }
@@ -432,6 +448,15 @@ export function refuseQuestionsCommand(fields: RefuseQuestionsCommandPayload): R
  */
 export function dequeueMessageCommand(fields: DequeueMessagePayload): RendererCommand {
   return { type: 'dequeueMessage', payload: fields }
+}
+
+/**
+ * Wrap a queued row's `conversation_id` + `queued_msg_id` into a `sendQueuedNow` command (#1726) — asks
+ * the daemon to deliver that queued message into the running turn. Pure; the wire payload verbatim, as
+ * dequeueMessageCommand. Ungated, so there is no token to mint.
+ */
+export function sendQueuedNowCommand(fields: SendQueuedNowPayload): RendererCommand {
+  return { type: 'sendQueuedNow', payload: fields }
 }
 
 /**
@@ -512,6 +537,8 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return 'payload' in value && isMCPReconnectPayload(value.payload)
     case 'toggleMcpServer':
       return 'payload' in value && isMCPTogglePayload(value.payload)
+    case 'stopBackgroundTask':
+      return 'payload' in value && isStopBackgroundTaskPayload(value.payload)
     case 'requestHistory':
       // Payload-required (#1222) — the neighbour's idiom verbatim, including why the
       // explicitly-`undefined` case is refused by the payload guard and not by the `in` check.
@@ -580,6 +607,8 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       )
     case 'dequeueMessage':
       return 'payload' in value && isDequeueMessagePayload(value.payload)
+    case 'sendQueuedNow':
+      return 'payload' in value && isSendQueuedNowPayload(value.payload)
     case 'interrupt':
       // The newSession arm's shape (#1092) — a required payload, refused BY isInterruptPayload rather
       // than by the `in` check, for the reason the requestModelList arm records. NO serverId arm any
@@ -1026,6 +1055,15 @@ function isMCPTogglePayload(value: unknown): value is MCPTogglePayload {
   return isMCPReconnectPayload(value) && 'enabled' in value && typeof value.enabled === 'boolean'
 }
 
+/** The background-task stop guard (#1770): both ids present, strings and non-empty, so a blank or missing
+ * id sends nothing. Opaque lookup keys; buildStopBackgroundTask discards extra fields. */
+function isStopBackgroundTaskPayload(value: unknown): value is StopBackgroundTaskPayload {
+  if (typeof value !== 'object' || value === null) return false
+  return 'conversation_id' in value && typeof value.conversation_id === 'string' &&
+    value.conversation_id.length > 0 &&
+    'task_id' in value && typeof value.task_id === 'string' && value.task_id.length > 0
+}
+
 /** The untrusted renderer→main boundary guard for the requestSystemPrompt payload (#1230). The guard
  *  above with the name changed: one present-and-string `conversation_id` check, so a missing key, a
  *  literal `null`, and a non-string are all rejected.
@@ -1223,24 +1261,45 @@ function isDequeueMessagePayload(value: unknown): value is DequeueMessagePayload
   )
 }
 
+/** The sendQueuedNow boundary guard (#1726): the dequeue guard's structural minimum, field for field. */
+function isSendQueuedNowPayload(value: unknown): value is SendQueuedNowPayload {
+  if (typeof value !== 'object' || value === null) return false
+  return (
+    'conversation_id' in value &&
+    typeof value.conversation_id === 'string' &&
+    'queued_msg_id' in value &&
+    typeof value.queued_msg_id === 'number'
+  )
+}
+
 /** The untrusted renderer→main boundary guard for the notify payload (#391). CRITICALLY UNLIKE every
  *  sibling is*Payload above — which check `typeof value.field === 'string'` and so accept ANY string —
  *  this guard tests CLOSED-SET MEMBERSHIP: `kind` must equal one of the two NotifyKind literals. This is
  *  the security-relevant line of the slice: a `typeof === 'string'` check here would let an arbitrary,
  *  possibly daemon-derived string pass the boundary and later map to no copy at all, defeating the
- *  by-construction guarantee that no free text can ride into an OS notification's body. A non-object, a
+ *  by-construction guarantee that every kind has a static fallback body. A non-object, a
  *  missing `kind`, a non-string `kind`, and any string outside the set are all rejected.
  *
- *  The optional `name` (#1593) is the one free-text field, and it only ever becomes the title: it must be
+ *  The optional `name` (#1593) is one of two free-text fields, and it only ever becomes the title: it must be
  *  absent, `undefined`, or a string, and any other type fails the whole command closed. Its content is
  *  not judged here — main's notificationTitle drops control characters and bounds the length, because
- *  this side of the boundary is not trusted to have done so. The optional `token` (#1597) must be
+ *  this side of the boundary is not trusted to have done so. The optional `preview` (#1737) is the second
+ *  free-text field and becomes the body: it must be absent, `undefined`, or a string of at most
+ *  MAX_NOTIFY_PREVIEW_LENGTH UTF-16 units, or the whole command fails closed; main's notificationBody
+ *  cleans and caps its content. The optional `token` (#1597) must be
  *  absent, `undefined`, or pass isNotificationToken; anything else fails closed. Extra fields are ignored (structural
  *  minimum, consistent with the other guards). Pure; never throws. */
 function isNotifyPayload(value: unknown): value is NotifyPayload {
   if (typeof value !== 'object' || value === null) return false
   if (!('kind' in value) || (value.kind !== 'turn-complete' && value.kind !== 'prompt')) return false
   if ('name' in value && value.name !== undefined && typeof value.name !== 'string') return false
+  if (
+    'preview' in value &&
+    value.preview !== undefined &&
+    (typeof value.preview !== 'string' || value.preview.length > MAX_NOTIFY_PREVIEW_LENGTH)
+  ) {
+    return false
+  }
   // #1597: the token is opaque, so it is judged only on shape — bounded, never free text.
   return !('token' in value) || value.token === undefined || isNotificationToken(value.token)
 }

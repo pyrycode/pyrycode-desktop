@@ -321,6 +321,51 @@ button.top-overlay-pill {
   justify-content: flex-start;
 }
 
+/* Scoped to live text arms: attachment offers and other timeline chrome keep their sizing. */
+.message-row--text {
+  --message-row-max-width: 900px;
+  --message-actions-width: 13px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--message-row-max-width);
+  margin-inline: auto;
+}
+
+.message-row--text.message-row--daemon {
+  padding-right: calc(var(--space-5) * 2);
+}
+
+.message-row--text.message-row--user {
+  padding-left: calc(var(--space-5) * 2);
+}
+
+.message-row--text:not(.message-row--queued) {
+  gap: var(--space-3);
+}
+
+.message-row--text > .bubble {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.message-actions {
+  flex: 0 0 var(--message-actions-width);
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-inverse-primary);
+}
+
+.bubble__meta-time {
+  visibility: hidden;
+}
+
+.message-row--text:hover .bubble__meta-time,
+.message-row--text:focus-within .bubble__meta-time {
+  visibility: visible;
+}
+
 /* #969 — the desktop drawing's `Message` component (Figma 132:4477 assistant / 132:4508 user),
    replacing the mobile thread's bubble (16-22 / 16-23) this wore until now. ONE SHAPE FOR BOTH SIDES:
    6px on all four corners, so the two side modifiers below no longer carry a radius at all and the
@@ -331,9 +376,9 @@ button.top-overlay-pill {
    the result lost its padding entirely and the field value box moved to the design's --space-4, so
    .tool-row__result / .tool-row__input-value is no longer among them.
 
-   max-width (not a fixed width) so bubbles reflow as the window resizes. The drawing gives one width at
-   one window size — 680px inside the 780px column at 1280px — which min(680px, 75%) already yields
-   there, so the shipped rule stands rather than being replaced by the drawn constant.
+   Text-message rows now own the available width: a centred 900px border-box cap and 40px
+   far-side inset. Their bubbles hug short content and shrink to the remaining width beside actions.
+   The base bubble cap remains for standalone file offers and the retired MessageBubble path.
 
    NOT A FLEX COLUMN, though the drawing's `Message` is one with a 12px gap. The in-progress assistant
    branch renders its text and the streaming cursor <span> as SIBLING direct children of this box
@@ -695,34 +740,10 @@ button.top-overlay-pill {
    the static tier, which has no layout at all. If .bubble's word-break is ever removed or narrowed, that
    spec is what goes red — a deterministic detector rather than a duplicated declaration. */
 
-/* #969 — the meta row at the foot of a text message bubble (Figma `Meta row` 132:4446 assistant /
-   132:4435 user): the timestamp #970 fills, then the copy control, 8px apart on a 16px line. Its colour
-   is --color-inverse-primary, read from the Figma VARIABLE on both nodes — the export prints #9dcbfc
-   there, which is the light-scheme transposition tokens.css:25-33 warns about and NOT what the design
-   says. The glyph inherits this colour through fill: currentColor rather than restating it.
-
-   THE min-height IS LOAD-BEARING, not a belt on the line-height above it. The timestamp slot renders
-   empty until #970, an empty inline element generates no line box, and without this the row would
-   collapse to the glyph's 12px and take the drawn 4px of breathing room with it. The token is the
-   body-small LINE HEIGHT because that is precisely why the row is 16px tall — --space-4 reads 16 by
-   coincidence and would couple the row to the spacing scale it has nothing else to do with.
-
-   MARGIN-TOP, NOT A PARENT GAP, per .bubble's own comment above. It sits between two siblings so it
-   neither collapses through the bubble's padding box nor escapes it, and .bubble__markdown > * (which
-   zeroes margin-block) cannot reach this row — that selector takes the markdown container's children,
-   and this is .bubble's child, a level up.
-
-   align-items: center where the drawing has items-start plus a 1px top pad on its `Copy` frame.
-   Centring is this file's vocabulary for the same intent, lands the 12px glyph within 1px of the drawn
-   position, and is the only value compatible with the enlarged hit area below — items-start would let
-   the control's taller box grow the row.
-
-   ACCEPTED CONSEQUENCE, recorded rather than fixed: --color-inverse-primary measures 2.67:1 on the
-   assistant fill and 2.04:1 on the user fill, against the 4.5:1 WCAG AA wants for 12px text and the 3:1
-   it wants for an icon control. Both message texts are fine (13.3:1 and 10.1:1) — it is only this row.
-   Substituting a colour here would put the app and the Figma out of step, which is the exact failure
-   this whole redraw is unwinding; the fix is a Figma-side change on 132:4446 / 132:4435 and a one-token
-   edit afterwards. The hover state below incidentally clears both thresholds. */
+/* The bubble's final child: body-small timestamp and optional turn stats. The 16px minimum
+   keeps the empty timestamp slot from collapsing. Visibility reserves stamped text's width
+   and height at rest; row hover/focus reveals it without reflow. Margin supplies the existing
+   12px rhythm without turning streaming text and its inline cursor into separate flex items. */
 .bubble__meta {
   margin-top: var(--space-3);
   display: flex;
@@ -742,36 +763,21 @@ button.top-overlay-pill {
   justify-content: flex-end;
 }
 
-/* #969 — the copy control. THE HIT AREA IS BIGGER THAN THE GLYPH WITHOUT BEING BIGGER THAN THE ROW:
-   11x12 is far under the app's 48px target convention, but growing the button would grow the 16px row
-   the drawing specifies. padding + an equal negative margin gives a 27x28 border box (what the pointer
-   and the focus ring get) inside an 11x12 margin box (what the layout gets), so the row's height and
-   the glyph's drawn position are both exactly as drawn. That is the M3 icon button's container trick,
-   expressed through the spacing scale so no pixel literal appears. The negative margin reaches 8px left
-   into the row's own 8px gap, so it stops at the timestamp rather than overlapping it.
-
-   THE DRAWING HAS NO HOVER, FOCUS OR PRESSED STATE, so both take this file's existing answer
-   (.queued-row__drop / .composer__send). Hover BRIGHTENS the glyph rather than lifting a surface under
-   it: --color-surface-container-high, the surface .queued-row__drop lifts to, is a neutral grey that
-   would read as a foreign patch on either navy fill, while --color-primary is the same tonal ramp as
-   the resting --color-inverse-primary one step lighter. No pressed state and no post-copy confirmation
-   — the drawing shows neither, and the AC does not ask for one. */
+/* Copy's 27×20px hit target enlarges the 11×12px glyph without changing its column.
+   Four vertical pixels per side leave room for a future glyph at a 12px gap. Pointer states
+   keep the same ink; the keyboard outline remains visible. */
 .bubble__copy {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: var(--space-2);
-  margin: calc(var(--space-2) * -1);
+  padding: var(--space-1) var(--space-2);
+  margin: calc(var(--space-1) * -1) calc(var(--space-2) * -1);
   border: none;
   border-radius: var(--radius-full);
   background: transparent;
   color: inherit;
   cursor: pointer;
-}
-
-.bubble__copy:hover {
-  color: var(--color-primary);
 }
 
 .bubble__copy:focus-visible {
@@ -1962,7 +1968,10 @@ button.top-overlay-pill {
    opacity is a compositing group a child opacity cannot escape — it was the region's until the queued rows
    moved into the thread) — consistent with the "waiting / not yet run" treatment; the hover-surface +
    focus outline carry the affordance, not full brightness. */
-.queued-row__drop {
+/* #1726: Send now (.queued-row__send-now) shares the drop control's idiom by decision — the design file
+   draws no queued state — so it joins each rule below rather than restating it. */
+.queued-row__drop,
+.queued-row__send-now {
   flex: 0 0 auto;
   align-self: center;
   display: inline-flex;
@@ -1976,16 +1985,19 @@ button.top-overlay-pill {
   cursor: pointer;
 }
 
-.queued-row__drop:hover {
+.queued-row__drop:hover,
+.queued-row__send-now:hover {
   background: var(--color-surface-container-high);
   color: var(--color-on-surface);
 }
 
-.queued-row__drop:focus-visible {
+.queued-row__drop:focus-visible,
+.queued-row__send-now:focus-visible {
   outline: 1px solid var(--color-outline);
 }
 
-.queued-row__drop-icon {
+.queued-row__drop-icon,
+.queued-row__send-now-icon {
   display: block;
 }
 
@@ -2065,20 +2077,9 @@ button.top-overlay-pill {
    these modifiers to the wrapper. Placed immediately after the base .tool-row so source order gives the
    equal-specificity modifier precedence over the pending opacity. tool-row--resolved lifts the pending
    dimming for BOTH outcomes (the success state is the mock's chip with dimming lifted — no accent
-   added); tool-row--error additionally retints the border to signal the failure. */
+   added). Failed rows use a small error icon and keep the plain border. */
 .tool-row--resolved {
   opacity: 1;
-}
-
-/* #1102 — the retint FOLLOWED THE BOX OUTWARD, from `.tool-row--error .tool-row__chip` to the row itself,
-   because the chip no longer has a border to retint and the failure is a property of the whole row rather
-   than of its header. THE PLACEMENT IS NOW LOAD-BEARING: at (0,1,0) this is equal specificity with the
-   base .tool-row, so it wins on SOURCE ORDER alone and must stay after it — the outgoing descendant
-   selector won at (0,2,0) and could have sat anywhere. e2e/tool-row-toggle.spec.ts compares a failed
-   row's computed border colour against a successful one's, so a selector left on the chip goes red rather
-   than silently drawing no failure device at all. */
-.tool-row--error {
-  border-color: var(--color-error);
 }
 
 /* #1073 — CONSECUTIVE TOOL ROWS JOIN INTO ONE STACK (Figma "Consequent tool uses" 384:7103), so a run of
@@ -2120,21 +2121,8 @@ button.top-overlay-pill {
    group shadow is; and it can stay because an outer shadow is clipped to outside its own border box and
    starts 4 − 2.5 = 1.5px below that box's top, so it cannot paint back up across the join above it.
 
-   THE JOIN'S COLOUR IS A RULE RATHER THAN A CONSEQUENCE OF PAINT ORDER, and that is the subtle part. Two
-   facts pull opposite ways. A later sibling paints its background and border over an earlier one's, so by
-   default the row below a failed row would erase that row's red bottom edge and a row above one would gain a
-   red edge it should not have. AND .tool-row's pending opacity: 0.5 makes a pending row an atomic paint
-   group, which paints above every non-dimmed sibling regardless of DOM order — so the direction reverses the
-   moment a pending row is one of the pair. Making both coincident borders carry the same colour is what makes
-   the drawn line independent of which row happens to paint last. Neither rule leaks past the shared edge: a
-   failed row's own four sides stay red through .tool-row--error above, and each neighbour is retinted on
-   exactly one edge.
-
-   A PENDING/RESOLVED JOIN NEEDS NO RULE. A 50% border painted over a 100% border of the same colour at the
-   same pixels composites back to full strength, so that join reads as one full line rather than a half one.
-   And a failed row is always --resolved as well (ToolRow's rowClass adds tool-row--error only on top of
-   tool-row--resolved), so a dimmed row and a red border are never the same element — only ever the two sides
-   of a join.
+   ALL ROWS KEEP THE SAME BORDER COLOUR, including failures. Pending opacity still composites the
+   coincident borders; failure is shown by the header icon rather than by retinting the shared edge.
 
    :has() SHIPPED IN CHROMIUM 105 and this app runs Electron 33 (Chromium 130) with no other renderer.
    e2e/tool-row-toggle.spec.ts drives a run of four resolving pending/resolved/failed/resolved, which is the
@@ -2152,16 +2140,6 @@ button.top-overlay-pill {
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
   box-shadow: none;
-}
-
-.tool-row--error + .tool-row,
-.tool-group-row--error-above > .tool-row {
-  border-top-color: var(--color-error);
-}
-
-.tool-row:has(+ .tool-row--error),
-.tool-group-row--error-below > .tool-row {
-  border-bottom-color: var(--color-error);
 }
 
 /* #696 — the expanded row. Since #1102 the row is a column in BOTH states, so what is left on this
@@ -2258,9 +2236,8 @@ button.top-overlay-pill {
 
    1. NOT `border`, it said, because `.tool-row--error .tool-row__chip` retinted at (0,2,0) against this
       rule's (0,1,0) and kept winning only while this rule stayed silent — a `border:` here would have
-      silently killed the error accent on every failed row. That accent now lives on `.tool-row--error`,
-      a different element, so nothing here can reach it. And the declaration became REQUIRED by the same
-      move: with the border gone from the base rule, the <button> branch would inherit the UA's own grey
+      silently killed the error accent on every failed row. Failure now uses the header icon, so no error
+      border rule remains. And the declaration became REQUIRED by the same move: with the border gone from the base rule, the <button> branch would inherit the UA's own grey
       3D border and grow, while the pending <div> branch would not — breaking the "identical by
       construction" property #722 wrote this rule for. `background: none` is required for the same reason
       (button-face), and pairs with the :hover rule below rather than fighting it.
@@ -2467,6 +2444,13 @@ button.top-overlay-pill {
   color: var(--color-primary);
 }
 
+/* Material error_outline from the Failed Tool use variant. Keep the 16px SVG from shrinking. */
+.tool-row__failed {
+  display: block;
+  flex: 0 0 auto;
+  color: var(--color-error);
+}
+
 /* The tool-name run: monospace tertiary — the tool's identity, never shrinks or truncates. #218 sized it
    from the mobile mock's raw 13px (Figma 16-30) down to body-small's 12px per the ±2px convention; #722
    redraws it at the desktop design's 14/16 (Figma 134:4939), which is a raw pair bound to no type style
@@ -2630,19 +2614,8 @@ button.top-overlay-pill {
   border-radius: var(--radius-xs);
 }
 
-/* #1103 — WHERE THE ERROR RULE WAS. `.tool-row__body--error .tool-row__result` drew a 1px --color-error
-   border around the result, the chip's own error device applied to the body in the same descendant
-   shape. It is deleted rather than retuned: with the result now bare text carrying no fill and no box,
-   that rule would draw a red rectangle around loose text, which is not a device the design has. The
-   accent LIVES OUTWARD now — #1102 moved the retint to .tool-row--error, the row's own border, so
-   deleting this removes the second failure device and not the last one.
-
-   THE MODIFIER CLASS ITSELF STAYS in the markup, deliberately. Removing it from ToolRow is a markup
-   change with test churn (two ConversationScreen.test.tsx assertions pin it as a substring) and no
-   visual gain, and it remains the body's own failure hook for anything a later ticket wants to draw
-   here. e2e/tool-row-toggle.spec.ts asserts a failed result's computed border width is 0 on all four
-   sides while the row's border colour still differs from a successful row's, so restoring this rule
-   reddens and losing the row-level retint reddens separately. */
+/* Failed results stay bare text. The body modifier remains a state hook; the header icon is the
+   failure indicator in both expanded and collapsed rows. */
 
 /* #706 — one input field: its name stacked above its value. --space-1 (4px) is TIGHTER than the
    distance between fields, which is what makes a name read as belonging to the value beneath it rather
@@ -3240,34 +3213,17 @@ button.top-overlay-pill {
   opacity: 0.41;
 }
 
-/* #811 — the input footer row (Figma node 110:3494, 780x20), the composer's second sub-row, beneath the
-   message box (#968 retired .composer__hint, which used to be the first). Four more tickets fill it
-   (#680 Actions, #682 permission mode, #683 model and effort, #685 attach); today it carries the context
-   reading alone and NOTHING stands in for the rest.
-
-   The height is the whole point (AC4). flex: 0 0 auto so it never claims a competing flex region, and
-   NO vertical padding, so 20px is the exact box under this repo's absent global box-sizing reset — the
-   .composer-status rule above, verbatim. The row is reserved whether or not a reading is inside it,
-   which is what stops the message box moving when the figure appears and disappears.
-
-   height: 20px as a literal rather than var(--space-5) (also 20px): a component's own height is
-   structural geometry, not spacing — the .composer-status / .conn-dot / .run-config__context-bar
-   precedent in this file.
-
-   Horizontal padding --space-4, NOT .composer-status's --space-3. The two rows are deliberately inset
-   differently in the design: this row's content starts at x=16, exactly where the message box's own text
-   starts, so it aligns with the INPUT'S TEXT rather than with the composer's box edge (which is what
-   .composer-status aligns to, its own node starting at x=0). Do not "fix" one to match the other.
+/* The revised input footer (Figma Input area 347:5408) is a 20px border box with
+   4px top, 16px right, no bottom and 12px left padding. Border-box sizing includes
+   the top inset in the reserved height; top alignment leaves a 16px content row.
+   Existing spacing tokens carry the insets, and the inline controls keep their
+   shared body-small styling and shrink policy.
 
    margin-top: --space-1 completes the design's 8px gap between the message box and this row: .composer
    is a column with gap: var(--space-1), so 4 + 4 = 8. The split is kept as it stands. It was a margin
    rather than a wider column gap because that gap also had to separate .composer__hint from
    .composer__row; #968 retired the caption, so the column now has only these two children and the pair
    could fold into one 8px gap — but folding it would move a settled spacing for no behavioural gain.
-
-   align-items: center puts the 16px line 2/2 in the 20px row. The Figma's own inset is asymmetric
-   (pt-[4px], nothing below); centring is 2px off that and one declaration instead of two — the same
-   trade .composer-status took against its node's py-[4px].
 
    THE ROW'S SHRINK POLICY (#1107) — whitespace gives first, then every labelled control gives together,
    and the context reading never gives. Until this ticket NOTHING in the row could give: the five gaps
@@ -3302,53 +3258,80 @@ button.top-overlay-pill {
    The consequence is the property this fix wants: at every width from the shipped default upward the row
    draws exactly as it drew before, and the rhythm compresses only where the row was already broken. At
    the 800px minimum it is ~10px a gap, which is where about a third of the row's deficit comes from; the
-   labels give the rest. */
+   labels give the rest.
+
+   #1728 names the gap --composer-footer-gap so the context circle's rule below can subtract it: the
+   design puts the circle 16px before Actions, not one row gap. */
 .composer__footer {
+  --composer-footer-gap: min(3.5%, var(--space-5));
   flex: 0 0 auto;
+  box-sizing: border-box;
   height: 20px;
   display: flex;
-  align-items: center;
-  column-gap: min(3.5%, var(--space-5));
-  padding: 0 var(--space-4);
+  align-items: flex-start;
+  column-gap: var(--composer-footer-gap);
+  padding: var(--space-1) var(--space-4) 0 var(--space-3);
   margin-top: var(--space-1);
 }
 
-/* The context reading (Figma 110:3497, "Context: 84%"): M3 body/small in the row's primary colour.
-   --color-primary by token NAME, never the export's #32628d fallback, which is the LIGHT scheme's
-   primary (desktop is dark-only, ADR 0003) — the standing rule in .composer-status and .status-row.
+/* The context reading — since #1728 the design's ring (Figma 347:5408 → Context), not text. The span's
+   `color` is the step's paint, which the arc takes through currentColor; this rule holds the PRIMARY
+   step's, and the two rules below override it (#1062). --color-primary by token NAME, never the export's
+   fallback hex (desktop is dark-only, ADR 0003).
 
-   The colour sits on the reading rather than on the row: every item in the design's footer is
-   schemes/primary, but hoisting it would pre-decide the treatment for four controls that will each read
-   their own node. Whichever of them lands first is the natural place to hoist it, if it is right for all
-   five.
-
-   white-space: nowrap because the row has a hard height — a wrapped reading would overflow it rather
-   than grow it (the .composer-status__error ruling). It needs NO truncation chain, unlike
-   .composer-status__label--tool: the string is client-owned and, since #1062 added the top step's word,
-   at most 18 characters ("Context high: 100%") — five more than before and still a constant-length bound,
-   because the only interpolated value is an integer in [0, 100]. It cannot blow the row out however
-   hostile the daemon's figures are.
-
-   THE READING GIVES NOTHING, AND THAT IS #1107's SHRINK POLICY EXPRESSED AS AN ABSENCE. This rule wears
-   no min-width: 0 and no non-visible overflow, so its automatic minimum size is its own full text and
-   flexbox cannot shrink it at any deficit — a flex-shrink: 0 here would be exactly equivalent and
-   therefore inert, which is why it is not declared. That absence is what makes the guarantee structural:
-   however long a name the daemon publishes into the three labels beside it, they absorb the row's deficit
-   and this reading stays whole. Adding either property would retire the guarantee silently.
-
-   The colour here is the PRIMARY STEP's, and the two rules below override it (#1062). */
+   THE READING GIVES NOTHING, #1107's shrink policy expressed as flex: 0 0 auto. A 15px ring has nothing
+   to ellipsize, so the three labels beside it absorb the row's deficit and the ring stays whole. */
 .composer__context {
+  display: flex;
+  flex: 0 0 auto;
   color: var(--color-primary);
-  font-size: var(--text-body-small-size);
-  line-height: var(--text-body-small-line);
-  letter-spacing: var(--text-body-small-tracking);
-  font-weight: var(--text-body-small-weight);
-  white-space: nowrap;
 }
 
-/* #1062 — the severity steps: amber from 50%, red from 70%. Emphasis on a fact the reading already
-   states in words, never the sole carrier of it, and at the top step the string itself says "high" so the
-   one actionable state does not depend on colour perception at all (ContextUsageReading's ruling).
+/* #1728 — the row's first item, at the left group's 4px inset (Figma: Context at x=4 of Info and
+   buttons) and 16px before Actions (Actions at x=35 = 4 + 15 + 16). The row's gap is subtracted from
+   the 16px so the spacing is the design's at every width: a percentage margin and the row's percentage
+   column-gap both resolve against the row's content box. Two selectors because the row's item is the
+   bare reading, or the popover's anchor when the session supports the breakdown. */
+.composer__footer > .composer__context,
+.composer__footer > .context-breakdown-anchor {
+  margin-left: var(--space-1);
+  margin-right: calc(var(--space-4) - var(--composer-footer-gap));
+}
+
+/* The 15px ring: a 2px stroke on r=6.5, the node's own geometry. The track is Schemes/Primary Container
+   at every step; the arc follows the step's colour. The arc's length and direction are set in
+   ContextUsageReading, from the reading. */
+.composer__context-ring {
+  display: block;
+  fill: none;
+  stroke-width: 2;
+}
+
+.composer__context-track {
+  stroke: var(--color-primary-container);
+}
+
+.composer__context-arc {
+  stroke: currentColor;
+}
+
+/* The percentage and the warning word, for assistive technology only: no percentage is visible since
+   #1728. The .composer-status__error-prefix recipe verbatim. */
+.composer__context-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* #1062 — the severity steps, amber from 70% and red from 85% since #1728. Never the sole carrier of the
+   state: the hidden label says "high" or "nearly full" at the two raised steps (ContextUsageReading's
+   ruling).
 
    The two boundaries are NOT here. They live in contextUsageStep, where a test can assert them as values;
    this file only paints what the ladder decided, which is why these rules are one declaration each.
@@ -3362,8 +3345,8 @@ button.top-overlay-pill {
    EQUAL SPECIFICITY to the base rule (0,1,0), so SOURCE ORDER is what makes these win. They must stay
    below .composer__context; moving either above it silently restores the primary colour at every step.
 
-   Nothing but `color`: the type ramp, the nowrap and the row's spacing are the reading's at every step —
-   a severity that also moved the metrics would shift the row's items as the session filled. */
+   Nothing but `color`: a severity that also moved the metrics would shift the row's items as the session
+   filled. */
 .composer__context--warning {
   color: var(--color-warning);
 }
@@ -3373,7 +3356,7 @@ button.top-overlay-pill {
 }
 
 /* #1254 — the reading is the breakdown popover's trigger. A bare button reset around the unchanged
-   .composer__context span, so the reading draws exactly as before: font: inherit is what stops the UA's
+   .composer__context span, so the reading draws exactly as the bare one: font: inherit is what stops the UA's
    form-control font reaching the span, which sets size and weight but not family. No outline: none —
    Escape and a second click return focus here, so the ring is load-bearing.
 
@@ -3548,40 +3531,19 @@ button.top-overlay-pill {
   cursor: pointer;
 }
 
-/* #863 — the attach trigger (Figma 115:3654), the footer row's LAST item and the fifth control the row's
-   own comment was written to expect. Its treatment is .composer__footer-button's; this rule is what is
-   left after that.
-
-   THE SHARED CLASS WAS EVALUATED RATHER THAN ASSUMED, since this is the first consumer with no label. Its
-   reset (padding, border and background off), its flex centring and its `color: var(--color-primary)` are
-   exactly what an icon-only button needs; its type block and its `gap` are inert here, which is harmless
-   and consistent with the rule's own note that it is named for the ROW rather than for a consumer.
-   Declaring a private rule instead would duplicate a six-declaration reset to avoid five inert ones. No
-   shipped element is re-classed.
-
-   margin-left: auto IS THE RIGHT-ALIGNMENT, and it is the declaration .composer__footer's comment has
-   reserved for this control since #811. The design makes the point structurally: this node is a SIBLING of
-   the `Info and buttons` group (115:3660) rather than its fifth member, so it does not join that group's
-   20px rhythm — it sits at x=714 in a 741-wide row, and 714 + 11 = 725, exactly the right edge of the
-   content box under the row's 16px inset. An auto margin reproduces that without a number: it absorbs
-   whatever the four controls and the reading leave, and collapses to 0 when they leave nothing, so a
-   narrow window degrades by squeezing rather than by overflowing.
-
-   cursor: pointer is the operable half, the .composer__actions declaration verbatim — the shared class
-   deliberately omits it, because #988's inert model label wears that class while opening nothing.
-
-   flex: 0 0 auto so the row cannot squeeze the glyph. The four menu triggers do not declare this and do
-   not need to; this one does, and the difference is that they hold a label whose own max-width absorbs a
-   narrow row while this button's whole width IS its 11px glyph. Without it the icon is the first thing the
-   row gives up when the reading grows.
-
-   NO GLYPH RULE OF ITS OWN. The four chevrons each carry a one-declaration .composer__*-icon rule; this
-   button's only child is the glyph and the button is already flex: 0 0 auto, so nothing can squeeze it.
-   Declining it also keeps the standing four-rule tidy-up (.composer__actions-icon's note) from growing to
-   five for a rule that would be inert on arrival. */
+/* Attach is the footer's sole trailing control. Its 24x16 visual box holds the
+   existing 11x12 paperclip at the top right (Figma Attach button 668:5565).
+   The shared footer-button class supplies the reset and primary ink; these local
+   alignments override its centring. The auto margin keeps the button against the
+   footer's 16px right inset, while fixed flex sizing preserves its box when the
+   inline settings compress at minimum window width. */
 .composer__attach {
   margin-left: auto;
   flex: 0 0 auto;
+  width: var(--space-6);
+  height: var(--space-4);
+  align-items: flex-start;
+  justify-content: flex-end;
   cursor: pointer;
 }
 
@@ -6125,11 +6087,11 @@ button.top-overlay-pill {
   min-width: 0;
 }
 
-/* The top-bar icon anchor cannot shrink. Level 1 lifts its panel over the later opacity divider
-   and positioned thread content; status sheets and existing dialog overlays use level 2. */
+/* The top-bar icon anchor cannot shrink. Dialog level 2 lifts its panel above the later
+   Top overlay pills at level 1, as well as the divider and positioned thread content. */
 .composer-options-anchor--bottom-end {
   flex: 0 0 auto;
-  z-index: 1;
+  z-index: 2;
 }
 
 /* Right alignment keeps the three fixed action labels inside the window at its 800px minimum.
@@ -6148,12 +6110,11 @@ button.top-overlay-pill {
    well: every name and path here is untrusted text, and each ellipsizes inside this width rather than
    widening the panel.
 
-   RIGHT-ALIGNED to the reading, the --bottom-end precedent, rather than the footer menus' left: -12px
-   plus measured shift. Both measured alternatives failed at the 800px minimum: the window-width bound
-   squeezed the panel to ~130px, and the shift moves it to the WINDOW's edge, 20px past
-   .paired-shell__pane's, whose overflow: hidden then clipped the panel's right side. The reading's right
-   edge is always inside the pane (only attach follows it), and 280px to its left clears the sidebar at
-   every width the app allows, so no measurement is needed at all.
+   LEFT-ALIGNED to the footer row's own left edge since #1728, which moved the reading to the row's first
+   slot: right-aligned to it, as #1254 drew it, the 280px panel would now run off the pane's left edge.
+   The anchor sits --space-3 (the row's padding) plus --space-1 (the circle's inset) in from that edge, so
+   this offset puts the panel's left on it, where the footer menus' panels also start. At the 800px
+   minimum the row's border box is ~312px, so the panel fits without a clamp.
 
    A grid rather than the base flex column: flex items shrink by default, so a capped scrolling panel
    would squash its rows instead of scrolling them (the type-ahead's measured trap). minmax(0, 1fr) on
@@ -6164,8 +6125,8 @@ button.top-overlay-pill {
   grid-template-columns: minmax(0, 1fr);
   align-content: start;
   gap: var(--space-2);
-  right: 0;
-  left: auto;
+  right: auto;
+  left: calc(-1 * var(--space-3) - var(--space-1));
   box-sizing: border-box;
   width: 280px;
   max-height: min(60vh, 420px);
@@ -6991,16 +6952,50 @@ button.top-overlay-pill {
   visibility: hidden;
 }
 
-/* #1627 — the markdown reader (Figma 552:2404), laid over .conversation's content box in place of the
-   thread and the composer (the inset is .conversation's own padding). The bar mirrors
-   .conversation__overflow's geometry (title-large title, a 0.6 inverse-primary rule 16px below, 16px under
-   it) with the drawn 8px gap between the arrow and the name. */
+/* Full-pane reader scrolls behind the shared translucent treatment. Padding retains its
+   existing alignment and resting offset; all notices belong to the measured sharp chrome. */
 .markdown-reader {
   position: absolute;
-  inset: var(--space-6) var(--space-5) var(--space-4);
+  inset: 0;
   z-index: 1;
   display: flex;
   flex-direction: column;
+}
+
+.markdown-reader__chrome {
+  position: absolute;
+  inset: 0 0 auto;
+  box-sizing: border-box;
+  z-index: 1;
+  padding: var(--space-6) var(--space-5) 0;
+  pointer-events: none;
+}
+
+.markdown-reader__chrome > :not(.conversation__blur) {
+  position: relative;
+  pointer-events: auto;
+}
+
+.markdown-reader__title {
+  text-shadow: var(--shadow-thread);
+}
+
+.markdown-reader__back {
+  filter: drop-shadow(var(--thread-control-shadow));
+}
+
+.markdown-reader .composer-options {
+  max-width: calc(var(--markdown-reader-width) - var(--space-5) * 2);
+}
+
+.markdown-reader .composer-options__item {
+  box-sizing: border-box;
+  height: auto;
+  min-height: var(--space-7);
+  padding-block: var(--space-1);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  flex-shrink: 0;
 }
 
 .markdown-reader__bar {
@@ -7079,6 +7074,11 @@ button.top-overlay-pill {
 /* The only scroll box, so the note scrolls beneath the fixed bar. Body-large on-surface per the drawn
    body; the .bubble__markdown rules inside give the headings, lists, code blocks and quotes. */
 .markdown-reader__body {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  box-sizing: border-box;
+  padding: var(--markdown-reader-header-height, 85px) var(--space-5) var(--space-4);
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -7088,4 +7088,241 @@ button.top-overlay-pill {
   line-height: var(--text-body-large-line);
   letter-spacing: var(--text-body-large-tracking);
   font-weight: var(--text-body-large-weight);
+}
+
+/* Secondary small button (Figma 347:6645); the card's gap places it after every report/cut marker. */
+.background-task-panel__stop {
+  padding: calc(var(--space-2) - 1px) var(--space-4);
+  border: 1px solid var(--color-primary);
+  background: var(--color-surface);
+  color: var(--color-primary);
+}
+
+.background-task-panel__stop:hover:not(:disabled) {
+  background: var(--color-on-primary);
+}
+
+.background-task-panel__stop:focus-visible {
+  outline: 1px solid var(--color-primary);
+  outline-offset: var(--space-1);
+}
+
+.background-task-panel__stop:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+/* Run headers share the existing box and joins; members retain their flat mounted wrappers. */
+.tool-run__row {
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+}
+.tool-run__chevron {
+  transform: rotate(90deg);
+  margin-inline: var(--space-1);
+}
+.tool-run__chevron--expanded {
+  transform: rotate(-90deg);
+}
+.tool-run__status {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: calc(var(--space-3) / 2);
+}
+.tool-run__spinner,
+.tool-run__done {
+  display: block;
+  flex: 0 0 auto;
+  color: var(--color-primary);
+}
+.tool-run__done {
+  color: var(--color-on-surface-variant);
+}
+.tool-run__failures {
+  color: var(--color-error);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight-emphasized);
+}
+
+/* Shared visual values reach both sibling surfaces: covered thread and reader. */
+.conversation {
+  --thread-header-ground: #09141d;
+  --thread-input-ground: rgb(11 14 17 / 60%);
+  --thread-blur-low: 2px;
+  --thread-blur-medium: 5px;
+  --thread-blur-high: 8px;
+  --thread-blur-full: 10px;
+  --thread-control-shadow: 0 4px 2.5px rgb(0 0 0 / 20%);
+}
+
+/* Full-pane scrolling: occupied chrome height remains stylesheet padding even when the
+   pin clears short-history compensation. */
+.conversation__covered {
+  position: absolute;
+  inset: 0;
+  display: block;
+  --thread-header-height: 85px;
+  --thread-input-height: 132px;
+}
+
+.conversation__message-area {
+  position: absolute;
+  inset: 0;
+  /* Contain pills and the drawer below chrome, leaving the existing modal levels intact. */
+  z-index: 0;
+}
+
+.conversation__message-area > .conversation__thread {
+  box-sizing: border-box;
+  margin-left: 0;
+  padding: calc(var(--thread-header-height) + var(--space-3)) var(--space-5)
+    var(--thread-input-height);
+}
+
+.conversation__top-chrome,
+.conversation__input-chrome {
+  position: absolute;
+  left: 0;
+  right: 0;
+  box-sizing: border-box;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.conversation__top-chrome {
+  top: 0;
+  padding: var(--space-6) var(--space-5) 0;
+}
+
+.conversation__input-chrome {
+  bottom: 0;
+  padding: var(--space-4) var(--space-5);
+}
+
+.conversation__top-chrome > :not(.conversation__blur),
+.conversation__input-chrome > :not(.conversation__blur) {
+  position: relative;
+  pointer-events: auto;
+}
+
+.conversation__input-chrome .composer-status {
+  margin-top: 0;
+}
+
+.conversation__overflow-title,
+.composer-status__label {
+  text-shadow: var(--shadow-thread);
+}
+
+.conversation__overflow-trigger,
+.composer-status__icon {
+  filter: drop-shadow(var(--thread-control-shadow));
+}
+
+/* Masks blend progressively stronger backdrop samples. Controls are siblings above these
+   decorative layers, so their text and hit targets never inherit a blur. */
+.conversation__blur,
+.conversation__blur::after,
+.conversation__blur > i {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.conversation__blur::after {
+  content: '';
+  background: linear-gradient(to bottom, var(--thread-header-ground), transparent);
+}
+
+.conversation__blur > i:nth-child(1) {
+  backdrop-filter: blur(var(--thread-blur-full));
+  mask-image: linear-gradient(to bottom, black, transparent 40%);
+}
+.conversation__blur > i:nth-child(2) {
+  backdrop-filter: blur(var(--thread-blur-high));
+  mask-image: linear-gradient(to bottom, transparent, black 25%, transparent 65%);
+}
+.conversation__blur > i:nth-child(3) {
+  backdrop-filter: blur(var(--thread-blur-medium));
+  mask-image: linear-gradient(to bottom, transparent 25%, black 55%, transparent 85%);
+}
+.conversation__blur > i:nth-child(4) {
+  backdrop-filter: blur(var(--thread-blur-low));
+  mask-image: linear-gradient(to bottom, transparent 55%, black 80%, transparent);
+}
+
+.conversation__input-chrome .conversation__blur::after {
+  background: linear-gradient(to bottom, transparent, var(--thread-input-ground) 20%);
+}
+.conversation__input-chrome .conversation__blur > i:nth-child(1) {
+  mask-image: linear-gradient(to bottom, transparent, black 20%);
+}
+.conversation__input-chrome .conversation__blur > i:nth-child(2) {
+  mask-image: linear-gradient(to bottom, transparent 8%, black 16%, transparent 24%);
+}
+.conversation__input-chrome .conversation__blur > i:nth-child(3) {
+  mask-image: linear-gradient(to bottom, transparent 3%, black 10%, transparent 18%);
+}
+.conversation__input-chrome .conversation__blur > i:nth-child(4) {
+  mask-image: linear-gradient(to bottom, transparent, black 4%, transparent 10%);
+}
+
+.conversation__top-overlay {
+  top: calc(var(--thread-header-height) + var(--space-3));
+  left: var(--space-5);
+  right: var(--space-5);
+}
+
+.background-task-drawer {
+  top: var(--thread-header-height);
+  bottom: var(--thread-input-height);
+  right: var(--space-5);
+  width: min(360px, calc(100% - var(--space-5)));
+}
+
+.conversation__message-area > .conversation__thread {
+  position: relative;
+  z-index: 0;
+}
+
+.conversation__input-chrome .composer-options {
+  max-width: var(--composer-options-max-width, none);
+}
+
+/* Bounded footer labels wrap fully, including unbroken model names. Keep overflow visible
+   on the row and panel so the existing keyboard focus outline paints outside their edges. */
+.conversation__input-chrome .composer__footer .composer-options__item {
+  box-sizing: border-box;
+  height: auto;
+  min-height: 28px;
+  padding-block: var(--space-1);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  flex-shrink: 0;
+}
+
+/* Left-edge header popup: preserve footer and right-aligned consumers' offsets. */
+.composer-options-anchor--bottom-start {
+  flex: 0 0 auto;
+  z-index: 1;
+}
+
+.composer-options-anchor--bottom-start > .composer-options {
+  top: calc(100% + var(--space-8));
+  left: calc(-1 * var(--space-1));
+  right: auto;
+  bottom: auto;
+}
+
+/* An opt-in dismissal layer consumes the entire gesture before exposing underlying controls. */
+.composer-options-dismiss-layer {
+  position: fixed;
+  inset: 0;
+}
+
+.composer-options-anchor--consume-outside > .composer-options {
+  z-index: 1;
 }

@@ -32,7 +32,7 @@ Part of [Thread timeline](thread-timeline.md).
   ([#1223](../codebase/1223.md)) does exactly that, and array-index keys broke under it —
   [#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260) gave the render layer its own
   origin-relative key for this reason; see [Conversation timeline store § Edge
-  cases](conversation-timeline-store.md#edge-cases-and-limitations).
+  cases](conversation-timeline-store-limits.md#edge-cases-and-limitations).
 - **`stalled` is onset-only with no daemon "cleared" signal** ([#317](../codebase/317.md)) — the daemon
   sends a one-shot `stall` frame and never repeats it or clears it, so the reducer derives the clear
   entirely client-side on the next turn-activity arm. A stall with no following activity stays shown
@@ -47,7 +47,7 @@ Part of [Thread timeline](thread-timeline.md).
 - **Compaction status survives turn activity.** Its falling edge clears the boolean
   and retains a divider; reconnect clears status directly without creating one.
   Delayed count metadata belongs to the row, not the liveness flag. See
-  [compaction association and lifetime](conversation-timeline-store.md#what-it-does).
+  [compaction association and lifetime](conversation-timeline-store-compaction.md#what-it-does).
 - **`thinkingTokens` is a reading, never a value to compare against a maximum** ([#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314)) — the daemon's own docs call it "approximate progress for
   spinners/pills, not the authoritative billed output_tokens", and it restarts near zero at every
   inference-request boundary (observed four times inside one committed single-turn capture). A monotonic
@@ -58,7 +58,7 @@ Part of [Thread timeline](thread-timeline.md).
 - **`requireNumber` proves only `typeof value === 'number'`** ([#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314)) — NaN, `Infinity` and negatives all decode and cross the contextBridge
   intact (ADR 0002 drift forbids a range check at the decode boundary), so this module carries the value
   unvalidated by design. The render-side `thinkingLabel` formatter is the actual boundary — see
-  [Conversation shell § Thinking / working indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967).
+  [Conversation shell § Thinking / working indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967-splits-the-local-send-window-into-sending-and-waiting-for-claude-since-1725).
 - **`reset` had no dispatch site as of [#528](../codebase/528.md); [#530](../codebase/530.md) shipped
   the first, [#531](../codebase/531.md) the second, [#652](../codebase/652.md) the third.** A
   conversation switch clears the timeline via `activateConversation`, gated on the active conversation's

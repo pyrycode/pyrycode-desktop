@@ -14,6 +14,8 @@ export const PROTOCOL_VERSION = 'v2' as const
 export const CAPABILITY_INTERACTIVE = 'interactive' as const
 /** Tells the daemon this client understands more than one agent, so it sends Codex conversations (#1657). */
 export const CAPABILITY_MULTI_AGENT = 'multi_agent' as const
+/** Detection only (pyrycode#2797): the daemon echoes it when it accepts `stop_background_task` (#1770). */
+export const CAPABILITY_STOP_BACKGROUND_TASK = 'stop_background_task' as const
 
 /** Which agent runs a conversation or offers a model row (#1649). */
 export type WireAgent = 'claude' | 'codex'
@@ -93,6 +95,7 @@ export type EnvelopeType =
   | 'assistant_delta'
   | 'turn_end'
   | 'turn_state'
+  | 'session_error'
   | 'stall'
   | 'api_retry'
   | 'compacting'
@@ -196,6 +199,11 @@ export type EnvelopeType =
   // internal/protocol/codes.go TypeMCPStatus.
   | 'mcp_status'
   | 'dequeue_message'
+  // Client → daemon (pyrycode#2729): deliver one queued message into the RUNNING turn instead of after
+  // it. Same fields as `dequeue_message`, no reply frame; the acknowledgement is the `queue_state`
+  // change and the user `message` push. A daemon no-op when the turn is idle, the id is unknown or the
+  // session is Codex.
+  | 'send_queued_now'
   // v2-only phone→binary control frame — stops the running turn in the conversation it names, which
   // the daemon maps to the neutral turnevent.Cancel and routes to that conversation's bound runner as
   // claude's own interrupt. Carries InterruptPayload (one optional conversation_id) and NO nonce,
@@ -282,6 +290,9 @@ export type EnvelopeType =
   // Asks the daemon to move one named MCP server to the requested enabled state. The client sends
   // `enabled` explicitly for both values and never retries a refusal (#1586).
   | 'mcp_toggle'
+  // Client → daemon (pyrycode#2796). Asks the daemon to stop one background task. Accepted: no reply.
+  // Refused: one error `stop_background_task.refused` correlated by in_reply_to. Never retried (#1770).
+  | 'stop_background_task'
   // The conversation's MODEL inventory (#971) — the identities claude will run as, with the
   // reasoning-effort levels each one supports. Same shape of frame as its sibling below and drawn from
   // the same `initialize` control reply: v2 outbound (binary → phone), interactive-capability-gated,
@@ -738,7 +749,7 @@ export interface SessionSettingsPayload {
   window_tokens: number
   /**
    * What the resolved session supports (pyrycode#2646). Absent unless the client advertised
-   * `multi_agent` and the reply resolved a session. Only the three flags below are decoded (#1654).
+   * `multi_agent` and the reply resolved a session. Only the flags below are decoded (#1654, #1726).
    */
   capabilities?: SessionCapabilitiesPayload
   /** Optional daemon memory-search report; omission means no reading was supplied. */
@@ -764,13 +775,15 @@ export interface MemorySearchPayload {
  * slash-command, MCP-status and context-breakdown requests at all — true for Claude, false for Codex.
  * Upstream always writes them on a present object, but a daemon predating #2670 does not, so each is
  * optional: absent = not reported, which is distinct from `false`. Support is not permission; the
- * daemon re-checks every request. The object's other keys (`interrupt`, `mid_turn_input`,
+ * daemon re-checks every request. `mid_turn_input` (#1726, pyrycode#2730) says whether the session
+ * accepts `send_queued_now` — true for Claude, false for Codex. The object's other keys (`interrupt`,
  * `effort_levels`, `permission_modes`, `attachment_types`, `models`) are deliberately not modelled.
  */
 export interface SessionCapabilitiesPayload {
   slash_commands?: boolean
   mcp_servers?: boolean
   context_usage_detail?: boolean
+  mid_turn_input?: boolean
 }
 
 /**
@@ -782,6 +795,8 @@ export interface SessionCapabilitiesPayload {
  * verbatim. See #199.
  */
 export interface AssistantDeltaPayload {
+  /** Spawning Agent/Task id; empty or absent for main-thread text. Display attribution only. */
+  parent_tool_use_id?: string
   conversation_id: string
   turn_id: string
   /** Per-turn sequence, non-negative, resets each turn (daemon Seq int, #607); `0` is a valid value. */
@@ -2077,6 +2092,18 @@ export interface DequeueMessagePayload {
 }
 
 /**
+ * Outbound `send_queued_now` payload (client → daemon). Mirrors the daemon SSOT (pyrycode#2729,
+ * docs/protocol-mobile.md § Queue (v2)) field-for-field — the same two fields as
+ * `DequeueMessagePayload`, both always present. Asks the daemon to hand one queued message to the
+ * running turn now rather than after it ends. Ungated like `dequeue_message`; `queued_msg_id` is the
+ * inbound `QueuedItem.queued_msg_id`, unpoliced here — an unknown id is a daemon-side no-op.
+ */
+export interface SendQueuedNowPayload {
+  conversation_id: string
+  queued_msg_id: number
+}
+
+/**
  * Outbound `interrupt` payload (client → daemon). Mirrors the daemon SSOT (pyrycode#2103,
  * docs/protocol-mobile.md § Interrupt (v2)) field-for-field: ONE field and nothing else. Asks the
  * daemon to stop the running turn in the conversation it names — the remote equivalent of pressing
@@ -2837,6 +2864,14 @@ export interface MCPTogglePayload {
   conversation_id: string
   server_name: string
   enabled: boolean
+}
+
+/** Ask the daemon to stop one background task (#1770), field-for-field with the daemon's payload. Both ids
+ *  are opaque daemon strings, required and non-empty; `task_id` is the one the roster rows carry. Never a
+ *  log field, a map key, a path or markup on this side. */
+export interface StopBackgroundTaskPayload {
+  conversation_id: string
+  task_id: string
 }
 
 /**

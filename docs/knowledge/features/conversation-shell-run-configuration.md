@@ -225,11 +225,12 @@ count) stays an in-file, unexported one-liner; zero new public exports, zero new
 own inline expression — `Math.min(100, Math.max(0, Math.round((usedTokens / windowTokens) * 100)))`
 behind `windowTokens > 0` — is now `contextUsagePercent(usedTokens, windowTokens)`, in the new
 `src/renderer/src/screens/conversation/contextUsage.ts`, so this gauge and the
-[composer footer row](conversation-shell-composer-message-box.md#composer-footer-row-811)'s "Context: N%" reading share one guard and one clamp
-rather than two that could drift apart. `#1062` added a severity ladder (`contextUsageStep`, in the same
-file) to the footer reading alone — `.run-config__context-fill` stays `--color-success` at every value on
-purpose, so this gauge and that reading can show different colours for the same number today; the shared
-function is what leaves the bar one class away from following the ladder in a later ticket.
+[composer footer row](conversation-shell-composer-message-box.md#composer-footer-row-811)'s context
+circle share one guard and one clamp rather than two that could drift apart. `#1062` added a severity
+ladder (`contextUsageStep`, in the same file) to the footer reading alone. Since #1728 that reading is
+a 15px counterclockwise ring with warnings at 70% and 85% and a visually hidden percentage/warning
+label; this sheet's gauge and visible usage text are unchanged. `.run-config__context-fill` stays
+`--color-success` at every value, so the gauge and circle can show different colours for the same number.
 `ContextWindowSection` calls it and derives nothing itself —
 `pct !== null` replaces the old `available` ternary — and every other line in the section (the usage
 string, the `role="progressbar"` triple, the inline fill width, the unavailable line) is byte-identical
@@ -269,10 +270,10 @@ from ever carrying a third field.
 **The composer footer's reading (`ContextUsageControl`, in [Composer footer
 row](conversation-shell-composer-message-box.md#composer-footer-row-811)) resolves the identical pair
 through the identical function**, so the footer and this gauge cannot disagree about which figure to show
-for one conversation. Both keep going through `contextUsagePercent`/`contextUsageStep` computed from the
-total and the maximum — never from claude's own `percentage` field, which the store holds and neither
-surface reads — so the clamp, the finiteness guard and the severity ladder stay the one computation this
-section's own `Number.isFinite` extraction established at #811. It also settles this section's *internal*
+for one conversation. Both use `contextUsagePercent` computed from the total and the maximum — never
+from claude's own `percentage` field, which the store holds and neither surface reads — so the clamp
+and finiteness guard remain shared. Only the footer then calls `contextUsageStep`; the gauge has no
+severity ladder. The shared source also settles this section's *internal*
 consistency for free: `ContextWindowSection` derives its percentage from the same two integers it
 abbreviates into `(X of Y tokens)`, so one winning pair makes the drawn triple (Figma `20:152`) consistent
 by construction rather than by three edits that happen to agree. See [#1421 architecture

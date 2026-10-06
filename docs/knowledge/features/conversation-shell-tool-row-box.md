@@ -71,9 +71,8 @@ a visible step over the now-unfilled resting background.
 
 **What the ticket held, and how each survives untouched:** the pending row's 50% dimming
 (`.tool-row { opacity: 0.5 }` / `.tool-row--resolved`, neither edited) and its `<div>` fork (TSX, not
-edited); the error border (`.tool-row--error .tool-row__chip`, not edited, still outspecifying the base
-rule at (0,2,0) against (0,1,0) — `.tool-row__chip--toggle` still declares no `border` in any form, which
-is the one thing that would silently kill the error accent on every failed row if it ever did); the
+edited); the failure-state hook (the former error border was removed by #1748 in favour of
+[the Failed icon](conversation-shell-tool-rows.md#failed-icon)); the
 headline's single-line ellipsis (`min-width: 0` + `overflow: hidden` + `text-overflow: ellipsis` +
 `white-space: nowrap`, all unchanged — a wider box gives an untrusted string more room, it does not make
 the geometric bound optional, and `nowrap` still collapses an embedded newline to a space so it cannot
@@ -142,17 +141,17 @@ the two corners each half of a join shares with the seam (`border-top-left/right
 row, `border-bottom-left/right-radius: 0` on the upper) — written as the absence of the row's own
 `--radius-xs`, not a `--radius-none` token, since a square corner isn't a value in the radius scale.
 
-**The join's border colour is stated as a rule, not left to paint order**, because paint order does not
-reliably favour either row. A later sibling paints over an earlier one by default, which would erase a
-failed row's red bottom edge against the row below it — but `.tool-row`'s pending `opacity: 0.5` makes a
-pending row an atomic paint group that paints above every non-dimmed sibling regardless of DOM order,
-which reverses that direction the moment a pending row is one side of the pair. `.tool-row--error +
-.tool-row` and `.tool-row:has(+ .tool-row--error)` retint exactly the one edge each neighbour shares with a
-failed row to `--color-error`, so the two coincident borders are always the same colour and the drawn line
-stops depending on which row happens to paint last. A pending/resolved join needs no such rule: a 50%
-border painted over a 100% border of the same colour at the same pixels composites back to full strength,
-and a failed row is always `--resolved` too (`tool-row--error` layers only on top of `tool-row--resolved`),
-so a dimmed row and a red border are never the same element.
+**All borders and joins stay plain**, including the failed row's four sides and both
+shared edges. #1748 removes the `.tool-row--error` border rule, the neighbour retints
+`.tool-row--error + .tool-row` / `.tool-row:has(+ .tool-row--error)`, and the grouped
+error-edge rules. `tool-row--error` stays as a state hook; the
+[Failed icon](conversation-shell-tool-rows.md#failed-icon) carries the error colour.
+The negative margin, internal square corners and single shadow remain unchanged.
+
+Paint order is still a trap when overlapping borders of different colours: pending
+opacity creates an atomic paint group, so DOM order alone cannot select the visible
+edge. The plain treatment avoids that dependency because both coincident borders
+use `--color-primary-container`, including a pending/resolved pair.
 
 **A run follows visible neighbours.** Legacy, clean-success and cancelled `turnBoundary`
 items draw nothing and do not break a tool stack. A [stopped-turn record](conversation-shell-timeline-render.md#stopped-turn-records)

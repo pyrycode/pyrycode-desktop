@@ -64,7 +64,7 @@ export function isAtBottom(metrics: ThreadScrollMetrics): boolean {
 }
 
 /**
- * How close to the top fires the history walk's next ask, in CSS pixels (#1260).
+ * How close to the top fires the history walk's next ask, in viewport heights (#1260, sized by #1752).
  *
  * ⭐ THIS IS NOT A TOLERANCE, and reading it as `AT_BOTTOM_TOLERANCE_PX`'s twin is the one way to get it
  * wrong. That constant is a rounding allowance around an exact position; this one is a deliberate RIM the
@@ -75,34 +75,30 @@ export function isAtBottom(metrics: ThreadScrollMetrics): boolean {
  * prepended above them. An ask fired only at the top would therefore fire at the one offset where the
  * mechanism it depends on is off. Do not shrink this to a tolerance.
  *
- * Fenced on three sides rather than chosen freely:
- *
- * - Two of Chromium's ~100px wheel notches, so a reader scrolling back with the wheel enters the band a
- *   frame or more before reaching zero.
- * - An order of magnitude above `AT_BOTTOM_TOLERANCE_PX`, so it reads as proximity rather than as
- *   accumulated sub-pixel error.
- * - A quarter of the app's 800px minimum window height, so it stays a rim rather than a viewport.
+ * Two viewports rather than a fixed pixel rim, so a reader scrolling back at a normal pace asks a whole
+ * screenful or more before the top and the page (`HISTORY_PAGE_LIMIT` entries) lands while they are still
+ * reading what is already drawn. It scales with the window, so a tall window asks as early, in screens,
+ * as a short one.
  *
  * A reader who lands on exactly zero anyway — a fling, `Home`, a programmatic jump — still asks, and that
  * one page arrives without their place held. That is a KNOWN, stated bound rather than an oversight:
  * closing it needs production code that measures the growth and writes `scrollTop` itself, which is a
  * second mechanism competing with anchoring for the same job.
  */
-export const HISTORY_ASK_BAND_PX = 200
+export const HISTORY_ASK_BAND_VIEWPORTS = 2
 
 /**
- * Is the thread scrolled back to within `HISTORY_ASK_BAND_PX` of its top?
+ * Is the thread scrolled back to within `HISTORY_ASK_BAND_VIEWPORTS` viewport heights of its top?
  *
- * ONE comparison against the offset alone, in the shape `isAtBottom` argues for: the elastic overshoot
- * past the top (a negative offset) and the thread too short to scroll (an offset pinned at zero) are both
- * consequences of the same expression rather than branches, so there is no clamp, no `Math.max` and no
- * "can it scroll at all" guard. `<=`, not `<`, so the boundary belongs to the band.
+ * ONE comparison of the offset against the viewport-sized band, in the shape `isAtBottom` argues for: the
+ * elastic overshoot past the top (a negative offset) and the thread too short to scroll (an offset pinned
+ * at zero) are both consequences of the same expression rather than branches, so there is no clamp, no
+ * `Math.max` and no "can it scroll at all" guard. `<=`, not `<`, so the boundary belongs to the band.
  *
- * It reads NEITHER of the other two metrics, and takes the whole `ThreadScrollMetrics` anyway: the call
- * site measures all three off one node for `isAtBottom` in the same breath, and a second parameter shape
- * would invite a bare number at exactly the site whose named fields exist to make the mapping correct by
- * inspection.
+ * It reads the offset and the viewport, never the content height, and takes the whole
+ * `ThreadScrollMetrics` anyway: the call site measures all three off one node for `isAtBottom` in the same
+ * breath, and named fields are what keep `viewportHeight` from being transposed with `contentHeight` here.
  */
 export function isNearTop(metrics: ThreadScrollMetrics): boolean {
-  return metrics.scrollOffset <= HISTORY_ASK_BAND_PX
+  return metrics.scrollOffset <= HISTORY_ASK_BAND_VIEWPORTS * metrics.viewportHeight
 }

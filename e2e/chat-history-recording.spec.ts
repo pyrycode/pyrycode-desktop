@@ -3,6 +3,7 @@ import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { ChatHistoryResult } from '../src/shared/chatHistory'
 import { pairAnotherServerFromSettings } from './fixtures/pairingArrival'
 import { readMainProcess } from './fixtures/mainProcessRead'
+import { installUnreadableLocalList } from './fixtures/localListFailure'
 
 const ts = '2026-07-07T12:00:00.000Z'
 const frame = (type: string, payload: Record<string, unknown>, in_reply_to?: number) =>
@@ -137,7 +138,8 @@ test('explicit unpair discards buffered history across restart while same-server
     conversation_id: SEEDED_ROW.id, turn_id: 'before-forget', seq: 1, text: ' buffered stale tail' }))
   await expect(first.page.locator('.bubble[data-thread-role="assistant"]')).toContainText('buffered stale tail')
   expect(await read(first.page)).toEqual(saved)
-  await first.page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await first.page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await first.page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
   const row = first.page.locator('.settings__server-row').filter({ has: first.page.locator('.settings__server-row-id', { hasText: new RegExp(`^${serverId}$`) }) })
   await row.getByRole('button', { name: 'Unpair', exact: true }).click()
   await row.getByRole('button', { name: 'Confirm', exact: true }).click()
@@ -264,7 +266,7 @@ test('records received content, drains buffered quit, and reads locally after re
   await expect(second.page.locator('.bubble[data-thread-role="assistant"]')).toContainText('live partial final buffered text')
   await expect(second.page.locator('.bubble__cursor')).toHaveCount(0)
   await expect(second.page.getByText('Older messages require a connection.', { exact: true })).toHaveCount(0)
-  await second.page.locator('.bubble[data-thread-role="assistant"]').getByRole('button', { name: 'Copy message' }).click()
+  await second.page.locator('.bubble[data-thread-role="assistant"]').locator('..').getByRole('button', { name: 'Copy message' }).click()
   await expect.poll(() => second.app.evaluate(({ clipboard }) => clipboard.readText())).toBe('live partial final buffered text')
   await second.page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')) })
   expect(await outbound()).toEqual([])
@@ -290,6 +292,8 @@ test('records received content, drains buffered quit, and reads locally after re
 })
 
 test('window close drains the writer and a reopened window can read its saved rows', async ({ launchPairedApp }) => {
+  // macOS only: everywhere else `window-all-closed` quits the app, so there is no window to reopen.
+  test.skip(process.platform !== 'darwin', 'only macOS keeps the app running after its last window closes')
   const { page, app, daemon, servers } = await launchPairedApp()
   await page.clock.install({ time: new Date('2026-09-12T12:00:00Z') })
   await page.clock.pauseAt(new Date('2026-09-12T12:00:01Z'))
@@ -343,7 +347,7 @@ test('restores a pairing-rejected saved host beside a usable connected host', as
   await expect(page.locator('.bubble[data-thread-role="assistant"]')).toContainText('Saved rejected-host reply')
   await expect(page.getByText('Older messages require a connection.', { exact: true })).toBeVisible()
   await page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')) })
-  await page.locator('.bubble[data-thread-role="assistant"]').getByRole('button', { name: 'Copy message' }).click()
+  await page.locator('.bubble[data-thread-role="assistant"]').locator('..').getByRole('button', { name: 'Copy message' }).click()
   await expect.poll(() => second.app.evaluate(({ clipboard }) => clipboard.readText())).toBe('Saved rejected-host reply')
   expect(await outbound()).toEqual([])
   await page.setViewportSize({ width: 1280, height: 800 })
@@ -410,31 +414,35 @@ test('pending saved reading survives opening and cancelling host repair', async 
   const reply = page.locator('.bubble[data-thread-role="assistant"]')
   await expect(reply).toContainText(text)
   await expect(page.getByText('Offline. Showing saved messages.', { exact: true })).toBeVisible()
-  await reply.getByRole('button', { name: 'Copy message' }).click()
+  await reply.locator('..').getByRole('button', { name: 'Copy message' }).click()
   await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText())).toBe(text)
   await page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')) })
   expect(await outbound()).toEqual([])
   await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
 })
 
-test('local list read failures stay beside the saved host', async ({ launchPairedApp }) => {
-  const { app, page, daemon, forwarder } = await launchPairedApp()
+test('local list read failures stay beside the saved host', async ({ launchPairedApp }, testInfo) => {
+  const { app, page, daemon, forwarder, servers } = await launchPairedApp()
   await daemon.close()
   await forwarder.close()
-  // Inject a classified storage failure at the existing IPC boundary, without changing pairing data.
-  await app.evaluate(({ ipcMain }) => {
-    ipcMain.removeHandler('pyry:chat-history')
-    ipcMain.handle('pyry:chat-history', () => ({ status: 'error', code: 'unreadable' }))
+  // Confirm registration after ambiguous inspection loss; pairing and non-list storage stay intact.
+  const setup = await installUnreadableLocalList(app)
+  const result = await page.evaluate(serverId => window.pyry.chatHistory({ operation: 'readList', serverId }), servers[0].serverId)
+  expect(result).toEqual({ status: 'error', code: 'unreadable' })
+  await testInfo.attach('local-list-failure-setup', {
+    body: JSON.stringify({ ...setup, result }), contentType: 'application/json'
   })
   await page.reload()
   await expect(page.locator('.channel-list__local-read-error')).toHaveCount(1)
   await expect(page.locator('.channel-list__local-read-error').first())
     .toHaveText('Could not read saved chats on this device.')
-  await expect(page.locator('.channel-list__host')).toHaveCount(1)
+  const host = page.locator('.channel-list__host')
+  await expect(host).toHaveCount(1)
+  await expect(host.locator(':scope + .channel-list__local-read-error')).toHaveCount(1)
   await expect(page.locator('.channel-list__row-open')).toHaveCount(0)
   await expect(page.locator('.conversation')).toHaveCount(0)
   await page.setViewportSize({ width: 800, height: 800 })
-  await page.screenshot({ path: '/tmp/builder-1387-local-error-800.png', animations: 'disabled' })
+  await page.screenshot({ path: '/tmp/builder-1794/local-error-800.png', animations: 'disabled' })
 })
 
 test('saved coverage survives offline restart, reconnect, live receipts and connected reopening', async ({ launchPairedApp }) => {

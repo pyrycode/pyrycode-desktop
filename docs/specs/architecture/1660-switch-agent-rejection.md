@@ -50,3 +50,17 @@ Run focused unit tests red before implementation, then green. After the final me
 ## Open Questions
 
 None.
+
+## Revisions
+
+2026-10-06: Typechecking the new event identified four exhaustive renderer translators:
+`translateDaemonEvent`, `translateModalEvent`, `translateQuestionEvent` and
+`translateTimelineEvent`. Each must return null for `switchAgentRejected`; the menu
+consumer remains the follow-up ticket's responsibility. Add a regression assertion
+beside each translator's tests. These four call sites and about 30 additional written
+lines keep the total within the size limits. No UI state or visible behavior is added.
+
+The full unit gate also identified exact decoder-shape assertions in
+`src/main/transport/fakeDaemon.test.ts`. Preserve their content-exclusion checks
+while explicitly expecting each fixture's boolean retryability. The attachment
+outcome classifiers and their consumers remain unchanged.

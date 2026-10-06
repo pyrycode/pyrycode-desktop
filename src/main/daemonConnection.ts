@@ -873,6 +873,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // onDriverEvent body, no await between a read and a write (the nextEnvelopeId / outstandingAnswers /
   // pendingSettings single-writer rationale).
   const pendingCreateConversations = new Set<number>()
+  // Sent switch envelope id → client-owned conversation; settled by refusal or conversation update.
+  const pendingSwitchAgents = new Map<number, string>()
   // envelopeId → the conversation id that request_session_settings named, for the run-config read's
   // attribution (#1176). The reply carries no conversation id of its own and the wire cannot grow one
   // (ADR 0002), so the conversation a reply describes is whichever one this client asked about under
@@ -1054,6 +1056,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   function emitFailed(code: string, message = messageFor(code), minClientVersion?: string): void {
     abandonHostPrompts()
     authenticated = false
+    pendingSwitchAgents.clear()
     if (pairingRejected) {
       code = 'pairing-rejected'
       message = messageFor(code)
@@ -1320,6 +1323,17 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
                 pendingCreateConversations.delete(inReplyTo)
                 deps.diagnosticLog?.event({ event: 'conversation-create-failed', code: 'server-rejected' })
                 emitDaemonEvent(sink, { type: 'conversationCreateRejected' })
+                return
+              }
+              const switchConversation = pendingSwitchAgents.get(inReplyTo)
+              if (switchConversation !== undefined) {
+                pendingSwitchAgents.delete(inReplyTo)
+                deps.diagnosticLog?.event({ event: 'switch-agent-failed', code: 'server-rejected' })
+                emitDaemonEvent(sink, {
+                  type: 'switchAgentRejected',
+                  conversationId: switchConversation,
+                  retryable: inbound.retryable ?? false
+                })
                 return
               }
               // Attachment-upload rejection correlation (#861), the third member of the same
@@ -2501,6 +2515,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               type: 'conversationUpdated',
               conversation: inbound.conversationUpdated
             })
+            for (const [id, conversationId] of pendingSwitchAgents) {
+              if (conversationId === inbound.conversationUpdated.id) pendingSwitchAgents.delete(id)
+            }
             // The set_system_prompt WRITE ack (#1249) — a SECOND reading of the same frame, ADDITIVE
             // to the emit above and never a gate on it. This is the file's first correlation of this
             // record, and the shape is deliberately NOT the `daemon-error` tier's: that tier consumes
@@ -2843,6 +2860,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         return
       case 'relay-link-down': {
         abandonHostPrompts()
+        pendingSwitchAgents.clear()
         const wasAuthenticated = authenticated
         authenticated = false
         // A retryable close is stream-fatal too (#505): the supervisor auto-re-dials into a fresh
@@ -3489,9 +3507,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       return
     }
     try {
-      const bytes = buildSwitchAgent({ id: nextEnvelopeId, ts: now(), payload })
+      const envelopeId = nextEnvelopeId
+      const bytes = buildSwitchAgent({ id: envelopeId, ts: now(), payload })
       nextEnvelopeId += 1
       driver.sendMessage(bytes)
+      pendingSwitchAgents.set(envelopeId, payload.conversation_id)
       deps.diagnosticLog?.event({ event: 'switch-agent-sent' })
     } catch {
       // Discard the exception and payload. A retry could initiate a second switch.
@@ -4213,6 +4233,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // to the create verb. A reconnect abandons outstanding creates, so a stale envelope id from a dead
     // session can never correlate an `error` on the reconnected one (which recycles ids from 2).
     pendingCreateConversations.clear()
+    pendingSwitchAgents.clear()
     // Reset the run-config request correlation map (#1176, AC4): a reconnect abandons outstanding
     // reads, so a reply correlated against a previous connection's envelope ids can never match on the
     // reconnected one — which is what makes the recycled ids safe here too. Without it, the fresh
@@ -4274,6 +4295,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       if (stopped) return
       stopped = true
       authenticated = false
+      pendingSwitchAgents.clear()
       abandonHostPrompts()
       // Idempotent driver teardown. If the bootstrap has not yet constructed the driver, the
       // `stopped` guard above (step 7) prevents it from ever being constructed.

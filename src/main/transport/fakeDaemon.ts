@@ -205,7 +205,7 @@ export type AttachmentRejectCode =
  * code (`internal/relay/v2session_attachment.go`'s `rejectInvalidChunk` … `rejectStorageFailed`, whose
  * flags are `false, false, false, true, true`). Mirrored rather than inferred from the code names, and
  * carried so a fixture is a REAL reject instead of a code in an empty shell — which is what makes the
- * client-side "nothing but the outcome crosses" assertions prove something.
+ * client-side content-free outcome and retryability assertions prove something.
  *
  * `message.too_long` is the one entry with no upstream text to mirror: the code is declared in
  * `codes.go` but has no emit site in the Go tree, so its message here is FAKE-OWNED. It is static and

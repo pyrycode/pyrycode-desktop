@@ -1193,16 +1193,16 @@ describe('attachmentRejectReplyFrames — the upload leg refusals (#965)', () =>
   // duplication is deliberate: sharing one constant between the fake and the narrower would make both
   // sides move together and leave the round-trip below asserting nothing. Two independent statements of
   // the wire string mean a drift in either one reddens.
-  const LEG: ReadonlyArray<readonly [string, string]> = [
-    ['attachment.invalid_chunk', 'attachment-invalid-chunk'],
-    ['attachment.integrity_failed', 'attachment-integrity-failed'],
-    ['attachment.too_large', 'attachment-too-large'],
-    ['attachment.too_many_uploads', 'attachment-too-many-uploads'],
-    ['attachment.storage_failed', 'attachment-storage-failed'],
-    ['message.too_long', 'message-too-long']
+  const LEG: ReadonlyArray<readonly [string, string, boolean]> = [
+    ['attachment.invalid_chunk', 'attachment-invalid-chunk', false],
+    ['attachment.integrity_failed', 'attachment-integrity-failed', false],
+    ['attachment.too_large', 'attachment-too-large', false],
+    ['attachment.too_many_uploads', 'attachment-too-many-uploads', true],
+    ['attachment.storage_failed', 'attachment-storage-failed', true],
+    ['message.too_long', 'message-too-long', false]
   ]
 
-  it.each(LEG)('answers the named chunk with %s, which the client narrows to its outcome', (code, outcome) => {
+  it.each(LEG)('answers the named chunk with %s, which the client narrows to its outcome', (code, outcome, retryable) => {
     const frames = attachmentRejectReplyFrames(1, code as Parameters<typeof attachmentRejectReplyFrames>[1])(
       chunkFrame(1, 42)
     )
@@ -1211,11 +1211,12 @@ describe('attachmentRejectReplyFrames — the upload leg refusals (#965)', () =>
     // Correlated to the REJECTED chunk's envelope id — the only handle the consumer (#861) can key on.
     expect(decodeEnvelope(frames[0]).in_reply_to).toBe(42)
     // End to end through the real decoder: the fake's reject becomes exactly the client-owned outcome
-    // and nothing else. Exact toEqual, so a leaked code / message / retryable reddens here too.
+    // and boolean retryability. Exact toEqual still rejects a leaked code or message.
     expect(parseInboundMessage(frames[0])).toEqual({
       kind: 'daemon-error',
       inReplyTo: 42,
-      outcome
+      outcome,
+      retryable
     })
   })
 
@@ -1246,7 +1247,8 @@ describe('attachmentRejectReplyFrames — the upload leg refusals (#965)', () =>
       expect(parseInboundMessage(frames[0])).toEqual({
         kind: 'daemon-error',
         inReplyTo: id,
-        outcome: 'attachment-invalid-chunk'
+        outcome: 'attachment-invalid-chunk',
+        retryable: false
       })
     }
     // A chunk that names one — the same completing index — is stored, not refused: the arm is about the

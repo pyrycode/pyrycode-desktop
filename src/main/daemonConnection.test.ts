@@ -13295,3 +13295,128 @@ describe('createDaemonConnection — switchAgent', () => {
     connection.stop()
   })
 })
+
+describe('createDaemonConnection — switchAgent rejection', () => {
+  const payload = { conversation_id: 'conv-1', agent: 'codex' as const, model: '' }
+  function refuse(driver: FakeDriver, inReplyTo?: number, retryable: unknown = true): void {
+    driver.emit({ type: 'message', plaintext: encodeEnvelope({
+      id: 90, type: 'error', ts: FIXED_TS,
+      ...(inReplyTo === undefined ? {} : { in_reply_to: inReplyTo }),
+      payload: { code: 'switch_agent.refused', message: 'private daemon refusal', retryable,
+        conversation_id: 'daemon-named-conversation' }
+    }) })
+  }
+  const rejections = (sink: ReturnType<typeof fakeSink>) =>
+    emitted(sink).filter(event => event.type === 'switchAgentRejected')
+  const lastId = (driver: FakeDriver) => decodeEnvelope(driver.sent[driver.sent.length - 1]).id
+
+  it.each([true, false])('emits one exact refusal with retryable=%s and content-free diagnostics', async retryable => {
+    const entries: DiagnosticEvent[] = []
+    const ctx = build({ diagnosticLog: { event: event => { entries.push(event) } } })
+    ctx.connection.start()
+    await tick()
+    const driver = ctx.drivers[0]
+    driver.emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    ctx.connection.switchAgent(payload)
+    const requestId = lastId(driver)
+    refuse(driver, requestId, retryable)
+    refuse(driver, requestId, retryable)
+    expect(rejections(ctx.sink)).toEqual([
+      { type: 'switchAgentRejected', conversationId: 'conv-1', retryable }
+    ])
+    expect(stampedEvents(ctx.sink)).toContainEqual({
+      type: 'switchAgentRejected', conversationId: 'conv-1', retryable, serverId: null
+    })
+    expect(entries.filter(event => event.event === 'switch-agent-failed')).toEqual([
+      { event: 'switch-agent-failed', code: 'server-rejected' }
+    ])
+    expect(JSON.stringify(emitted(ctx.sink))).not.toMatch(/private daemon refusal|daemon-named-conversation/)
+    ctx.connection.stop()
+  })
+
+  it('ignores uncorrelated errors without consuming the pending switch', async () => {
+    const { connection, drivers, sink } = await reachConnected()
+    connection.switchAgent(payload)
+    refuse(drivers[0])
+    refuse(drivers[0], lastId(drivers[0]) + 1)
+    expect(rejections(sink)).toEqual([])
+    refuse(drivers[0], lastId(drivers[0]))
+    expect(rejections(sink)).toEqual([
+      { type: 'switchAgentRejected', conversationId: 'conv-1', retryable: true }
+    ])
+  })
+
+  it('clears every switch for an updated conversation while preserving other conversations', async () => {
+    const { connection, drivers, sink } = await reachConnected()
+    const driver = drivers[0]
+    connection.switchAgent(payload)
+    const first = lastId(driver)
+    connection.switchAgent(payload)
+    const second = lastId(driver)
+    connection.switchAgent({ ...payload, conversation_id: 'conv-2' })
+    const other = lastId(driver)
+    driver.emit({ type: 'message', plaintext: conversationUpdatedPlaintext({
+      id: 'conv-1', is_promoted: false, cwd: '/workspace', name: null, last_used_at: '', workspace_label: null
+    }) })
+    expect(emitted(sink).filter(event => event.type === 'conversationUpdated')).toHaveLength(1)
+    refuse(driver, first)
+    refuse(driver, second)
+    expect(rejections(sink)).toEqual([])
+    refuse(driver, other, false)
+    expect(rejections(sink)).toEqual([
+      { type: 'switchAgentRejected', conversationId: 'conv-2', retryable: false }
+    ])
+  })
+
+  it.each([
+    'relay-down', 'terminal', 'error', 'reconnect', 'stop'
+  ] as const)('discards pending switches on %s', async teardown => {
+    const { connection, drivers, sink } = await reachConnected()
+    const driver = drivers[0]
+    connection.switchAgent(payload)
+    const oldId = lastId(driver)
+    switch (teardown) {
+      case 'relay-down': driver.emit({ type: 'relay-link-down', code: 1006 }); break
+      case 'terminal': driver.emit({ type: 'terminal', code: 1006, reason: 'closed' }); break
+      case 'error': driver.emit({ type: 'error', reason: 'outbound-frame-encode-failed' }); break
+      case 'reconnect': connection.reconnect(); await tick(); break
+      case 'stop': connection.stop(); break
+    }
+    // Relay supervision can reuse the driver; reconnect instead fences the old generation.
+    refuse(driver, oldId)
+    expect(rejections(sink)).toEqual([])
+    if (teardown !== 'stop') {
+      const active = drivers[drivers.length - 1]
+      active.emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+      refuse(active, oldId)
+      expect(rejections(sink)).toEqual([])
+      connection.switchAgent({ ...payload, conversation_id: 'conv-2' })
+      refuse(active, lastId(active))
+      expect(rejections(sink)).toEqual([
+        { type: 'switchAgentRejected', conversationId: 'conv-2', retryable: true }
+      ])
+      connection.stop()
+    }
+  })
+
+  it('does not correlate a throwing send', async () => {
+    const { connection, drivers, sink } = await reachConnected()
+    vi.spyOn(drivers[0].handle, 'sendMessage').mockImplementationOnce(() => { throw new Error('private failure') })
+    connection.switchAgent(payload)
+    refuse(drivers[0], 2)
+    expect(rejections(sink)).toEqual([])
+  })
+
+  it.each([undefined, null, 'true', 1])('defaults an unusable retryable flag (%s) to false', async retryable => {
+    const { connection, drivers, sink } = await reachConnected()
+    connection.switchAgent(payload)
+    // Explicit undefined must omit the wire field rather than take refuse's default value.
+    drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({
+      id: 90, type: 'error', ts: FIXED_TS, in_reply_to: lastId(drivers[0]),
+      payload: { code: 'switch_agent.refused', message: 'private daemon refusal', retryable }
+    }) })
+    expect(rejections(sink)).toEqual([
+      { type: 'switchAgentRejected', conversationId: 'conv-1', retryable: false }
+    ])
+  })
+})

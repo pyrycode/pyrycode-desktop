@@ -1187,17 +1187,15 @@ describe('parseInboundMessage — debug-bundle recognition (#116, additive)', ()
     })
   })
 
-  it('narrows a daemon error into a { kind: daemon-error } carrying ONLY a client-owned outcome', () => {
-    // The ErrorPayload fields are present on the wire but must NOT be surfaced (#965 scoped the
-    // content-free rule; `code` is read as a comparand only, and this fixture's code is outside the
-    // six this client classifies, so it lands on the catch-all).
+  it('narrows a daemon error into a client-owned outcome and boolean retryability', () => {
+    // Error text stays discarded; this code is outside the classified set and lands on the catch-all.
     const bytes = encodeEnvelope({
       id: 1,
       type: 'error',
       ts: FIXED_TS,
       payload: { code: 'server.binary_offline', message: 'secret daemon detail', retryable: true }
     })
-    expect(parseInboundMessage(bytes)).toEqual({ kind: 'daemon-error', outcome: 'unclassified' })
+    expect(parseInboundMessage(bytes)).toEqual({ kind: 'daemon-error', outcome: 'unclassified', retryable: true })
   })
 
   it('carries the Envelope in_reply_to onto the daemon-error kind as inReplyTo (#269 correlation id)', () => {
@@ -1213,6 +1211,7 @@ describe('parseInboundMessage — debug-bundle recognition (#116, additive)', ()
       kind: 'daemon-error',
       inReplyTo: 7,
       outcome: 'unclassified',
+      retryable: false,
       // `protocol.malformed` is unclassified for THIS union and classified for the system-prompt
       // write verb's (#1249) — the per-verb separation working as designed. Named here because
       // `toEqual` ignores an undefined property but fails on a defined one, so a sibling narrowed
@@ -1229,7 +1228,7 @@ describe('parseInboundMessage — debug-bundle recognition (#116, additive)', ()
       payload: { code: 'session.not_found', message: 'secret daemon detail', retryable: false }
     })
     const result = parseInboundMessage(bytes)
-    expect(result).toEqual({ kind: 'daemon-error', outcome: 'unclassified' })
+    expect(result).toEqual({ kind: 'daemon-error', outcome: 'unclassified', retryable: false })
     // Explicit: the carrier is present-but-undefined, so daemonConnection's lookup short-circuits.
     expect(result?.kind === 'daemon-error' && result.inReplyTo).toBeUndefined()
   })
@@ -1276,9 +1275,9 @@ describe('parseInboundMessage — daemon-error outcome narrowing (#965)', () => 
 
   it.each(LEG)('narrows the reject code %s onto its own client-owned outcome', (code, outcome) => {
     // Exact toEqual, never toMatchObject: the exactness IS the no-leak assertion (AC3). A decoder that
-    // passed `code`, `message`, `retryable` or `retry_after_s` through reddens here rather than being
+    // passed `code`, `message` or `retry_after_s` through reddens here rather than being
     // tolerated by a subset match.
-    expect(parseInboundMessage(encodeReject(code))).toEqual({ kind: 'daemon-error', outcome })
+    expect(parseInboundMessage(encodeReject(code))).toEqual({ kind: 'daemon-error', outcome, retryable: true })
   })
 
   it('gives the eight reject codes eight DISTINCT outcomes', () => {
@@ -1310,6 +1309,7 @@ describe('parseInboundMessage — daemon-error outcome narrowing (#965)', () => 
       expect(parseInboundMessage(encodeReject(code))).toEqual({
         kind: 'daemon-error',
         outcome: 'unclassified',
+        retryable: true,
         systemPromptReject
       })
     }
@@ -1333,20 +1333,18 @@ describe('parseInboundMessage — daemon-error outcome narrowing (#965)', () => 
     for (const code of nearMisses) {
       expect(parseInboundMessage(encodeReject(code))).toEqual({
         kind: 'daemon-error',
-        outcome: 'unclassified'
+        outcome: 'unclassified',
+        retryable: true
       })
     }
   })
 
-  it('ignores the wire retryable flag — retryability is documented, never read (AC2)', () => {
-    // encodeReject hardcodes `retryable: true`, which for attachment.not_found CONTRADICTS the daemon's
-    // published `no` (`rejectAttachmentNotFound`'s flag is literally `false`). That disagreement is what
-    // makes this assertable at all — it is the first code in the set where the fixture and the real
-    // reject table differ. Narrowing to the not-retryable outcome anyway, with no flag on the result,
-    // proves the classifier neither reads the wire's claim nor computes retryability from the code name.
+  it('preserves the classified outcome independently of the wire retryable flag', () => {
+    // Existing attachment consumers classify from outcome; the switch consumer reads retryable.
     expect(parseInboundMessage(encodeReject('attachment.not_found'))).toEqual({
       kind: 'daemon-error',
-      outcome: 'attachment-not-found'
+      outcome: 'attachment-not-found',
+      retryable: true
     })
   })
 
@@ -1395,7 +1393,8 @@ describe('parseInboundMessage — daemon-error outcome narrowing (#965)', () => 
     expect(parseInboundMessage(encodeReject('attachment.too_large', 41))).toEqual({
       kind: 'daemon-error',
       inReplyTo: 41,
-      outcome: 'attachment-too-large'
+      outcome: 'attachment-too-large',
+      retryable: true
     })
   })
 
@@ -11695,6 +11694,19 @@ describe('parseInboundMessage — the envelope ts on the timeline-bearing arms (
 })
 
 
+describe('daemon error retryability', () => {
+  it.each([true, false, undefined, null, 'true', 1])('preserves only boolean retryable (%s)', retryable => {
+    const result = parseInboundMessage(encodeEnvelope({
+      id: 1, type: 'error', ts: FIXED_TS, in_reply_to: 7,
+      payload: { code: 'switch_agent.refused', message: 'private refusal', retryable }
+    }))
+    expect(result).toEqual({
+      kind: 'daemon-error', inReplyTo: 7, outcome: 'unclassified',
+      retryable: typeof retryable === 'boolean' ? retryable : undefined
+    })
+  })
+})
+
 describe('pairing rejection classification', () => {
   it.each([
     ['auth.invalid_token', 'pairing-rejected'],
@@ -11706,7 +11718,7 @@ describe('pairing rejection classification', () => {
       id: 1, type: 'error', ts: '2026-09-12T00:00:00Z',
       payload: { code, message: 'private-daemon-detail', retryable: true }
     }))
-    expect(result).toEqual({ kind: 'daemon-error', outcome: 'unclassified', pairingReject })
+    expect(result).toEqual({ kind: 'daemon-error', outcome: 'unclassified', pairingReject, retryable: true })
     expect(JSON.stringify(result)).not.toContain('private-daemon-detail')
   })
 })

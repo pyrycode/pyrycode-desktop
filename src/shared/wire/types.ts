@@ -546,6 +546,8 @@ export interface HelloClientPayload {
   role: 'client'
   device_name: string
   client_version: string
+  /** Optional self-reported plain text, independent of negotiated capabilities. */
+  client_features?: string
   protocol_versions: string[]
   token: string
   capabilities: string[]

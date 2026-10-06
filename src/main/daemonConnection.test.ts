@@ -682,6 +682,28 @@ describe('createDaemonConnection', () => {
     expect(payload.device_name).toBe('my-desktop')
   })
 
+  it('reports Desktop features on the first dial, automatic reload and explicit reconnect', async () => {
+    const { connection, drivers } = build()
+    connection.start()
+    await tick()
+    const expected = "Markdown links to absolute paths of markdown files under the daemon's served folders open in-app. Paths with spaces need angle brackets: [Note](</Users/me/My Vault/note.md>). Bare paths in backticks do not open. Attached files and photos upload to the daemon; on Send, Claude receives daemon-host paths and instructions to read them, not inline content."
+    const assertHello = (hello: Uint8Array): void => {
+      expect(decodeEnvelope(hello).payload).toMatchObject({
+        client_features: expected,
+        capabilities: ['interactive', 'multi_agent', 'stop_background_task']
+      })
+    }
+    assertHello(drivers[0].config.session.hello)
+    const reload = await drivers[0].config.loadDialConfig?.()
+    expect(reload).toBeTruthy()
+    assertHello(reload!.session.hello)
+    connection.reconnect()
+    await tick()
+    expect(drivers).toHaveLength(2)
+    assertHello(drivers[1].config.session.hello)
+    connection.stop()
+  })
+
   it('advertises the interactive, multi_agent and stop_background_task capabilities in the client hello (#179 AC1, #1657, #1770)', async () => {
     const { connection, drivers } = build()
     connection.start()

@@ -31,3 +31,7 @@ Sizing before commitment: one deliverable, approximately 450–550 written lines
 - Move the task-list positive control guard to the row while keeping markdown inertness assertions.
 - Fake-transport geometry/reveal spec: both sides, long/short bubbles at 800/1280/1800 widths, 900px outer cap/centering, 40px inset, actions width/gap/vertical alignment, stable colour and keyboard focus, timestamp row pointer/focus reveal without dimension changes, streaming and queued rows, attachment focus and non-text scope guard. Capture synthetic UI at constrained and wide sizes for Figma comparison.
 - Run required five regression specs and new scoped spec; after final main merge run pre-verify check and build. No live specs changed; full browser/live gates remain dispatcher-owned.
+
+## Revisions
+
+2026-10-06: The source sweep found four more bubble-scoped copy locators in `e2e/chat-history-recording.spec.ts` and `e2e/offline-conversation-actions.spec.ts`. Move those to the message row and run both specs with all behavior assertions preserved. This extends test maintenance only; the production contract stays the same. Final expected work remains below 550 lines.

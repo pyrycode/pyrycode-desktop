@@ -116,7 +116,7 @@ test('copies a message to the OS clipboard by pointer and by keyboard, and draws
   // --- 1. The measurement + the pointer path (AC3). If the blanket permission denial reaches
   // clipboard-sanitized-write, this is where it shows: the write is refused, the clipboard still holds
   // the sentinel, and the ticket takes its branch-2 handler narrowing. ---
-  await assistantBubble.getByRole('button', { name: 'Copy message' }).click()
+  await assistantBubble.locator('..').getByRole('button', { name: 'Copy message' }).click()
   await expect
     .poll(() => app.evaluate(({ clipboard }) => clipboard.readText()), {
       timeout: ROUND_TRIP_TIMEOUT_MS
@@ -126,7 +126,7 @@ test('copies a message to the OS clipboard by pointer and by keyboard, and draws
   // --- 2. The keyboard path (AC3). A real <button> is focusable and Enter-activated with no key
   // handler of our own, which is exactly the claim: focus it, press Enter, and the USER message
   // replaces the assistant one on the clipboard. Distinct texts make the swap unambiguous. ---
-  const userCopy = userBubble.getByRole('button', { name: 'Copy message' })
+  const userCopy = userBubble.locator('..').getByRole('button', { name: 'Copy message' })
   await userCopy.focus()
   await expect(userCopy).toBeFocused()
   await page.keyboard.press('Enter')

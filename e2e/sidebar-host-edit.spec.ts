@@ -271,7 +271,8 @@ test('the host row’s pen renames the machine, clears it, and the name outlives
   // MAIN answers into every slot UNCONDITIONALLY. So a write that never persisted would come back
   // `not-stored` here and both of machine A's rows would fall back to the generic word — which is exactly
   // what makes this a detector and not a re-read of the store that was just written. ---
-  await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
   const settings = page.locator('section[aria-label="Settings screen"]')
   await expect(settings).toBeVisible()
   await settings.getByRole('button', { name: 'Back' }).click()

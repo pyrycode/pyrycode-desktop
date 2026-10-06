@@ -1,3 +1,4 @@
+import { capturePairedApp } from './fixtures/capturePairedApp'
 import type { Locator, Page } from '@playwright/test'
 import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
@@ -68,8 +69,10 @@ test('the drawer toggles from the pill, leaves the composer usable, takes one Es
   launchPairedApp
 }) => {
   const captured: Envelope[] = []
-  const { page, daemon } = await launchPairedApp({ buildReplyFrames: capturingFake(captured) })
-  await page.setViewportSize({ width: 1280, height: 800 })
+  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: capturingFake(captured) })
+  await app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0].setSize(1280, 800)
+  })
 
   daemon.pushFrame(roster(SEEDED_ROW.id, [task('task-seeded', SEEDED_TASK)]))
   daemon.pushFrame(roster(SECOND.id, [task('task-second', SECOND_TASK)]))
@@ -87,7 +90,29 @@ test('the drawer toggles from the pill, leaves the composer usable, takes one Es
   await expect(drawer).toContainText(SEEDED_TASK)
   await expect(page.locator('.status-sheet-overlay, .status-sheet')).toHaveCount(0)
   await expect(pill).toHaveClass(/composer-status__tasks--open/)
-  await page.screenshot({ path: '/tmp/builder-1634-drawer-open.png', animations: 'disabled' })
+  await capturePairedApp(app, page, '/tmp/builder-1634-drawer-open.png')
+
+  // Both drawn sizes keep the complete drawer between occupied chrome and inside the pane.
+  for (const size of [{ width: 1280, height: 800 }, { width: 800, height: 600 }]) {
+    await app.evaluate(({ BrowserWindow }, size) => {
+      BrowserWindow.getAllWindows()[0].setSize(size.width, size.height)
+    }, size)
+    await expect.poll(() => page.evaluate(() => innerWidth)).toBe(size.width)
+    await expect.poll(() => page.evaluate(() => {
+      const rect = (selector: string) => document.querySelector(selector)!.getBoundingClientRect()
+      const pane = rect('.conversation__message-area')
+      const drawer = rect('.background-task-drawer')
+      const header = rect('.conversation__top-chrome')
+      const input = rect('.conversation__input-chrome')
+      return {
+        contained: drawer.left >= pane.left && drawer.right <= pane.right,
+        rightInset: Math.round(pane.right - drawer.right),
+        top: Math.round(drawer.top - header.bottom),
+        bottom: Math.round(drawer.bottom - input.top)
+      }
+    })).toEqual({ contained: true, rightInset: 20, top: 0, bottom: 0 })
+    await capturePairedApp(app, page, `/tmp/builder-1733/drawer-${size.width}.png`)
+  }
 
   // --- 2. No scrim: the composer takes typing and sending while the drawer is open. ---
   await box.click()

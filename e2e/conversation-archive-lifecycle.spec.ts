@@ -77,7 +77,8 @@ test('archive → restore → delete lifecycle reflects through the stateful fak
 
   // --- Baseline: the Archive view starts empty (the observed 0 of the 0→1). The seed is never archived, so
   // both tabs read (0). This also proves the archive-view entry and the seed-exclusion up front. ---
-  await page.locator('.channel-list__archive').click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
   await expect(page.getByRole('tab', { name: 'Channels (0)', exact: true })).toBeVisible()
   await expect(page.getByRole('tab', { name: 'Discussions (0)', exact: true })).toBeVisible()
   await page.locator('.archive__back').click()
@@ -122,7 +123,8 @@ test('archive → restore → delete lifecycle reflects through the stateful fak
 
   // Nav to the Archive view. With the manual Back gone, this click can only resolve because the app
   // navigated by itself — but it is corroboration, not the proof; the delta above is.
-  await page.locator('.channel-list__archive').click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
 
   // AC2 — Discussions 0→1: the archived non-promoted row lands in Discussions (partitionArchived filters
   // is_archived then splits promoted→channels / non-promoted→discussions). Auto-waits the archive → broadcast
@@ -196,7 +198,8 @@ test('archive → restore → delete lifecycle reflects through the stateful fak
   await expect(page.locator('.channel-list').getByText(UNTITLED, { exact: true })).toHaveCount(0)
 
   // AC4 — gone from the Archive view: the spliced row is in neither tab.
-  await page.locator('.channel-list__archive').click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
   await expect(page.getByRole('tab', { name: 'Discussions (0)', exact: true })).toBeVisible()
   await expect(page.getByRole('tab', { name: 'Channels (0)', exact: true })).toBeVisible()
 })

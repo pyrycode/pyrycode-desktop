@@ -2,7 +2,8 @@
 
 The paired region's fifth view — `archive`, a sibling of [`list`](channel-list.md),
 [`thread`](conversation-shell.md), [`settings`](settings-screen.md), and
-[`pairServer`](pairing-input-screen.md) — reachable from a new entry button on the Channel List home.
+[`pairServer`](pairing-input-screen.md) — reachable through Sidebar menu → Archive in the
+always-mounted [Channel List](channel-list.md) toolbar.
 A back header titled "Archived" above a two-tab segmented header (Channels / Discussions), each label
 carrying its live archived count (e.g. "Channels (3)"), and a per-tab list of restore rows. Mirrors
 mobile's Archive design (Figma node 18-2).
@@ -18,14 +19,12 @@ security-sensitive.
 
 ## What it does
 
-- A new icon-only **Archive** entry button (`aria-label="Archive"`) renders alongside the existing
-  [Settings entry](settings-screen.md) on the [Channel List](channel-list.md)'s root `<section>` —
-  present in all three list states (not-yet-loaded / loaded-zero / non-empty). Originally a Material
-  `archive`-box glyph leading Settings inside a shared, sticky, top-right `.channel-list__actions`
-  cluster; since [#1443](https://github.com/pyrycode/pyrycode-desktop/issues/1443) both are drawn glyphs
-  in the card's own non-scrolling Top bar, Settings leading — see the [Channel List](channel-list.md)
-  overview's "What it does" for the current geometry.
-- Clicking it navigates the [paired shell](paired-shell.md) to a new `archive` route.
+- **Archive** is the second `menuitem` in the left **Sidebar menu** ellipsis popup, after
+  [Settings](settings-screen.md). The trigger remains in loading, empty and populated sidebar
+  states; **Pair new host** stays at the right with its hover/focus name pill. The standalone
+  Archive icon has been removed.
+- Selecting Archive closes the menu and invokes the existing `onOpenArchive` callback once,
+  navigating the [paired shell](paired-shell.md) to `archive`.
 - The Archive screen shows a back header: a back affordance (`aria-label="Back"`, the same 48px
   `arrow_back` glyph as `SettingsScreen`'s `BackControl`, cloned verbatim) beside an `<h1>` reading
   "Archived".
@@ -57,7 +56,7 @@ src/renderer/src/
 ├── pairedRoute.ts                        # + 'archive' route, + 'openArchive' nav arm
 ├── PairedShell.tsx                       # + case 'archive', + onOpenArchive threading
 └── screens/
-    ├── channels/ChannelList.tsx          # + ArchiveButton entry (in-file, unexported) + .channel-list__actions cluster
+    ├── channels/ChannelList.tsx          # Sidebar menu Archive item → onOpenArchive
     └── archive/
         ├── ArchiveScreen.tsx             # ArchiveScreen (container) + ArchiveScreenView (pure) + ArchiveRow/RestoreControl/BackControl (in-file)
         ├── ArchiveScreen.test.tsx
@@ -112,22 +111,13 @@ reusing the shared `onBack` unchanged, same as `settings`. The container adds
 
 ### The entry button (`ChannelList.tsx`)
 
-`SettingsButton` used to be the list's lone top-right sticky child. A second independent sticky child
-would have stacked awkwardly, so both buttons now share one cluster:
-
-```tsx
-<div className="channel-list__actions">
-  <ArchiveButton onClick={onOpenArchive} />
-  <SettingsButton onClick={onOpenSettings} />
-</div>
-```
-
-`.channel-list__actions` carries the `position: sticky; top; align-self: flex-end; z-index; margin`
-rules that `.channel-list__settings` used to carry alone; both button rules now keep only their 48px
-box + hover/focus/color presentation. `ArchiveButton` clones `SettingsButton`'s shape exactly — an
-icon-only native `<button aria-label="Archive">` wrapping an `aria-hidden` 24px SVG (the Material
-`archive`-box glyph) — with a **distinct** `aria-label` disambiguating it from the gear's "Settings"
-(the ticket's accessibility requirement).
+The entry is now a menu item in `ComposerOptionsMenu`, mounted beside `PairNewHostButton`
+in `.channel-list__actions`. It passes `currentId={null}`, `placement="bottom-start"` and
+`consumeOutsideClick`; selecting id `archive` calls `onOpenArchive` after closing the menu.
+The menu has no selected row. Keyboard opening focuses Settings, ArrowDown reaches Archive,
+Enter/Space select, and Escape closes and restores trigger focus. The first outside tree click
+dismisses without opening or folding the underlying item; a second click operates normally.
+See the [toolbar](channel-list-section-header-pair-control.md) for popup geometry and stacking.
 
 ### The screen (`ArchiveScreen.tsx`)
 
@@ -232,7 +222,7 @@ already taken by the topbar `<h1>` (title-large).
 ### Data flow
 
 ```
-ChannelList (ArchiveButton onClick)
+ChannelList Sidebar menu → Archive menuitem → ComposerOptionsMenu.onSelect('archive')
   → onOpenArchive prop
     → PairedShell dispatch({ type: 'openArchive' })
       → nextPairedRoute('list', openArchive) = 'archive'
@@ -265,6 +255,12 @@ the subtitle source, last-use fallback and bare "Archived". Cross-view assertion
 `channelListViewModel.test.ts`: Archive sorts while the shared `partitionByPromotion` preserves
 input order, so changing only the archive suite would miss that regression.
 
+Fake-transport navigation specs open Sidebar menu before selecting the Archive `menuitem` and
+retain their destination/lifecycle assertions. `sidebar-header-menu.spec.ts` proves pointer and
+keyboard navigation at 1280×800 and 800×600; assert `aria-label="Archive screen"` for arrival,
+since Archive text also exists inside the open menu. The shared pairing-arrival helper uses the
+sibling Settings item for Pair another server. See [recorded evidence](development-verification.md#layout-and-input).
+
 [`e2e/real-daemon-archive-order.spec.ts`](../../../e2e/real-daemon-archive-order.spec.ts) uses the
 Claude-less daemon fixture. It observes the first archive completing before issuing the second,
 then expects second-archived-first against opposing last-used order. It also checks both daemon
@@ -291,18 +287,16 @@ the spec records its revision. See the [live test runbook](live-e2e-runbook.md) 
   active-marker render both derive from the same `tab.key`, so a mismatch is structurally impossible.
   The restore-dispatch contract itself is pinned directly: `requestUnarchiveConversation` is tested by
   calling it with a fake `sendCommand` and asserting the exact command shape.
-- **Restore glyph is a developer choice; the sidebar entry glyph no longer is.** The restore glyph (a
+- **Restore glyph is a developer choice.** The restore glyph (a
   Material `replay` circular arrow) is a reasonable stand-in for Figma's undo/restore icon — not
-  load-bearing, since the accessible name comes from `aria-label`, not the glyph. The `ArchiveButton`
-  glyph was the same kind of stand-in until
-  [#1443](https://github.com/pyrycode/pyrycode-desktop/issues/1443) replaced it with the drawing's own
-  export (`box-archive-solid-full 1`, Figma `117:3839`).
+  load-bearing, since the accessible name comes from `aria-label`, not the glyph. The sidebar
+  Archive entry is now text inside Sidebar menu, with no separate archive glyph.
 
 ## Related
 
 - [Paired shell](paired-shell.md) / [#140](../codebase/140.md) — the router this screen's `archive`
   route slots into, now `list ⇄ thread ⇄ settings ⇄ pairServer ⇄ archive`.
-- [Channel List home screen](channel-list.md) / [#141](../codebase/141.md) — hosts the entry button in
+- [Channel List home screen](channel-list.md) / [#141](../codebase/141.md) — hosts the menu entry in
   its own Top bar, and the `titleFor`/`partitionByPromotion`/`formatLastActivity` reuse source in
   `channelListViewModel.ts`.
 - [Settings screen](settings-screen.md) / [#333](../codebase/333.md) — the direct structural precedent

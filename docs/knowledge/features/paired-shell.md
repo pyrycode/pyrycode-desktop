@@ -118,6 +118,14 @@ reconnect preserves restored rows and their recording ownership. See
 
 ## How it works
 
+`PairedShell` mounts `subscribeResetContextUsage(conversationActivityStore,
+window.pyry.sendCommand)` once in an effect and returns its unsubscribe function for cleanup.
+The subscription survives route changes and chat-pane remounts, so completion of an off-screen
+conversation's reset still requests that conversation's context. Putting it in `ConversationScreen`
+would lose that observation when switching chats. Shell teardown stops the observer; mounting does
+not itself request a reading. Activation retains its separate connected-owner ask. See
+[reported-context refresh triggers](reported-context-store.md#how-it-works).
+
 Two new files, peers of `appRoute.ts` / `App.tsx` (the second-level router, not a screen), plus
 additive edits to `App.tsx` and `ConversationScreen.tsx`. [#670](../codebase/670.md) added a third,
 co-located with `PairedShell.tsx` the way every screen's stylesheet already is:

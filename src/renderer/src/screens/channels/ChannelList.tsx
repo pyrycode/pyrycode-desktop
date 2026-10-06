@@ -59,6 +59,7 @@ import { useActiveConversationStore } from '../../store/activeConversationStore'
 import { resolveConversationStatus } from '../../store/conversationStatus'
 import { isConversationUnread } from '../../store/conversationUnread'
 import { requestArchiveConversation } from '../conversation/ConversationScreen'
+import { ComposerOptionsMenu } from '../conversation/ComposerOptionsPanel'
 import { SaveAsChannelDialog } from './SaveAsChannelDialog'
 // #1440 renamed this module for its new title. `requestRenameConversation` KEEPS its name: it owns the
 // `renameConversation` wire literal, and renaming the helper would drift it from the verb it sends.
@@ -791,8 +792,31 @@ export function ChannelListView({
     <section className="channel-list" aria-label="Conversations">
       {/* The toolbar and rule stay outside the list scrollport. */}
       <div className="channel-list__actions">
-        <SettingsButton onClick={onOpenSettings} />
-        <ArchiveButton onClick={onOpenArchive} />
+        <ComposerOptionsMenu
+          options={[{ id: 'settings', label: 'Settings' }, { id: 'archive', label: 'Archive' }]}
+          currentId={null}
+          onSelect={(id) => {
+            if (id === 'settings') onOpenSettings()
+            else if (id === 'archive') onOpenArchive()
+          }}
+          ariaLabel="Sidebar menu"
+          triggerAriaLabel="Sidebar menu"
+          triggerClassName="channel-list__menu"
+          placement="bottom-start"
+          consumeOutsideClick
+          triggerContent={
+            <svg
+              className="channel-list__menu-icon"
+              viewBox="0 0 6 24"
+              width="6"
+              height="24"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M3 6C1.34464 6 0 4.65536 0 3C0 1.34464 1.34464 0 3 0C4.65536 0 6 1.34464 6 3C6 4.65536 4.65536 6 3 6ZM3 18C4.65536 18 6 19.3446 6 21C6 22.6554 4.65536 24 3 24C1.34464 24 0 22.6554 0 21C0 19.3446 1.34464 18 3 18ZM6 12C6 13.6554 4.65536 15 3 15C1.34464 15 0 13.6554 0 12C0 10.3446 1.34464 9 3 9C4.65536 9 6 10.3446 6 12Z" />
+            </svg>
+          }
+        />
         <PairNewHostButton onClick={onPairNewHost} />
       </div>
       <div className="channel-list__actions-rule" />
@@ -818,87 +842,11 @@ export function ChannelListView({
   )
 }
 
-// The Settings entry affordance (#333, redrawn by #1443 as the Top bar's `Settings button` 115:3834) —
-// no longer a desktop-invented control. #333 and #347 both recorded that the list scope (mobile 15-8)
-// pinned no settings entry and no archive entry, so both were invented and both wore the
-// `.settings__back` 48px round treatment. The desktop card draws them: two 24px boxes at the card's top
-// inset, the gear LEADING at the content edge, filled --color-primary with no ground in any state drawn.
-// Rendered as a child of the bar, which is a sibling of the list body, so it is present in all three
-// list states (AC1) and stays put while a long list scrolls under the rule. An icon-only native <button>
-// (keyboard-focusable), `aria-label` supplies the accessible name since the gear glyph carries no text,
-// and the SVG is aria-hidden — the shape `ArchiveButton` beside it shares. onClick is a pure injected
-// nav effect — no window.pyry, no store.
-//
-// THE GLYPH IS THE DRAWING'S OWN EXPORT (`gear-solid-full 1` 115:3832), drawn at its own 22 × 24 and
-// centred in the 24px box by the button's flex centring — the outer box and the leaf are separate
-// numbers in the node and stay separate here. Its path is inlined rather than fetched: the Figma MCP
-// asset URLs expire after seven days, so the operator recorded both path strings on the ticket. It
-// replaces the 24px Material `settings` glyph #333 shipped. `fill="currentColor"` over the button's
-// `color` is what keeps the node's #9dcbfc a TOKEN reference rather than a literal.
-function SettingsButton({ onClick }: { onClick: () => void }): JSX.Element {
-  return (
-    <button
-      type="button"
-      className="channel-list__settings"
-      aria-label="Settings"
-      onClick={onClick}
-      {...controlNamePlacement}
-    >
-      <svg
-        className="channel-list__settings-icon"
-        viewBox="0 0 22 24"
-        width="22"
-        height="24"
-        fill="currentColor"
-        aria-hidden="true"
-      >
-        <path d="M8.3569 1.125C8.48641 0.472059 9.05191 0 9.70806 0H12.2895C12.9457 0 13.5112 0.472059 13.6407 1.125L14.2666 4.21324C14.8753 4.47794 15.4451 4.81765 15.9631 5.21912L18.8899 4.22647C19.5115 4.01471 20.1936 4.27941 20.5217 4.86176L21.8124 7.14706C22.1405 7.72941 22.0239 8.46176 21.5318 8.90735L19.2309 10.9985C19.2698 11.325 19.2871 11.6603 19.2871 12C19.2871 12.3397 19.2655 12.675 19.2309 13.0015L21.5361 15.0971C22.0282 15.5426 22.1405 16.2794 21.8167 16.8574L20.526 19.1426C20.1979 19.7206 19.5158 19.9897 18.8942 19.7779L15.9674 18.7853C15.4451 19.1868 14.8753 19.5221 14.2709 19.7912L13.6493 22.875C13.5155 23.5324 12.95 24 12.2981 24H9.7167C9.06054 24 8.49504 23.5279 8.36553 22.875L7.74391 19.7912C7.13524 19.5265 6.56974 19.1868 6.04741 18.7853L3.10766 19.7779C2.48604 19.9897 1.80399 19.725 1.47591 19.1426L0.185184 16.8574C-0.142893 16.275 -0.0263396 15.5426 0.465776 15.0971L2.77095 13.0015C2.7321 12.675 2.71483 12.3397 2.71483 12C2.71483 11.6603 2.73642 11.325 2.77095 10.9985L0.465776 8.90294C-0.0263396 8.45735 -0.138577 7.72059 0.185184 7.14265L1.47591 4.85735C1.80399 4.275 2.48604 4.01029 3.10766 4.22206L6.03446 5.21471C6.55679 4.81324 7.12661 4.47794 7.73096 4.20882L8.3569 1.125ZM10.9988 15.5294C12.9068 15.5206 14.4479 13.9368 14.4393 11.9868C14.4306 10.0368 12.8809 8.46176 10.9729 8.47059C9.06486 8.47941 7.52376 10.0632 7.53239 12.0132C7.54102 13.9632 9.09076 15.5382 10.9988 15.5294Z" />
-      </svg>
-      <span className="channel-list__control-name" aria-hidden="true">Settings</span>
-    </button>
-  )
-}
-
-// The Archive entry affordance (#347, redrawn by #1443 as the Top bar's `Archive button` 117:3835) —
-// mirroring SettingsButton's shape, as it has since #347, and now TRAILING rather than leading: the
-// drawing puts the gear first. Clones the gear's posture exactly: an icon-only native <button>
-// (keyboard-focusable), whose distinct `aria-label="Archive"` supplies the accessible name and
-// disambiguates it from the gear's "Settings" (the ticket's disambiguation), and whose SVG is
-// aria-hidden. onClick is a pure injected nav effect — no window.pyry, no store.
-//
-// THE GLYPH IS THE DRAWING'S OWN EXPORT (`box-archive-solid-full 1` 117:3839), drawn at its own 24 × 21
-// — a DIFFERENT leaf size from the gear's 22 × 24 inside the same 24px box, which is why neither is
-// sized by a shared rule. Inlined for the gear's reason: the export URLs expire after seven days. It
-// replaces the 24px Material `archive` glyph #347 shipped.
-function ArchiveButton({ onClick }: { onClick: () => void }): JSX.Element {
-  return (
-    <button
-      type="button"
-      className="channel-list__archive"
-      aria-label="Archive"
-      onClick={onClick}
-      {...controlNamePlacement}
-    >
-      <svg
-        className="channel-list__archive-icon"
-        viewBox="0 0 24 21"
-        width="24"
-        height="21"
-        fill="currentColor"
-        aria-hidden="true"
-      >
-        <path d="M0 1.5C0 0.670312 0.670312 0 1.5 0H22.5C23.3297 0 24 0.670312 24 1.5V3C24 3.82969 23.3297 4.5 22.5 4.5H1.5C0.670312 4.5 0 3.82969 0 3V1.5ZM1.5 6.75H22.5V18C22.5 19.6547 21.1547 21 19.5 21H4.5C2.84531 21 1.5 19.6547 1.5 18V6.75ZM8.625 9.75C8.00156 9.75 7.5 10.2516 7.5 10.875C7.5 11.4984 8.00156 12 8.625 12H15.375C15.9984 12 16.5 11.4984 16.5 10.875C16.5 10.2516 15.9984 9.75 15.375 9.75H8.625Z" />
-      </svg>
-      <span className="channel-list__control-name" aria-hidden="true">Archive</span>
-    </button>
-  )
-}
-
 // `NewConversationFab` (#242, Figma 15-106) stood HERE until #1426 deleted it — a floating 56px add
 // affordance pinned bottom-right of the scroller, minting a chat in the Settings default workspace on the
 // sole paired host and disabled whenever the paired count was not exactly one. Recorded rather than
 // silently removed because the sidebar card (103:2959) never drew a floating button, and because the
-// deletion is what the three comments above — SettingsButton's, ArchiveButton's and the actions
+// deletion is what the actions
 // cluster's — used to cite as the shape they cloned. Its replacement was already shipped: the workspace
 // row's plus (#1178/#1185/#1189) confirms on the clicked row's host with the daemon's default folder, so every paired
 // machine keeps a route to a first chat and no create depends on a client-side default any more.

@@ -35,8 +35,8 @@ first-write order. #758 remains the reader cutover, now depending on this rather
 
 Holds a whole `TimelineState` per conversation id: the ordered `items`, `phase`,
 `stalled`, `apiRetry`, `compacting`, `localSendPending`, `thinkingTokens` and optional
-`latestTurnEnd`. The `ConversationSlice` wrapper also holds history-request state,
-the prepend count, live/history join keys, supplying `serverId`, local-read status
+`latestTurnEnd` and `sessionError`. The `ConversationSlice` wrapper also holds
+history-request state, the prepend count, live/history join keys, supplying `serverId`, local-read status
 and explicit restored host/coverage evidence. Successful `coverage` lives separately
 from pending/failed `history`, so retries retain the last successful cursor. A key **absent** from the map means
 "nothing is held for this conversation" — no event has ever arrived, or it was evicted — distinct from a
@@ -63,8 +63,9 @@ exactly the thread the operator stepped away from.
   - `dispatchFor(conversationId, event)` — folds one `ThreadEvent` into that id's slice via the existing
     `reduceTimeline`, creating the slice from `initialTimelineState` when the key is absent (even when the
     fold against that seed is itself a no-op). The exception is `toolProgress`: an absent key
-    returns the original store state. A heartbeat can only update a retained call; creating
-    an empty slice could otherwise evict a retained conversation without adding a row.
+    returns the original store state. Client-owned `sessionErrorCleared` also creates no
+    absent slice and preserves host/local-read ownership. A heartbeat can only update
+    a retained call; creating an empty slice could otherwise evict a retained conversation without adding a row.
     See [live tool progress](conversation-timeline-store.md#live-tool-progress). A
     reduce that changes nothing on an already-held key returns the state object itself, so zustand's
     `Object.is` short-circuit fires and no subscriber wakes.
@@ -72,6 +73,14 @@ exactly the thread the operator stepped away from.
     using the host resolved by the current send gate. Retains only explicitly
     same-host content and clears local-read status, invalidating pending completion.
     This lets connected reopening reuse the echo without admitting unowned rows.
+  - `markLocalSendQueued(conversationId, queued: readonly QueuedItem[])`
+    ([#1725](https://github.com/pyrycode/pyrycode-desktop/issues/1725)) — applies the pure
+    `markLocalSendQueued` from [thread timeline](thread-timeline-internals.md#the-reducer) to a held
+    slice's `localSendPending`. An absent key is a same-object no-op — unlike `dispatchFor`, this
+    action never creates a slice, since a `queue_state` snapshot naming no held conversation has
+    nothing to mark. Called from the [queue bridge](queue-store.md#the-data-path-srcrenderersrcstorequeuebridgets)'s
+    `QueueData` snapshot callback, right after `queueStore.setBacklog`, so the same frame that updates
+    the queued-backlog rows also lets the open send window know the daemon has the message.
   - `markViewed(conversationId)` — stamps a conversation as most recently viewed. Already-tail is a
     same-object no-churn return (the common case: `activateConversation`'s `onOpen` fires on every row
     click, including a re-click of the already-open row). Present-not-tail moves it. Absent **creates** it
@@ -169,14 +178,19 @@ exactly the thread the operator stepped away from.
 ### Local timeline admission
 
 `beginLocalTimelineRead` admits validated saved rows through an explicit completion
-handle, not fabricated daemon events. Exact pending-slice identity rejects stale
-success/failure after mutation, cancellation, replacement, clear or eviction.
+handle, not fabricated daemon events. A process-local `localReadOwner` symbol,
+host and loading status reject stale success/failure after live content, local
+sends, cancellation, host replacement, clear or eviction. Notice replacement and
+consumption preserve the owner; settlement carries current sidecars and retires the
+owner, preventing both stranded loading and resurrection of a cleared notice.
 The holder remains keyed by conversation id; per-slice host evidence and the
 screen's selected-host check prevent equal ids from sharing saved content, including
 while connected. Reconnect and list refresh do not clear the slice or its ownership.
 Receipt-stamped mutations cannot append one host's content to another's restored
 rows. Successful restoration preserves durable identity metadata and coverage
-while resetting transient state and conferring writer ownership without a save.
+while initializing saved transient state afresh, preserving any current same-host
+session-error notice and conferring writer ownership without a save. Neither notice
+nor request owner is persisted.
 See [chat-history admission](chat-history.md#received-state-admission-and-ownership)
 for cache reuse and cancellation, and [saved coverage](chat-history.md#snapshot-contract)
 for its distinction from current server history. Evicted saved slices reload on
@@ -215,7 +229,11 @@ boundary and transient reading with their slice.
   keep writing the flat `timelineStore` unchanged (dual-write). **`markViewed` gained its first caller in
   [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786)** — wired at the activation seam — so
   eviction ordering is now armed in production rather than degrading to first-write order; see § Edge
-  cases.
+  cases. **`markLocalSendQueued` gained its first and only caller in
+  [#1725](https://github.com/pyrycode/pyrycode-desktop/issues/1725)** — `QueueData`'s existing
+  `queue_state` subscription (see [Queue store](queue-store.md#the-data-path-srcrenderersrcstorequeuebridgets)),
+  no new subscription. The flat `timelineStore` is not dual-written here: `queue_state` has never
+  reached `reduceTimeline`, and this write targets only the keyed holder's `localSendPending`.
 - **Reader, as of [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758):** `ConversationScreen`
   binds `selectTimelineFor(openConversationId)` through a `useMemo`-stable selector factory
   (`selectOpenTimelineFor`, exported from `ConversationScreen.tsx` for its own unit tests), keyed off
@@ -231,9 +249,11 @@ boundary and transient reading with their slice.
   #756 established for the two writers. Both **delete** rather than overwrite with an empty slice, so a
   cleared id reads absent through `selectTimelineFor`, not present-and-empty; both return the state object
   unchanged on a no-op (already-empty map, already-absent key), which is what keeps
-  `clearPairingScopedState`'s idempotence claim true. This map still has **no** `connected`-edge clear by
-  design — unlike its two keyed siblings, a timeline must survive a reconnect, so growth between
-  handshakes is bounded only by `MAX_RETAINED_TIMELINES`.
+  `clearPairingScopedState`'s idempotence claim true. `clearSessionErrorsForHost(serverId)`
+  runs on the main-stamped `connected` edge and clears only that host's held notices,
+  including off-screen slices, preserving read ownership, rows and unrelated slice references.
+  Reconnect never drops the timelines; growth between handshakes remains bounded by
+  `MAX_RETAINED_TIMELINES`.
 - **Reader cutover, shipped in [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758):**
   `ConversationScreen`'s seven reads of the flat `timelineStore` (six selectors on the container plus
   `InterruptControl`'s own `selectPhase`) collapsed into one subscription to this store's

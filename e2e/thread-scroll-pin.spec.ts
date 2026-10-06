@@ -1,3 +1,4 @@
+import { capturePairedApp } from './fixtures/capturePairedApp'
 import { createHash } from 'node:crypto'
 import type { ElectronApplication, Locator, Page } from '@playwright/test'
 import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/launchPairedApp'
@@ -5,7 +6,7 @@ import { bubbleTextExactly } from './fixtures/bubbleText'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import {
   AT_BOTTOM_TOLERANCE_PX,
-  HISTORY_ASK_BAND_PX
+  HISTORY_ASK_BAND_VIEWPORTS
 } from '../src/renderer/src/screens/conversation/threadScrollPosition'
 import { ATTACHMENT_UPLOAD_EVENT_CHANNEL } from '../src/shared/ipc/attachmentUpload'
 import type { AttachmentUploadEvent } from '../src/shared/ipc/attachmentUpload'
@@ -84,7 +85,7 @@ const FIXED_TS = '2026-07-07T12:00:00.000Z'
 // 20 is sized for headroom over the 1100x800 window (src/main/index.ts:37-38), not measured — if
 // the thread does not overflow, the scrollHeight > clientHeight gate fails loudly, which is the gate
 // working. Raise the count; never weaken the gate.
-const REPLY_TURNS = 20
+const REPLY_TURNS = 24
 const replyText = (turn: number): string => `Streamed reply line ${turn}`
 
 // A collapsed tool row's height: 1px border + 8px chip padding + the 20px summary line + 8 + 1. Asserted
@@ -657,7 +658,8 @@ test('re-opening a discussion lands at the most recent messages and leaves the t
   // and the thread were mutually exclusive. The list is now always on screen, so that assertion would pass
   // instantly and the re-entry could race the unmount — reading the thread's OWN disappearance restores
   // the gate, and it still reddens correctly here because the Settings route replaces the whole shell.
-  await page.locator('.channel-list__settings').click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
   await expect(page.locator('.conversation')).toHaveCount(0)
   await page.locator('.settings__back').click()
 
@@ -1167,7 +1169,7 @@ test('a thumbnail resolving in the last row leaves a bottom-resting reader at th
 //
 // THIS IS THE POSITION THE WALK ACTUALLY FIRES FROM, and that is why the case belongs here rather than
 // beside the walk drive in `history-walk.spec.ts`. The two anchoring tests above drive a growth in the
-// MIDDLE of the thread, from a park at 40%; the walk fires from inside `HISTORY_ASK_BAND_PX` of the top,
+// MIDDLE of the thread, from a park at 40%; the walk fires from inside `HISTORY_ASK_BAND_VIEWPORTS` of the top,
 // where nothing had measured the reader's place. The band is above zero for exactly that reason —
 // Chromium suppresses scroll anchoring at a scroll offset of exactly zero, so an ask that only fired at
 // the wall would fire where the mechanism holding the reader's place is off.
@@ -1299,7 +1301,7 @@ const viewportTopOfAssistantRowWithContent = (page: Page, content: string): Prom
 for (const [initialRows, pageRows] of [[1, 1], [1, REPLY_TURNS], [REPLY_TURNS, REPLY_TURNS]]) {
   test(`first history prepend preserves the row at zero with ${initialRows} held rows and ${pageRows} incoming rows`, async ({ launchPairedApp }) => {
     const requests: number[] = []
-    const { page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
+    const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
       const envelope = decodeEnvelope(bytes)
       if (envelope.type === 'request_history') {
         expect((envelope.payload as RequestHistoryPayload).cursor).toBe('')
@@ -1335,7 +1337,7 @@ for (const [initialRows, pageRows] of [[1, 1], [1, REPLY_TURNS], [REPLY_TURNS, R
     expect(await viewportTopOfAssistantRowWithContent(page, content)).toBeCloseTo(top, 0)
     expect(requests).toHaveLength(1)
     if (initialRows === 1) {
-      await page.screenshot({ path: `/tmp/builder-1394-zero-prepend-${pageRows}.png` })
+      await capturePairedApp(app, page, `/tmp/builder-1394-zero-prepend-${pageRows}.png`)
       await page.getByPlaceholder('Message…').fill('resume bottom following')
       await page.getByRole('button', { name: 'Send' }).click()
       await settleScrollEvent(page)
@@ -1364,8 +1366,9 @@ test('a page walked back above the reader leaves them looking at the same row', 
 
   // Park inside the band and ABOVE zero — the offset the walk fires from. Programmatic for the reasons the
   // tests above give; the rAF settle is not optional, because the flag is still `true` at the instant of
-  // the assignment and the scroll event that clears it is what also fires the ask.
-  const parked = HISTORY_ASK_BAND_PX / 2
+  // the assignment and the scroll event that clears it is what also fires the ask. One viewport deep
+  // (#1752): inside the viewport-sized band, and far past the fixed 200px rim it replaced.
+  const parked = await page.locator('.conversation__thread').evaluate(el => el.clientHeight)
   await page.locator('.conversation__thread').evaluate((el, top) => {
     el.scrollTop = top
   }, parked)
@@ -1383,7 +1386,7 @@ test('a page walked back above the reader leaves them looking at the same row', 
   const before = await readThreadMetrics(page)
   expect(before.scrollTop).toBe(parked)
   expect(before.scrollTop).toBeGreaterThan(0)
-  expect(before.scrollTop).toBeLessThanOrEqual(HISTORY_ASK_BAND_PX)
+  expect(before.scrollTop).toBeLessThanOrEqual(HISTORY_ASK_BAND_VIEWPORTS * before.clientHeight)
   expect(distanceFromBottom(before)).toBeGreaterThan(before.clientHeight)
 
   // The reference row: the first assistant bubble resting entirely inside the visible band, remembered by

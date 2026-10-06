@@ -168,6 +168,8 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // store — queue_state is daemon state, not a turn-stream item (#720). Present only because the
       // assertNever guard below makes a new arm a compile error.
       return null
+    case 'sessionError':
+      return null // The conversation timeline owns this transient notice.
     case 'stallDetected':
       // No session-store action: the render slice (#317, not yet built) surfaces the stall indicator, not
       // the session store. Present only because the assertNever guard below makes a new arm a compile
@@ -192,6 +194,7 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
     case 'mcpStatusRequestRejected': // The channel info sheet's notice owns this (#1579).
     case 'mcpReconnectRejected': // The channel info sheet's Reconnect control owns this (#1582).
     case 'mcpToggleRejected': // The channel info sheet's on/off switch owns this (#1586).
+    case 'backgroundTaskStopRejected': // The Stop task button owns this (#1770).
     case 'modelAnnounced':
       // No session-store action: the announced-model store (#588, not yet built) holds the identifier
       // claude named for the turn, not the session store — which holds no model state at all (its

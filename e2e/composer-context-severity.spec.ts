@@ -7,8 +7,9 @@ import type {
   WireTurnState
 } from '../src/shared/wire/types'
 
-// Fake-stack UI e2e for #1062 — the composer footer's context reading turning amber at 50% and red at
-// 70%. The PAINTED colour is what lives here and nowhere else: `vitest.config.ts` runs
+// Fake-stack UI e2e for #1062 — the composer footer's context reading turning amber and red as the
+// window fills, at 70% and 85% since #1728, where the reading became a ring whose used arc carries the
+// step's colour over a track that stays dark. The PAINTED colour is what lives here and nowhere else: `vitest.config.ts` runs
 // `environment: 'node'` and every renderer spec is a `renderToStaticMarkup` string, so a stylesheet's
 // effect is invisible to that tier. What the renderer tier owns instead is the ladder's two boundaries as
 // VALUES (contextUsage.test.ts) and the three emitted markups (ConversationScreen.test.tsx); this spec
@@ -40,13 +41,13 @@ const SESSION_ID = 'session-1062'
 // One window for all three steps, so each step is a numerator and the percentage is read off it directly.
 const WINDOW_TOKENS = 200_000
 
-// The three drives, at BOTH boundaries rather than at comfortable interior values: 49/50 is the pair that
-// falsifies a `> 50` slip and 70 is the first value of the top step. The reading is the design's own
-// M3 body/small run either way; only the colour and, at the top, the prefix may differ.
+// The four drives, at BOTH sides of BOTH boundaries (#1728): 69/70 falsifies a `> 70` slip and 84/85 a
+// `> 85` one. The text is the ring's visually hidden label, which textContent still reads.
 const STEPS = [
-  { usedTokens: 98_000, text: 'Context: 49%', token: '--color-primary' },
-  { usedTokens: 100_000, text: 'Context: 50%', token: '--color-warning' },
-  { usedTokens: 140_000, text: 'Context high: 70%', token: '--color-error' }
+  { usedTokens: 138_000, text: 'Context: 69%', token: '--color-primary' },
+  { usedTokens: 140_000, text: 'Context high: 70%', token: '--color-warning' },
+  { usedTokens: 168_000, text: 'Context high: 84%', token: '--color-warning' },
+  { usedTokens: 170_000, text: 'Context nearly full: 85%', token: '--color-error' }
 ] as const
 
 // #1166: the figure the launch-time reply carries, and it is a FOURTH value sharing no reading text with
@@ -127,6 +128,9 @@ test('composer footer: the context reading steps primary → warning → error a
   })
 
   const reading = page.locator('.composer__context')
+  const arc = reading.locator('.composer__context-arc')
+  const track = reading.locator('.composer__context-track')
+  const trackColor = await tokenColor(page, '--color-primary-container')
 
   // The reading mounts only once a run-config snapshot exists, and nothing PUSHES one — `session_settings`
   // is reply-only. Since #1166 the app asks on conversation open, and `launchPairedApp` navigates by
@@ -148,6 +152,7 @@ test('composer footer: the context reading steps primary → warning → error a
     // The text is the barrier for "this cycle's snapshot has landed": it is unique per step (the third
     // carries the top step's word), so a stale reading from the previous cycle cannot satisfy it.
     await expect(reading).toHaveText(step.text, { timeout: ROUNDTRIP_TIMEOUT_MS })
-    await expect(reading).toHaveCSS('color', await tokenColor(page, step.token))
+    await expect(arc).toHaveCSS('stroke', await tokenColor(page, step.token))
+    await expect(track).toHaveCSS('stroke', trackColor)
   }
 })

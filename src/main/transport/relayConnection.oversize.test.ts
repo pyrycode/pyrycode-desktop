@@ -130,12 +130,18 @@ describe('relayConnection oversize — 1009 normalisation, driven not observed (
     expect(relayClosedRecords(captured.records)).toEqual([
       {
         event: 'relay-closed',
+        connectionId: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+        ),
         status: 1009,
         code: 'max-frame-exceeded',
         host: 'relay.example',
         path: '/v1/client'
       }
     ])
+    expect(relayClosedRecords(captured.records)[0].connectionId).toBe(
+      captured.records.find((record) => record.event === 'relay-open')?.connectionId
+    )
   })
 
   it('leaves a non-oversize post-open error unclassified — the peer close code and reason are forwarded as-is', () => {

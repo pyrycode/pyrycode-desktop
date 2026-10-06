@@ -179,6 +179,7 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
     case 'mcpStatusRequestRejected': // The channel info sheet's notice owns this (#1579).
     case 'mcpReconnectRejected': // The channel info sheet's Reconnect control owns this (#1582).
     case 'mcpToggleRejected': // The channel info sheet's on/off switch owns this (#1586).
+    case 'backgroundTaskStopRejected': // The Stop task button owns this (#1770).
     case 'modelAnnounced':
     case 'runConfigReceived':
     case 'modalShown':
@@ -288,6 +289,8 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
       // be the ONE route by which it lands in an Error message, a stack trace and a crash reporter.
       // This case is what keeps it out.
       return null
+    case 'sessionError':
+      return null // Owned by the conversation timeline, never an error diagnostic here.
     default:
       return assertNever(event)
   }

@@ -175,6 +175,9 @@ QueueData(): null
 // headless component, one subscribe effect (deps []), mounted app-level in App.tsx
 // the composition root: resolves origin -> conversation ids via conversationListStore, THEN calls
 // queueStore.getState().resetBacklogsFor(ids) — see below
+// since #1725: the snapshot callback also calls
+// conversationTimelineStore.getState().markLocalSendQueued(snapshot.conversationId, snapshot.queued) —
+// see Conversation timeline holder § How it works
 ```
 
 Reactive-only for the snapshot write — like [`sessionIdBridge`](session-id-store.md) and unlike
@@ -240,6 +243,7 @@ daemon → queue_state frame → parseQueueStatePayload → queueState DaemonEve
   → DAEMON_EVENT_CHANNEL → subscribeQueue listener
     → translateQueueState → { conversationId, queued } (or null → skip)
     → queueStore.setBacklog(snapshot)   [replacement-truth, per conversationId key]
+    → conversationTimelineStore.markLocalSendQueued(snapshot.conversationId, snapshot.queued)   [#1725, same callback]
   → selectBacklogFor(openId) / useQueueStore   (read by #294)
 
 relay (re)handshake → daemonConnection.ts emits connected DaemonEvent, before any re-send [#197]
@@ -396,6 +400,12 @@ pairing ends (unpair only, since #1141 — pairing another server adds a server 
   restated in this bridge.
 - [Paired shell § Related](paired-shell.md#related) — `clearAllBacklogs`, the eleventh member of
   `clearPairingScopedState`'s dep set (#1138).
+- [#1725](https://github.com/pyrycode/pyrycode-desktop/issues/1725) — `QueueData`'s `queue_state`
+  callback gained a second call, `conversationTimelineStore.markLocalSendQueued` (see [Conversation
+  timeline holder § How it works](conversation-timeline-holder.md#how-it-works) and [Thread timeline §
+  Types](thread-timeline-internals.md#types)), reading the already-decoded `QueuedItem.message_id`
+  this store carries to tell the composer's local send window "the daemon has it" — "Sending…" becomes
+  "Waiting for Claude". This store's own read/write surface is unchanged.
 - `docs/specs/architecture/1138-queue-backlog-reconnect-reset-scoped-to-server.md` — the full
   architecture spec: the key-domain ruling on `ConversationListOrigin`'s three cases, and a
   `## Revisions` entry recording the mid-flight design change to `clearAllBacklogs` after a first

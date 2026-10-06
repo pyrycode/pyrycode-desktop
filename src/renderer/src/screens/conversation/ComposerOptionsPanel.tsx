@@ -9,7 +9,12 @@ import {
   type RefObject
 } from 'react'
 import { initialFocusedOptionIndex, resolveComposerOptionsKey } from './composerOptionsKeyboard'
-import { composerOptionsMaxWidthPx, composerOptionsShiftPx } from './composerOptionsPlacement'
+import {
+  COMPOSER_OPTIONS_LABEL_INSET_PX,
+  COMPOSER_OPTIONS_WINDOW_MARGIN_PX,
+  composerOptionsMaxWidthPx,
+  composerOptionsShiftPx
+} from './composerOptionsPlacement'
 
 // #838: the composer footer's shared options panel (Figma node 121:3879, "Options overlay") — ONE surface
 // for five queued consumers: #680 Actions, #682 permission mode, #683 model and effort, and #694's
@@ -294,7 +299,16 @@ export function useComposerOptionsClamp({
       // inspection — composerOptionsPlacement.ts's whole reason for taking an object rather than three
       // positionals.
       const anchorLeft = anchor.getBoundingClientRect().left
-      const windowWidth = window.innerWidth
+      // Conversation overlays fit the pane; other menu consumers retain their window boundary.
+      const chrome = anchor.closest('.conversation__input-chrome')
+      const pane = chrome?.getBoundingClientRect()
+      const windowWidth = pane?.right ?? window.innerWidth
+      // Footer labels wrap, so use the pane's width and shift left rather than forcing a
+      // tall column into the remaining space beside a rightward trigger at increased zoom.
+      const footerPane = anchor.closest('.composer__footer') ? pane : undefined
+      const maxWidth = footerPane
+        ? Math.max(0, footerPane.width - COMPOSER_OPTIONS_WINDOW_MARGIN_PX - COMPOSER_OPTIONS_LABEL_INSET_PX)
+        : composerOptionsMaxWidthPx({ anchorLeft, windowWidth })
 
       // #940's window-relative WIDTH BOUND, written BEFORE the panel is measured — and that order is the
       // whole correctness of pairing the two. `offsetWidth` below reads the panel's laid-out width, so
@@ -302,26 +316,19 @@ export function useComposerOptionsClamp({
       // bound is about to remove. Writing it first costs one forced style-and-layout pass per open (and
       // per resize), inside a layout effect, before paint.
       //
-      // It is written for EVERY host and consumed by whichever one's stylesheet reads the property: today
-      // only the type-ahead's `.composer__row .composer-options` does, and the three footer menus inherit
-      // a custom property no rule of theirs mentions, so their geometry is byte-for-byte what it was. That
-      // is deliberate rather than lazy — a bound of this shape applied to the Actions panel would squash it
-      // at the artificial widths e2e/composer-options-clamp.spec.ts drives, which is the detector for the
-      // shift and must keep measuring the shift.
+      // Footer menus and type-ahead consume the bound; other hosts leave it inert.
       anchor.style.setProperty(
         '--composer-options-max-width',
-        `${composerOptionsMaxWidthPx({ anchorLeft, windowWidth })}px`
+        `${maxWidth}px`
       )
 
       // `offsetWidth` is the recipe's chosen input: it rounds to an integer while the rect is fractional.
-      // For a host that consumes the bound above this now reads a width that already fits, so the shift is
-      // structurally 0 there and the panel is kept inside the window by its width rather than by a move —
-      // the clamp stays wired because it is one shared effect, and because it is what still catches the
-      // panel if that `max-width` declaration is ever dropped.
+      // Footer menus may need to shift left after taking the pane-wide bound. Type-ahead
+      // remains anchored because its bound already accounts for its resting position.
       const shift = composerOptionsShiftPx({
         anchorLeft,
         panelWidth: panel.offsetWidth,
-        windowWidth
+        windowWidth: footerPane ? windowWidth - COMPOSER_OPTIONS_WINDOW_MARGIN_PX : windowWidth
       })
       // THE UNIT IS NOT OPTIONAL. A bare number makes the whole `left` declaration invalid at
       // computed-value time, dropping the panel to `left: auto` and its static position — which for an
@@ -367,7 +374,8 @@ export function ComposerOptionsMenu({
   triggerContent,
   triggerClassName,
   triggerAriaLabel,
-  placement = 'footer'
+  placement = 'footer',
+  consumeOutsideClick = false
 }: {
   options: readonly ComposerOptionsPanelOption[]
   currentId: string | null
@@ -376,7 +384,8 @@ export function ComposerOptionsMenu({
   triggerContent: ReactNode
   triggerClassName: string
   triggerAriaLabel?: string
-  placement?: 'footer' | 'bottom-end'
+  placement?: 'footer' | 'bottom-end' | 'bottom-start'
+  consumeOutsideClick?: boolean
 }): JSX.Element {
   // Component-local useState, never the session store (ADR 0006, the `sheetOpen` precedent), so the panel
   // resets to closed on remount for free — the same reason #276's container gets that property.
@@ -482,7 +491,7 @@ export function ComposerOptionsMenu({
   // where the user clicked rather than on the trigger. That is the correct outcome — returning focus to a
   // trigger the user just clicked away from would steal it — which is why no preventDefault is added here.
   useEffect(() => {
-    if (!open) return
+    if (!open || consumeOutsideClick) return
     const onMouseDown = (event: DocumentEventMap['mousedown']): void => {
       const target = event.target
       if (target instanceof Node && anchorRef.current && !anchorRef.current.contains(target)) {
@@ -493,14 +502,16 @@ export function ComposerOptionsMenu({
     return () => {
       document.removeEventListener('mousedown', onMouseDown)
     }
-  }, [open])
+  }, [open, consumeOutsideClick])
 
   return (
     <div
       ref={anchorRef}
-      className={placement === 'bottom-end'
-        ? 'composer-options-anchor composer-options-anchor--bottom-end'
-        : 'composer-options-anchor'}
+      className={[
+        'composer-options-anchor',
+        placement === 'footer' ? '' : `composer-options-anchor--${placement}`,
+        consumeOutsideClick ? 'composer-options-anchor--consume-outside' : ''
+      ].filter(Boolean).join(' ')}
       onKeyDown={handleKeyDown}
     >
       <button
@@ -516,6 +527,21 @@ export function ComposerOptionsMenu({
       </button>
       {/* A real <button>, so Enter and Space activate the trigger natively — no handler of their own, and
           none is wanted: one would double-fire on top of the native activation. */}
+      {open && consumeOutsideClick && (
+        // Keep the layer through mousedown: unmounting then would expose the tree to click.
+        <div
+          className="composer-options-dismiss-layer"
+          aria-hidden="true"
+          onMouseDown={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+          }}
+          onClick={(event) => {
+            event.stopPropagation()
+            close()
+          }}
+        />
+      )}
       {open && (
         <ComposerOptionsPanel
           options={options}

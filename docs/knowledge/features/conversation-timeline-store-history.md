@@ -23,7 +23,7 @@ the coarse `message`/`message_chunk` path imports or is changed by either new fi
 [#214](../codebase/214.md) added a third arm to `translateTimelineEvent`'s owned block, `turnState` —
 the transport slice that finally feeds `phase` a live value. `selectPhase` now has a real upstream
 source; [#215](../codebase/215.md) gave it its first reader, `ConversationScreen`'s `ThinkingIndicator`
-(see [Conversation shell § Thinking indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)).
+(see [Conversation shell § Thinking indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967-splits-the-local-send-window-into-sending-and-waiting-for-claude-since-1725)).
 
 [#217](../codebase/217.md) added a fourth arm, `toolUse` — the tool-call enrichment of the same v2
 interactive stream. Unlike the three arms before it, this is the first whose mapping produces a
@@ -139,7 +139,7 @@ through unchanged — the deliberate inverse of `stalled`, since content can arr
 compiler-invisible early-outs (`turnState`'s no-churn guard, `reconnected`'s `nothingLive`
 predicate) gained a matching widened clause, the same shape as `stalled`'s guard in #317.
 `selectLocalSendPending` joins the read surface. See [Conversation shell § Thinking / working
-indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)
+indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967-splits-the-local-send-window-into-sending-and-waiting-for-claude-since-1725)
 for the view-side composition.
 
 [#643](../codebase/643.md) widened the fourth owned arm, `toolUse` ([#217](../codebase/217.md)) — no
@@ -296,12 +296,13 @@ re-ask), and `null` (nothing held) belongs to the opening path, never restarting
 is the only stop a page can produce: nothing counts entries or compares a page against the `limit` it was
 asked with, so neither an empty page nor a short one is ever read as the end of the log. "Near the top" is
 `isNearTop(metrics)`, a new pure predicate beside `isAtBottom` in `threadScrollPosition.ts` — a band of
-`HISTORY_ASK_BAND_PX` (200) above the scroll wall, not the wall itself, because Chromium suppresses scroll
-anchoring at a scroll offset of exactly zero and anchoring is the mechanism that holds the reader's place
-when the page lands above them; see [Conversation shell § Thread scroll
-pin](conversation-shell-scroll-pin.md) for the band's full arithmetic and the discovered scroll-event
-cascade (a small prepend that doesn't clear the band is itself a scroll event, so the walk can take several
-steps for one operator scroll). `ConversationScreen`'s `useThreadScrollPin` calls the new asker from
+`HISTORY_ASK_BAND_VIEWPORTS` (2 viewport heights, widened from a fixed 200px band by
+[#1752](https://github.com/pyrycode/pyrycode-desktop/issues/1752)) above the scroll wall, not the wall
+itself, because Chromium suppresses scroll anchoring at a scroll offset of exactly zero and anchoring is
+the mechanism that holds the reader's place when the page lands above them; see [Conversation shell §
+Thread scroll pin](conversation-shell-scroll-pin.md) for the band's full arithmetic and the discovered
+scroll-event cascade (a small prepend that doesn't clear the band is itself a scroll event, so the walk
+can take several steps for one operator scroll). `ConversationScreen`'s `useThreadScrollPin` calls the new asker from
 `onScroll`, right after its existing pin write, passing the container's own `conversationId`.
 
 The same ticket corrects a premise the render layer had inherited rather than earned. `Timeline` had keyed
@@ -323,7 +324,7 @@ key; a prepend of N lowers `firstRowKey` by N while every surviving row's index 
 already-drawn row's key is unchanged and React inserts N new nodes at the head — which is what makes
 anchoring's measurement correct. The queued tail's `q`-prefixed keys are a separate namespace and cannot
 collide with a negative numeric key. See [Edge cases and
-limitations](conversation-timeline-store.md#edge-cases-and-limitations) on the parent page for the current
+limitations](conversation-timeline-store-limits.md#edge-cases-and-limitations) for the current
 state of this fix, and [Thread timeline § Edge cases](thread-timeline-limits.md#edge-cases-and-limitations) for
 why the original premise still holds for the reducer's own array.
 

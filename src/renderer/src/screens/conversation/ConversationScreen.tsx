@@ -31,6 +31,7 @@ import { canRespondToPromptNow, usePromptResponseAvailability } from './promptRe
 // (dual-write, Strangler Fig). Its six selectors are gone with the reads below; retiring the store
 // itself is its own ticket.
 import { useTimelineStore } from '../../store/timelineStore'
+import { useCollapseToolUsesPrefStore, selectCollapseToolUses } from '../../store/collapseToolUsesPrefStore'
 import {
   conversationTimelineStore,
   useConversationTimelineStore,
@@ -66,6 +67,7 @@ import {
   type TurnPhase,
   type ApiRetryStatus,
   type ResettingStatus,
+  type LocalSendPending,
   type UnrecognizedSite,
   type MessageAttachment
 } from '../../store/threadTimeline'
@@ -110,6 +112,7 @@ import { contextUsagePercent, contextUsageStep } from './contextUsage'
 import {
   useRunConfigStore,
   selectSnapshot,
+  selectMidTurnInputSupported,
   selectMcpServersSupported,
   sessionSupports
 } from '../../store/runConfigStore'
@@ -129,8 +132,10 @@ import {
   selectConversationAgentFor
 } from '../../store/conversationListStore'
 import { dropQueuedMessage } from './dropQueuedMessage'
+import { sendQueuedNow } from './sendQueuedNow'
 import { foldQueuedRows, type QueuedRowHandle } from './foldQueuedRows'
 import { groupToolRows } from './groupToolRows'
+import { foldToolRuns, type ToolRun } from './foldToolRuns'
 import { copyMessageText } from './copyMessageText'
 import { formatMessageTime } from './messageTime'
 import { turnStatsByItemIndex } from './turnStats'
@@ -251,6 +256,7 @@ export function ConversationScreen({
   // #758 moved it ABOVE the timeline read, which now needs its id: same hook, same selector, same single
   // subscription, only its position in the hook list changed (stable across renders).
   const activeConversation = useActiveConversationStore(selectActiveConversation)
+  const collapseToolUses = useCollapseToolUsesPrefStore(selectCollapseToolUses)
   // #758: the thread on screen is the OPEN conversation's own retained timeline, not the flat
   // single-thread store — which `activateConversation` still resets on every switch, into a store nothing
   // reads any more. That is the whole of "leaving a chat and coming back keeps both threads": the rows
@@ -260,6 +266,9 @@ export function ConversationScreen({
   // "nothing open" (the :281 / :1955 spelling this file already uses).
   const openConversationId = activeConversation?.id ?? null
   const actionsAvailable = useConversationActionAvailability(openConversationId)
+  // #1726: the open session's `mid_turn_input` reading, a boolean slice so other snapshot fields re-render
+  // nothing. The snapshot is the open conversation's (cleared on switch), so it gates that thread alone.
+  const midTurnInput = useRunConfigStore(selectMidTurnInputSupported)
   // A useMemo-stable selector per id (the BackgroundTaskPanel.tsx:342 idiom) so a fresh closure per render
   // does not churn the subscription. NOTHING wraps, copies, maps or derives the result inside the
   // subscription, which is what keeps the selector's return Object.is-stable: a write for ANOTHER
@@ -439,7 +448,7 @@ export function ConversationScreen({
     [openConversationId]
   )
   const prependedRows = useConversationTimelineStore(selectOpenPrependedRows)
-  const { scrollPin, followBottom } = useThreadScrollPin(openConversationId, prependedRows)
+  const { scrollPin, followBottom, paneRef } = useThreadScrollPin(openConversationId, prependedRows)
   // #1579: every open asks for fresh MCP status, from the handler rather than a mount effect so one open
   // is one request. The sheet shows this same `activeConversation`. #1494: the overflow menu's item and the
   // status row's MCP failure notice both call this one closure, so they open the sheet identically.
@@ -468,7 +477,7 @@ export function ConversationScreen({
           onSave={reader.save}
         />
       )}
-      <div className="conversation__covered" data-covered={readerOpen ? 'true' : undefined}>
+      <div className="conversation__covered" ref={paneRef} data-covered={readerOpen ? 'true' : undefined}>
       {/* #276: the trailing overflow menu (Figma 16-16) — the single entry point to per-conversation
           actions. #365 wires its Channel-info item to open the Channel Info sheet (below): the seam is no
           longer a no-op. Gated on onBack presence, the established "mounted in the paired shell" signal —
@@ -480,6 +489,8 @@ export function ConversationScreen({
           and the composer — the overlays and their open/closed state are untouched, only the affordance
           that flips them moved. This menu is itself mobile-era chrome that a later ticket retires
           together with the sheet, once #683 lands the footer's model and effort controls. */}
+      <div className="conversation__top-chrome">
+        <div className="conversation__blur" aria-hidden="true"><i /><i /><i /><i /></div>
       {onBack && (
         <ThreadOverflowMenu
           name={activeConversation?.name ?? UNNAMED_CONVERSATION_LABEL}
@@ -506,6 +517,7 @@ export function ConversationScreen({
       {reader.state.type === 'closed' && reader.state.notice && (
         <p className="conversation__banner" role="status">{MARKDOWN_OPEN_FAILED_NOTICE}</p>
       )}
+      </div>
       {/* #1214: the backlog goes INTO the thread. `queue_state` is still daemon state held verbatim by
           queueStore and never written through the timeline reducer — the fold is render-time, per
           foldQueuedRows' header — but the two row lists are now joined before they are drawn, so a message
@@ -525,6 +537,7 @@ export function ConversationScreen({
       {(!offline || items.length > 0 || visibleQueued.length > 0) && <Timeline
         key={openConversationId}
         items={items}
+        foldTools={collapseToolUses}
         scrollPin={scrollPin}
         // #1260: NEGATED, so the first held row's key is minus the number of rows history has already
         // put ahead of it. A prepend of N lowers this by N while every surviving row's index rises by N,
@@ -538,10 +551,18 @@ export function ConversationScreen({
         onDropQueued={actionsAvailable ? (queuedMsgId, messageId) => {
           if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
           dropQueuedMessage(openConversationId, queuedMsgId, messageId, {
+            diagnose: window.pyry.sendDiagnostic,
             sendCommand: window.pyry.sendCommand,
             dispatch: dispatchTimeline,
             dispatchFor: dispatchTimelineFor
           })
+        } : undefined}
+        midTurnInput={midTurnInput}
+        // #1726: the drop closure's gate and guard, verbatim, so Send now is disabled exactly when the drop
+        // control is. No timeline write: the message is being delivered, so its echo stays true.
+        onSendQueuedNow={actionsAvailable ? (queuedMsgId) => {
+          if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
+          sendQueuedNow(openConversationId, queuedMsgId, { sendCommand: window.pyry.sendCommand })
         } : undefined}
       />}
       <TopOverlayControl onRepairHost={onRepairHost} />
@@ -555,6 +576,7 @@ export function ConversationScreen({
         <BackgroundTaskPanel
           conversationId={activeConversation?.id ?? null}
           turnRunning={isTurnRunning(phase)}
+          serverId={selectedHost}
           agent={openAgent}
           onClose={() => setPanelOpen(false)}
         />
@@ -616,6 +638,8 @@ export function ConversationScreen({
           whole. The conversation id goes down as a prop off the `activeConversation` slice already read
           above (the BackgroundTaskPanel idiom below); the question store read stays inside the slot, so a
           question arriving never re-renders this screen. */}
+      <div className="conversation__input-chrome">
+        <div className="conversation__blur" aria-hidden="true"><i /><i /><i /><i /></div>
       <ComposerSlot
         serverId={selectedHost}
         statusArea={(sendText) => (
@@ -648,6 +672,7 @@ export function ConversationScreen({
         phase={phase}
         onMessageSent={followBottom}
       />
+      </div>
       {sheetOpen && (
         <StatusSheet onClose={() => setSheetOpen(false)}>
           {/* #187: the headless data path — requests a snapshot on open and holds Model/Effort/YOLO.
@@ -706,6 +731,7 @@ export interface ThreadScrollPin {
  * File-local: nothing outside this module names it.
  */
 interface ThreadPin {
+  paneRef: RefObject<HTMLDivElement>
   scrollPin: ThreadScrollPin
   /** Resume following the bottom. Called when the operator's own message enters the timeline (#602). */
   followBottom: () => void
@@ -768,6 +794,17 @@ function reassertPinnedToBottom(
   if (el.scrollTop !== before) pinnedOffset.current = el.scrollTop
 }
 
+// Chrome can remain mounted when an empty offline Timeline is absent.
+function measureThreadChrome(pane: HTMLElement): void {
+  for (const [selector, property] of [
+    ['.conversation__top-chrome', '--thread-header-height'],
+    ['.conversation__input-chrome', '--thread-input-height']
+  ]) {
+    const chrome = pane.querySelector(selector)
+    if (chrome) pane.style.setProperty(property, `${chrome.getBoundingClientRect().height}px`)
+  }
+}
+
 /**
  * #601: keep the thread following the conversation while the operator is already reading at the bottom.
  *
@@ -799,7 +836,9 @@ function reassertPinnedToBottom(
  */
 function useThreadScrollPin(conversationId: string | null, prependedRows: number): ThreadPin {
   const ref = useRef<HTMLDivElement>(null)
+  const paneRef = useRef<HTMLDivElement>(null)
   const following = useRef(true)
+  const viewport = useRef({ width: 0, height: 0 })
   // #1049's growth observer, and the node its observation set was last synced against. Constructed on first
   // use rather than here, so `ResizeObserver` is never referenced under vitest's `node` environment — where
   // neither hook below runs at all, since renderer tests server-render through renderToStaticMarkup.
@@ -905,10 +944,14 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
   // the maximum scroll offset, so the browser never clamps scrollTop and no scroll event fires at all.
   useThreadLayoutEffect(() => {
     const el = ref.current
-    if (el === null) return
+    const pane = paneRef.current
+    if (pane === null) return
+    const header = pane?.querySelector<HTMLElement>('.conversation__top-chrome')
+    const input = pane?.querySelector<HTMLElement>('.conversation__input-chrome')
+    measureThreadChrome(pane)
 
     const anchor = topAnchor.current
-    if (!following.current && el.scrollTop === 0 && anchor !== null &&
+    if (el !== null && !following.current && el.scrollTop === 0 && anchor !== null &&
         anchor.conversationId === conversationId && prependedRows > anchor.prependedRows &&
         anchor.row.parentElement === el) {
       // Chromium suppresses anchoring at zero. Measure the surviving row, not scrollHeight:
@@ -933,17 +976,28 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
       // Re-read the ref rather than closing over `el`: an observation can be delivered in the same frame as
       // an unmount, and the null path is that case.
       const region = ref.current
-      if (region !== null) reassertPinnedToBottom(region, following, pinnedOffset)
+      const currentPane = paneRef.current
+      if (currentPane) measureThreadChrome(currentPane)
+      if (region !== null) {
+        reassertPinnedToBottom(region, following, pinnedOffset)
+        viewport.current = { width: region.clientWidth, height: region.clientHeight }
+      }
     }))
-    if (observedRegion.current !== el) {
+    const observationRoot = el ?? pane
+    if (observedRegion.current !== observationRoot) {
       observer.disconnect()
-      observedRegion.current = el
+      observedRegion.current = observationRoot
     }
-    observer.observe(el)
-    for (const row of el.children) observer.observe(row)
-
-    reassertPinnedToBottom(el, following, pinnedOffset)
-    rememberTop(el)
+    observer.observe(pane)
+    if (header) observer.observe(header)
+    if (input) observer.observe(input)
+    if (el !== null) {
+      observer.observe(el)
+      for (const row of el.children) observer.observe(row)
+      reassertPinnedToBottom(el, following, pinnedOffset)
+      viewport.current = { width: el.clientWidth, height: el.clientHeight }
+      rememberTop(el)
+    }
   })
 
   // The observer's cancellation path, and it needs an effect of its own: the dep-free one above has no
@@ -969,6 +1023,7 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
   }
 
   return {
+    paneRef,
     scrollPin: {
       onWheel: (event) => {
         if (event.isTrusted && event.deltaY < 0) demandHistory(event.currentTarget)
@@ -995,6 +1050,10 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
         const echo = pinnedOffset.current
         pinnedOffset.current = null
         if (echo !== null && el.scrollTop === echo) return
+        // Native anchoring can emit a scroll during resize/zoom before the observer re-pins.
+        // That movement is layout, not a reader leaving the bottom.
+        if (following.current && (el.clientWidth !== viewport.current.width ||
+            el.clientHeight !== viewport.current.height)) return
         // Measure the local bottom-following position. The mapping is the one thing
         // this glue can get wrong with no type error and no unit test — scrollTop is the offset,
         // clientHeight the viewport, scrollHeight the total content — so it is written exactly once.
@@ -1092,9 +1151,12 @@ export function SavedTimelineNotice({ status }: {
 
 export function Timeline({
   items,
+  foldTools = false,
   scrollPin,
   queued,
   onDropQueued,
+  midTurnInput = false,
+  onSendQueuedNow,
   firstRowKey = 0,
   olderSaved = false,
   saved = false,
@@ -1102,9 +1164,16 @@ export function Timeline({
   agent
 }: {
   items: readonly ThreadItem[]
+  /** Presentation only; absent or false retains ordinary tool rows. */
+  foldTools?: boolean
   scrollPin?: ThreadScrollPin
   queued?: readonly QueuedItem[]
   onDropQueued?: (queuedMsgId: number, messageId: string | undefined) => void
+  /** #1726: the session's `mid_turn_input` reading — a queued row draws Send now only when true. Optional
+   *  and defaulting to false for `queued`'s reason, so every existing render site is byte-identical. */
+  midTurnInput?: boolean
+  /** #1726: what Send now calls; absent draws it disabled, exactly as `onDropQueued` does the drop. */
+  onSendQueuedNow?: (queuedMsgId: number) => void
   /** #1260: the key the FIRST item row gets; each row after it counts up from there. Optional and
    *  defaulting to 0, for `scrollPin`'s and `queued`'s reason — the existing render sites pass nothing
    *  and get today's keys byte-for-byte. See the row map below for what a caller passes and why. */
@@ -1122,23 +1191,35 @@ export function Timeline({
   // #1566: keyed by item index, which is the row index below items.length (foldQueuedRows).
   const turnStats = turnStatsByItemIndex(items)
   const [expandedTools, setExpandedTools] = useState<ReadonlySet<number>>(() => new Set())
+  const [expandedRuns, setExpandedRuns] = useState<ReadonlySet<number>>(() => new Set())
   const projection = groupToolRows(rows.map((row) => row.item))
-  const hiddenRows = new Set(projection.filter((group) =>
-    group.ancestors.some((index) => !expandedTools.has(firstRowKey + index))
-  ).map((group) => group.index))
-  // Hidden descendants stay mounted; only undrawn boundaries are skipped when joining tool rows.
-  const visible = projection.filter((group) => {
+  const drawn = projection.filter((group) => {
     const item = rows[group.index]?.item
-    return !hiddenRows.has(group.index) &&
+    return !(foldTools && item?.kind === 'banner' && item.level === 'info') &&
       (item?.kind !== 'turnBoundary' || stoppedTurnText(item) !== null)
   })
+  const runs = foldTools ? foldToolRuns(rows.map((row) => row.item), drawn) : []
+  const runByMember = new Map(runs.flatMap((run) => run.members.map((index) => [index, run] as const)))
+  const runByStart = new Map(runs.map((run) => [run.index, run]))
+  const runIsExpanded = (run: ToolRun) => run.members.some((index) => expandedRuns.has(firstRowKey + index))
+  const expandedRunStarts = new Set(runs.filter(runIsExpanded).map((run) => run.index))
+  const hiddenRows = new Set(projection.filter((group) => {
+    const run = runByMember.get(group.index)
+    return group.ancestors.some((index) => {
+      const ancestorRun = runByMember.get(index)
+      return !expandedTools.has(firstRowKey + index) ||
+        (ancestorRun !== undefined && !expandedRunStarts.has(ancestorRun.index))
+    }) || (run !== undefined && !expandedRunStarts.has(run.index))
+  }).map((group) => group.index))
+  // Hidden descendants stay mounted; undrawn rows are skipped when joining tool rows.
+  const visible = drawn.filter((group) => !hiddenRows.has(group.index))
   const joins = new Map(visible.map((group, index) => {
     const previous = visible[index - 1]
     const next = visible[index + 1]
     const above = previous?.depth === group.depth ? rows[previous.index]?.item : undefined
     const below = next?.depth === group.depth ? rows[next.index]?.item : undefined
     return [group.index, [
-      above?.kind === 'toolCall' && 'tool-group-row--joined-above',
+      (above?.kind === 'toolCall' || runByStart.has(group.index)) && 'tool-group-row--joined-above',
       below?.kind === 'toolCall' && 'tool-group-row--joined-below'
     ].filter(Boolean).join(' ')]
   }))
@@ -1147,21 +1228,30 @@ export function Timeline({
       aria-label="Conversation history" tabIndex={0} onWheel={scrollPin?.onWheel} onKeyDown={scrollPin?.onKeyDown}>
       {rows.length === 0 && <EmptyThread />}
       {olderSaved && <p className="conversation__banner">Older messages require a connection.</p>}
-      {projection.map((group) => {
+      {projection.flatMap((group) => {
         const row = rows[group.index]
         if (!row) return null
         const key = firstRowKey + group.index
         const hidden = hiddenRows.has(group.index)
-        if (row.item.kind !== 'toolCall') return (
-          <TimelineRow key={group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
+        if (row.item.kind !== 'toolCall') {
+          const rowKey = group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`
+          const content = <TimelineRow key={rowKey}
             item={row.item} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(group.index)}
+            midTurnInput={midTurnInput} onSendQueuedNow={onSendQueuedNow}
             onOpenMarkdownPath={onOpenMarkdownPath} agent={agent}
             inProgress={!saved && group.index === items.length - 1 && row.item.kind === 'assistantText'} />
-        )
+          // Keep attributed text mounted through collapse and late-owner history regrouping.
+          if (row.item.kind === 'assistantText' && row.item.parentToolUseId) return (
+            <div key={rowKey} className={`tool-group-row tool-group-row--depth-${group.depth}`} hidden={hidden}>
+              {content}
+            </div>
+          )
+          return content
+        }
         const content = (
           <ToolRow
             item={row.item}
-            group={group.count > 0 ? {
+            group={group.hasChildren ? {
               count: group.count,
               running: !saved && group.running
             } : undefined}
@@ -1178,12 +1268,23 @@ export function Timeline({
         )
         // Origin-relative identity survives history prepends and display regrouping. Keep hidden
         // descendants mounted so their own result expansion survives an outer collapse.
-        return (
+        const run = runByStart.get(group.index)
+        const expanded = expandedRunStarts.has(group.index)
+        return [
+          run && <div key={`run${key}`} className={`tool-group-row tool-run${expanded ? ' tool-group-row--joined-below' : ''}`}>
+            <ToolRunHeader run={run} expanded={expanded} onToggle={() => setExpandedRuns((previous) => {
+              const next = new Set(previous)
+              if (run.members.some((index) => previous.has(firstRowKey + index))) {
+                for (const index of run.members) next.delete(firstRowKey + index)
+              } else next.add(key)
+              return next
+            })} />
+          </div>,
           <div key={group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
             className={`tool-group-row tool-group-row--depth-${group.depth} ${joins.get(group.index) ?? ''}`} hidden={hidden}>
             {content}
           </div>
-        )
+        ]
       })}
     </div>
   )
@@ -1193,52 +1294,19 @@ export function Timeline({
 // identity does not churn per render (the EMPTY_BACKLOG idiom from queueStore).
 const EMPTY_QUEUED: readonly QueuedItem[] = []
 
-// #969: the accessible name on the meta row's copy control — a CLIENT-OWNED constant, beside
+// The accessible name on the message copy control — a CLIENT-OWNED constant, beside
 // DROP_QUEUED_LABEL's precedent below. Never interpolated with the message text: `Copy: ${text}` would
 // put relay-peer-authored text into an ATTRIBUTE, which CLAUDE.md's 2026-08-20 ruling forbids outright,
 // and "the control has an accessible name" is exactly the requirement that invites it.
 const COPY_MESSAGE_LABEL = 'Copy message'
 
-// #969: the meta row at the foot of a text message bubble (Figma `Meta row` 132:4446 assistant /
-// 132:4435 user) — a body-small timestamp and the copy control, in --color-inverse-primary. Rendered as
-// the bubble's LAST child in both TimelineRow message arms and nowhere else: not on the tool rows
-// (which are not bubbles), not on the queued row (nothing sent yet to copy, and no time), and not on
-// the unmounted MessageBubble residue, whose exact-markup tests pin the message text as its sole child.
-//
-// APPENDED, NEVER PREPENDED. interactiveRoundtrip.test.tsx pins the byte string
-// `data-thread-role="assistant"><div class="bubble__markdown"><p>`, so the markdown container must stay
-// the bubble's opening child; and #691/#686's attachment slots will insert themselves above this row
-// simply by being written before it. Last-child is the shape, not a preference.
-//
-// #1014 fills the timestamp slot from the item's own `createdAt`. The slot still renders EMPTY when the
-// item carries no stamp — #1013's contract makes an absent one a LEGAL item, not a defect: it is what
-// every producer with no injected clock yields, and the ~39 stamp-free fixtures in ConversationScreen's
-// spec are exactly that case. So the read is `createdAt === undefined`, NEVER `'createdAt' in item`,
-// which is always true (the reducer assigns the field unconditionally) and would render "undefined".
-// `{null}` children emit the same bytes as the self-closing span #969 shipped, so the empty case is
-// unchanged rather than re-implemented. An empty inline element generates no line box, which is why
-// .bubble__meta carries a min-height rather than taking its 16px from the text — see conversation.css;
-// that is also what makes the fill purely additive, with no CSS change and no reflow either way.
-//
-// NO INJECTED EFFECT, unlike the drop control's `onDropQueued` (Timeline's optional prop, formerly
-// QueuedBacklog's required `onDrop`). That injection exists because a queued row cannot see the
-// conversation id its send needs; a copy needs the row's own text and nothing else, so the handler is a
-// closure over that one value calling the module helper directly. This row therefore added nothing to
-// Timeline's prop surface, which is what kept the ~30 existing `<Timeline` render sites untouched — the
-// same optionality argument #1214's two props had to make when they DID need to reach the container. The
-// promise is explicitly voided — never floating — and copyMessageText handles its own rejection.
-//
-// #1566: `turnStats` is the formatted turn numbers, passed only to a turn's last assistant bubble. It is
-// appended after the copy control as React text only (never an attribute or `title`: the numbers are
-// daemon-supplied), and `.bubble__turn-stats` keeps it `display: none` until the row is hovered, so an
-// unhovered row draws and measures exactly as before. Absent → byte-identical markup to #1014's.
+// Timestamp space remains reserved even without a stamp. Turn stats keep their independent
+// meta-row hover reveal; copy lives in MessageActions beside the bubble.
 function BubbleMeta({
-  text,
   side,
   createdAt,
   turnStats
 }: {
-  text: string
   side: 'user' | 'daemon'
   createdAt?: number
   turnStats?: string
@@ -1248,6 +1316,16 @@ function BubbleMeta({
       <span className="bubble__meta-time">
         {createdAt === undefined ? null : formatMessageTime(createdAt)}
       </span>
+      {turnStats !== undefined && <span className="bubble__turn-stats">{turnStats}</span>}
+    </div>
+  )
+}
+
+// Copy the row's source text, including a partial streaming reply. The helper owns rejection,
+// so this one-shot click promise is deliberately voided and adds no store or subscription.
+function MessageActions({ text }: { text: string }): JSX.Element {
+  return (
+    <div className="message-actions">
       <button
         type="button"
         className="bubble__copy"
@@ -1269,7 +1347,6 @@ function BubbleMeta({
           <path d="M4.71429 0C3.84754 0 3.14286 0.672656 3.14286 1.5V7.5C3.14286 8.32734 3.84754 9 4.71429 9H9.42857C10.2953 9 11 8.32734 11 7.5V2.79844C11 2.39062 10.8257 1.99922 10.5163 1.71562L9.09955 0.417188C8.80737 0.15 8.41696 0 8.01183 0H4.71429ZM1.57143 3C0.704688 3 0 3.67266 0 4.5V10.5C0 11.3273 0.704688 12 1.57143 12H6.28571C7.15246 12 7.85714 11.3273 7.85714 10.5V10.125H6.28571V10.5H1.57143V4.5H1.96429V3H1.57143Z" />
         </svg>
       </button>
-      {turnStats !== undefined && <span className="bubble__turn-stats">{turnStats}</span>}
     </div>
   )
 }
@@ -1317,7 +1394,7 @@ function BubbleMeta({
 // A content-derived name is the one shape that satisfies the criterion without reopening either question.
 //
 // The handler is a closure over this row's own record calling the module helper directly, drilling nothing
-// — BubbleMeta's copy control established that shape in this same bubble, and Timeline's ~30 render sites
+// — the message copy control established that shape in this same bubble, and Timeline's ~30 render sites
 // stay untouched. The conversation id the fetch needs is read outside React from `activeConversationStore`
 // inside `attachmentDownloadDeps`, the conversationLastReadBridge idiom, so it is not a prop either.
 //
@@ -1409,6 +1486,41 @@ function QueuedRowDrop({
   )
 }
 
+const SEND_QUEUED_NOW_LABEL = 'Send queued message now'
+
+// #1726: Send now on a queued row — the drop control's icon-button idiom by decision (the design file
+// draws no queued state), leading it so the drop keeps its place beside the bubble. Drawn only while
+// the session reports `mid_turn_input: true`; disabled under the drop control's own condition. The
+// click writes nothing: the row stays queued until the daemon's next `queue_state` omits it.
+function QueuedRowSendNow({
+  queued,
+  onSendQueuedNow
+}: {
+  queued: QueuedRowHandle
+  onSendQueuedNow?: (queuedMsgId: number) => void
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      className="queued-row__send-now"
+      aria-label={SEND_QUEUED_NOW_LABEL}
+      disabled={!onSendQueuedNow}
+      onClick={() => onSendQueuedNow?.(queued.queuedMsgId)}
+    >
+      <svg
+        className="queued-row__send-now-icon"
+        viewBox="0 0 24 24"
+        width="18"
+        height="18"
+        fill="currentColor"
+        aria-hidden="true"
+      >
+        <path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z" />
+      </svg>
+    </button>
+  )
+}
+
 // One timeline row, discriminated on `kind`. No `default` / `assertNever`: the switch is exhaustive
 // over the six kinds (only turnBoundary null), so a future seventh ThreadItem kind makes it
 // non-exhaustive → a compile-time "not all code paths return" error that forces a render decision —
@@ -1458,6 +1570,8 @@ function TimelineRow({
   inProgress,
   queued = null,
   onDropQueued,
+  midTurnInput = false,
+  onSendQueuedNow,
   turnStats,
   onOpenMarkdownPath,
   agent
@@ -1466,6 +1580,9 @@ function TimelineRow({
   inProgress: boolean
   queued?: QueuedRowHandle | null
   onDropQueued?: (queuedMsgId: number, messageId: string | undefined) => void
+  /** #1726: Timeline's two Send now props, passed through; read only by the queued `userText` arm. */
+  midTurnInput?: boolean
+  onSendQueuedNow?: (queuedMsgId: number) => void
   /** #1566: set only on a closed turn's last assistant bubble; read only by the `assistantText` arm. */
   turnStats?: string
   /** #1627: read only by the settled `assistantText` arm; user messages render no markdown. */
@@ -1489,7 +1606,7 @@ function TimelineRow({
         ? 'bubble bubble--daemon bubble--assistant-text'
         : 'bubble bubble--daemon'
       return (
-        <div className="message-row message-row--daemon">
+        <div className="message-row message-row--daemon message-row--text">
           <div className={bubbleClass} data-thread-role="assistant">
             {inProgress ? (
               <>
@@ -1525,8 +1642,9 @@ function TimelineRow({
                 settles, and a partial reply is as copyable as a finished one. #607's pre-wrap reaches
                 this subtree on that branch and is inert there: the JSX transform emits no whitespace
                 text nodes between elements on separate lines. */}
-            <BubbleMeta text={item.text} side="daemon" createdAt={item.createdAt} turnStats={turnStats} />
+            <BubbleMeta side="daemon" createdAt={item.createdAt} turnStats={turnStats} />
           </div>
+          <MessageActions text={item.text} />
         </div>
       )
     }
@@ -1610,10 +1728,14 @@ function TimelineRow({
       return (
         <div
           className={
-            queued ? 'message-row message-row--user message-row--queued' : 'message-row message-row--user'
+            queued
+              ? 'message-row message-row--user message-row--queued message-row--text'
+              : 'message-row message-row--user message-row--text'
           }
         >
+          {queued && midTurnInput && <QueuedRowSendNow queued={queued} onSendQueuedNow={onSendQueuedNow} />}
           {queued && <QueuedRowDrop queued={queued} onDropQueued={onDropQueued} />}
+          {!queued && <MessageActions text={item.text} />}
           <div className="bubble bubble--user" data-thread-role={queued ? 'queued' : 'user'}>
             {item.text}
             {/* #815: the attachment rows, written between the text and the meta row — the slot BubbleMeta's
@@ -1639,9 +1761,8 @@ function TimelineRow({
               )
             )}
             {/* #969: the same row, right-aligned by its own modifier (the drawing's `justify-end` on
-                132:4435). The copy source is the echo the composer wrote — the text as sent.
-                #1214 suppresses it while the message is queued — see the arm's header for why. */}
-            {!queued && <BubbleMeta text={item.text} side="user" createdAt={item.createdAt} />}
+                132:4435). Queued messages have no delivery meta row. */}
+            {!queued && <BubbleMeta side="user" createdAt={item.createdAt} />}
           </div>
         </div>
       )
@@ -1911,6 +2032,43 @@ export function ComposerBannerReport({ report, agent }: {
   return <div className="composer-status__error composer-status__banner" role="status">{bannerDisplayText(report, agent)}</div>
 }
 
+function ToolRunHeader({ run, expanded, onToggle }: {
+  run: ToolRun; expanded: boolean; onToggle: () => void
+}): JSX.Element {
+  return <div className="tool-row tool-row--resolved tool-run__row">
+    <button type="button" className="tool-row__chip tool-row__chip--toggle" aria-expanded={expanded} onClick={onToggle}>
+      <span className="tool-row__left">
+        <span className="tool-row__summary">Using tools: {run.count}</span>
+        <svg className={`tool-row__chevron tool-run__chevron${expanded ? ' tool-run__chevron--expanded' : ''}`}
+          viewBox="0 0 4 8" width="4" height="8" fill="currentColor" aria-hidden="true">
+          <path d={TOOL_ROW_CHEVRON_PATH} />
+        </svg>
+      </span>
+      <span className="tool-run__status">
+        {run.failed > 0 && <><span className="tool-run__failures">{run.failed} failed</span><ToolFailedIcon /></>}
+        {run.running && <svg className="tool-run__spinner composer-status__icon--spinning" viewBox="0 0 16 16"
+          width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" role="img" aria-label="Running">
+          <path d="M8 2a6 6 0 1 1-6 6" />
+        </svg>}
+        {!run.running && run.failed === 0 && <svg className="tool-run__done" viewBox="0 0 16 16"
+          width="16" height="16" fill="currentColor" role="img" aria-label="Done">
+          <path d="M6 10.78L3.22 8L2.27333 8.94L6 12.6667L14 4.66667L13.06 3.72667L6 10.78Z" />
+        </svg>}
+      </span>
+    </button>
+  </div>
+}
+
+function ToolFailedIcon(): JSX.Element {
+  return <svg
+    className="tool-row__failed"
+    viewBox="0 0 16 16" width="16" height="16" fill="currentColor"
+    role="img" aria-label="Failed"
+  >
+    <path d="M7.33333 10H8.66667V11.3333H7.33333V10ZM7.33333 4.66667H8.66667V8.66667H7.33333V4.66667ZM7.99333 1.33333C4.31333 1.33333 1.33333 4.32 1.33333 8C1.33333 11.68 4.31333 14.6667 7.99333 14.6667C11.68 14.6667 14.6667 11.68 14.6667 8C14.6667 4.32 11.68 1.33333 7.99333 1.33333ZM8 13.3333C5.05333 13.3333 2.66667 10.9467 2.66667 8C2.66667 5.05333 5.05333 2.66667 8 2.66667C10.9467 2.66667 13.3333 5.05333 13.3333 8C13.3333 10.9467 10.9467 13.3333 8 13.3333Z" />
+  </svg>
+}
+
 export function ToolRow({
   item,
   defaultExpanded = false,
@@ -2021,13 +2179,7 @@ export function ToolRow({
           {!group && result && result.resultDetail !== undefined && result.resultDetail !== '' && (
             <span className="tool-row__count">{result.resultDetail}</span>
           )}
-          {denial === undefined && result?.isError && <svg
-            className="tool-row__failed"
-            viewBox="0 0 16 16" width="16" height="16" fill="currentColor"
-            role="img" aria-label="Failed"
-          >
-            <path d="M7.33333 10H8.66667V11.3333H7.33333V10ZM7.33333 4.66667H8.66667V8.66667H7.33333V4.66667ZM7.99333 1.33333C4.31333 1.33333 1.33333 4.32 1.33333 8C1.33333 11.68 4.31333 14.6667 7.99333 14.6667C11.68 14.6667 14.6667 11.68 14.6667 8C14.6667 4.32 11.68 1.33333 7.99333 1.33333ZM8 13.3333C5.05333 13.3333 2.66667 10.9467 2.66667 8C2.66667 5.05333 5.05333 2.66667 8 2.66667C10.9467 2.66667 13.3333 5.05333 13.3333 8C13.3333 10.9467 10.9467 13.3333 8 13.3333Z" />
-          </svg>}
+          {denial === undefined && result?.isError && <ToolFailedIcon />}
           {/* The .status-row__chevron / .composer__actions-icon idiom: a bare inline <svg> sized by its
               own width/height, fill="currentColor" so it takes the ink from CSS, and aria-hidden so it
               adds no accessible name — the button's name stays exactly its text runs, three of them
@@ -2306,6 +2458,13 @@ export const THINKING_COPY = 'Thinking…'
 // string — the wire carries no label for this state, so the guarantee holds by construction.
 export const WORKING_COPY = 'Working…'
 
+// #1725: the two stages of the locally-opened send window, before the daemon reports a turn. "Sending…"
+// until a `queue_state` lists the sent `message_id`, then "Waiting for Claude" until the first
+// `turn_state`, so a daemon whose claude never starts no longer reads as claude thinking. Client-owned,
+// apostrophe-free; the second has no ellipsis, as the ticket words it.
+export const SENDING_COPY = 'Sending…'
+export const WAITING_COPY = 'Waiting for Claude'
+
 // #649: the label that names the tool the daemon currently has open — the answer to the operator's
 // remaining complaint, that WORKING_COPY reads identically for a 40 ms file read and a four-minute build.
 // A function rather than a constant because this copy has a hole, but BOTH fixed runs (the leading verb
@@ -2410,6 +2569,9 @@ export type WorkingIndicatorState =
   | 'compacting'
   | 'stalled'
   | 'resetting'
+  // #1725: the local send window's two stages, which replace its former `'thinking'` answer.
+  | 'sending'
+  | 'waiting'
 
 // #967: the label for each of the five states — a total switch with NO default, so a sixth member is a
 // `tsc` error here rather than a silently unlabelled row. Every arm returns a client-owned constant; only
@@ -2439,6 +2601,10 @@ function statusRowCopy(
       return thinkingLabel(thinkingTokens)
     case 'working':
       return WORKING_COPY
+    case 'sending':
+      return SENDING_COPY
+    case 'waiting':
+      return WAITING_COPY
   }
 }
 
@@ -2927,14 +3093,21 @@ export function workingIndicatorState(status: ThreadStatus): WorkingIndicatorSta
 // from #307's standalone interrupt control to the composer's send button, which now wears the stop
 // variant), so a locally opened window structurally cannot arm a stop button for a turn the daemon has not
 // started (AC4).
+//
+// #1725 REPLACES (b): the honest reading of "nothing produced yet" turned out to be the daemon's, not
+// ours. On 2026-10-03 a crash-looping claude left the row reading `Thinking…` for minutes. The gate's
+// `'thinking'` answer is now mapped to the window's own stage — `'sending'` until a `queue_state` listed
+// the sent id, `'waiting'` after — so `Thinking…` comes only from a daemon `turn_state{thinking}`.
 export function workingIndicatorStateWithLocalSend(
   status: ThreadStatus,
-  localSendPending: boolean
+  localSendPending: LocalSendPending | null
 ): WorkingIndicatorState | null {
   const daemonState = workingIndicatorState(status)
   if (daemonState !== null) return daemonState
-  if (!localSendPending) return null
-  return workingIndicatorState({ ...status, phase: 'thinking' })
+  if (localSendPending === null) return null
+  const local = workingIndicatorState({ ...status, phase: 'thinking' })
+  if (local !== 'thinking') return local
+  return localSendPending.queued ? 'waiting' : 'sending'
 }
 
 // #649: the `name` of the most recently started still-open main-thread tool call, or null if none is open.
@@ -3025,8 +3198,12 @@ export function isTurnRunning(phase: TurnPhase): boolean {
 //
 // The animation stops on its own: any `turn_state`, `idle` included, clears `localSendPending`
 // (threadTimeline's turnState arm), so the local window closes with the turn and needs no second rule.
+//
+// #1725: the local window now answers `'sending'` or `'waiting'` rather than `'thinking'`, so those two
+// carry the widening instead; a `'thinking'` answer is daemon-sourced and already covered by the first
+// clause.
 export function isStatusIconTurning(phase: TurnPhase, state: WorkingIndicatorState | null): boolean {
-  return isTurnRunning(phase) || state === 'thinking'
+  return isTurnRunning(phase) || state === 'sending' || state === 'waiting'
 }
 
 // #1214 DELETED `QueuedBacklog` AND ITS `.conversation__queued` REGION. #294 drew the backlog as a
@@ -3823,6 +4000,7 @@ function Composer({
     // this function: that would move the dereference into the render path, where `window.pyry` does not
     // exist under renderToStaticMarkup, and every container smoke test would throw.
     const sent = submitMessage(value, activeConversationId, {
+      diagnose: window.pyry.sendDiagnostic,
       sendCommand: window.pyry.sendCommand,
       dispatch,
       dispatchFor: (conversationId, event) => {
@@ -4053,14 +4231,15 @@ function Composer({
           does not already give. The attach button is a SIBLING of that group in the design too (115:3654
           against 115:3660), which is what makes it right-aligned rather than the group's fifth member.
 
-          #680: Actions is the row's FIRST item (Figma 115:3677 at x=0), ahead of the reading. It takes
+          #680: Actions is the row's first CONTROL (Figma 115:3677), after only the context circle since
+          #1728. It takes
           `sendText`, so a picked command travels the identical path a typed one does — the same gate, the
           same submitMessage call, the same optimistic echo and the same scroll follow (AC3, AC4). No
           `canSend` prop goes down with it: the gate stays in one place.
 
           #682: the permission-mode menu (Figma 115:3678), the row's SECOND item, now at the design's
           x=76 — it is the control the two notes below were holding the slot for, so the row finally
-          matches Figma's own order (Actions · mode · model · effort · reading).
+          matches Figma's own order (reading · Actions · mode · model · effort since #1728).
 
           #1022 gave it `conversationId`, which it did not take until then. Its VOCABULARY is still
           client-owned rather than daemon-published, but one entry of it is now conditional: a row's
@@ -4078,7 +4257,7 @@ function Composer({
           reads its own four store slices, so a snapshot tick re-renders this leaf rather than the textarea
           beside it.
 
-          #989: the effort menu (Figma 115:3688), the row's LAST control before the reading, at the
+          #989: the effort menu (Figma 115:3688), the row's last menu before attach, at the
           design's x=197. Same shape as the model menu beside it and the same four store slices, but its
           label is the session's effort VALUE rather than a looked-up name: claude publishes these levels
           byte-identical to what it accepts, so there is nothing to relabel — where the permission menu
@@ -4093,6 +4272,9 @@ function Composer({
           no conversation and no file — the picker, the path and the bytes all stay in the background
           process. */}
       <div className="composer__footer">
+        {/* #1728: the context circle is the row's FIRST item (Figma 347:5408 → Context, at the left
+            group's 4px inset and 16px before Actions); everything after it keeps its order. */}
+        <ContextUsageControl conversationId={activeConversationId} />
         <ComposerActionsMenu
           conversationId={activeConversationId}
           onCommand={sendText}
@@ -4107,7 +4289,6 @@ function Composer({
             and this is where that conversation id is already in hand and where its lifetime is the open
             chat's. */}
         <EffortDefaultData conversationId={activeConversationId} />
-        <ContextUsageControl conversationId={activeConversationId} />
         <ComposerAttachButton onAttach={attach.requestAttach} />
       </div>
       {/* #863: the attach outcome, the composer column's last child and NOT a member of the footer row
@@ -4774,6 +4955,23 @@ function TopOverlayControl({ onRepairHost }: {
     open === null ? NO_USAGE_LIMIT_READING : selectUsageLimitFor(open.id, nowSeconds)
   )
   const dismissed = useUsagePillDismissalStore(s => s.dismissed)
+  const sessionError = useConversationTimelineStore(s =>
+    open === null ? undefined : s.timelines.get(open.id)?.timeline.sessionError)
+  const conversationId = open?.id
+  const mountedConversation = useRef<string>()
+  useEffect(() => {
+    mountedConversation.current = conversationId
+    if (conversationId === undefined) return
+    return () => {
+      mountedConversation.current = undefined
+      // StrictMode immediately sets up the same effect again. Consume only after a real departure.
+      queueMicrotask(() => {
+        if (mountedConversation.current !== conversationId) {
+          conversationTimelineStore.getState().dispatchFor(conversationId, { type: 'sessionErrorCleared' })
+        }
+      })
+    }
+  }, [conversationId])
   const resolution = useModalStore(s =>
     open === null ? null : s.resolutions.find(r => r.conversationId === open.id) ?? null)
   useEffect(() => {
@@ -4803,6 +5001,7 @@ function TopOverlayControl({ onRepairHost }: {
   }
   return (
     <TopOverlay
+      sessionError={sessionError?.code}
       resolution={resolution?.phase === 'displayed' ? resolution.kind : null}
       onDismissResolution={() => {
         if (resolution !== null) modalStore.getState().dispatch({ type: 'resolutionDismissed', resolution })
@@ -4831,8 +5030,8 @@ const NO_TASK_COUNT = (): number => 0
 // #1494: the same constant for the MCP failure read, hoisted for the same reason.
 const NO_MCP_FAILURE = (): string | null => null
 
-// #811: the context-window reading, first occupant of the composer footer row (Figma 110:3497,
-// "Context: 84%"). The percentage USED, not remaining. Its arithmetic is contextUsagePercent —
+// #811: the context-window reading, since #1728 the composer footer row's first item and a ring
+// rather than text (Figma 347:5408 → Context). The percentage USED, not remaining. Its arithmetic is contextUsagePercent —
 // deliberately the SAME function the run-configuration sheet's gauge calls, so the two surfaces cannot
 // disagree about either the number or whether there is one to show.
 //
@@ -4844,41 +5043,44 @@ const NO_MCP_FAILURE = (): string | null => null
 // so a <p>'s UA margin is a live layout hazard against AC4 for no semantic gain (the ComposerErrorChip
 // ruling above, verbatim).
 //
-// NOTHING beyond className — no onClick, no tabIndex, no role, no title, no href. That is AC3 ("a
-// reading, not a control"), and it is structural: the emitted markup is short enough that the test pins
-// it EXACTLY, so nothing can be added here without a failing assertion.
+// NOTHING beyond className on the span — no onClick, no tabIndex, no role, no title, no href. That is
+// AC3 ("a reading, not a control"), and it is structural: the test pins the emitted markup EXACTLY, so
+// nothing can be added here without a failing assertion.
 //
 // NO LIVE REGION — no role="status", no aria-live. The ComposerErrorChip ruling applies and is stronger
 // here: since #810 these figures refresh on every connect and every turn end, so a polite region would
 // announce a percentage after every turn.
 //
-// A SINGLE text run, one template literal — not `Context: {pct}%` split across JSX children. The
+// A SINGLE text run in the label, one template literal — not `Context: {pct}%` split across JSX children. The
 // .composer-status__label discipline: one run has one predictable serialisation, which is what makes the
 // exact-markup assertion stable. The prefix is a client-owned literal and the only interpolated value is
 // an integer in [0, 100], so no daemon-supplied STRING reaches this surface at all — there is nothing to
-// escape and nothing to length-bound. No copy constant for an 18-character string with one call site: the
+// escape and nothing to length-bound. No copy constant for a short string with one call site: the
 // module's copy constants exist for strings asserted across files or that must be provably free of
 // daemon text, and neither applies.
 //
-// #1062 — THE SEVERITY LADDER. The colour is emphasis on a fact the reader can already read, so the
-// arithmetic stays where it was and only the presentation branches. Two derived values, both from
+// #1062 — THE SEVERITY LADDER, retuned by #1728 to 70% and 85%. Two derived values, both from
 // contextUsageStep (the boundaries live there as values, never here as inline conditionals):
 //
-//   CLASS. The base token stays LEADING and the modifier is APPENDED, never swapped in — six assertions
-//   in this file's footer-order describes locate the reading by `composer__context` as a substring, and
-//   all of them survive a suffix. The primary arm emits the bare class, byte-identical to the markup
-//   this component shipped before #1062: the step that means "nothing to see" must not move at all.
+//   CLASS. The base token stays LEADING and the modifier is APPENDED, never swapped in — the footer-order
+//   tests locate the reading by `composer__context` as a substring, and all of them survive a suffix. The
+//   modifier sets `color`, which the arc paints through `currentColor`; the track never changes.
 //
-//   TEXT. The word rides the TOP step alone. Below 70% the percentage is already legible as text, so
-//   amber is emphasis and WCAG 1.4.1 is satisfied without a second channel; at 70% the message becomes
-//   actionable ("you are running out"), which is the one step where a reader who cannot separate amber
-//   from the row's blue would lose something real. A WORD, not a glyph: a glyph inside a text run cannot
-//   be hidden from a screen reader. NOT an aria-label — name-from-author is not supported on a generic
-//   role — and still no live region, for the reason stated above.
+//   TEXT. Since #1728 no percentage is visible, so the colour would be the warning's only channel. The
+//   hidden label therefore names BOTH raised steps in words ("high", "nearly full"). A WORD in a text run,
+//   NOT an aria-label — name-from-author is not supported on a generic role — and still no live region.
 //
-// The copy stays HERE rather than in contextUsage.ts: that module maps a number to a step, and the step
-// is a role, not a string. Everything the ruling above forbids is still forbidden and still structural —
-// the three renderings are each pinned as exact markup, so nothing can be added to any of them silently.
+// #1728 — THE RING (Figma 347:5408 → Context). A dark full track and, over it, the used arc. The arc is the
+// reading itself: its dash is that share of the circumference, followed by a whole circumference of gap, so
+// 0% draws no arc and 100% a whole ring. In user units rather than through pathLength="100", because
+// Chromium's pathLength scaling on a circle is inexact — measured: a 100-unit dash left a gap at the top,
+// and a 100-unit period drew a sliver past the start. A circle's path starts at 3 o'clock and runs
+// clockwise; CONTEXT_ARC_TRANSFORM reflects it across the 3-to-12 diagonal through the centre, so it starts
+// at 12 o'clock and runs counterclockwise, as the design draws it. The SVG is aria-hidden; the label beside it is the accessible text, visually hidden in
+// CSS, and in the popover arm it is the trigger button's accessible name.
+const CONTEXT_ARC_TRANSFORM = 'matrix(0 -1 -1 0 15 15)'
+const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * 6.5
+
 export function ContextUsageReading({
   usedTokens,
   windowTokens
@@ -4891,8 +5093,28 @@ export function ContextUsageReading({
   const step = contextUsageStep(pct)
   const className =
     step === 'primary' ? 'composer__context' : `composer__context composer__context--${step}`
-  const label = step === 'error' ? `Context high: ${pct}%` : `Context: ${pct}%`
-  return <span className={className}>{label}</span>
+  const label =
+    step === 'error' ? `Context nearly full: ${pct}%`
+    : step === 'warning' ? `Context high: ${pct}%`
+    : `Context: ${pct}%`
+  return (
+    <span className={className}>
+      <svg className="composer__context-ring" width="15" height="15" viewBox="0 0 15 15" aria-hidden="true">
+        <circle className="composer__context-track" cx="7.5" cy="7.5" r="6.5" />
+        <circle
+          className="composer__context-arc"
+          cx="7.5"
+          cy="7.5"
+          r="6.5"
+          strokeDasharray={
+            `${((pct * CONTEXT_RING_CIRCUMFERENCE) / 100).toFixed(3)} ${CONTEXT_RING_CIRCUMFERENCE.toFixed(3)}`
+          }
+          transform={CONTEXT_ARC_TRANSFORM}
+        />
+      </svg>
+      <span className="composer__context-label">{label}</span>
+    </span>
+  )
 }
 
 // The store-bound container for the reading (#811) — the ComposerErrorChipControl shape. A container

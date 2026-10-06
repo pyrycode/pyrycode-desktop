@@ -16,6 +16,15 @@ const render = (): string =>
   renderToStaticMarkup(<SettingsScreen onBack={noop} onPairAnother={noop} onUnpaired={noop} />)
 
 describe('SettingsScreen', () => {
+  it('places Thread directly between Notifications and Storage with the default-on collapse switch', () => {
+    const markup = render()
+    const headings = [...markup.matchAll(/<h2[^>]*>([^<]+)<\/h2>/g)].map((match) => match[1])
+    expect(headings.slice(headings.indexOf('Notifications'), headings.indexOf('Storage') + 1))
+      .toEqual(['Notifications', 'Thread', 'Storage'])
+    const thread = markup.slice(markup.indexOf('>Thread</h2>'), markup.indexOf('>Storage</h2>'))
+    expect(thread).toContain('role="switch" aria-checked="true" aria-label="Collapse assistant tool uses"')
+  })
+
   it('renders the "Settings" title (AC2)', () => {
     expect(render()).toContain('>Settings</h1>')
   })

@@ -61,6 +61,28 @@ request-specific rejection fields, but [the connection](daemon-connection.md#pai
 consumes authentication rejection before request correlation. Decoder tests pin the exact comparison
 and ensure private daemon text cannot appear in the result.
 
+### Optional assistant parent attribution
+
+`AssistantDeltaPayload.parent_tool_use_id` names the spawning Agent/Task call for
+helper text. `parseAssistantDeltaPayload` serves both live `assistant_delta` and
+`decodeHistoryEvent`: `optionalString` preserves nonempty strings exactly, including
+whitespace, and missing or empty strings become `undefined`. Supplied non-strings,
+including `null`, throw `WireDecodeError`; live frames are dropped and malformed
+history entries are skipped individually. Errors name only the static field,
+never its value, and unknown payload keys are discarded by named-field copying.
+
+The live connection and decoded history carry it as `parentToolUseId` through
+`DaemonEvent`/`HistoryTimelineEvent` and `translateTimelineEvent` to assistant
+timeline items. A parser-only check would miss a forwarding boundary that drops
+the field: `inboundMessage.test.ts` covers both decode lanes,
+`daemonConnection.test.ts` covers live and correlated history IPC, and
+`timelineBridge.test.ts` covers renderer translation. See
+[timeline attribution](conversation-timeline-store.md#assistant-parent-attribution)
+and [version-1 persistence](chat-history.md#snapshot-contract).
+
+The parent is a conversation-local display hint, never authority, a DOM attribute,
+log content or a path. Tool-use/result decoding retains its existing contract.
+
 ### Optional permission context
 
 `parseModalShownPayload` preserves the seven required `ModalShownPayload` fields
@@ -189,25 +211,30 @@ choices belong to [#1549](https://github.com/pyrycode/pyrycode-desktop/issues/15
 
 `SessionSettingsPayload.capabilities?: SessionCapabilitiesPayload` reports whether
 the resolved session answers slash-command, MCP-status and context-breakdown
-requests (pyrycode#2646/#2670) — true for a Claude session, false for a Codex one.
+requests (pyrycode#2646/#2670), and accepts queued input during a running turn
+(`mid_turn_input`, pyrycode#2730, desktop [#1726](https://github.com/pyrycode/pyrycode-desktop/issues/1726))
+— true for a Claude session, false for a Codex one.
 `parseSessionSettingsPayload` follows the `effective_effort` optional-field pattern
 above: absent `capabilities` stays `undefined`; present is narrowed by
 `parseSessionCapabilities` (\#1654), which rejects outright when the value is not a
-record and otherwise reads `slash_commands`, `mcp_servers` and
-`context_usage_detail` independently through `requireBoolean` — each absent flag
+record and otherwise reads `slash_commands`, `mcp_servers`, `context_usage_detail`
+and `mid_turn_input` independently through its `optionalBoolean` helper, which
+calls `requireBoolean` for a present value — each absent flag
 stays `undefined` (distinct from `false`), and a present non-boolean rejects the
-whole frame before it is logged. The parser returns a fresh literal of the three
-flags only; the object's other upstream keys (`interrupt`, `mid_turn_input`,
+whole frame before it is logged. The parser returns a fresh literal of the four
+flags only; the object's other upstream keys (`interrupt`,
 `effort_levels`, `permission_modes`, `attachment_types`, `models`) are deliberately
 never decoded.
 
 `capabilities` only ever reaches a client that advertised `multi_agent`, and only
-when the reply resolved a session — this app doesn't advertise `multi_agent` yet,
-so the key will not arrive in production until it does. The decode is ready ahead
-of that; the flags carry no display or control behaviour on their own.
+when the reply resolved a session. Production `loadDialConfig` advertises
+`multi_agent`, so resolved-session replies supply these readings to the current UI.
 
 The [event channel](daemon-event-channel.md#run-configuration-report) carries the
-three flags as flat `slashCommands`/`mcpServers`/`contextUsageDetail` booleans.
+four flags as flat `slashCommands`/`mcpServers`/`contextUsageDetail`/`midTurnInput`
+optional booleans. Send now requires explicit `midTurnInput === true`; absent
+capabilities, an absent flag or `false` hides it. The other three flags retain
+their absence-as-supported rule; see [run-config selection](run-config-store.md#session-capability-flags-1655).
 
 ### Optional memory-search report
 

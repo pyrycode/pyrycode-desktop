@@ -1,10 +1,14 @@
 # Background-task roster store
 
 The renderer's held copy of each open conversation's live background-task set — a dedicated,
-unidirectional Zustand store fed by a headless subscription binding that observes all **three** typed
+unidirectional Zustand store fed by a headless subscription binding that observes the four typed
 daemon events in the family — the [daemon-event channel](daemon-event-channel.md)'s `backgroundTaskRoster`
-aggregate, `backgroundTaskStarted` scalar and `backgroundTaskUpdated` scalar arms — joining them per task
+aggregate, `backgroundTaskStarted`, `backgroundTaskUpdated` and `backgroundTaskProgress` scalar arms — joining them per task
 so the panel (#581) and the composer's count pill (#1435) read one source of truth.
+
+It also holds renderer-only pending Stop task pairs. The app listener settles them while the drawer is
+closed; see [pending stop waits](background-task-roster-store-internals.md#pending-stop-waits) and the
+[panel action](conversation-shell-background-tasks.md#stop-task).
 
 Introduced in [#573](../codebase/573.md), split from #567 alongside #574 (the two scalar arms,
 `backgroundTaskStarted`/`backgroundTaskUpdated`). #574 was itself later split into
@@ -39,8 +43,8 @@ larger sections moved to their own pages, linked from their stub headings:
 - No import surface at #573's ship: `useBackgroundTaskRosterStore`/`selectRosterFor` had no consumer
   until #581 (the panel); `selectLiveTaskCountFor` (#1561) had no consumer until the composer's count
   pill (#1435) switched onto it the same ticket that added it.
-- `tasks` is a **display** map — its collection shape is not an invitation to iterate it as a work list
-  something acts on. Nothing in this store or its bridge iterates it.
+- `tasks` is a **display** map, not a work list. The separate Stop task button routes only the selected
+  conversation/task pair after a synchronous eligibility claim; no batch action is derived from the map.
 - `clearAllRosters` ([#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139)) is wired into
   `PairedShell.tsx`'s shared `clearPairingDeps` object, beside `clearAllBacklogs`, and invoked only from
   [`clearPairingScopedState`](paired-shell.md#related) — never from a bridge arm or directly from a

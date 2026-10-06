@@ -1,3 +1,6 @@
+import { createMessageLifecycle } from './messageLifecycle'
+import { createDiagnosticLog } from './diagnosticLog'
+import type { SendOutcome } from './transport/sendObservation'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createHash } from 'node:crypto'
 import { onCommand, type CommandSource } from './receiveCommand'
@@ -62,7 +65,8 @@ import {
   type ChangeWorkspacePayload,
   type RenameWorkspacePayload,
   type SetSessionSettingsPayload,
-  type DequeueMessagePayload
+  type DequeueMessagePayload,
+  type SendQueuedNowPayload
 } from '../shared/wire/types'
 
 // This consumer is a pure in-process composition, so its tests inject fakes at the three seams
@@ -103,6 +107,7 @@ interface FakeDriver {
   stopped: boolean
   /** Every plaintext handed to the driver's sendMessage, in order. */
   sent: Uint8Array[]
+  observations: Array<(outcome: SendOutcome) => void>
   handle: NoiseRelayDriver
   /** Drive a RelaySessionEvent back into the consumer's onEvent handler. */
   emit(event: RelaySessionEvent): void
@@ -120,14 +125,16 @@ function makeDriverFactory(options: { throwOnSend?: boolean } = {}): {
         config,
         stopped: false,
         sent: [],
+        observations: [],
         emit: (event) => config.onEvent(event),
         handle: {
           // Record what the connection forwards. The driver's own inertness (pre-handshake /
           // post-terminal) is NOT modelled here — that contract is proven by
           // noiseRelayDriver.test.ts:304-358; this layer only tests what it hands the driver.
-          sendMessage(plaintext) {
+          sendMessage(plaintext, observe) {
             if (options.throwOnSend) throw new Error('driver send boom')
             fake.sent.push(plaintext)
+            if (observe) fake.observations.push(observe)
           },
           stop() {
             fake.stopped = true
@@ -218,6 +225,7 @@ function build(
     save?: () => Promise<void>
     throwOnSend?: boolean
     diagnosticLog?: DiagnosticLog
+    messageLifecycle?: DaemonConnectionDeps['messageLifecycle']
     mintToken?: () => string
     timing?: DaemonConnectionDeps['timing']
     serverId?: string | null
@@ -243,6 +251,7 @@ function build(
     now: () => FIXED_TS,
     createDriver: factory.createDriver,
     diagnosticLog: overrides.diagnosticLog,
+    messageLifecycle: overrides.messageLifecycle,
     // The retrieval idle-deadline seam (#996). Left undefined by default so every pre-existing test
     // keeps the real setTimeout; the retrieval block injects a fake scheduler.
     timing: overrides.timing,
@@ -673,7 +682,7 @@ describe('createDaemonConnection', () => {
     expect(payload.device_name).toBe('my-desktop')
   })
 
-  it('advertises the interactive and multi_agent capabilities in the client hello (#179 AC1, #1657)', async () => {
+  it('advertises the interactive, multi_agent and stop_background_task capabilities in the client hello (#179 AC1, #1657, #1770)', async () => {
     const { connection, drivers } = build()
     connection.start()
     await tick()
@@ -682,7 +691,7 @@ describe('createDaemonConnection', () => {
     // buildClientHello in isolation, so this pins the production wiring, not the codec default.
     const envelope = decodeEnvelope(drivers[0].config.session.hello)
     const payload = envelope.payload as Record<string, unknown>
-    expect(payload.capabilities).toEqual(['interactive', 'multi_agent'])
+    expect(payload.capabilities).toEqual(['interactive', 'multi_agent', 'stop_background_task'])
   })
 
   it('decodes server_static_pubkey to the raw 32-byte key', async () => {
@@ -1527,6 +1536,16 @@ describe('createDaemonConnection — structured stream (assistant_delta / turn_e
     ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
     return ctx
   }
+
+  it('forwards assistant parent attribution through live IPC', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+    drivers[0].emit({ type: 'message', plaintext: assistantDeltaPlaintext({ ...DELTA, parent_tool_use_id: 'agent-parent' }) })
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'assistantDelta', turnId: 'turn-1', seq: 3, text: 'a reply slice',
+        conversationId: 'conv-1', daemonTs: FIXED_TS, parentToolUseId: 'agent-parent' }
+    ])
+  })
 
   it('decodes an inbound assistant_delta into one camelCase assistantDelta, conversation id and all', async () => {
     const { sink, drivers } = await connected()
@@ -7923,6 +7942,48 @@ describe('createDaemonConnection — dequeueMessage (dequeue_message request, un
   })
 })
 
+describe('createDaemonConnection — sendQueuedNow (send_queued_now, the dequeueMessage twin, #1726)', () => {
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.sendQueuedNow({ conversation_id: 'c1', queued_msg_id: 7 })).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('sends exactly one send_queued_now envelope carrying only the two fields', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.sendQueuedNow({
+      conversation_id: 'c1',
+      queued_msg_id: 7,
+      message_id: 'smuggled'
+    } as unknown as SendQueuedNowPayload)
+
+    expect(drivers[0].sent).toHaveLength(1)
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    expect(envelope.type).toBe('send_queued_now')
+    expect(envelope.id).toBe(2)
+    expect(envelope.payload).toEqual({ conversation_id: 'c1', queued_msg_id: 7 })
+  })
+
+  it('does not throw out of the module when the driver sendMessage throws', async () => {
+    const { connection, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(() => connection.sendQueuedNow({ conversation_id: 'c1', queued_msg_id: 7 })).not.toThrow()
+  })
+})
+
 describe('createDaemonConnection — interrupt (named interrupt control frame, fire-and-forget, #306/#1092)', () => {
   /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
   async function connected(): Promise<ReturnType<typeof build>> {
@@ -8670,6 +8731,182 @@ describe('createDaemonConnection — toggleMcpServer (#1586)', () => {
   })
 })
 
+describe('createDaemonConnection — stopBackgroundTask (#1770)', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  function refusal(code: unknown, inReplyTo: number): Uint8Array {
+    return encodeEnvelope({ id: 90, type: 'error', ts: FIXED_TS, in_reply_to: inReplyTo, payload: {
+      code, message: 'private daemon detail', retryable: false,
+      conversation_id: 'daemon-named-conversation', task_id: 'daemon-named-task'
+    } })
+  }
+  const stopRejections = (sink: ReturnType<typeof build>['sink']): DaemonEvent[] =>
+    emitted(sink).filter((e) => e.type === 'backgroundTaskStopRejected' || e.type === 'mcpToggleRejected')
+  const lastSentId = (ctx: ReturnType<typeof build>): number =>
+    decodeEnvelope(ctx.drivers[0].sent[ctx.drivers[0].sent.length - 1]).id
+
+  it('sends exactly one two-field frame on the shared id sequence and never re-sends', async () => {
+    const { connection, drivers } = await reachConnected()
+    vi.useFakeTimers()
+    connection.send({ conversation_id: 'other', message_id: 'm1', text: 'hello' })
+    connection.stopBackgroundTask('conv-42', 'task-7')
+    expect(drivers[0].sent.map(decodeEnvelope)[1]).toEqual({ id: 3, type: 'stop_background_task', ts: FIXED_TS,
+      payload: { conversation_id: 'conv-42', task_id: 'task-7' } })
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(drivers[0].sent).toHaveLength(2)
+    connection.stop()
+  })
+
+  it('is inert before startup, before authentication and after stop, and logs no id', async () => {
+    const { log, records } = captureLog()
+    const { connection, drivers } = build({ diagnosticLog: log })
+    expect(() => connection.stopBackgroundTask('private-conv', 'private-task')).not.toThrow()
+    connection.start()
+    await tick()
+    connection.stopBackgroundTask('private-conv', 'private-task')
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    connection.stop()
+    expect(() => connection.stopBackgroundTask('private-conv', 'private-task')).not.toThrow()
+    expect(drivers[0].sent).toEqual([])
+    expect(records.filter((entry) => entry.event === 'background-task-stop-refused')).toEqual(
+      Array.from({ length: 3 }, () => ({ event: 'background-task-stop-refused', code: 'unavailable' }))
+    )
+    expect(JSON.stringify(records)).not.toMatch(/private-conv|private-task/)
+  })
+
+  it('catches a send failure, records nothing and never retries', async () => {
+    const { log, records } = captureLog()
+    const { connection, sink, drivers } = build({ diagnosticLog: log, throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    vi.useFakeTimers()
+    expect(() => connection.stopBackgroundTask('private-conv', 'private-task')).not.toThrow()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(records.at(-1)).toEqual({ event: 'background-task-stop-failed', code: 'build-or-send-failed' })
+    for (const id of [2, 3]) {
+      drivers[0].emit({ type: 'message', plaintext: refusal('stop_background_task.refused', id) })
+    }
+    expect(stopRejections(sink)).toEqual([])
+    expect(JSON.stringify(records)).not.toMatch(/private-conv|private-task|driver send boom/)
+    connection.stop()
+  })
+
+  it.each(['stop_background_task.refused', 'stop_background_task.something_later', 42])(
+    'settles a correlated %j refusal with the ids recorded at send time', async (code) => {
+      const { log, records } = captureLog()
+      const ctx = build({ diagnosticLog: log })
+      ctx.connection.start()
+      await tick()
+      ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+      ctx.connection.stopBackgroundTask('conv-42', 'task-7')
+      const before = emitted(ctx.sink).length
+      ctx.drivers[0].emit({ type: 'message', plaintext: refusal(code, lastSentId(ctx)) })
+      const events = emitted(ctx.sink).slice(before)
+      expect(events).toEqual([{ type: 'backgroundTaskStopRejected', conversationId: 'conv-42', taskId: 'task-7' }])
+      expect(JSON.stringify(events)).not.toMatch(/private|daemon-named|in_reply_to|refused/)
+      expect(records.at(-1)).toEqual({ event: 'background-task-stop-rejected' })
+      expect(JSON.stringify(records)).not.toMatch(/conv-42|task-7|private|daemon-named/)
+      expect(ctx.drivers[0].sent).toHaveLength(1)
+      ctx.connection.stop()
+    })
+
+  it('emits nothing for an uncorrelated error or a second error at the same id', async () => {
+    const ctx = await reachConnected()
+    ctx.connection.stopBackgroundTask('conv-42', 'task-7')
+    const id = lastSentId(ctx)
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('stop_background_task.refused', id + 1) })
+    expect(stopRejections(ctx.sink)).toEqual([])
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('stop_background_task.refused', id) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('stop_background_task.refused', id) })
+    expect(stopRejections(ctx.sink)).toEqual([
+      { type: 'backgroundTaskStopRejected', conversationId: 'conv-42', taskId: 'task-7' }
+    ])
+    ctx.connection.stop()
+  })
+
+  it('settles a stop refusal and an MCP toggle refusal as their own events', async () => {
+    const ctx = await reachConnected()
+    ctx.connection.toggleMcpServer('conv-toggle', 'docs', false)
+    const toggleId = lastSentId(ctx)
+    ctx.connection.stopBackgroundTask('conv-stop', 'task-7')
+    const stopId = lastSentId(ctx)
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('mcp_actuation.refused', toggleId) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusal('stop_background_task.refused', stopId) })
+    expect(stopRejections(ctx.sink)).toEqual([
+      { type: 'mcpToggleRejected', conversationId: 'conv-toggle' },
+      { type: 'backgroundTaskStopRejected', conversationId: 'conv-stop', taskId: 'task-7' }
+    ])
+    ctx.connection.stop()
+  })
+
+  it('bounds the outstanding stops, evicting the oldest', async () => {
+    const ctx = await reachConnected()
+    for (let i = 0; i < 33; i += 1) ctx.connection.stopBackgroundTask('conv-42', `task-${i}`)
+    const ids = ctx.drivers[0].sent.map(decodeEnvelope).map((frame) => frame.id)
+    for (const index of [0, 1, 32]) {
+      ctx.drivers[0].emit({ type: 'message', plaintext: refusal('stop_background_task.refused', ids[index]) })
+    }
+    expect(stopRejections(ctx.sink).map((e) => e.type === 'backgroundTaskStopRejected' && e.taskId))
+      .toEqual(['task-1', 'task-32'])
+    ctx.connection.stop()
+  })
+
+  it('clears outstanding stops on a new dial, so a recycled id settles nothing', async () => {
+    const ctx = await reachConnected()
+    ctx.connection.stopBackgroundTask('conv-42', 'task-7')
+    const staleId = lastSentId(ctx)
+    ctx.connection.reconnect()
+    await tick()
+    ctx.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    ctx.drivers[1].emit({ type: 'message', plaintext: refusal('stop_background_task.refused', staleId) })
+    expect(stopRejections(ctx.sink)).toEqual([])
+    ctx.connection.stop()
+  })
+
+  it('routes a validated command to its host, strips extra fields and refuses empty ids and unknown hosts', async () => {
+    const connections = new Map<string, DaemonConnection>()
+    const router = createConversationRouter({ connectionFor: (id) => connections.get(id) ?? null })
+    const host = build({ serverId: 'host-A', wrapSink: router.observe })
+    const other = build({ serverId: 'host-B', wrapSink: router.observe })
+    connections.set('host-A', host.connection)
+    connections.set('host-B', other.connection)
+    host.connection.start()
+    other.connection.start()
+    await tick()
+    for (const ctx of [host, other]) ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    host.drivers[0].emit({ type: 'message', plaintext: conversationCreatedPlaintext({
+      id: 'conv-42', is_promoted: false, cwd: '/workspace', name: null, last_used_at: '', workspace_label: null
+    }) })
+    const source = { on: vi.fn(), removeListener: vi.fn() } satisfies CommandSource
+    const off = onCommand(source, (command) => {
+      if (command.type === 'stopBackgroundTask') {
+        const conversationId = command.payload.conversation_id
+        router.route(conversationId)?.stopBackgroundTask(conversationId, command.payload.task_id)
+      }
+    })
+    const receive = source.on.mock.calls[0][1]
+    receive({}, { type: 'stopBackgroundTask', serverId: 'host-B', payload: {
+      conversation_id: 'conv-42', task_id: 'task-7', serverId: 'host-B', token: 'smuggled'
+    } })
+    expect(host.drivers[0].sent.map(decodeEnvelope)).toEqual([{ id: 2, ts: FIXED_TS, type: 'stop_background_task',
+      payload: { conversation_id: 'conv-42', task_id: 'task-7' } }])
+    receive({}, { type: 'stopBackgroundTask', payload: { conversation_id: 'conv-42', task_id: '' } })
+    receive({}, { type: 'stopBackgroundTask', payload: { conversation_id: '', task_id: 'task-7' } })
+    receive({}, { type: 'stopBackgroundTask', payload: { conversation_id: 'conv-42' } })
+    expect(() => receive({}, { type: 'stopBackgroundTask', payload: {
+      conversation_id: 'unknown', task_id: 'task-7'
+    } })).not.toThrow()
+    expect(host.drivers[0].sent).toHaveLength(1)
+    expect(other.drivers[0].sent).toEqual([])
+    off()
+    host.connection.stop()
+    other.connection.stop()
+  })
+})
+
 describe('createDaemonConnection — requestModelList (on-demand model vocabulary, #1165)', () => {
   it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin)', () => {
     const { connection, drivers } = build()
@@ -8977,13 +9214,16 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
   ])('maps the capability flags of %s onto runConfigReceived (#1654)', async (_label, flag) => {
     const { sink, drivers, replyTo } = await requested()
     const capabilities = {
-      interrupt: true, mid_turn_input: true, slash_commands: flag, mcp_servers: flag, context_usage_detail: flag,
+      interrupt: true, mid_turn_input: flag, slash_commands: flag, mcp_servers: flag, context_usage_detail: flag,
       effort_levels: ['low'], permission_modes: ['default'], attachment_types: ['*/*'], models: ['private-model']
     }
     drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, capabilities }, replyTo) })
 
     const events = emitted(sink).filter((e) => e.type === 'runConfigReceived')
-    expect(events).toEqual([{ ...BASE_EVENT, slashCommands: flag, mcpServers: flag, contextUsageDetail: flag }])
+    expect(events).toEqual([
+      { ...BASE_EVENT, slashCommands: flag, mcpServers: flag, contextUsageDetail: flag, midTurnInput: flag }
+    ])
+    expect(events[0]).not.toHaveProperty('mid_turn_input')
     expect(events[0]).not.toHaveProperty('capabilities')
     expect(events[0]).not.toHaveProperty('slash_commands')
     expect(events[0]).not.toHaveProperty('interrupt')
@@ -9000,23 +9240,32 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     expect(event.slashCommands).toBeUndefined()
     expect(event.mcpServers).toBeUndefined()
     expect(event.contextUsageDetail).toBeUndefined()
+    expect(event.midTurnInput).toBeUndefined()
   })
 
   it.each([
     ['slash_commands', 'slashCommands'],
     ['mcp_servers', 'mcpServers'],
-    ['context_usage_detail', 'contextUsageDetail']
+    ['context_usage_detail', 'contextUsageDetail'],
+    ['mid_turn_input', 'midTurnInput']
   ] as const)('carries no value for a missing %s, distinct from false (#1654)', async (wire, ipc) => {
     const { sink, drivers, replyTo } = await requested()
-    const capabilities: Record<string, boolean> = { slash_commands: false, mcp_servers: false, context_usage_detail: false }
+    const capabilities: Record<string, boolean> = {
+      slash_commands: false, mcp_servers: false, context_usage_detail: false, mid_turn_input: false
+    }
     delete capabilities[wire]
     drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, capabilities }, replyTo) })
 
     const event = emitted(sink).find((e) => e.type === 'runConfigReceived')
     if (event?.type !== 'runConfigReceived') throw new Error('expected runConfigReceived')
-    const flags = { slashCommands: event.slashCommands, mcpServers: event.mcpServers, contextUsageDetail: event.contextUsageDetail }
+    const flags = {
+      slashCommands: event.slashCommands,
+      mcpServers: event.mcpServers,
+      contextUsageDetail: event.contextUsageDetail,
+      midTurnInput: event.midTurnInput
+    }
     expect(flags[ipc]).toBeUndefined()
-    expect(Object.values(flags).filter((v) => v === false)).toHaveLength(2)
+    expect(Object.values(flags).filter((v) => v === false)).toHaveLength(3)
   })
 
   it.each([
@@ -11094,6 +11343,16 @@ describe('createDaemonConnection — requestHistory (history page request/reply,
     expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
   })
 
+  it('forwards a stored assistant parent hint through correlated history IPC', async () => {
+    const { sink, drivers, replyTo } = await requested()
+    drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext({ ...PAGE, entries: [
+      { ...ENTRY, payload: { ...ENTRY.payload, parent_tool_use_id: 'historical-agent' } }
+    ] }, replyTo) })
+    expect(emitted(sink).filter(event => event.type === 'historyPageReceived')).toMatchObject([
+      { conversationId: CONV, entries: [{ event: { parentToolUseId: 'historical-agent' } }] }
+    ])
+  })
+
   it('decodes a correlated history_page into historyPageReceived, attributed to the ASKED conversation', async () => {
     // The page names no conversation. What crosses is the id THIS CLIENT put in its own outbound
     // frame, resolved from the envelope the page answers — the only place that fact exists.
@@ -12738,5 +12997,71 @@ describe('reconnect replay cursor', () => {
     expect(b.drivers).toHaveLength(1)
     expect(await hello(b)).toHaveProperty('last_event_id', 99)
     registry.stop()
+  })
+})
+
+describe('composer diagnostics through the daemon connection', () => {
+  const id = '12345678-1234-4123-8123-123456789abc'
+  it('requires own write evidence and correlates decoded snapshots to originating host and conversation', async () => {
+    const lines: string[] = []
+    const log = createDiagnosticLog({ sink: { write: line => lines.push(line) } })
+    const lifecycle = createMessageLifecycle(log)
+    const local = build({ serverId: 'host', messageLifecycle: lifecycle })
+    const other = build({ serverId: 'other-host', messageLifecycle: lifecycle })
+    for (const ctx of [local, other]) { ctx.connection.start(); await tick(); ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() }) }
+    lifecycle.queued(id, 'chat')
+    local.connection.send({ message_id: id, conversation_id: 'chat', text: 'TEXT_SECRET', attachment_ids: ['ATTACHMENT_SECRET'] })
+    expect(lines.map(line => JSON.parse(line).event)).toEqual(['message-queued'])
+    local.drivers[0].observations[0]({ type: 'sent', connectionId: '22345678-1234-4123-8123-123456789abc' })
+    const snapshot = (ctx: typeof local, conversation: string, message_id: string | undefined) => ctx.drivers[0].emit({ type: 'message', plaintext: queueStatePlaintext({ conversation_id: conversation, queued: [{ queued_msg_id: 1, message_id, text: 'WIRE_SECRET', ts: FIXED_TS }] }) })
+    snapshot(other, 'chat', id)
+    snapshot(local, 'other-chat', id)
+    for (const value of [undefined, '', 'WIRE_SECRET']) snapshot(local, 'chat', value)
+    expect(lines).toHaveLength(2)
+    snapshot(local, 'chat', id)
+    snapshot(local, 'chat', id)
+    expect(lines.map(line => JSON.parse(line).event)).toEqual(['message-queued', 'message-sent', 'message-acknowledged'])
+    lifecycle.cancel(id, 'chat')
+    expect(JSON.parse(lines[3]).code).toBe('user-cancel-request')
+    expect(lines.join()).not.toContain('SECRET')
+    for (const ctx of [local, other]) ctx.connection.stop()
+    expect(lines).toHaveLength(4)
+  })
+  it.each(['unavailable', 'driver-failure', 'encode-failure'] as const)('records %s without inventing sent', async mode => {
+    const lines: string[] = []
+    const lifecycle = createMessageLifecycle(createDiagnosticLog({ sink: { write: line => lines.push(line) } }))
+    const ctx = build({ messageLifecycle: lifecycle, throwOnSend: mode === 'driver-failure' })
+    if (mode !== 'unavailable') { ctx.connection.start(); await tick() }
+    lifecycle.queued(id, 'chat')
+    ctx.connection.send({ message_id: id, conversation_id: 'chat', text: mode === 'encode-failure' ? 'SECRET'.repeat(20000) : 'SECRET' })
+    expect(lines.map(line => JSON.parse(line).event)).toEqual(['message-queued', 'message-dropped'])
+    expect(JSON.parse(lines[1]).code).toBe(mode === 'unavailable' ? 'send-refused' : 'send-failed')
+    expect(lines.join()).not.toContain('SECRET')
+    ctx.connection.stop()
+  })
+})
+
+describe('session_error IPC emission', () => {
+  it('emits only conversation id and code, and malformed diagnostics expose no content', async () => {
+    const records: DiagnosticEvent[] = []
+    const log = { event: (event: DiagnosticEvent) => records.push(event) } as DiagnosticLog
+    const { connection, sink, drivers } = build({ diagnosticLog: log })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    const before = emitted(sink).length
+    drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 7, ts: FIXED_TS, type: 'session_error',
+      payload: { conversation_id: 'PRIVATE-ID', code: 'future.PRIVATE-CODE', message: 'PRIVATE-MESSAGE', extra: 'PRIVATE-EXTRA' } }) })
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'sessionError', conversationId: 'PRIVATE-ID', code: 'future.PRIVATE-CODE' }
+    ])
+    const after = emitted(sink).length
+    const logsBefore = records.length
+    drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 8, ts: FIXED_TS, type: 'session_error',
+      payload: { conversation_id: 'PRIVATE-ID', code: 3, message: 'PRIVATE-MESSAGE' } }) })
+    expect(emitted(sink)).toHaveLength(after)
+    expect(records.length).toBe(logsBefore)
+    expect(JSON.stringify(records)).not.toContain('PRIVATE')
+    connection.stop()
   })
 })

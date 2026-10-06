@@ -8,6 +8,7 @@ import {
   answerQuestionsCommand,
   refuseQuestionsCommand,
   dequeueMessageCommand,
+  sendQueuedNowCommand,
   interruptCommand,
   newSessionCommand,
   type RendererCommand,
@@ -153,6 +154,16 @@ describe('dequeueMessageCommand (#300)', () => {
       // (#720), so the payload reuses the wire type directly (unlike answerModal's Omit-derivative).
       expect(command.payload).toBe(fields)
     }
+  })
+})
+
+describe('sendQueuedNowCommand (#1726)', () => {
+  it('wraps a queued row\'s ids into a sendQueuedNow command, fields unchanged', () => {
+    const fields = { conversation_id: 'c1', queued_msg_id: 7 }
+
+    const command = sendQueuedNowCommand(fields)
+
+    expect(command).toEqual({ type: 'sendQueuedNow', payload: fields })
   })
 })
 
@@ -548,6 +559,45 @@ describe('isRendererCommand', () => {
       type: 'toggleMcpServer', payload: { conversation_id: 'conv-42', server_name: 'docs', enabled: false }
     }
     for (const invalid of [bare, missingEnabled, stringEnabled]) {
+      expect(isRendererCommand(invalid)).toBe(false)
+    }
+    expect(isRendererCommand(valid)).toBe(true)
+  })
+
+  it.each([
+    ['conv-42', 'task-7'], ['__proto__', 'constructor'], ['conv\n<&>', 'task "<img>"']
+  ])('accepts a background-task stop for conversation %j and task %j (#1770)', (id, taskId) => {
+    expect(isRendererCommand({ type: 'stopBackgroundTask', payload: {
+      conversation_id: id, task_id: taskId, extra: 'ignored'
+    } })).toBe(true)
+  })
+
+  it.each([
+    {}, { payload: undefined }, { payload: null }, { payload: {} }, { payload: 'conv-42' },
+    { payload: { conversation_id: 'conv-42' } },
+    { payload: { task_id: 'task-7' } },
+    { payload: { conversation_id: '', task_id: 'task-7' } },
+    { payload: { conversation_id: 'conv-42', task_id: '' } },
+    { payload: { conversation_id: null, task_id: 'task-7' } },
+    { payload: { conversation_id: 'conv-42', task_id: null } },
+    { payload: { conversation_id: 42, task_id: 'task-7' } },
+    { payload: { conversation_id: 'conv-42', task_id: 7 } }
+  ])('rejects malformed background-task stop %j (#1770)', (fields) => {
+    expect(isRendererCommand({ type: 'stopBackgroundTask', ...fields })).toBe(false)
+  })
+
+  it('requires the background-task stop payload and both ids at compile time (#1770)', () => {
+    // @ts-expect-error a stop requires a payload
+    const bare: RendererCommand = { type: 'stopBackgroundTask' }
+    const missingTask: RendererCommand = {
+      type: 'stopBackgroundTask',
+      // @ts-expect-error the task id must be present
+      payload: { conversation_id: 'conv-42' }
+    }
+    const valid: RendererCommand = {
+      type: 'stopBackgroundTask', payload: { conversation_id: 'conv-42', task_id: 'task-7' }
+    }
+    for (const invalid of [bare, missingTask]) {
       expect(isRendererCommand(invalid)).toBe(false)
     }
     expect(isRendererCommand(valid)).toBe(true)
@@ -1464,6 +1514,16 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand({ type: t, payload: { queued_msg_id: 7 } })).toBe(false)
   })
 
+  it('accepts a well-formed sendQueuedNow command and refuses a malformed payload (#1726)', () => {
+    expect(isRendererCommand(sendQueuedNowCommand({ conversation_id: 'c1', queued_msg_id: 7 }))).toBe(true)
+    const t = 'sendQueuedNow'
+    expect(isRendererCommand({ type: t })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: null })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { conversation_id: 42, queued_msg_id: 7 } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { conversation_id: 'c1', queued_msg_id: '7' } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { conversation_id: 'c1' } })).toBe(false)
+  })
+
   it('accepts a well-formed notify command for each closed kind (#391)', () => {
     // The ONLY member whose guard tests closed-set membership, not `typeof === "string"`. No
     // constructor exists (the unarchiveConversation precedent): #392 builds the literal inline, proven
@@ -1518,6 +1578,23 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand({ type: t, payload: { kind: 'prompt', name: null } })).toBe(false)
     expect(isRendererCommand({ type: t, payload: { kind: 'prompt', name: { toString: 'x' } } })).toBe(false)
     expect(isRendererCommand({ type: t, payload: { kind: 'prompt', name: ['a'] } })).toBe(false)
+  })
+
+  it('accepts a notify carrying a string preview up to 4000 characters, or none (#1737)', () => {
+    const t = 'notify'
+    const previewed: RendererCommand = { type: t, payload: { kind: 'turn-complete', preview: 'Done.' } }
+    expect(isRendererCommand(previewed)).toBe(true)
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', preview: 'x'.repeat(4000) } })).toBe(true)
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', preview: '' } })).toBe(true)
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', preview: undefined } })).toBe(true)
+  })
+
+  it('rejects a notify whose preview is not a string or is over 4000 characters (#1737)', () => {
+    const t = 'notify'
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', preview: 'x'.repeat(4001) } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', preview: 42 } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', preview: null } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { kind: 'prompt', preview: ['a'] } })).toBe(false)
   })
 
   it('accepts a notify carrying a bounded opaque token, or none (#1597)', () => {

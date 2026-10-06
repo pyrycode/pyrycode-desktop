@@ -75,7 +75,7 @@ dims the shadow with it, the composite Figma renders), and `.session-delimiter__
 `TimelineRow` renders `compactionBoundary` with the same `.session-delimiter`
 hairlines, centred body-small label, spacing and painted-part shadows. It adds
 `.compaction-delimiter`, keeps both rules decorative, and has no `data-thread-role`.
-The [timeline store](conversation-timeline-store.md#what-it-does) owns insertion,
+The [timeline store](conversation-timeline-store-compaction.md#what-it-does) owns insertion,
 delayed enrichment and retention; the view never infers completion from status.
 
 [`compactionBoundaryTitle`](../../../src/renderer/src/screens/conversation/compactionBoundaryViewModel.ts)

@@ -163,8 +163,7 @@ test('a real daemon answers the opening history ask and the thread reopens holdi
   // The non-vacuity anchor: the thread surface is HERE before the confirming click — the Channel Info
   // sheet renders inside ConversationScreen — so the 1→0 delta below is a transition this click caused.
   await expect(conversation).toHaveCount(1)
-  // SCOPED to the chat pane: the two-pane shell keeps the Channel List mounted beside the thread and its
-  // top-right entry is also `aria-label="Archive"`, so an unscoped exact-name query matches two buttons.
+  // Keep the thread action scoped to the chat pane; the sidebar menu opens the Archive screen.
   await conversation.getByRole('button', { name: 'Archive', exact: true }).click()
   // The app returns to the Channel List on the daemon's confirmation, with no manual Back click. THIS
   // delta is the proof that `exitActiveConversation` ran — and therefore that the timeline this spec is
@@ -172,7 +171,8 @@ test('a real daemon answers the opening history ask and the thread reopens holdi
   await expect(conversation).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
   // --- Restore it. The seed is PROMOTED, so it lands in the Archive view's Channels tab. ---
-  await page.locator('.channel-list__archive').click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
   const channelsTab = page.getByRole('tab', { name: 'Channels (1)', exact: true })
   await expect(channelsTab).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
   await channelsTab.click()

@@ -172,7 +172,7 @@ case is now a filter, not a plain copy, and `ThreadEvent.apiRetry` is the side t
 `compacting` copies `active`, `compactResult` and `compactError`; `compactionBoundary`
 copies `trigger`, `preTokens` and `postTokens`. Both omit the conversation id from the
 `ThreadEvent`; live routing uses the original event's id. The reducer owns edge detection,
-failure classification and [delayed metadata association](conversation-timeline-store.md#what-it-does);
+failure classification and [delayed metadata association](conversation-timeline-store-compaction.md#what-it-does);
 the bridge neither synthesizes completion on reconnect nor correlates by row index.
 
 `thinkingProgress` ([#1313](https://github.com/pyrycode/pyrycode-desktop/issues/1313), decoded at
@@ -233,7 +233,7 @@ reorder the holder. Restoration seeds coverage through its explicit read handle.
 `requestOlderHistory(deps, conversationId, nearTop)` is the sole asker. It declines
 unaddressable ids, input outside the band, pending local reads/requests and received
 `atStart`. Otherwise it marks synchronously before sending the exact successful
-cursor, or `''` for unknown coverage, with `limit: 0`. The production dependency
+cursor, or `''` for unknown coverage, with `limit: HISTORY_PAGE_LIMIT` (200). The production dependency
 reads current host ownership on each invocation; no coverage is captured at mount.
 
 `subscribeHistoryPage` owns both page and failure events independently of the live
@@ -472,17 +472,22 @@ session boundary ─(sessionTransition, #286)→ translateTimelineEvent → { ty
     reset chat A, switch to chat B while the wrap-up turn ran, and the divider drew in B, never in A)
 
 operator presses Enter ─(composerSend.ts, submitMessage, guard passed)→ optimistic echo
-   → timelineStore.dispatch({ type: 'userText', text }) → reduceTimeline → localSendPending: true
+   → timelineStore.dispatch({ type: 'userText', text }) → reduceTimeline →
+       localSendPending: { messageId: event.messageId ?? '', queued: false }   [#1725, was `true`]
    → selectLocalSendPending (read by ConversationScreen's workingIndicatorStateWithLocalSend, composed
                               on top of #215's shouldShowThinking/workingIndicatorState gate)
    (#650 — renderer-sourced, no daemon frame, no bridge involvement; closed by the next turnState,
     reconnected, or reset arm above, never by a fourth path of its own)
+   → a queue_state for this conversation listing that messageId later flips queued: true via
+     conversationTimelineStore.markLocalSendQueued — see Queue store § The data path and
+     Conversation timeline holder § How it works (#1725; sticky, and keyed-holder-only — it does not
+     reach the flat timelineStore above)
 
 trusted upward thread input near top, connected owner →
    requestOlderHistory(historyAskDeps, conversationId, nearTop)
    → pending local read/request or received atStart ? return
      : markHistoryRequested(id, host)
-       → sendCommand(requestHistory, cursor: last successful cursor or '', limit: 0)
+       → sendCommand(requestHistory, cursor: last successful cursor or '', limit: 200)
    // Opening, scroll events, page settlement and reconnect do not initiate requests.
 
 served history page ─(#1222 ask + transport decode, #1227 per-entry decode)→ DaemonEvent{historyPageReceived,

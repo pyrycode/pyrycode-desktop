@@ -317,13 +317,14 @@ export interface BackgroundTaskRosterState {
   rosters: ReadonlyMap<string, BackgroundTaskRosterEntry>
   unlistedStarts: ReadonlyMap<string, ReadonlyMap<string, HeldBackgroundTask>>
   finishedTasks: ReadonlyMap<string, ReadonlySet<string>>
+  /** One outstanding user stop per listed conversation/task pair; never persisted. */
+  pendingStops: ReadonlyMap<string, ReadonlySet<string>>
 }
 
-/** Store shape = state + the six mutation entry points: record one conversation's roster, record one
+/** Store shape = state + the eight mutation entry points: record one conversation's roster, record one
  *  started task, record one task's latest patch, record one task's latest progress report (#1640), drop the reconnecting server's rosters on the
  *  `connected` edge (#573's AC5, scoped by #1139), and drop EVERY conversation's at a pairing boundary
- *  (#1139). Still named setters, not a discriminated-union action set — that would be ceremony for
- *  five operations. */
+ *  (#1139), and claim/settle one stop wait (#1771). Named setters preserve the existing store contract. */
 export type BackgroundTaskRosterStore = BackgroundTaskRosterState & {
   setRoster: (snapshot: BackgroundTaskRosterSnapshot) => void
   setStartedTask: (snapshot: BackgroundTaskStartedSnapshot) => void
@@ -331,12 +332,15 @@ export type BackgroundTaskRosterStore = BackgroundTaskRosterState & {
   setTaskProgress: (snapshot: BackgroundTaskProgressSnapshot) => void
   resetRostersFor: (conversationIds: ReadonlySet<string>) => void
   clearAllRosters: () => void
+  beginTaskStop: (conversationId: string, taskId: string) => boolean
+  endTaskStopWait: (conversationId: string, taskId: string) => void
 }
 
 export const initialBackgroundTaskRosterState: BackgroundTaskRosterState = {
   rosters: new Map(),
   unlistedStarts: new Map(),
-  finishedTasks: new Map()
+  finishedTasks: new Map(),
+  pendingStops: new Map()
 }
 
 /** The three tokens claude reports for a finished task, matched EXACTLY (#1561). Everything else is
@@ -358,6 +362,22 @@ function withFinished(
   ids.add(taskId)
   const next = new Map(finishedTasks)
   next.set(conversationId, ids)
+  return next
+}
+
+// Retain only waits whose pair is still eligible. Preserve unrelated sets and no-change identity.
+function keepTaskStopWaits(
+  pending: ReadonlyMap<string, ReadonlySet<string>>,
+  conversationId: string,
+  keep: (taskId: string) => boolean
+): ReadonlyMap<string, ReadonlySet<string>> {
+  const held = pending.get(conversationId)
+  if (held === undefined) return pending
+  const kept = new Set([...held].filter(keep))
+  if (kept.size === held.size) return pending
+  const next = new Map(pending)
+  if (kept.size === 0) next.delete(conversationId)
+  else next.set(conversationId, kept)
   return next
 }
 
@@ -526,8 +546,23 @@ function withFinished(
 export function createBackgroundTaskRosterStore(
   init: BackgroundTaskRosterState = initialBackgroundTaskRosterState
 ) {
-  return createStore<BackgroundTaskRosterStore>((set) => ({
+  return createStore<BackgroundTaskRosterStore>((set, get) => ({
     ...init,
+    // Claim before the caller sends. A stale render or repeated activation cannot send twice.
+    beginTaskStop: (conversationId, taskId) => {
+      const state = get()
+      const task = state.rosters.get(conversationId)?.tasks.get(taskId)
+      if (task === undefined || task.truncatedFields?.includes('task_id') === true ||
+          state.finishedTasks.get(conversationId)?.has(taskId) === true ||
+          state.pendingStops.get(conversationId)?.has(taskId) === true) return false
+      const ids = new Set(state.pendingStops.get(conversationId)).add(taskId)
+      set({ pendingStops: new Map(state.pendingStops).set(conversationId, ids) })
+      return true
+    },
+    endTaskStopWait: (conversationId, taskId) => set(state => {
+      const pendingStops = keepTaskStopWaits(state.pendingStops, conversationId, id => id !== taskId)
+      return pendingStops === state.pendingStops ? state : { pendingStops }
+    }),
     setRoster: (snapshot) =>
       set((s) => {
         const previous = s.rosters.get(snapshot.conversationId)?.tasks
@@ -578,10 +613,11 @@ export function createBackgroundTaskRosterStore(
         }
         // Every roster empties the conversation's holds: the listed ones moved in above, the rest were
         // foreground work no roster will ever name (#1563).
-        if (holds === undefined) return { rosters: next, finishedTasks }
+        const pendingStops = keepTaskStopWaits(s.pendingStops, snapshot.conversationId, id => tasks.has(id))
+        if (holds === undefined) return { rosters: next, finishedTasks, pendingStops }
         const unlistedStarts = new Map(s.unlistedStarts)
         unlistedStarts.delete(snapshot.conversationId)
-        return { rosters: next, unlistedStarts, finishedTasks }
+        return { rosters: next, unlistedStarts, finishedTasks, pendingStops }
       }),
     setStartedTask: (snapshot) =>
       set((s) => {
@@ -623,6 +659,9 @@ export function createBackgroundTaskRosterStore(
         const held = existing?.tasks.get(snapshot.taskId)
         const latestUpdate = { patch: snapshot.patch, truncatedFields: snapshot.truncatedFields }
         const terminal = isTerminalTaskStatus(snapshot.status)
+        const pendingStops = terminal
+          ? keepTaskStopWaits(s.pendingStops, snapshot.conversationId, id => id !== snapshot.taskId)
+          : s.pendingStops
         // Written only on a hit, below: a finished id is always an id this store already holds.
         const finishedTasks = terminal
           ? withFinished(s.finishedTasks, snapshot.conversationId, snapshot.taskId)
@@ -651,7 +690,7 @@ export function createBackgroundTaskRosterStore(
           nextHolds.set(snapshot.taskId, { ...pending, ...outcome(pending) })
           const unlistedStarts = new Map(s.unlistedStarts)
           unlistedStarts.set(snapshot.conversationId, nextHolds)
-          return { unlistedStarts, finishedTasks }
+          return { unlistedStarts, finishedTasks, pendingStops }
         }
         const tasks = new Map(existing.tasks)
         // A spread is right here and not in the translators: this is a same-type held → held write
@@ -662,7 +701,7 @@ export function createBackgroundTaskRosterStore(
         const next = new Map(s.rosters)
         // `droppedTasks` PRESERVED: an update reports nothing about roster truncation.
         next.set(snapshot.conversationId, { tasks, droppedTasks: existing.droppedTasks })
-        return { rosters: next, finishedTasks }
+        return { rosters: next, finishedTasks, pendingStops }
       }),
     // #1640: the same join as `setUpdatedTask` — the listed task first, else the unlisted hold — and the
     // same silent same-reference miss, so a report never opens a task. A hit replaces `progress` whole
@@ -701,18 +740,21 @@ export function createBackgroundTaskRosterStore(
         const doomed = [...s.rosters.keys()].filter((id) => conversationIds.has(id))
         const doomedHolds = [...s.unlistedStarts.keys()].filter((id) => conversationIds.has(id))
         const doomedFinished = [...s.finishedTasks.keys()].filter((id) => conversationIds.has(id))
-        if (doomed.length === 0 && doomedHolds.length === 0 && doomedFinished.length === 0) return s
+        const doomedStops = [...s.pendingStops.keys()].filter(id => conversationIds.has(id))
+        if (doomed.length === 0 && doomedHolds.length === 0 && doomedFinished.length === 0 && doomedStops.length === 0) return s
         const next = new Map(s.rosters)
         for (const id of doomed) next.delete(id)
         const unlistedStarts = new Map(s.unlistedStarts)
         for (const id of doomedHolds) unlistedStarts.delete(id)
         const finishedTasks = new Map(s.finishedTasks)
         for (const id of doomedFinished) finishedTasks.delete(id)
-        return { rosters: next, unlistedStarts, finishedTasks }
+        const pendingStops = new Map(s.pendingStops)
+        for (const id of doomedStops) pendingStops.delete(id)
+        return { rosters: next, unlistedStarts, finishedTasks, pendingStops }
       }),
     clearAllRosters: () =>
       set((s) =>
-        s.rosters.size === 0 && s.unlistedStarts.size === 0 && s.finishedTasks.size === 0
+        s.rosters.size === 0 && s.unlistedStarts.size === 0 && s.finishedTasks.size === 0 && s.pendingStops.size === 0
           ? s
           : initialBackgroundTaskRosterState
       )
@@ -795,3 +837,9 @@ export const selectLiveTaskCountFor =
     for (const taskId of entry.tasks.keys()) if (finished?.has(taskId) !== true) live++
     return live + entry.droppedTasks
   }
+
+/** App-lifetime waits for one conversation, returned by reference for narrow subscriptions. */
+export const selectPendingTaskStopsFor =
+  (conversationId: string) =>
+  (state: BackgroundTaskRosterState): ReadonlySet<string> | null =>
+    state.pendingStops.get(conversationId) ?? null

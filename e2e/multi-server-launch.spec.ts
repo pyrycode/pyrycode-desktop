@@ -91,7 +91,8 @@ test('lands paired against two fake daemons, one row and one Settings row per se
   // --- AC1: Settings renders one Server row per paired server, carrying the two ids that were pasted.
   // `ServerInfoData` refetches on every Settings mount, so this reads the collection as it stands after
   // BOTH pairings. Asserted LAST, because the settings route replaces the list view. ---
-  await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
   await expect(page.locator('section[aria-label="Settings screen"]')).toBeVisible()
   // The array form pins the COUNT and each row's text in store order (oldest-paired first) — so one row,
   // three rows, or the right count in the wrong order all fail. Ids only: `relayUrl` is non-secret too,

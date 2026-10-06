@@ -9,6 +9,8 @@ import {
   ComposerStatusArea,
   THINKING_COPY,
   WORKING_COPY,
+  SENDING_COPY,
+  WAITING_COPY,
   workingIndicatorState,
   workingIndicatorStateWithLocalSend,
   openToolName,
@@ -1627,6 +1629,33 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
     }
   })
 
+  it('puts copy in an actions sibling beside each delivered bubble, including the streaming tail', () => {
+    const cases = [
+      { items: settled('settled'), side: 'assistant' },
+      { items: settled('```ts\nconst x = 1\n```'), side: 'assistant' },
+      { items: [{ kind: 'assistantText', turnId: 't1', text: 'streaming' }] as ThreadItem[], side: 'assistant' },
+      { items: [{ kind: 'userText', text: 'mine' }] as ThreadItem[], side: 'user' },
+      { items: [{ kind: 'userText', text: 'attached', attachments: [
+        { attachmentId: 'file', filename: 'report.pdf' },
+        { attachmentId: 'image', filename: 'chart.png' }
+      ] }] as ThreadItem[], side: 'user' }
+    ]
+    for (const { items, side } of cases) {
+      const markup = renderToStaticMarkup(<Timeline items={items} />)
+      const actions = '<div class="message-actions"><button type="button" class="bubble__copy"'
+      expect(markup).toContain(actions)
+      expect(markup).toContain('message-row--text')
+      const meta = markup.match(/<div class="bubble__meta[^"]*">(.*?)<\/div>/)?.[1]
+      expect(meta).toBeDefined()
+      expect(meta).not.toContain('<button')
+      if (side === 'assistant') {
+        expect(markup).toContain('</span></div></div>' + actions)
+      } else {
+        expect(markup).toContain('</svg></button></div><div class="bubble bubble--user"')
+      }
+    }
+  })
+
   it('appends the row at the FOOT — after the markdown container, and after the streaming cursor', () => {
     // The append-never-prepend constraint, which interactiveRoundtrip.test.tsx pins from the other side
     // (its byte string asserts the markdown container opens the bubble). Ordering assertions rather than
@@ -1702,6 +1731,8 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
     expect(markup).toContain('data-thread-role="queued"')
     expect(markup).not.toContain(META)
     expect(markup).not.toContain(COPY)
+    expect(markup).not.toContain('message-actions')
+    expect(markup).toContain('message-row--text')
     // …and the SAME item, once the daemon stops reporting it queued, draws the meta row it always did.
     const delivered = renderToStaticMarkup(
       <Timeline
@@ -1818,14 +1849,13 @@ describe('Timeline — the meta row timestamp (#1014)', () => {
     }
   })
 
-  it('adds a text child and nothing else — the slot, the row and the control are otherwise unchanged', () => {
-    // AC4. `bubble__meta-time` stays the sink: the string lands inside that span and nowhere else in the
-    // bubble, the copy control still follows it in the same row, and no new element or class appeared.
+  it('keeps the timestamp as text in the meta row without a copy control', () => {
+    // The timestamp stays in its original slot while copy moves beside the bubble.
     const markup = renderToStaticMarkup(
       <Timeline items={[{ kind: 'userText', text: 'mine', createdAt: CREATED_AT }]} />
     )
     expect(markup).toContain(
-      `<div class="bubble__meta bubble__meta--user"><span class="${TIME_SLOT}">${DRAWN}</span><button type="button" class="bubble__copy" aria-label="Copy message"`
+      `<div class="bubble__meta bubble__meta--user"><span class="${TIME_SLOT}">${DRAWN}</span></div>`
     )
     // Once, in that one sink — not duplicated into an attribute, a title or a second element.
     expect(markup.match(new RegExp(DRAWN.replace(/\./g, '\\.'), 'g'))?.length ?? 0).toBe(1)
@@ -2424,6 +2454,19 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
     expect(markup).not.toContain(THINKING_COPY)
   })
 
+  // #1725: the local send window's two stages, on the same element and class as every other label.
+  it.each([
+    ['sending', SENDING_COPY, 'Sending…'],
+    ['waiting', WAITING_COPY, 'Waiting for Claude']
+  ] as const)('shows the %s stage of the local send window on the same surface (#1725)', (state, copy, text) => {
+    const markup = renderToStaticMarkup(
+      <ThinkingIndicator state={state} toolName={null} retry={null} resetting={null} thinkingTokens={null} />
+    )
+    expect(copy).toBe(text)
+    expect(markup).toContain(`<span class="conversation__thinking composer-status__label">${text}</span>`)
+    expect(markup).not.toContain(THINKING_COPY)
+  })
+
   it('carries five client-owned labels, lexically distinct from each other (AC2, AC5, #967)', () => {
     // Reachable without rendering (AC5) — all five exported since #967 moved STALL_COPY up beside its
     // siblings and exported it, so no test asserts a duplicated literal any more.
@@ -2937,15 +2980,22 @@ describe('workingIndicatorState — which label the rows one slot shows (#648, #
 // gate, while a stall sits in the MIDDLE of the order and could not be expressed that way without
 // re-reading the two supersede facts here. See workingIndicatorStateWithLocalSend's own comment.
 describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650)', () => {
-  it('opens the window at idle while a local send is pending, labelled thinking (AC1)', () => {
-    expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null }, true)
-    ).toBe('thinking')
+  // #1725: the window now carries the sent id and whether a queue_state has listed it.
+  const SENT = { messageId: 'm1', queued: false }
+  const QUEUED = { messageId: 'm1', queued: true }
+  const IDLE_STATUS = { phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null } as const
+
+  it('opens the window at idle while a local send is pending, labelled sending (#1725 AC1)', () => {
+    expect(workingIndicatorStateWithLocalSend(IDLE_STATUS, SENT)).toBe('sending')
+  })
+
+  it('reads waiting once a queue_state has listed the sent id (#1725 AC1)', () => {
+    expect(workingIndicatorStateWithLocalSend(IDLE_STATUS, QUEUED)).toBe('waiting')
   })
 
   it('opens nothing at idle with no local send pending — todays behaviour, unchanged (AC1)', () => {
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null }, false)
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null }, null)
     ).toBeNull()
   })
 
@@ -2953,7 +3003,7 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     // The daemon's answer wins: for every phase and both pending values, a non-null daemon answer is
     // returned byte-identical, so no daemon-opened case changed behaviour at all.
     for (const phase of ['thinking', 'responding', 'idle'] as const) {
-      for (const pending of [true, false]) {
+      for (const pending of [SENT, QUEUED, null]) {
         const status = { phase, apiRetry: null, compacting: false, stalled: false, resetting: null }
         const daemon = workingIndicatorState(status)
         if (daemon !== null) {
@@ -2967,7 +3017,7 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     expect(
       workingIndicatorStateWithLocalSend(
         { phase: 'responding', apiRetry: null, compacting: false, stalled: false, resetting: null },
-        true
+        SENT
       )
     ).toBe('working')
   })
@@ -2983,7 +3033,7 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     expect(
       workingIndicatorStateWithLocalSend(
         { phase: 'idle', apiRetry: { current: 3, total: 10 }, compacting: false, stalled: false, resetting: null },
-        true
+        SENT
       )
     ).toBe('retrying')
   })
@@ -2992,14 +3042,14 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     expect(
       workingIndicatorStateWithLocalSend(
         { phase: 'idle', apiRetry: { current: 0, total: 0 }, compacting: false, stalled: false, resetting: null },
-        true
+        SENT
       )
     ).toBe('retrying')
   })
 
   it('inherits the compaction supersede rule too (#967)', () => {
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: true, stalled: false, resetting: null }, true)
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: true, stalled: false, resetting: null }, SENT)
     ).toBe('compacting')
   })
 
@@ -3007,7 +3057,7 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     expect(
       workingIndicatorStateWithLocalSend(
         { phase: 'idle', apiRetry: { current: 3, total: 10 }, compacting: true, stalled: false, resetting: null },
-        true
+        SENT
       )
     ).toBe('retrying')
   })
@@ -3016,21 +3066,21 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     // The middle of the order, and the case a wrapper composed on the gate could not have expressed
     // without re-reading `apiRetry` and `compacting` itself — the reason #967 took the fourth field.
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: true, resetting: null }, true)
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: true, resetting: null }, SENT)
     ).toBe('stalled')
     // And with no local send pending either: the three folded statuses were never gated on a send.
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: true, resetting: null }, false)
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: true, resetting: null }, null)
     ).toBe('stalled')
   })
 
-  it('hands over to the daemon with no label flicker at the seam (AC2)', () => {
-    // The local window is labelled exactly what the daemon's first turn_state says, so the moment the
-    // daemon takes over is invisible. `working` would have flipped Working → Thinking → Working at the
-    // one seam this ticket exists to smooth.
-    expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null }, true)
-    ).toBe(workingIndicatorState({ phase: 'thinking', apiRetry: null, compacting: false, stalled: false, resetting: null }))
+  it('never answers thinking itself — that label comes only from the daemon phase (#1725 AC2)', () => {
+    // #1725 reverses #650's flicker-free seam on purpose: a crash-looping claude left the local
+    // `Thinking…` up for minutes. The daemon's own `thinking` phase is still `thinking`.
+    for (const pending of [SENT, QUEUED]) {
+      expect(workingIndicatorStateWithLocalSend(IDLE_STATUS, pending)).not.toBe('thinking')
+    }
+    expect(workingIndicatorStateWithLocalSend({ ...IDLE_STATUS, phase: 'thinking' }, QUEUED)).toBe('thinking')
   })
 
   it('opens the window WITHOUT arming the stop variant (AC4)', () => {
@@ -3043,7 +3093,7 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     // `phase` alone, isTurnRunning admits only a TurnPhase, and ComposerSendButton takes
     // `isRunning: boolean` — the new scalar has no path into any of the three.
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null }, true)
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null }, SENT)
     ).not.toBeNull()
     expect(isTurnRunning('idle')).toBe(false)
   })
@@ -3111,7 +3161,7 @@ describe('the resetting label — the rows sixth state (#1517)', () => {
     expect(
       workingIndicatorStateWithLocalSend(
         { phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: WRAPPING },
-        true
+        { messageId: 'm1', queued: false }
       )
     ).toBe('resetting')
   })
@@ -3451,20 +3501,24 @@ describe('isTurnRunning — the stop-variant gate (broader than the thinking ind
 // every other test in this block and silently spin all four.
 describe('isStatusIconTurning — the status icon gate widened by the local window (#1556)', () => {
   const IDLE = { phase: 'idle', apiRetry: null, compacting: false, stalled: false, resetting: null } as const
+  const SENT = { messageId: 'm1', queued: false }
+  const QUEUED = { messageId: 'm1', queued: true }
 
   it('turns while the daemon reports a running turn, in both phases (AC1)', () => {
     expect(isStatusIconTurning('thinking', 'thinking')).toBe(true)
     expect(isStatusIconTurning('responding', 'working')).toBe(true)
   })
 
-  it('turns at idle for the locally opened Thinking window, before any server phase (AC1)', () => {
+  it('turns at idle for both stages of the locally opened window, before any server phase (AC1)', () => {
     // Composed through the label's own derivation, never a hand-written state: what this ticket claims is
     // that the icon follows the LABEL, so the label's function is what has to produce the input.
-    expect(isStatusIconTurning('idle', workingIndicatorStateWithLocalSend(IDLE, true))).toBe(true)
+    // #1725: the window's two stages, Sending and Waiting, both turn the glyph.
+    expect(isStatusIconTurning('idle', workingIndicatorStateWithLocalSend(IDLE, SENT))).toBe(true)
+    expect(isStatusIconTurning('idle', workingIndicatorStateWithLocalSend(IDLE, QUEUED))).toBe(true)
   })
 
   it('is still at idle with no local send — the control arm (AC1)', () => {
-    expect(isStatusIconTurning('idle', workingIndicatorStateWithLocalSend(IDLE, false))).toBe(false)
+    expect(isStatusIconTurning('idle', workingIndicatorStateWithLocalSend(IDLE, null))).toBe(false)
     expect(isStatusIconTurning('idle', null)).toBe(false)
   })
 
@@ -3476,12 +3530,17 @@ describe('isStatusIconTurning — the status icon gate widened by the local wind
 
   it("keeps turning across the seam the daemon's first turn_state crosses (AC1)", () => {
     // The local window (idle + pending) and the daemon's first thinking phase are consecutive renders of
-    // the same visible turn. Neither the gate nor the label changes value across them — that is the whole
-    // "the animation continues when the running phase arrives" half.
-    const local = workingIndicatorStateWithLocalSend(IDLE, true)
-    const daemon = workingIndicatorStateWithLocalSend({ ...IDLE, phase: 'thinking' }, false)
-    expect(local).toBe(daemon)
+    // the same visible turn. #1725 changes the label across them (Waiting for Claude → Thinking…), but
+    // the gate keeps its value — the "animation continues when the running phase arrives" half.
+    const local = workingIndicatorStateWithLocalSend(IDLE, QUEUED)
+    const daemon = workingIndicatorStateWithLocalSend({ ...IDLE, phase: 'thinking' }, null)
+    expect(local).toBe('waiting')
+    expect(daemon).toBe('thinking')
     expect(isStatusIconTurning('idle', local)).toBe(isStatusIconTurning('thinking', daemon))
+  })
+
+  it('does not turn for a thinking answer at idle — the local window never produces one (#1725)', () => {
+    expect(isStatusIconTurning('idle', 'thinking')).toBe(false)
   })
 })
 
@@ -3668,8 +3727,8 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
     expect(markup).toContain('data-thread-role="queued">still waiting')
     // …with the modifier APPENDED to the shared class run, never prepended (the whole-run assertion at
     // the userText row's own test matches the `message-row message-row--user` prefix).
-    expect(markup).toContain('class="message-row message-row--user message-row--queued"')
-    expect(markup.match(/class="message-row message-row--user"/g)?.length ?? 0).toBe(1)
+    expect(markup).toContain('class="message-row message-row--user message-row--queued message-row--text"')
+    expect(markup.match(/class="message-row message-row--user message-row--text"/g)?.length ?? 0).toBe(1)
     // …reusing the right-aligned user-bubble treatment (queued messages are the user's own sends).
     expect(markup.match(/bubble bubble--user/g)?.length ?? 0).toBe(2)
   })
@@ -3750,11 +3809,45 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
     expect(markup.indexOf('queued-row__drop')).toBeLessThan(markup.indexOf('the only queued one'))
   })
 
+  // #1726: Send now rides a queued row only while the session reports mid_turn_input: true.
+  it('draws Send now before the drop control on each queued row when the session supports it (#1726)', () => {
+    const markup = renderToStaticMarkup(
+      <Timeline
+        items={[echo('a delivered send', 'm1')]}
+        queued={[item(1, 'first queued'), item(2, 'second queued')]}
+        midTurnInput
+        onSendQueuedNow={() => {}}
+        onDropQueued={() => {}}
+      />
+    )
+    expect(markup.match(/<button type="button" class="queued-row__send-now" aria-label="Send queued message now">/g)
+      ?.length ?? 0).toBe(2)
+    expect(markup.indexOf('a delivered send')).toBeLessThan(markup.indexOf('queued-row__send-now'))
+    expect(markup.indexOf('queued-row__send-now')).toBeLessThan(markup.indexOf('class="queued-row__drop"'))
+    expect(markup.indexOf('class="queued-row__drop"')).toBeLessThan(markup.indexOf('first queued'))
+  })
+
+  it('draws the queued row byte-identically to today when the flag is false or absent (#1726)', () => {
+    const queued = [item(1, 'first queued')]
+    const today = renderToStaticMarkup(<Timeline items={[]} queued={queued} onDropQueued={() => {}} />)
+    const off = renderToStaticMarkup(
+      <Timeline items={[]} queued={queued} onDropQueued={() => {}} midTurnInput={false} onSendQueuedNow={() => {}} />
+    )
+    expect(off).toBe(today)
+    expect(today).not.toContain('queued-row__send-now')
+  })
+
+  it('disables Send now exactly as the drop control is disabled — without an action closure (#1726)', () => {
+    const markup = renderToStaticMarkup(<Timeline items={[]} queued={[item(1, 'first queued')]} midTurnInput />)
+    expect(markup).toContain('class="queued-row__send-now" aria-label="Send queued message now" disabled=""')
+    expect(markup).toContain('class="queued-row__drop" aria-label="Drop queued message" disabled=""')
+  })
+
   it('draws no queued treatment anywhere when the backlog prop is omitted entirely', () => {
     // The optional-prop contract the 72 existing `<Timeline` render sites depend on: absent `queued`
     // folds against an empty backlog and yields today's rows.
     const markup = renderToStaticMarkup(<Timeline items={[echo('plain send', 'm1')]} />)
-    expect(markup).toContain('class="message-row message-row--user"')
+    expect(markup).toContain('class="message-row message-row--user message-row--text"')
     expect(markup).toContain('data-thread-role="user"')
     expect(markup).not.toContain('queued')
   })
@@ -4330,51 +4423,77 @@ describe('ComposerErrorChip — the connection-error chip in the status row (#79
 // present/absent matrix is proven by server-rendering it with injected figures and no store. The
 // arithmetic itself lives in contextUsage.test.ts; what these prove is the MARKUP — that the reading is
 // a reading and not a control, and that its absent arm renders nothing at all.
-describe('ContextUsageReading — the composer footer’s context percentage (#811)', () => {
-  // An EXACT markup assertion, not a toContain, and deliberately so: AC3 ("it is a reading, not a
-  // control: no click handler, not focusable") is structural in a string this short — no onclick, no
-  // tabindex, no role, no href, no <button> and nothing else can hide in it. Do not relax this to a
-  // substring check; the exactness IS the assertion.
-  //
-  // #1062 turned ONE exact pin into THREE, one per severity step, and that is the tripwire this
-  // component's own comment promised working rather than an obstacle to route around: the reading now has
-  // three renderings and each one is pinned whole. The primary arm below is byte-identical to the string
-  // this file pinned before #1062 — the step that reads "nothing to see" must not have moved at all.
-  it('renders the percentage as a single bare text run — no handler, no tabindex, no role (AC1, AC3)', () => {
+//
+// #1728: the reading is the design's ring (Figma 347:5408 → Context), with the percentage and the
+// warning state as visually hidden text. Each step is still pinned as EXACT markup, so nothing — no
+// handler, no tabindex, no role, no visible text — can be added to any of them silently.
+//
+// The arc's dash is the reading's share of the r=6.5 circumference (40.841), hard-coded per case so the
+// test does not re-derive it from the formula under test.
+const contextRing = (className: string, dash: string, label: string): string =>
+  `<span class="${className}">` +
+  '<svg class="composer__context-ring" width="15" height="15" viewBox="0 0 15 15" aria-hidden="true">' +
+  '<circle class="composer__context-track" cx="7.5" cy="7.5" r="6.5"></circle>' +
+  '<circle class="composer__context-arc" cx="7.5" cy="7.5" r="6.5" ' +
+  `stroke-dasharray="${dash} 40.841" transform="matrix(0 -1 -1 0 15 15)"></circle></svg>` +
+  `<span class="composer__context-label">${label}</span></span>`
+
+describe('ContextUsageReading — the composer footer’s context circle (#811, #1728)', () => {
+  it('draws the ring with the percentage as hidden text below 70% — no handler, no tabindex, no role', () => {
     const markup = renderToStaticMarkup(
-      <ContextUsageReading usedTokens={98000} windowTokens={200000} />
+      <ContextUsageReading usedTokens={138000} windowTokens={200000} />
     )
-    expect(markup).toBe('<span class="composer__context">Context: 49%</span>')
+    expect(markup).toBe(contextRing('composer__context', '28.180', 'Context: 69%'))
   })
 
-  // #1062 AC2/AC4: the middle step wears the modifier and NOTHING else changes — same prefix, same single
-  // run, same base class LEADING (which is what keeps the five footer-order assertions further down this
-  // file, all of which locate the reading by substring, honest). The 50 here is the boundary itself:
-  // contextUsageStep's own tests pin 49/50 as values, and this pins that the view actually asks it.
-  it('wears the warning modifier from 50%, with the text unchanged (AC2, AC4)', () => {
-    const markup = renderToStaticMarkup(
-      <ContextUsageReading usedTokens={100000} windowTokens={200000} />
-    )
-    expect(markup).toBe(
-      '<span class="composer__context composer__context--warning">Context: 50%</span>'
-    )
-  })
-
-  // #1062 AC2/AC4: the top step, where the string itself changes. The word is the non-colour channel for
-  // the one step that means "act now", and it is a WORD rather than a glyph because a glyph inside a text
-  // run cannot be hidden from a screen reader. Still one run, still nothing but a class attribute.
-  it('wears the error modifier and says "high" from 70% (AC2, AC4)', () => {
+  // The middle step wears the modifier the arc's colour follows, and its hidden text says "high", so the
+  // warning is not carried by colour alone now that no percentage is visible.
+  it('wears the warning modifier and says "high" from 70%', () => {
     const markup = renderToStaticMarkup(
       <ContextUsageReading usedTokens={140000} windowTokens={200000} />
     )
     expect(markup).toBe(
-      '<span class="composer__context composer__context--error">Context high: 70%</span>'
+      contextRing('composer__context composer__context--warning', '28.588', 'Context high: 70%')
     )
+  })
+
+  it('stays at the warning step at 84%', () => {
+    const markup = renderToStaticMarkup(
+      <ContextUsageReading usedTokens={168000} windowTokens={200000} />
+    )
+    expect(markup).toBe(
+      contextRing('composer__context composer__context--warning', '34.306', 'Context high: 84%')
+    )
+  })
+
+  it('wears the error modifier and says "nearly full" from 85%', () => {
+    const markup = renderToStaticMarkup(
+      <ContextUsageReading usedTokens={170000} windowTokens={200000} />
+    )
+    expect(markup).toBe(
+      contextRing('composer__context composer__context--error', '34.715', 'Context nearly full: 85%')
+    )
+  })
+
+  // The arc is derived from the reading, not copied from the design's static 75%: a known 0% draws no
+  // arc (a zero dash) and a full window the whole circumference.
+  it.each([
+    [0, 0, '0.000'],
+    [500, 0, '0.000'],
+    [45000, 23, '9.393'],
+    [200000, 100, '40.841']
+  ] as const)('draws %i used tokens (%i%) as a %s-unit arc', (used, pct, dash) => {
+    const markup = renderToStaticMarkup(
+      <ContextUsageReading usedTokens={used} windowTokens={200000} />
+    )
+    expect(markup).toContain(`stroke-dasharray="${dash} 40.841"`)
+    expect(markup).toContain(`: ${pct}%</span>`)
   })
 
   // AC2's whole surface, in the STRICT form the ComposerErrorChip describe above uses: an exact-empty
   // markup, not a not.toContain. That is what proves "not an empty element holding the slot either" —
-  // a substring assertion would pass on a rendered-but-empty <span>.
+  // a substring assertion would pass on a rendered-but-empty <span>, and an unavailable reading must
+  // not draw the dark 0% ring either.
   it('renders nothing at all when the window count is 0 — not an empty element (AC2)', () => {
     expect(renderToStaticMarkup(<ContextUsageReading usedTokens={146000} windowTokens={0} />)).toBe('')
   })
@@ -4390,20 +4509,15 @@ describe('ContextUsageReading — the composer footer’s context percentage (#8
     expect(markup).not.toContain('NaN')
   })
 
-  // An over-full session is the top step by definition, so #1062's word rides the clamp too — this is the
-  // longest string the reading can ever produce (18 characters, the bound .composer__context's nowrap
-  // comment now states).
-  it('clamps an over-full session to 100% rather than running past it', () => {
+  it('clamps an over-full session to a full ring rather than running past it', () => {
     const markup = renderToStaticMarkup(
       <ContextUsageReading usedTokens={250000} windowTokens={200000} />
     )
-    expect(markup).toContain('Context high: 100%')
+    expect(markup).toContain('stroke-dasharray="40.841 40.841"')
+    expect(markup).toContain('Context nearly full: 100%')
     expect(markup).not.toContain('Infinity')
   })
 
-  // The reading is NOT a live region. After #810 the figures refresh on every connect and every turn
-  // end, so a polite region here would announce a percentage after every single turn — the
-  // ComposerErrorChip ruling, and stronger here because the update cadence is the turn itself.
   it('is not a live region — the figure re-renders on every turn end', () => {
     const markup = renderToStaticMarkup(
       <ContextUsageReading usedTokens={168000} windowTokens={200000} />
@@ -4882,7 +4996,7 @@ describe('selectOpenTimelineFor', () => {
     expect(thread?.items).toEqual([{ kind: 'userText', text: 'alpha' }])
     // The chrome travels with the rows — the whole slice is one value, so the phase and the four
     // scalars can no more come from another conversation than the rows can.
-    expect(thread?.localSendPending).toBe(true)
+    expect(thread?.localSendPending).not.toBeNull()
     // The HELD timeline itself, not a copy. That `Object.is` identity is what makes the switch cheap: a
     // write for another conversation rebuilds the outer map but copies every survivor by reference, so
     // this screen does not re-render (`withNewSliceAtHead`'s by-reference survivor copy). Since #1259 a
@@ -5135,10 +5249,9 @@ describe('ConversationScreen — store binding', () => {
     })
     try {
       const markup = renderToStaticMarkup(<ConversationScreen />)
-      // 84% is the top step since #1062, so the mounted reading says "high" — the seeded figures are the
-      // design's own (Figma 110:3497) and are left as they are, because a mount proof is stronger when it
-      // reads the string the shipped surface actually shows.
+      // 84% is the warning step since #1728, so the mounted reading's hidden text says "high".
       expect(markup).toContain('Context high: 84%')
+      expect(markup).toContain('stroke-dasharray="34.306 40.841"')
       // In the ROW, not loose in the composer: the reading follows .composer__footer's opening tag.
       expect(markup.indexOf('composer__context')).toBeGreaterThan(
         markup.indexOf('class="composer__footer"')
@@ -5227,7 +5340,8 @@ describe('ConversationScreen — store binding', () => {
     )
     try {
       const markup = renderToStaticMarkup(<ConversationScreen />)
-      expect(markup).toContain('<span class="composer__context">Context: 25%</span>')
+      expect(markup).toContain('<span class="composer__context">')
+      expect(markup).toContain('<span class="composer__context-label">Context: 25%</span>')
       expect(markup.includes('composer__context-trigger')).toBe(trigger)
     } finally {
       runConfig.mockRestore()
@@ -5243,7 +5357,7 @@ describe('ConversationScreen — store binding', () => {
   // initial state is an empty map) the control renders AC4's inert label, which is exactly what makes
   // this a mount proof — the label is the seeded snapshot's own model value, so it can only appear if the
   // container actually read the snapshot.
-  it('mounts the model control in the footer row, between Actions and the reading (AC1, AC4)', () => {
+  it('mounts the model control in the footer row, after the reading and Actions (AC1, AC4)', () => {
     const restoreConnection = stageOpenConnection(CONNECTED)
     const sessionId = vi.spyOn(sessionIdStore, 'getInitialState').mockReturnValue({
       ...sessionIdStore.getInitialState(), sessionId: 'held-session'
@@ -5265,9 +5379,10 @@ describe('ConversationScreen — store binding', () => {
       const triggerAt = markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)
       const modelAt = markup.indexOf('composer__model-label')
       expect(triggerAt).toBeGreaterThan(-1)
-      // The design's item order: Actions, then the model control, then the reading.
+      // The design's item order since #1728: the reading, Actions, then the model control.
+      expect(markup.indexOf('class="composer__context')).toBeGreaterThan(-1)
+      expect(markup.indexOf('class="composer__context')).toBeLessThan(triggerAt)
       expect(modelAt).toBeGreaterThan(triggerAt)
-      expect(markup.indexOf('composer__context')).toBeGreaterThan(modelAt)
       // The mount proof's own half, through the mounted container: nothing is published, so the label is
       // derived from the session's own model value — `seeded-session-model` reads as `Seeded` since
       // #1095. Still a mount proof, and a slightly stronger one: only a container that read the snapshot
@@ -5295,7 +5410,7 @@ describe('ConversationScreen — store binding', () => {
   // file can make. With no model list published (the model-list store's initial state is an empty map)
   // both render their inert arms, so each label can only appear if its container actually read the
   // snapshot. Connected ownership leaves Actions and permission mode operable.
-  it('mounts the effort control in the footer row, between the model control and the reading (AC1, AC3)', () => {
+  it('mounts the effort control in the footer row, after the reading and the model control (AC1, AC3)', () => {
     const restoreConnection = stageOpenConnection(CONNECTED)
     const sessionId = vi.spyOn(sessionIdStore, 'getInitialState').mockReturnValue({
       ...sessionIdStore.getInitialState(), sessionId: 'held-session'
@@ -5319,9 +5434,12 @@ describe('ConversationScreen — store binding', () => {
       const effortAt = markup.indexOf('composer__effort-label')
       expect(markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)).toBeGreaterThan(-1)
       expect(modelAt).toBeGreaterThan(-1)
-      // The design's item order: Actions, the model control, the effort control, then the reading.
+      // The design's item order since #1728: the reading, Actions, the model control, then effort.
+      expect(markup.indexOf('class="composer__context')).toBeGreaterThan(-1)
+      expect(markup.indexOf('class="composer__context')).toBeLessThan(
+        markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)
+      )
       expect(effortAt).toBeGreaterThan(modelAt)
-      expect(markup.indexOf('composer__context')).toBeGreaterThan(effortAt)
       // The session's effort VERBATIM, through the mounted container — no relabelling, no capitalisation.
       expect(markup).toContain('>seeded-session-effort<')
       // AC3's inert arm: THIS control adds no popup announcement and no anchor. 2 rather than 1 since
@@ -5368,9 +5486,13 @@ describe('ConversationScreen — store binding', () => {
       const markup = renderToStaticMarkup(<ConversationScreen />)
       const permissionAt = markup.indexOf('composer__permission-label')
       const modelAt = markup.indexOf('composer__model-label')
-      // Figma 110:3494's order, in full: Actions, permission mode, model, effort, then the reading.
-      if (connected) expect(markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)).toBeGreaterThan(-1)
+      // The footer's order in full since #1728 (Figma 347:5408): the reading, Actions, permission mode,
+      // model, then effort.
+      const contextAt = markup.indexOf('class="composer__context')
+      expect(contextAt).toBeGreaterThan(-1)
+      if (connected) expect(markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)).toBeGreaterThan(contextAt)
       else expect(markup).not.toContain(ACTIONS_TRIGGER_CLASS_RUN)
+      expect(permissionAt).toBeGreaterThan(contextAt)
       expect(permissionAt).toBeGreaterThan(markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN))
       expect(modelAt).toBeGreaterThan(permissionAt)
       expect(markup.indexOf('composer__effort-label')).toBeGreaterThan(modelAt)
@@ -5419,7 +5541,7 @@ describe('ConversationScreen — store binding', () => {
   })
 
   // AC1's "the row's LAST item", in the only form a static render can state it: past the context reading,
-  // which is the item the design puts immediately before it. The same getInitialState SPY as the three
+  // which since #1728 is the row's first item, and past every control. The same getInitialState SPY as the three
   // tests above, and for the same reason — zustand v5 reads getInitialState() under renderToStaticMarkup,
   // so a seeded snapshot is what makes the reading (and the three menu labels) appear at all.
   it('places the attach button last in the footer row, past all four controls and the reading (AC1)', () => {
@@ -5913,6 +6035,8 @@ describe('Timeline — a file the assistant offered (#1621)', () => {
     expect(markup).toContain('<span class="bubble__file-name">report.pdf</span>')
     expect(markup).toContain('<span class="bubble__file-ext" aria-hidden="true">PDF</span>')
     expect(markup).not.toContain('bubble__meta')
+    expect(markup).not.toContain('message-row--text')
+    expect(markup).not.toContain('message-actions')
     expect(markup).not.toContain('data-thread-role="user"')
   })
 

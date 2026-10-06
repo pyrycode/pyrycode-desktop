@@ -1,3 +1,4 @@
+import { createMessageLifecycle } from './messageLifecycle'
 import {
   app,
   BrowserWindow,
@@ -405,6 +406,7 @@ app.whenReady().then(() => {
   const diagnosticLog = createDiagnosticLog({
     sink: app.isPackaged ? fileRotatingSink(join(app.getPath('userData'), 'logs')) : stdoutSink()
   })
+  const messageLifecycle = createMessageLifecycle(diagnosticLog)
   // The once-per-session diagnostics banner (#132), emitted here so it is seq 0 — the first line of
   // every bundle — attributing the bundle to this client build + wire-protocol identity. `whenReady`
   // runs once per process, so the banner is fire-once; it must NOT be re-emitted from the transport
@@ -532,6 +534,7 @@ app.whenReady().then(() => {
         serverId,
         deviceName,
         clientVersion,
+        messageLifecycle,
         diagnosticLog
       }),
     diagnosticLog
@@ -770,9 +773,12 @@ app.whenReady().then(() => {
       // refusal, not a silent shrug, and an id no server has claimed puts a frame on no wire at all.
       // The decision itself lives in `conversationRouter.ts`, where a unit test can drive it; these
       // stay the per-case one-liners they were.
-      case 'sendMessage':
-        router.route(command.payload.conversation_id)?.send(command.payload)
+      case 'sendMessage': {
+        const connection = router.route(command.payload.conversation_id)
+        if (connection === null) messageLifecycle.drop(command.payload.message_id, command.payload.conversation_id, 'route-refused')
+        else connection.send(command.payload)
         return
+      }
       case 'requestSessionSettings': {
         // Direct to the connection method (mirrors sendMessage), no facade — a run-config read
         // has no orchestrator/consumer. The optional conversation id is unwrapped here rather than
@@ -821,6 +827,12 @@ app.whenReady().then(() => {
         const conversationId = command.payload.conversation_id
         router.route(conversationId)?.toggleMcpServer(conversationId, command.payload.server_name,
           command.payload.enabled)
+        return
+      }
+      case 'stopBackgroundTask': {
+        // Routed like the toggle above (#1770): the conversation's host gets the frame, or no wire does.
+        const conversationId = command.payload.conversation_id
+        router.route(conversationId)?.stopBackgroundTask(conversationId, command.payload.task_id)
         return
       }
       case 'requestHistory':
@@ -915,6 +927,11 @@ app.whenReady().then(() => {
         // ungated fire-and-forget. Sends dequeue_message; no reply is expected (the daemon re-broadcasts
         // its queue_state as the observable effect, #294). Inert no-op when not connected (#300).
         router.route(command.payload.conversation_id)?.dequeueMessage(command.payload)
+        return
+      case 'sendQueuedNow':
+        // #1726: the dequeueMessage route, verbatim — routed by conversation, fire-and-forget, inert when
+        // not connected. The daemon's next queue_state and its user `message` push are the effect.
+        router.route(command.payload.conversation_id)?.sendQueuedNow(command.payload)
         return
       case 'interrupt': {
         // ROUTED BY CONVERSATION (#1092), mirroring the newSession arm below and no longer by server —
@@ -1068,14 +1085,15 @@ app.whenReady().then(() => {
       }
       case 'notify':
         // NOT SERVER-SCOPED, and deliberately gains no id (#1120). It is main-local: fireNotification
-        // owns the body copy, and no frame results — so a server id here would be a field nothing reads.
+        // owns the body, and no frame results — so a server id here would be a field nothing reads.
         // #1593: the title names the conversation. The renderer resolved the name against the event's
         // own server, so neither a server nor a conversation id crosses; `payload.name` is untrusted and
-        // fireNotification cleans it (notificationTitle) before it reaches the OS. Never log it. The
+        // fireNotification cleans it (notificationTitle) before it reaches the OS. Never log it.
+        // #1737: likewise `payload.preview`, the untrusted body text, cleaned by notificationBody. The
         // event the click emits stays origin-free for the reason `windowLocalSink` gives above.
         // Main-local side effect, no connection method: raise an OS notification only when the window
         // is unfocused. Focus is queried at fire-time (one synchronous isFocused(), no stateful
-        // tracker); the kind→body mapping is owned by the module, so no command field supplies the body.
+        // tracker); the body's cleaning and its fallback copy are owned by the module.
         // Live since #392 shipped (pushNotifyBridge.ts sends it). The click path is reachable in one
         // sequence: a notification raised while the window is open but unfocused, the window then
         // closed, the notification clicked afterwards. The focus query with no window at all stays
@@ -1111,7 +1129,8 @@ app.whenReady().then(() => {
                 )
               }
             },
-            command.payload.name
+            command.payload.name,
+            command.payload.preview
           )
         }
         return
@@ -1140,7 +1159,7 @@ app.whenReady().then(() => {
   // the untrusted boundary; a non-allowlisted field never reaches the logger's spread. Registered
   // once via ipcMain.on (additive); inert until #134 emits — a record arriving before any consumer
   // is simply a logged line. `will-quit` removes the exact listener, symmetric with unregisterCommands.
-  const unregisterDiagnostics = onDiagnostic(ipcMain, diagnosticLog)
+  const unregisterDiagnostics = onDiagnostic(ipcMain, diagnosticLog, messageLifecycle)
   app.on('will-quit', () => unregisterDiagnostics())
 
   // The attach flow's composition-root edge (#862) — the ONE Electron touch the feature needs, and

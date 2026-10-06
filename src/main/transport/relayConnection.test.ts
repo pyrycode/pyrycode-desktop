@@ -428,7 +428,7 @@ describe('createRelayConnection — content-free diagnostic logging (#127)', () 
     await sink.waitFor((e) => e.type === 'connected')
 
     expect(captured.records.filter((r) => r.event === 'relay-open')).toEqual([
-      { event: 'relay-open', host: '127.0.0.1', path: '/v1/client' }
+      { event: 'relay-open', host: '127.0.0.1', path: '/v1/client', connectionId: expect.any(String) }
     ])
   })
 
@@ -453,6 +453,7 @@ describe('createRelayConnection — content-free diagnostic logging (#127)', () 
     expect(captured.records.filter((r) => r.event === 'relay-closed')).toEqual([
       {
         event: 'relay-closed',
+        connectionId: expect.any(String),
         status: 1006,
         code: 'pong-timeout',
         host: '127.0.0.1',
@@ -532,4 +533,37 @@ describe('createRelayConnection — content-free diagnostic logging (#127)', () 
     const closed = await sink.waitFor((e) => e.type === 'closed', 500)
     expect(closed).toMatchObject({ type: 'closed' })
   })
+})
+
+it('correlates real socket handoffs with distinct open/close connection ids and never observes refused writes', async () => {
+  const relay = await startRelay()
+  cleanups.push(() => relay.close())
+  const connectionIds: string[] = []
+  for (let i = 0; i < 3; i++) {
+    const captured = captureLog()
+    const sink = makeSink()
+    const handle = createRelayConnection({ url: relay.url, headers: {}, onEvent: sink.onEvent, diagnosticLog: captured.log })
+    cleanups.push(() => handle.close())
+    const observe = vi.fn()
+    expect(() => handle.send('x', observe)).toThrow(RelayNotConnectedError)
+    expect(observe).not.toHaveBeenCalled()
+    await sink.waitFor(event => event.type === 'connected')
+    const write = vi.spyOn(WebSocket.prototype, 'send').mockImplementationOnce(() => { throw new Error('SECRET') })
+    expect(() => handle.send('x', observe)).toThrow()
+    expect(observe).not.toHaveBeenCalled()
+    write.mockRestore()
+    handle.send('x', observe)
+    const opened = captured.records.find(record => record.event === 'relay-open')
+    expect(observe).toHaveBeenCalledTimes(1)
+  expect(observe).toHaveBeenCalledWith({ type: 'sent', connectionId: opened?.connectionId })
+    expect(() => handle.send('x', () => { throw new Error('SECRET') })).not.toThrow()
+    handle.close()
+    await sink.waitFor(event => event.type === 'closed')
+    const closed = captured.records.find(record => record.event === 'relay-closed')
+    expect(closed?.connectionId).toBe(opened?.connectionId)
+    connectionIds.push(opened!.connectionId!)
+    expect(() => handle.send('x', observe)).toThrow(RelayNotConnectedError)
+    expect(observe).toHaveBeenCalledTimes(1)
+  }
+  expect(new Set(connectionIds).size).toBe(3)
 })

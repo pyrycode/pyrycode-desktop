@@ -1,3 +1,4 @@
+import { capturePairedApp } from './fixtures/capturePairedApp'
 import type { Locator, Page } from '@playwright/test'
 import { test, expect } from './fixtures/launchPairedApp'
 
@@ -266,7 +267,7 @@ test('the message box is the design Input large, with the control inside its rig
 test('the box grows a line at a time to a five-line ceiling, then scrolls (AC2, AC3, AC4)', async ({
   launchPairedApp
 }, testInfo) => {
-  const { page } = await launchPairedApp()
+  const { page, app } = await launchPairedApp()
 
   const box = page.locator('.composer__row')
   const input = page.locator('.composer__input')
@@ -334,7 +335,7 @@ test('the box grows a line at a time to a five-line ceiling, then scrolls (AC2, 
   await expect.poll(scrollTop).toBe(0)
   await expect(input).toHaveCSS('scrollbar-width', 'none')
   await testInfo.attach('composer-overflow-top', {
-    body: await page.screenshot({ path: testInfo.outputPath('composer-overflow-top.png') }),
+    body: await capturePairedApp(app, page, testInfo.outputPath('composer-overflow-top.png')),
     contentType: 'image/png'
   })
 
@@ -347,7 +348,7 @@ test('the box grows a line at a time to a five-line ceiling, then scrolls (AC2, 
   )).toBe(0)
   await expectBoxHeight(box, GROWN_HEIGHT_PX, 'after wheel scrolling')
   await testInfo.attach('composer-overflow-bottom', {
-    body: await page.screenshot({ path: testInfo.outputPath('composer-overflow-bottom.png') }),
+    body: await capturePairedApp(app, page, testInfo.outputPath('composer-overflow-bottom.png')),
     contentType: 'image/png'
   })
 
@@ -388,7 +389,7 @@ test('the box grows a line at a time to a five-line ceiling, then scrolls (AC2, 
   }
 })
 
-test('only the thread gives up the space, and a sent draft returns the box to one line (AC3, AC5)', async ({
+test('the thread reserves composer clearance, and a sent draft returns the box to one line (AC3, AC5)', async ({
   launchPairedApp
 }) => {
   const { page } = await launchPairedApp()
@@ -416,6 +417,8 @@ test('only the thread gives up the space, and a sent draft returns the box to on
     )
 
   const restingThread = await rectOf(thread)
+  const bottomPadding = () => thread.evaluate(el => Number.parseFloat(getComputedStyle(el).paddingBottom))
+  const restingPadding = await bottomPadding()
   const restingStatus = await rectOf(status)
   const restingFooter = await rectOf(footer)
   expect(await documentOverflow()).toBeLessThanOrEqual(0)
@@ -423,13 +426,10 @@ test('only the thread gives up the space, and a sent draft returns the box to on
   await input.fill(draftOfLines(MAX_LINES))
   await expectBoxHeight(box, GROWN_HEIGHT_PX, 'at the five-line ceiling')
 
-  // --- AC5. The thread's loss is asserted as a DELTA against the box's gain, never as a fixed 428: a
-  // literal there would encode this runner's window size rather than the behaviour. This is the half that
-  // bites — `.composer__footer` declares `height: 20px` hard, so its reading below can essentially never
-  // redden, and `.composer-status`'s min-height grows only for its own error slot. They are the cheap
-  // sanity check that the growth did not come out of a neighbour, not the detector. ---
+  // The scrollport now fills the pane; its padding absorbs the composer's occupied-height change.
   const grownThread = await rectOf(thread)
-  expect(wholePixels(restingThread.height - grownThread.height)).toBe(
+  expect(wholePixels(grownThread.height)).toBe(wholePixels(restingThread.height))
+  await expect.poll(async () => wholePixels(await bottomPadding() - restingPadding)).toBe(
     GROWN_HEIGHT_PX - BOX_HEIGHT_PX
   )
   expect(wholePixels((await rectOf(status)).height)).toBe(wholePixels(restingStatus.height))

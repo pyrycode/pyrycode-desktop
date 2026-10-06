@@ -141,6 +141,26 @@ const scrollTopOf = (page: Page): Promise<number> =>
   page.locator('.conversation__thread').evaluate((el) => el.scrollTop)
 
 /**
+ * Run one scroll input and wait for the thread's `scrollend` before the next one. Chromium drops a
+ * keyboard scroll that arrives while the previous scroll is still finishing, which the offset polls alone
+ * cannot see: the offset reaches its target a frame or more before the scroll ends. Measured under four
+ * parallel workers, a key pressed in that gap did nothing in about one run in eight. The wait is bounded,
+ * so a scroll that never starts still fails on the offset poll that follows, not on the test timeout.
+ */
+async function scrollAndSettle(page: Page, input: () => Promise<void>): Promise<void> {
+  const thread = page.locator('.conversation__thread')
+  await thread.evaluate((el) => {
+    const host = el as HTMLElement & { scrollSettled?: Promise<void> }
+    host.scrollSettled = new Promise((resolve) => {
+      el.addEventListener('scrollend', () => resolve(), { once: true })
+      setTimeout(resolve, 5_000)
+    })
+  })
+  await input()
+  await thread.evaluate((el) => (el as HTMLElement & { scrollSettled?: Promise<void> }).scrollSettled)
+}
+
+/**
  * Drive one send whose reply overflows the thread, then assert it ACTUALLY overflows.
  *
  * The overflow gate is the non-vacuity requirement for the first criterion's "at any content length": a
@@ -234,11 +254,11 @@ test('the thread still scrolls by wheel and by keyboard with no bar to drag', as
   expect(box).not.toBeNull()
   if (box === null) return
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
-  await page.mouse.wheel(0, -400)
+  await scrollAndSettle(page, () => page.mouse.wheel(0, -400))
   await expect.poll(() => scrollTopOf(page)).toBeLessThan(bottom)
 
   const afterWheelUp = await scrollTopOf(page)
-  await page.mouse.wheel(0, 200)
+  await scrollAndSettle(page, () => page.mouse.wheel(0, 200))
   await expect.poll(() => scrollTopOf(page)).toBeGreaterThan(afterWheelUp)
 
   // --- AC2, the four keys. Each is asserted in its own direction, so a key silently doing nothing cannot
@@ -247,16 +267,16 @@ test('the thread still scrolls by wheel and by keyboard with no bar to drag', as
   await clickInsideThread(page)
 
   const beforePageUp = await scrollTopOf(page)
-  await page.keyboard.press('PageUp')
+  await scrollAndSettle(page, () => page.keyboard.press('PageUp'))
   await expect.poll(() => scrollTopOf(page)).toBeLessThan(beforePageUp)
 
   const beforePageDown = await scrollTopOf(page)
-  await page.keyboard.press('PageDown')
+  await scrollAndSettle(page, () => page.keyboard.press('PageDown'))
   await expect.poll(() => scrollTopOf(page)).toBeGreaterThan(beforePageDown)
 
-  await page.keyboard.press('Home')
+  await scrollAndSettle(page, () => page.keyboard.press('Home'))
   await expect.poll(() => scrollTopOf(page)).toBe(0)
 
-  await page.keyboard.press('End')
+  await scrollAndSettle(page, () => page.keyboard.press('End'))
   await expect.poll(() => scrollTopOf(page)).toBe(bottom)
 })

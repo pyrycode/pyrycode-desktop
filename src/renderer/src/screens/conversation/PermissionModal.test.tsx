@@ -21,23 +21,17 @@ import {
 // The click → answerPrompt / cancelPrompt behavior lives in modalResolution.test.ts (plain spies): the
 // `node` environment fires no clicks, so the view is server-rendered for structure only.
 
-// #237/#226: onSelect / onConfirm / onBack / onCancel are required props (a view that cannot answer is a
-// bug). The structural tests inject no-op effects; the wiring is exercised in modalResolution.test.ts.
-// `pendingOption` selects the render mode: null = the option list, set = the confirm sub-step (#226).
+// The view receives effects as callbacks; controller tests prove consent and response routing.
 const noop = (): void => {}
-function renderView(prompt: ModalPrompt, pendingOption: ModalOption | null = null): string {
+function renderView(prompt: ModalPrompt, armedOption: ModalOption | null = null, available = true): string {
   return renderToStaticMarkup(
     <PermissionModalView
-      responseAvailable={true}
+      responseAvailable={available}
       sessionPermissionChecked={false}
       onSessionPermissionChange={noop}
       prompt={prompt}
-      pendingOption={pendingOption}
-      selectedOption={null}
-      onContinue={noop}
-      onSelect={noop}
-      onConfirm={noop}
-      onBack={noop}
+      armedOption={armedOption}
+      onActivate={noop}
       onCancel={noop}
     />
   )
@@ -45,7 +39,7 @@ function renderView(prompt: ModalPrompt, pendingOption: ModalOption | null = nul
 
 // Count native choices independently from the action buttons.
 function optionCount(markup: string): number {
-  return markup.match(/type="radio"/g)?.length ?? 0
+  return markup.match(/class="permission-panel__choice(?: |")/g)?.length ?? 0
 }
 
 // The default marked neither first nor last, so order and default-marking are independent (spec note).
@@ -78,6 +72,12 @@ describe('PermissionModalView — the outstanding permission/trust prompt', () =
       expect(markup).not.toContain('<img src=x>')
       expect(markup).not.toContain(' title=')
     }
+  })
+
+  it('disables every decision and grant control when the unique owner is unavailable', () => {
+    const markup = renderView({ ...PROMPT, alwaysAllow: { offered: true, rules: ['Read'] } }, null, false)
+    expect(markup.match(/disabled=""/g)).toHaveLength(5)
+    expect(markup).not.toContain('aria-label="Read"')
   })
 
   it('hides legacy, unavailable and trust offers', () => {
@@ -126,8 +126,8 @@ describe('PermissionModalView — the outstanding permission/trust prompt', () =
     expect(markup).not.toContain(' title=')
     expect(markup).not.toContain(' href=')
     expect(markup).not.toContain('checked=""')
-    expect(markup).toContain('disabled=""')
-    expect(markup).toContain('Deny<span class="permission-panel__default"> Default</span>')
+    expect(markup).not.toContain('disabled=""')
+    expect(markup).toContain('Deny</button>')
   })
 
   it('renders the title and prompt text (AC2)', () => {
@@ -136,7 +136,7 @@ describe('PermissionModalView — the outstanding permission/trust prompt', () =
     expect(markup).toContain('claude wants to write to schema.ts')
   })
 
-  it('renders one radio per option in array order (AC2)', () => {
+  it('renders one choice button per option in array order (AC2)', () => {
     const markup = renderView(PROMPT)
     expect(optionCount(markup)).toBe(3)
     expect(markup.indexOf('Allow once')).toBeLessThan(markup.indexOf('Deny'))
@@ -146,11 +146,11 @@ describe('PermissionModalView — the outstanding permission/trust prompt', () =
   it('marks only the supplied default option (AC3)', () => {
     const markup = renderView(PROMPT)
     // Exactly one default, and it is the middle supplied choice.
-    expect(markup.match(/permission-panel__default/g)?.length ?? 0).toBe(1)
-    expect(markup).toContain('Deny<span class="permission-panel__default"> Default</span>')
+    expect(markup.match(/permission-panel__choice--default/g)?.length ?? 0).toBe(1)
+    expect(markup).toContain('Deny</button>')
     // The other labels remain unadorned.
-    expect(markup).toContain('Allow once</span>')
-    expect(markup).toContain('Allow always</span>')
+    expect(markup).toContain('Allow once</button>')
+    expect(markup).toContain('Allow always</button>')
   })
 
   it('renders title / prompt / labels as inert text, never live markup (AC4)', () => {
@@ -181,7 +181,7 @@ describe('PermissionModalView — the outstanding permission/trust prompt', () =
     expect(markup).toContain('id="permission-modal-title"')
   })
 
-  it('renders exactly one radio for a single-option prompt', () => {
+  it('renders exactly one choice button for a single-option prompt', () => {
     const single: ModalPrompt = {
       conversationId: 'conv-m3',
       modalId: 'm3',
@@ -195,56 +195,28 @@ describe('PermissionModalView — the outstanding permission/trust prompt', () =
     expect(optionCount(markup)).toBe(1)
   })
 
-  it('renders a leading cancel affordance in the action row (AC1)', () => {
+  it('renders a Cancel after the card (AC1)', () => {
     const markup = renderView(PROMPT)
     // Cancel precedes Continue in the action row; choices are separate native inputs.
     expect(markup).toContain('class="button-small question-panel__cancel permission-modal__cancel">Cancel</button>')
     expect(optionCount(markup)).toBe(3)
-    expect(markup.indexOf('permission-modal__cancel')).toBeLessThan(markup.indexOf('>Continue</button>'))
-    expect(markup).toContain('disabled=""')
+    expect(markup.indexOf('permission-modal__cancel')).toBeGreaterThan(markup.indexOf('>Allow always</button>'))
+    expect(markup).not.toContain('disabled=""')
     expect(markup).not.toContain('checked=""')
   })
 })
 
-// #226: the confirm sub-step — when `pendingOption` is set, the view renders a client-owned confirm
-// sentence + a Back/Confirm action row INSTEAD of the daemon option list, reusing the same dialog chrome.
-describe('PermissionModalView — the second-confirm sub-step (#226)', () => {
-  const pending: ModalOption = { id: 'allow-once', label: 'Allow once' }
-
-  it('renders a client-owned confirm sentence naming the held option, not the daemon option list (AC1)', () => {
-    const markup = renderView(PROMPT, pending)
-    expect(markup).toContain('Send')
-    expect(markup).toContain('Allow once')
-    // The daemon option list is NOT rendered in confirm mode…
-    expect(optionCount(markup)).toBe(0)
-    // …nor the daemon prompt body or the other (unselected) daemon options.
-    expect(markup).not.toContain('claude wants to write to schema.ts')
-    expect(markup).not.toContain('Allow always')
-  })
-
-  it('renders a leading Back and a trailing Confirm affordance (AC1)', () => {
-    const markup = renderView(PROMPT, pending)
-    expect(markup).toContain('class="button-small question-panel__cancel permission-modal__back">Back</button>')
-    expect(markup).toContain('class="button-small question-panel__continue permission-modal__confirm">Confirm</button>')
-    // Back is the leading (left) action; Confirm trails it. The list-mode Cancel is gone in this mode.
-    expect(markup.indexOf('permission-modal__back')).toBeLessThan(
-      markup.indexOf('permission-modal__confirm')
-    )
-    expect(markup).not.toContain('permission-modal__cancel')
-  })
-
-  it('escapes an untrusted held-option label in the confirm sentence (AC4)', () => {
-    const markup = renderView(PROMPT, { id: 'x', label: '<img src=x onerror=alert(1)>' })
-    expect(markup).toContain('&lt;img src=x onerror=alert(1)&gt;')
-    expect(markup).not.toContain('<img src=x onerror=alert(1)>')
-  })
-
-  it('keeps the panel region and title so the user stays oriented on what is being approved', () => {
-    const markup = renderView(PROMPT, pending)
-    expect(markup).toContain('role="region"')
-    expect(markup).not.toContain('aria-modal')
-    expect(markup).toContain('aria-labelledby="permission-modal-title"')
-    expect(markup).toContain('Allow file write')
+describe('PermissionModalView — armed choice', () => {
+  it('keeps the complete card and options with a client-owned accessible instruction', () => {
+    const markup = renderView(PROMPT, PROMPT.options[0])
+    expect(optionCount(markup)).toBe(3)
+    expect(markup).toContain('permission-panel__choice--armed')
+    expect(markup).toContain('aria-describedby="permission-choice-confirm"')
+    expect(markup).toContain('Activate this choice again to confirm.')
+    expect(markup).toContain('claude wants to write to schema.ts')
+    expect(markup).toContain('>Cancel</button>')
+    expect(markup).not.toContain('>Continue</button>')
+    expect(markup).not.toContain('>Confirm</button>')
   })
 })
 
@@ -329,7 +301,7 @@ describe('PermissionModal — the second-confirm marker is scoped to its prompt 
     expect(optionCount(renderView(prompt, pendingOption))).toBe(4)
   })
 
-  it('still renders the confirm sub-step for the prompt the option WAS selected on (AC3)', () => {
+  it('still renders the armed choice for the prompt the option WAS selected on (AC3)', () => {
     // The mutation control, and it is not optional: every assertion above is "→ null", so a
     // resolvePendingOption that simply returned null always would pass all of them. This is the one
     // that fails against that stub.
@@ -341,9 +313,9 @@ describe('PermissionModal — the second-confirm marker is scoped to its prompt 
     expect(pendingOption).toEqual({ id: 'allow_always', label: 'Allow always' })
 
     const markup = renderView(prompt, pendingOption)
-    expect(markup).toContain('class="button-small question-panel__cancel permission-modal__back">Back</button>')
-    expect(markup).toContain('class="button-small question-panel__continue permission-modal__confirm">Confirm</button>')
-    expect(optionCount(markup)).toBe(0)
+    expect(markup).toContain('class="button-small question-panel__cancel permission-modal__cancel">Cancel</button>')
+    expect(markup).toContain('Activate this choice again to confirm.')
+    expect(optionCount(markup)).toBe(4)
   })
 })
 

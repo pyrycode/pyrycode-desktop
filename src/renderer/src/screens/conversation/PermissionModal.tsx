@@ -1,36 +1,28 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
+import { useStore } from 'zustand'
+import { modalStore } from '../../store/modalStore'
+import { activeConversationStore } from '../../store/activeConversationStore'
+import { conversationListStore, selectConversations } from '../../store/conversationListStore'
+import { sessionStore } from '../../store/sessionStore'
+import { serverIdForOpenConversation } from './unpairAction'
+import { createPermissionChoices } from './permissionChoices'
 import { useModalStore, selectOutstanding, selectRejections } from '../../store/modalStore'
 import type { ModalOption, ModalPrompt } from '../../store/modalPrompts'
-import { PyryMark } from '../../theme/PyryMark'
 import { QuestionTick } from './QuestionPanel'
 import { canRespondToPromptNow, usePromptResponseAvailability } from './promptResponseAvailability'
-import {
-  answerPrompt,
-  confirmPrompt,
-  hasSessionPermission,
-  cancelPrompt,
-  selectOption,
-  resolvePendingOption,
-  type PendingConfirm
-} from './modalResolution'
-
 const PERMISSION_MODAL_TITLE_ID = 'permission-modal-title'
 
 // Permission and questionnaire share visual structure, but never requests or answer state.
 export function PermissionModalView({
-  prompt, selectedOption, pendingOption, responseAvailable, onSelect, onContinue, onConfirm, onBack, onCancel,
+  prompt, armedOption, responseAvailable, onActivate, onCancel,
   sessionPermissionChecked, onSessionPermissionChange
 }: {
   prompt: ModalPrompt
-  selectedOption: ModalOption | null
-  pendingOption: ModalOption | null
+  armedOption: ModalOption | null
   responseAvailable: boolean
   sessionPermissionChecked: boolean
   onSessionPermissionChange: (checked: boolean) => void
-  onSelect: (modalId: string, optionId: string) => void
-  onContinue: () => void
-  onConfirm: (modalId: string, optionId: string) => void
-  onBack: () => void
+  onActivate: (optionId: string) => void
   onCancel: (modalId: string) => void
 }): JSX.Element {
   const cancelButton = useRef<HTMLButtonElement>(null)
@@ -38,7 +30,7 @@ export function PermissionModalView({
   useEffect(() => {
     if (displayedModalId.current === prompt.modalId) return
     displayedModalId.current = prompt.modalId
-    // Only initial display moves focus; updates, Back and availability changes never steal it.
+    // Only initial display moves focus; updates and availability changes never steal it.
     if (prompt.defaultToNo === true && responseAvailable) cancelButton.current?.focus()
   }, [prompt.modalId, prompt.defaultToNo, responseAvailable])
   // The inbound parser supplies JSON; keep false, zero and null as meaningful display text.
@@ -50,54 +42,28 @@ export function PermissionModalView({
   const hasContext = hasReason || prompt.description !== undefined || prompt.blockedPath !== undefined
   return (
     <section className="question-panel permission-panel" role="region" aria-labelledby={PERMISSION_MODAL_TITLE_ID}>
-      <div className="question-panel__title">
-        <PyryMark className="question-panel__mark" width={14} height={16} />
-        <h2 id={PERMISSION_MODAL_TITLE_ID} className="question-panel__label permission-panel__title">
-          {prompt.title}
-        </h2>
-      </div>
       <div className="question-panel__box">
         <div className="permission-panel__content">
-          {pendingOption ? (
-            <p className="question-panel__question permission-panel__explanation">
-              Send &quot;{pendingOption.label}&quot;? This grants the requested action.
-            </p>
-          ) : (
-            <>
-              <p className="question-panel__question permission-panel__explanation">{prompt.prompt}</p>
-              {hasContext && (
-                <div className="permission-panel__context">
-                  {hasReason && <p className="permission-panel__context-text">
-                    {reasonLabel}{reason !== undefined ? `: ${reason}` : ''}
-                  </p>}
-                  {prompt.description !== undefined && <p className="permission-panel__context-text">{prompt.description}</p>}
-                  {prompt.blockedPath !== undefined && <p className="permission-panel__context-text">{prompt.blockedPath}</p>}
-                </div>
-              )}
-              <div className="question-panel__options">
-                {prompt.options.map((option) => (
-                  <label key={option.id} className="question-panel__option">
-                    <input type="radio" name="permission-choice" className="question-panel__input"
-                      checked={selectedOption?.id === option.id}
-                      onChange={() => onSelect(prompt.modalId, option.id)} />
-                    <span className="question-panel__control question-panel__control--radio" aria-hidden="true">
-                      {selectedOption?.id === option.id && <span className="question-panel__control-dot" />}
-                    </span>
-                    <span className="question-panel__option-text question-panel__option-label">
-                      {option.label}{option.id === prompt.defaultOptionId && (
-                        <span className="permission-panel__default"> Default</span>
-                      )}
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </>
+          <div className="question-panel__title">
+            <h2 id={PERMISSION_MODAL_TITLE_ID} className="question-panel__label permission-panel__title">
+              {prompt.title}
+            </h2>
+          </div>
+          <p className="question-panel__question permission-panel__explanation">{prompt.prompt}</p>
+          {hasContext && (
+            <div className="permission-panel__context">
+              {hasReason && <p className="permission-panel__context-text">
+                {reasonLabel}{reason !== undefined ? `: ${reason}` : ''}
+              </p>}
+              {prompt.description !== undefined && <p className="permission-panel__context-text">{prompt.description}</p>}
+              {prompt.blockedPath !== undefined && <p className="permission-panel__context-text">{prompt.blockedPath}</p>}
+            </div>
           )}
           {prompt.class === 'permission' && prompt.alwaysAllow?.offered === true && (
             <div className="permission-panel__session-offer">
               <label className="question-panel__option">
                 <input type="checkbox" className="question-panel__input"
-                  checked={sessionPermissionChecked} aria-describedby="permission-session-rules"
+                  disabled={!responseAvailable} checked={sessionPermissionChecked} aria-describedby="permission-session-rules"
                   onChange={(event) => onSessionPermissionChange(event.target.checked)} />
                 <span className="question-panel__control question-panel__control--checkbox" aria-hidden="true">
                   {sessionPermissionChecked && <QuestionTick />}
@@ -111,36 +77,24 @@ export function PermissionModalView({
               </ul>
             </div>
           )}
-        </div>
-        <div className="question-panel__separator" aria-hidden="true" />
-        <div className="question-panel__actions">
-          {pendingOption ? (
-            <>
-              <button type="button" className="button-small question-panel__cancel permission-modal__back" onClick={onBack}>
-                Back
-              </button>
-              <button type="button" className="button-small question-panel__continue permission-modal__confirm"
-                disabled={!responseAvailable}
-                onClick={() => onConfirm(prompt.modalId, pendingOption.id)}>
-                Confirm
-              </button>
-            </>
-          ) : (
-            <>
-              <button type="button" className="button-small question-panel__cancel permission-modal__cancel"
-                ref={cancelButton}
-                disabled={!responseAvailable}
-                onClick={() => onCancel(prompt.modalId)}>
-                Cancel
-              </button>
-              <button type="button" className="button-small question-panel__continue" disabled={!responseAvailable || selectedOption === null}
-                onClick={onContinue}>
-                Continue
-              </button>
-            </>
-          )}
+          <div className="permission-panel__choices">
+            {prompt.options.map(option => (
+              <div key={option.id}>
+                <button type="button"
+                  className={`permission-panel__choice${option.id === prompt.defaultOptionId ? ' permission-panel__choice--default' : armedOption?.id === option.id ? ' permission-panel__choice--armed' : ''}`}
+                  disabled={!responseAvailable}
+                  aria-describedby={armedOption?.id === option.id ? 'permission-choice-confirm' : undefined}
+                  onClick={() => onActivate(option.id)}>{option.label}</button>
+                {armedOption?.id === option.id && <p id="permission-choice-confirm" className="permission-panel__instruction" role="status">
+                  Activate this choice again to confirm.
+                </p>}
+              </div>
+            ))}
+          </div>
         </div>
       </div>
+      <button type="button" className="button-small question-panel__cancel permission-modal__cancel"
+        ref={cancelButton} disabled={!responseAvailable} onClick={() => onCancel(prompt.modalId)}>Cancel</button>
     </section>
   )
 }
@@ -175,25 +129,28 @@ export function RejectionSurfaceView({
   )
 }
 
-// Selection is local to this chat instance. Rejection ownership lives as long as the feedback.
+// Choice consent is local to this chat instance. Rejection ownership lives as long as the feedback.
 export function PermissionModal({ conversationId }: { conversationId: string | null }): JSX.Element | null {
   const outstanding = useModalStore(selectOutstanding)
   const rejections = useModalStore(selectRejections)
   const owners = useModalStore((s) => s.rejectionOwners)
   const dispatch = useModalStore((s) => s.dispatch)
-  const [selected, setSelected] = useState<PendingConfirm | null>(null)
-  const [pending, setPending] = useState<PendingConfirm | null>(null)
-  const [opted, setOpted] = useState<ModalPrompt | null>(null)
-  const prompt = conversationId === null ? undefined
-    : outstanding.find((p) => p.conversationId === conversationId)
+  const control = useMemo(() => createPermissionChoices(() => {
+    const displayed = activeConversationStore.getState().activeConversation?.id === conversationId
+    const prompt = displayed ? modalStore.getState().outstanding.find(p => p.conversationId === conversationId) : undefined
+    return { prompt, serverId: serverIdForOpenConversation(selectConversations(conversationListStore.getState()), conversationId),
+      available: canRespondToPromptNow(conversationId) }
+  }, changed => {
+    const offs = [modalStore, activeConversationStore, conversationListStore, sessionStore].map(store => store.subscribe(changed))
+    return () => offs.forEach(off => off())
+  }, { sendCommand: command => window.pyry.sendCommand(command), dispatch,
+    report: code => window.pyry.sendDiagnostic?.({ event: 'permission-choice', code }) }), [conversationId, dispatch])
+  useEffect(() => control.start(), [control])
+  const { armedOptionId } = useStore(control.store)
+  const prompt = conversationId === null ? undefined : outstanding.find(p => p.conversationId === conversationId)
   const responseAvailable = usePromptResponseAvailability(prompt?.conversationId ?? null)
-  const selectedOption = resolvePendingOption(prompt, selected)
-  const pendingOption = resolvePendingOption(prompt, pending)
-  const sessionPermissionChecked = hasSessionPermission(prompt, opted)
-  // Clear invalid markers during render: a removed option must not revive on a later re-delivery.
-  if (selected && !selectedOption) setSelected(null)
-  if (pending && !pendingOption) setPending(null)
-  if (opted && !sessionPermissionChecked) setOpted(null)
+  const armedOption = prompt?.options.find(o => o.id === armedOptionId) ?? null
+  const sessionPermissionChecked = control.checked(prompt)
   const visibleRejections = conversationId === null ? [] : rejections.filter((id) =>
     owners.some((owner) => owner.modalId === id && owner.conversationId === conversationId))
   return (
@@ -205,28 +162,10 @@ export function PermissionModal({ conversationId }: { conversationId: string | n
           prompt={prompt}
           responseAvailable={responseAvailable}
           sessionPermissionChecked={sessionPermissionChecked}
-          onSessionPermissionChange={(checked) => setOpted(checked ? prompt : null)}
-          selectedOption={selectedOption}
-          pendingOption={pendingOption}
-          onSelect={(modalId, optionId) => setSelected({ modalId, optionId })}
-          onContinue={() => {
-            if (!selectedOption || !canRespondToPromptNow(prompt.conversationId)) return
-            selectOption(prompt, selectedOption.id, {
-              answer: (id) => answerPrompt(prompt.modalId, id, { sendCommand: window.pyry.sendCommand, dispatch }),
-              requestConfirm: (optionId) => setPending({ modalId: prompt.modalId, optionId })
-            })
-          }}
-          onConfirm={(modalId, optionId) => {
-            if (modalId !== prompt.modalId || !pendingOption || pendingOption.id !== optionId
-              || !canRespondToPromptNow(prompt.conversationId)) return
-            confirmPrompt(prompt, pending, opted, { sendCommand: window.pyry.sendCommand, dispatch })
-            setPending(null)
-          }}
-          onBack={() => setPending(null)}
-          onCancel={(modalId) => {
-            if (!canRespondToPromptNow(prompt.conversationId)) return
-            cancelPrompt(modalId, { sendCommand: window.pyry.sendCommand, dispatch })
-          }}
+          onSessionPermissionChange={checked => control.toggle(prompt, checked)}
+          armedOption={armedOption}
+          onActivate={optionId => control.activate(prompt, optionId)}
+          onCancel={() => control.cancel(prompt)}
         />
       )}
     </>

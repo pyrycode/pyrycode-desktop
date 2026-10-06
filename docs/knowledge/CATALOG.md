@@ -1314,7 +1314,7 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
 
 - [Channel List — the toolbar's pair-new-host control](features/channel-list-section-header-pair-control.md): Sidebar menu Settings/Archive navigation, fixed Pair new host entry and name pill, popup geometry, consumed dismissal, origin-aware cancel and CSP-safe SVG paint checks.
 
-- [Windows packaging (electron-builder)](features/windows-packaging.md) — Combined unsigned x64/arm64 NSIS installer, GitHub update feed, Mac-to-pyrybox Podman Wine release command, source-pinned retries and verification before publication; architecture, user-data, allowlist and archive-transfer traps, plus operator acceptance boundaries.
+- [Windows packaging (electron-builder)](features/windows-packaging.md) — Combined unsigned x64/arm64 NSIS installer, GitHub release command/feed and packaged Windows self-update; pinned Ready/Failed rows, narrow IPC projection, static diagnostics, history drain and failure exit, release verification/retries, publisher trust and pending Surface acceptance.
 
 - [Channel List — workspace grouping](features/channel-list-workspace-grouping.md) — split out of
   [Channel List home screen](features/channel-list.md) to stay under the doc-guard's byte cap:

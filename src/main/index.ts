@@ -985,6 +985,9 @@ app.whenReady().then(() => {
         router.route(conversationId)?.interrupt(conversationId)
         return
       }
+      case 'switchAgent':
+        router.route(command.payload.conversation_id)?.switchAgent(command.payload)
+        return
       case 'newSession': {
         // ROUTED BY CONVERSATION (#1217), mirroring requestModelList and NOT the interrupt arm above
         // — a restart kills claude in one conversation, so the conversation id is the address and a

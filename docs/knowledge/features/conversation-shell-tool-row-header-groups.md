@@ -115,8 +115,10 @@ group presentation independently of that work.
 
 ### Expansion identity
 
-`Timeline` controls expansion for **every** tool row, keyed by its origin-relative
-index (`firstRowKey + index`). Separate leaf and group state would close an expanded
+`Timeline` controls expansion for **every** tool row, keyed by the retained client-owned
+numeric identity at its source item index. Queue projection can change display indices;
+ancestor and run lookups must resolve through `FoldedRow.itemIndex` too. The fallback for
+callers without retained keys is `firstRowKey + itemIndex`. Separate leaf and group state would close an expanded
 leaf when history gives it its first child. Tool and attributed-text wrappers stay
 under one React parent and remain mounted while hidden, preserving child-result
 and inner-group expansion

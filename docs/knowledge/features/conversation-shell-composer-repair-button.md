@@ -93,7 +93,7 @@ as #963 shipped it, with the group flush to the row's bottom edge and the icon's
 body/small-emphasized type, `border-radius: var(--radius-xs)`, `white-space: nowrap`, `flex: 0 0 auto` —
 is the same nine declarations the question panel's `.question-panel__cancel`/`__previous`/`__continue`
 already shared as one three-selector rule; see
-[Question panel § Step controls](conversation-shell-question-panel.md#step-controls-916) for that side of
+[Question panel](conversation-shell-question-panel.md#all-question-presentation) for that side of
 the extraction. `.button-small--error` is the design's `Type=Error` fill: `background:
 var(--color-on-error)`, `color: var(--color-error)`, hover swaps the fill to
 `var(--color-error-container)` (already a token, from #797's chip). Padding stays out of the base class —

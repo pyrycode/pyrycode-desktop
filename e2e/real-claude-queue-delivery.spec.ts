@@ -128,6 +128,19 @@ for (const scenario of [
         expect(await app.evaluate(() => (globalThis as CaptureGlobal).queueSendCapture.sends)).toEqual(sends)
         await expect(stop).toHaveCount(0)
         if (scenario.drop) await expect(rowsFor(followups[0])).toHaveCount(0)
+        const transcriptOrder = await page.locator('[data-thread-role]').evaluateAll((rows, data) => {
+          const texts = rows.map(row => row.textContent ?? '')
+          const first = texts.findIndex((text, index) => rows[index].getAttribute('data-thread-role') === 'assistant' &&
+            text.includes(data.markers[0]))
+          const positions = [first]
+          for (const [index, message] of data.followups.entries()) {
+            if (data.drop && index === 0) continue
+            positions.push(texts.findIndex((text, row) => rows[row].getAttribute('data-thread-role') === 'user' && text.includes(message)))
+            positions.push(texts.findIndex((text, row) => rows[row].getAttribute('data-thread-role') === 'assistant' && text.includes(data.markers[index + 1])))
+          }
+          return positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1]))
+        }, { markers, followups, drop: scenario.drop })
+        expect(transcriptOrder, 'first reply, delivered follow-up, answering reply, then next delivery/reply').toBe(true)
       } finally {
         const evidence = await readEvidence(page, expected)
         await testInfo.attach('queue-delivery-evidence', { contentType: 'application/json', body: Buffer.from(JSON.stringify({

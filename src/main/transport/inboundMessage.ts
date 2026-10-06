@@ -1265,7 +1265,18 @@ function parseMessagePayload(payload: unknown): MessagePayload {
   if (role !== 'user' && role !== 'assistant') {
     throw new WireDecodeError('missing required field: role')
   }
-  return { conversation_id, message_id, role, text }
+  const queued_msg_id = payload.queued_msg_id
+  if (queued_msg_id !== undefined &&
+      (typeof queued_msg_id !== 'number' || !Number.isSafeInteger(queued_msg_id) || queued_msg_id < 1)) {
+    throw new WireDecodeError('invalid message queue identity')
+  }
+  const sent_now = payload.sent_now
+  if (sent_now !== undefined && typeof sent_now !== 'boolean') {
+    throw new WireDecodeError('invalid message delivery mode')
+  }
+  return { conversation_id, message_id, role, text,
+    ...(queued_msg_id === undefined ? {} : { queued_msg_id }),
+    ...(sent_now === undefined ? {} : { sent_now }) }
 }
 
 /**

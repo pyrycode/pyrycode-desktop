@@ -269,12 +269,12 @@ describe('selectBatchFor — the per-conversation read (AC5)', () => {
     expect(selectBatchFor('constructor')(run([shown('batch-1')]))).toBeUndefined()
   })
 
-  it('answers with the FIRST in insertion order when two batches share a conversation', () => {
+  it('answers with the latest request when a fresh batch replaces the conversation request', () => {
     const state = run([
       shown('batch-1', { conversationId: 'conv-x' }),
       shown('batch-2', { conversationId: 'conv-x' })
     ])
-    expect(selectBatchFor('conv-x')(state)?.questionBatchId).toBe('batch-1')
+    expect(selectBatchFor('conv-x')(state)?.questionBatchId).toBe('batch-2')
   })
 
   it('scopes to the asking conversation, leaving another conversation answered separately', () => {
@@ -312,5 +312,15 @@ describe('reduceQuestionBatches — purity', () => {
     const questions = [question('Alpha')]
     const state = run([shown('batch-1', { questions })])
     expect(state.outstanding[0]?.questions).toBe(questions)
+  })
+})
+
+describe('replacement request ownership', () => {
+  it('a fresh request retires the prior request for its conversation only', () => {
+    const questions = [{ question: 'Q', header: 'H', options: [], multiSelect: false }]
+    let state = reduceQuestionBatches(initialQuestionBatchState, { type: 'shown', conversationId: 'a', questionBatchId: 'old', questions })
+    state = reduceQuestionBatches(state, { type: 'shown', conversationId: 'b', questionBatchId: 'other-host', questions })
+    state = reduceQuestionBatches(state, { type: 'shown', conversationId: 'a', questionBatchId: 'new', questions })
+    expect(state.outstanding.map(b => b.questionBatchId)).toEqual(['other-host', 'new'])
   })
 })

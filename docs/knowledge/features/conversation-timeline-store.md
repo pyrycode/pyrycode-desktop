@@ -63,12 +63,15 @@ the [existing item-count predicate](conversation-unread.md).
 Receipts preserve `localSendPending` and session-error notices, while accepted local
 submission clears the notice and opens “Sending…”. Live time comes from `daemonTs`;
 unusable times and history-only rows draw without time. A matching nonempty
-`message_id` returns the exact held state before
-any row or sidecar mutation. Identity covers optimistic echoes, repeated receipts,
-queued folding and history in either arrival order; equal text and empty/absent ids
-do not suppress rows. Retaining the held row also retains local attachments, which
-the received payload cannot supply. See [user event semantics](thread-timeline-internals.md#the-reducer)
-and [message timestamp contract](inbound-message-decode-contract.md#public-contract).
+`message_id` preserves held row content and local attachments, which the received payload
+cannot supply. Optional `queued_msg_id` and `sent_now` translate to `queuedMsgId` and
+`sentNow` through the same mounted typed event path. Owned queued receipts settle before
+content/chrome reduction; exact bound queue identity precedes eligible unbound message-id
+fallback. Already settled repeats retain no-op identity. Legacy held/history deduplication
+still applies to other matching receipts, except metadata distinguishing a different bound
+entry. Equal text and empty/absent ids do not establish ownership or suppress rows.
+See [settlement, mixed delivery and late receipts](thread-timeline-internals.md#queued-own-echo-settlement)
+and [message timestamp contract](inbound-message-decode-contract.md#message-receipts-and-timestamps).
 
 `messageReceived` explicitly contributes no timestamp live-join key, even when
 `daemonTs` is present. The history filter keeps and steps over these entries so the

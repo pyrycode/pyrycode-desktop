@@ -78,7 +78,16 @@ and naming the same conversation. The connected-owner guard blocks unavailable o
 the React-free sender also rejects null/empty ids. Created chats whose list row has not arrived use
 the existing [deferred initialization](conversation-shell.md#created-chat-initialization).
 
-Keep this ask at activation: adding it inside `requestRunConfigSnapshot` would also request context
+Reset completion also asks once through `subscribeResetContextUsage`, mounted for the
+[paired shell's lifetime](paired-shell.md#how-it-works). It compares current and previous
+`conversationActivityStore` snapshots and requests only for a retained entry whose `resetting`
+changes from true to false. It watches every conversation, so a reset that finishes after switching
+chats still requests the reset conversation's reading. Initial inactive entries, repeated reset
+phases or inactive states, unrelated activity updates, entry eviction and reconnect/pairing clears
+send nothing: removal is not a reset-completion edge. The explicit activity lifecycle owns this
+trigger, rather than the timeline's reset presentation or a click on Reset session.
+
+Keep the activation ask at activation: adding it inside `requestRunConfigSnapshot` would also request context
 on sheet opens and settings refreshes. Opening Run configuration sends no additional context ask.
 The [outbound transport](daemon-connection-methods.md#public-surface) remains synchronous
 fire-and-forget; main owns send diagnostics, and neither layer retries a failure, error or silence.
@@ -87,8 +96,10 @@ The bridge and store gain no request effect or pending state.
 A reply for the chat replaces its held reading through the same receive path as unsolicited turn-end
 reports. Both the footer and run-configuration gauge prefer that reading before any new turn through
 `contextTokenSource`, keeping their existing visuals and absent-only transcript fallback. Reopening
-does not clear the held reading while awaiting a reply. See the
-[#1504 design](../../specs/architecture/1504-context-reading-on-chat-open.md).
+and reset completion retain the previous reading until a passive reply replaces it; requesting does
+not clear it or optimistically display zero. See the
+[#1504 activation design](../../specs/architecture/1504-context-reading-on-chat-open.md) and
+[#1749 reset design](../../specs/architecture/1749-reset-context-reading.md).
 
 ### The store (`src/renderer/src/store/reportedContextStore.ts`)
 

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
 import { createAppUpdateController, registerAppUpdate, selectAppUpdateEligibility, createQuitDrain } from './appUpdate'
-import { validateUpdateVersion } from '../shared/ipc/appUpdate'
+import { validateUpdateVersion, isAppUpdateAction } from '../shared/ipc/appUpdate'
 
 function fixture(isPackaged = true, platform = 'win32') {
   const updater = Object.assign(new EventEmitter(), {
@@ -157,4 +157,10 @@ it('cancels a late check result after disposal and ignores late completion', asy
   await pending; expect(cancel).toHaveBeenCalledOnce()
   f.updater.emit('update-downloaded', { version: '1.2.3' }); f.updater.emit('error', Error('PRIVATE'))
   expect(f.controller.snapshot()).toEqual({ type: 'idle' })
+})
+
+it('accepts only the two exact IPC action objects', () => {
+  for (const type of ['restart', 'dismiss']) expect(isAppUpdateAction({ type })).toBe(true)
+  for (const value of [null, 'restart', { type: 'restart', path: 'PRIVATE' }, Object.assign([], { type: 'restart' }),
+    Object.assign(Object.create({ type: 'restart' }), { path: 'PRIVATE' })]) expect(isAppUpdateAction(value)).toBe(false)
 })

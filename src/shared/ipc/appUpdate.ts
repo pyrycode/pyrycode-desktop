@@ -15,6 +15,6 @@ export function projectAppUpdateState(value: unknown): AppUpdateState {
   return { type: 'idle' }
 }
 export function isAppUpdateAction(value: unknown): value is AppUpdateAction {
-  return typeof value === 'object' && value !== null && Object.keys(value).length === 1 &&
+  return typeof value === 'object' && value !== null && !Array.isArray(value) && Object.keys(value).length === 1 && Object.keys(value)[0] === 'type' &&
     'type' in value && (value.type === 'restart' || value.type === 'dismiss')
 }

@@ -106,6 +106,12 @@ The real Wine build and the first real publish are the ticket's operator accepta
 - [Network and I/O] SHOULD FIX, done in Phase B. SSH uses `BatchMode=yes` and `ConnectTimeout=15`
   so a missing key fails rather than prompting. The Wine image is pinned by digest so a changed
   upstream image cannot run unnoticed with the source.
+  MUST FIX, resolved in rework: `sshHost.upload` formerly used plain `sh` for `tar | ssh`, hiding a
+  local archive failure when remote extraction succeeded. That could build and publish an incomplete
+  app. Run the pipeline with `bash -o pipefail`: upload succeeds only when both tar and SSH exit zero.
+  `realExec` propagates either failure before the Wine build, build receipt or any GitHub write.
+  `scripts/release-win-upload.test.ts` drives the real command boundary with fake executables,
+  including a valid partial archive whose producer exits one and whose extraction succeeds.
 - [Errors and logs] No findings. Command output is the build's own; `gh api` errors carry no token.
 - [Concurrency] OUT OF SCOPE. Two simultaneous runs of one version could race on the draft; the
   command has one operator and no lock, matching `pyry-release`'s single-operator use. Revisit only if
@@ -117,3 +123,33 @@ The real Wine build and the first real publish are the ticket's operator accepta
 **Reviewer:** builder (self-review per `builder/security-review.md`), run by hand in an interactive
 Claude Code session
 **Date:** 2026-10-06
+
+## Revisions
+
+### 2026-10-06 — verifier findings 1 and 2
+
+- Finding 1: `sshHost.upload` now requires both pipeline processes to succeed through Bash
+  `pipefail`, rather than accepting only SSH's exit status. A valid partial archive was observed to
+  reach the build after tar failed. The new contract stops before building, recording a build receipt
+  or writing release state on GitHub when either process fails. Command-boundary tests use real
+  `sshHost.upload` and `realExec` with local fake tar/SSH executables to check tar-only, SSH-only and
+  combined failures, successful extraction of the partial archive, and no build, draft or publish.
+- Finding 2: the implementation added `host` as a fourth injected boundary alongside `exec`, `fs`
+  and `github`. Remote files, their hashes and the Wine build need a fake host so transaction tests
+  exercise upload repair and verification without simulating shell output or contacting pyrybox.
+  The real host still runs all commands through `exec`; the transaction, retry and dry-run tests in
+  `scripts/release-win.test.ts` validate this separation.
+- Finding 2: preparation changed from install → stamp → build → test to install → test → stamp →
+  build. The Settings spec asserts the development version that `vitest.config.ts` reads from source
+  `package.json`, so testing the unstamped source preserves that check. Stamping still precedes the
+  build so `__APP_VERSION__` has the release version. The isolated-clone transaction test pins this
+  exact command order; the failed-check retry test proves no draft or publish follows a failed test.
+
+## Documentation handoff
+
+Pending for the documentation stage: update `README.md` under **Build**, including **Windows
+installer**, to document the command and version syntax; the Mac invocation reaching pyrybox through
+`automation-access with-pyrybox-key`; the Podman Wine build; prerequisites and the build-host GitHub
+login used for publishing; retry behavior; and the manual NSIS install on the Surface with
+SmartScreen's warning. Replace the stale "There is no update feed" wording with the GitHub feed and
+the scope of #1775. Preserve the `%APPDATA%\Pyrycode Desktop` guidance.

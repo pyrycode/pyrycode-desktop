@@ -314,7 +314,9 @@ export function sshHost(exec, ssh) {
   return {
     reset: (dir) => run(`rm -rf ${shellQuote(dir)} && mkdir -p ${shellQuote(dir)}`),
     upload: (localDir, dir) =>
-      exec('sh', [
+      // A valid partial archive can extract successfully after tar fails. Require both exits.
+      exec('bash', [
+        '-o', 'pipefail',
         '-c',
         `COPYFILE_DISABLE=1 tar -C ${shellQuote(localDir)} --no-xattrs --exclude ./node_modules ` +
           `--exclude ./.git --exclude ./dist -cf - . | ssh ${ssh.map(shellQuote).join(' ')} ` +

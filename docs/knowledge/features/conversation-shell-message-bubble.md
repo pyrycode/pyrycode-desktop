@@ -1,6 +1,6 @@
 # Conversation shell — message bubble
 
-The desktop text message bubble, its reserved timestamp and optional turn stats, and the copy control
+The desktop text message bubble, its reserved timestamp and optional turn stats, and copy/reply controls
 beside it. Text rows are centred within a 900px outer cap, with a 40px far-side inset.
 
 Part of [Conversation shell](conversation-shell.md); see that document for what the screen does, its
@@ -85,7 +85,7 @@ about. `.bubble__meta--user` adds `justify-content: flex-end` (the drawing's `ju
 the assistant row carries none, so the base rule's `flex-start` is already right).
 
 **`min-height: var(--text-body-small-line)` is load-bearing, not decorative.** The row holds
-`bubble__meta-time` and optional assistant turn stats; copy is a sibling of the bubble. #970 split
+`bubble__meta-time` and optional assistant turn stats; actions are siblings of the bubble. #970 split
 into a data slice
 ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013) — gives the `assistantText`/`userText`
 [timeline items](thread-timeline-internals.md#types) an optional `createdAt`) and a render slice
@@ -95,7 +95,7 @@ when `createdAt` is absent. The slot keeps its drawn 16px height even then.
 
 **Timestamp visibility follows the whole text row (#1778).** `.bubble__meta-time` uses
 `visibility: hidden` at rest and `visibility: visible` under `.message-row--text:hover` or
-`:focus-within`. Hovering empty row space or focusing copy, a file button or an image button therefore
+`:focus-within`. Hovering empty row space or focusing copy, reply, a file button or an image button therefore
 reveals the timestamp beneath the text in its existing position. Visibility reserves both width and
 height, so revealing or hiding it changes neither bubble nor row dimensions; an absent stamp retains
 the empty slot. Using `display: none` here would lose that reservation. Turn stats keep their separate
@@ -147,34 +147,45 @@ full-bleed 11×12 rect and is dropped as the no-op it is). It inherits `--color-
 at rest, on hover and while pressed. `:focus-visible` draws `outline: 1px solid var(--color-outline)`;
 the accessible name remains `Copy message`. There is no confirmation after a copy.
 
-**The hit area is bigger than the glyph without growing the row.** The glyph is 11×12, far under the
-app's 48px target convention. `padding: var(--space-1) var(--space-2)` (4px vertical, 8px horizontal)
-plus matching negative margins gives a **27×20px** border box for pointer activation and the focus
-ring inside an 11×12px margin box. The old 27×28px target would overlap a future reply target at the
-drawing's 12px inter-glyph gap; 4px vertical padding leaves room. Only copy is rendered.
+**Reply sits below copy (#1779).** It is a native `<button type="button">` named `Reply to message`,
+reachable with Tab and activated by Enter, Space or pointer. Its `bubble__copy bubble__reply` classes
+reuse copy's constant pointer appearance and visible keyboard outline. The supplied
+`reply-solid-full.svg` draws a 13×12px mask on the aria-hidden `.bubble__reply-icon` span, tinted through
+`currentColor` with `--color-inverse-primary` (#32628d). Both controls are always visible.
 
-Rendered by module-local `MessageActions({ text })` in `ConversationScreen.tsx` as a **direct sibling
-of the bubble**: after assistant bubbles (copy on the right), before delivered user bubbles (copy on
-the left), including bubbles with code blocks or attachments. `.message-actions` is a fixed 13px flex
-column stretching to the bubble's height and centring the 11×12px glyph vertically, separated from the
-bubble by 12px. It also renders beside the in-progress assistant tail and copies the partial reply.
-Queued rows render neither actions nor copy.
+**The hit areas are bigger than the glyphs without growing the row.**
+`padding: var(--space-1) var(--space-2)` (4px vertical, 8px horizontal) plus matching negative margins
+gives copy a **27×20px** target around its 11×12px glyph and reply a **29×20px** target around its
+13×12px glyph. The `--space-3` gap is 12px between glyph margin boxes and leaves 4px between the
+targets. Restoring the old 28px target height would make them overlap.
+
+Module-local `MessageActions({ text, role, onReply })` in `ConversationScreen.tsx` is a **direct sibling
+of the bubble**: after assistant bubbles (actions on the right), before delivered user bubbles (actions
+on the left), including bubbles with code blocks or attachments. `.message-actions` is a fixed 13px
+flex column stretching to the bubble's height and vertically centring the whole copy/reply stack,
+separated from the bubble by 12px. Queued rows render neither action nor the column.
 
 `BubbleMeta({ side, createdAt, turnStats })` remains the bubble's **last child**, after markdown or the
 inline streaming cursor on the assistant side and after user text and attachments on the other. It
-contains no copy control. Keeping `.bubble` out of flex-column layout preserves the inline cursor;
+contains neither action. Keeping `.bubble` out of flex-column layout preserves the inline cursor;
 the existing 12px meta margin supplies the spacing below content.
 
-**No new `Timeline` prop.** The copy source is the row's own `item.text`, passed to `MessageActions`.
-Its click handler closes over that text and calls `copyMessageText` directly — no conversation id, no store read, no
-`onDropQueued`-style injected effect (`Timeline`'s optional drop prop, formerly the deleted
-`QueuedBacklog`'s required `onDrop`). That is deliberately not the drop control's shape: that injection
-exists because a queued row cannot see the conversation id its send needs, which is not this control's
-situation. `Timeline`'s prop surface for this control is unchanged, so the ~30 existing `<Timeline`
-render sites needed no edits for it.
+**Both actions read the same current `item.text`.** Copy calls `copyMessageText` directly; reply uses
+`Timeline`'s optional `onReply(role, text)` callback through `TimelineRow`. The streaming tail supplies
+its partial source at activation, and later activations see subsequent deltas. Settled assistant text
+retains Markdown source; attachment names and bytes are excluded. Reply appends the full literal source
+to the pane's retained host/conversation draft; see [the controlled composer](composer-send-internals.md#3-the-controlled-composer--conversationscreentsx)
+for format, offline drafting and focus consumption. Copy's clipboard path stays independent.
 
-**The accessible name is a client-owned constant, `COPY_MESSAGE_LABEL = 'Copy message'`, never
-interpolated with the message text.** `aria-label={`Copy: ${text}`}` would put relay-peer-authored text
+**Small SVGs must load under the renderer CSP.** Vite would inline the reply asset as a data URL,
+which this renderer rejects. The mask URL uses the intrinsic viewport fragment
+`reply-solid-full.svg#svgView(viewBox(0,0,13,12))` so Vite emits the unchanged asset as an app-local file
+without widening CSP or changing build configuration. A non-`none` computed mask URL alone can pass
+while the icon is invisible; browser coverage also decodes that URL and checks its 13×12 intrinsic size.
+
+**Both accessible names are client-owned strings**, `COPY_MESSAGE_LABEL = 'Copy message'` and the
+literal `Reply to message`, never interpolated with the message text.
+`aria-label={`Copy: ${text}`}` would put relay-peer-authored text
 into an attribute, which CLAUDE.md's 2026-08-20 ruling forbids outright — "the control needs an
 accessible name" is exactly the requirement that invites that mistake.
 
@@ -405,7 +416,7 @@ maps nothing either.
 attribute (not even `title`) and never logged, per CLAUDE.md's daemon-text rule. `.bubble__turn-stats {
 display: none }`, flipped to `inline` by `.bubble__meta:hover` — `display: none` rather than
 `visibility: hidden` because the latter would still reserve the span's width and could widen a short
-bubble's meta row while nothing is hovered. Hovering the rest of the message row or focusing copy or
+bubble's meta row while nothing is hovered. Hovering the rest of the message row or focusing copy, reply or
 an attachment reveals the timestamp only; it does not reveal stats. Selection and formatting remain
 unchanged when copy moves outside the bubble.
 
@@ -428,7 +439,7 @@ would reject the expected timestamp reveal instead of proving that no stats were
   reuses `.bubble--user` and `.message-row--text`, taking the centred 900px outer cap and 40px left inset
   while retaining row dimming, attachments and the leading drop control's placement and behavior.
   The delivered row's 12px actions gap does not apply to queued rows. They render no `BubbleMeta`,
-  copy or actions column: a queued message has no timestamp and nothing sent yet to copy.
+  copy, reply or actions column: a queued message has no timestamp and nothing sent yet to copy or quote.
   Its `data-thread-role="queued"` distinguishes it from a
   delivered row's `"user"`, so the two are distinguishable in a markup assertion that counts meta rows
   rather than greping for a class.
@@ -466,7 +477,9 @@ ordering against the message text and against `.bubble__markdown`), the user met
 `bubble__meta--user` and the assistant meta row does not. Copy is a `<button type="button">` with
 `COPY_MESSAGE_LABEL` inside a direct `.message-actions` sibling: before the user bubble and after
 settled or streaming assistant bubbles, including file/image children and fenced code. The meta row
-contains no button. Queued rows carry the text-row modifier but have no actions, copy or meta;
+contains no button. Reply follows copy as a second native named button on both sides, including the
+streaming tail and attached bubbles; its icon introduces no focus stop. Queued rows carry the text-row
+modifier but have no actions, copy, reply or meta;
 standalone offers have none of that text-row treatment. The queued row / `MessageBubble` residue
 render **zero** `.bubble__meta` (a count assertion over the whole markup, not a per-string absence).
 `messageTime.test.ts` covers the
@@ -486,7 +499,8 @@ above; the keyboard path (focus + Enter, same clipboard read-back); and the rest
 computed style — all four `border-radius` corners equal, `padding` 16/20, and the meta row's
 `justify-content` differing between the two sides. Its copy locator now starts from the message row.
 `assistant-whitespace` keeps its inert-markdown check inside markdown but counts working controls
-at the row, where message copy now lives; saved-history and offline copy locators likewise use the row.
+at the row, naming both `Copy message` and `Reply to message`; saved-history and offline copy locators
+likewise use the row.
 Filling the slot broke thirteen *other* specs' bubble text assertions across the fake tier plus four
 raw `textContent` reads in the real-claude tier — see
 [E2E test harness — scenario history](e2e-harness-scenarios.md) and [Real-claude liveness
@@ -495,7 +509,9 @@ method that finds the next one.
 
 **Side-actions geometry and reveal** (`e2e/message-side-actions.spec.ts`, fake transport): both sides
 with long and short text at 800/1280/1800 window widths, centred 900px outer cap, 40px insets,
-13px stretching actions column, 12px gap, vertical glyph alignment and thread overflow containment.
+13px stretching actions column, 12px row gap, centred copy/reply stack, both glyph sizes, 12px glyph
+spacing, separate targets and thread overflow containment. Centring copy alone would reject the
+correct two-control stack.
 It checks unchanged inverse-primary ink on hover/press, a visible keyboard outline, and timestamp
 reveal over empty row space and on copy/file-button focus with identical bubble and row dimensions.
 It also copies a streaming partial reply through the OS clipboard, verifies queued sizing/dimming
@@ -510,12 +526,25 @@ checks preserved. Along with `message-side-actions`, `chat-history-recording` an
 `offline-conversation-actions`, that group executed 28 tests: 28 passed, 0 failed, 1 platform skip.
 The skipped case is not a pass. No live-Claude evidence is required for this presentation change.
 
+**Reply acceptance evidence (#1779).** On `986c9845`, the dispatcher browser gate executed 314 tests:
+314 passed, 0 failed, 5 skipped. The [verifier's counted review](https://github.com/pyrycode/pyrycode-desktop/pull/1812#issuecomment-6027306207)
+confirms all four active `e2e/message-reply.spec.ts` scenarios were present and passed, covering
+pointer/keyboard append and outgoing text, covered-composer focus, equal-ID host draft isolation and
+reopened saved/offline drafting. It also confirms the named side-actions geometry test and task-list
+test passed, with all 13 assistant-whitespace scenarios passing. The reply spec's fifth case, equal-ID
+history persistence, remains skipped pending [#1811](https://github.com/pyrycode/pyrycode-desktop/issues/1811);
+draft isolation and ordinary offline drafting do not prove that persistence works. SVG decoding and
+current-head captures at 1280×800 and 800×800 were accepted against Figma in that review.
+
 **The attachment slots' own coverage (#815, #816, #1045, #869)** is in
 [Conversation shell — message bubble attachment slots § Testing](conversation-shell-message-bubble-attachments.md#testing),
 alongside the sections that describe what each spec proves.
 
 ## Related
 
+- [#1779 architecture spec](../../specs/architecture/1779-message-reply.md) — reply wiring, permission
+  coverage and the SVG/CSP revision; [composer send](composer-send-internals.md#3-the-controlled-composer--conversationscreentsx)
+  owns quote assembly and retained drafts.
 - [#1778 architecture spec](../../specs/architecture/1778-message-side-copy.md) — sibling copy,
   text-row sizing and reserved timestamp reveal; includes the saved-history/offline locator sweep
   and the `innerText` versus `textContent` testing revision.

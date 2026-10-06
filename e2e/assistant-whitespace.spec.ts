@@ -870,7 +870,7 @@ interface TaskMetrics {
   delColor: string
   mutedTokenRgb: string
   markdownInteractiveCount: number
-  rowInteractiveCount: number
+  rowInteractiveNames: Array<string | null>
 }
 
 /**
@@ -936,8 +936,8 @@ const readTaskMetrics = (page: Page, index: number): Promise<TaskMetrics> =>
       // whole container rather than over the mark, so the claim covers everything the reply rendered and
       // not just the element this ticket added.
       markdownInteractiveCount: markdown.querySelectorAll(INTERACTIVE).length,
-      // Positive control guard: markdown is inert, but the message row's copy button is interactive.
-      rowInteractiveCount: row.querySelectorAll(INTERACTIVE).length
+      // Positive control guard: markdown is inert, but the row has copy and reply controls.
+      rowInteractiveNames: Array.from(row.querySelectorAll(INTERACTIVE)).map(el => el.getAttribute('aria-label'))
     }
   })
 
@@ -1459,9 +1459,9 @@ test('a task list draws two distinguishable inert marks, and struck text reads a
 
   // Nothing the reply rendered is focusable or clickable to begin with — the count that would have been
   // 2 had the extension's own <input type="checkbox" disabled> been accepted verbatim rather than
-  // overridden away. The message row's copy button proves this selector still finds controls.
+  // overridden away. The named row actions prove this selector still finds controls.
   expect(before.markdownInteractiveCount).toBe(0)
-  expect(before.rowInteractiveCount).toBe(1)
+  expect(before.rowInteractiveNames).toEqual(['Copy message', 'Reply to message'])
   // ...and the click moved focus nowhere into the reply, so there is no keyboard target either.
   const focusedInsideBubble = await page.evaluate(() =>
     Boolean(document.activeElement?.closest('.bubble'))

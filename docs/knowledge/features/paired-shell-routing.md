@@ -333,7 +333,7 @@ shipped in a follow-up commit on the same PR:
   into a compile error rather than a silent reintroduction of the bug.
 
 Text retention has a different lifetime from those controls. The
-[composer draft store](composer-send.md#3-the-controlled-composer--conversationscreentsx)
+[composer draft store](composer-send-internals.md#3-the-controlled-composer--conversationscreentsx)
 holds exact text by host and conversation for the app session, including across screen exits.
 The pane still remounts and resets transient panels, menus and scroll state; attachments are outside
 text-draft retention. Including the host in `paneKey` also resets controls when two hosts use the

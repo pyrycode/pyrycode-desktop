@@ -303,6 +303,8 @@ export type RelayLinkStatus = 'connected' | 'offline' | 'daemon-absent'
  */
 type BaseDaemonEvent =
   | { type: 'replySuggestion'; conversationId: string; sessionId: string; revision: number; suggestedReply: string | null }
+  | { type: 'hostSystemPromptReceived'; requestId: string; operation: 'read' | 'write'; systemPrompt: string; defaultSystemPrompt: string }
+  | { type: 'hostSystemPromptFailed'; requestId: string; operation: 'read' | 'write' }
   | (ModelRefusalEvent & { conversationId: string })
   | { type: 'connecting' }
   | { type: 'connected'; ack: HelloAckPayload }

@@ -16,6 +16,7 @@
 // Imported by src/main and src/preload, which have no @shared path alias — hence the
 // relative import here and in those callers (see tsconfig.node.json).
 import type {
+  SetHostSystemPromptPayload,
   SendMessagePayload,
   ModalAnswerPayload,
   ModalCancelPayload,
@@ -344,6 +345,8 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * the boundary.
  */
 export type RendererCommand =
+  | { type: 'requestHostSystemPrompt'; serverId: string; requestId: string }
+  | { type: 'setHostSystemPrompt'; serverId: string; requestId: string; payload: SetHostSystemPromptPayload }
   | { type: 'sendMessage'; payload: SendMessagePayload }
   | { type: 'requestDebugBundle'; serverId?: string }
   | { type: 'requestSessionSettings'; payload: RequestSessionSettingsPayload }
@@ -543,6 +546,12 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       // Payload-required (#1222) — the neighbour's idiom verbatim, including why the
       // explicitly-`undefined` case is refused by the payload guard and not by the `in` check.
       return 'payload' in value && isRequestHistoryPayload(value.payload)
+    case 'requestHostSystemPrompt':
+    case 'setHostSystemPrompt':
+      return 'serverId' in value && 'requestId' in value && typeof value.serverId === 'string' && value.serverId.length > 0 && value.serverId.length <= 1024 &&
+        typeof value.requestId === 'string' && value.requestId.length > 0 && value.requestId.length <= 128 &&
+        (value.type === 'requestHostSystemPrompt' ||
+          ('payload' in value && typeof value.payload === 'object' && value.payload !== null && 'system_prompt' in value.payload && typeof value.payload.system_prompt === 'string'))
     case 'requestSystemPrompt':
       // Payload-required (#1230) — the neighbours' idiom verbatim, including why the
       // explicitly-`undefined` case is refused by the payload guard rather than by the `in` check.

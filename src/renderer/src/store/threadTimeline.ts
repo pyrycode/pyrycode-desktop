@@ -267,6 +267,8 @@ export type ThreadEvent =
   | {
       type: 'userText'
       received?: true
+      queuedMsgId?: number
+      sentNow?: boolean
       text: string
       createdAt?: number
       messageId?: string
@@ -329,7 +331,7 @@ export type ThreadEvent =
   // wire id. That is deliberate placement, not an omission: `undefined === ''` is false, so an id-less
   // echo is already unreachable from here, and a second guard in the reducer would defend a failure mode
   // the producer makes impossible.
-  | { type: 'dropUserText'; messageId: string }
+  | { type: 'dropUserText'; messageId: string; queuedMsgId?: number }
   // #1314: one thinking-token reading (#1312 decodes it, #1313 carried it to the window, this slice gives
   // it a consumer). The DaemonEvent carries `conversationId` beside the one render field; the ThreadEvent
   // this arm describes does not, so the id STOPS at the bridge — a filter + fresh literal (the `apiRetry` /
@@ -415,6 +417,20 @@ export interface LocalSendPending {
 
 /** The whole timeline state: ordered content + the coarse lifecycle phase + the five chrome scalars. */
 export interface TimelineState {
+  /** Client-owned identities; keys survive receipt settlement and history prepends. */
+  rowKeys?: readonly number[]
+  nextRowKey?: number
+  receivedQueueIds?: readonly number[]
+  localEchoes?: readonly {
+    rowKey: number
+    messageId: string
+    waiting: boolean
+    waitTurnId?: string
+    queuedMsgId?: number
+    afterKey?: number
+    released?: true
+    settled?: true
+  }[]
   /** Transient daemon failure; code is only compared to renderer-owned copy constants. */
   sessionError?: { code: string }
   /** Latest stopping report, retired only by a local optimistic send or timeline reset. */
@@ -574,31 +590,6 @@ function fillResult(
 }
 
 /**
- * #1213: drop the FIRST `userText` item carrying `messageId`, returning `items` UNCHANGED (same reference)
- * when nothing matches. `fillToolResult`'s discipline above, one shape over: a `removed` flag rather than
- * a bare `filter`, so an unmatched drop churns no selector and the reducer's same-reference contract holds.
- *
- * First-match-only, not filter-everything. Ids are unique in production — the composer mints one per send
- * — so the two agree on every real input; the narrower rule is the one that CANNOT surprise, since a single
- * operator click may never take two rows out of the transcript.
- *
- * The `kind === 'userText'` guard is what makes "only a user echo can ever be removed" structural rather
- * than conventional: no other item kind carries a `messageId` at all, so no daemon-authored row — a tool
- * call, a boundary, an assistant bubble — has a path to this branch whatever the wire says.
- */
-function removeUserEcho(items: readonly ThreadItem[], messageId: string): readonly ThreadItem[] {
-  let removed = false
-  const next = items.filter((item) => {
-    if (!removed && item.kind === 'userText' && item.messageId === messageId) {
-      removed = true
-      return false
-    }
-    return true
-  })
-  return removed ? next : items
-}
-
-/**
  * Pure reducer — no mutation, returns fresh state. `items` and `phase` are orthogonal: content
  * events never touch `phase`, `turnState` never touches `items`. Mirrors `reduceSession`: a
  * `switch` on the sealed union with an `assertNever` default, and same-reference returns when
@@ -611,13 +602,81 @@ function removeUserEcho(items: readonly ThreadItem[], messageId: string): readon
  * true; it is the narrower reading — "the chrome scalars are all daemon-sourced" — that no longer is.
  */
 export function reduceTimeline(state: TimelineState, event: ThreadEvent): TimelineState {
+  const keys = state.rowKeys ?? state.items.map((_, index) => index)
+  const echoes = state.localEchoes ?? []
+  if (event.type === 'userText' && event.received === true) {
+    if (event.queuedMsgId !== undefined && state.receivedQueueIds?.includes(event.queuedMsgId)) return state
+    const own = event.queuedMsgId === undefined
+      ? echoes.find(e => !!event.messageId && e.messageId === event.messageId)
+      : echoes.find(e => e.queuedMsgId === event.queuedMsgId) ??
+        echoes.find(e => e.queuedMsgId === undefined && !e.settled &&
+          !!event.messageId && e.messageId === event.messageId)
+    if (own !== undefined) {
+      if (own.settled) return state
+      if (own.queuedMsgId === undefined && event.queuedMsgId === undefined) {
+        return { ...state, localEchoes: echoes.map(e => e === own ? { ...e, settled: true } : e) }
+      }
+      const index = keys.indexOf(own.rowKey)
+      const item = state.items[index]
+      if (item === undefined) return state
+      const items = state.items.filter((_, i) => i !== index)
+      const rowKeys = keys.filter((_, i) => i !== index)
+      let insertion = items.length
+      if (own.waiting && event.sentNow !== true && own.afterKey !== undefined) {
+        const boundary = rowKeys.indexOf(own.afterKey)
+        if (boundary !== -1) {
+          insertion = boundary + 1
+          while (echoes.some(e => e.settled && e.afterKey === own.afterKey && e.rowKey === rowKeys[insertion])) insertion++
+        }
+      } else if (!own.waiting && event.sentNow !== true) insertion = index
+      items.splice(insertion, 0, item)
+      rowKeys.splice(insertion, 0, own.rowKey)
+      return { ...state, items, rowKeys, localEchoes: echoes.map(e => e === own ? {
+        ...e, queuedMsgId: e.queuedMsgId ?? event.queuedMsgId, settled: true
+      } : own.waiting && own.afterKey !== undefined && e.waiting && !e.settled && !e.released &&
+          e.afterKey === own.afterKey ? { ...e, afterKey: undefined, waitTurnId: undefined } : e) }
+    }
+  }
+  if (event.type === 'dropUserText') {
+    const own = echoes.find(e => e.messageId === event.messageId &&
+      (event.queuedMsgId === undefined || e.queuedMsgId === event.queuedMsgId))
+    if (own === undefined) return state
+    const index = keys.indexOf(own.rowKey)
+    return { ...state, items: state.items.filter((_, i) => i !== index),
+      rowKeys: keys.filter((_, i) => i !== index), localEchoes: echoes.filter(e => e !== own) }
+  }
   // Reject a held receipt before content or chrome sidecars can change anything.
   if (event.type === 'userText' && event.received === true &&
       event.messageId !== undefined && event.messageId !== '' &&
+      !(event.queuedMsgId !== undefined && echoes.some(e => e.messageId === event.messageId &&
+        e.queuedMsgId !== undefined && e.queuedMsgId !== event.queuedMsgId)) &&
       state.items.some(item => item.kind === 'userText' && item.messageId === event.messageId)) {
     return state
   }
   let next = reduceTimelineContent(state, event)
+  if (event.type !== 'reset' && next !== state) {
+    let nextRowKey = state.nextRowKey ?? state.items.length
+    const rowKeys = next.items.map((_, index) => keys[index] ?? nextRowKey++)
+    let localEchoes = echoes
+    if (event.type === 'userText' && event.received !== true && event.messageId) {
+      const lastTurnRow = [...state.items].reverse().find(item =>
+        item.kind === 'assistantText' || item.kind === 'toolCall' || item.kind === 'turnBoundary')
+      const running = lastTurnRow !== undefined && lastTurnRow.kind !== 'turnBoundary'
+      localEchoes = [...echoes, { rowKey: rowKeys[rowKeys.length - 1] ?? nextRowKey++, messageId: event.messageId,
+        waitTurnId: running ? lastTurnRow.turnId : undefined,
+        waiting: state.phase !== 'idle' || running }]
+    }
+    if (event.type === 'turnEnd') {
+      const afterKey = rowKeys[rowKeys.length - 1]
+      localEchoes = echoes.map(e => e.waiting && !e.settled && e.afterKey === undefined &&
+          (e.waitTurnId === undefined || e.waitTurnId === event.turnId)
+        ? { ...e, afterKey } : e)
+    }
+    next = { ...next, rowKeys, nextRowKey, localEchoes }
+    const receivedQueueIds = event.type === 'userText' && event.received === true && event.queuedMsgId !== undefined
+      ? [...(state.receivedQueueIds ?? []), event.queuedMsgId] : state.receivedQueueIds
+    if (receivedQueueIds !== undefined) next = { ...next, receivedQueueIds }
+  }
   const sessionError = event.type === 'sessionError' ? { code: event.code }
     : event.type === 'sessionErrorCleared' || event.type === 'reset' ||
       (event.type === 'sessionBoundary' && event.reason === 'clear') ||
@@ -896,39 +955,9 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
         // deep the running think is.
         thinkingTokens: state.thinkingTokens
       }
-    case 'dropUserText': {
-      // #1213: the operator cancelled the queued message this echo stood for, so the echo comes out. The
-      // ONE arm that removes an item; everything else here appends or coalesces.
-      //
-      // `items` is the ONLY thing this arm touches. Every chrome scalar and `phase` are carried unchanged,
-      // and each for its own reason rather than by symmetry:
-      //  - `stalled` follows `userText` / `sessionBoundary`: a renderer-sourced event is not daemon turn
-      //    activity, so it is not in AC2's clear set.
-      //  - `apiRetry` and `compacting` clear only on their own explicit wire falling edge, which this is not.
-      //  - `localSendPending` (#650) is the one worth stating. The `userText` arm OPENS the working
-      //    indicator's local window on the grounds that the arm firing and the composer accepting a submit
-      //    are the same fact. This arm is NOT a second `userText` producer, so that reasoning is untouched
-      //    — but it is also NOT the inverse of it, and must not be written as one: the window belongs to
-      //    whatever message is currently pending, and a drop says nothing about that. Clearing it here
-      //    would hide the indicator for a DIFFERENT message that genuinely is in flight. So it is carried,
-      //    and the daemon's next `turn_state` still owns the close.
-      //
-      // Same-reference on no match, via the helper — so a drop for an id this timeline never held (another
-      // conversation's echo, an item whose wire id matched nothing) churns no selector at all.
-      const items = removeUserEcho(state.items, event.messageId)
-      return items === state.items
-        ? state
-        : {
-            items,
-            phase: state.phase,
-            stalled: state.stalled,
-            apiRetry: state.apiRetry,
-            compacting: state.compacting,
-            resetting: state.resetting,
-            localSendPending: state.localSendPending,
-            thinkingTokens: state.thinkingTokens
-          }
-    }
+    case 'dropUserText':
+      // Local identity removal is handled before content reduction.
+      return state
     case 'sessionBoundary':
       // A whole boundary marker: fresh tail-append (never coalesced), `phase` untouched — the `userText` /
       // `turnEnd` discipline. Always a new `items` array (a fresh append is always a change). AC1. NOT in
@@ -1204,10 +1233,10 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
       // Nothing live to clear ⇒ the SAME state reference, so a first connect, or a reconnect with clean
       // chrome, churns no subscriber (the #415 `modalPrompts` shape).
       //
-      // Accepted residual: the daemon re-asserts only the outstanding modal (#877) and the queued
-      // backlog (#878) on connect — never `api_retry` / `compacting` / `turn_state` — so a status still
-      // genuinely live across the reconnect shows nothing until the daemon's next edge. A briefly-missing
-      // banner over a permanently-stuck one; do not engineer around it here.
+      // After replay, the daemon re-asserts a running turn's current `turn_state` without an event ID
+      // (pyrycode #2712). That later event restores the open conversation's phase; silence keeps idle
+      // when the turn ended offline. `api_retry` / `compacting` still have no connect-time reassertion,
+      // so those cleared statuses wait for their next wire edge.
       // #1314 is that classification for the seventh field, and it is Mode B: a thinking-token reading is
       // transient chrome about a turn that was running on the OTHER side of the disconnect, and the daemon
       // re-asserts no `thinking_progress` on connect. Held across the reconcile it would report the depth
@@ -1273,6 +1302,27 @@ export const selectLocalSendPending = (s: TimelineState): LocalSendPending | nul
  * no id leaves the window as it is. Same reference whenever nothing changes.
  */
 export function markLocalSendQueued(state: TimelineState, queued: readonly QueuedItem[]): TimelineState {
+  const claimed = new Set<number>()
+  const echoes = state.localEchoes ?? []
+  let changed = false
+  const localEchoes = echoes.map(e => {
+    if (e.settled && e.queuedMsgId === undefined) return e
+    const entry = e.queuedMsgId === undefined
+      ? queued.find(q => q.message_id === e.messageId && !claimed.has(q.queued_msg_id) &&
+          !echoes.some(other => other.queuedMsgId === q.queued_msg_id))
+      : queued.find(q => q.queued_msg_id === e.queuedMsgId)
+    if (entry) claimed.add(entry.queued_msg_id)
+    if (e.queuedMsgId === undefined && entry && !e.settled) {
+      changed = true
+      return { ...e, queuedMsgId: entry.queued_msg_id }
+    }
+    if (e.queuedMsgId !== undefined && !entry && !e.released) {
+      changed = true
+      return { ...e, released: true as const }
+    }
+    return e
+  })
+  if (changed) state = { ...state, localEchoes }
   const pending = state.localSendPending
   if (pending === null || pending.queued || pending.messageId === '') return state
   if (!queued.some(item => item.message_id === pending.messageId)) return state

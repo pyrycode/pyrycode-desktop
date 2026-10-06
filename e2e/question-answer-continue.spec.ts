@@ -9,25 +9,7 @@ import type {
   SetSessionSettingsPayload
 } from '../src/shared/wire/types'
 
-// Fake-stack UI e2e for the question panel's CONTINUE (#922) — the panel's last inert control, and the
-// only place this slice's wiring can be proven at all. Renderer specs here are static server renders
-// (`environment: 'node'`, no jsdom, no @testing-library), so the pure half — assembling the entries and
-// deciding answerability, which are one function — is covered in questionResolution.test.ts and the
-// disabled matrix in QuestionPanel.test.tsx, but nothing there can click.
-//
-// THIS SPEC EXISTS FOR THE CONJUNCTION AS MUCH AS FOR THE FRAME. The trailing control is ONE element in
-// two roles: Next on every earlier question, Continue on the last. Gating it on batch completeness alone
-// would disable Next on any incomplete batch — stranding the operator on question 1, unable to reach
-// question 2 to answer it, so the batch could never become complete and the panel would deadlock. The
-// whole drive below is shaped to make that failure visible: it steps through a batch with NOTHING
-// answered before it answers anything.
-//
-// SECRET HYGIENE, the #921 rule unchanged. `question_answer` carries an `answer_token` beside the batch
-// id — minted MAIN-side by daemonConnection.answerQuestions, never composed or held by the renderer. The
-// capture below NARROWS at capture time to the type, the batch id and the entries, so no spec array, no
-// `toEqual` diff and no failure diagnostic can ever hold or print one. That is also why nothing here
-// asserts the payload's exact key set: correct code sends three fields and the third is the token.
-
+// Fake transport proves native interactions; captures contain synthetic content only.
 const ROUNDTRIP_TIMEOUT_MS = 15_000
 
 const REPLY_ENVELOPE_ID = 1
@@ -40,7 +22,6 @@ const BATCH_ID = 'question-batch-answered'
 // question-picks precedent): e2e is outside every tsconfig and importing a .tsx module would drag React
 // through Playwright's transform for a handful of string literals.
 const CONTINUE_COPY = 'Continue'
-const NEXT_COPY = 'Next'
 const OTHER_PLACEHOLDER = 'Other. Type something.'
 
 const DRAFT = 'a half-typed message the answer must not eat'
@@ -161,165 +142,35 @@ const MODELS = ['sonnet', 'opus', 'haiku'].map((value) => ({
   effort_levels: ['low', 'high'], supports_auto_mode: true, truncated_fields: null
 }))
 
-test('question panel: Continue waits for a complete batch, then sends every answer and clears', async ({
-  launchPairedApp
-}) => {
-  const captured: CapturedAnswer[] = []
-  const settings: { id: number; payload: SetSessionSettingsPayload }[] = []
-  const types: string[] = []
-  const { page, daemon, app } = await launchPairedApp({
-    buildReplyFrames: capturingAnswerFake(captured, settings, types)
-  })
-
-  const panel = page.locator('.question-panel')
-  const composer = page.getByPlaceholder('Message…')
-  // The ONE trailing element, located by its class rather than by either copy — that is what lets an
-  // assertion follow it across both roles and catch a split into two branched elements.
-  const trailing = panel.locator('.question-panel__continue')
-  // Tabs are scoped to the title row: since #915 a tab is also a `<button>`, so a panel-wide role match
-  // would mix them with the action row's three.
-  const tab = (header: string) =>
-    panel.locator('.question-panel__labels').getByRole('button', { name: header })
-  const optionRow = (label: string) =>
-    panel.locator('.question-panel__option').filter({ hasText: label })
-  const otherField = panel.getByRole('textbox', { name: OTHER_PLACEHOLDER })
-  const otherTick = panel.locator('.question-panel__other-control')
-
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(800, 600))
-  daemon.pushFrame(frame('model_list', { conversation_id: CONVERSATION_ID, models: MODELS, dropped_models: 0 }))
+test('inline Continue validates every question and sends ordered, trimmed answers optimistically', async ({ launchPairedApp }) => {
+  const captured: CapturedAnswer[] = [], settings: { id: number; payload: SetSessionSettingsPayload }[] = [], types: string[] = []
+  const { page, daemon } = await launchPairedApp({ buildReplyFrames: capturingAnswerFake(captured, settings, types) })
+  const panel = page.locator('.question-batch'), cards = panel.locator('.question-batch__question')
+  const composer = page.getByPlaceholder('Message…'), continueButton = panel.getByRole('button', { name: 'Continue', exact: true })
   await composer.fill(DRAFT)
   daemon.pushFrame(questionShownFrame())
-  await expect(panel).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
-  // #1099: the panel sits in the composer's slot and, like the composer, paints no ground of its own — the
-  // pane card shows through both. Pinned here because this tier is the only one that can put the panel on
-  // screen; paired-shell-card.spec.ts pins the composer's half.
-  expect(await panel.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe('rgba(0, 0, 0, 0)')
-  // Non-vacuity anchor: nothing has been sent before the drive below.
-  expect(captured).toHaveLength(0)
-
-  // AC2 — STEPPING IS NEVER GATED ON WHAT HAS BEEN PICKED, and this runs first, on a batch with nothing
-  // answered at all. If the gate were `disabled={!canAnswer}` rather than the conjunction, the panel
-  // would be deadlocked right here and every assertion below would be unreachable.
-  await expect(trailing).toHaveText(NEXT_COPY)
-  await expect(trailing).toBeEnabled()
-  await trailing.click()
-  await expect(panel.locator('.question-panel__question')).toHaveText(QUESTIONS[1].question)
-  await expect(trailing).toHaveText(NEXT_COPY)
-  await expect(trailing).toBeEnabled()
-  await trailing.click()
-
-  // AC1 — the last question, and the batch holds nothing: the same element now reads Continue and is
-  // unavailable.
-  await expect(panel.locator('.question-panel__question')).toHaveText(QUESTIONS[2].question)
-  await expect(trailing).toHaveText(CONTINUE_COPY)
-  await expect(trailing).toBeDisabled()
-
-  // Answering ONLY this question is not enough — the gate is over the whole batch, not the one on screen.
-  // This is the partial the daemon would reject totally and silently, so it must stay unsendable.
-  await optionRow('Today').click()
-  await expect(trailing).toBeDisabled()
-
-  // Answer the first question, come back, and it is STILL unavailable: the middle one is untouched.
-  await tab('Language').click()
-  await optionRow('Elixir').click()
-  await tab('Timing').click()
-  await expect(trailing).toBeDisabled()
-
-  // The multi-select question, and the one entry that proves three separate rules at once. Ticked
-  // BOTTOM-UP (Neither before Tabs) so the sent order cannot be click order, plus Other text padded on
-  // both sides and ticked. On a non-last question the trailing button is Next and enabled throughout,
-  // gate or no gate.
-  await tab('Style').click()
-  await expect(trailing).toHaveText(NEXT_COPY)
-  await expect(trailing).toBeEnabled()
-  await optionRow('Neither').click()
-  await optionRow('Tabs').click()
-  // Typing ticks Other (#1698), so no click on the row: one would flip it back off.
-  await otherField.fill(OTHER_TYPED)
-
-  // Model changes preserve the active middle question and every in-progress answer.
-  const footer = page.locator('.composer__footer:visible')
-  const model = footer.locator('.composer__model-label')
-  await expect(footer.getByRole('button')).toHaveCount(1)
-  await expect(composer).toBeHidden()
-  const beforeTypes = types.length
-  await footer.getByRole('button', { name: 'Sonnet', exact: true }).click()
+  await expect(cards).toHaveCount(3)
+  await expect(page.locator('.conversation__thread .question-batch')).toHaveCount(1)
+  await expect(composer).toBeVisible()
+  await expect(continueButton).toBeDisabled()
+  await cards.nth(0).getByRole('radio', { name: /Elixir/ }).press('Space')
+  await cards.nth(1).getByRole('checkbox', { name: /Neither/ }).press('Space')
+  await cards.nth(1).getByRole('checkbox', { name: /Tabs/ }).press('Space')
+  await cards.nth(1).getByRole('textbox').fill(OTHER_TYPED)
+  await expect(continueButton).toBeDisabled()
+  await cards.nth(2).getByRole('textbox').fill('   ')
+  await expect(continueButton).toBeDisabled()
+  await cards.nth(2).getByRole('radio', { name: /Today/ }).press('Space')
+  await expect(continueButton).toBeEnabled()
+  daemon.pushFrame(frame('model_list', { conversation_id: CONVERSATION_ID, models: MODELS, dropped_models: 0 }))
+  await page.locator('.composer__footer .composer__model').click()
   await page.getByRole('menuitem', { name: 'Opus', exact: true }).click()
   await expect.poll(() => settings.length).toBe(1)
   expect(settings[0].payload).toEqual({ session_id: 'question-session', model: 'opus' })
-  await expect(model).toHaveText('Opus')
-  await expect(panel.locator('.question-panel__question')).toHaveText(QUESTIONS[1].question)
-  await expect(otherField).toHaveValue(OTHER_TYPED)
-  await expect(otherTick.locator('input')).toBeChecked()
-  expect(captured).toHaveLength(0)
-  expect(types.slice(beforeTypes).filter((type) =>
-    ['send_message', 'question_answer', 'question_refused'].includes(type))).toEqual([])
   daemon.pushFrame(frame('session_settings_updated', { session_id: 'question-session' }, settings[0].id))
-
-  // Keyboard access and a correlated rejection use the same settings lifecycle.
-  const trigger = footer.getByRole('button', { name: 'Opus', exact: true })
-  await trailing.focus()
-  await page.keyboard.press('Tab')
-  await expect(trigger).toBeFocused()
-  await page.keyboard.press('Enter')
-  const haiku = page.getByRole('menuitem', { name: 'Haiku', exact: true })
-  await page.keyboard.press('ArrowDown')
-  await expect(haiku).toBeFocused()
-  await page.keyboard.press('Enter')
-  await expect.poll(() => settings.length).toBe(2)
-  expect(settings[1].payload).toEqual({ session_id: 'question-session', model: 'haiku' })
-  await expect(model).toHaveText('Haiku')
-  daemon.pushFrame(frame('rate_limited', {
-    conversation_id: CONVERSATION_ID, status: 'allowed_warning', limit_type: 'seven_day', resets_at: 4102444800, truncated_fields: null
-  }))
-  daemon.pushFrame(frame('error', {}, settings[1].id))
-  const error = page.locator('.composer-status').getByRole('alert')
-  await expect(model).toHaveText('Opus')
-  await expect(error).toHaveText('Could not change the model — try again.')
-  // The usage warning is a Top overlay pill, so the settings error in the slot no longer holds it back.
-  const usage = page.locator('.conversation__top-overlay .top-overlay-pill--default')
-  await expect(usage).toBeVisible()
-  await expect.poll(() => page.locator('.composer-status').evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(0)
-  await expect(otherField).toHaveValue(OTHER_TYPED)
-  await expect(panel.locator('.question-panel__question')).toHaveText(QUESTIONS[1].question)
-  const box = await footer.boundingBox()
-  expect(box).not.toBeNull()
-  expect(box!.x).toBeGreaterThanOrEqual(0)
-  expect(box!.x + box!.width).toBeLessThanOrEqual(800)
-  await page.screenshot({ path: '/tmp/1252-question-model-footer.png' })
-
-  // A fresh model dispatch clears the error; the usage pill stays where it was.
-  await trigger.click()
-  await page.getByRole('menuitem', { name: 'Sonnet', exact: true }).click()
-  await expect.poll(() => settings.length).toBe(3)
-  await expect(error).toHaveCount(0)
-  await expect(usage).toBeVisible()
-  daemon.pushFrame(frame('session_settings_updated', { session_id: 'question-session' }, settings[2].id))
-
-  expect(settings[2].payload).toEqual({ session_id: 'question-session', model: 'sonnet' })
-  expect(types.slice(beforeTypes).filter((type) =>
-    ['send_message', 'question_answer', 'question_refused'].includes(type))).toEqual([])
-
-  // AC1's second half — available the moment every question holds a value.
-  await tab('Timing').click()
-  await expect(trailing).toHaveText(CONTINUE_COPY)
-  await expect(trailing).toBeEnabled()
-
-  await trailing.click()
-
-  // AC3 — exactly one `question_answer`, and its entries asserted WHOLE. `toEqual` on the narrowed record
-  // is what makes the assertion honest without touching the token: one entry per question, each naming
-  // its question by index, labels in claude's display order rather than the operator's click order, and
-  // the Other text trimmed, carried as its own value and placed last.
-  await expect
-    .poll(() => captured, { timeout: ROUNDTRIP_TIMEOUT_MS })
-    .toEqual([{ type: 'question_answer', questionBatchId: BATCH_ID, answers: EXPECTED_ANSWERS }])
-
-  // AC4 — the panel clears through #921's path and the composer comes back underneath with the draft
-  // untouched. The clear is LOCAL and optimistic: no daemon frame has answered at this point, so a panel
-  // that waited for one would still be up here.
-  await expect(panel).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
-  await expect(composer).toBeVisible()
+  await expect(cards.nth(1).getByRole('textbox')).toHaveValue(OTHER_TYPED)
+  await continueButton.click()
+  await expect.poll(() => captured).toEqual([{ type: 'question_answer', questionBatchId: BATCH_ID, answers: EXPECTED_ANSWERS }])
+  await expect(panel).toHaveCount(0)
   await expect(composer).toHaveValue(DRAFT)
-  expect(captured).toHaveLength(1)
 })

@@ -301,6 +301,8 @@ export function translateModalEvent(
       // other sink on any path, and `reason`, a client-owned literal. A missing case would put the
       // former into an Error message, a stack trace and a crash reporter. These cases keep it out.
       return null
+    case 'hostSystemPromptReceived':
+    case 'hostSystemPromptFailed':
     case 'systemPromptReceived':
       // No modal-store action (#1230). The transport owns the ask, the correlation and the decode; the store that
       // holds a conversation's system prompt is #1231's, in the announcedModelBridge /

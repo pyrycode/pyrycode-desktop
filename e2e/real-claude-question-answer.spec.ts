@@ -119,15 +119,14 @@ const META_SELECTOR = '.bubble__meta'
 // SEPARATELY from `__option-description`: comparing against whole option rows would let description prose
 // corrupt the ordering check below. It is also what tells a real option row from the trailing Other row,
 // which is a `.question-panel__option` carrying no `__option-label` child.
-const PANEL = '.question-panel'
+const PANEL = '.question-batch'
 const OPTION_LABEL = '.question-panel__option-label'
 const TRAILING = '.question-panel__continue'
-const TAB = '.question-panel__labels button'
+const CARD = '.question-batch__question'
 // The panel's client-owned copy, re-declared spec-local rather than imported from QuestionPanel.tsx (the
 // #922 precedent): e2e is outside every tsconfig and importing a .tsx module would drag React through
 // Playwright's transform for two string literals.
 const CONTINUE_COPY = 'Continue'
-const NEXT_COPY = 'Next'
 
 // --- Timeouts ----------------------------------------------------------------
 // Generous to absorb real daemon startup latency plus a handshake re-dial or two; Send-enabled is the
@@ -295,11 +294,8 @@ test('real claude changes model during a question and resumes with the original 
   const sendButton = page.getByRole('button', { name: 'Send' })
   const composer = page.getByPlaceholder('Message…')
   const panel = page.locator(PANEL)
-  const optionLabels = panel.locator(OPTION_LABEL)
-  // The ONE trailing element, located by its class rather than by either copy — that is what lets the drive
-  // follow it across both of its roles (Next on every question but the last, Continue on the last).
   const trailing = panel.locator(TRAILING)
-  const tabs = panel.locator(TAB)
+  const cards = panel.locator(CARD)
 
   await pairFromUnpairedLaunch(page, payload)
 
@@ -360,7 +356,7 @@ test('real claude changes model during a question and resumes with the original 
   expect(targetIndex, 'daemon must publish a different non-empty Opus model').toBeGreaterThanOrEqual(0)
   const target = visibleModels[targetIndex]
   const acceptedBefore = await page.evaluate(() => (window as unknown as EvidenceWindow).questionModelEvidence.accepted)
-  await page.locator('.composer__footer:visible').getByRole('button').click()
+  await page.locator('.composer__footer:visible .composer__model').click()
   const modelMenu = page.getByRole('menu', { name: 'Model', exact: true })
   await expect(modelMenu.getByRole('menuitem')).toHaveCount(visibleModels.length)
   const targetItem = modelMenu.getByRole('menuitem').nth(targetIndex)
@@ -376,12 +372,8 @@ test('real claude changes model during a question and resumes with the original 
   expect(preserved, 'model change must preserve the original outstanding batch').toBe(true)
   await expect(panel).toBeVisible()
 
-  // The batch's question count, read from the tab row. ONE question draws a bare <span> and no tabs at all,
-  // which is why this floors at 1. The trigger asks for one question; CLAUDE DECIDES, and the drive below
-  // does not assume it got one — the trailing control only enables once EVERY question holds a value, and
-  // the daemon rejects an entry count that is not exactly the parked question count before assembling
-  // anything.
-  const questionCount = Math.max(await tabs.count(), 1)
+  // Answer every inline card; the daemon decides how many questions to ask.
+  const questionCount = await cards.count()
 
   // The focus question's choice, captured BEFORE anything is clicked and made from the surfaced batch —
   // never from the trigger, which names no option.
@@ -389,13 +381,7 @@ test('real claude changes model during a question and resumes with the original 
   let unchosen: string[] = []
 
   for (let index = 0; index < questionCount; index += 1) {
-    // The step barrier: the active tab carries aria-current="true", so this is what proves the previous
-    // Next landed and the rows below belong to THIS question rather than the last one. Same React commit,
-    // so tab and rows cannot disagree. Skipped for a single-question batch, which has no tabs.
-    if (questionCount > 1) {
-      await expect(tabs.nth(index)).toHaveAttribute('aria-current', 'true')
-    }
-
+    const optionLabels = cards.nth(index).locator(OPTION_LABEL)
     const labels = (await optionLabels.allTextContents()).map((label) => label.trim())
     if (index === 0) {
       // --- AC1, second half: the batch is ANSWERABLE, asserted before anything is clicked. A batch that
@@ -425,10 +411,7 @@ test('real claude changes model during a question and resumes with the original 
     // it. Locating the ROW instead would also match the trailing Other row, which offers no label.
     await optionLabels.nth(labels.length - 1).click()
 
-    if (index < questionCount - 1) {
-      await expect(trailing).toHaveText(NEXT_COPY)
-      await trailing.click()
-    }
+
   }
 
   // --- AC2, first half: the batch is complete, so the trailing control is now Continue and available. ---

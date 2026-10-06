@@ -70,7 +70,7 @@ describe('dropQueuedMessage', () => {
       dispatchFor
     })
 
-    const expected: ThreadEvent = { type: 'dropUserText', messageId: 'wire-id-9' }
+    const expected: ThreadEvent = { type: 'dropUserText', messageId: 'wire-id-9', queuedMsgId: 7 }
     expect(dispatch).toHaveBeenCalledTimes(1)
     expect(dispatch).toHaveBeenCalledWith(expected)
     // The keyed holder is the second place submitMessage wrote the echo (#756). A removal reaching only

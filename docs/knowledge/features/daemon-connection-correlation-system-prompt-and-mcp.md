@@ -4,6 +4,48 @@ Split out of [Daemon connection correlation](daemon-connection-correlation.md) f
 read/write, workspace renaming, MCP-status requests and actuation, background-task stops, and
 conversation-mute writes.
 
+## Host system prompt read/write correlation
+
+The [Edit host dialog](edit-host-dialog.md) uses host-wide commands independently
+of the conversation system-prompt maps below. `pendingHostPromptReads` and
+`pendingHostPromptWrites` each map an envelope id to `{ requestId, timer }`.
+Both draw ids from the connection's monotonic sequence. The daemon supplies no
+host, conversation or session identifier in the reply; correlation and the
+main-owned server stamp are the only attribution sources. See the
+[protocol contract](inbound-message-decode-payloads.md#daemon-wide-host-system-prompt).
+
+`sendHostPrompt` checks authentication/driver availability and refuses an
+over-limit UTF-8 write before sending. It builds a fresh read `{}` or write
+`{ system_prompt }` payload, excluding renderer routing/correlation metadata and
+extra fields. It registers the pending entry and 15-second timer before calling
+`driver.sendMessage`, so a synchronous response can match. A build/send throw
+removes the entry, clears its timer and emits fixed failure; the spent envelope
+id is not reused.
+
+The validated `host-system-prompt` inbound kind requires `inReplyTo` to match
+one pending map. `takeHostPrompt` clears the timer and consumes the entry once,
+then emits `hostSystemPromptReceived { requestId, operation, systemPrompt,
+defaultSystemPrompt }`. Writes succeed only through this durable reply; there
+is no separate ack. Missing/unrelated/duplicate correlation emits nothing.
+Replies contain only the two required, inclusively byte-bounded strings;
+null/missing/mistyped/oversized values fail decoding rather than entering IPC.
+A malformed reply leaves the wait to its deadline unless connection loss ends it.
+
+Correlated daemon errors consume the corresponding read/write entry before
+other error consumers, regardless of error code. Route refusal, unavailable
+driver, local byte refusal, send failure, timeout, daemon rejection and connection
+loss produce `hostSystemPromptFailed { requestId, operation }`, with no daemon
+message or exception text. There is no automatic retry. Logs carry fixed names
+and classification/operation only, never prompt/default text or request ids.
+
+`abandonHostPrompts` fails all pending operations and clears timers/maps on link
+loss, terminal/failure, stop and fresh dial (including connection replacement).
+The driver generation rejects old socket callbacks. Clearing both maps matters:
+otherwise a late reply could settle a request after reconnect under a recycled
+envelope id. The registry's lifecycle-free facade delegates both host methods;
+it does not own another correlation store. The dialog separately guards its
+interaction and operation lifetime before treating an outcome as current.
+
 # System-prompt read correlation (#1230)
 
 An eighth correlation store, the `pendingConfigRequests` shape exactly:

@@ -2542,6 +2542,40 @@
   font-weight: var(--text-body-small-weight);
 }
 
+
+/* Host prompt follows the channel textarea, with the reset beside muted helper copy. */
+.edit-host__prompt { display: flex; flex-direction: column; gap: var(--space-2); }
+.edit-host__textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-4);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--color-on-primary) 41%, transparent);
+  color: var(--color-on-surface);
+  font: inherit;
+  resize: vertical;
+  field-sizing: content;
+  min-height: calc(4 * var(--text-body-medium-line) + 2 * var(--space-4));
+  max-height: calc(14 * var(--text-body-medium-line) + 2 * var(--space-4));
+  overflow-wrap: break-word;
+}
+.edit-host__textarea:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.edit-host__textarea:disabled { opacity: 0.38; }
+.edit-host__helper-row { display: flex; align-items: center; gap: var(--space-4); }
+.edit-host__helper {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+.edit-host__reset { flex-shrink: 0; margin-left: auto; }
+
 /* Figma sidebar menu shows the darker option hover within its on-primary surface. */
 .channel-list__actions .composer-options__item:hover:not(.composer-options__item--unavailable) {
   background: var(--color-on-primary-fixed);

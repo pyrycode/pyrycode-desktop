@@ -99,7 +99,7 @@ export function dropQueuedMessage(
   // reference across the two stores is safe because `reduceTimeline` is pure and always builds fresh
   // arrays. The keyed write is folded under the conversation the drop was issued against, which is the
   // same conversation the echo was written to — this window can only drop a row it is looking at.
-  const removal: ThreadEvent = { type: 'dropUserText', messageId: message_id }
+  const removal: ThreadEvent = { type: 'dropUserText', messageId: message_id, queuedMsgId: queued_msg_id }
   deps.dispatch(removal)
   deps.dispatchFor(conversation_id, removal)
 }

@@ -13148,3 +13148,25 @@ describe('session_error IPC emission', () => {
     connection.stop()
   })
 })
+
+describe('reply suggestion IPC', () => {
+  it('forwards only validated named fields and drops invalid suggestion frames', async () => {
+    const ctx = build({ serverId: 'srv-1' })
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    ctx.sink.send.mockClear()
+    const payload = { conversation_id: 'c', session_id: 's', revision: 4, suggested_reply: 'Private display text' }
+    const emit = (value: unknown) => ctx.drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({
+      id: 91, type: 'reply_suggestion', ts: FIXED_TS, payload: value
+    }) })
+    emit({ ...payload, raw: 'must not cross' })
+    emit({ ...payload, suggested_reply: '' })
+    emit({ ...payload, revision: 5, suggested_reply: null })
+    expect(ctx.sink.send.mock.calls.map(call => call[1])).toEqual([
+      { type: 'replySuggestion', conversationId: 'c', sessionId: 's', revision: 4, suggestedReply: payload.suggested_reply, serverId: 'srv-1' },
+      { type: 'replySuggestion', conversationId: 'c', sessionId: 's', revision: 5, suggestedReply: null, serverId: 'srv-1' }
+    ])
+    ctx.connection.stop()
+  })
+})

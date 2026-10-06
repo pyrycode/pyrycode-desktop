@@ -174,6 +174,7 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
     case 'backgroundTaskUpdated':
     case 'backgroundTaskRoster':
     case 'backgroundTaskProgress':
+    case 'replySuggestion': // Transient composer state; exclude text from exhaustive errors.
     case 'sessionFacts': // Informational only; the session-facts bridge owns retention.
     case 'mcpStatus': // Informational only; the MCP status bridge owns retention.
     case 'mcpStatusRequestRejected': // The channel info sheet's notice owns this (#1579).

@@ -64,6 +64,6 @@ None. The pane-local counter is the simplest focus wiring: it avoids adding tran
 
 ## Documentation handoff
 
-- Pending for documentation stage: `docs/knowledge/features/conversation-shell-message-bubble.md`, The copy control — describe reply below copy on both sides, streaming source, queued exclusion, accessible name, icon/token, stack spacing and hit targets.
-- Pending for documentation stage: `docs/knowledge/features/composer-send.md`, The controlled composer — describe literal full-source quote format, attachment exclusion, host/conversation draft retention and repeated append, offline drafting, one-time focus/caret placement after permission coverage clears, chat-switch cancellation, and existing submission trimming.
-- Pending for documentation stage: carry the app-local SVG/CSP lesson into the message-bubble topic and distinguish draft isolation from the history-persistence limitation tracked in #1811.
+- Satisfied: [Message bubble — The copy control](../../knowledge/features/conversation-shell-message-bubble.md#the-copy-control) describes reply below copy on both sides, streaming source, queued exclusion, accessible name, icon/token, stack spacing and hit targets.
+- Satisfied: [Composer send](../../knowledge/features/composer-send.md) maps to [The controlled composer](../../knowledge/features/composer-send-internals.md#3-the-controlled-composer--conversationscreentsx), moved during the size-cap split. It describes literal full-source quote format, attachment exclusion, host/conversation draft retention and repeated append, offline drafting, one-time focus/caret placement after permission coverage clears, chat-switch cancellation and existing submission trimming.
+- Satisfied: the message-bubble topic carries the app-local SVG/CSP lesson; its Testing section and the controlled-composer section distinguish draft isolation from the history-persistence limitation tracked in #1811.

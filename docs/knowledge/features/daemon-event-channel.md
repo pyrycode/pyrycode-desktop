@@ -196,7 +196,7 @@ activity leaves it unknown. Explicit transitions remain authoritative, and retai
 watermarks prevent stale text returning if identity later cycles back to a session.
 
 Every invalidation leaves other hosts/conversations and the independent
-[retained drafts](composer-send.md#3-the-controlled-composer--conversationscreentsx) intact, including
+[retained drafts](composer-send-internals.md#3-the-controlled-composer--conversationscreentsx) intact, including
 text already accepted with Tab. See the [message-box behavior and coverage](conversation-shell-composer-message-box.md#suggested-next-reply)
 and [revised plan](../../specs/architecture/1761-reply-suggestion.md#revisions).
 

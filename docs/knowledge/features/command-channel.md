@@ -131,7 +131,7 @@ carry none. Unlike `answerQuestions`'s entries, elements here are checked for no
 shape: the canonical lowercase-UUIDv4 check is a deliberate omission, left to the daemon (the
 `RequestAttachmentPayload` precedent — *documented, not validated* on this side), since the only producer
 is the window echoing back ids this process itself minted with `randomUUID()`. See [Composer send §
-10](composer-send.md#10-attachments-named-on-the-outbound-frame---takeattachments-1039-reworked-by-1055)
+10](composer-send-internals.md#10-attachments-named-on-the-outbound-frame--takeattachments-1039-reworked-by-1055)
 for the sender side.
 
 The union gained a `requestModelList` member in [#1165](https://github.com/pyrycode/pyrycode-desktop/issues/1165):

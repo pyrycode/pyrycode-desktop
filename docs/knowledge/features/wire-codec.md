@@ -1,6 +1,6 @@
 # Wire codec
 
-The **serialization layer** of the transport: pure functions that turn the shared wire types into — and back from — the daemon's on-the-wire bytes, **byte-identical to what pyrycode-mobile sends**. Encode is total; the two `decode*` functions are the network trust boundary and **fail closed**. Lives entirely in the Electron **background process** (`src/main/transport/codec.ts`), never the renderer.
+The **serialization layer** of the transport: pure functions that turn the shared wire types into — and back from — the daemon's on-the-wire bytes, using the same wire format as pyrycode-mobile. Desktop supplies its own client identity, feature report and capabilities. Encode is total; the two `decode*` functions are the network trust boundary and **fail closed**. Lives entirely in the Electron **background process** (`src/main/transport/codec.ts`), never the renderer.
 
 Introduced in [#5](../codebase/5.md). It sits *on top of* the [relay connection](relay-connection.md) (#21, the opaque byte pipe) and *under* the Noise session (#7, which encrypts the bytes this codec produces). The wire *types* it (de)serializes already existed ([#21 foundation](../codebase/21.md), `src/shared/wire/types.ts`); this ticket adds only the encode/decode. The daemon does not care which client speaks it, so a byte mismatch — a dropped default, an emitted `null`, the wrong base64 alphabet, or a silently-truncated decode — breaks the contract **silently** ([ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md); CLAUDE.md).
 
@@ -51,8 +51,35 @@ Taken directly from mobile's `NoiseSessionPump` + `OkHttpRelayTransport`:
 Mobile relies on Kotlin runtime defaults (`encodeDefaults = true`). TS interfaces carry no runtime defaults, so "always emit defaults" (AC #3) is split by how each field is enforced:
 
 - **Literal-typed fields enforce themselves.** `InnerFrameV2.v: 2` and `HelloClientPayload.role: 'client'` are literal types — you cannot construct the object without them, so `JSON.stringify` always emits them. **No runtime injector.**
-- **Non-literal defaults need one constructor.** `makeHelloClientPayload` injects `protocol_versions: ['v2']` (reusing `PROTOCOL_VERSION` from `types.ts`). `capabilities` is a caller argument defaulting to `[]`; production `loadDialConfig` in `daemonConnection` supplies `[CAPABILITY_INTERACTIVE, CAPABILITY_MULTI_AGENT]` (`['interactive', 'multi_agent']`) through [hello exchange](hello-exchange.md). `interactive` enables the structured stream; `multi_agent` unlocks Codex conversations, frames and model rows on supporting v0.27.0+ daemons. The advertised set belongs at the caller: the [capability probe](real-claude-liveness-e2e.md#capability-gated-skip--the-one-check-that-runs-after-the-daemon-exists) supplies exactly its spec's required set. Optional `lastEventId` and legacy `lastSeenTs` become `last_event_id` and `last_seen_ts` only when provided, never `null`. `HelloClientPayload` is the only encode-side payload with non-literal defaults, so it has one constructor. `Envelope` has no defaulted fields; callers build it directly.
+- **Non-literal defaults need one constructor.** `makeHelloClientPayload` injects `protocol_versions: ['v2']` (reusing `PROTOCOL_VERSION` from `types.ts`) and the fixed `client_features` report below. `capabilities` is a caller argument defaulting to `[]`; production `loadDialConfig` in `daemonConnection` supplies `['interactive', 'multi_agent', 'stop_background_task']` through [hello exchange](hello-exchange.md). `interactive` enables the structured stream; `multi_agent` unlocks Codex conversations, frames and model rows on supporting v0.27.0+ daemons; `stop_background_task` detects support for that verb. The advertised set belongs at the caller: the [capability probe](real-claude-liveness-e2e.md#capability-gated-skip--the-one-check-that-runs-after-the-daemon-exists) supplies exactly its spec's required set. Optional `lastEventId` and legacy `lastSeenTs` become `last_event_id` and `last_seen_ts` only when provided, never `null`. `HelloClientPayload` is the only encode-side payload with non-literal defaults, so it has one constructor. `Envelope` has no defaulted fields; callers build it directly.
 - **`client_version` gets an app-name prefix, added once, here.** `input.clientVersion` is the bare app version (`app.getVersion()`, e.g. `"0.1.0"`); the constructor writes `client_version` as `` `${CLIENT_APP_NAME}/${input.clientVersion}` `` (`CLIENT_APP_NAME = 'pyrycode-desktop'`), the `<app>/<MAJOR>.<MINOR>.<PATCH>` format the daemon parses (pyrycode `docs/protocol-mobile.md` § `hello`, "`client_version` format"; \#1612). The prefix is added inside this constructor rather than by the caller because the same bare `clientVersion` also feeds the relay `User-Agent` header and the session-start log banner, and prefixing it upstream would double-prefix both (see [daemon connection lifecycle](daemon-connection-lifecycle.md) `clientVersion` field). Once a daemon release enforces a minimum `client_version` it cannot parse, an unprefixed hello is rejected — desktop shipped this format ahead of that gate.
+
+### Desktop feature report
+
+`HelloClientPayload.client_features?: string` mirrors the daemon's optional v2
+plain-text self-report. `makeHelloClientPayload` always injects its private
+module-level `CLIENT_FEATURES` constant; neither its input nor `ClientHelloInput`
+offers an override. `buildClientHello` serializes it automatically on the first
+dial, supervisor-provider reload and explicit reconnect. The exact current text is:
+
+```text
+Markdown links to absolute paths of markdown files under the daemon's served folders open in-app. Paths with spaces need angle brackets: [Note](</Users/me/My Vault/note.md>). Bare paths in backticks do not open. Attached files and photos upload to the daemon; on Send, Claude receives daemon-host paths and instructions to read them, not inline content.
+```
+
+The value is one line of 353 UTF-8 bytes, without a trailing newline. It fits the
+daemon's independent prompt-admission limit of 512 UTF-8 bytes and contains no C0
+(U+0000–U+001F), DEL (U+007F), C1 (U+0080–U+009F) or double quote (U+0022).
+These constraints apply to the decoded string, not its JSON field syntax.
+The daemon owns admission; the client pins this fixed report in tests rather than
+adding a runtime validator or rejection path. See the daemon's
+[handshake contract](https://github.com/pyrycode/pyrycode/blob/main/docs/knowledge/features/protocol-package-handshake-control-payloads.md).
+
+The report describes UI behavior for Claude's prompt; it does not negotiate
+capabilities or grant file access. Capability defaults and caller-supplied sets
+remain independent. Its example path is inert text. The constant and serialization
+stay in the main process, with no renderer input or new logging. For independent
+encoded-text and production dial-path coverage, see
+[hello exchange testing](hello-exchange.md#testing).
 
 ### Omit-absent-optionals, without `null` (AC #3)
 

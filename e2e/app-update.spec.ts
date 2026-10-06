@@ -20,7 +20,7 @@ async function inject(app: PairedApp, state: 'ready' | 'failed') {
     })
     const calls: boolean[][] = []
     const controller = createAppUpdateController({ isPackaged: true, platform: 'win32', construct: () => updater,
-      beforeInstall: async () => {}, log: { event: () => {} } })
+      beforeInstall: async () => {}, onInstallFailure: () => {}, log: { event: () => {} } })
     ipcMain.removeHandler('pyry:app-update-state'); ipcMain.removeAllListeners('pyry:app-update-action')
     registerAppUpdate(ipcMain, controller,
       (event: any) => event.senderFrame === event.sender.mainFrame && BrowserWindow.fromWebContents(event.sender) !== null,
@@ -59,7 +59,22 @@ test('verified update row is pinned; Restart now crosses preload and installs on
     const row = app.page.locator('.app-update')
     expect(await row.evaluate(node => node.closest('.channel-list__tree'))).toBeNull()
     await expect(row.getByRole('button', { name: 'Restart now' })).toBeVisible()
-    await expect.poll(() => row.locator('img').evaluate(img => [img.naturalWidth, img.naturalHeight])).toEqual([20, 20])
+    const icon = row.locator('.app-update__icon')
+    expect(await icon.evaluate(async node => {
+      const source = /url\("(.+)"\)/.exec(getComputedStyle(node).maskImage)?.[1]
+      if (source === undefined) return null
+      const glyph = new Image(); glyph.src = source
+      await glyph.decode()
+      const box = node.getBoundingClientRect()
+      return [glyph.naturalWidth, glyph.naturalHeight, box.width, box.height]
+    })).toEqual([20, 20, 20, 20])
+    expect(await icon.evaluate(node => {
+      const element = node as HTMLElement
+      element.style.setProperty('--color-primary', 'rgb(31, 151, 71)')
+      const colour = getComputedStyle(element).backgroundColor
+      element.style.removeProperty('--color-primary')
+      return colour
+    })).toBe('rgb(31, 151, 71)')
     const geometry = await row.evaluate(node => {
       const row = node.getBoundingClientRect(), sidebar = node.closest('.channel-list')!.getBoundingClientRect()
       return { inset: sidebar.bottom - row.bottom, width: row.width }

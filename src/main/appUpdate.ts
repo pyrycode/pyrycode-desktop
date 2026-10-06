@@ -19,11 +19,12 @@ export function selectAppUpdateEligibility(opts: { isPackaged: boolean; platform
 }
 export function createAppUpdateController(deps: {
   isPackaged: boolean; platform: string; construct: () => AppUpdaterPort
-  beforeInstall: () => Promise<void>; log: Pick<DiagnosticLog, 'event'>
+  beforeInstall: () => Promise<void>; onInstallFailure: () => void; log: Pick<DiagnosticLog, 'event'>
 }) {
   let state: AppUpdateState = { type: 'idle' }
   let phase: 'checking' | 'downloading' | 'ready' | 'failed' = 'checking'
   let started = false, dismissed = false, verified = false, installing = false, disposed = false
+  let installDrained = false
   let updater: AppUpdaterPort | undefined
   let token: { cancel(): void } | undefined
   const subscribers = new Set<(state: AppUpdateState) => void>()
@@ -35,7 +36,14 @@ export function createAppUpdateController(deps: {
   const failure = (): void => {
     if (disposed || phase === 'failed' || (phase === 'ready' && !installing)) return
     deps.log.event({ event: 'app-update-failed', code: installing ? 'install-failed' : phase === 'downloading' ? 'download-failed' : 'check-failed' })
-    if (phase === 'downloading' || installing) { verified = false; phase = 'failed'; publish({ type: 'failed' }) }
+    if (phase === 'downloading' || installing) {
+      verified = false; phase = 'failed'; publish({ type: 'failed' })
+      if (installing && updater !== undefined) {
+        // The registry cannot resume after the drain. Quit without retrying this installer.
+        updater.autoInstallOnAppQuit = false
+        if (installDrained) deps.onInstallFailure()
+      }
+    }
   }
   const available = (): void => {
     if (disposed || phase !== 'checking') return
@@ -86,10 +94,12 @@ export function createAppUpdateController(deps: {
       try {
         await deps.beforeInstall()
         if (disposed) return
+        installDrained = true
+        // An error delivered while draining must also wait for history before exit.
+        if (phase === 'failed') { deps.onInstallFailure(); return }
         deps.log.event({ event: 'app-update-installing' }); updater.quitAndInstall(true, true)
       } catch {
-        verified = false; phase = 'failed'
-        deps.log.event({ event: 'app-update-failed', code: 'install-failed' }); publish({ type: 'failed' })
+        failure()
       }
     },
     dispose(): void {

@@ -2,6 +2,11 @@ import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
 import { createAppUpdateController, registerAppUpdate, selectAppUpdateEligibility, createQuitDrain } from './appUpdate'
 import { validateUpdateVersion, isAppUpdateAction } from '../shared/ipc/appUpdate'
+import { createConnectionRegistry } from './connectionRegistry'
+import type { DaemonConnection } from './daemonConnection'
+import { createChatHistoryStore } from './chatHistoryStore'
+import { createSecureStore } from './secureStore'
+import { createDiagnosticLog } from './diagnosticLog'
 
 function fixture(isPackaged = true, platform = 'win32') {
   const updater = Object.assign(new EventEmitter(), {
@@ -9,10 +14,11 @@ function fixture(isPackaged = true, platform = 'win32') {
     checkForUpdates: vi.fn(async (): Promise<any> => null), quitAndInstall: vi.fn()
   })
   const beforeInstall = vi.fn(async () => {})
+  const onInstallFailure = vi.fn()
   const log = { event: vi.fn() }
   const construct = vi.fn(() => updater)
-  const controller = createAppUpdateController({ isPackaged, platform, construct, beforeInstall, log })
-  return { controller, updater, construct, beforeInstall, log }
+  const controller = createAppUpdateController({ isPackaged, platform, construct, beforeInstall, onInstallFailure, log })
+  return { controller, updater, construct, beforeInstall, onInstallFailure, log }
 }
 const ready = (f: ReturnType<typeof fixture>, version: unknown = '1.2.3') => {
   f.updater.emit('update-available')
@@ -163,4 +169,60 @@ it('accepts only the two exact IPC action objects', () => {
   for (const type of ['restart', 'dismiss']) expect(isAppUpdateAction({ type })).toBe(true)
   for (const value of [null, 'restart', { type: 'restart', path: 'PRIVATE' }, Object.assign([], { type: 'restart' }),
     Object.assign(Object.create({ type: 'restart' }), { path: 'PRIVATE' })]) expect(isAppUpdateAction(value)).toBe(false)
+})
+
+it.each(['throw', 'event', 'late event', 'during drain'])('exits after %s installation failure with connections stopped and history persisted', async mode => {
+  const f = fixture()
+  const connection = { start: vi.fn(), stop: vi.fn() }
+  const registry = createConnectionRegistry({
+    store: { load: async () => null, loadById: async () => null, list: async () => [], save: async () => {} },
+    createConnection: () => connection as unknown as DaemonConnection
+  })
+  registry.start(); await settled()
+  expect(connection.start).toHaveBeenCalledOnce()
+  const bytes = new Map<string, Uint8Array>()
+  let release!: () => void
+  const writing = new Promise<void>(resolve => { release = resolve })
+  const secureStore = createSecureStore({
+    encryption: { isAvailable: () => true, encrypt: value => value, decrypt: value => value },
+    persistence: { read: async name => bytes.get(name) ?? null, delete: async name => { bytes.delete(name) },
+      write: async (name, value) => { await writing; bytes.set(name, value) } }
+  })
+  const history = createChatHistoryStore({ secureStore, log: createDiagnosticLog({ sink: { write: () => {} } }) })
+  const snapshot = { version: 1, kind: 'timeline', serverId: 'host', conversationId: 'chat',
+    items: [{ kind: 'assistantText', turnId: 'turn', text: 'final buffered reply' }],
+    prependedRows: 0, coverage: { status: 'unknown' } }
+  const save = history.execute({ operation: 'replaceTimeline', serverId: 'host', conversationId: 'chat', snapshot })
+  let quitDrained = false, exited = false
+  const drain = createQuitDrain(() => registry.stop(), async () => {
+    expect(await save).toEqual({ status: 'ok' }); quitDrained = true
+  })
+  f.beforeInstall.mockImplementation(drain)
+  f.onInstallFailure.mockImplementation(() => {
+    expect(quitDrained).toBe(true)
+    expect(bytes.size).toBe(1)
+    expect(f.updater.autoInstallOnAppQuit).toBe(false)
+    exited = true
+  })
+  if (mode === 'throw') f.updater.quitAndInstall.mockImplementation(() => { throw Error('PRIVATE') })
+  if (mode === 'event') f.updater.quitAndInstall.mockImplementation(() => { f.updater.emit('error', Error('PRIVATE')) })
+  await f.controller.start(); ready(f)
+  const restart = f.controller.command({ type: 'restart' })
+  expect(connection.stop).toHaveBeenCalledOnce()
+  expect(f.updater.quitAndInstall).not.toHaveBeenCalled()
+  if (mode === 'during drain') f.updater.emit('error', Error('PRIVATE'))
+  expect(exited).toBe(false)
+  release(); await restart
+  if (mode === 'late event') f.updater.emit('error', Error('PRIVATE'))
+  expect(exited).toBe(true)
+  expect(f.onInstallFailure).toHaveBeenCalledOnce()
+  expect(await history.execute({ operation: 'readTimeline', serverId: 'host', conversationId: 'chat' }))
+    .toEqual({ status: 'stored', snapshot })
+  f.updater.emit('error', Error('PRIVATE'))
+  await f.controller.command({ type: 'restart' }); await drain()
+  registry.start(); await settled()
+  expect(connection.start).toHaveBeenCalledOnce()
+  expect(f.onInstallFailure).toHaveBeenCalledOnce()
+  expect(f.updater.quitAndInstall).toHaveBeenCalledTimes(mode === 'during drain' ? 0 : 1)
+  expect(JSON.stringify(f.log.event.mock.calls)).not.toContain('PRIVATE')
 })

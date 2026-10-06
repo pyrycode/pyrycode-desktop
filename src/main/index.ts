@@ -676,7 +676,7 @@ app.whenReady().then(() => {
       const { autoUpdater } = library
       return autoUpdater
     },
-    beforeInstall: drainQuit, log: diagnosticLog
+    beforeInstall: drainQuit, onInstallFailure: () => app.quit(), log: diagnosticLog
   })
   const unregisterAppUpdate = registerAppUpdate(ipcMain, appUpdate,
     event => {

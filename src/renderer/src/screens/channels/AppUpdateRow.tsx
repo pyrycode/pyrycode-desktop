@@ -10,7 +10,7 @@ export function AppUpdateRow({ state, onEvent }: {
     <div className="app-update" role="status">
       <div className="app-update__rule" />
       <div className="app-update__row">
-        <img src={updateIcon} alt="" />
+        <span className="app-update__icon" aria-hidden="true" style={{ maskImage: `url(${updateIcon})` }} />
         <div className="app-update__content">
           <div className="app-update__title">{ready ? 'Update ready' : 'Update could not install'}</div>
           <div className={`app-update__caption${ready ? '' : ' app-update__caption--failed'}`}>

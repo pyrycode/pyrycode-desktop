@@ -7116,6 +7116,8 @@ button.top-overlay-pill {
 .conversation__message-area {
   position: absolute;
   inset: 0;
+  /* Contain pills and the drawer below chrome, leaving the existing modal levels intact. */
+  z-index: 0;
 }
 
 .conversation__message-area > .conversation__thread {
@@ -7131,7 +7133,7 @@ button.top-overlay-pill {
   left: 0;
   right: 0;
   box-sizing: border-box;
-  z-index: 2;
+  z-index: 1;
   pointer-events: none;
 }
 
@@ -7223,11 +7225,7 @@ button.top-overlay-pill {
   top: var(--thread-header-height);
   bottom: var(--thread-input-height);
   right: var(--space-5);
-}
-
-/* Sheets remain above both chrome stacking contexts. */
-.conversation__covered > .status-sheet-overlay {
-  z-index: 3;
+  width: min(360px, calc(100% - var(--space-5)));
 }
 
 .conversation__message-area > .conversation__thread {

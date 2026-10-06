@@ -1,4 +1,5 @@
-import { writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import type { ElectronApplication, Page } from '@playwright/test'
 
 /** Capture the integrated synthetic app through Electron after its requested state paints.
@@ -12,6 +13,9 @@ export async function capturePairedApp(app: ElectronApplication, page: Page, pat
     return image.toPNG().toString('base64')
   })
   const buffer = Buffer.from(png, 'base64')
-  if (path) await writeFile(path, buffer)
+  if (path) {
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, buffer)
+  }
   return buffer
 }

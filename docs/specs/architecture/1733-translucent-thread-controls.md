@@ -67,3 +67,13 @@ None. Use measured chrome rather than duplicating height formulas; retain the ex
 2026-10-05: The measured rejection banner places Re-pair below the short header menu. Retain positive overlap and actual click checks for usage pills at both sizes; the connection scenario still checks stacking and a real menu click at its natural position. The new empty-offline regression separately clicks Re-pair below the measured header.
 
 2026-10-05: The affected permission-sheet scenario also stalls in Playwright screenshot on this runner. Migrate its capture calls to the same native helper, retaining the original image paths and all permission assertions.
+
+2026-10-06: Verifier findings 1–4 require restoring modal precedence and completing browser geometry migration. Contain the thread, pills and drawer in the message area's level-0 stacking context; put sharp chrome at level 1 so existing level-2 sheets and later dialog siblings (including Create chat at level 3) retain their precedence. Remove the sheet's new level-3 override. Bound drawer width by pane width minus its right inset, and prove containment and unchanged Escape/send behavior using actual Electron resizing at both requested sizes. Overlaps remain additive with #1726 and #1729; #1732's merged sidebar-menu CSS is preserved.
+
+2026-10-06: `capturePairedApp` creates the destination parent recursively before writing; a capture into a fresh nested test-output path must match the returned PNG. Migrate status/newest-row geometry to measured input chrome, pills to occupied-header height plus their gap, and type-ahead width to the input pane boundary. Keep all interaction, overlap and scrim hit-test assertions.
+
+## Documentation handoff
+
+- Pending documentation stage: `docs/knowledge/features/conversation-shell.md` → What it does / How it works: full-pane scrolling behind translucent controls; reader adaptation remains follow-up work.
+- Pending documentation stage: `docs/knowledge/features/conversation-shell-scroll-pin.md` → Thread scroll pin: measured chrome clearance, chrome-only ResizeObserver changes, resize/zoom following and coexistence with temporary prepend padding.
+- Pending documentation stage: `docs/knowledge/features/development-verification.md` → Layout and input: below-header pills, dialog/sheet/menu ordering, drawer boundaries, pane-relative menu clamping, native capture parent creation, final revision, retained capture paths, comparison results and executed browser counts. No wire/protocol documentation change.

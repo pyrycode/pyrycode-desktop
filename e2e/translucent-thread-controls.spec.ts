@@ -3,6 +3,7 @@ import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import { ATTACHMENT_UPLOAD_EVENT_CHANNEL } from '../src/shared/ipc/attachmentUpload'
 import { capturePairedApp } from './fixtures/capturePairedApp'
 import type { Page } from '@playwright/test'
+import { readFile } from 'node:fs/promises'
 
 const frame = (type: Parameters<typeof encodeEnvelope>[0]['type'], payload: unknown) =>
   encodeEnvelope({ id: 1733, type, ts: '2026-10-03T12:00:00Z', payload })
@@ -33,7 +34,7 @@ const clearBottom = async (page: Page) => {
 }
 
 for (const size of [{ width: 1280, height: 800 }, { width: 800, height: 600 }]) {
-  test(`translucent controls overlap rows and track occupied height at ${size.width}`, async ({ launchPairedApp }) => {
+  test(`translucent controls overlap rows and track occupied height at ${size.width}`, async ({ launchPairedApp }, testInfo) => {
     const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
       const env = decodeEnvelope(bytes)
       if (env.type === 'send_message') return [...replies(), frame('turn_state', {
@@ -51,6 +52,9 @@ for (const size of [{ width: 1280, height: 800 }, { width: 800, height: 600 }]) 
     expect(b.thread.top).toBe(b.pane.top)
     expect(b.thread.bottom).toBe(b.pane.bottom)
     await clearBottom(page)
+    const nestedCapture = testInfo.outputPath('fresh-capture', 'nested', 'resting.png')
+    const png = await capturePairedApp(app, page, nestedCapture)
+    expect(await readFile(nestedCapture)).toEqual(png)
     await capturePairedApp(app, page, `/tmp/builder-1733/resting-${size.width}.png`)
 
     await page.locator('.conversation__thread').evaluate(node => { node.scrollTop = 0 })

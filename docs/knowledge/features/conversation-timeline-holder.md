@@ -76,11 +76,14 @@ exactly the thread the operator stepped away from.
   - `markLocalSendQueued(conversationId, queued: readonly QueuedItem[])`
     ([#1725](https://github.com/pyrycode/pyrycode-desktop/issues/1725)) — applies the pure
     `markLocalSendQueued` from [thread timeline](thread-timeline-internals.md#the-reducer) to a held
-    slice's `localSendPending`. An absent key is a same-object no-op — unlike `dispatchFor`, this
+    slice's newest-send indicator and local echo correlation/release facts. An absent key is a same-object no-op — unlike `dispatchFor`, this
     action never creates a slice, since a `queue_state` snapshot naming no held conversation has
     nothing to mark. Called from the [queue bridge](queue-store.md#the-data-path-srcrenderersrcstorequeuebridgets)'s
     `QueueData` snapshot callback, right after `queueStore.setBacklog`, so the same frame that updates
     the queued-backlog rows also lets the open send window know the daemon has the message.
+    The trusted `receiptHost()` must match a known held `serverId` before either binding or release;
+    a foreign-host snapshot leaves the full state unchanged. Missing origins retain compatibility.
+    Queue snapshots remain in `queueStore`; see [local settlement](thread-timeline-internals.md#queued-own-echo-settlement).
   - `markViewed(conversationId)` — stamps a conversation as most recently viewed. Already-tail is a
     same-object no-churn return (the common case: `activateConversation`'s `onOpen` fires on every row
     click, including a re-click of the already-open row). Present-not-tail moves it. Absent **creates** it
@@ -233,7 +236,7 @@ boundary and transient reading with their slice.
   [#1725](https://github.com/pyrycode/pyrycode-desktop/issues/1725)** — `QueueData`'s existing
   `queue_state` subscription (see [Queue store](queue-store.md#the-data-path-srcrenderersrcstorequeuebridgets)),
   no new subscription. The flat `timelineStore` is not dual-written here: `queue_state` has never
-  reached `reduceTimeline`, and this write targets only the keyed holder's `localSendPending`.
+  reached `reduceTimeline`, and this write targets the keyed holder's local indicator and echo facts.
 - **Reader, as of [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758):** `ConversationScreen`
   binds `selectTimelineFor(openConversationId)` through a `useMemo`-stable selector factory
   (`selectOpenTimelineFor`, exported from `ConversationScreen.tsx` for its own unit tests), keyed off

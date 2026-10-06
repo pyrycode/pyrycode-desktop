@@ -225,6 +225,7 @@ export type EnvelopeType =
   // app's one Reset-session action dispatches; a typed `/clear` still goes down the message path.)
   // SSOT pyrycode docs/protocol-mobile.md § New session (v2), widened by pyrycode#2099.
   | 'new_session'
+  | 'switch_agent'
   | 'modal_shown'
   | 'modal_dismissed'
   | 'modal_answer'
@@ -4072,4 +4073,13 @@ export interface SetHostSystemPromptPayload { system_prompt: string }
 export interface HostSystemPromptPayload {
   system_prompt: string
   default_system_prompt: string
+}
+
+/** Outbound v2 agent switch; empty model selects the target template default. */
+export interface SwitchAgentPayload {
+  conversation_id: string
+  agent: WireAgent
+  model: string
+  /** Undefined omits effort; an explicit empty string clears it. */
+  effort?: string
 }

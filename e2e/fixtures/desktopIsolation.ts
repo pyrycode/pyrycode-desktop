@@ -57,18 +57,26 @@ export const RENDERER_THROTTLING_SWITCHES = [
 
 /**
  * The harness's opt-out from hiding the launched window. Set it to exactly `'1'` only where no operator
- * shares the display: the Linux dispatcher container, which runs Electron under Xvfb. On Linux a window
- * that is never shown produces no frames, so every `page.screenshot` and `locator.screenshot` waits out
- * its 30 s timeout; measured 2026-10-04, three specs went from 3 failed in 2.3 min hidden to 4 passed in
- * 10 s shown. Showing a window on a virtual display steals nobody's focus, and the throttling switches
- * above still apply. Only the harness reads this variable. The app's own gate is still
- * `HIDDEN_WINDOW_ENV_FLAG`, so a real launch is unaffected.
+ * shares the display. On Linux a window that is never shown produces no frames, so every `page.screenshot`
+ * and `locator.screenshot` waits out its 30 s timeout; measured 2026-10-04, three specs went from 3 failed
+ * in 2.3 min hidden to 4 passed in 10 s shown. Showing a window on a virtual display steals nobody's focus,
+ * and the throttling switches above still apply. Only the harness reads this variable. The app's own gate
+ * is still `HIDDEN_WINDOW_ENV_FLAG`, so a real launch is unaffected.
  */
 export const SHOW_WINDOW_E2E_ENV_FLAG = 'PYRY_E2E_SHOW_WINDOW'
 
-/** Whether this test run leaves launched windows shown. Exact `'1'` opt-in, like the app's own flags. */
-export function e2eShowsWindow(env: Record<string, string | undefined> = process.env): boolean {
-  return env[SHOW_WINDOW_E2E_ENV_FLAG] === '1'
+/**
+ * Whether this test run leaves launched windows shown. Exact `'1'` opt-in, like the app's own flags, and
+ * always on Linux (#1796). Linux runs are the pyrybox container's Xvfb display, where a hidden window
+ * cannot be screenshotted at all. The dispatcher's gate sets the flag, but a Codex agent's shell keeps
+ * only allowlisted variables and loses it, so the agent's own runs timed out on every screenshot the gate
+ * passed. Making Linux the default gives both the same presentation.
+ */
+export function e2eShowsWindow(
+  env: Record<string, string | undefined> = process.env,
+  platform: NodeJS.Platform = process.platform
+): boolean {
+  return env[SHOW_WINDOW_E2E_ENV_FLAG] === '1' || platform === 'linux'
 }
 
 /**

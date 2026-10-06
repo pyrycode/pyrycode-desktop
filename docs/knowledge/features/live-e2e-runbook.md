@@ -74,9 +74,8 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 **Latest run: #1785, 2026-10-05 — 24 executed, 24 passed, 0 failed, 1 skipped.**
 At `29e351d298` integrated with main `cb82a7d9d5`, all three required question-answer,
-question-cancel and multi-agent cases executed and passed. The actual daemon version/source
-revision remains an operator evidence blocker; see
-[per-test evidence and its limits](development-verification.md#live-test-diagnosis).
+question-cancel and multi-agent cases executed and passed against daemon release `0.34.0`,
+source `9834e99ee0`; see [per-test evidence and provenance](development-verification.md#live-test-diagnosis).
 
 **Previous verified run: #1657, 2026-10-01 — 24 executed, 24 passed, 0 failed, 1 skipped.**
 The [dispatcher verdict](https://github.com/pyrycode/pyrycode-desktop/issues/1657#issuecomment-5933303183)

@@ -299,12 +299,19 @@ session`; the evidence comment records no skip reason. The dispatcher-host repor
 `pyrycode-desktop-agents/logs/2026-10-05T22-45-56-174Z_real-claude-gate_#1785.log`.
 This proves the named live results against the built app and local relay.
 
-**Operator evidence blocker:** acceptance criterion 3 also requires the actual live daemon version
-and source revision. Neither the supplied gate report nor the issue's live verdict records either,
-so that documentation handoff remains pending. The earlier branch/base version `0.34.0` and daemon
-source revision `70634a042b21804caf3427ab369b028f55b93550` inspected during verification do not
-identify this run's executable. Retain the executed binary's version and source revision from the
-same run's provenance; another checkout's revision or a current version command cannot supply it.
+**Daemon provenance:** the run's daemon was release `0.34.0`, built from pyrycode tag
+`v0.34.0` at source revision `9834e99ee046b9f94b528c2c83c7bd03f389cc41`. The same JSON report
+records `daemon-revision` `0.34.0`, parsed from `pyry version`, in every spec that checks it,
+including `real-daemon-archive-order.spec.ts`, which ran between the question-cancel and
+multi-agent cases. The three named specs do not attach it themselves. They spawn their daemons
+from the same `PYRY_BIN`, `/usr/local/bin/pyry` in the dispatcher image, within the same
+single-worker run. That image installs the daemon with `go install` of `cmd/pyry@v0.34.0`; the
+binary's build info records module `v0.34.0` with sum
+`h1:5Xfhf9XwYuRp1TT1rk9LgGIWRfbcMdw42CwfwXQSWgw=`, which the Go module proxy resolves to
+`refs/tags/v0.34.0` at that revision. It contains daemon commit `4d651424` from
+[pyrycode#2734](https://github.com/pyrycode/pyrycode/issues/2734), so this run exercised
+first-key binding. See the
+[provenance comment](https://github.com/pyrycode/pyrycode-desktop/issues/1785#issuecomment-6010788994) on the ticket.
 
 The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1792#issuecomment-6004715409)
 records 8,835 unit tests executed/passed, 0 failed and 3 skipped, including all 18 fixture/capability

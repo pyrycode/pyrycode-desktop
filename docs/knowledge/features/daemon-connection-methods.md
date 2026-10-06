@@ -35,6 +35,7 @@ export interface DaemonConnection {
   requestHistory(payload: RequestHistoryPayload): void  // #1222: encrypt a request_history onto the live session, asking for one backward step of a scroll-back walk; takes the WHOLE payload (three fields), unlike its two neighbours above; answered by history_page → historyPageReceived or error → historyRequestFailed, correlated by envelope id since the reply names no conversation
   requestSystemPrompt(conversationId: string): void  // #1230: encrypt a request_system_prompt onto the live session, asking what system prompt a conversation holds and whether the running session was started with a different one; the id is REQUIRED, requestModelList's rule; answered by ONE system_prompt → systemPromptReceived, correlated by envelope id since the reply names no conversation, and by NOTHING ELSE — this verb has no error frame at all, so nothing retries and an unroutable id must be refused before the send
   newSession(conversationId: string): void  // #1217: encrypt a new_session onto the live session — KILLS claude and spawns a fresh one under a new session id; the id is REQUIRED (unlike the wire type, which mirrors the daemon's optional field); fire-and-forget, NO reply of any kind
+  switchAgent(payload: SwitchAgentPayload): void  // authenticated owner only; one switch_agent, no retries
   createConversation(payload: CreateConversationPayload): void  // #241: encrypt a create_conversation onto the live session, fresh-literal net
   setSessionSettings(payload: SetSessionSettingsPayload, changeId: string): void  // #263: encrypt a set_session_settings onto the live session, omitempty presence contract owned by the builder; #261 added changeId + pending-map correlation
   uploadAttachment(input: AttachmentChunkPlanInput): Promise<AttachmentTransferResult>  // #861: drive a planAttachmentChunks() result onto the live session and resolve on the one terminal; consumer-failing twin like requestDebugBundle, not send's silent no-op
@@ -220,6 +221,18 @@ The receive-path tests deliberately use different requested and returned convers
 a test reusing one id would miss attribution to the request instead of the payload.
 The outbound contract ships dormant in [#1503](../../specs/architecture/1503-request-context-usage.md);
 [#1504](https://github.com/pyrycode/pyrycode-desktop/issues/1504) owns the later on-open trigger.
+
+**`switchAgent(payload)`** sends one v2 `switch_agent` on the conversation's owning
+connection, reached through the router and the registry's `viewOf` delegate.
+It requires both a driver and authentication; a non-null driver alone is not proof
+of availability before handshake or after relay loss. It uses the shared clock and
+envelope counter, advancing the ID after encoding and before the single send.
+Encoding/send failures are contained with static diagnostics and no retries or
+replay. Empty model and effort strings survive; undefined effort is omitted and
+extra renderer fields are stripped by the fresh-literal builder. See
+[Switch-agent request](switch-agent-request.md) for the contract and counted browser
+evidence. Existing reset/transition/update events handle success; refusal
+correlation and menu/confirmation remain #1660 and #1661.
 
 **`newSession(conversationId)` was added in [#1217](https://github.com/pyrycode/pyrycode-desktop/issues/1217)**
 — asks the daemon to **kill** the supervised claude process in the named conversation and spawn a fresh

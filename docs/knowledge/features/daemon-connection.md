@@ -132,9 +132,9 @@ owns retention and recovery; successful decode logs only type, byte count and ha
 Split out to [Daemon connection — methods](daemon-connection-methods.md) 2026-09-06 to keep this
 document under the size cap: the full `DaemonConnectionDeps`/`DaemonConnection` interface listing, and
 one write-up per method — when it was added, what it builds, and how it fits the `send`-twin /
-consumer-failing-twin split. Latest addition: `newSession(conversationId)` (#1217), which asks the
-daemon to kill claude and spawn a fresh one in the named conversation — the `requestModelList` (#1165)
-send mechanics and required-id posture, but with no reply of any kind.
+consumer-failing-twin split. `switchAgent(payload)` sends one authenticated,
+conversation-routed request with no retries. See [Switch-agent request](switch-agent-request.md)
+for empty/omitted settings semantics, lifecycle drops and failure containment.
 
 ## Edge cases and limitations
 

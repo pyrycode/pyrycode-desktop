@@ -16,7 +16,7 @@ Playwright's `_electron` API launches the project's **own** `electron` binary an
 
 | File | Role |
 |---|---|
-| `playwright.config.ts` (repo root) | `testDir: './e2e'` (Playwright scans only `e2e/`), `workers: 1` + `fullyParallel: false` (one Electron process at a time), `reporter: 'list'`, CI-gated `forbidOnly`/`retries`. No `projects`/`browserName` block — Electron launches its own binary, so a browser project would be dead config and there is **no** `npx playwright install` step. |
+| `playwright.config.ts` (repo root) | `testDir: './e2e'` (Playwright scans only `e2e/`), several workers with `fullyParallel: false` (files spread across workers, the tests in one file stay in order), `reporter: 'list'`, CI-gated `forbidOnly`/`retries`. The worker count defaults to four, or half the cores when that is fewer, and `PW_WORKERS` overrides it; `PW_WORKERS=1` is the old serial run. Every launch already owns its user-data dir, its loopback ports and its process, so the only shared resource is the OS clipboard: the specs that copy or paste are listed in `CLIPBOARD_SPECS` and run in a `clipboard` project capped at one worker, beside the `parallel` project. A new spec that touches the clipboard belongs in that list. There is no `browserName` — Electron launches its own binary, so there is **no** `npx playwright install` step. |
 | `e2e/smoke.spec.ts` | The single smoke assertion: `expect(page.locator('.pairing')).toBeVisible()`, launched through its own local isolated-userData fixture (see below) — see [#105](../codebase/105.md). |
 
 ### The launch fixture (retired)
@@ -30,7 +30,7 @@ rebuild replaces the renderer assets and can invalidate launch evidence.
 
 ### Deterministic teardown
 
-Teardown must run on **every** exit path — success, test failure, and a failure raised after a resource (the Electron process, its `--user-data-dir`) came up but before `use()` returns. The naive shape (cleanup code placed textually after `await use(...)`) only covers the first two: Playwright's fixture lifecycle runs that code on pass and fail alike, but a setup-time throw — say `firstWindow()` rejecting — never reaches it, so the process and dir both leak. With `workers: 1`, one leaked launch then poisons every remaining spec in the run, since apps launch serially and the orphan just sits there.
+Teardown must run on **every** exit path — success, test failure, and a failure raised after a resource (the Electron process, its `--user-data-dir`) came up but before `use()` returns. The naive shape (cleanup code placed textually after `await use(...)`) only covers the first two: Playwright's fixture lifecycle runs that code on pass and fail alike, but a setup-time throw — say `firstWindow()` rejecting — never reaches it, so the process and dir both leak. A leaked launch then sits there for the rest of its worker's run, competing with every later launch.
 
 The fixtures use nested `try`/`finally` so app cleanup precedes profile removal, including when
 window setup fails. Both steps are best-effort and discard teardown errors without logging: a

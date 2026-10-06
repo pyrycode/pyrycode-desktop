@@ -16,7 +16,7 @@ Playwright's `_electron` API launches the project's **own** `electron` binary an
 
 | File | Role |
 |---|---|
-| `playwright.config.ts` (repo root) | `testDir: './e2e'` (Playwright scans only `e2e/`), `workers: 1` + `fullyParallel: false` (one Electron process at a time), `reporter: 'list'`, CI-gated `forbidOnly`/`retries`. No `projects`/`browserName` block — Electron launches its own binary, so a browser project would be dead config and there is **no** `npx playwright install` step. |
+| `playwright.config.ts` (repo root) | `testDir: './e2e'` (Playwright scans only `e2e/`), several workers with `fullyParallel: false` (files spread across workers, the tests in one file stay in order), `reporter: 'list'`, CI-gated `forbidOnly`/`retries`. The worker count defaults to four, or half the cores when that is fewer, and `PW_WORKERS` overrides it; `PW_WORKERS=1` is the old serial run. Every launch already owns its user-data dir, its loopback ports and its process, so the only shared resource is the OS clipboard: the specs that copy or paste are listed in `CLIPBOARD_SPECS` and run in a `clipboard` project capped at one worker, beside the `parallel` project. A new spec that touches the clipboard belongs in that list. There is no `browserName` — Electron launches its own binary, so there is **no** `npx playwright install` step. |
 | `e2e/smoke.spec.ts` | The single smoke assertion: `expect(page.locator('.pairing')).toBeVisible()`, launched through its own local isolated-userData fixture (see below) — see [#105](../codebase/105.md). |
 
 ### The launch fixture (retired)
@@ -30,7 +30,7 @@ rebuild replaces the renderer assets and can invalidate launch evidence.
 
 ### Deterministic teardown
 
-Teardown must run on **every** exit path — success, test failure, and a failure raised after a resource (the Electron process, its `--user-data-dir`) came up but before `use()` returns. The naive shape (cleanup code placed textually after `await use(...)`) only covers the first two: Playwright's fixture lifecycle runs that code on pass and fail alike, but a setup-time throw — say `firstWindow()` rejecting — never reaches it, so the process and dir both leak. With `workers: 1`, one leaked launch then poisons every remaining spec in the run, since apps launch serially and the orphan just sits there.
+Teardown must run on **every** exit path — success, test failure, and a failure raised after a resource (the Electron process, its `--user-data-dir`) came up but before `use()` returns. The naive shape (cleanup code placed textually after `await use(...)`) only covers the first two: Playwright's fixture lifecycle runs that code on pass and fail alike, but a setup-time throw — say `firstWindow()` rejecting — never reaches it, so the process and dir both leak. A leaked launch then sits there for the rest of its worker's run, competing with every later launch.
 
 The fixtures use nested `try`/`finally` so app cleanup precedes profile removal, including when
 window setup fails. Both steps are best-effort and discard teardown errors without logging: a
@@ -72,6 +72,8 @@ Both launch sites — `launchPairedApp.ts` and `smoke.spec.ts` — now go throug
 `e2e/fixtures/realDaemon.ts` and `e2e/fixtures/pairingArrival.ts` are deliberately untouched — the `real-*` tier is operator-supervised by nature, and this ticket is provable without a live daemon.
 
 **Show-window opt-out for headless Linux (2026-10-04).** On Linux under Xvfb, as in the pyrybox dispatcher container, a window that is never shown produces no frames, so every `page.screenshot` and `locator.screenshot` waits out its 30-second timeout. Measured: three specs went from 3 failed in 2.3 minutes with the window hidden to 4 passed in 10 seconds with it shown. Setting `PYRY_E2E_SHOW_WINDOW=1` (`SHOW_WINDOW_E2E_ENV_FLAG` in `desktopIsolation.ts`) makes both launch sites, `launchIsolatedApp` and `realDaemon.ts`, leave `HIDDEN_WINDOW_ENV_FLAG` off. The throttling switches still apply, and `expectDesktopIsolated` and the isolation spec skip only the not-visible clause. Only the harness reads the variable, so the app's own gate is unchanged. Leave it unset on a machine someone is using: a shown window takes focus.
+
+**Linux shows the window by default (\#1796, 2026-10-06).** The dispatcher sets the flag for its gates, but a Codex agent's shell keeps only allowlisted variables, so a builder's own Playwright runs in the same container launched hidden and timed out on screenshots the gate passed. `e2eShowsWindow` now returns true on Linux whatever the flag says, so agent runs and gates share one presentation. macOS and Windows keep the hidden default and the exact `'1'` opt-out.
 
 The [collapse-tool preference review](https://github.com/pyrycode/pyrycode-desktop/pull/1793#issuecomment-6003905659)
 records the same trap for Settings on/off captures: a hidden Linux window reached

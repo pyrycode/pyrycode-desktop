@@ -1,9 +1,69 @@
 # Windows packaging (`electron-builder`)
 
-`npm run dist:win` runs `npm run build` and then `electron-builder --win`, producing an unsigned NSIS
-installer from `electron-builder.yml`. No `mac` or `linux` target: an artifact for a platform nobody has
-launched the app on is not something this repo ships. No signing, no `publish` (auto-update) feed —
-updating means installing a newer exe over the old one. (#1416)
+`npm run dist:win` runs `npm run build` and then `electron-builder --win --publish never`, producing one
+unsigned NSIS installer for x64 and arm64 from `electron-builder.yml`, its `.blockmap`, and `latest.yml`.
+`npm run release:win -- X.Y.Z` builds on pyrybox and publishes those three assets to the
+[GitHub Releases feed](https://github.com/pyrycode/pyrycode-desktop/releases). Mac and Linux targets and
+signing remain out of scope. Runtime updater wiring and the Surface updater round-trip belong to
+[#1775](https://github.com/pyrycode/pyrycode-desktop/issues/1775); until then, updates use a manual
+installer over the existing installation. See [README Build](../../../README.md#build) for commands,
+prerequisites and the manual unsigned Surface install.
+
+## Release preparation and retry state
+
+[`scripts/release-win.mjs`](../../../scripts/release-win.mjs) accepts stable `X.Y.Z` only, without a
+`v`, leading zeroes or suffix. A new version, including a draft retry, must exceed all published
+stable versions, or the source `package.json` version before the first release. The tag names the
+unmodified source SHA from GitHub main; the version stamp changes only an isolated clone and lands
+before `npm run build` so `__APP_VERSION__` carries the release version. Main keeps its dev version.
+
+Preparation runs `npm ci`, **tests before stamping**, then stamps and builds. Stamping before tests
+would break the Settings spec, which pins the development version supplied by `vitest.config.ts`.
+Testing the unmodified source preserves that check while the packaged renderer gets the release
+version. The transaction test pins this order and a failed-check retry leaves no draft or publish.
+
+`~/.cache/pyrycode-desktop-releases/X.Y.Z/` on the Mac stores the source SHA and preparation/build
+receipts; `~/pyrycode-desktop-release/X.Y.Z/` on pyrybox holds the build and verification downloads.
+Keep these for retries: completed work is reused for the same SHA/version, incomplete uploads are
+repaired, and every download is verified again before publishing. A draft or existing tag on another
+SHA fails rather than combining commits. GitHub ignores `target_commitish` when a tag exists, so
+checking that tag's resolved SHA is essential before reuse.
+
+The exact published-version check precedes **all local state access**. An interrupted state write
+can leave truncated or non-JSON metadata; parsing it first would turn a completed release's no-op
+into a failure. Unpublished versions still need their saved source SHA to resume safely.
+
+## Feed generation and verification before publication
+
+The GitHub provider names `pyrycode/pyrycode-desktop`. `PublishManager` writes `latest.yml` and each
+architecture's `resources/app-update.yml` even with `--publish never` and without a runtime updater.
+Keep that flag on both local and release packaging: otherwise CI/tag detection can enable automatic
+publication and bypass the draft verification transaction. The NSIS `artifactName` has neither
+spaces, which GitHub rewrites on upload, nor `${arch}`, which would split the combined installer:
+`Pyrycode-Desktop-Setup-X.Y.Z.exe` must match the feed exactly.
+
+Before any GitHub write, the command checks the feed's version, installer name and base64 sha512,
+plus both architectures' repo configuration. It creates or resumes one draft, retaining existing
+assets only when their upload state, size and available digest match. It downloads the installer,
+blockmap and feed by asset id, compares their sha256 hashes to the build, and checks the downloaded
+feed's installer sha512. An upload or hash failure leaves the release unpublished; a mismatched
+download is deleted so a retry uploads it again. Publishing is followed by a release/tag readback.
+These hashes establish transfer integrity; the installer remains unsigned.
+
+## Build host and source transfer
+
+The Mac command re-enters under `automation-access with-pyrybox-key` and explicitly passes the
+temporary agent through SSH's `IdentityAgent`. GitHub REST calls use pyrybox's existing
+`~/.local/bin/gh` login over SSH; no token reaches the Mac or Wine container. The prepared tree is
+streamed without `.git`, `node_modules` or `dist`, and pyrybox runs a digest-pinned
+`electronuserland/builder:wine` image through Podman with a fresh locked dependency install.
+
+The `tar | ssh` transfer must run under **Bash `pipefail`**. Tar can emit a valid partial archive and
+then fail while remote extraction succeeds; accepting only SSH's exit status would allow an
+incomplete application to reach packaging and publication. Either failure stops before the Wine
+build, build receipt or GitHub writes. Transaction fakes alone cannot prove shell pipeline behavior;
+`scripts/release-win-upload.test.ts` exercises the real command boundary with local fake tar/SSH
+executables, including successful extraction of a partial archive whose producer exits nonzero.
 
 ## The build-host-arch trap
 
@@ -94,9 +154,9 @@ payload — and fails only at the final step, spawning `mac/makensis`:
 without Rosetta 2 (`/Library/Apple/usr/libexec/oah` absent) the kernel refuses to spawn it at all. The
 stack trace points at NSIS internals, not at the cause, so "the build failed" understates how far it
 actually got — everything up to the installer-wrapping step is proven on an Apple Silicon Mac without
-Rosetta. Two routes to an actual `.exe`, neither a code or config change: `softwareupdate
---install-rosetta` on the build Mac, or run `npm run dist:win` on Windows itself, where `makensis` is
-native.
+Rosetta. The release command therefore packages on Intel Linux pyrybox in the Podman Wine container.
+Local alternatives are installing Rosetta 2 on the build Mac or running `npm run dist:win` on Windows,
+where `makensis` is native; neither local path publishes.
 
 ## What running the packaging stage proved without installing anything
 
@@ -112,13 +172,27 @@ main-process only, but nothing exercises it before an installed launch). Those s
 Windows operator acceptance actually installs and runs the exe; see #1416's operator-acceptance comment
 for that outcome once recorded.
 
-## No packaging-config test in the suite, by design
+## Packaging and release test boundaries
 
 There is deliberately no vitest spec that parses `electron-builder.yml` and asserts its keys — that
-would be a second copy of the config, not a proof of it. The real proof is running `dist:win` and
-checking the artifact, which is what the two sections above do. A contingency spec asserting the ICO's
+would be a second copy of the config, not a proof of it. Packaging proof comes from running the build
+and checking the artifact. A contingency spec asserting the ICO's
 directory-entry sizes and the PNG header dimensions was planned in case the macOS run failed before
 reaching the icon stage; it did not, so that spec was never added.
+
+Release transaction tests inject command, filesystem, remote-host and GitHub boundaries to check
+validation, isolated preparation, verification before publish, upload/hash failure repair and
+source-pinned retries. Dry run uses a command recorder and in-memory filesystem, ending at the Wine
+invocation without executing SSH/Podman/the key helper or contacting GitHub; it proves command shape,
+not a real build or live release.
+
+The [verifier's final verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1806#issuecomment-6026588812)
+records the gate at `e36037e8`: 8,979 unit tests executed and passed, 0 failed, 3 skipped, with all 19
+release tests present and passed, including malformed-state and transfer-failure regressions.
+Post-merge Wine build from main, artifact inspection, first live GitHub publication and a second live
+published-version no-op remain operator acceptance. The operator must comment with those results
+before closing [#1774](https://github.com/pyrycode/pyrycode-desktop/issues/1774). A preliminary Wine build
+from a feature commit used stubbed GitHub writes and does not satisfy that hand check.
 
 ## Dev-dependency-only audit noise
 

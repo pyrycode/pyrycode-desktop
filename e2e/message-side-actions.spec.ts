@@ -29,14 +29,18 @@ const geometry = (bubble: Locator) => bubble.evaluate(el => {
   const row = el.parentElement!
   const thread = row.parentElement!
   const actions = row.querySelector('.message-actions')!
-  const glyph = actions.querySelector('svg')!
+  const copy = actions.querySelector('button[aria-label="Copy message"]')!
+  const reply = actions.querySelector('button[aria-label="Reply to message"]')!
+  const copyGlyph = copy.querySelector('svg')!
+  const replyGlyph = reply.querySelector('.bubble__reply-icon')!
   const box = (node: Element) => {
     const r = node.getBoundingClientRect()
-    return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right }
+    return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right, bottom: r.bottom }
   }
   const style = getComputedStyle(thread)
   return {
-    bubble: box(el), row: box(row), actions: box(actions), glyph: box(glyph),
+    bubble: box(el), row: box(row), actions: box(actions),
+    copy: box(copy), reply: box(reply), copyGlyph: box(copyGlyph), replyGlyph: box(replyGlyph),
     available: thread.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
     threadCenter: box(thread).x + parseFloat(style.paddingLeft) +
       (thread.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)) / 2,
@@ -72,9 +76,17 @@ test('side copy, row cap and timestamp reveal preserve geometry at minimum and w
       for (const g of [long, short]) {
         expect(g.actions.width).toBe(13)
         expect(g.actions.height).toBe(g.bubble.height)
-        expect(g.glyph.width).toBe(11)
-        expect(g.glyph.height).toBe(12)
-        expect(g.glyph.y + 6).toBeCloseTo(g.bubble.y + g.bubble.height / 2, 0)
+        expect(g.copyGlyph.width).toBe(11)
+        expect(g.copyGlyph.height).toBe(12)
+        expect(g.replyGlyph.width).toBe(13)
+        expect(g.replyGlyph.height).toBe(12)
+        expect(g.replyGlyph.y - g.copyGlyph.bottom).toBeCloseTo(12, 0)
+        expect((g.copyGlyph.y + g.replyGlyph.bottom) / 2).toBeCloseTo(g.bubble.y + g.bubble.height / 2, 0)
+        for (const glyph of [g.copyGlyph, g.replyGlyph]) {
+          expect(glyph.x + glyph.width / 2).toBeCloseTo(g.actions.x + g.actions.width / 2, 0)
+        }
+        expect(g.copy.bottom).toBeLessThanOrEqual(g.reply.y)
+        expect(g.reply.y - g.copy.bottom).toBeCloseTo(4, 0)
         expect(user ? g.bubble.x - g.actions.right : g.actions.x - g.bubble.right).toBeCloseTo(12, 0)
         expect(user ? g.bubble.right - g.row.right : g.bubble.x - g.row.x).toBeCloseTo(0, 0)
         expect(g.overflow).toBeLessThanOrEqual(1)

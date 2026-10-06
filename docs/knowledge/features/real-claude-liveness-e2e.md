@@ -533,7 +533,7 @@ overrides the resolved `pyry` binary when it isn't on `PATH` (e.g. a sibling-rep
   fake-stack twin #921 ([question-panel-cancel-refusal.md](question-panel-cancel-refusal.md)). Proves a
   live claude honours a Cancel refusal by leaving no artefact for the gated work, via a recursive
   post-quiesce workdir walk made non-vacuous by an allow arm on any post-refusal permission modal.
-- [Composer send § 10](composer-send.md#10-attachments-named-on-the-outbound-frame---takeattachments-1039-reworked-by-1055)
+- [Composer send § 10](composer-send-internals.md#10-attachments-named-on-the-outbound-frame--takeattachments-1039-reworked-by-1055)
   / [Composer attach § Pending attachments](composer-attach-pending.md#pending-attachments-1039) / [#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055) — the sixth tier sibling
   (`real-claude-attachment.spec.ts`), covered above; the live proof for the client-side change that names
   a message's attachments on the outbound `send_message` frame.

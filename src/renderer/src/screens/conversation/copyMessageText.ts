@@ -1,3 +1,10 @@
+/** Preserve both draft and full message source; only submission trims outer whitespace. */
+export function appendMessageQuote(draft: string, role: 'user' | 'assistant', text: string): string {
+  const separator = draft !== '' && !draft.endsWith('\n') ? '\n' : ''
+  const label = role === 'user' ? 'User:' : 'Assistant:'
+  return `${draft}${separator}${label}\n"${text}"\n`
+}
+
 /**
  * #969 — put a message's own text on the OS clipboard, for the copy control in the bubble's meta row.
  *

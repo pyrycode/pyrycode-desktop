@@ -1644,6 +1644,8 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
       const markup = renderToStaticMarkup(<Timeline items={items} />)
       const actions = '<div class="message-actions"><button type="button" class="bubble__copy"'
       expect(markup).toContain(actions)
+      expect(markup).toContain('<button type="button" class="bubble__copy bubble__reply" aria-label="Reply to message"')
+      expect(markup.indexOf('Reply to message')).toBeGreaterThan(markup.indexOf('Copy message'))
       expect(markup).toContain('message-row--text')
       const meta = markup.match(/<div class="bubble__meta[^"]*">(.*?)<\/div>/)?.[1]
       expect(meta).toBeDefined()
@@ -1651,7 +1653,7 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
       if (side === 'assistant') {
         expect(markup).toContain('</span></div></div>' + actions)
       } else {
-        expect(markup).toContain('</svg></button></div><div class="bubble bubble--user"')
+        expect(markup).toContain('</span></button></div><div class="bubble bubble--user"')
       }
     }
   })
@@ -1683,13 +1685,13 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
     expect(assistant).not.toContain(`${META}--user`)
   })
 
-  it('gives the copy control a real button with an accessible name, and no second focusable element', () => {
+  it('gives copy and reply native buttons with accessible names and no focusable icon', () => {
     const markup = renderToStaticMarkup(<Timeline items={settled('copy me')} />)
     // A real <button type="button"> IS the keyboard path (AC3): natively focusable, activated by Enter
     // and Space, no tabindex or key handler of our own to get wrong.
     expect(markup).toContain(`<button type="button" class="${COPY}" aria-label="${COPY_LABEL}"`)
-    // Exactly one interactive element in the bubble — the control this ticket adds and nothing else.
-    expect(markup.match(/<button/g)?.length ?? 0).toBe(1)
+    expect(markup).toContain('aria-label="Reply to message"')
+    expect(markup.match(/<button/g)?.length ?? 0).toBe(2)
     expect(markup.match(/tabindex/g)).toHaveLength(1)
     expect(markup).toContain('class="conversation__thread" aria-label="Conversation history" tabindex="0"')
   })
@@ -1733,6 +1735,7 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
     expect(markup).not.toContain(META)
     expect(markup).not.toContain(COPY)
     expect(markup).not.toContain('message-actions')
+    expect(markup).not.toContain('Reply to message')
     expect(markup).toContain('message-row--text')
     // …and the SAME item, once the daemon stops reporting it queued, draws the meta row it always did.
     const delivered = renderToStaticMarkup(

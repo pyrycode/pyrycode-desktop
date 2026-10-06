@@ -8,7 +8,7 @@ other occupants.
 ## Composer error chip (#797)
 
 Fills the composer status row's `trailing` slot (Figma error frame `112:3529`) with a red pill reading
-`COMPOSER_ERROR_CHIP_COPY` (`'Host connection down!'`, [composer send § 8](composer-send.md#8-error-chip-copy-composersendts-797)),
+`COMPOSER_ERROR_CHIP_COPY` (`'Host connection down!'`, [composer send § 8](composer-send-internals.md#8-error-chip-copy--composersendts-797)),
 shown in the `error` connection arm and in no other — the **fourth** read of `sessionStore`'s
 `ConnectionStatus`, beside `composerAvailability`'s send gate, `shouldOfferRepair`'s re-pair gate, and
 `shouldShowBanner`'s prominent band (all in [composer send](composer-send.md)).

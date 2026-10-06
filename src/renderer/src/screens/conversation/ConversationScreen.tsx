@@ -125,7 +125,7 @@ import { toolHeadlineRuns } from './toolHeadline'
 import { listedInputFields, shellCommandBlock } from './toolBody'
 import { serverIdForOpenConversation } from './unpairAction'
 import { requestRunConfigSnapshot } from './runConfigSnapshot'
-import { selectDraft, useComposerDraftStore } from '../../store/composerDraftStore'
+import { composerDraftStore, selectDraft, useComposerDraftStore } from '../../store/composerDraftStore'
 import {
   conversationListStore,
   useConversationListStore,
@@ -137,7 +137,7 @@ import { sendQueuedNow } from './sendQueuedNow'
 import { foldQueuedRows, type QueuedRowHandle } from './foldQueuedRows'
 import { groupToolRows } from './groupToolRows'
 import { foldToolRuns, type ToolRun } from './foldToolRuns'
-import { copyMessageText } from './copyMessageText'
+import { appendMessageQuote, copyMessageText } from './copyMessageText'
 import { formatMessageTime } from './messageTime'
 import { turnStatsByItemIndex } from './turnStats'
 import { AttachmentFileIcon } from './AttachmentFileIcon'
@@ -287,6 +287,15 @@ export function ConversationScreen({
     ? savedTimelineTarget.serverId
     : activeConversation !== null && 'serverId' in activeConversation &&
       typeof activeConversation.serverId === 'string' ? activeConversation.serverId : null
+  const [replyFocusRequest, setReplyFocusRequest] = useState(0)
+  const replyToMessage = (role: 'user' | 'assistant', text: string): void => {
+    if (selectedHost === null || openConversationId === null) return
+    const drafts = composerDraftStore.getState()
+    drafts.setDraft(selectedHost, openConversationId,
+      appendMessageQuote(selectDraft(drafts, selectedHost, openConversationId), role, text))
+    setReplyFocusRequest(request => request + 1)
+    window.pyry.sendDiagnostic({ event: 'message-reply-appended', code: role })
+  }
   const offline = useSessionStore(s => selectedHost !== null && s.statuses.get(selectedHost)?.type !== 'connected')
   const heldSlice = useConversationTimelineStore(s => openConversationId === null ? undefined : s.timelines.get(openConversationId))
   const ownSlice = heldSlice?.serverId === selectedHost ? heldSlice : undefined
@@ -542,6 +551,7 @@ export function ConversationScreen({
         rowKeys={thread.rowKeys}
         localEchoes={thread.localEchoes}
         foldTools={collapseToolUses}
+        onReply={replyToMessage}
         scrollPin={scrollPin}
         trailing={pendingBatch && <QuestionHistorySlot conversationId={openConversationId} />}
         // #1260: NEGATED, so the first held row's key is minus the number of rows history has already
@@ -647,6 +657,7 @@ export function ConversationScreen({
         <div className="conversation__blur" aria-hidden="true"><i /><i /><i /><i /></div>
       <ComposerSlot
         serverId={selectedHost}
+        replyFocusRequest={replyFocusRequest}
         statusArea={(sendText) => (
           <ComposerStatusArea
             isRunning={isStatusIconTurning(phase, indicatorState)}
@@ -1167,7 +1178,8 @@ export function Timeline({
   saved = false,
   onOpenMarkdownPath,
   agent,
-  trailing
+  trailing,
+  onReply
 }: {
   trailing?: ReactNode
   items: readonly ThreadItem[]
@@ -1195,6 +1207,7 @@ export function Timeline({
   /** #1656: the open conversation's agent, named by the banner and stopped-turn rows. Optional for the
    *  `scrollPin` reason: absent reads Claude, so the existing render sites stay byte-identical. */
   agent?: WireAgent
+  onReply?: (role: 'user' | 'assistant', text: string) => void
 }): JSX.Element {
   const rows = foldQueuedRows(items, queued ?? EMPTY_QUEUED, localEchoes, rowKeys)
   // Stats use source item indices; projection may move waiting echoes.
@@ -1250,6 +1263,7 @@ export function Timeline({
             item={row.item} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(row.itemIndex)}
             midTurnInput={midTurnInput} onSendQueuedNow={onSendQueuedNow}
             onOpenMarkdownPath={onOpenMarkdownPath} agent={agent}
+            onReply={onReply}
             inProgress={!saved && row.itemIndex === items.length - 1 && row.item.kind === 'assistantText'} />
           // Keep attributed text mounted through collapse and late-owner history regrouping.
           if (row.item.kind === 'assistantText' && row.item.parentToolUseId) return (
@@ -1335,7 +1349,11 @@ function BubbleMeta({
 
 // Copy the row's source text, including a partial streaming reply. The helper owns rejection,
 // so this one-shot click promise is deliberately voided and adds no store or subscription.
-function MessageActions({ text }: { text: string }): JSX.Element {
+function MessageActions({ text, role, onReply }: {
+  text: string
+  role: 'user' | 'assistant'
+  onReply?: (role: 'user' | 'assistant', text: string) => void
+}): JSX.Element {
   return (
     <div className="message-actions">
       <button
@@ -1358,6 +1376,14 @@ function MessageActions({ text }: { text: string }): JSX.Element {
         >
           <path d="M4.71429 0C3.84754 0 3.14286 0.672656 3.14286 1.5V7.5C3.14286 8.32734 3.84754 9 4.71429 9H9.42857C10.2953 9 11 8.32734 11 7.5V2.79844C11 2.39062 10.8257 1.99922 10.5163 1.71562L9.09955 0.417188C8.80737 0.15 8.41696 0 8.01183 0H4.71429ZM1.57143 3C0.704688 3 0 3.67266 0 4.5V10.5C0 11.3273 0.704688 12 1.57143 12H6.28571C7.15246 12 7.85714 11.3273 7.85714 10.5V10.125H6.28571V10.5H1.57143V4.5H1.96429V3H1.57143Z" />
         </svg>
+      </button>
+      <button
+        type="button"
+        className="bubble__copy bubble__reply"
+        aria-label="Reply to message"
+        onClick={() => onReply?.(role, text)}
+      >
+        <span className="bubble__reply-icon" aria-hidden="true" />
       </button>
     </div>
   )
@@ -1586,7 +1612,8 @@ function TimelineRow({
   onSendQueuedNow,
   turnStats,
   onOpenMarkdownPath,
-  agent
+  agent,
+  onReply
 }: {
   item: ThreadItem
   inProgress: boolean
@@ -1601,6 +1628,7 @@ function TimelineRow({
   onOpenMarkdownPath?: (path: string) => void
   /** #1656: read by the banner and turnBoundary arms, which name the conversation's agent. */
   agent?: WireAgent
+  onReply?: (role: 'user' | 'assistant', text: string) => void
 }): JSX.Element | null {
   switch (item.kind) {
     case 'assistantText': {
@@ -1656,7 +1684,7 @@ function TimelineRow({
                 text nodes between elements on separate lines. */}
             <BubbleMeta side="daemon" createdAt={item.createdAt} turnStats={turnStats} />
           </div>
-          <MessageActions text={item.text} />
+          <MessageActions text={item.text} role="assistant" onReply={onReply} />
         </div>
       )
     }
@@ -1747,7 +1775,7 @@ function TimelineRow({
         >
           {queued && midTurnInput && <QueuedRowSendNow queued={queued} onSendQueuedNow={onSendQueuedNow} />}
           {queued && <QueuedRowDrop queued={queued} onDropQueued={onDropQueued} />}
-          {!queued && <MessageActions text={item.text} />}
+          {!queued && <MessageActions text={item.text} role="user" onReply={onReply} />}
           <div className="bubble bubble--user" data-thread-role={queued ? 'queued' : 'user'}>
             {item.text}
             {/* #815: the attachment rows, written between the text and the meta row — the slot BubbleMeta's
@@ -3946,7 +3974,8 @@ function Composer({
   phase,
   onMessageSent,
   covered,
-  beforeComposer
+  beforeComposer,
+  replyFocusRequest
 }: {
   serverId: string | null
   conversationId: string | null
@@ -3954,6 +3983,7 @@ function Composer({
   onMessageSent: () => void
   covered: boolean
   beforeComposer: (sendText: (value: string) => boolean) => ReactNode
+  replyFocusRequest: number
 }): JSX.Element {
   // Selected coordinates survive metadata refreshes; only transient UI belongs to the keyed pane.
   const suggestion = useReplySuggestionStore(s => selectReplySuggestion(s, serverId, conversationId))
@@ -4072,6 +4102,16 @@ function Composer({
     conversationId: activeConversationId,
     onComplete: setText
   })
+  const consumedReplyFocus = useRef(0)
+  useThreadLayoutEffect(() => {
+    // Permission coverage keeps the request pending until this pane's composer is visible.
+    if (covered || replyFocusRequest === consumedReplyFocus.current) return
+    const input = typeAhead.inputRef.current
+    if (input === null) return
+    consumedReplyFocus.current = replyFocusRequest
+    input.focus()
+    input.setSelectionRange(input.value.length, input.value.length)
+  }, [covered, replyFocusRequest, typeAhead.inputRef])
 
   /**
    * #1033: the PASTE entry into the attach flow, and the third gesture that reaches it.
@@ -4337,17 +4377,19 @@ function Composer({
 }
 
 // Permission temporarily covers the mounted composer so its local draft survives.
-export function ComposerSlot({ serverId = null, conversationId, phase, onMessageSent, statusArea }: {
+export function ComposerSlot({ serverId = null, conversationId, phase, onMessageSent, statusArea, replyFocusRequest = 0 }: {
   serverId?: string | null
   conversationId: string | null
   phase: TurnPhase
   onMessageSent: () => void
   statusArea?: (sendText: (value: string) => boolean) => ReactNode
+  replyFocusRequest?: number
 }): JSX.Element {
   const hasPermission = useModalStore((s) =>
     conversationId !== null && selectHasOutstandingFor(conversationId)(s)
   )
   return <Composer serverId={serverId} conversationId={conversationId} phase={phase}
+    replyFocusRequest={replyFocusRequest}
     onMessageSent={onMessageSent} covered={hasPermission} beforeComposer={(sendText) => <>
       {statusArea?.(sendText)}
       <PermissionModal conversationId={conversationId} />

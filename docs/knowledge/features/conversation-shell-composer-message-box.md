@@ -74,7 +74,7 @@ paints **no container** (`background: none`) with its glyph in `--color-primary`
 desktop divergence. The send variant's glyph changed to the `circle-chevron-up-solid-full` export at
 28×28, matching the stop variant's existing size and export family; both glyphs are `fill="currentColor"`,
 no hardcoded `#9DCBFC`. `ComposerSendButton`'s own props, callbacks, `aria-label`s and disabled gate are
-untouched — see [composer send § 3](composer-send.md#3-the-controlled-composer--conversationscreentsx).
+untouched — see [composer send § 3](composer-send-internals.md#3-the-controlled-composer--conversationscreentsx).
 Through #951 the control's vertical placement was `top: 50%; transform: translateY(-50%)` — centred in
 the box. **#1056 replaced that with a bottom pin** (`bottom: 2px`) so the control stays beside the line
 being typed as the box grows past its resting height — see below.

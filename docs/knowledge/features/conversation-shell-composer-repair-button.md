@@ -13,7 +13,7 @@ except `unpair` and `not-paired`) filled the composer status row's trailing slot
 of that slot into the conversation's Top overlay** — the same overlay [the usage-limit
 notice](conversation-shell-composer-usage-limit-notice.md) moved into — leaving **Reconnect as the row
 slot's only actionable-error occupant**. Retryable errors and the two exclusions still fall through to the
-existing chip. The [pure gates](composer-send.md#5-re-pair-gate--shouldofferrepair-167) remain disjoint;
+existing chip. The [pure gates](composer-send-internals.md#5-re-pair-gate--shouldofferrepair-167) remain disjoint;
 `shouldOfferRepair` now gates `TopOverlayControl`'s `repair` prop instead of a slot arm. A bare fatal close,
 including 4421 or 4401, is still not evidence of broken pairing; only the sealed invalid-token rejection
 establishes repair.
@@ -66,7 +66,7 @@ lifecycle events remain authoritative. A rejected bridge call emits only the fix
 `composer-reconnect-failed` / `bridge-rejected` diagnostic, with no error details.
 
 `COMPOSER_REPAIR_BUTTON_COPY` and `COMPOSER_RECONNECT_BUTTON_COPY` still live beside the
-connection copy in `composerSend.ts`, unmoved by #1604; see [Composer send § 9](composer-send.md#9-actionable-error-button-copy-composerrepairbuttoncopy-963).
+connection copy in `composerSend.ts`, unmoved by #1604; see [Composer send § 9](composer-send-internals.md#9-actionable-error-button-copy--composerrepairbuttoncopy-963).
 `TopOverlay` imports `COMPOSER_REPAIR_BUTTON_COPY` directly rather than through a prop.
 
 ### The row grows to fit the button — now only for Reconnect (#963; narrowed by #1604)

@@ -60,7 +60,7 @@ export function drainPendingAttachments(holder: {
   `PendingAttachmentTake` — `{ attachments, rollback }` — rather than the bare set: `attachments` is the
   same take as before, and `rollback` restores exactly it to the holder, undoing the drain without
   splitting it into a peek/consume pair. The type is declared in `composerSend.ts`, its consumer, not
-  here — see [Composer send § 10](composer-send.md#10-attachments-named-on-the-outbound-frame---takeattachments-1039-reworked-by-1055)
+  here — see [Composer send § 10](composer-send-internals.md#10-attachments-named-on-the-outbound-frame--takeattachments-1039-reworked-by-1055)
   for why the boundary runs that way and why restoring is sound (the caller is synchronous end to end, so
   nothing can arrive between the take and a rollback for it to clobber).
 
@@ -113,7 +113,7 @@ last send, which the events give on their own arrival order. The listener now as
 it still correlates nothing to a gesture.
 
 **Where the send reads it — `submitMessage` (`composerSend.ts`).** See [Composer send §
-10](composer-send.md#10-attachments-named-on-the-outbound-frame---takeattachments-1039-reworked-by-1055)
+10](composer-send-internals.md#10-attachments-named-on-the-outbound-frame--takeattachments-1039-reworked-by-1055)
 for the read site, why it sits below both of `submitMessage`'s early `false` returns, why it now sits
 *above* the guarded send (the ids ride the outbound `send_message` frame since #1055), and how an empty
 or unwired take normalises to an absent field on both the frame and the echo.
@@ -512,7 +512,7 @@ children with no raw-markup sink.
 
 - [Composer attach](composer-attach.md) — the parent page: the button, the outcome line, in-flight
   progress, the copy module, and the CSS shared across the whole family.
-- [Composer send § 10](composer-send.md#10-attachments-named-on-the-outbound-frame---takeattachments-1039-reworked-by-1055) —
+- [Composer send § 10](composer-send-internals.md#10-attachments-named-on-the-outbound-frame--takeattachments-1039-reworked-by-1055) —
   the read site for the take.
 - [Thread timeline § Types](thread-timeline-internals.md#types) — `MessageAttachment` and the `userText` fields the
   taken set feeds.

@@ -201,7 +201,7 @@ path #307 had, now read one level up in `Composer` rather than in a standalone c
 
 **Since [#1072](https://github.com/pyrycode/pyrycode-desktop/issues/1072), a click is not the only route
 to `sendInterrupt`.** Escape reaches it too, from two points inside the composer: `Composer`'s own
-`handleKeyDown` (see [Composer send § 7](composer-send.md#7-keystroke-intent-gates--shouldsubmitonkeydown-512-and-shouldinterruptonkeydown-1072))
+`handleKeyDown` (see [Composer send § 7](composer-send-internals.md#7-keystroke-intent-gates--shouldsubmitonkeydown-512-and-shouldinterruptonkeydown-1072))
 when the caret is in the message box, and a new `onKeyDown` on `ComposerSendButton`'s running variant
 itself, for the state a mouse send actually leaves the operator in.
 
@@ -377,7 +377,7 @@ without an observed failure.
   rules; adds one two-variant component. `sendInterrupt.ts`, the wire type, and the command pathway
   (#305/#306) are untouched. See § The render affordance above.
 - [#1072](https://github.com/pyrycode/pyrycode-desktop/issues/1072) — Escape stops the running turn from
-  the keyboard: `shouldInterruptOnKeyDown` in [Composer send § 7](composer-send.md#7-keystroke-intent-gates--shouldsubmitonkeydown-512-and-shouldinterruptonkeydown-1072),
+  the keyboard: `shouldInterruptOnKeyDown` in [Composer send § 7](composer-send-internals.md#7-keystroke-intent-gates--shouldsubmitonkeydown-512-and-shouldinterruptonkeydown-1072),
   bound in `Composer`'s `handleKeyDown` and, for the mouse-send-then-Escape path, on
   `ComposerSendButton`'s running variant itself — see § The render affordance above. `sendInterrupt`,
   the wire type, and the command pathway are all unchanged; this ticket gives `sendInterrupt` two more

@@ -126,6 +126,8 @@ function createFactoryFake() {
     })
     const noop = (): void => {}
     return {
+      requestHostSystemPrompt: () => {},
+      setHostSystemPrompt: () => {},
       start: () => {
         calls.start += 1
       },

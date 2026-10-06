@@ -48,6 +48,7 @@ function renderView(
       onCancel={noop}
       onSave={noop}
       unpair={UNPAIR_NOOPS}
+      prompt={{ type: 'reading' }} onPromptChange={noop} onResetPrompt={noop}
     />
   )
 }
@@ -94,7 +95,7 @@ describe('EditHostDialogView', () => {
     expect(markup).toContain('role="dialog"')
     expect(markup).toContain('aria-modal="true"')
     expect(markup).toContain('class="modal"')
-    expect(markup).toContain('--modal-width:646px')
+    expect(markup).toContain('--modal-width:640px')
     const titleId = markup.match(/aria-labelledby="([^"]+)"/)?.[1]
     expect(titleId).toBeTruthy()
     expect(markup).toContain(`id="${titleId}"`)
@@ -175,7 +176,7 @@ describe('EditHostDialogView', () => {
     // `renderToStaticMarkup` escapes ' → &#x27; (the standing desktop lesson), and the line interpolates
     // neither the label nor the server id — so no untrusted text and no backend detail can reach it.
     const markup = renderView('pyrybox', 'failed')
-    expect(markup).not.toContain('&#x27;')
+    expect(markup.match(/<p class="edit-host__error">[^<]*<\/p>/)?.[0] ?? '').not.toContain('&#x27;')
     expect(markup).not.toContain('pyrybox</p>')
   })
 
@@ -434,7 +435,7 @@ describe('EditHostDialogView — the unpair slot (#1422)', () => {
     // neither the label nor the server id, so no operator- or daemon-authored text reaches this voice.
     for (const status of ['confirming-unpair', 'unpairing', 'unpair-failed'] as const) {
       const markup = renderView('pyrybox', status, { serverId: 'Serverid-Sentinel', relayUrl: 'r' })
-      expect(markup).not.toContain('&#x27;')
+      expect(markup.match(/<p class="edit-host__error">[^<]*<\/p>/)?.[0] ?? '').not.toContain('&#x27;')
       // Each identity value still appears exactly once — in its own caption's span, never in the copy.
       expect(countOf(markup, 'Serverid-Sentinel')).toBe(1)
       expect(countOf(markup, 'pyrybox')).toBe(1)
@@ -513,5 +514,38 @@ describe('runEditHostUnpair (#1422)', () => {
     const d = deps('error')
     await runEditHostUnpair(d)
     expect(d.unpair).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('host prompt view', () => {
+  const ready = { type: 'ready' as const, original: '', draft: '', defaultText: 'default', saveFailed: false }
+  const markup = (prompt: import('../../store/hostPromptController').HostPromptState) => renderToStaticMarkup(
+    <EditHostDialogView name="host" status="idle" server={SERVER} unpair={UNPAIR_NOOPS}
+      onNameChange={noop} onCancel={noop} onSave={noop} prompt={prompt}
+      onPromptChange={noop} onResetPrompt={noop} />)
+  it('labels the escaped field and renders exact helper plus reset only on verbatim difference', () => {
+    const html = markup({ ...ready, draft: '<script>inert</script>' })
+    expect(html).toContain('>Host system prompt:</span>')
+    expect(html).toContain('&lt;script&gt;inert&lt;/script&gt;')
+    expect(html).toContain('Added to every conversation on this host, before the channel system prompt. A change takes effect from each conversation&#x27;s next session.')
+    expect(html).toContain('>Reset to default</button>')
+    expect(markup({ ...ready, draft: 'default' })).not.toContain('>Reset to default</button>')
+    expect(markup({ ...ready, draft: 'default ' })).toContain('>Reset to default</button>')
+  })
+  it('keeps name and dismissal available after read failure, and locks save/reset/unpair during writes', () => {
+    const failed = markup({ type: 'read-failed' })
+    expect(failed).toContain('Could not read the host system prompt')
+    expect(failed).toMatch(/textarea[^>]*disabled/)
+    expect(failed).not.toMatch(INPUT_DISABLED)
+    const saving = markup({ type: 'saving-prompt', previous: ready, requestId: 'write' })
+    expect(saving).toMatch(SAVE_DISABLED)
+    expect(saving).toMatch(INPUT_DISABLED)
+    expect(saving).toMatch(/edit-host__reset"[^>]*disabled/)
+    expect(saving).not.toMatch(CANCEL_DISABLED)
+    expect(saving).not.toMatch(CLOSE_DISABLED)
+  })
+  it('refuses multibyte excess while allowing exactly the inclusive limit', () => {
+    expect(markup({ ...ready, draft: 'é'.repeat(4097) })).toMatch(SAVE_DISABLED)
+    expect(markup({ ...ready, draft: 'é'.repeat(4096) })).not.toMatch(SAVE_DISABLED)
   })
 })

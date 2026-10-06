@@ -12,7 +12,7 @@ On a non-failed host, the glyph, label and chevron sit in a native disclosure bu
 
 <a id="the-rows-pen-and-plus-on-hover-1185"></a>
 
-The hover action is **Edit host**. Its pen and pointer-following name pill use fixed client copy; clicking opens [Edit host](edit-host-dialog.md), which changes the local paired-host label. The host row no longer renders **Add workspace**. A connected host instead exposes **Create channel** and **Create chat** pluses on its section rows, including when empty. Their confirmation dialogs send the clicked host with `cwd: null` so the daemon chooses its default folder. Disconnected and reconnecting hosts have no section pluses. Section labels are fixed and cannot be renamed. Legacy `onAddWorkspace` props and dialog code still exist in `ChannelList.tsx`, but there is no sidebar entry point; the verifier marked that unreachable path for later cleanup.
+The hover action is **Edit host**. Its pen and pointer-following name pill use fixed client copy; clicking opens [Edit host](edit-host-dialog.md), which changes the local paired-host label and reads/edits that selected host's daemon-wide system prompt. The host row no longer renders **Add workspace**. A connected host instead exposes **Create channel** and **Create chat** pluses on its section rows, including when empty. Their confirmation dialogs send the clicked host with `cwd: null` so the daemon chooses its default folder. Disconnected and reconnecting hosts have no section pluses. Section labels are fixed and cannot be renamed. Legacy `onAddWorkspace` props and dialog code still exist in `ChannelList.tsx`, but there is no sidebar entry point; the verifier marked that unreachable path for later cleanup.
 
 <a id="the-edit-host-dialog-1299"></a>
 <a id="the-add-workspace-dialog-1308"></a>
@@ -34,5 +34,5 @@ A disclosure alone cannot prove authentication: connecting, disconnected and unr
 - [Channel List](channel-list.md) — row attribution, partitioning and creation.
 - [Host and section folds](channel-list-host-fold.md) — disclosure state and failure behavior.
 - [Host-first tree geometry](channel-list-tree-inset.md) — row and section positions.
-- [Edit host dialog](edit-host-dialog.md) — local host-label mutation.
+- [Edit host dialog](edit-host-dialog.md) — local host label and selected-host system prompt.
 - [Session store](session-store.md) and [relay-link store](relay-link-store.md) — per-server status sources.

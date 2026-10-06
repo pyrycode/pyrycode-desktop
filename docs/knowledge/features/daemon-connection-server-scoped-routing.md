@@ -62,6 +62,23 @@ through this accessor.)
 
 ## The command shape
 
+The host prompt commands require explicit top-level `serverId` and `requestId`:
+`requestHostSystemPrompt` has no payload; `setHostSystemPrompt` requires
+`payload.system_prompt` as a string, including `""` to clear. `isRendererCommand`
+accepts server ids of 1–1024 characters and client request ids of 1–128 characters;
+missing/null/non-string ids and missing/null/non-string write text are refused.
+These commands cannot use the optional sole-host fallback described below.
+
+Main routes through `servers.route(command.serverId)` to the selected registry
+connection, whose facade delegates `requestHostSystemPrompt(requestId)` and
+`setHostSystemPrompt(systemPrompt, requestId)`. An unknown host sends nothing and
+emits a fixed `hostSystemPromptFailed` with the requested host stamp, request id
+and read/write operation. A known disconnected host fails through its connection.
+Fresh wire literals exclude both top-level ids and any extra payload fields;
+main enforces the inclusive UTF-8 write bound before sending. The
+[separate correlation maps and deadlines](daemon-connection-correlation-system-prompt-and-mcp.md#host-system-prompt-readwrite-correlation)
+settle each wait without retry and clear it on disconnect/replacement.
+
 Six `RendererCommand` union arms gained an optional top-level `serverId?: string` — a sibling of
 `payload`, never a field inside it, `setSessionSettings`'s `changeId` precedent exactly. The envelope
 builders consume `payload` alone, so the key has no expression that could carry it onto the wire; four of

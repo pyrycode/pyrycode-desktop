@@ -72,7 +72,35 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
-**Latest verified run: #1729, 2026-10-06 — 25 executed, 25 passed, 0 failed, 1 skipped.**
+**Latest verified run: #1723, 2026-10-06 — 26 executed, 26 passed, 0 failed, 1 skipped.**
+The [dispatcher PASS comment](https://github.com/pyrycode/pyrycode-desktop/issues/1723#issuecomment-6024904239)
+records `feature/1723` at `1832410096`, merged with main `d627211c4d` in run
+`2026-10-06T20-27-45-100Z`. The supplied per-test gate report confirms
+`real claude restores the status after reconnect during the same running turn`
+was present, executed and passed. The sole listed skip is
+`real claude picks up a saved channel system prompt at Reset session`; no reason is recorded.
+The configured command installed and built, then ran
+`npx playwright test --config playwright.real-claude.config.ts --reporter=json`,
+rather than the criterion's `npm run e2e:real:gate`. The counted run and named
+pass establish the required execution despite this command mismatch.
+
+The [reconnect spec](../../../e2e/real-claude-phase-reconnect.spec.ts) holds a real
+foreground Bash tool open and requires a new connection, an attributed running
+phase and the same uncompleted turn before accepting restored status. The
+[earlier verified baseline](https://github.com/pyrycode/pyrycode-desktop/pull/1763#issuecomment-5994328407)
+recorded `responding`, connections 1 → 2 and the original turn still running:
+the selected test executed once, passed once, with 0 failed and 0 skipped.
+That verifier confirmed daemon v0.31.1 release revision
+`ad7c57a850277bea48aafc4daad2cd2983e8fc90` contains prerequisite
+`25b532b6205507784a7615fe59d3c5a7bb2f5484` (pyrycode#2718).
+This provenance belongs to the earlier baseline, not a version assertion about
+the latest gate. Existing desktop behavior needed no production fix. The live
+observer cannot prove omission of `event_id`; the
+[fake regression](conversation-timeline-store-limits.md#testing) supplies that seam.
+These results cover the built desktop, local relay, real daemon and real Claude;
+the production relay is outside this gate.
+
+**Previous verified run: #1729, 2026-10-06 — 25 executed, 25 passed, 0 failed, 1 skipped.**
 The [dispatcher PASS comment](https://github.com/pyrycode/pyrycode-desktop/issues/1729#issuecomment-6024105618)
 records `feature/1729` at `98f3db3893`, integrated with main `8b95b3bda8`, in run
 `2026-10-06T19-37-51-069Z`. Its sole listed skip is

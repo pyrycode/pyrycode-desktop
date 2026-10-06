@@ -271,13 +271,9 @@ test('typing a slash opens the published menu; Enter completes, a second Enter s
   expect(Math.round(fullBox.height)).toBe(10 * 28 + 4)
   expect(await panel.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true)
 
-  // And the width stops COMPOSER_OPTIONS_WINDOW_MARGIN_PX clear of the window's right edge. The hostile
-  // 400-character name draws far wider than any window, so the panel is at its bound and this pins the
-  // bound itself rather than the incidental width of a short list — the assertion is an equality against
-  // the measured innerWidth, not a `<=` that a narrow panel would satisfy for free. `composerOptions-
-  // MaxWidthPx` keeps the arithmetic; this proves it reaches the panel.
-  const viewportWidth = await page.evaluate(() => window.innerWidth)
-  expect(Math.round(fullBox.x + fullBox.width)).toBe(viewportWidth - COMPOSER_OPTIONS_WINDOW_MARGIN_PX)
+  // The long name reaches the shared menu bound, now measured from the input pane's right edge.
+  const paneRight = await page.locator('.conversation__input-chrome').evaluate(el => el.getBoundingClientRect().right)
+  expect(Math.round(fullBox.x + fullBox.width)).toBe(paneRight - COMPOSER_OPTIONS_WINDOW_MARGIN_PX)
   // Anchored at the message box's left edge throughout: the bound caps the width, it never moves the panel.
   const finalBoxBox = await box.boundingBox()
   if (!finalBoxBox) throw new Error('the composer is not laid out')

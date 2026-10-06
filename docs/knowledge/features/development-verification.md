@@ -236,6 +236,38 @@ Flow arithmetic alone can predict the wrong boundary.
 An overlay can paint beneath a later positioned sibling when both use automatic
 stacking or equal explicit levels. Check the complete ancestor and sibling arrangement.
 
+The [translucent conversation layout](conversation-shell-chrome.md#layout-contract)
+keeps the existing scroll surface across the full pane. Assert unchanged viewport
+height plus measured padding changes when status, attachments, drafts or pending
+prompts alter the occupied input height. Compare the newest row with input chrome,
+and pills with occupied header height plus their 12px gap, including an empty offline
+chat. The scrolled Desktop Figma frame does not establish a new resting offset:
+history start still needs the 97px first-row clearance and 20px horizontal alignment.
+Native anchoring can emit resize scrolls before `ResizeObserver`; verify following
+survives native window resizing and Electron zoom, while parked arrivals stay held.
+Use `BrowserWindow.setSize`, not `page.setViewportSize`, to establish the actual
+800×600 and 1280×800 window geometry, and distinguish outer size from content size.
+
+Stacking levels are relative to ancestor contexts. The message area's level 0
+contains rows, pills and drawer; sharp top/input chrome at level 1 keeps controls
+and their menus above them. Existing level-2 sheets and later dialog siblings retain
+precedence, with Create chat at level 3. A raised sheet can cover the dialog it opens;
+an overly raised header can beat a dialog scrim. Keep both surfaces mounted for
+scrim hit tests and retain actual dialog clicks. Decorative blur layers must not
+intercept pointer input. Drawer containment needs both measured vertical boundaries
+and width minus the right inset: `min(360px, 100%)` alone overhangs a narrow pane.
+Retain composer send, Escape and conversation-switch checks while the drawer is open.
+
+Conversation footer panels clamp to the input pane, use its width minus right margin
+and label inset, and shift left as needed. Bounding the background rectangle alone
+can leave labels clipped outside it. Wrapping only in the space beside a rightward
+trigger can make long menus taller than the viewport at 125% zoom. Measure every
+rendered text line, including unbroken names; prove selection by keyboard and a real
+click on the final wrapped line at both sizes and 100%/125% zoom. Keep visible overflow
+for focus outlines. Type-ahead retains single-line containment within the pane;
+other shared-menu consumers retain their prior boundary. See
+[menu clamping](conversation-shell-composer-options-panel.md).
+
 Stacking proof needs positive rectangle overlap before `elementFromPoint` checks,
 then a real click on a menu item inside the overlap that opens its destination.
 Visibility and bounding boxes can pass while the item is covered; a hit-test outside
@@ -244,9 +276,78 @@ the intersection cannot prove precedence. The
 regression also checks that the computed menu anchor level exceeds the Top overlay.
 It covers usage at 1280×800 and 800×600 windows, and Re-pair alone at 1280×800.
 The pairing-rejection banner pushes the second pill below the popup, so the fixture
-dismisses usage before testing Re-pair and measures actual overlap in each state.
+dismisses usage before testing Re-pair. Usage proves positive overlap and a real
+menu-item click inside the pill intersection at both sizes. With measured header
+clearance, Re-pair sits below the short popup; that state checks stacking and a real
+menu click at its natural position, without claiming overlap. The empty-offline
+translucent-control case separately clicks Re-pair below the occupied header.
 Drive Re-pair with a sealed non-retryable `error` envelope carrying `auth.invalid_token`;
 a terminal socket closure offers Reconnect and cannot establish that pill's stacking.
+
+[`capturePairedApp`](../../../e2e/fixtures/capturePairedApp.ts) waits two animation
+frames, then captures through Electron's native `webContents.capturePage`, avoiding
+the Playwright screenshot-protocol stall observed on this runner. It recursively
+creates the destination parent before writing and returns the PNG buffer. Existing
+scratch directories can hide a missing-parent failure; both translucent-control
+size cases write a fresh nested test-output path and compare the saved PNG to the
+returned buffer. Preserve original capture paths when migrating a scenario.
+
+Recorded [translucent-control design](../../specs/architecture/1733-translucent-thread-controls.md)
+evidence: the dispatcher verifier gate on 2026-10-06 at final production revision
+`d2ef7fc79270a0b01d8d5b9316bb9544c96659d7` ran
+`npx playwright test --reporter=json`: 284 executed, 284 passed, 0 failed, 4 skipped.
+The [final verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1797#issuecomment-6007169599)
+confirms every test in the following spec groups was present, executed and passed
+in that run. Each group had 0 failed and 0 skipped:
+
+| Browser spec | Executed / passed | Proof retained |
+| --- | --- | --- |
+| `translucent-thread-controls.spec.ts` | 3 / 3 | Full-pane overlap, dynamic clearance, resize/zoom, offline pills, fresh capture parents |
+| `composer-options-clamp.spec.ts` | 3 / 3 | Width/shift restoration, complete long labels, real selection and focus |
+| `thread-scroll-pin.spec.ts` | 11 / 11 | Following, late images, zero/nonzero prepend position, no extra history demand |
+| `history-walk.spec.ts` | 2 / 2 | Existing history behavior |
+| `composer-message-box.spec.ts` | 3 / 3 | Draft sizing, scrolling and editing |
+| `thread-overflow-overlay.spec.ts` | 1 / 1 | Menu/pill overlap and real clicks |
+| `background-task-drawer.spec.ts` | 1 / 1 | Native resizing, containment, send, Escape and chat switch |
+| `chat-top-bar-geometry.spec.ts` | 5 / 5 | Top bar, dropdown interaction and sheet/dialog scrims |
+| `permission-modal-answer-paths.spec.ts` | 7 / 7 | Permission response paths |
+| `question-picks.spec.ts`, `question-answer-continue.spec.ts`, `question-cancel-refuses.spec.ts` | 3 / 3 | Picks, Continue and Cancel |
+
+The footer tests are named `the options panel fits the pane and restores its width
+on resize`, and `long footer model labels stay readable and selectable at 1280 with
+zoom` / `long footer model labels stay readable and selectable at 800 with zoom`;
+each executed once and passed, with 0 failed and 0 skipped.
+The verdict also confirms all 13 tests across the migrated top-bar, status-spacing,
+usage-limit, type-ahead and unpair/repair specs executed and passed (0 failed, 0 skipped),
+retaining interaction and hit-test assertions. These overlap the groups above and
+are not an additional suite total. The four full-run skips concern platform-specific
+badge/window-close scenarios. Acceptance uses fake transport; no real-Claude run or
+separate manual interaction run is claimed.
+
+The same verdict independently inspected all 14 native synthetic captures at that
+revision against [Desktop `756:9848`](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG/Pyrycode-Client?node-id=756-9848),
+[Top bar `731:6010`](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=731-6010)
+and [Input area `134:5013`](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=134-5013).
+Fade/softening, sharp controls, preserved sidebar/alignment, expanded-input clearance,
+drawer containment and complete long labels with visible focus matched, with no
+unresolved visual deviation. Outer windows were 1280×800 and 800×600; native 100%
+content captures were 1280×773 and 800×573. Geometry tests establish resting clearance;
+captures establish appearance.
+
+| State | Original 1280×800 capture | Original 800×600 capture |
+| --- | --- | --- |
+| Resting | `/tmp/builder-1733/resting-1280.png` | `/tmp/builder-1733/resting-800.png` |
+| Under header | `/tmp/builder-1733/under-header-1280.png` | `/tmp/builder-1733/under-header-800.png` |
+| Under composer | `/tmp/builder-1733/under-composer-1280.png` | `/tmp/builder-1733/under-composer-800.png` |
+| Expanded composer | `/tmp/builder-1733/expanded-1280.png` | `/tmp/builder-1733/expanded-800.png` |
+| Drawer | `/tmp/builder-1733/drawer-1280.png` | `/tmp/builder-1733/drawer-800.png` |
+| Long labels, 100% | `/tmp/builder-1733/long-model-1280-1.png` | `/tmp/builder-1733/long-model-800-1.png` |
+| Long labels, 125% | `/tmp/builder-1733/long-model-1280-1.25.png` | `/tmp/builder-1733/long-model-800-1.25.png` |
+
+Reviewed copies and a SHA-256 manifest are retained under
+`/tmp/verifier-1797/review-d2ef7fc7/` with the same basenames. These are recorded scratch
+evidence paths, not committed image assets. Original paths and comparison remain in
+[PR #1797](https://github.com/pyrycode/pyrycode-desktop/pull/1797).
 
 Sidebar popup dismissal needs a complete gesture: closing on outside mousedown alone
 can expose the underlying tree to the following click. The

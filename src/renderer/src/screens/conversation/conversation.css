@@ -7096,6 +7096,159 @@ button.top-overlay-pill {
   font-weight: var(--text-body-small-weight-emphasized);
 }
 
+/* Full-pane scrolling: occupied chrome height remains stylesheet padding even when the
+   pin clears short-history compensation. The reader keeps its independent inset overlay. */
+.conversation__covered {
+  position: absolute;
+  inset: 0;
+  display: block;
+  --thread-header-height: 85px;
+  --thread-input-height: 132px;
+  --thread-header-ground: #09141d;
+  --thread-input-ground: rgb(11 14 17 / 60%);
+  --thread-blur-low: 2px;
+  --thread-blur-medium: 5px;
+  --thread-blur-high: 8px;
+  --thread-blur-full: 10px;
+  --thread-control-shadow: 0 4px 2.5px rgb(0 0 0 / 20%);
+}
+
+.conversation__message-area {
+  position: absolute;
+  inset: 0;
+  /* Contain pills and the drawer below chrome, leaving the existing modal levels intact. */
+  z-index: 0;
+}
+
+.conversation__message-area > .conversation__thread {
+  box-sizing: border-box;
+  margin-left: 0;
+  padding: calc(var(--thread-header-height) + var(--space-3)) var(--space-5)
+    var(--thread-input-height);
+}
+
+.conversation__top-chrome,
+.conversation__input-chrome {
+  position: absolute;
+  left: 0;
+  right: 0;
+  box-sizing: border-box;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.conversation__top-chrome {
+  top: 0;
+  padding: var(--space-6) var(--space-5) 0;
+}
+
+.conversation__input-chrome {
+  bottom: 0;
+  padding: var(--space-4) var(--space-5);
+}
+
+.conversation__top-chrome > :not(.conversation__blur),
+.conversation__input-chrome > :not(.conversation__blur) {
+  position: relative;
+  pointer-events: auto;
+}
+
+.conversation__input-chrome .composer-status {
+  margin-top: 0;
+}
+
+.conversation__overflow-title,
+.composer-status__label {
+  text-shadow: var(--shadow-thread);
+}
+
+.conversation__overflow-trigger,
+.composer-status__icon {
+  filter: drop-shadow(var(--thread-control-shadow));
+}
+
+/* Masks blend progressively stronger backdrop samples. Controls are siblings above these
+   decorative layers, so their text and hit targets never inherit a blur. */
+.conversation__blur,
+.conversation__blur::after,
+.conversation__blur > i {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.conversation__blur::after {
+  content: '';
+  background: linear-gradient(to bottom, var(--thread-header-ground), transparent);
+}
+
+.conversation__blur > i:nth-child(1) {
+  backdrop-filter: blur(var(--thread-blur-full));
+  mask-image: linear-gradient(to bottom, black, transparent 40%);
+}
+.conversation__blur > i:nth-child(2) {
+  backdrop-filter: blur(var(--thread-blur-high));
+  mask-image: linear-gradient(to bottom, transparent, black 25%, transparent 65%);
+}
+.conversation__blur > i:nth-child(3) {
+  backdrop-filter: blur(var(--thread-blur-medium));
+  mask-image: linear-gradient(to bottom, transparent 25%, black 55%, transparent 85%);
+}
+.conversation__blur > i:nth-child(4) {
+  backdrop-filter: blur(var(--thread-blur-low));
+  mask-image: linear-gradient(to bottom, transparent 55%, black 80%, transparent);
+}
+
+.conversation__input-chrome .conversation__blur::after {
+  background: linear-gradient(to bottom, transparent, var(--thread-input-ground) 20%);
+}
+.conversation__input-chrome .conversation__blur > i:nth-child(1) {
+  mask-image: linear-gradient(to bottom, transparent, black 20%);
+}
+.conversation__input-chrome .conversation__blur > i:nth-child(2) {
+  mask-image: linear-gradient(to bottom, transparent 8%, black 16%, transparent 24%);
+}
+.conversation__input-chrome .conversation__blur > i:nth-child(3) {
+  mask-image: linear-gradient(to bottom, transparent 3%, black 10%, transparent 18%);
+}
+.conversation__input-chrome .conversation__blur > i:nth-child(4) {
+  mask-image: linear-gradient(to bottom, transparent, black 4%, transparent 10%);
+}
+
+.conversation__top-overlay {
+  top: calc(var(--thread-header-height) + var(--space-3));
+  left: var(--space-5);
+  right: var(--space-5);
+}
+
+.background-task-drawer {
+  top: var(--thread-header-height);
+  bottom: var(--thread-input-height);
+  right: var(--space-5);
+  width: min(360px, calc(100% - var(--space-5)));
+}
+
+.conversation__message-area > .conversation__thread {
+  position: relative;
+  z-index: 0;
+}
+
+.conversation__input-chrome .composer-options {
+  max-width: var(--composer-options-max-width, none);
+}
+
+/* Bounded footer labels wrap fully, including unbroken model names. Keep overflow visible
+   on the row and panel so the existing keyboard focus outline paints outside their edges. */
+.conversation__input-chrome .composer__footer .composer-options__item {
+  box-sizing: border-box;
+  height: auto;
+  min-height: 28px;
+  padding-block: var(--space-1);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  flex-shrink: 0;
+}
+
 /* Left-edge header popup: preserve footer and right-aligned consumers' offsets. */
 .composer-options-anchor--bottom-start {
   flex: 0 0 auto;

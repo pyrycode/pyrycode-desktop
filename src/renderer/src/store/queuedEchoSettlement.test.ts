@@ -76,6 +76,39 @@ describe('queued own echo settlement', () => {
     expect(text(s, [])).toEqual(['first reply', 'turnBoundary', 'before delivery', 'own', 'after delivery'])
   })
 
+  it.each([
+    { removalFirst: false, released: false }, { removalFirst: true, released: false },
+    { removalFirst: false, released: true }, { removalFirst: true, released: true }
+  ])('forced delivery advances only still-queued successors: %j', ({ removalFirst, released }) => {
+    let s = reduceTimeline(waiting(), { type: 'userText', messageId: 'm', text: 'second own', createdAt: 456 })
+    s = markLocalSendQueued(s, [queue(), queue(8)])
+    const second = s.items.at(-1)!
+    const key = s.rowKeys?.at(-1)
+    s = reduceTimeline(s, end('first'))
+    s = reduceTimeline(s, delta('second', 'before forced delivery'))
+    if (released) s = markLocalSendQueued(s, [queue()])
+    const remaining = released ? [] : [queue(8)]
+    if (removalFirst) s = markLocalSendQueued(s, remaining)
+    s = reduceTimeline(s, receipt(7, true))
+    if (!removalFirst) s = markLocalSendQueued(s, remaining)
+    s = reduceTimeline(s, delta('second', 'after forced delivery'))
+    s = reduceTimeline(s, end('second'))
+    s = markLocalSendQueued(s, [])
+    s = reduceTimeline(s, delta('third', 'next reply'))
+    const before = s
+    s = reduceTimeline(s, receipt(8))
+    expect(s.phase).toBe(before.phase)
+    expect(s.localSendPending).toBe(before.localSendPending)
+    expect(text(s, [])).toEqual(released
+      ? ['first reply', 'turnBoundary', 'second own', 'before forced delivery', 'own', 'after forced delivery', 'turnBoundary', 'next reply']
+      : ['first reply', 'turnBoundary', 'before forced delivery', 'own', 'after forced delivery', 'turnBoundary', 'second own', 'next reply'])
+    expect(s.items[s.rowKeys!.indexOf(key!)]).toBe(second)
+    expect(reduceTimeline(s, receipt(7, true))).toBe(s)
+    expect(reduceTimeline(s, receipt(8))).toBe(s)
+    s = reduceTimeline(s, delta('third', ' continues'))
+    expect(s.items.at(-1)).toMatchObject({ text: 'next reply continues' })
+  })
+
   it('keeps submission order and isolates distinct queue entries with colliding message IDs', () => {
     let s = waiting()
     s = reduceTimeline(s, { type: 'userText', messageId: 'm', text: 'second own' })

@@ -60,8 +60,10 @@ for (const historyFirst of [false, true]) {
   })
 }
 
-for (const order of ['removal-first', 'receipt-first', 'sent-now'] as const) {
+for (const order of ['removal-first', 'receipt-first', 'sent-now', 'mixed-removal-first', 'mixed-receipt-first'] as const) {
   test(`queued own rows settle in stream order: ${order}`, async ({ launchPairedApp }) => {
+    const forced = order === 'sent-now' || order.startsWith('mixed-')
+    const removalFirst = order === 'removal-first' || order === 'mixed-removal-first'
     const sends: SendMessagePayload[] = []
     const { page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
       const frame = decodeEnvelope(bytes)
@@ -115,16 +117,17 @@ for (const order of ['removal-first', 'receipt-first', 'sent-now'] as const) {
       ...entries[index], role: 'user', text: 'receipt must preserve own copy', sent_now
     })
     end('first')
-    if (order === 'sent-now') delta('intervening', 'Running turn before Send now')
-    if (order === 'removal-first') push('queue_state', { queued: entries.slice(1) })
-    deliver(0, order === 'sent-now')
+    if (forced) delta(order === 'sent-now' ? 'intervening' : 'answer', 'Running turn before Send now')
+    if (removalFirst) push('queue_state', { queued: entries.slice(1) })
+    deliver(0, forced)
     delta('answer', 'Answer to first follow-up')
     await expect(thread.getByText('Answer to first follow-up', { exact: false })).toBeVisible()
-    if (order !== 'removal-first') {
+    if (!removalFirst) {
       await expect(own).toHaveCount(1)
       push('queue_state', { queued: entries.slice(1) })
     }
     await expect(page.locator('.message-row--user:not(.message-row--queued)', { hasText: 'Own follow-up one' })).toHaveCount(1)
+    await expect(page.locator('.message-row--queued', { hasText: 'Own follow-up two' })).toHaveCount(1)
     expect(await ownHandle?.evaluate(node => node.isConnected)).toBe(true)
     await expect(group).toHaveAttribute('aria-expanded', 'true')
     await expect(tool).toHaveAttribute('aria-expanded', 'true')
@@ -141,7 +144,7 @@ for (const order of ['removal-first', 'receipt-first', 'sent-now'] as const) {
     const transcript = await orderOf()
     const position = (text: string) => transcript.findIndex(row => row.includes(text))
     expect(position('First reply final output')).toBeLessThan(position('Own follow-up one'))
-    if (order === 'sent-now') expect(position('Running turn before Send now')).toBeLessThan(position('Own follow-up one'))
+    if (forced) expect(position('Running turn before Send now')).toBeLessThan(position('Own follow-up one'))
     expect(position('Own follow-up one')).toBeLessThan(position('Answer to first follow-up'))
     expect(position('Answer to first follow-up')).toBeLessThan(position('Own follow-up two'))
     expect(position('Own follow-up two')).toBeLessThan(position('Answer to second follow-up'))

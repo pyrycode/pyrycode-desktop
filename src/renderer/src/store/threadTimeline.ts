@@ -633,7 +633,7 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       rowKeys.splice(insertion, 0, own.rowKey)
       return { ...state, items, rowKeys, localEchoes: echoes.map(e => e === own ? {
         ...e, queuedMsgId: e.queuedMsgId ?? event.queuedMsgId, settled: true
-      } : own.waiting && own.afterKey !== undefined && e.waiting && !e.settled && !e.released && event.sentNow !== true &&
+      } : own.waiting && own.afterKey !== undefined && e.waiting && !e.settled && !e.released &&
           e.afterKey === own.afterKey ? { ...e, afterKey: undefined, waitTurnId: undefined } : e) }
     }
   }

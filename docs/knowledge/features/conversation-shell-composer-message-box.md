@@ -8,7 +8,7 @@ Part of [Composer](conversation-shell-composer.md); see that document for the st
 
 The message box itself, redrawn as the design's `Input large` (Figma `347:6635`) — chrome and glyph only,
 no behaviour change to sending, Enter handling, the send→stop switch (#678), the not-connected gate (#31),
-queueing, or the covered state (#906). Closes the glyph/colour follow-up #678 deferred (see
+queueing, or permission-only composer coverage (see [inline question placement](conversation-shell-question-panel.md#composer-placement)). Closes the glyph/colour follow-up #678 deferred (see
 [Interrupt envelope § The render affordance](interrupt-envelope.md#the-render-affordance-307-merged-into-the-send-button-by-678)).
 
 **`.composer` paints no background since #1099.** The block had painted `--color-surface` since #1,
@@ -20,9 +20,10 @@ card as an opaque, square-cornered sheet with a seam above it where `.composer-s
 nothing) already sat on the card. Figma's `Input area` (347:5408) has no fill at any level: only the card
 behind it and the message box carry paint. The box's own ground below is 41% translucent and so takes its
 colour from what is behind it, which is why the box read wrong too although its rule matched the drawing.
-`.question-panel`, which takes this slot, dropped the same paint in the same change.
+The shared `.question-panel` also dropped its paint in that change. Clarification batches now render
+in history rather than this slot; permission/trust retains the input-area panel.
 `e2e/paired-shell-card.spec.ts` pins `.composer` transparent beside `.channel-list` and `.conversation`;
-`e2e/question-answer-continue.spec.ts` pins the panel. Reported by the operator on 2026-09-05, the same
+`e2e/question-answer-continue.spec.ts` now proves inline placement and available composer/footer. Reported by the operator on 2026-09-05, the same
 day #1058 merged, and fixed by hand on `main` rather than through the pipeline.
 
 **`.composer` took the card's own sides and foot, and deliberately left the top, since
@@ -36,11 +37,10 @@ top 8 (`--space-2`) was kept rather than zeroed — `.composer-status` is a sibl
 column, which declares no gap, so that 8px of `.composer`'s own padding-top is the *whole* distance
 between the status row's bottom edge and the message box's top edge in every connection state; #1444's
 own AC did not ask to move it, and zeroing it with the rest would have deleted a drawn value rather than
-converged on one. **`.question-panel`, the
-same slot's other occupant, still carries the retired `--space-3` side padding** — it is drawn by its
-own Figma node (347:6018), which #1444 did not read, so the permission/question surface sits 12px in
-from the message box's edge until a ticket reads that node and converges it. Not a bug in #1444; a
-scope boundary it named explicitly rather than silently redrawing a node it hadn't read.
+converged on one. The shared `.question-panel` retains its own `--space-3` side padding for input-area
+consumers. The history questionnaire overrides it to zero under `.question-batch`, following its
+[inline design](conversation-shell-question-panel.md#all-question-presentation); that override does
+not change permission-panel insets.
 
 **`.composer__row` *is* the box now**, not a bare flex row holding a filled textarea beside a filled send
 disc. It keeps its class — three shipped specs and #940's type-ahead anchor depend on it — and gains the

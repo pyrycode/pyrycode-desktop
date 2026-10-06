@@ -72,7 +72,36 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
-**Latest verified run: #1731, 2026-10-06 — 25 executed, 25 passed, 0 failed, 1 skipped.**
+**Latest reported run: #1729, 2026-10-06 — 25 executed, 25 passed, 0 failed, 1 skipped.**
+The [dispatcher PASS comment](https://github.com/pyrycode/pyrycode-desktop/issues/1729#issuecomment-6024105618)
+records `feature/1729` at `98f3db3893`, integrated with main `8b95b3bda8`, in run
+`2026-10-06T19-37-51-069Z`. Its sole listed skip is
+`real claude picks up a saved channel system prompt at Reset session`; no skip reason is recorded.
+The configured command installed/built then ran
+`npx playwright test --config playwright.real-claude.config.ts --reporter=json`, rather than the
+issue's `npm run e2e:real:gate` spelling. Counted execution satisfies the purpose of the command's
+nonzero-execution guard, but suite totals alone do not establish the required named scenarios.
+
+The current handoff and issue comment provide no per-test results for these adapted inline specs:
+
+| Spec | Required named scenario | Current-run evidence |
+| --- | --- | --- |
+| `real-claude-question-answer.spec.ts` | `real claude changes model during a question and resumes with the original answer` | Per-test executed/pass confirmation not supplied |
+| `real-claude-question-cancel.spec.ts` | `real claude raises a clarifying question that refusing through Cancel stops the gated work` | Per-test executed/pass confirmation not supplied |
+
+The answer scenario now selects every `.question-batch__question` without stepping; its proof
+still requires a real continuation naming the chosen option before the unchosen options. The refusal
+scenario targets the whole inline batch and retains continuation, quiescence and recursive absence
+of the gated artefact. Their source assertions and earlier #1785 passes do not prove execution on
+this inline revision. Preserve the aggregate PASS separately from named-test acceptance.
+
+An operator/dispatcher can supply both per-test results from the existing dispatcher-host report
+`pyrycode-desktop-agents/logs/2026-10-06T19-37-51-069Z_real-claude-gate_#1729.log`, confirming each
+was present, executed and passed with the run's 25 executed, 0 failed and 1 skipped counts.
+Documentation does not have access to those logs and does not rerun live tests to create evidence.
+
+
+**Previous verified run: #1731, 2026-10-06 — 25 executed, 25 passed, 0 failed, 1 skipped.**
 The [dispatcher PASS comment](https://github.com/pyrycode/pyrycode-desktop/issues/1731#issuecomment-6023654588)
 records `feature/1731` at `b8b61010e0`, merged with main `2168a4b739`, exit 0.
 The sole listed skip is `real claude picks up a saved channel system prompt at Reset session`;

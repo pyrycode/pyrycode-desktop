@@ -64,7 +64,7 @@ insertion order survives without leaning on key ordering.
 ticket rather than inherited from ADR 0009:
 
 - **Two nesting levels, not one.** `options` hangs off each `Question`, not off the batch — the panel's
-  header tabs and Previous button need every question, and each question's options, in hand at once.
+  inline cards need every question and each question's own options in hand at once.
   A near-verbatim clone of the modal shape gets this wrong by default, since `ModalShownPayload.options`
   is flat.
 - **No `id` on `QuestionOption`, and no `defaultOptionId` on `QuestionBatch`.** Unlike `ModalOption`'s
@@ -105,7 +105,7 @@ state, `switch` on `event.type` with an `assertNever` default, every arm spreadi
 
 | event | effect |
 |---|---|
-| `shown` | an empty `questions` array → same `state` reference (see above). Otherwise build a fresh `QuestionBatch` literal copying each field **by name** (never spreading the event, never deriving `conversationId` from the nonce); a still-outstanding `questionBatchId` is replaced **in place** via `map` (position and length preserved, re-delivered fields win — carries over the [#195](../codebase/195.md) idempotency finding), an unseen id appends. |
+| `shown` | an empty `questions` array → same `state` reference (see above). Otherwise build a fresh `QuestionBatch` literal copying each field **by name** (never spreading the event, never deriving `conversationId` from the nonce); a fresh ID retires any previous batch for the same conversation. Same-ID redelivery replaces its object **in place**, keeping insertion order while delivered fields win; an unseen ID appends after retirement. Other conversations stay pending. |
 | `dismissed` | `removeById` on `questionBatchId`; no match → same `state` reference, a deterministic non-throwing no-op absorbing an unknown or already-dismissed id. Clears on **any** `outcome`/`source`, regardless of value — the reducer never reads either field, which is what satisfies the never-read-an-unrecognised-`source`-as-an-answer rule at this layer. No `resolved` slice to poison, since none exists (see above). |
 | `reconnected` | clears `outstanding` so the daemon's connect-time re-send is the sole repopulation truth for the new connection ([#415](../codebase/415.md)'s finding, reapplied) — a still-outstanding batch re-appends via `shown`, absence means resolved-while-away. An already-empty set keeps its reference; a reconnect holding nothing is a same-`state` no-op. |
 
@@ -113,10 +113,8 @@ state, `switch` on `event.type` with an `assertNever` default, every arm spreadi
 reference (parity with `selectOutstanding`, so #899 has the whole-set read it re-exports).
 `selectBatchFor(conversationId)` is a selector *factory* matching `selectHasOutstandingFor`: an `===`
 scan via `Array.prototype.find` over the ordered array, answering with the **first** match in insertion
-order. The reducer does not enforce one batch per conversation — nothing observed says the daemon raises
-two concurrently, and enforcing it would invent a replacement rule for traffic no one has seen; the
-ordered-array-scanned-by-id shape keeps a future one-per-conversation rule a one-arm change. An unknown
-conversation id answers `undefined`, never an error.
+order. Fresh requests now replace the previous batch for their conversation; this prevents an older
+request remaining ahead of its replacement in that scan. An unknown conversation answers `undefined`.
 
 ### Internal helpers (unexported)
 
@@ -133,16 +131,20 @@ consumer — the question vertical's counterpart to [modal store + bridge](modal
 ```ts
 export type QuestionBatchStore = QuestionBatchState & { dispatch: (event: QuestionBatchEvent) => void }
 
-createQuestionBatchStore(init: QuestionBatchState = initialQuestionBatchState)  // vanilla createStore, DI seam
+createQuestionBatchStore(init = initialQuestionBatchState, onRetiredBatch = () => {}) // DI seam
 questionBatchStore                                                             // app-wide singleton
 useQuestionBatchStore<T>(selector: (s: QuestionBatchStore) => T): T            // useStore(questionBatchStore, selector)
 export { selectOutstandingBatches, selectBatchFor } from './questionBatches'   // re-exported, never redefined
 ```
 
-`dispatch` is `(event) => set((s) => reduceQuestionBatches(s, event))` — one call, no per-arm handling,
-so a fourth `QuestionBatchEvent` arm needs no change to this file. No third selector is minted:
-`selectBatchFor` already returns both panel-facing reads (which batch belongs to a conversation, and,
-on that batch, its full ordered question list), matching the container's own no-redefinition rule.
+`dispatch` performs retirement before reducing a nonempty `shown` request: each held batch for that
+conversation with a different ID invokes `onRetiredBatch`. The app singleton wires that callback to
+`questionPicksStore`'s `dismissed` arm; isolated factories default to a no-op rather than mutating an
+unrelated singleton in tests. Clearing picks before publishing replacement state matters because
+Zustand notifies synchronously: batch-first would expose retired selections after their owner vanished.
+Doing this in the store covers every installer, not only the bridge. Same-ID redelivery retains picks,
+and an empty delivery remains a no-op without retirement. `selectBatchFor` remains the read surface;
+no additional selector or bridge listener is needed.
 
 No `observe?` diagnostics param, matching `createModalStore`: the #134 instrumentation seam is
 session-only, and an observer here would be the easiest way to hand `questionBatchId` (a one-time
@@ -172,7 +174,9 @@ singleton silently asserts against the initial cell. Renderer tests here are sta
 need a per-file `createQuestionBatchStore(init)` instance to seed, overriding only the
 `useQuestionBatchStore` binding via `vi.mock`, exactly as `composerSlot.test.tsx` (#906) does.
 
-`questionBatchStore.test.ts` asserts the wiring — initial state, `dispatch` threads the reducer through
+`questionBatchStore.test.ts` also proves fresh replacement retires picks while same-ID delivery retains
+them through the injected callback. `questionBatches.test.ts` covers one-batch-per-conversation
+replacement while preserving other owners. The original container wiring coverage includes initial state, `dispatch` threads the reducer through
 all three arms, a same-reference no-op on an unknown `dismissed` id, DI-seeded init, two-instance
 isolation, and a read-only check on the app singleton — not the reducer's branches, which
 `questionBatches.test.ts` already owns. No test for `useQuestionBatchStore` itself: a bare hook is
@@ -300,7 +304,8 @@ type QuestionPickEvent =
 createQuestionPicksStore(init: QuestionPicksState = { picks: new Map() })  // vanilla createStore, DI seam
 questionPicksStore                                                        // app-wide singleton
 useQuestionPicksStore<T>(selector: (s: QuestionPicksStore) => T): T
-selectQuestionSelection(questionBatchId, questionIndex)                    // the one read surface
+selectQuestionSelection(questionBatchId, questionIndex)                    // per-question read
+selectBatchSelections(questionBatchId)                                   // inline whole-batch read
 ```
 
 Keyed `questionBatchId -> questionIndex -> QuestionSelection`: a `ReadonlyMap` of `ReadonlyMap`s, not a
@@ -320,7 +325,7 @@ the client-side identity on both sides. Resolving a position back to a label at 
 [#922](question-panel-continue-answer.md)'s `resolveQuestionAnswers`, which also skips a position a
 same-nonce re-delivery has left out of range rather than throwing — see § Edge cases below. The Other
 row is typed text plus a ticked flag rather than a sentinel index, since it is drawn
-inside the option list container but is not an entry in `question.options` (`QuestionPanel.tsx:128-144`).
+inside the option list container but is not an entry in `question.options` (`QuestionPanel.tsx`).
 `otherText` is held independently of `otherTicked` in both shapes — clearing the tick leaves the text.
 
 **Seven arms named for behaviour, not a `multiSelect` boolean flag.** A boolean at the call site is
@@ -389,31 +394,34 @@ shipped in: a store landing with no consumer mounted. [#912](https://github.com/
 wired the panel to it, making the rows and the Other field respond, and proved the picks survive a
 conversation switch in a new `e2e/question-picks.spec.ts`, built on the same pattern
 `e2e/conversation-switch-remount.spec.ts` established for the composer's draft. See [Question
-panel](conversation-shell-question-panel.md#question-panel-906-option-rows-since-907-live-since-912-header-tabs-since-915-step-controls-since-916-cancel-sends-since-921-continue-sends-since-922)
+panel](conversation-shell-question-panel.md)
 for the render-side design.
 
 ## Configuration and usage
 
-[#906](https://github.com/pyrycode/pyrycode-desktop/issues/906) ends the dormant period: `useQuestionBridge`
-now mounts app-level in `App.tsx`, beside `useModalBridge`, and `ConversationScreen.tsx`'s `ComposerSlot`
-is the batch store's first reader — an outstanding batch for the conversation on screen draws the question
-panel in the composer's slot and covers the whole `.composer` with the native `hidden` attribute. See
-[Question
-panel](conversation-shell-question-panel.md#question-panel-906-option-rows-since-907-live-since-912-header-tabs-since-915-step-controls-since-916-cancel-sends-since-921-continue-sends-since-922)
-for the render vertical's design; this document still owns the model and the bridge underneath it. That slice drew the
-panel's frame only — the title row, the question text, the separator, and an inert Cancel/Continue row —
-with the option rows landing in [#907](https://github.com/pyrycode/pyrycode-desktop/issues/907). #908 was
-meant to land the picks and the answer path together; it was split into
-[#911](https://github.com/pyrycode/pyrycode-desktop/issues/911) (the picks store, § The picks store, above)
-and [#912](https://github.com/pyrycode/pyrycode-desktop/issues/912), and closed as not planned without
-shipping anything of its own. #911 landed the picks store headless, no consumer mounted; #912 wired the
-panel to it, making the rows and the Other field respond.
-[#921](https://github.com/pyrycode/pyrycode-desktop/issues/921) gave the panel's Cancel button its first
-sending handler — it refuses the batch and clears both stores, see [Question panel — Cancel refuses the
-batch](question-panel-cancel-refusal.md). [#922](https://github.com/pyrycode/pyrycode-desktop/issues/922)
-gave the trailing button's Continue role the answer path: it assembles the operator's picks into the
-`question_answer` frame and sends it, see [Question panel — Continue answers the
-batch](question-panel-continue-answer.md).
+`useQuestionBridge` mounts app-level beside `useModalBridge`. The live screen checks pending-batch
+presence to keep empty/offline history available and suppress the welcome. `QuestionHistorySlot`
+selects the owning batch and permission presence; `QuestionPanelSlot` alone reads whole-batch picks.
+All cards render at history's end with independent positional radio groups and one batch response row.
+A questionnaire leaves the composer/footer usable under their existing gates; permission/trust hides
+both mounted subtrees temporarily. See [placement and activation](conversation-shell-question-panel.md).
+
+Question drafts stay in memory across chat-switch remounts. Dismissal and reconnect clear picks;
+fresh-ID replacement retires the old picks before publishing the new batch. Same-ID delivery retains
+selections but resolution excludes removed questions/options. Drafts and prompt content never become
+saved or paginated messages. Request IDs, answer content and Other drafts enter neither disk nor logs.
+
+The panel rejects edits/responses unless the active conversation owns the exact currently held batch
+object and has no outstanding permission/trust. Edits validate positions; responses also reread host
+availability, and Continue derives current answers at activation. Comparing only the ID would allow
+callbacks from an earlier delivery of the same request to act on changed positions. These checks live
+at the UI boundary; the picks store remains a simple reducer and does not acquire batch knowledge.
+
+Answer/refusal synchronously send then clear picks-first even on bridge failure. Duplicate activation
+sees no current batch. Disconnect retains local edits, while reconnect resets both stores before the
+daemon reconciles unresolved requests; retry requires new picks and explicit response. No resolved-ID
+memory suppresses legitimate reassertion. See [Cancel](question-panel-cancel-refusal.md) and
+[Continue](question-panel-continue-answer.md) for the command helpers.
 
 ## Edge cases and limitations
 
@@ -557,9 +565,9 @@ that a `connected` clears a pick made against a still-outstanding batch. The 9 e
 - `docs/specs/architecture/900-question-bridge.md` — the bridge's architecture spec, including its own
   security review (verdict PASS).
 - [Question
-  panel](conversation-shell-question-panel.md#question-panel-906-option-rows-since-907-live-since-912-header-tabs-since-915-step-controls-since-916-cancel-sends-since-921-continue-sends-since-922)
-  — the render vertical #906 built on this model and bridge: `ComposerSlot`, `QuestionPanelView`, and the
-  composer's `covered` cover mechanism.
+  panel](conversation-shell-question-panel.md)
+  — the inline render vertical over this model and bridge: `QuestionHistorySlot`,
+  `QuestionPanelSlot`, all-question controls and permission-only composer coverage.
 - [Question panel — Cancel refuses the batch](question-panel-cancel-refusal.md) — `refuseQuestionBatch`
   (#921), the first local dispatcher of this model's `dismissed` arm.
 - [Question panel — Continue answers the batch](question-panel-continue-answer.md) — `answerQuestionBatch`

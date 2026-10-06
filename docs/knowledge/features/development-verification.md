@@ -473,6 +473,47 @@ Use the Electron window's native paste operation for this case.
 Seed the clipboard before the first paste and distinguish rejection branches in
 the fake responses.
 
+### Inline question verification
+
+The [final inline-question verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1783#issuecomment-6024030746)
+reviewed `98f3db3893fdbdb56fc4dc5fb46c106b4cf58c4d` on 2026-10-06. Its full fake-transport
+run executed 289 tests: 288 passed, 1 failed, 4 skipped. The unrelated sidebar name-pill tooltip
+failure passed its focused rerun (1 executed, 1 passed, 0 failed, 0 skipped). The verdict explicitly
+confirms all 14 scenarios across the following adapted groups were present, executed and passed:
+question picks/scrolling, Continue answers, Cancel refuses, offline-held responses and permission
+answer paths. Those scenarios had 0 failed and 0 skipped; the full-run failure is not hidden in that
+scoped result. Unit evidence records 8,850 executed/passed, 0 failed, 3 skipped.
+
+Static markup tests check all cards and positional native names, one gated response row, escaping,
+trailing-history placement and permission-only composer coverage. Captured-callback tests drive
+real stores to reject stale replacements/redeliveries, duplicates, cleared drafts and navigated-away
+owners. Browser coverage retains native radio keyboard independence, multi-select/Other behavior,
+ordered trimmed answers, chat navigation, fresh replacement/shortened delivery, offline gates,
+permission hidden-input isolation and restoration of every card's drafts.
+
+Scroll assertions wait two animation frames after positioning so the scroll event has updated
+`following`. The edit case uses a visible option and a real label click while above the bottom;
+focusing an offscreen radio natively scrolls it into view and would confuse focus movement with
+content growth. See [scroll pin](conversation-shell-scroll-pin.md#inline-question-growth), including
+the open observer-retention finding carried forward from review.
+
+The same verifier compared freshly fetched
+[Figma 756:8626](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG/Pyrycode-Client?node-id=756-8626)
+with integrated synthetic captures produced by `question-picks.spec.ts`: 1280×1292 and 800×572 content
+viewports at `/tmp/verifier-1783/inline-desktop.png` and `/tmp/verifier-1783/inline-minimum.png`, with
+reference `/tmp/verifier-1783/figma.png` on the verifier host. Card stacking, theme styling, PyryMark
+headers, Other fields, centered actions and available composer matched. Fixture content, existing
+sidebar chrome, footer availability and translucent chrome differed with state/current main.
+Minimum-width history scrolled with the composer visible. These paths record reviewed scratch
+artifacts; they are not committed product assets or evidence of real-Claude continuation.
+
+The adapted live answer spec selects every inline card before Continue and still requires Claude's
+continuation to name its chosen label first. The Cancel spec refuses the whole surfaced batch and
+still requires continuation/quiescence plus absence of the gated file, while servicing subsequent
+permissions. Optimistic panel disappearance alone proves neither response reached Claude.
+The [latest live run](live-e2e-runbook.md#current-real-claude-gate-state) records aggregate counts;
+current-run per-scenario confirmation is still needed for these two required tests.
+
 ## Live-test diagnosis
 
 A real-Claude failure can come from the installed daemon being too old or too new

@@ -26,15 +26,21 @@ See [Composer placement](conversation-shell-question-panel.md#composer-placement
 coverage and chat-switch lifetimes.
 
 `PermissionModalView` renders a `section` with `role="region"` labelled by its title.
-There is no centred dialog, dimmed backdrop or modal focus boundary; the chat history and sidebar
-remain usable. The approved adaptation of
-[Figma node 347:6913](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=347-6913)
-uses the Pyry mark and title row, bordered content box, native single-choice rows, separator and
-trailing outlined Cancel / filled Continue actions. It omits the questionnaire's Other field; each protocol retains its own response controls.
-The supplied default has visible “Default” copy; it is not preselected.
+The chat history and sidebar remain usable. The desktop adaptation of
+[Figma node 756:9170](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=756-9170)
+uses a background card with primary-container border, title, explanation, optional context and
+session grant, then full-width choice buttons in server order. The supplied `defaultOptionId`
+uses primary/on-primary fill, other choices have a primary outline, and the armed choice uses
+secondary-container tonal fill. An outlined Cancel follows outside the card. Choice buttons replace
+the radios, Continue and separate Back/Confirm screen for permission and trust requests
+([#1817](https://github.com/pyrycode/pyrycode-desktop/issues/1817)); questionnaire controls remain independent.
 
-Optional context appears below the prompt in muted body-small text, using the existing spacing and
-colour tokens. String `reason` values display directly; other supplied JSON uses compact JSON text,
+This slice retains bottom composer placement and navigation-cleared pane drafts.
+[#1818](https://github.com/pyrycode/pyrycode-desktop/issues/1818) owns inline placement and
+navigation-retained grants; neither behavior is supplied by the choice controller.
+
+Optional context appears below the prompt in body-medium text using the on-primary-container
+colour and existing spacing tokens. String `reason` values display directly; other supplied JSON uses compact JSON text,
 including `null`, `false` and `0`. Presence must not be tested by truthiness. Missing fields create no
 empty rows; when all display fields are absent, the context container is absent too.
 
@@ -52,98 +58,89 @@ from prose or a path. `description` has its own secondary text row and `blockedP
 each independent of reason/category presence. The [bridge](modal-store-bridge.md#the-translator--binding-srcrenderersrcstoremodalbridgets)
 and [prompt model](modal-prompt-model.md#types) preserve these optional fields through both copies.
 
-The permission variant is capped at `60vh`. Its explanation, context and supplied options scroll inside
-`.permission-panel__content`, while the title row, separator and actions stay outside that scrollport.
-An unusually tall title has its own `15vh` scroll bound. Context, prompt and confirmation explanations
-use `white-space: pre-wrap` with `overflow-wrap: anywhere`, preserving the full text and wrapping
-unbroken paths. These overrides are permission-specific; the normal questionnaire layout is unchanged.
-Titles, explanations, all context and option labels remain escaped React children, including the
-selected label quoted in confirmation. Context is display information only: no markup, attributes,
-URLs, filesystem operations, logs or outbound commands consume it.
+The permission variant is capped at `60vh`. The card's title, explanation, context, grant rules
+and choices scroll inside `.permission-panel__content`; Cancel remains outside that scrollport.
+An unusually tall title also has a `15vh` scroll bound. Titles, explanations, context, option
+labels and complete rules wrap with `white-space: pre-wrap` and `overflow-wrap: anywhere`.
+All supplied text remains escaped React children. Context is display information only: no markup,
+attributes, URLs, filesystem operations, logs or outbound commands consume it. ARIA IDs and
+second-activation instructions are client-owned constants.
 
 ## Selection and confirmation
 
-Continue, Confirm and server-bound Cancel require the prompt conversation's uniquely stamped host
-to report `connected` in `SessionState.statuses` ([#1381](https://github.com/pyrycode/pyrycode-desktop/issues/1381)).
-`promptResponseAvailability.ts` uses `serverIdForOpenConversation`; missing/unstamped or duplicate
-ownership, absent status, connecting, disconnected and error all block responses. Neither aggregate
-status nor another connected host supplies a fallback. The hook updates native disabled controls;
-each response handler also rereads ownership and status synchronously before calling a resolution
-helper, with no intervening await. A confirmation opened before disconnect cannot send afterward,
-including by keyboard. A blocked attempt emits no answer/cancel command and does not resolve the prompt.
+The supplied default answers on one activation, including an affirmative default. Any other choice
+requires two activations of that same button: the first arms it without sending, and the second
+calls `confirmPrompt` exactly once. Choosing another non-default arms that choice afresh. The armed
+button references a fixed `role="status"` instruction through `aria-describedby`:
+“Activate this choice again to confirm.” Labels and server order never determine the default.
+Cancel calls `cancelPrompt`; answer/cancel retain guarded sends and unconditional optimistic
+`dismissed` dispatch after admission. Main mints `answer_token`; questionnaire free text and
+multiple picks never enter a permission answer.
 
-Selection editing, local Back and rejection-feedback Dismiss remain usable offline. Disconnect
-preserves the held prompt, selection, confirmation and hidden composer draft. Reconnect retains the
-[bridge reset and daemon re-delivery](modal-store-bridge.md#configuration-and-usage) contract; it never
-submits a blocked response automatically. A re-delivered prompt needs a fresh explicit response under
-the selection and confirmation rules below. Chat-switch remounts still reset local selection and drafts.
+Choice, grant-checkbox and Cancel controls require the prompt conversation's uniquely stamped host
+to report `connected` in `SessionState.statuses`. Missing/unstamped or duplicate ownership, absent
+status, connecting, disconnected and error all disable these controls. Aggregate status and another
+connected host never supply a fallback. Rejection-feedback Dismiss remains a local action offline.
+A status-only disconnect holds the request and drafts but blocks all consent editing and sending;
+reconnect's scoped clearing and daemon re-delivery require a fresh response and never submit one
+automatically.
 
 For each newly displayed `modalId`, `defaultToNo: true` initially focuses Cancel once, provided
 responses are available. An absent or false hint leaves focus alone. The view records the displayed
-identity even when offline: an availability change, same-request context/hint update or Back does not
-rerun initial focus. Unmounting resets that record, so a queued prompt or a chat-switch remount gets
-its own initial-focus decision. The hint never selects a choice, changes `defaultOptionId`, enables
-an offline response or bypasses confirmation.
+identity even when offline: availability or same-request context/hint updates never rerun initial
+focus. Unmounting resets that record; queued requests and chat-switch remounts get their own initial
+focus decision. The hint neither changes the supplied default nor bypasses two-activation choices.
+Native button Enter/Space supplies deliberate activation; there is no panel-wide approval shortcut.
+Enter on focused Cancel only cancels.
 
-There is no panel-wide Enter approval shortcut. Enter on focused Cancel sends cancellation only;
-native keyboard activation of Continue and Confirm remains available after deliberate selection.
-Selecting a radio or pressing Enter on it sends no answer.
+`PermissionModalView` receives an armed option, availability, checked consent and injected handlers;
+its output is statically renderable. The per-pane Zustand controller in
+[`permissionChoices.ts`](../../../src/renderer/src/screens/conversation/permissionChoices.ts)
+holds `armedOptionId` and an `opted` prompt snapshot. While mounted it synchronously subscribes to
+modal, active-conversation, conversation-list and session stores. Removal/resolution, cancellation,
+replacement, navigation, ordered choice/default/class changes, ordered grant-offer/eligibility
+changes, loss/change of unique ownership, scoped reconnect clearing and pairing reset discard both
+arm and consent. Cleanup unsubscribes all sources, clears drafts and invalidates retained callbacks.
+A change then restoration before React paints cannot resurrect either marker. Merely deriving an
+inert marker during render would miss the interrupted offer or ownership transition.
 
-`PermissionModalView` receives `selectedOption`, `pendingOption` and injected handlers; both modes
-remain statically renderable. The container owns selection and confirmation separately:
+Every answer, checkbox and Cancel handler rereads the active displayed conversation, first outstanding
+request for that chat, unique owner and current connection status synchronously. It requires the exact
+displayed prompt object, validates current choice membership or grant eligibility, and performs no await
+between validation and action. An old callback cannot operate on a replacement, same-ID re-delivery,
+another chat or a disposed controller. Content-only re-delivery preserves valid arm/consent through
+stable choice/offer identities but still makes callbacks holding the old prompt snapshot stale.
 
-- Initially nothing is selected and Continue is disabled. Selecting a native radio row records one
-  supplied option and sends nothing. The client-owned `name="permission-choice"` groups the radios
-  separately from any hidden questionnaire controls.
-- Continue calls the existing `selectOption` gate. Selecting the supplied `defaultOptionId` and then
-  continuing sends that option directly, even when the supplied default is affirmative. The client
-  does not infer the default from label wording.
-- For any non-default, Continue opens Back/Confirm inside the same panel. Confirmation keeps the
-  title and replaces the explanation/context/options with the client-owned sentence naming the selected
-  label. Back sends nothing and restores the selection; Confirm sends that option.
-- Cancel in the choice view calls `cancelPrompt`. Both answer and cancel retain the guarded send and
-  unconditional optimistic `dismissed` dispatch in `modalResolution.ts` once availability passes. An answer contains one
-  supplied `option_id`, with `modal_id` for correlation; main mints `answer_token`. Questionnaire
-  free text and multiple picks never enter a permission answer.
-
-Both local markers hold `{ modalId, optionId }`. `resolvePendingOption` validates request identity
-and membership in the current option set on every render. Option IDs can repeat across requests,
-so checking only option membership would let a confirmation authorize a different prompt. Invalid
-markers are also cleared: merely rendering them as inert would let a removed option revive when a
-later same-request delivery restored it. Chat switches retain the existing pane remount behavior
-and require a fresh permission selection.
+Controller construction through `useMemo` also calls its snapshot reader. That reader and subscription
+refreshes derive availability directly from the stamped owner and per-owner status without IPC.
+Calling diagnostic-emitting `canRespondToPromptNow` there would perform external I/O during repeated
+or speculative React renders and unrelated store transitions. Choice/response diagnostics remain
+content-free in action handlers; prompt content and grant drafts are neither persisted nor logged.
 
 ### Session permission checkbox (#1409)
 
-A third local marker, `opted`, holds the whole `ModalPrompt` snapshot whose session-permission
-checkbox is checked — not just its id, because the checkbox's own validity tracks the same ordered
-`alwaysAllow` offer staying live, not just the request. `hasSessionPermission(prompt, opted)` in
-[`modalResolution.ts`](../../../src/renderer/src/screens/conversation/modalResolution.ts) requires
-matching `modalId` and `conversationId`, `class === 'permission'` on both, and reference equality of
-the two `alwaysAllow` objects; the container clears `opted` during render exactly like `selected`/
-`pending` whenever that check fails. `reduceModal` keeps the previous `alwaysAllow` object only when
-a re-delivery carries the same class, conversation and ordered rule list — object identity, not text
-equality, so a removal-then-restoration or a same-`modalId` replacement with edited rules always
-allocates a new object and drops any checked consent, even across React-batched updates.
+For `class === 'permission'` with `alwaysAllow.offered === true`, one initially unchecked checkbox
+covers the complete offer: “Don't ask again this session for:” followed by every escaped rule as an
+ordered sequence of `<li>` children. It reuses `QuestionTick` and client-owned ARIA metadata. Trust,
+absent and unavailable offers show no checkbox. Toggling edits only `opted`: it neither arms nor
+answers and leaves an existing arm unchanged.
 
-For a permission prompt (`prompt.class === 'permission'`) whose current offer has
-`alwaysAllow.offered === true`, `PermissionModalView` shows one initially unchecked checkbox inside
-`.permission-panel__content`, above the action separator: the client-owned label "Don't ask again
-this session for:" followed by every supplied rule as an escaped `<li>`, in original order, sharing
-[`QuestionTick`](../../../src/renderer/src/screens/conversation/QuestionPanel.tsx)'s glyph (exported
-for this reuse) with the questionnaire's own checkbox. Absent/unavailable offers and trust prompts
-render no checkbox. Toggling only updates `opted` locally and sends nothing — it applies to the
-complete offer, never a per-rule choice.
+`hasSessionPermission(prompt, opted)` requires matching modal/conversation IDs, permission class,
+a currently offered grant and reference equality of `alwaysAllow`. `reduceModal` preserves that
+reference only for a continuous identical ordered offer with unchanged class, conversation, supplied
+default and ordered option IDs/labels. It also preserves the options array identity for identical
+choices. Display-only context re-delivery keeps both identities. Removal, changed/reordered rules,
+eligibility changes or choice/default/class changes break offer identity; restoring the old text
+allocates a new offer. Synchronous controller invalidation also discards consent when ownership or
+navigation changes even if the offer object itself survives. See the
+[model contract](modal-prompt-model.md#continuous-choice-and-offer-identity).
 
-Confirm's grant path lives in `confirmPrompt`: it resolves the pending option through the same
-`resolvePendingOption` validity check, and adds `always_allow: true` to the answer only when that
-option's id is a supplied `allow_once` or `allow_always` **and** `hasSessionPermission` still holds
-for the current offer. Every other path — unchecked approval, any rejection, deny, cancel, trust, an
-unavailable offer, or the default-option direct-Continue path (which never opens Confirm at all, even
-for an affirmative default) — calls `answerPrompt` with its default `alwaysAllow = false` and omits
-the field from the payload entirely; the renderer never sends rule text or a destination. The daemon
-(`docs/protocol-mobile.md`, Modal (v2)) remains the sole authority that validates the grant and scopes
-it to the current session.
+Only a checked, continuously current offer and twice-activated supplied `allow_once` or `allow_always`
+can add `always_allow: true` through `confirmPrompt`. Unchecked approval, rejection choices, Cancel,
+trust, unavailable offers and all one-activation default answers omit the field entirely, even when
+the default is affirmative and the checkbox is checked. The renderer sends neither rules nor a
+destination. The daemon remains the authority that validates grants, scopes them to the current
+session and enforces remote-permission restrictions; no wire/schema change is involved.
 
 ## Rejection surface (#249)
 
@@ -169,41 +166,57 @@ alone never covers or hides the composer or questionnaire, and may coexist with 
 
 ## Verification
 
+`permissionChoices.test.ts` drives default/second activation, switching arms, grant omission,
+ordered identity changes, change-then-restoration before render, navigation/ownership invalidation,
+stale answer/checkbox/Cancel callbacks, offline guards and disposal. `PermissionModal.test.tsx`
+checks static region markup, server order, filled/default and tonal states, fixed accessible
+instructions, permission-only ordered rules, disabled controls, escaping and context with falsy JSON.
+Its production-wiring regressions capture the actual controller during repeated populated/empty
+static renders and count diagnostics, then manually start subscriptions and drive store transitions.
+Static rendering alone cannot run effects, clicks, focus or scrolling.
+
 [`offline-held-responses.spec.ts`](../../../e2e/offline-held-responses.spec.ts) observes renderer
-`sendCommand` calls as well as retained prompts/picks: observing only outbound daemon frames could
-pass while broken if main rejected an offline renderer command. It covers both request classes,
-pre-opened confirmation, keyboard attempts, unavailable ownership/status and another connected host.
-Draft retention is asserted before switching chats, because pane remounts reset composer-local state.
+`sendCommand` calls as well as retained prompts/picks: daemon-frame silence alone could pass while
+main rejected an offline renderer command. It covers both request classes, a previously armed choice,
+keyboard attempts, disabled checkbox/Cancel, unavailable ownership/status and another connected host.
 Reconnect tests re-deliver prompts before explicit responses; reconnect alone must send nothing.
-`promptResponseAvailability.test.ts` checks fresh store reads independently of native disabled buttons.
 
-`PermissionModal.test.tsx` checks static region markup, supplied/default choices, initial disabled
-Continue, confirmation, absent context, independent category mappings/fallbacks, compact JSON with
-falsy values, separate description/path rows and escaped text. `composerSlot.test.tsx` checks
-current-chat/null-chat placement and retained hidden subtrees. Static renderer tests do not execute
-clicks, focus or layout.
 [`permission-modal-answer-paths.spec.ts`](../../../e2e/permission-modal-answer-paths.spec.ts) drives
-both request classes through the fake transport, including FIFO, option invalidation, chat switching,
-cancel/remote dismissal, delayed rejection through reconnect, and questionnaire/draft retention.
-It checks hidden controls are absent from role queries and cannot retain keyboard input or tab focus.
+choice buttons through fake transport, including grants, continuous-offer interruption/restoration,
+FIFO, changed options, chat switching, cancellation/peer dismissal, delayed rejection through reconnect,
+and questionnaire/composer draft retention. Browser assertions prove hinted Cancel focus once,
+unhinted focus retention, native Enter/Space and no response before a non-default's second activation.
+Keep hidden-input typing checks separate from initial Cancel focus: Space on focused Cancel cancels.
+[`permission-resolution-notices.spec.ts`](../../../e2e/permission-resolution-notices.spec.ts)
+retains notice lifetime/isolation proofs while answering via the new buttons.
 
-Focus proof needs the browser: the spec checks each new hinted prompt, absent/false hints,
-same-request updates, Enter cancellation and deliberate Continue/Confirm activation. Back and Cancel
-reuse a native button, so keyboard Back can naturally leave focus on Cancel without any focus effect.
-To detect an unwanted refocus, hold focus on a chat control while dispatching Back and assert it stays
-there. Keep checks for typing into hidden inputs separate from initial Cancel focus: a space typed
-while Cancel is focused activates cancellation.
+Long prose alone can hide unbroken-path overflow. Minimum 800×600 cases include a 180-character
+filename, long context, a 500-character unbroken rule and 15 additional complete rules. They compare
+`scrollWidth` with `clientWidth`, scroll the last rule and every choice into view, and check checkbox
+and Cancel reachability, including the armed state. No answer may precede the second activation.
 
-Long prose with spaces can pass a scroll test while a filename still overflows. The long-content
-case uses long reason/description text and a 180-character filename at 800×600. It compares each
-context row, explanation and scrollport `scrollWidth` with `clientWidth`, including the confirmation
-explanation after Continue, checks the actions remain in the viewport, and verifies no answer is sent
-before confirmation.
+The [final verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1820#issuecomment-6025856890)
+records all 13 scoped browser scenarios present and passed at `1cec0874`: permission paths 7,
+offline responses 3 and resolution notices 3, each with 0 failed and 0 skipped. The full run executed
+305: 304 passed, 1 unrelated flaky failure, 4 skipped; its selected rerun executed/passed 1, failed 0,
+skipped 0. Unit evidence is 8,921 executed/passed, 0 failed, 3 skipped, including 37 permission-view
+tests and both new snapshot-purity regressions. Those regressions failed against the original IPC read.
 
-Shared CSS classes do not identify the response protocol: permission locators use
-`.permission-panel`; questionnaire locators in a drive that services both use
-`.question-panel:not(.permission-panel)`. Both `real-claude-permission-modal.spec.ts` and
-`real-claude-question-cancel.spec.ts` choose a supplied affirmative row, Continue, then Confirm when
-needed. Live permission proof requires the existing tool effect, not just disappearance of the
-optimistically removed panel; an all-skipped real suite cannot establish it. See the
-[live test runbook](live-e2e-runbook.md).
+The [earlier visual review](https://github.com/pyrycode/pyrycode-desktop/pull/1820#issuecomment-6025235267)
+compared desktop `756:9170` and supplementary grant/armed/trust/behavior states with integrated synthetic
+captures at `60447236`: `/tmp/verifier-1820/{safe-default,armed,grant-unchecked,grant-checked}.png`
+at 1280×800 and `{minimum-rules,minimum-armed,minimum-context-armed}.png` at 800×600, with dimensions
+and hashes in `capture-manifest.json`. Filled/default, outlined/tonal choices, rules, checkbox states
+and Cancel matched the requested adaptation. The final review retains that comparison because the
+corrective commit changes no view markup/styles. Builder refreshed captures at `1cec0874` under
+`/tmp/builder-1817/`. These are reviewed host scratch paths, not committed assets. Native Electron
+capture once returned the preceding armed frame; the scoped spec uses Playwright screenshots for
+the painted tonal state.
+
+Shared CSS classes do not identify response protocols: permission locators use `.permission-panel`,
+questionnaire locators `.question-panel:not(.permission-panel)`. The three migrated live consumers
+in `real-claude-permission-modal.spec.ts`, `real-claude-permission-mode.spec.ts` and
+`real-claude-question-cancel.spec.ts` now activate supplied choice buttons, twice when non-default.
+Live acceptance requires the repeated Bash effect without a new permission in the same session,
+then a fresh permission before an effect in a new session; panel disappearance alone is optimistic.
+See the [counted live evidence and its limits](live-e2e-runbook.md#current-real-claude-gate-state).

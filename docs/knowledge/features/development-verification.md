@@ -247,6 +247,23 @@ Native anchoring can emit resize scrolls before `ResizeObserver`; verify followi
 survives native window resizing and Electron zoom, while parked arrivals stay held.
 Use `BrowserWindow.setSize`, not `page.setViewportSize`, to establish the actual
 800×600 and 1280×800 window geometry, and distinguish outer size from content size.
+Native `setSize` and `setZoomFactor` can return before renderer reflow. Poll
+`window.innerWidth`/`innerHeight` against `BrowserWindow.getContentSize()` divided by
+the requested zoom (allowing pixel rounding), then wait two animation frames before
+checking clearance or the final scroll endpoint. An immediate endpoint assertion
+produced a transient minimum-width failure in the reader proof.
+
+The [Markdown reader](conversation-shell-markdown-reader.md#pane-wiring) needs its own
+full-pane viewport assertion: header padding alone can pass while the scrollport still
+starts below the header and cannot overlap it. Check the unchanged 85px resting heading
+offset, 20px horizontal inset and 16px bottom clearance, then measured clearance as copy
+confirmation and refresh/open/save notices appear or disappear. At both native sizes
+and 100%/125% zoom, reach the final content, bound the menu and every label line, establish
+positive text/control overlap, and actually click Note actions, a copy row and Back.
+Retain keyboard activation, focus, Escape and outside-click checks. Inject external-open
+and save failures at the IPC handler seam so layout proof invokes neither OS apps nor
+Downloads writes. Draft/thread-position checks and an upload completing while the reader
+is open distinguish a hidden covered conversation from one accidentally unmounted.
 
 Stacking levels are relative to ancestor contexts. The message area's level 0
 contains rows, pills and drawer; sharp top/input chrome at level 1 keeps controls
@@ -348,6 +365,49 @@ Reviewed copies and a SHA-256 manifest are retained under
 `/tmp/verifier-1797/review-d2ef7fc7/` with the same basenames. These are recorded scratch
 evidence paths, not committed image assets. Original paths and comparison remain in
 [PR #1797](https://github.com/pyrycode/pyrycode-desktop/pull/1797).
+
+Recorded [reader-header design](../../specs/architecture/1734-translucent-markdown-reader.md)
+evidence: the dispatcher verifier gate on 2026-10-06 at production revision
+`9caa860214f8caee57aca508fa456dbee04bb843` ran
+`npx playwright test --reporter=json`: 286 executed, 286 passed, 0 failed, 4 skipped.
+The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1801#issuecomment-6007835769)
+confirms the existing reader scenario and every reader-menu/shared-header scenario were
+present, executed and passed in that run; each group had 0 failed and 0 skipped:
+
+| Browser spec | Executed / passed | Proof retained |
+| --- | --- | --- |
+| `markdown-reader.spec.ts` | 1 / 1 | Refetch on open, Back, pending attachments completing while covered |
+| `markdown-reader-menu.spec.ts` | 3 / 3 | Existing six-action scenario plus full-pane overlap, dynamic clearance, resize/zoom, menu bounds, real pointer/keyboard input, draft and thread-position preservation |
+| `translucent-thread-controls.spec.ts` | 3 / 3 | Shared thread-header regression coverage |
+
+The two layout cases in `markdown-reader-menu.spec.ts` are
+`reader scrolls under sharp chrome with dynamic clearance and input at 1280` and
+`reader scrolls under sharp chrome with dynamic clearance and input at 800`.
+The verdict confirms both passed alongside the existing copy/refresh scenario.
+The four full-run skips were two OS badge cases, close-time history drain and
+window-reopen convergence; none is counted as passed. This is fake-transport evidence;
+no live-Claude run is claimed for the reader layout.
+
+The same verdict inspected all ten native synthetic captures and confirmed their hashes
+against `/tmp/builder-1734/capture-manifest.json` at that revision. Comparison with the
+retained [Figma `756:10358`](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG/Pyrycode-Client?node-id=756-10358)
+reference `/tmp/builder-1734/figma-756-10358.png` and shared thread capture
+`/tmp/builder-1733/under-header-1280.png` matched downward fade/progressive softening,
+sharp controls, preserved sidebar/alignment, readable failure notices and complete menu
+labels at both zoom levels, with no unresolved in-scope visual discrepancy. A fresh Figma
+fetch was unavailable; the verdict used the retained reference. Outer windows were
+1280×800 and 800×600; native 100% content captures were 1280×773 and 800×573.
+
+| State | Original 1280×800 capture | Original 800×600 capture |
+| --- | --- | --- |
+| Resting | `/tmp/builder-1734/resting-1280.png` | `/tmp/builder-1734/resting-800.png` |
+| Scrolled | `/tmp/builder-1734/scrolled-1280.png` | `/tmp/builder-1734/scrolled-800.png` |
+| Three failure notices | `/tmp/builder-1734/notices-1280.png` | `/tmp/builder-1734/notices-800.png` |
+| Menu, 100% | `/tmp/builder-1734/menu-1280-1.png` | `/tmp/builder-1734/menu-800-1.png` |
+| Menu, 125% | `/tmp/builder-1734/menu-1280-1.25.png` | `/tmp/builder-1734/menu-800-1.25.png` |
+
+These are recorded scratch evidence paths. Original paths, revision and comparison
+results are retained in [PR #1801](https://github.com/pyrycode/pyrycode-desktop/pull/1801).
 
 Sidebar popup dismissal needs a complete gesture: closing on outside mousedown alone
 can expose the underlying tree to the following click. The

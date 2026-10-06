@@ -6940,16 +6940,50 @@ button.top-overlay-pill {
   visibility: hidden;
 }
 
-/* #1627 — the markdown reader (Figma 552:2404), laid over .conversation's content box in place of the
-   thread and the composer (the inset is .conversation's own padding). The bar mirrors
-   .conversation__overflow's geometry (title-large title, a 0.6 inverse-primary rule 16px below, 16px under
-   it) with the drawn 8px gap between the arrow and the name. */
+/* Full-pane reader scrolls behind the shared translucent treatment. Padding retains its
+   existing alignment and resting offset; all notices belong to the measured sharp chrome. */
 .markdown-reader {
   position: absolute;
-  inset: var(--space-6) var(--space-5) var(--space-4);
+  inset: 0;
   z-index: 1;
   display: flex;
   flex-direction: column;
+}
+
+.markdown-reader__chrome {
+  position: absolute;
+  inset: 0 0 auto;
+  box-sizing: border-box;
+  z-index: 1;
+  padding: var(--space-6) var(--space-5) 0;
+  pointer-events: none;
+}
+
+.markdown-reader__chrome > :not(.conversation__blur) {
+  position: relative;
+  pointer-events: auto;
+}
+
+.markdown-reader__title {
+  text-shadow: var(--shadow-thread);
+}
+
+.markdown-reader__back {
+  filter: drop-shadow(var(--thread-control-shadow));
+}
+
+.markdown-reader .composer-options {
+  max-width: calc(var(--markdown-reader-width) - var(--space-5) * 2);
+}
+
+.markdown-reader .composer-options__item {
+  box-sizing: border-box;
+  height: auto;
+  min-height: var(--space-7);
+  padding-block: var(--space-1);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  flex-shrink: 0;
 }
 
 .markdown-reader__bar {
@@ -7028,6 +7062,11 @@ button.top-overlay-pill {
 /* The only scroll box, so the note scrolls beneath the fixed bar. Body-large on-surface per the drawn
    body; the .bubble__markdown rules inside give the headings, lists, code blocks and quotes. */
 .markdown-reader__body {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  box-sizing: border-box;
+  padding: var(--markdown-reader-header-height, 85px) var(--space-5) var(--space-4);
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -7096,14 +7135,8 @@ button.top-overlay-pill {
   font-weight: var(--text-body-small-weight-emphasized);
 }
 
-/* Full-pane scrolling: occupied chrome height remains stylesheet padding even when the
-   pin clears short-history compensation. The reader keeps its independent inset overlay. */
-.conversation__covered {
-  position: absolute;
-  inset: 0;
-  display: block;
-  --thread-header-height: 85px;
-  --thread-input-height: 132px;
+/* Shared visual values reach both sibling surfaces: covered thread and reader. */
+.conversation {
   --thread-header-ground: #09141d;
   --thread-input-ground: rgb(11 14 17 / 60%);
   --thread-blur-low: 2px;
@@ -7111,6 +7144,16 @@ button.top-overlay-pill {
   --thread-blur-high: 8px;
   --thread-blur-full: 10px;
   --thread-control-shadow: 0 4px 2.5px rgb(0 0 0 / 20%);
+}
+
+/* Full-pane scrolling: occupied chrome height remains stylesheet padding even when the
+   pin clears short-history compensation. */
+.conversation__covered {
+  position: absolute;
+  inset: 0;
+  display: block;
+  --thread-header-height: 85px;
+  --thread-input-height: 132px;
 }
 
 .conversation__message-area {

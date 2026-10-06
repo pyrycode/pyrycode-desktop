@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MAX_SYSTEM_PROMPT_BYTES } from '@shared/wire/types'
-import type { ConversationCreatedPayload } from '@shared/wire/types'
+import type { ConversationCreatedPayload, WireModelOption } from '@shared/wire/types'
 import { CreateChannelDialogView, confirmsPending, systemPromptOverLimit } from './CreateChannelDialog'
 
 const noop = (): void => {}
@@ -20,6 +20,35 @@ function renderView(
 }
 
 describe('CreateChannelDialogView', () => {
+  const models: WireModelOption[] = [
+    { value: 'default', display_name: 'Inherited', resolved_model: 'claude-sonnet',
+      effort_levels: [], supports_auto_mode: false, truncated_fields: null },
+    { value: 'gpt-6-luna', agent: 'codex', display_name: 'GPT-6 Luna', resolved_model: 'gpt-6-luna',
+      effort_levels: ['low'], supports_auto_mode: false, truncated_fields: null }
+  ]
+  function withModel(busy = false): string {
+    return renderToStaticMarkup(<CreateChannelDialogView
+      name="Release planning" busy={busy} error={null} systemPrompt="" promptOverLimit={false}
+      model={{ rows: models, selected: models[1], onChange: noop }}
+      onNameChange={noop} onSystemPromptChange={noop} onCancel={noop} onCreate={noop}
+    />)
+  }
+
+  it('renders the model field between name and prompt using the published Codex label', () => {
+    const markup = withModel()
+    expect(markup.indexOf('Channel name:')).toBeLessThan(markup.indexOf('Model:'))
+    expect(markup.indexOf('Model:')).toBeLessThan(markup.indexOf('Channel system prompt:'))
+    expect(markup).toContain('GPT-6 Luna')
+    expect(markup).toContain('aria-haspopup="menu"')
+    expect(markup).toContain('aria-label="Model"')
+    expect(renderView()).not.toContain('create-channel__model')
+  })
+
+  it('disables the model trigger and leaves no open menu while pending', () => {
+    expect(withModel(true)).toMatch(/create-channel__model"[^>]*disabled=""/)
+    expect(withModel(true)).not.toContain('role="menu"')
+  })
+
   it('uses the shared 640px modal with a labelled name and no location choice', () => {
     const markup = renderView()
     expect(markup).toContain('class="modal"')

@@ -44,8 +44,21 @@ win:
   # when `build/installerIcon.ico` is absent, and it is.
   icon: build/icon.ico
 
-# No auto-update feed. Updating means running a newer installer over the old one.
-publish: null
+# One fixed installer name per version: no spaces, so the name in `latest.yml` matches the GitHub
+# asset name exactly (GitHub swaps spaces for dots on upload), and no `${arch}`, so x64 and arm64
+# stay in the single combined installer.
+nsis:
+  artifactName: Pyrycode-Desktop-Setup-${version}.${ext}
+
+# The GitHub update feed (#1774). Naming the provider makes the build write `latest.yml` beside the
+# installer and an `app-update.yml` into each architecture's resources, which the runtime updater
+# (#1775) reads. It does NOT make electron-builder publish: every build passes `--publish never`, and
+# `scripts/release-win.mjs` uploads, downloads back and checks the files itself before it publishes the
+# draft. Without the explicit flag a CI environment or a tag would publish an unverified build.
+publish:
+  provider: github
+  owner: pyrycode
+  repo: pyrycode-desktop
 # `build/` is electron-builder's default buildResources directory, and it is a build input rather
 # than app payload — which is why it does not appear in `files` above. It holds `icon.ico`, the
 # raster the Windows target consumes, and `icon.png`, the 512² master both were rendered from and

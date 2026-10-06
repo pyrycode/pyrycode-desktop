@@ -20,11 +20,12 @@
 ## Design
 
 One new script, `scripts/release-win.mjs`, run on the Mac as `npm run release:win -- X.Y.Z`. It is plain
-Node ESM so it runs without a build step. All side effects go through three injected boundaries, so the
+Node ESM so it runs without a build step. All side effects go through four injected boundaries, so the
 tests drive the whole transaction against fakes:
 
-- `exec(cmd, args, opts)` — every local command, including `ssh pyrybox …`.
+- `exec(cmd, args, opts)` — every local command.
 - `fs` — the work directory and its state files.
+- `host` — files and the Wine build on pyrybox. The real one runs over `ssh` through `exec`.
 - `github` — a small REST client. The real one runs `gh api` on pyrybox over SSH, so publishing uses
   pyrybox's existing GitHub login and no token crosses to the Mac, the container or a file.
 
@@ -40,8 +41,11 @@ tests drive the whole transaction against fakes:
    SHA even when main has moved. An existing draft for the tag must target the same SHA, and an
    existing tag must resolve to it, or the run fails without publishing.
 3. **Prepare** in an isolated clone from GitHub under the work directory, never the developer checkout:
-   detach at the SHA, `npm ci`, stamp the version with `npm version --no-git-tag-version` in that clone
-   only, then `npm run build` and `npm test`. A receipt keyed by SHA and version skips this on retry.
+   detach at the SHA, `npm ci`, `npm test`, then stamp the version with `npm version
+   --no-git-tag-version` in that clone only and run `npm run build`. The tests run before the stamp
+   because the settings screen's spec pins the dev version that `vitest.config.ts` reads from
+   `package.json`; the stamp is packaging metadata, so testing the unmodified source is the right
+   evidence. A receipt keyed by SHA and version skips this on retry.
 4. **Build the installer** on pyrybox: stream the prepared tree, without `node_modules` and `.git`, to
    `~/pyrycode-desktop-release/X.Y.Z/project`, then run one Podman call of
    `electronuserland/builder:wine`, pinned by digest, doing `npm ci` and
@@ -64,7 +68,8 @@ the script re-enters itself under `automation-access with-pyrybox-key`.
 
 ## Testing
 
-`scripts/release-win.test.ts`, added to vitest's `include`. Fake `exec`, `fs` and GitHub REST state:
+`scripts/release-win.test.ts`, added to vitest's `include`. Fake `exec`, `fs`, pyrybox files and GitHub REST
+state:
 
 - version syntax and ordering, and that rejection happens before any command, write or GitHub write;
 - the published-version no-op makes no command and no write;
@@ -82,7 +87,7 @@ The real Wine build and the first real publish are the ticket's operator accepta
 **Findings:**
 
 - [Trust boundaries] No findings. The only inputs are the operator's version argument, validated by
-  `parseVersion` before any other step, and GitHub REST responses, read by `findRelease` and
+  `parseVersion` before any other step, and GitHub REST responses, read in `release` and
   `parseLatestYml`. Asset names are fixed by the script from the validated version, never taken from
   a response, so no response field becomes a path or a shell word.
 - [Tokens] No findings. The GitHub token never leaves pyrybox's `gh` keyring: the Mac sends

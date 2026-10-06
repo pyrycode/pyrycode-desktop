@@ -2244,11 +2244,8 @@ function renderBody(
  * `typeof window === 'undefined'` (conversationLastReadStore.ts:246-257) — so every unseeded row
  * server-renders as `idle`.
  */
-function ConversationStatusDotControl({
-  conversationId
-}: {
-  conversationId: string
-}): JSX.Element {
+function ConversationStatusDotControl({ row }: { row: ConversationSummary }): JSX.Element {
+  const conversationId = row.id
   const promptPending = useModalStore(selectHasOutstandingFor(conversationId))
   // #1700: a pending question batch waits on the operator exactly as a prompt does. The selector returns
   // a plain boolean, value-stable under `Object.is`, never the held batch or a fresh object.
@@ -2263,7 +2260,7 @@ function ConversationStatusDotControl({
       status={resolveConversationStatus(
         promptPending || questionPending,
         activity,
-        isConversationUnread(timeline, lastRead)
+        isConversationUnread(timeline, lastRead, row)
       )}
     />
   )
@@ -2347,7 +2344,7 @@ function Row({
           #1171) so the
           button still spans the row and its hover/focus rectangles are unchanged; nothing about
           `.channel-list__row` / `__row-open`'s class tokens or ancestry moves (AC4). */}
-      <ConversationStatusDotControl conversationId={row.id} />
+      <ConversationStatusDotControl row={row} />
       <button
         type="button"
         className="channel-list__row-open"

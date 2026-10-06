@@ -860,6 +860,15 @@ describe('ChannelListView', () => {
   })
 
   describe('the status dot leading every conversation row (#801)', () => {
+    it('uses each daemon row before timelines exist, including colliding host IDs', () => {
+      const markup = render([
+        row({ id: 'same', serverId: 'a', read_up_to: 0, latest_entry_id: 10 }),
+        row({ id: 'same', serverId: 'b', read_up_to: 10, latest_entry_id: 10 })
+      ])
+      expect((markup.match(/conversation-status-dot--new-messages/g) ?? []).length).toBe(1)
+      expect((markup.match(/conversation-status-dot--idle/g) ?? []).length).toBe(1)
+    })
+
     // THE ONE REAL TRAP IN THIS SUITE. The four stores are file-level instances shared by every case in
     // this describe, so a seed left standing silently colours a LATER case's render — an `--idle` row
     // quietly turning `--working`, which is a passing-looking wrong answer rather than a failure. Four

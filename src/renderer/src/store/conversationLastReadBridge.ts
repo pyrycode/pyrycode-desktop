@@ -1,5 +1,5 @@
 // The renderer data path feeding the per-conversation last-read store (#777, split from #677): it keeps
-// ONE invariant true — THE OPEN CONVERSATION'S MARK EQUALS ITS OWN HELD ITEM COUNT — from two restore
+// ONE legacy invariant true — THE OPEN CONVERSATION'S LOCAL MARK EQUALS ITS OWN HELD ITEM COUNT — from two restore
 // points. `activateConversation` restores it when a conversation is opened; the store subscription below
 // restores it again whenever content lands while that conversation stays open. Both are the same write of
 // the same quantity, which is why this is one write function called from two places rather than two
@@ -65,6 +65,8 @@
 // renderer console is readable by anything that can open DevTools (ADR 0007, #126). The `null`-open early
 // return and the absent-slice `0` are silent BY DESIGN, not swallowed errors.
 import { useEffect } from 'react'
+import { hasDaemonReadState } from './conversationUnread'
+import { conversationListStore } from './conversationListStore'
 import { activeConversationStore, selectActiveConversation } from './activeConversationStore'
 import { conversationLastReadStore, type LastReadMark } from './conversationLastReadStore'
 import { conversationTimelineStore, selectTimelineFor } from './conversationTimelineStore'
@@ -83,6 +85,7 @@ import type { TimelineState } from './threadTimeline'
  * left, with a count it no longer holds.
  */
 export interface ConversationLastReadDeps {
+  isDaemonBacked?: (conversationId: string) => boolean
   getOpenConversationId: () => string | null
   getTimelineFor: (conversationId: string) => TimelineState | null
   recordLastRead: (conversationId: string, itemsSeen: LastReadMark) => void
@@ -110,6 +113,7 @@ export interface ConversationLastReadDeps {
  * `getTimelineFor` spy both readings drive through the same function.
  */
 export function stampLastReadFor(deps: ConversationLastReadDeps, conversationId: string): void {
+  if (deps.isDaemonBacked?.(conversationId)) return
   const slice = deps.getTimelineFor(conversationId)
   deps.recordLastRead(conversationId, slice === null ? 0 : slice.items.length)
 }
@@ -164,6 +168,10 @@ export function subscribeConversationLastRead(
  * import, two is a home") — a separate three-line ticket for whoever needs a third.
  */
 export const conversationLastReadDeps: ConversationLastReadDeps = {
+  // Local marks are ID-keyed: suppress a stamp if any matching host has the complete contract.
+  isDaemonBacked: (id) => conversationListStore.getState().conversations?.some(
+    (row) => row.id === id && hasDaemonReadState(row)
+  ) === true,
   getOpenConversationId: () => {
     const open = selectActiveConversation(activeConversationStore.getState())
     return open === null ? null : open.id

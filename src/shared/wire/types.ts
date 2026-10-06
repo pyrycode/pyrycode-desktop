@@ -73,6 +73,7 @@ export interface InnerFrameV2 {
 }
 
 export type EnvelopeType =
+  | 'reply_suggestion'
   | 'hello'
   | 'hello_ack'
   | 'message'
@@ -4051,4 +4052,12 @@ export interface ModelRefusalNoFallbackPayload {
 export interface ModelRefusalFallbackPayload extends ModelRefusalNoFallbackPayload {
   fallback_model: string
   scope: string
+}
+
+/** Transient interactive v2 state; never a history entry. */
+export interface ReplySuggestionPayload {
+  conversation_id: string
+  session_id: string
+  revision: number
+  suggested_reply: string | null
 }

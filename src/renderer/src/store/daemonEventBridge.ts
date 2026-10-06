@@ -189,6 +189,7 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // assertNever guard below makes a new arm a compile error (the
       // apiRetry-was-a-no-op-until-#493 precedent).
       return null
+    case 'replySuggestion': // Transient composer state; exclude text from exhaustive errors.
     case 'sessionFacts': // Informational only; the session-facts bridge owns retention.
     case 'mcpStatus': // Informational only; the MCP status bridge owns retention.
     case 'mcpStatusRequestRejected': // The channel info sheet's notice owns this (#1579).

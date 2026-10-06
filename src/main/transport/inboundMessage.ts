@@ -31,6 +31,7 @@ import {
 } from '../../shared/wire/types'
 import type {
   Envelope,
+  ReplySuggestionPayload,
   WireAgent,
   BannerPayload,
   MessagePayload,
@@ -805,6 +806,7 @@ interface FrameTimestamp {
  * catch-all, so the stream stops here until claimed.
  */
 export type InboundDaemonMessage =
+  | { kind: 'reply-suggestion'; replySuggestion: ReplySuggestionPayload }
   | { kind: 'banner'; banner: BannerPayload }
   | ({ kind: 'message'; message: MessagePayload } & FrameTimestamp)
   | { kind: 'chunk'; messages: MessagePayload[] }
@@ -4070,6 +4072,27 @@ export function parseInboundMessage(
   // frame that fails to narrow throws first and leaves no record. Optional chaining short-circuits the
   // whole call (including hashPlaintext) when no logger is injected — absent-logger costs nothing.
   switch (envelope.type) {
+    case 'reply_suggestion': {
+      const payload = envelope.payload
+      const text = isRecord(payload) ? payload.suggested_reply : undefined
+      // Reject lone UTF-16 surrogates as well as actual invalid UTF-8 caught by decodeEnvelope.
+      const validText = text === null || (typeof text === 'string' && text.trim() !== '' &&
+        !/[\r\n\u2028\u2029]/u.test(text) &&
+        Buffer.from(text, 'utf8').toString('utf8') === text && Buffer.byteLength(text, 'utf8') <= 1024)
+      if (!isRecord(payload) || typeof payload.conversation_id !== 'string' ||
+          typeof payload.session_id !== 'string' || typeof payload.revision !== 'number' ||
+          !Number.isSafeInteger(payload.revision) || payload.revision <= 0 || !validText ||
+          (text !== null && typeof text !== 'string')) {
+        diagnosticLog?.event({ event: 'inbound-rejected', code: 'reply-suggestion-invalid' })
+        throw new WireDecodeError('invalid reply suggestion')
+      }
+      diagnosticLog?.event({ event: 'inbound-decoded', code: 'reply_suggestion',
+        bytes: plaintext.length, hash: hashPlaintext(plaintext) })
+      return { kind: 'reply-suggestion', replySuggestion: {
+        conversation_id: payload.conversation_id, session_id: payload.session_id,
+        revision: payload.revision, suggested_reply: text
+      } }
+    }
     case 'resync':
       return null
     case 'message': {

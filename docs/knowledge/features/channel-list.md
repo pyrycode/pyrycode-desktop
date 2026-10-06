@@ -12,8 +12,9 @@ height — a trailing last-activity time until
 geometry](channel-list-desktop-row-geometry.md). Mirrors the mobile home screen (mobile #312). Replaces the throwaway `PlaceholderList`
 [#140](../codebase/140.md) shipped as a stand-in.
 
-Introduced in [#141](../codebase/141.md). Renderer-only, pure render slice — no keys, sockets, tokens,
-transport, or new store/wire code, so not security-sensitive.
+Introduced in [#141](../codebase/141.md). Conversation rendering remains a pure view over held state;
+the app-wide self-update row reads a separate store and sends narrow actions through preload.
+Updater eligibility, download verification and installation authority stay in main.
 
 ## What it does
 
@@ -50,8 +51,41 @@ Conversation rows retain their title, status dot, selection, edit and
 [Edit channel](edit-channel-dialog.md); the Chats pen opens
 [Edit chat](rename-conversation-dialog.md). The row's own identity, stored `cwd` and daemon
 contract are unchanged. The 400px card uses the [host-first geometry](channel-list-tree-inset.md).
-There are no sidebar workspace rows, global Channels/Chats trees or divider. Apps rows and
+There are no sidebar workspace rows, global Channels/Chats trees or section divider. Apps rows and
 actions are absent.
+
+### App-wide self-update row
+
+`ChannelListView` renders its optional `appUpdate` slot after `.channel-list__tree`, outside the
+host scrollport. `AppUpdateRow` stays pinned below the hosts within the card's 20px inset; the row
+is 360px wide in the fixed 400px sidebar. Host connectivity, folds and conversation selection do
+not control it. The app-lifetime subscription lives in `App`, so completion received while Settings
+or pairing owns the screen is retained in `appUpdateStore`. Main supplies the latest state after
+a renderer remount. See [Windows self-update](windows-packaging.md#packaged-windows-self-update).
+
+- Ready shows **Update ready** and “Version X.Y.Z installs when you restart.” Only a stable ASCII
+  three-part version, at most 64 characters with no leading zeroes except zero itself, is displayed;
+  prefixes, whitespace and prerelease/build suffixes fall back to “An update installs when you restart.”
+  **Restart now** requests silent installation and relaunch after the history drain. **Later**
+  hides the row for the process lifetime while preserving installation on ordinary quit.
+- Download/verification failure shows **Update could not install**, “Pyrycode will try again next
+  launch.” and **Dismiss**. Dismiss hides it for the process lifetime; duplicate errors cannot
+  revive it. Checking, downloading, up-to-date results and check/offline failures draw nothing.
+  Development and non-Windows builds never show the row.
+
+The separator uses inverse-primary at 60% opacity, with a 12px gap below it; the 20px edgeless Update
+path sits 8px from body-medium title/body-small caption. Only the failed caption uses the error
+role. Restart reuses the shared small Secondary button; Later/Dismiss use text actions.
+`app-update.svg` is a local alpha mask painted by `--color-primary`. An external image with a fixed
+fill would ignore theme changes, while Vite's default small-asset data URL would violate renderer
+CSP; keep its `assetsInlineLimit` exclusion in `electron.vite.config.ts`.
+
+[`e2e/app-update.spec.ts`](../../../e2e/app-update.spec.ts) decodes the actual mask, checks intrinsic
+and rendered 20px dimensions, changes the primary token to prove recolouring, and measures pinned
+insets at 1280×800 and 800×600 windows. It also drives all three actions through preload, including
+completion during Settings and dismissal across remounts. Markup alone proves neither asset paint
+nor clicks. Counted gate evidence and pending Surface acceptance are recorded in
+[Windows packaging](windows-packaging.md#self-update-test-evidence).
 
 ## Why the row carries no message preview
 
@@ -259,8 +293,9 @@ success green. See [the dot's paint contract](conversation-status-dot.md).
 
 ### CSS (`channels.css`)
 
-`.channel-list__tree` scrolls inside the padded card; the top bar and its rule remain outside
-that scrollport. Since [#1527](https://github.com/pyrycode/pyrycode-desktop/issues/1527), it shares
+`.channel-list__tree` scrolls inside the padded card; the top bar, its rule and the app-wide
+self-update row remain outside that scrollport. Since
+[#1527](https://github.com/pyrycode/pyrycode-desktop/issues/1527), it shares
 the [thread and composer's hidden-scrollbar policy](conversation-shell-chrome.md#layout-contract):
 `scrollbar-width: none` plus a separate `::-webkit-scrollbar { display: none; }` fallback hide the
 bar at rest and during scrolling, including with an always-visible OS scrollbar preference.

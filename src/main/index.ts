@@ -1,3 +1,5 @@
+import { createAppUpdateController, registerAppUpdate, createQuitDrain } from './appUpdate'
+import { APP_UPDATE_STATE_CHANNEL } from '../shared/ipc/appUpdate'
 import { createMessageLifecycle } from './messageLifecycle'
 import {
   app,
@@ -662,16 +664,39 @@ app.whenReady().then(() => {
   const windowPresentation = selectWindowPresentation({ isPackaged: app.isPackaged, env: process.env })
   let quitDrained = false
   let quitting = false
+  const drainQuit = createQuitDrain(() => registry.stop(), async () => {
+    await Promise.all(BrowserWindow.getAllWindows().map(flushHistory))
+    quitDrained = true
+  })
+  const appUpdate = createAppUpdateController({
+    isPackaged: app.isPackaged, platform: process.platform,
+    construct: () => {
+      // Accessing the lazy singleton constructs it only after the packaged-Windows gate.
+      const library: typeof import('electron-updater') = require('electron-updater')
+      const { autoUpdater } = library
+      return autoUpdater
+    },
+    beforeInstall: drainQuit, onInstallFailure: () => app.quit(), log: diagnosticLog
+  })
+  const unregisterAppUpdate = registerAppUpdate(ipcMain, appUpdate,
+    event => {
+      const trusted = event.senderFrame === event.sender.mainFrame && BrowserWindow.fromWebContents(event.sender) !== null
+      if (!trusted) diagnosticLog.event({ event: 'app-update-refused', code: 'untrusted-sender' })
+      return trusted
+    },
+    state => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed()) window.webContents.send(APP_UPDATE_STATE_CHANNEL, state)
+      }
+    })
+  void appUpdate.start() // Controller handles check and automatic-download failures.
+  app.on('will-quit', () => { unregisterAppUpdate(); appUpdate.dispose() })
   app.on('before-quit', (event) => {
     if (quitDrained) return
     event.preventDefault()
     if (quitting) return
     quitting = true
-    registry.stop()
-    void Promise.all(BrowserWindow.getAllWindows().map(flushHistory)).then(() => {
-      quitDrained = true
-      app.quit()
-    })
+    void drainQuit().then(() => app.quit())
   })
   const openWindow = (): void => {
     const window = createWindow(windowPresentation)

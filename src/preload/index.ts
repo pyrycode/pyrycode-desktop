@@ -1,3 +1,4 @@
+import { APP_UPDATE_STATE_CHANNEL, APP_UPDATE_ACTION_CHANNEL, projectAppUpdateState, type AppUpdateState, type AppUpdateAction } from '../shared/ipc/appUpdate'
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import { CHAT_HISTORY_CHANNEL, CHAT_HISTORY_FLUSH_CHANNEL, type ChatHistoryRequest, type ChatHistoryResult } from '../shared/chatHistory'
 import { DAEMON_EVENT_CHANNEL, type StampedDaemonEvent } from '../shared/ipc/events'
@@ -72,6 +73,19 @@ import { MARKDOWN_SAVE_CHANNEL, type MarkdownSaveOutcome } from '../shared/ipc/m
 let historyReceipt: { type: string; serverId: string | null | undefined } | null = null
 
 const api = {
+  sendAppUpdateAction: (action: AppUpdateAction): void => { ipcRenderer.send(APP_UPDATE_ACTION_CHANNEL, action) },
+  onAppUpdate: (listener: (state: AppUpdateState) => void): (() => void) => {
+    let active = true, receivedEvent = false
+    const handler = (_event: IpcRendererEvent, value: unknown): void => {
+      receivedEvent = true
+      if (active) listener(projectAppUpdateState(value))
+    }
+    ipcRenderer.on(APP_UPDATE_STATE_CHANNEL, handler)
+    void ipcRenderer.invoke(APP_UPDATE_STATE_CHANNEL).then((value: unknown) => {
+      if (active && !receivedEvent) listener(projectAppUpdateState(value))
+    }).catch(() => {}) // Missing main snapshot stays invisible.
+    return () => { active = false; ipcRenderer.removeListener(APP_UPDATE_STATE_CHANNEL, handler) }
+  },
   chatHistory: (request: ChatHistoryRequest): Promise<ChatHistoryResult> =>
     ipcRenderer.invoke(CHAT_HISTORY_CHANNEL, request),
   chatHistoryReceipt: () => historyReceipt,

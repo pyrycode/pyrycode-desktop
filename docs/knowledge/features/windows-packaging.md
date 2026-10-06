@@ -4,10 +4,11 @@
 unsigned NSIS installer for x64 and arm64 from `electron-builder.yml`, its `.blockmap`, and `latest.yml`.
 `npm run release:win -- X.Y.Z` builds on pyrybox and publishes those three assets to the
 [GitHub Releases feed](https://github.com/pyrycode/pyrycode-desktop/releases). Mac and Linux targets and
-signing remain out of scope. Runtime updater wiring and the Surface updater round-trip belong to
-[#1775](https://github.com/pyrycode/pyrycode-desktop/issues/1775); until then, updates use a manual
-installer over the existing installation. See [README Build](../../../README.md#build) for commands,
-prerequisites and the manual unsigned Surface install.
+signing remain out of scope. Packaged Windows builds check that feed once per process launch,
+download silently and offer a pinned sidebar restart prompt after verification. Ordinary quit
+also installs a downloaded update. See [README Build](../../../README.md#build) for commands,
+prerequisites and the first manual unsigned Surface install. The actual Surface update round-trip
+remains [operator acceptance](#surface-self-update-acceptance).
 
 ## Release preparation and retry state
 
@@ -36,7 +37,7 @@ into a failure. Unpublished versions still need their saved source SHA to resume
 ## Feed generation and verification before publication
 
 The GitHub provider names `pyrycode/pyrycode-desktop`. `PublishManager` writes `latest.yml` and each
-architecture's `resources/app-update.yml` even with `--publish never` and without a runtime updater.
+architecture's `resources/app-update.yml` even with `--publish never`.
 Keep that flag on both local and release packaging: otherwise CI/tag detection can enable automatic
 publication and bypass the draft verification transaction. The NSIS `artifactName` has neither
 spaces, which GitHub rewrites on upload, nor `${arch}`, which would split the combined installer:
@@ -48,7 +49,118 @@ assets only when their upload state, size and available digest match. It downloa
 blockmap and feed by asset id, compares their sha256 hashes to the build, and checks the downloaded
 feed's installer sha512. An upload or hash failure leaves the release unpublished; a mismatched
 download is deleted so a retry uploads it again. Publishing is followed by a release/tag readback.
-These hashes establish transfer integrity; the installer remains unsigned.
+These hashes establish transfer integrity; the installer remains unsigned. Runtime sha512
+verification likewise establishes download integrity, not publisher authenticity: anyone able to
+publish this repository's releases can ship code to the Surface.
+
+## Packaged Windows self-update
+
+[`src/main/appUpdate.ts`](../../../src/main/appUpdate.ts) owns one controller per process.
+`selectAppUpdateEligibility` checks `isPackaged` first and only then `platform === 'win32'`;
+the lazy `electron-updater` factory is never invoked in development or on other platforms.
+`electron-updater` 6.8.9 is a production dependency alongside the electron-builder 26 configuration.
+`externalizeDepsPlugin` leaves it external and electron-builder includes production dependencies
+through its own dependency packaging, independently of the `files` allowlist below.
+
+The controller consumes the packaged `app-update.yml`; there is no feed override, credential or
+renderer-controlled URL. Before its single `checkForUpdates()` call, it disables the library logger,
+enables `autoDownload` and `autoInstallOnAppQuit`, and disables web installers. It never calls the
+OS-notification API. Available metadata only starts the internal downloading phase; only the
+library's verified `update-downloaded` event during that phase grants installation authority.
+Checking, downloading, up-to-date results and check/offline failures show no row. Download or
+integrity failures produce one dismissible failed row; classification uses lifecycle phase,
+never error-message inspection. Both error events and rejected check/download promises are handled.
+There is no retry loop within a launch. See [the sidebar row](channel-list.md#app-wide-self-update-row)
+for copy, version fallback and Later/Dismiss behavior. Host minimum-version rejection remains a
+separate [host-row affordance](channel-list-host-row.md).
+
+Diagnostics use fresh static records through the existing [diagnostic log](diagnostic-log.md):
+`app-update-checking`, `app-update-downloading`, `app-update-ready`, `app-update-installing` and
+`app-update-dismissed`; `app-update-failed` carries only `startup-failed`, `check-failed`,
+`download-failed` or `install-failed`. `app-update-refused` uses `untrusted-sender`,
+`malformed-command` or `not-installable`. Never adapt the library logger by forwarding its arguments
+to `DiagnosticLog.event`: those can contain feed metadata and raw exception text, including in
+otherwise permitted string fields. Even the validated feed version is omitted from diagnostics.
+
+### IPC state and lifetime
+
+[`src/shared/ipc/appUpdate.ts`](../../../src/shared/ipc/appUpdate.ts) defines the separate
+`pyry:app-update-state` snapshot/event channel and `pyry:app-update-action` command channel;
+neither extends daemon wire events. State contains only `{ type: 'idle' }`,
+`{ type: 'ready', version: string | null }` or `{ type: 'failed' }`. The sole feed-supplied
+display text is a stable ASCII `X.Y.Z`, at most 64 characters, with no leading zeroes except zero
+itself, prefix, whitespace, prerelease or build suffix. Invalid versions become `null` without
+discarding the verified update. URLs, paths, release notes and raw errors never enter state or logs.
+
+Preload exposes only `onAppUpdate` and `sendAppUpdateAction`. It installs the event listener before
+requesting a snapshot, projects either delivery into a fresh declared state, and ignores the
+snapshot after any event or cleanup. This gives late subscribers current completion or dismissed
+state without allowing an older startup snapshot to overwrite a newer event. `App` subscribes for
+its lifetime into `appUpdateStore`; subscribing from the sidebar would miss completion while
+Settings or pairing owns the screen. Main retains state and dismissal across renderer remounts.
+
+Main accepts only the exact one-field `{ type: 'restart' }` and `{ type: 'dismiss' }` objects
+from a current BrowserWindow's main frame. Restart is inert without verified download authority
+and is latched to one attempt. Dismiss hides state for the process lifetime without revoking a
+ready update or disabling installation on ordinary quit. Duplicate completion/failure delivery
+cannot revive the row. On `will-quit`, main unregisters IPC and disposes the controller: subscribers
+and lifecycle listeners are removed and a pending download token is cancelled, including one
+returned by a late check result. A content-free inert error listener remains until exit because
+cancellation can still emit an EventEmitter error; late work cannot publish or log.
+
+### History drain and installation failure
+
+`createQuitDrain` shares one promise between Restart now and ordinary quit. It permanently stops
+the connection registry, flushes every window's renderer history writer, then awaits queued main
+history operations. Successful completion marks `quitDrained`, allowing the windows' close guards
+to pass. Restart then calls `quitAndInstall(true, true)` once: silent installation and forced
+relaunch. Waiting only in `before-quit` would be too late, because the library begins installing
+before its explicit `app.quit()`. See [history shutdown](chat-history.md#window-close-and-app-quit).
+
+Once that registry has stopped, an installation failure cannot leave a usable open application.
+A thrown installer call or updater error revokes verified authority, disables
+`autoInstallOnAppQuit` to prevent a retry during the same quit, and completes an orderly exit once
+the drain succeeds. An error during draining waits for persistence and skips installer execution.
+Repeated failures cannot install or exit again. This differs from a download failure, whose
+dismissible row leaves the application running. No persistent previous-install outcome is inferred.
+
+### Self-update test evidence
+
+[`appUpdate.test.ts`](../../../src/main/appUpdate.test.ts) fakes updater events and promises;
+[`preload/appUpdate.test.ts`](../../../src/preload/appUpdate.test.ts) covers projection, late snapshots
+and cleanup. Shutdown regressions hold persistence using the real connection registry, history
+store, secure store and shared drain. A no-op `beforeInstall` fake alone cannot detect an application
+left open with permanently stopped connections after installation failure.
+
+[`e2e/app-update.spec.ts`](../../../e2e/app-update.spec.ts) injects the production controller with a
+fake updater at main's IPC seam and clicks the mounted row through production preload. It covers
+Restart once, Later, Dismiss, completion while Settings is open, remounts, pinned geometry and
+icon loading/recolouring. It adds no production updater switch and executes no download or installer.
+Static renderer tests pin copy but cannot prove these interactions.
+
+The [final verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1828#issuecomment-6027643097)
+records the gate at `08ed7d85`: 9,048 unit tests executed and passed, 0 failed, 3 skipped;
+The configured `npx playwright test --reporter=json` run had 317 executed and passed, 0 failed,
+5 skipped. It ran the default fake-transport tier directly after the separate successful build,
+rather than through the issue's `npm run e2e` wrapper. All three `app-update.spec.ts`
+scenarios were present and passed: verified row/Restart, Later across repeat delivery/navigation/remount,
+and failure/Dismiss across duplicate error/remount. Build and docs guard also passed. These fake
+tests establish application behavior at the injected boundary; Windows installer/relaunch and
+pairing continuity still require the Surface procedure below. No live-Claude run was required or recorded.
+
+### Surface self-update acceptance
+
+Acceptance for [#1775](https://github.com/pyrycode/pyrycode-desktop/issues/1775) remains pending
+Juhana's Surface comment before ticket closure. Neither fake-transport nor real-Claude tests prove it.
+
+1. Manually install release N containing the updater over the zip build. Verify that hosts remain
+   paired using the same `%APPDATA%\Pyrycode Desktop` directory.
+2. Publish N+1 with `npm run release:win -- X.Y.Z`, then launch N. Wait for Update ready, choose
+   Restart now, and verify silent installation/relaunch, Settings showing N+1 and retained hosts.
+3. Publish N+2, launch N+1, wait for Update ready, choose Later and quit normally. Verify the next
+   launch runs N+2, with Settings version and paired hosts recorded again.
+
+Record versions, restart/quit outcomes and pairing evidence in the issue comment.
 
 ## Build host and source transfer
 
@@ -94,7 +206,7 @@ only in the artifact electron-builder packs, not in the source tree's own `packa
 `files: [out/**, package.json]` is an allowlist, not electron-builder's default `**/*`. Verified against
 the packed artifact: each `app.asar`'s top level is exactly `node_modules`, `out`, `package.json` — no
 `src/`, no `e2e/`, no `build/`. That is what keeps `fakeDaemon.ts`, the fake relay, and every Playwright
-fixture out of a build someone installs, while the 1261 production `node_modules` entries
+fixture out of a build someone installs, while the production `node_modules` dependencies
 `externalizeDepsPlugin` (`electron.vite.config.ts`) requires still ship — electron-builder resolves those
 from the `dependencies` block via its own `node_modules` inclusion, unconditionally spliced in ahead of
 this glob (`app-builder-lib`'s `computeFileSets`), not from `files` itself. The same function
@@ -164,9 +276,10 @@ A macOS `dist:win` run that reaches the NSIS step (the common case, once Rosetta
 available) is itself evidence, checked against the two `dist/win*-unpacked/Pyrycode Desktop.exe`
 artifacts rather than read off the config: the icon bytes are embedded, the asar contents are exactly
 what `files` allows, and the packed `package.json` carries the right `productName`. What it cannot prove
-is anything that only happens at runtime on Windows — the three `app.isPackaged` composition-root
+is anything that only happens at runtime on Windows — the `app.isPackaged` composition-root
 branches in `src/main/index.ts` (`selectRelayPolicy`, `selectSecretEncryption`, `fileRotatingSink` vs.
-`stdoutSink`), and whether `noise-c.wasm` loads from inside the asar (Electron's asar-aware `fs.readFileSync`
+`stdoutSink`, and the packaged-Windows updater construction gate), and whether `noise-c.wasm` loads
+from inside the asar (Electron's asar-aware `fs.readFileSync`
 patch is expected to make this transparent, since `loadNoiseLib` — `src/main/transport/noiseLib.ts` — is
 main-process only, but nothing exercises it before an installed launch). Those stay open until the
 Windows operator acceptance actually installs and runs the exe; see #1416's operator-acceptance comment

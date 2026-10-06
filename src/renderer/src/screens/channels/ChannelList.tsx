@@ -1,3 +1,6 @@
+import { useStore } from 'zustand'
+import { appUpdateStore } from '../../store/appUpdateStore'
+import { AppUpdateRow } from './AppUpdateRow'
 import './channels.css'
 import {
   Children,
@@ -173,6 +176,7 @@ export function ChannelList({
    */
   onLeaveConversation: () => void
 }): JSX.Element {
+  const update = useStore(appUpdateStore)
   const conversations = useConversationListStore(selectConversations)
   // #1426 — the client-owned default workspace (#403) is NO LONGER READ HERE. The FAB was its only reader
   // in this file and it closed over the current value so #404 would re-render the container; with the FAB
@@ -347,6 +351,7 @@ export function ChannelList({
           holds one list and each mount re-reads it. */}
       <ServerInfoData />
       <ChannelListView
+        appUpdate={<AppUpdateRow state={update} onEvent={event => window.pyry.sendAppUpdateAction(event)} />}
         conversations={conversations}
         statuses={statuses}
         serverIds={servers.map((server) => server.serverId)}
@@ -709,6 +714,7 @@ export function ChannelList({
  * host row to draw, and that row is where #1185/#1189 put the plus that starts a chat in a new workspace.
  */
 export function ChannelListView({
+  appUpdate,
   conversations,
   statuses,
   serverIds,
@@ -727,6 +733,7 @@ export function ChannelListView({
   onRename,
   onEditChannel
 }: {
+  appUpdate?: ReactNode
   // Widened to `ServerConversationSummary` in all but name: the rows arrive carrying their server stamp
   // (#1086), and `groupByServer`'s structural constraint is what reads it — this prop stays typed as the
   // wire row so the three other screens reading the same selector are unaffected.
@@ -838,6 +845,7 @@ export function ChannelListView({
           onEditChannel
         )}
       </div>
+      {appUpdate}
     </section>
   )
 }

@@ -38,11 +38,13 @@ newest field on the row — the id of the `send_message` that produced the item,
 optional only because a pre-#2092 daemon sends none. It reaches this store, and every reader of its held
 `queued` array, for free: the store holds `queued` **verbatim by reference** with no remap (see § How it
 works), so a wire field this store never names is already carried. This store does nothing with the field
-itself — it is read by `dropQueuedMessage` (via the container's drop closure) to correlate a drop against
-the sending window's own [thread timeline](thread-timeline.md) echo, and, since
-[#1214](https://github.com/pyrycode/pyrycode-desktop/issues/1214), by `foldQueuedRows` to correlate a
-queued row against that same echo for rendering — the two consumers use the field for the same
-correlation, one to remove a row and one to draw it as one. See [Dequeue message
+itself. The timeline's local echo records associate entries one-to-one by nonempty message id,
+then retain exact queue identity across replacement snapshots. Only locally minted echoes
+can bind; received/history rows and equal text cannot establish ownership. Drops carry both
+ids so colliding entries cannot remove one another's echoes. `foldQueuedRows` uses these facts
+to draw each owned waiting row below continuing output until receipt settlement. Snapshot removal
+marks release, never delivery mode or row deletion; snapshot presence controls queued styling
+and Drop even after settlement. See [settlement, Send now and late receipts](thread-timeline-internals.md#queued-own-echo-settlement), [Dequeue message
 envelope](dequeue-message-envelope.md#configuration-and-usage) and [Conversation shell — conversation
 surfaces and modals § Queued rows folded into the
 thread](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213)
@@ -179,6 +181,13 @@ QueueData(): null
 // conversationTimelineStore.getState().markLocalSendQueued(snapshot.conversationId, snapshot.queued) —
 // see Conversation timeline holder § How it works
 ```
+
+The same callback runs in the preload's trusted receipt-origin context. Before correlating
+or releasing local records, `ConversationTimelineStore.markLocalSendQueued` compares
+`receiptHost()` with the held slice's `serverId`; a different host leaves the complete held
+state unchanged. Without this check, a colliding conversation/message id from another host
+could bind the echo to the wrong queue entry permanently. Absent origins preserve older
+event compatibility. No snapshot is copied into the timeline, and no subscription is added.
 
 Reactive-only for the snapshot write — like [`sessionIdBridge`](session-id-store.md) and unlike
 `conversationListBridge`, the daemon pushes `queue_state` unsolicited, so there is no request half:

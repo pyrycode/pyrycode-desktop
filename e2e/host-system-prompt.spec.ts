@@ -26,7 +26,7 @@ const answer = (id: number, text: string, failed = false) => encodeEnvelope({
     : { system_prompt: text, default_system_prompt: DEFAULT }
 })
 function hostFake(seed: typeof SEEDED_ROW, initial: string) {
-  const base = conversationStateFake([seed])
+  const base = conversationStateFake({ conversations: [seed] })
   const reads: Envelope[] = [], writes: Envelope[] = []
   const state = { current: initial, holdRead: false, failRead: false, holdWrite: false, failWrite: false }
   return { state, reads, writes, buildReplyFrames(bytes: Uint8Array): Uint8Array[] {
@@ -189,6 +189,64 @@ test('each opening reads once under development StrictMode effect replay', async
     expect(fake.reads).toHaveLength(2)
   } finally {
     await server.close()
+  }
+})
+
+test('unrelated host traffic preserves a disconnected host name save lock and completion', async ({ launchPairedApp }) => {
+  const a = hostFake(SEEDED_ROW, 'Host A prompt'), b = hostFake(SECOND_SEEDED_ROW, 'Host B prompt')
+  const { app, page, servers } = await launchPairedApp(
+    { buildReplyFrames: a.buildReplyFrames }, { secondServer: { buildReplyFrames: b.buildReplyFrames } })
+  await page.locator('.channel-list__row-open').filter({ hasText: SEEDED_ROW.name }).click()
+  const hosts = page.locator('.channel-list__host')
+  servers[1].forwarder.closeClientLeg(4401)
+  await expect(hosts.nth(1)).toHaveClass(/channel-list__host--failed/)
+  await app.evaluate(({ ipcMain }, nameChannel) => {
+    const original = (ipcMain as typeof ipcMain & {
+      _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, request: unknown) => Promise<unknown>>
+    })._invokeHandlers.get(nameChannel)!
+    ipcMain.removeHandler(nameChannel)
+    ipcMain.handle(nameChannel, async (event, request) => {
+      await new Promise<void>(resolve => ipcMain.once('test:release-disconnected-name-save', () => resolve()))
+      return original(event, request)
+    })
+  }, HOST_LABEL_SET_CHANNEL)
+  try {
+    await page.locator('.channel-list__host-edit').nth(1).click()
+    const dialog = page.getByRole('dialog', { name: 'Edit host', exact: true })
+    const name = dialog.getByRole('textbox', { name: 'Host name:' })
+    const ok = dialog.getByRole('button', { name: 'OK', exact: true })
+    const unpair = dialog.getByRole('button', { name: 'Unpair host', exact: true })
+    await expect(dialog.getByText('Could not read the host system prompt')).toBeVisible()
+    await name.fill('Saved disconnected host name')
+    await ok.click()
+    await expect(name).toBeDisabled()
+    const assertLocked = async () => {
+      await expect(name).toBeDisabled()
+      await expect(ok).toBeDisabled()
+      await expect(unpair).toBeDisabled()
+      await expect(dialog.getByRole('textbox', { name: 'Host system prompt:' })).toBeDisabled()
+      await expect(dialog.locator('.modal__action--cancel')).toBeEnabled()
+      await expect(dialog.getByRole('button', { name: 'Close dialog' })).toBeEnabled()
+    }
+    servers[0].daemon.pushFrame(encodeEnvelope({ id: 901, ts: TS, type: 'message', payload: {
+      conversation_id: SEEDED_ROW.id, message_id: 'unrelated-host-message', role: 'user',
+      text: 'Unrelated host A message'
+    } }))
+    // Visible receipt proves the unrelated message crossed IPC before checking the held save.
+    await expect(page.locator('.bubble[data-thread-role="user"]')).toContainText('Unrelated host A message')
+    await assertLocked()
+    servers[0].forwarder.closeClientLeg(4401)
+    await expect(hosts.nth(0)).toHaveClass(/channel-list__host--failed/)
+    await assertLocked()
+    await app.evaluate(({ ipcMain }) => { ipcMain.emit('test:release-disconnected-name-save') })
+    await expect(dialog).toHaveCount(0)
+    await expect(page.locator('.channel-list__host-label').nth(1)).toHaveText('Saved disconnected host name')
+    expect(a.reads).toHaveLength(0)
+    expect(a.writes).toHaveLength(0)
+    expect(b.reads).toHaveLength(0)
+    expect(b.writes).toHaveLength(0)
+  } finally {
+    await app.evaluate(({ ipcMain }) => { ipcMain.emit('test:release-disconnected-name-save') })
   }
 })
 

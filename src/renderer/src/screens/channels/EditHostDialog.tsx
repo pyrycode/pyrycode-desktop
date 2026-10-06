@@ -430,8 +430,11 @@ export function EditHostDialog(props: Omit<ComponentProps<typeof EditHostDialogV
   useEffect(() => {
     let disposed = false
     const removeEvents = window.pyry.onDaemonEvent(controller.receive)
-    const removeSession = sessionStore.subscribe((state) => {
-      if (state.statuses.get(props.serverId)?.type !== 'connected') controller.connectionLost()
+    const removeSession = sessionStore.subscribe((state, previous) => {
+      const status = state.statuses.get(props.serverId)
+      if (status !== previous.statuses.get(props.serverId) && status?.type !== 'connected') {
+        controller.connectionLost()
+      }
     })
     // Effect replay cleans up its first setup before this runs. Only the surviving setup reads.
     queueMicrotask(() => { if (!disposed) controller.open() })

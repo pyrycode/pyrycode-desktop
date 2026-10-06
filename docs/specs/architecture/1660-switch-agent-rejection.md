@@ -64,3 +64,34 @@ The full unit gate also identified exact decoder-shape assertions in
 `src/main/transport/fakeDaemon.test.ts`. Preserve their content-exclusion checks
 while explicitly expecting each fixture's boolean retryability. The attachment
 outcome classifiers and their consumers remain unchanged.
+
+2026-10-06 (verifier rework): Finding 1 requires current `origin/main` ancestry;
+the dispatcher's main merge is retained, and final gates run after fetching and
+merging again. Finding 2 exposes a send that reports a synchronous connection
+failure but returns normally. `switchAgent` captures its driver and generation
+before sending and registers only if authentication remains live, that driver
+is still current and the generation is unchanged afterward. Otherwise it records
+only `switch-agent-failed` / `connection-lost` and leaves no pending entry.
+No new state, retry or exported contract is added. Five regression cases exercise
+error, relay loss, terminal close, reconnect and stop during send, assert that
+later refusals cannot settle the failed switch, and verify a fresh recovered send
+still rejects normally. The total remains below 400 written lines, with no new
+exported declarations or consumer migrations; #1544 still overlaps separate
+run-config logic and requires no dependency wait.
+
+## Documentation handoff
+
+- Pending for the documentation stage: update `docs/knowledge/features/switch-agent-request.md`
+  § Owning connection and failures and `docs/knowledge/features/daemon-connection-correlation-requests.md`
+  § Switch-agent rejection correlation (new) with the pending envelope-to-conversation
+  map, exactly-once rejection, conversation-update cleanup and connection/session
+  lifetime, including the post-send authentication and generation guard.
+- Pending for the documentation stage: document `switchAgentRejected`'s conversation
+  attribution, boolean retryability/default and exclusion of daemon message text in
+  `docs/knowledge/features/daemon-event-channel.md` § What it does, plus boolean-only
+  retryability preservation in `docs/knowledge/features/inbound-message-decode.md`
+  § Error handling.
+- Pending for the documentation stage: record the four renderer translators'
+  explicit no-op handling in `docs/knowledge/features/switch-agent-request.md`
+  § Owning connection and failures; menu rollback/notification belongs to the
+  follow-up consumer ticket.

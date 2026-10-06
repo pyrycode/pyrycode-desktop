@@ -13407,6 +13407,47 @@ describe('createDaemonConnection — switchAgent rejection', () => {
     expect(rejections(sink)).toEqual([])
   })
 
+  it.each(['error', 'relay-down', 'terminal', 'reconnect', 'stop'] as const)(
+    'does not register a switch when send synchronously causes %s', async teardown => {
+      const entries: DiagnosticEvent[] = []
+      const { connection, drivers, sink } = build({ diagnosticLog: { event: event => { entries.push(event) } } })
+      connection.start()
+      await tick()
+      const driver = drivers[0]
+      driver.emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+      vi.spyOn(driver.handle, 'sendMessage').mockImplementationOnce(bytes => {
+        driver.sent.push(bytes)
+        switch (teardown) {
+          case 'error': driver.emit({ type: 'error', reason: 'outbound-frame-encode-failed' }); break
+          case 'relay-down': driver.emit({ type: 'relay-link-down', code: 1006 }); break
+          case 'terminal': driver.emit({ type: 'terminal', code: 1006, reason: 'closed' }); break
+          case 'reconnect': connection.reconnect(); break
+          case 'stop': connection.stop(); break
+        }
+      })
+      expect(() => connection.switchAgent(payload)).not.toThrow()
+      const oldId = lastId(driver)
+      refuse(driver, oldId)
+      expect(rejections(sink)).toEqual([])
+      expect(entries.filter(event => event.event.startsWith('switch-agent'))).toEqual([
+        { event: 'switch-agent-failed', code: 'connection-lost' }
+      ])
+      if (teardown === 'stop') return
+
+      await tick()
+      const active = drivers[drivers.length - 1]
+      active.emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+      refuse(active, oldId)
+      expect(rejections(sink)).toEqual([])
+      connection.switchAgent({ ...payload, conversation_id: 'conv-2' })
+      refuse(active, lastId(active))
+      expect(rejections(sink)).toEqual([
+        { type: 'switchAgentRejected', conversationId: 'conv-2', retryable: true }
+      ])
+      connection.stop()
+    }
+  )
+
   it.each([undefined, null, 'true', 1])('defaults an unusable retryable flag (%s) to false', async retryable => {
     const { connection, drivers, sink } = await reachConnected()
     connection.switchAgent(payload)

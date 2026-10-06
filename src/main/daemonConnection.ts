@@ -3506,11 +3506,18 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       deps.diagnosticLog?.event({ event: 'switch-agent-refused', code: 'unavailable' })
       return
     }
+    const sendingDriver = driver
+    const gen = generation
     try {
       const envelopeId = nextEnvelopeId
       const bytes = buildSwitchAgent({ id: envelopeId, ts: now(), payload })
       nextEnvelopeId += 1
-      driver.sendMessage(bytes)
+      sendingDriver.sendMessage(bytes)
+      // A send may report failure or trigger teardown synchronously without throwing.
+      if (!authenticated || driver !== sendingDriver || generation !== gen) {
+        deps.diagnosticLog?.event({ event: 'switch-agent-failed', code: 'connection-lost' })
+        return
+      }
       pendingSwitchAgents.set(envelopeId, payload.conversation_id)
       deps.diagnosticLog?.event({ event: 'switch-agent-sent' })
     } catch {

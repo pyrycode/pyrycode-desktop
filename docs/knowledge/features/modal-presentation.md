@@ -3,7 +3,7 @@
 [`Modal`](../../../src/renderer/src/components/Modal.tsx) supplies the shared panel,
 header, content slot and footer for desktop dialogs. It imports its own stylesheet
 and close SVG; the renderer entry loads the shared theme tokens. The presentation
-is used by [Edit host](edit-host-dialog.md), which supplies a 646px preferred
+is used by [Edit host](edit-host-dialog.md), which supplies a 640px preferred
 width and its existing save and dismissal callbacks.
 [Add workspace](add-workspace-dialog.md) adoption is tracked separately in
 [#1346](https://github.com/pyrycode/pyrycode-desktop/issues/1346).
@@ -32,8 +32,9 @@ Callers own data, validation, pending/error state, save outcomes and mounting.
 They also provide the overlay and its placement, focus entry/containment/restoration,
 and Escape/backdrop policy. `Modal` performs no asynchronous work or lifecycle
 handling. An action does not unmount the panel by itself. The adopting dialogs
-must preserve their available dismissal path while a save is outstanding; their
-round trips have no timeout.
+must preserve their available dismissal path while a save is outstanding. Local
+name persistence has no invoke timeout; the host prompt transport has a 15-second
+deadline. Neither lifetime is owned by `Modal`.
 
 The panel carries `role="dialog"` and `aria-modal="true"`. `useId` associates
 `aria-labelledby` with its own heading, including when titles repeat. Titles and

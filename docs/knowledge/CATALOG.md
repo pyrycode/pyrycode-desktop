@@ -248,21 +248,10 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   way back to the folder name is Save itself." Renderer-only, no wire/IPC change (both shipped already).
   Builder self-review PASS.
 - [Reusable modal presentation](features/modal-presentation.md) — Caller-supplied content and actions, caller-owned lifecycle, viewport constraints and grid-sizing evidence.
-- [Edit host dialog (#1299)](features/edit-host-dialog.md) —
-  gave the host row's hover pen (#1185, dormant since) its first caller: a near-clone of the [Edit
-  workspace dialog](features/edit-workspace-dialog.md) that renames the machine through
-  `window.pyry.setHostLabelFor` (#1186) — no wire type, no command, reaches no daemon. Departs from the
-  sibling on two points: Save stays enabled on a blank name (the valid way back to the generic fallback
-  word, unlike a workspace's folder-name fallback) and the dialog carries a round-trip status the
-  sibling has no use for, since this write is an awaited promise rather than fire-and-forget. The write
-  helper tests `stored`/`not-stored` positively and falls through unconditionally to "keep the dialog
-  open, write nothing" on anything else, so a rogue answer cannot silently reset a row. Gives the
-  renderer [host-label window store](features/host-label-window-store.md) its second writer.
-  `e2e/host-row-hover-controls.spec.ts` inverted per its own header — the row it once asserted drew no
-  control now does. Code review PASS with one non-blocking SHOULD FIX left open: the dialog's own
-  open/closed/failed state isn't scoped to the interaction that opened it, so a slow write's late
-  resolution can land on a since-reopened dialog (the store write itself is unaffected — see the linked
-  section).
+- [Edit host dialog](features/edit-host-dialog.md) — 640px modal for local host-name persistence,
+  selected-host daemon-wide prompt read/write and unpair. Covers verbatim draft/default/reset,
+  inclusive UTF-8 bound, durable save/retry, StrictMode-safe opening and interaction/operation guards.
+  Mounted fake-transport evidence includes disconnected name persistence isolated from other hosts.
 - [Add workspace dialog (#1308)](features/add-workspace-dialog.md) —
   gave the host row's hover plus (#1185, dormant since) its first caller: a near-clone of [Create-channel
   dialog](features/create-channel-dialog.md) with a round trip added, the closer relative for that half

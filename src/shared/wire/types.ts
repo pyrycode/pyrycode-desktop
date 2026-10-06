@@ -73,6 +73,9 @@ export interface InnerFrameV2 {
 }
 
 export type EnvelopeType =
+  | 'request_host_system_prompt'
+  | 'set_host_system_prompt'
+  | 'host_system_prompt'
   | 'hello'
   | 'hello_ack'
   | 'message'
@@ -4053,4 +4056,11 @@ export interface ModelRefusalNoFallbackPayload {
 export interface ModelRefusalFallbackPayload extends ModelRefusalNoFallbackPayload {
   fallback_model: string
   scope: string
+}
+
+/** Daemon-wide instructions; only the empty string clears, never null. */
+export interface SetHostSystemPromptPayload { system_prompt: string }
+export interface HostSystemPromptPayload {
+  system_prompt: string
+  default_system_prompt: string
 }

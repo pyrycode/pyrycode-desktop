@@ -162,6 +162,26 @@ of who supplied a held row. Raw `IpcRendererEvent` objects never cross this seam
 
 ## Data flow
 
+Host prompt replies take this channel after required-string validation and
+[read/write correlation](daemon-connection-correlation-system-prompt-and-mcp.md#host-system-prompt-readwrite-correlation):
+`host_system_prompt` → `hostSystemPromptReceived { requestId, operation,
+systemPrompt, defaultSystemPrompt }` → main-owned host stamp → preload
+`onDaemonEvent` → the mounted Edit host controller. The reply is projected to
+named fields; both strings are bounded by `MAX_SYSTEM_PROMPT_BYTES` in UTF-8.
+Host identity comes from the connection, operation/request id from its pending
+map, never reflected daemon fields. Unknown-host routing failures use a sink
+bound to the requested host and the same typed failure event.
+
+`hostSystemPromptFailed { requestId, operation }` carries no daemon error text.
+Local refusal, rejection, send failure and the 15-second deadline settle through
+that fixed outcome; disconnect/stop/replacement clear pending maps/timers and
+fail outstanding waits. The dialog owns fixed read/save copy and matches host,
+operation and request id. Its subscriptions end on dismissal. `daemonEventBridge`,
+`modalBridge`, `questionBridge` and `timelineBridge` explicitly ignore both new
+events before their exhaustive fallback. There is no application-wide host prompt
+cache or session-store projection. Text stays inert and unlogged; keys, sockets
+and raw frames remain in main.
+
 ```
  #10/#12 transport (later)          bindServerOrigin              emitDaemonEvent          preload bridge         #19 (shipped)
  wire Envelope ──validate/parse──►  sink = bind(deps.sink, id) ──► emitDaemonEvent(sink,e) ──IPC──► onDaemonEvent(cb)

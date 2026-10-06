@@ -66,3 +66,9 @@ None. Figma notes mention showing failure after an unsuccessful previous install
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-06
+
+## Revisions
+
+2026-10-06: The built renderer initially inlined the small Update SVG, which the existing CSP blocks. Add it beside the existing modal-close exclusion in `electron.vite.config.ts` so the exact asset ships as a local file. Reuse `.channel-info__mcp-reconnect` for Secondary button geometry. Library source confirms installation starts inside quitAndInstall before app.quit, reinforcing the pre-install drain. The shared `createQuitDrain` helper owns that promise for both callers. On disposal replace the updater error listener with an inert sink until process exit, because cancellation can still emit an EventEmitter error; late errors cannot log or publish.
+
+2026-10-06: Move the bridge subscription from ChannelList to `App` beside the existing app-lifetime bridges; the sidebar still only reads `appUpdateStore`. This prevents missing update events while Settings or pairing owns the screen. App has no overlapping in-flight edits. Browser coverage now receives completion while Settings is open and checks the exact icon's natural dimensions and bottom inset.

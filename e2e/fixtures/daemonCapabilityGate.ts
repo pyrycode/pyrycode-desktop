@@ -23,7 +23,7 @@
 // then a subset of `required`, and `required \ ack` is the missing set, exactly.
 //
 // SECRET HYGIENE (the consuming fixture carries a security-sensitive label):
-//   - The probe carries the existing pairing token in the upgrade header and in the hello
+//   - The probe carries its own daemon-minted pairing token in the upgrade header and in the hello
 //     early-data, exactly as daemonConnection's loadDialConfig does — and readDaemonCapabilities is
 //     TOTAL: it never throws and never rejects, so no stack carrying that header or a wasm/codec
 //     message can reach a Playwright diagnostic. Every caught object is DROPPED; only a static
@@ -221,14 +221,13 @@ function probeOnce(
  *
  * It mirrors daemonConnection's loadDialConfig field-for-field (same four headers, empty prologue,
  * `/v1/client` path) with three substitutions: an EPHEMERAL static minted from the shared wasm
- * loader instead of the persisted device keypair (deviceKeypair needs safeStorage, and the daemon
- * pins no device static — its Device record has no pubkey field, so token auth is the real gate);
+ * loader instead of the persisted device keypair (deviceKeypair needs safeStorage);
  * `advertise` instead of production's `[CAPABILITY_INTERACTIVE, CAPABILITY_MULTI_AGENT]`; and a
  * probe-shaped identity.
  *
- * The pairing token is REUSED rather than a second `pyry pair` being minted: the daemon's
- * Devices.Validate is a pure hash lookup, and Device.RedeemBy's own comment records that a redeemed
- * device keeps authenticating, so the probe spends nothing the app needs.
+ * The caller must supply a dedicated daemon-minted pairing. The daemon binds that pairing to the
+ * first accepted static key; using the app's pairing here would prevent its independent key from
+ * authenticating later. Retries within this read reuse the same probe key and pairing.
  */
 export async function readDaemonCapabilities(input: {
   /** The fake routing relay's base URL — the client leg path is appended here, as the app does. */

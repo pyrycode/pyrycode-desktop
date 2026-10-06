@@ -511,8 +511,14 @@ The adapted live answer spec selects every inline card before Continue and still
 continuation to name its chosen label first. The Cancel spec refuses the whole surfaced batch and
 still requires continuation/quiescence plus absence of the gated file, while servicing subsequent
 permissions. Optimistic panel disappearance alone proves neither response reached Claude.
-The [latest live run](live-e2e-runbook.md#current-real-claude-gate-state) records aggregate counts;
-current-run per-scenario confirmation is still needed for these two required tests.
+The [latest live run](live-e2e-runbook.md#current-real-claude-gate-state) executed 25 tests: 25 passed,
+0 failed, 1 skipped. The [supplemental per-test evidence](https://github.com/pyrycode/pyrycode-desktop/issues/1729#issuecomment-6024286951)
+confirms both named scenarios were present, executed and passed on their first attempts: the answer
+case in 11.2 s and Cancel in 10.4 s, each with 1 executed, 1 passed, 0 failed and 0 skipped.
+Every test records daemon revision `0.37.0`. The configured gate used
+`npx playwright test --config playwright.real-claude.config.ts --reporter=json` rather than the
+issue's `npm run e2e:real:gate`; counted passes for both required scenarios satisfy its execution
+requirement. This proves continuation through the local test relay, not the production relay.
 
 ## Live-test diagnosis
 

@@ -186,7 +186,7 @@ The wire `NewSessionPayload.conversation_id` is optional because the daemon publ
 — the absent/`{}`/empty forms are one wire meaning, the daemon's process-wide follow-active cursor — and
 a client that can name a conversation must always name one, so the command payload makes the bare form a
 compile error instead. `isNewSessionPayload` is `isRequestModelListPayload` with one clause added: it
-also rejects `''`, the **one guard in this file that checks emptiness** rather than type alone, because
+also rejects `''`, checking emptiness rather than type alone, because
 on this verb an empty id is not an unresolvable id — it is the bare-form restart, which would hand the
 daemon's shared cursor to a renderer that read a not-yet-loaded conversation id. See [New session
 envelope](new-session-envelope.md) for the full frame, the builder, and why the wire type stays optional
@@ -289,6 +289,23 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
 - **A payload-free member's guard case is a bare `return true`.** `requestDebugBundle` (and now `requestConversations`, #139) has no payload to validate, so a well-formed `type` alone is complete acceptance — the same structural-minimum posture as `sendMessage` accepting extra harmless fields.
 - **`sendMessageCommand` is the pure, tested constructor** — a one-line wrap of already-assembled fields. It deliberately does **not** mint the `message_id`: randomness would break purity, so #11's composer generates it (`crypto.randomUUID()` — main-safe, security-appropriate) and passes the assembled `SendMessagePayload` in. The `RendererCommand` return type is the compile-time guarantee AC4 requires — a member with an unmodelled `type` cannot type-check.
 - **`isRendererCommand` is the boundary validator.** Minimum structural checks: `value` is a non-null object with a known `type`; for `sendMessage`, `value.payload` is a non-null object whose `conversation_id`, `message_id`, and `text` are all strings. It **accepts** commands carrying extra/unknown fields (structural minimum — do not reject on excess) and **rejects** everything else. Pure; never throws. It is co-located with the union so the two evolve in lockstep — the `switch (value.type)` shape makes a missing case visible.
+
+#### Switch-agent validation
+
+`switchAgent` carries the shared `SwitchAgentPayload`: required nonempty string
+`conversation_id`, exactly `claude` or `codex`, required string `model` (including
+empty), and absent/undefined/string `effort`. Its guard rejects nonobject, null
+and array payloads, missing or mistyped required fields, unsupported agents, empty
+IDs and non-string effort including null. Extra keys pass admission; the main-only
+builder copies named fields into a fresh literal before encoding.
+
+An empty model selects the target template default; explicit empty effort clears
+effort and must remain present. Structured clone preserves an own `undefined`
+property, so the guard accepts it and the builder omits it with `!== undefined`,
+never a truthiness check. All strings pass unchanged. See
+[Switch-agent request](switch-agent-request.md) for the exact payload, owning-host
+routing, failure containment and preload-to-wire coverage. Menu/confirmation and
+refusal correlation remain #1661 and #1660 respectively.
 
 #### Modal answer validation
 
@@ -413,7 +430,8 @@ sendCommand: (command: RendererCommand): void => {
 - [Run configuration store](run-config-store.md) / [#491](https://github.com/pyrycode/pyrycode-desktop/issues/491), widened [#945](https://github.com/pyrycode/pyrycode-desktop/issues/945) — the `requestSessionSettings` member's sole consumer, and the conversation-keying correction that gave it this file's only optional payload.
 - [App icon attention badge](app-badge.md) / [#1592](https://github.com/pyrycode/pyrycode-desktop/issues/1592) — the payload-carrying `setBadgeCount` member + `isBadgeCountPayload` guard this channel's union gained; main-local like `notify`, and the first guard here to bound a number rather than a string or a set.
 - [Model-list wire types § Outbound ask](model-list-wire-types.md#outbound-ask-1165) / [#1165](https://github.com/pyrycode/pyrycode-desktop/issues/1165) — the payload-carrying `requestModelList` member + `isRequestModelListPayload` guard this channel's union gained, required from the start; ships with no renderer sender, consumer is #1166.
-- [New session envelope](new-session-envelope.md) / [#1217](https://github.com/pyrycode/pyrycode-desktop/issues/1217) — the payload-carrying `newSession` member + `isNewSessionPayload` guard this channel's union gained, the only member whose payload type *tightens* its wire type (`Required<NewSessionPayload>`) and the only guard in this file that rejects an empty string; ships with no renderer sender, consumer is the sibling ticket.
+- [New session envelope](new-session-envelope.md) / [#1217](https://github.com/pyrycode/pyrycode-desktop/issues/1217) — the payload-carrying `newSession` member + `isNewSessionPayload` guard, tightening its wire type with `Required<NewSessionPayload>` and rejecting an empty conversation ID.
+- [Switch-agent request](switch-agent-request.md) — `switchAgent` admission, verbatim model/effort strings and fresh-literal wire filtering; both target agents, authenticated owner routing and no retries.
 - [Request history send](request-history-send.md) / [#1222](https://github.com/pyrycode/pyrycode-desktop/issues/1222) — the payload-carrying `requestHistory` member + `isRequestHistoryPayload` guard this channel's union gained, checking type only on all three fields (an empty `cursor` is the normal opening value of a walk, not a rejectable one); the first member carrying a value this app did not mint — the daemon-minted `cursor` — which stays opaque end to end; ships with no renderer sender, consumer is #1224.
 - [System prompt send](system-prompt-send.md) / [#1230](https://github.com/pyrycode/pyrycode-desktop/issues/1230) — the payload-carrying `requestSystemPrompt` member + `isRequestSystemPromptPayload` guard this channel's union gained, `isRequestModelListPayload`'s clone checking type not emptiness; the only member whose verb has no error frame at all, so the id's refusal rides the routing lookup one layer up rather than this guard; ships with no renderer sender, consumer is #1231.
 - [System prompt write](system-prompt-write.md) / [#1249](https://github.com/pyrycode/pyrycode-desktop/issues/1249) — the payload-carrying `setSystemPrompt` member + `isSetSystemPromptPayload` guard this channel's union gained; the guard checks **three** things where its siblings check one (`conversation_id` present, `system_prompt` present, `system_prompt` a string or exactly `null`) because the tri-state has four naive inhabitants and only three are meaningful; checks type and presence, deliberately never length — the 8192-byte bound must produce an outcome, and a guard rejection produces none; ships with no renderer sender, consumer is #1250.

@@ -44,6 +44,7 @@ import { buildRequestSystemPrompt } from './transport/requestSystemPromptEnvelop
 import { buildSetSystemPrompt } from './transport/setSystemPromptEnvelope'
 import { buildSetConversationMuted } from './transport/setConversationMutedEnvelope'
 import { buildRequestHistory } from './transport/requestHistoryEnvelope'
+import { buildSwitchAgent } from './transport/switchAgentEnvelope'
 import { buildNewSession } from './transport/newSessionEnvelope'
 import { buildListConversations } from './transport/listConversationsEnvelope'
 import { buildRecentWorkspaces } from './transport/recentWorkspacesEnvelope'
@@ -121,6 +122,7 @@ import {
   type QuestionAnswerPayload,
   type QuestionRefusedPayload,
   type AttachmentChunkPayload,
+  type SwitchAgentPayload,
   type RequestHistoryPayload
 } from '../shared/wire/types'
 
@@ -458,6 +460,8 @@ export interface DaemonConnection {
    * NEVER throws out of the module (parity #490).
    */
   newSession(conversationId: string): void
+  /** Send one agent switch on an authenticated connection; never retry or throw build/send errors. */
+  switchAgent(payload: SwitchAgentPayload): void
   /**
    * Encrypt a payload-carrying `promote_conversation` control envelope onto the live session — asks the
    * daemon to promote a discussion into a saved channel (all three fields required: the id must resolve,
@@ -3479,6 +3483,22 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function switchAgent(payload: SwitchAgentPayload): void {
+    if (driver === null || !authenticated) {
+      deps.diagnosticLog?.event({ event: 'switch-agent-refused', code: 'unavailable' })
+      return
+    }
+    try {
+      const bytes = buildSwitchAgent({ id: nextEnvelopeId, ts: now(), payload })
+      nextEnvelopeId += 1
+      driver.sendMessage(bytes)
+      deps.diagnosticLog?.event({ event: 'switch-agent-sent' })
+    } catch {
+      // Discard the exception and payload. A retry could initiate a second switch.
+      deps.diagnosticLog?.event({ event: 'switch-agent-failed', code: 'build-or-send-failed' })
+    }
+  }
+
   function newSession(conversationId: string): void {
     // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
     // mid-bootstrap, or bootstrap-failed). A restart request has no consumer to fail and is
@@ -4279,6 +4299,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     sendQueuedNow,
     interrupt,
     newSession,
+    switchAgent,
     promoteConversation,
     archiveConversation,
     unarchiveConversation,

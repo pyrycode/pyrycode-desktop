@@ -3,6 +3,39 @@
 Part of the [public contract](inbound-message-decode-contract.md). These admission
 rules complement the [transport interface](inbound-message-decode-interface.md).
 
+## Daemon-wide host system prompt
+
+The host setting is independent of channel/conversation settings. The merged
+upstream contract is `internal/protocol/host_system_prompt.go` and
+`docs/protocol-mobile.md` § Daemon-wide host system prompt; the
+[final verifier](https://github.com/pyrycode/pyrycode-desktop/pull/1787#issuecomment-6024523660)
+checked daemon revision `9b8b91071b480bdc3f0e7051d6334ebb8b1f058d`.
+
+| Envelope type | Payload / outcome |
+| --- | --- |
+| `request_host_system_prompt` | `{}`; returns current text and seeded default |
+| `set_host_system_prompt` | Required string `system_prompt`; `""` clears, whitespace survives, null is invalid |
+| `host_system_prompt` | Required strings `system_prompt` and `default_system_prompt`, with envelope `in_reply_to` naming the read or write |
+| `error` | Correlated `protocol.malformed` or `host_system_prompt.unavailable`; settles the operation as failed |
+
+Both operations succeed with `host_system_prompt`; a successful write reply
+confirms durable storage. There is no reset verb or separate write ack, and no
+conversation/session id or session-status verdict belongs in these payloads.
+Reset in the client is a draft edit saved only by OK. The daemon adds this text
+before the channel system prompt and applies changes from each conversation's
+next session.
+
+`MAX_SYSTEM_PROMPT_BYTES` is inclusive at 8192 UTF-8 bytes. Main checks outgoing
+write text, and `parseInboundMessage` checks both required reply strings by
+`Buffer.byteLength`. Missing/null/non-string or over-limit text throws fixed
+`WireDecodeError('invalid host system prompt payload')` without quoting content.
+Explicitly empty strings are valid. The parser returns only named current/default
+fields and envelope correlation, dropping extras; host attribution and read/write
+operation come from main's [pending maps](daemon-connection-correlation-system-prompt-and-mcp.md#host-system-prompt-readwrite-correlation).
+Prompt/default text never enters logs, exception messages or active markup.
+`hostSystemPrompt.test.ts` pins IPC/reply shapes, stripped extras and exact/over
+multibyte boundaries. [Edit host](edit-host-dialog.md) is the sole product consumer.
+
 ## Compaction
 
 **Compaction reports.** `CompactingPayload` requires string `conversation_id` and

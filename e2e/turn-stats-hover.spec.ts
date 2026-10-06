@@ -99,10 +99,13 @@ test("shows a turn's tokens and time only while its last assistant meta row is h
 
   // --- The turn whose turn_end carried none: hovering reveals nothing. ---
   const bareMeta = assistantBubbles.nth(1).locator('.bubble__meta')
-  const restingText = await bareMeta.innerText()
+  // Timestamp visibility now changes on row hover; the meta's underlying text must stay unchanged.
+  const restingText = await bareMeta.textContent()
+  await expect(bareMeta.locator('.bubble__meta-time')).toBeHidden()
   await bareMeta.hover()
   await expect(bareMeta.locator('.bubble__turn-stats')).toHaveCount(0)
-  expect(await bareMeta.innerText()).toBe(restingText)
+  await expect(bareMeta.locator('.bubble__meta-time')).toBeVisible()
+  expect(await bareMeta.textContent()).toBe(restingText)
 
   // --- User bubbles carry none either. ---
   await expect(page.locator('.bubble[data-thread-role="user"] .bubble__turn-stats')).toHaveCount(0)

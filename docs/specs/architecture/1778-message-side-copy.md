@@ -35,3 +35,5 @@ Sizing before commitment: one deliverable, approximately 450–550 written lines
 ## Revisions
 
 2026-10-06: The source sweep found four more bubble-scoped copy locators in `e2e/chat-history-recording.spec.ts` and `e2e/offline-conversation-actions.spec.ts`. Move those to the message row and run both specs with all behavior assertions preserved. This extends test maintenance only; the production contract stays the same. Final expected work remains below 550 lines.
+
+2026-10-06: `turn-stats-hover` used `innerText` equality to prove a metrics-free turn adds no stats. Timestamp reveal intentionally changes visible text, so compare underlying `textContent` and assert the timestamp's hidden/visible states explicitly. Keep the existing stats content, absence and meta sizing checks.

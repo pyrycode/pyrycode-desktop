@@ -34,8 +34,8 @@ ConversationScreen                         .conversation (full-height containing
 The connected empty timeline keeps `EmptyThread` inside the focusable scroller for
 history input. An empty offline chat can omit `Timeline`, but the pane, notices and
 Top overlay remain mounted and measured. Reader opening hides the covered subtree
-without unmounting the composer; reader adaptation to translucent controls remains
-follow-up work.
+without unmounting the composer. The [Markdown reader](conversation-shell-markdown-reader.md#pane-wiring)
+has its own full-pane scrollport and measured fixed header using the same translucent treatment.
 
 The top bar reads the current name through `ConversationScreen`'s existing
 `selectActiveConversation` subscription. A null name or absent snapshot displays
@@ -152,7 +152,8 @@ prove these updates, geometry or dismissal; see [test boundaries](development-ve
 
 Spacing, typography and shared roles use `theme/tokens.css`; see
 [ADR 0003](../decisions/0003-m3-theme-tokens-css-custom-properties.md). Translucent
-control treatment values are local custom properties on `.conversation__covered`:
+control treatment values are local custom properties on `.conversation`, shared by
+the covered thread and its reader sibling:
 header `#09141D` → transparent, input transparent → `rgb(11 14 17 / 60%)` by 20% of
 its height, and backdrop samples of 10px, 8px, 5px and 2px blended by vertical masks.
 The header eases down to zero blur; the input rises from zero to 10px across its top

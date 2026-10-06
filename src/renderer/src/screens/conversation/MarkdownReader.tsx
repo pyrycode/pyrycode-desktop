@@ -404,6 +404,22 @@ export function MarkdownReaderView({
   onOpenInApp: () => void
   onSave: () => void
 }): JSX.Element {
+  const readerRef = useRef<HTMLDivElement>(null)
+  const chromeRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const reader = readerRef.current
+    const chrome = chromeRef.current
+    if (!reader || !chrome) return
+    const measure = (): void => {
+      const bounds = chrome.getBoundingClientRect()
+      reader.style.setProperty('--markdown-reader-header-height', `${bounds.height}px`)
+      reader.style.setProperty('--markdown-reader-width', `${bounds.width}px`)
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(chrome)
+    return () => observer.disconnect()
+  }, [])
   const options = markdownReaderMenuOptions(state)
   const choose = (id: string): void => {
     const action = options.find((option) => option.id === id)?.action
@@ -413,62 +429,65 @@ export function MarkdownReaderView({
     else if (action?.type === 'save') onSave()
   }
   return (
-    <div className="markdown-reader">
-      <div className="markdown-reader__bar">
-        <div className="markdown-reader__bar-content">
-          <button type="button" className="markdown-reader__back" aria-label="Back" onClick={onBack}>
-            {/* Figma 552:2865, the arrow drawn as two round-capped strokes in on-surface. */}
-            <svg
-              viewBox="0 0 24 24"
-              width="24"
-              height="24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M19 12H5" />
-              <path d="M12 19L5 12L12 5" />
-            </svg>
-          </button>
-          <p className="markdown-reader__title">{markdownFileName(state.path)}</p>
-          {/* Figma 557:2239 — the thread overflow's drawing and glyph, on the shared dropdown. */}
-          <ComposerOptionsMenu
-            options={options}
-            currentId={null}
-            onSelect={choose}
-            ariaLabel="Note actions"
-            triggerAriaLabel="Note actions"
-            triggerClassName="conversation__overflow-trigger"
-            placement="bottom-end"
-            triggerContent={
+    <div ref={readerRef} className="markdown-reader">
+      <div ref={chromeRef} className="markdown-reader__chrome">
+        <div className="conversation__blur" aria-hidden="true"><i /><i /><i /><i /></div>
+        <div className="markdown-reader__bar">
+          <div className="markdown-reader__bar-content">
+            <button type="button" className="markdown-reader__back" aria-label="Back" onClick={onBack}>
+              {/* Figma 552:2865, the arrow drawn as two round-capped strokes in on-surface. */}
               <svg
-                className="conversation__overflow-icon"
-                viewBox="0 0 6 24"
-                width="6"
+                viewBox="0 0 24 24"
+                width="24"
                 height="24"
-                fill="currentColor"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
                 aria-hidden="true"
               >
-                <path d="M3 6C1.34464 6 0 4.65536 0 3C0 1.34464 1.34464 0 3 0C4.65536 0 6 1.34464 6 3C6 4.65536 4.65536 6 3 6ZM3 18C4.65536 18 6 19.3446 6 21C6 22.6554 4.65536 24 3 24C1.34464 24 0 22.6554 0 21C0 19.3446 1.34464 18 3 18ZM6 12C6 13.6554 4.65536 15 3 15C1.34464 15 0 13.6554 0 12C0 10.3446 1.34464 9 3 9C4.65536 9 6 10.3446 6 12Z" />
+                <path d="M19 12H5" />
+                <path d="M12 19L5 12L12 5" />
               </svg>
-            }
-          />
+            </button>
+            <p className="markdown-reader__title">{markdownFileName(state.path)}</p>
+            {/* Figma 557:2239 — the thread overflow's drawing and glyph, on the shared dropdown. */}
+            <ComposerOptionsMenu
+              options={options}
+              currentId={null}
+              onSelect={choose}
+              ariaLabel="Note actions"
+              triggerAriaLabel="Note actions"
+              triggerClassName="conversation__overflow-trigger"
+              placement="bottom-end"
+              triggerContent={
+                <svg
+                  className="conversation__overflow-icon"
+                  viewBox="0 0 6 24"
+                  width="6"
+                  height="24"
+                  fill="currentColor"
+                  aria-hidden="true"
+                >
+                  <path d="M3 6C1.34464 6 0 4.65536 0 3C0 1.34464 1.34464 0 3 0C4.65536 0 6 1.34464 6 3C6 4.65536 4.65536 6 3 6ZM3 18C4.65536 18 6 19.3446 6 21C6 22.6554 4.65536 24 3 24C1.34464 24 0 22.6554 0 21C0 19.3446 1.34464 18 3 18ZM6 12C6 13.6554 4.65536 15 3 15C1.34464 15 0 13.6554 0 12C0 10.3446 1.34464 9 3 9C4.65536 9 6 10.3446 6 12Z" />
+                </svg>
+              }
+            />
+          </div>
+          <div className="markdown-reader__rule" />
         </div>
-        <div className="markdown-reader__rule" />
+        {state.type === 'loaded' && state.notice && (
+          <p className="conversation__banner markdown-reader__notice" role="status">{MARKDOWN_OPEN_FAILED_NOTICE}</p>
+        )}
+        {openInAppFailed && (
+          <p className="conversation__banner markdown-reader__notice" role="status">{MARKDOWN_OPEN_IN_APP_FAILED_NOTICE}</p>
+        )}
+        {saveFailed && (
+          <p className="conversation__banner markdown-reader__notice" role="status">{MARKDOWN_SAVE_FAILED_NOTICE}</p>
+        )}
+        {copied && <p className="markdown-reader__copied" role="status">{MARKDOWN_COPIED_NOTICE}</p>}
       </div>
-      {state.type === 'loaded' && state.notice && (
-        <p className="conversation__banner markdown-reader__notice" role="status">{MARKDOWN_OPEN_FAILED_NOTICE}</p>
-      )}
-      {openInAppFailed && (
-        <p className="conversation__banner markdown-reader__notice" role="status">{MARKDOWN_OPEN_IN_APP_FAILED_NOTICE}</p>
-      )}
-      {saveFailed && (
-        <p className="conversation__banner markdown-reader__notice" role="status">{MARKDOWN_SAVE_FAILED_NOTICE}</p>
-      )}
-      {copied && <p className="markdown-reader__copied" role="status">{MARKDOWN_COPIED_NOTICE}</p>}
       {state.type === 'loaded' ? (
         <div className="markdown-reader__body">
           <div className="bubble__markdown">

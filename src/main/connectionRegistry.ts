@@ -264,6 +264,7 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
     sendQueuedNow: (payload) => resolve().sendQueuedNow(payload),
     interrupt: (conversationId) => resolve().interrupt(conversationId),
     newSession: (conversationId) => resolve().newSession(conversationId),
+    switchAgent: (payload) => resolve().switchAgent(payload),
     promoteConversation: (payload) => resolve().promoteConversation(payload),
     archiveConversation: (payload) => resolve().archiveConversation(payload),
     unarchiveConversation: (payload) => resolve().unarchiveConversation(payload),

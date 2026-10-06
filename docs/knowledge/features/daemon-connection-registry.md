@@ -24,6 +24,13 @@ those lifecycle members from the runtime object. The views returned by `connecti
 binding once [per-server routing](daemon-connection-routing.md) covered every caller; named-host
 reconnect belongs on the registry itself, where the held connection is resolved explicitly.
 
+Every outbound method also needs a `viewOf` delegate: adding it only to the raw
+connection does not expose it to the conversation router. `switchAgent(payload)`
+forwards the same payload object to the selected connection, leaving authentication
+and wire filtering to that connection and its builder. Its registry test records
+the forwarded object on alpha and proves beta receives nothing. See
+[Switch-agent request](switch-agent-request.md) for the two-host preload-to-wire proof.
+
 ## The entry set and its one invariant
 
 The registry holds an ordered `Entry[]` (`{ serverId, record, connection }`), and maintains one rule:

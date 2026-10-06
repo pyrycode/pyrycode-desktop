@@ -43,6 +43,7 @@ import type {
   RequestHistoryPayload,
   InterruptPayload,
   NewSessionPayload,
+  SwitchAgentPayload,
   DequeueMessagePayload,
   SendQueuedNowPayload,
   QuestionAnswerPayload,
@@ -382,6 +383,7 @@ export type RendererCommand =
   | { type: 'sendQueuedNow'; payload: SendQueuedNowPayload }
   | { type: 'interrupt'; payload: InterruptCommandPayload }
   | { type: 'newSession'; payload: NewSessionCommandPayload }
+  | { type: 'switchAgent'; payload: SwitchAgentPayload }
   | { type: 'notify'; payload: NotifyPayload }
   | { type: 'setBadgeCount'; payload: BadgeCountPayload }
 
@@ -630,6 +632,8 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       // conversation id already selects the connection, so a second addressing scheme would be a way
       // for the two to disagree.
       return 'payload' in value && isNewSessionPayload(value.payload)
+    case 'switchAgent':
+      return 'payload' in value && isSwitchAgentPayload(value.payload)
     case 'notify':
       return 'payload' in value && isNotifyPayload(value.payload)
     case 'setBadgeCount':
@@ -1324,5 +1328,20 @@ function isBadgeCountPayload(value: unknown): value is BadgeCountPayload {
     typeof value.count === 'number' &&
     Number.isSafeInteger(value.count) &&
     value.count >= 0
+  )
+}
+
+/** Renderer settings are structural input; the builder discards all extra keys. */
+function isSwitchAgentPayload(value: unknown): value is SwitchAgentPayload {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  return (
+    'conversation_id' in value &&
+    typeof value.conversation_id === 'string' &&
+    value.conversation_id.length > 0 &&
+    'agent' in value &&
+    (value.agent === 'claude' || value.agent === 'codex') &&
+    'model' in value &&
+    typeof value.model === 'string' &&
+    (!('effort' in value) || value.effort === undefined || typeof value.effort === 'string')
   )
 }

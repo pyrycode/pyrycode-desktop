@@ -99,7 +99,7 @@ function isNewSessionPayload(value: unknown): value is NewSessionCommandPayload 
   return (
     'conversation_id' in value &&
     typeof value.conversation_id === 'string' &&
-    value.conversation_id.length > 0   // the one clause every sibling guard deliberately omits
+    value.conversation_id.length > 0   // empty IDs must not request a follow-active restart
   )
 }
 ```
@@ -109,8 +109,8 @@ function isNewSessionPayload(value: unknown): value is NewSessionCommandPayload 
 idiom, tightening a field instead of excluding one. It makes `{ type: 'newSession', payload: {} }` a
 compile error rather than something the runtime guard alone has to catch.
 
-**The guard's emptiness check is the security-relevant line of this slice.** Every sibling guard in this
-file (`isRequestModelListPayload`, `isDequeueMessagePayload`, …) checks type only, because for them an
+**The guard's emptiness check is the security-relevant line of this slice.** Read-only guards such as
+`isRequestModelListPayload` check type only, because for them an
 empty id is merely an id the daemon cannot resolve. Here it is the bare form (see § How it works above),
 so a `typeof === 'string'` check alone would let a renderer that read an id from a not-yet-loaded store
 slice restart whichever conversation the daemon's cursor last pointed at — mid-work, silently. This is
@@ -179,7 +179,8 @@ running turn's context.
   routing and required-id analogue: conversation-scoped, required id, `viewOf` delegate, ships with no
   renderer sender in the ticket that declares it.
 - [Command channel](command-channel.md) — the `RendererCommand`/`isRendererCommand` seam this ticket
-  extends with the `newSession` member, and the one guard in that file that checks emptiness.
+  extends with the `newSession` member and its nonempty-ID guard. `interrupt` and
+  [switch-agent](switch-agent-request.md) also require nonempty conversation IDs.
 - [Wire codec](wire-codec.md) — `encodeEnvelope`/`WireEncodeError`, unchanged by this slice.
 - Daemon twin (QMD `pyrycode-docs`): `docs/protocol-mobile.md` § New session (v2); pyrycode#2099
   (conversation-scoped `new_session`, merged 2026-09-06) and pyrycode#2094 (per-conversation system

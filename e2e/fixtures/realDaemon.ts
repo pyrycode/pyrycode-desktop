@@ -60,8 +60,8 @@ import type { QrPayload } from '../../src/shared/wire/types'
 // skip. A spec declaring none never dials the probe and is gated exactly as it was.
 //
 // SECRET HYGIENE (the source spec carries a security-sensitive label): `pyry pair` stdout carries the
-// pairing token inside its payload, so it is NEVER echoed into an error — only the (content-free, #62)
-// daemon stderr is surfaced, and only on a STARTUP failure before any message flows.
+// pairing token inside its payload, so mint stdout, stderr and launch errors are NEVER echoed into
+// diagnostics. Only daemon startup stderr is surfaced, before any pairing or message flows.
 //
 // Two `app.isPackaged`-gated dev affordances are consumed (relaxing NO validation here): #97 (accept a
 // loopback `ws://` relay, PYRY_ALLOW_LOOPBACK_RELAY) + #99 (a keychain-free secret backend,
@@ -475,7 +475,7 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
       //
       // A mint failure here leaves a live daemon, which the `finally` below reaps on this path exactly as
       // it does on every other: `cleanup` was registered before the `try` and `child` is already assigned.
-      const pairStdout = await runPyryPair(pyryBin, daemonEnv, allowRemotePermissions)
+      const pairStdout = await runPyryPair(pyryBin, daemonEnv, allowRemotePermissions, 'realclaude-e2e')
       const pairFields = decodePairFields(pairStdout)
 
       // --- Capability gating (#933): the ONE skip that necessarily lands AFTER resource creation.
@@ -490,11 +490,17 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
       // the read fails closed into a skip and never throws, so it can neither fail a spec nor hang
       // the suite.
       if (requiredCapabilities.length > 0) {
+        // The daemon binds a pairing to its first Noise static key. The probe has its own temporary
+        // key, so it must claim a separate pairing and leave the app's pairing untouched. It answers
+        // no permission prompts and needs no remote-permission grant.
+        const probeFields = decodePairFields(
+          await runPyryPair(pyryBin, daemonEnv, false, 'capability-probe-e2e')
+        )
         const decision = decideCapabilityGate(
           requiredCapabilities,
           await readDaemonCapabilities({
             relayUrl: relay.url,
-            pairFields,
+            pairFields: probeFields,
             advertise: requiredCapabilities
           })
         )
@@ -652,36 +658,33 @@ function resolvePyryBin(): string | null {
  * dials that service's control socket at `$HOME/.pyry/<name>.sock`, and the live daemon mints — so the
  * caller must have spawned the daemon and awaited its readiness first (#1413).
  *
- * Rejects on non-zero exit / launch failure / timeout — NEVER echoing stdout, which carries the pairing
- * token; only the (content-free, #62) stderr is surfaced. That rule is unchanged by the reorder: probed
- * 2026-09-13, a successful mint writes the payload to stdout and leaves stderr empty, and a failing one
- * writes only the service name and socket path there.
+ * Rejects on non-zero exit / launch failure / timeout with fixed status-only diagnostics. Drop stdout,
+ * stderr and launch-error contents: the mint handles secrets, and none may reach Playwright reports.
  */
 function runPyryPair(
   pyryBin: string,
   env: NodeJS.ProcessEnv,
-  allowRemotePermissions: boolean
+  allowRemotePermissions: boolean,
+  deviceName: 'realclaude-e2e' | 'capability-probe-e2e'
 ): Promise<string> {
   return new Promise((resolve, reject) => {
-    const pairArgs = ['pair', `-pyry-name=${DAEMON_INSTANCE_NAME}`, '--name=realclaude-e2e']
+    const pairArgs = ['pair', `-pyry-name=${DAEMON_INSTANCE_NAME}`, `--name=${deviceName}`]
     // #483/T9 — grant this device the remote-permission answer capability (default OFF, per #702).
     if (allowRemotePermissions) pairArgs.push('--allow-remote-permissions')
     const child = spawn(pyryBin, pairArgs, { env })
     let stdout = ''
-    let stderr = ''
     child.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf-8')
     })
-    child.stderr.on('data', (chunk: Buffer) => {
-      if (stderr.length < 4096) stderr += chunk.toString('utf-8')
-    })
+    // Drain without retaining secret-bearing subprocess diagnostics.
+    child.stderr.resume()
     const timer = setTimeout(() => {
       child.kill('SIGKILL')
       reject(new Error(`pyry pair timed out after ${PAIR_TIMEOUT_MS}ms`))
     }, PAIR_TIMEOUT_MS)
-    child.once('error', (err) => {
+    child.once('error', () => {
       clearTimeout(timer)
-      reject(new Error(`pyry pair failed to launch: ${err.message}`))
+      reject(new Error('pyry pair failed to launch'))
     })
     child.once('close', (code) => {
       clearTimeout(timer)
@@ -689,7 +692,7 @@ function runPyryPair(
         resolve(stdout)
         return
       }
-      reject(new Error(`pyry pair exited with code ${code ?? 'null'}; stderr:\n${stderr}`))
+      reject(new Error(`pyry pair exited with code ${code ?? 'null'}`))
     })
   })
 }

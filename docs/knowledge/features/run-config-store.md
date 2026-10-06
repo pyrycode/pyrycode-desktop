@@ -172,6 +172,7 @@ export interface RunConfigSnapshot {
   permissionMode: string                     // #1020 — '' means "no session was resolved"
   usedTokens: number; windowTokens: number   // #192 — windowTokens === 0 means "usage unavailable"
   slashCommands?: boolean; mcpServers?: boolean; contextUsageDetail?: boolean  // #1655, see below
+  midTurnInput?: boolean                     // #1726 — Send now requires explicit true
   memorySearch?: MemorySearchPayload          // daemon search report; omission means unknown
 }
 export interface RunConfigState { snapshot: RunConfigSnapshot | null }  // null = not yet loaded
@@ -183,7 +184,7 @@ export type RunConfigStore = RunConfigState & {
 createRunConfigStore(init?)     // vanilla createStore — one isolated instance per test (DI seam)
 runConfigStore                  // app-wide singleton
 useRunConfigStore(selector)     // React binding: useStore(runConfigStore, selector)
-selectSnapshot(s)                // the only read surface
+selectSnapshot(s)                // whole-snapshot read; capability selectors below
 ```
 
 Mirrors [`sessionStore.ts`](session-store.md)'s DI-factory → singleton → hook → selectors
@@ -261,7 +262,7 @@ spread as `effectiveEffort`: an unreported flag crosses IPC as an explicit `unde
 property, and the spread omits the key rather than holding that `undefined`, so the snapshot
 never carries a key the daemon did not send.
 
-`sessionSupports(snapshot, capability)` is the one reading rule: `false` only for the daemon's
+`sessionSupports(snapshot, capability)` reads these three flags as `false` only for the daemon's
 explicit `false`. A null snapshot, an absent flag and `true` all read as supported, so an older
 daemon, a snapshot that has not arrived yet and every Claude session render exactly as before
 the flags existed. `selectSlashCommandsSupported`/`selectMcpServersSupported` are primitive
@@ -275,6 +276,16 @@ drops the Actions menu's slash-command rows, [Conversation shell — channel inf
 MCP](conversation-shell-channel-info-mcp.md) mounts no MCP servers section, and
 `ContextUsageControl` (`ConversationScreen.tsx`) renders the context reading without its
 `ContextBreakdownPopover` trigger.
+
+`midTurnInput` follows the same copy-when-reported and whole-snapshot lifetime,
+but has its own opt-in selector, `selectMidTurnInputSupported(s)`, which reads
+`s.snapshot?.midTurnInput === true` ([#1726](https://github.com/pyrycode/pyrycode-desktop/issues/1726)).
+It deliberately stays outside `SessionCapability` / `sessionSupports`: reusing
+that helper would show Send now before any reply or on an older daemon that
+omits the flag. No snapshot, omission and explicit `false` all hide the control;
+only explicit `true` offers it on queued rows. A later reply without the flag
+drops an earlier true reading, and switching chats clears it with the snapshot.
+See [queued-row behavior](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213).
 
 ### The data path (`src/renderer/src/screens/conversation/runConfigSnapshot.ts`)
 
@@ -499,8 +510,9 @@ round trip, bounded by [#1166](../codebase/1166.md)'s ask-on-activation and
 (`snapshot: null`), sourced from that exported constant rather than a fresh `{ snapshot: null }`
 literal — `clearSessionId`'s stated reason, so a second field added to `RunConfigState` later is reset
 for free rather than needing a second edit here. Unconditional, so clearing an already-clear store is a
-no-op by construction; `selectSnapshot` is the only read surface and `null → null` is not a slice
-change, so no subscriber wakes on a redundant clear. It reverts to the *distinct* not-loaded state,
+no-op by construction; `selectSnapshot` and the capability selectors see no slice
+change on `null → null`, so no subscriber wakes on a redundant clear. It reverts to the
+*distinct* not-loaded state,
 never to an all-zero snapshot — `''` / `false` / `0` are real daemon readings and must stay
 distinguishable from "nothing has arrived for this chat yet", which is what makes every footer
 control's not-known rendering reachable at all.

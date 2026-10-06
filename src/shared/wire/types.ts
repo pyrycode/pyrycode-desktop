@@ -95,6 +95,7 @@ export type EnvelopeType =
   | 'assistant_delta'
   | 'turn_end'
   | 'turn_state'
+  | 'session_error'
   | 'stall'
   | 'api_retry'
   | 'compacting'
@@ -198,6 +199,11 @@ export type EnvelopeType =
   // internal/protocol/codes.go TypeMCPStatus.
   | 'mcp_status'
   | 'dequeue_message'
+  // Client → daemon (pyrycode#2729): deliver one queued message into the RUNNING turn instead of after
+  // it. Same fields as `dequeue_message`, no reply frame; the acknowledgement is the `queue_state`
+  // change and the user `message` push. A daemon no-op when the turn is idle, the id is unknown or the
+  // session is Codex.
+  | 'send_queued_now'
   // v2-only phone→binary control frame — stops the running turn in the conversation it names, which
   // the daemon maps to the neutral turnevent.Cancel and routes to that conversation's bound runner as
   // claude's own interrupt. Carries InterruptPayload (one optional conversation_id) and NO nonce,
@@ -743,7 +749,7 @@ export interface SessionSettingsPayload {
   window_tokens: number
   /**
    * What the resolved session supports (pyrycode#2646). Absent unless the client advertised
-   * `multi_agent` and the reply resolved a session. Only the three flags below are decoded (#1654).
+   * `multi_agent` and the reply resolved a session. Only the flags below are decoded (#1654, #1726).
    */
   capabilities?: SessionCapabilitiesPayload
   /** Optional daemon memory-search report; omission means no reading was supplied. */
@@ -769,13 +775,15 @@ export interface MemorySearchPayload {
  * slash-command, MCP-status and context-breakdown requests at all — true for Claude, false for Codex.
  * Upstream always writes them on a present object, but a daemon predating #2670 does not, so each is
  * optional: absent = not reported, which is distinct from `false`. Support is not permission; the
- * daemon re-checks every request. The object's other keys (`interrupt`, `mid_turn_input`,
+ * daemon re-checks every request. `mid_turn_input` (#1726, pyrycode#2730) says whether the session
+ * accepts `send_queued_now` — true for Claude, false for Codex. The object's other keys (`interrupt`,
  * `effort_levels`, `permission_modes`, `attachment_types`, `models`) are deliberately not modelled.
  */
 export interface SessionCapabilitiesPayload {
   slash_commands?: boolean
   mcp_servers?: boolean
   context_usage_detail?: boolean
+  mid_turn_input?: boolean
 }
 
 /**
@@ -787,6 +795,8 @@ export interface SessionCapabilitiesPayload {
  * verbatim. See #199.
  */
 export interface AssistantDeltaPayload {
+  /** Spawning Agent/Task id; empty or absent for main-thread text. Display attribution only. */
+  parent_tool_use_id?: string
   conversation_id: string
   turn_id: string
   /** Per-turn sequence, non-negative, resets each turn (daemon Seq int, #607); `0` is a valid value. */
@@ -2077,6 +2087,18 @@ export interface QueueStatePayload {
  * daemon-side no-op, exactly as the inbound decoder narrows the type but does not police it. See #292.
  */
 export interface DequeueMessagePayload {
+  conversation_id: string
+  queued_msg_id: number
+}
+
+/**
+ * Outbound `send_queued_now` payload (client → daemon). Mirrors the daemon SSOT (pyrycode#2729,
+ * docs/protocol-mobile.md § Queue (v2)) field-for-field — the same two fields as
+ * `DequeueMessagePayload`, both always present. Asks the daemon to hand one queued message to the
+ * running turn now rather than after it ends. Ungated like `dequeue_message`; `queued_msg_id` is the
+ * inbound `QueuedItem.queued_msg_id`, unpoliced here — an unknown id is a daemon-side no-op.
+ */
+export interface SendQueuedNowPayload {
   conversation_id: string
   queued_msg_id: number
 }

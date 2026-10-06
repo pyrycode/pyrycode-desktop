@@ -19,6 +19,8 @@
 // classification code and the event name — never the caught error object, the human-readable banner
 // (messageFor), the ack/plaintext bytes, or the numeric close code (that is #127's relay leg). Every
 // failure surfaces as a non-connected DaemonEvent; nothing throws out of the module.
+import type { MessageLifecycle } from './messageLifecycle'
+import { notifySend } from './transport/sendObservation'
 import { randomUUID } from 'node:crypto'
 import { createNoiseRelayDriver } from './transport/noiseRelayDriver'
 import type {
@@ -55,6 +57,7 @@ import { buildChangeWorkspace } from './transport/changeWorkspaceEnvelope'
 import { buildRenameWorkspace } from './transport/renameWorkspaceEnvelope'
 import { buildSetSessionSettings } from './transport/setSessionSettingsEnvelope'
 import { buildDequeueMessage } from './transport/dequeueMessageEnvelope'
+import { buildSendQueuedNow } from './transport/sendQueuedNowEnvelope'
 import { buildInterrupt } from './transport/interruptEnvelope'
 import { buildAttachmentChunk } from './transport/attachmentChunkEnvelope'
 import { buildRequestAttachment } from './transport/requestAttachmentEnvelope'
@@ -113,6 +116,7 @@ import {
   type ModalAnswerPayload,
   type ModalCancelPayload,
   type DequeueMessagePayload,
+  type SendQueuedNowPayload,
   type QuestionAnswerPayload,
   type QuestionRefusedPayload,
   type AttachmentChunkPayload,
@@ -219,6 +223,8 @@ export interface DaemonConnectionDeps {
    * daemon-leg call sites (this module) are #128 and the relay-leg threading is #127. Unused in #126.
    */
   diagnosticLog?: DiagnosticLog
+  /** Shared observer of local composer submissions; holds no message content. */
+  messageLifecycle?: MessageLifecycle
   /**
    * The retrieval idle-deadline seam (#996) — createRelaySupervisor's `timing` parameter, restated
    * for the one timer this module owns. Test-only in practice: every field defaults to the real
@@ -408,6 +414,13 @@ export interface DaemonConnection {
    * (#296); this slice only wires the command path. NEVER throws out of the module (parity #490).
    */
   dequeueMessage(payload: DequeueMessagePayload): void
+  /**
+   * Encrypt a `send_queued_now` control envelope onto the live session (#1726, pyrycode#2729) — asks
+   * the daemon to deliver one queued message into the running turn. The `dequeueMessage` twin: inert
+   * when not connected, ungated, fire-and-forget (the acknowledgement is the next `queue_state` and the
+   * user `message` push), and it NEVER throws out of the module.
+   */
+  sendQueuedNow(payload: SendQueuedNowPayload): void
   /**
    * Encrypt a payload-carrying `interrupt` control envelope onto the live session — the "stop the
    * running turn in the conversation it names" signal, which the daemon maps to the neutral
@@ -1504,10 +1517,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               permissionMode: inbound.sessionSettings.permission_mode,
               used_tokens: inbound.sessionSettings.used_tokens,
               window_tokens: inbound.sessionSettings.window_tokens,
-              // The three capability flags only (#1654), by name; the wire object itself never crosses.
+              // The capability flags only (#1654, #1726), by name; the wire object itself never crosses.
               slashCommands: inbound.sessionSettings.capabilities?.slash_commands,
               mcpServers: inbound.sessionSettings.capabilities?.mcp_servers,
               contextUsageDetail: inbound.sessionSettings.capabilities?.context_usage_detail,
+              midTurnInput: inbound.sessionSettings.capabilities?.mid_turn_input,
               memorySearch: inbound.sessionSettings.memory_search
             })
             return
@@ -1625,6 +1639,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               turnId: inbound.delta.turn_id,
               seq: inbound.delta.seq,
               text: inbound.delta.text,
+              parentToolUseId: inbound.delta.parent_tool_use_id,
               conversationId: inbound.delta.conversation_id,
               daemonTs: inbound.ts
             })
@@ -1670,6 +1685,13 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               state: inbound.turnState.state,
               conversationId: inbound.turnState.conversation_id,
               daemonTs: inbound.ts
+            })
+            return
+          case 'session-error':
+            emitDaemonEvent(sink, {
+              type: 'sessionError',
+              conversationId: inbound.sessionError.conversation_id,
+              code: inbound.sessionError.code
             })
             return
           case 'stall':
@@ -2334,6 +2356,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // known fields, nothing to drop, no snake→camel on the row) — the `conversations` precedent. A
             // fresh top-level literal, never a spread of the decoded payload. Consumed by the #293 queue
             // store, not the session / timeline / modal store — queue_state is daemon state (#720).
+            deps.messageLifecycle?.acknowledge(
+              deps.serverId,
+              inbound.queueState.conversation_id,
+              inbound.queueState.queued.map(item => item.message_id)
+            )
             emitDaemonEvent(sink, {
               type: 'queueState',
               conversationId: inbound.queueState.conversation_id,
@@ -2940,19 +2967,19 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   }
 
   function send(payload: SendMessagePayload): void {
-    // No driver yet: before start(), mid-bootstrap (await not resolved), or bootstrap-failed. The
-    // driver's own sendMessage is inert pre-handshake / post-terminal (noiseRelayDriver.ts:229),
-    // so this single guard plus that inertness covers every "not connected" state — no `connected`
-    // flag needed (a flag would only change whether an id is consumed, which is harmless).
-    if (driver === null) return
+    const observe = deps.messageLifecycle?.sending(
+      payload.message_id, payload.conversation_id, deps.serverId
+    )
+    if (driver === null) {
+      notifySend(observe, { type: 'dropped', reason: 'send-refused' })
+      return
+    }
     try {
       const bytes = buildSendMessage({ id: nextEnvelopeId, ts: now(), payload })
-      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
-      driver.sendMessage(bytes)
+      nextEnvelopeId += 1
+      driver.sendMessage(bytes, observe)
     } catch {
-      // Never throw out of the module (parity #490): covers an over-cap plaintext (WireEncodeError)
-      // and any driver/wasm throw. The caught object is DROPPED — its message could echo the
-      // message plaintext; no log, no event (classify-don't-forward, inherited #62).
+      notifySend(observe, { type: 'dropped', reason: 'send-failed' })
     }
   }
 
@@ -3324,6 +3351,26 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
       // driver/wasm throw. The caught object is DROPPED — its message could echo the payload; no log,
       // no event (classify-don't-forward, inherited #62).
+    }
+  }
+
+  function sendQueuedNow(payload: SendQueuedNowPayload): void {
+    // dequeueMessage's twin, guard and all: inert when not connected, a fresh two-field literal so no
+    // renderer-smuggled key reaches the wire, the shared id counter, and every throw dropped unlogged.
+    if (driver === null) return
+    try {
+      const bytes = buildSendQueuedNow({
+        id: nextEnvelopeId,
+        ts: now(),
+        payload: {
+          conversation_id: payload.conversation_id,
+          queued_msg_id: payload.queued_msg_id
+        }
+      })
+      nextEnvelopeId += 1
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490); the caught object could echo the payload.
     }
   }
 
@@ -4145,6 +4192,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     createConversation,
     createWorkspaceFolder,
     dequeueMessage,
+    sendQueuedNow,
     interrupt,
     newSession,
     promoteConversation,

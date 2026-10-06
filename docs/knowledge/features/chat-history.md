@@ -100,7 +100,7 @@ valid saved list. Saved order remains unchanged; Archive sorts its own per-tab a
 
 A timeline adds `conversationId`, ordered `items`, `prependedRows` and `coverage`.
 `prependedRows` is the nonnegative safe-integer index offset used to preserve
-[row keys across history prepends](conversation-timeline-store.md#edge-cases-and-limitations).
+[row keys across history prepends](conversation-timeline-store-limits.md#edge-cases-and-limitations).
 Coverage is either `{ status: 'unknown' }`, when no history page has been received,
 or `{ status: 'received', cursor: string, atStart: boolean }`. The cursor is the
 opaque oldest retained history cursor, and `atStart` records the server's report
@@ -140,7 +140,7 @@ at all:
 
 | Row kind | Retained fields beyond `kind` |
 | --- | --- |
-| `assistantText` | `turnId`, `text`, `createdAt?` |
+| `assistantText` | `turnId`, `text`, `createdAt?`, `parentToolUseId?` |
 | `userText` | `text`, `createdAt?`, `messageId?`, `attachments?` containing `attachmentId` and `filename` |
 | `toolCall` | `turnId`, `toolUseId`, `parentToolUseId?`, `name`, `inputSummary`, `input?`, `result`, `denial?`, `elapsedSeconds?` |
 | `turnBoundary` | `turnId`, `stopReason`, `outcome?`, `isError?`, `terminalReason?`, `errorCategory?` |
@@ -149,6 +149,15 @@ at all:
 | `compactionBoundary` | `failed`, `manual`, nullable optional `preTokens?` and `postTokens?` |
 | `banner` | `level`, `text`, `stopsTurn`, `truncated` |
 | `modelRefusal` | `refusal`, containing the shared `ModelRefusalEvent` report |
+
+Assistant `parentToolUseId` survives saving and restoring with its Agent/Task owner,
+so [grouping](conversation-shell-tool-row-header-groups.md#subagent-tool-groups) is
+recomputed from the restored rows. Version 1 is unchanged: older snapshots without
+the field remain readable and render parentless replies as before. The `threadItem`
+parser validates a supplied parent with the bounded `id` parser, just like tool
+attribution; `null`, non-strings and values over 8,192 UTF-16 code units reject with
+`INVALID_CHAT_HISTORY`. Unlike wire normalization, saved empty strings remain valid
+id data and establish no owner. The hint grants no authority and never becomes a path.
 
 Tool `result` is `null` or `{ isError, resultSummary, resultDetail? }`. Optional
 `denial` retains `toolName`, `decisionReasonType`, `decisionReason`, `message`,
@@ -254,10 +263,15 @@ exclusion of unrelated conversation-id-only queue rows.
 installs a pending slice in the existing ten-slot holder at the viewed tail. A
 same-host local read (including a settled failure) or nonempty held timeline is
 reused; unowned or differently owned content is replaced. Completion validates the
-snapshot and exact coordinates, then admits it only if the exact pending slice is
-still held. Replacement, received mutations, clear, eviction and cancellation
-invalidate late success and failure. Opening eleven saved chats and reopening the
-first therefore reads it again from disk without increasing the memory bound.
+snapshot and exact coordinates, then admits it only while its process-local
+`localReadOwner` symbol, host and loading status still match. Same-host session-error
+replacement/clearing preserves ownership even though the slice object changes;
+opening and settlement retain the current live notice rather than restoring one
+from disk or the original pending object. Live content, local sends, host replacement,
+clear, eviction and cancellation invalidate late success and failure. Settled handles
+cannot settle twice. See [notice/read interaction](conversation-timeline-store.md#edge-cases-and-limitations).
+Opening eleven saved chats and reopening the first therefore reads it again from
+disk without increasing the memory bound.
 
 Composer echoes must already have explicit ownership before reopening. Composer
 passes the host synchronously resolved by `connectedConversationHostNow` to
@@ -559,6 +573,9 @@ row count alone cannot prove that the empty response has settled.
 [`chatHistory.test.ts`](../../../src/shared/chatHistory.test.ts) exercises every
 current row shape, optional/empty values, coverage, nested field projection,
 detached inputs, admission limits and request coordinates.
+Its assistant-attribution cases JSON-round-trip an owner, parented text and an older
+parentless row, and reject malformed or oversized saved parents. Renderer
+`toolGroups.test.tsx` also verifies identical grouping after that version-1 round trip.
 [`chatHistoryStore.test.ts`](../../../src/main/chatHistoryStore.test.ts) uses real
 temporary files with injected reversible encryption to cover fresh-instance
 reads, empty-versus-missing records, host separation, retained unlisted timelines,

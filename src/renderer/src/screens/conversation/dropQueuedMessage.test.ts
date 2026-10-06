@@ -141,7 +141,19 @@ describe('dropQueuedMessage', () => {
     expect(dispatch).not.toHaveBeenCalled()
     expect(dispatchFor).not.toHaveBeenCalled()
     // The swallowed error stays content-free — no id, no text, no conversation id (ADR 0007).
-    expect(errorSpy).toHaveBeenCalledWith('drop queued message send failed', expect.anything())
+    expect(errorSpy).toHaveBeenCalledWith('drop queued message send failed')
     errorSpy.mockRestore()
   })
+})
+
+it('diagnoses cancellation as a local request even when the bridge fails', () => {
+  const diagnose = vi.fn()
+  const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+  const deps = { diagnose, sendCommand: () => { throw new Error('SECRET') }, dispatch: vi.fn(), dispatchFor: vi.fn() }
+  dropQueuedMessage('chat', 1, undefined, deps)
+  expect(diagnose).not.toHaveBeenCalled()
+  dropQueuedMessage('chat', 1, '12345678-1234-4123-8123-123456789abc', deps)
+  expect(diagnose).toHaveBeenCalledWith({ event: 'message-cancel-requested', conversationId: 'chat', messageId: '12345678-1234-4123-8123-123456789abc' })
+  expect(deps.dispatch).not.toHaveBeenCalled()
+  error.mockRestore()
 })

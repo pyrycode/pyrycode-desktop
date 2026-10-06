@@ -98,3 +98,23 @@ export function projectDiagnosticEvent(value: unknown): RendererDiagnosticEvent 
 
   return projected
 }
+
+/** Restricted lifecycle requests; routing strings are held for comparison, never serialized. */
+export interface MessageLifecycleDiagnostic {
+  event: 'message-queued' | 'message-bridge-failed' | 'message-cancel-requested'
+  messageId: string
+  conversationId: string
+}
+
+export function isComposerMessageId(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)
+}
+
+export function projectMessageLifecycle(value: unknown): MessageLifecycleDiagnostic | null {
+  if (typeof value !== 'object' || value === null || !('event' in value) ||
+      (value.event !== 'message-queued' && value.event !== 'message-bridge-failed' && value.event !== 'message-cancel-requested') ||
+      !('messageId' in value) || !isComposerMessageId(value.messageId) ||
+      !('conversationId' in value) || typeof value.conversationId !== 'string' ||
+      value.conversationId.length === 0 || value.conversationId.length > 256) return null
+  return { event: value.event, messageId: value.messageId, conversationId: value.conversationId }
+}

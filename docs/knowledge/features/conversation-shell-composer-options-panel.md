@@ -10,7 +10,8 @@ overall.
 ## Composer options panel (#838, placed #839, keyboard-driven since #840, first live mount since #680, right-edge clamp wired since #847)
 
 The shared surface serves Actions, permission mode, model and effort in the footer,
-the [messaging top bar](conversation-shell-chrome.md#structure), and the
+the [messaging top bar](conversation-shell-chrome.md#structure), the
+[sidebar header menu](channel-list-section-header-pair-control.md), the Markdown reader, and the
 [slash-command type-ahead](conversation-shell-composer-options-slash-type-ahead.md).
 `ThreadOverflowMenu` uses `ComposerOptionsMenu` with `currentId={null}` for its three
 actions, so it inherits the same dark surface, 6px corners, body-small Primary text,
@@ -108,15 +109,13 @@ the drawn 81px is that particular menu's longest label, not a size (#683's model
 wider). #838 shipped no `position`, no offset and no `z-index` anywhere in the block (AC5) —
 deliberately: the panel cannot be an in-flow child of `.composer__footer`, which holds a hard
 `height: 20px`, and #839 (below) is the ticket that fills the gap in. The panel and footer
-anchors still have no explicit `z-index`. The top-bar consumer requires a different
-stacking relationship: `.composer-options-anchor--bottom-end` has `z-index: 2` so its
-whole panel paints above the later opacity divider, positioned message content and
-Top overlay pills at level 1. At level 1 the anchor tied with the later overlay,
-letting the pills cover its popup. `.status-sheet-overlay` and existing dialog
-overlays retain level 2; their later DOM placement keeps them above the menu.
-Raising only this anchor preserves the title row's layout and avoids a stacking
-context on the whole header. See the
-[pill stacking fix](../../specs/architecture/1745-thread-overflow-overlay.md).
+anchors still have no explicit `z-index`. The top-bar bottom-end anchor retains
+level 2 above its opacity divider. In the conversation pane, both sharp chrome
+wrappers sit at level 1 above the message area's level-0 context containing rows,
+pills and drawer. Existing level-2 sheets and later dialog siblings retain modal
+precedence above chrome; Create chat remains level 3. Compare ancestor contexts,
+not just anchor/pill integers. See [chrome ordering](conversation-shell-chrome.md#structure)
+and [verification](development-verification.md#layout-and-input).
 The old outlined `.conversation__overflow-menu` surface has been removed; the top bar
 uses this same panel.
 
@@ -158,8 +157,9 @@ Code review PASS, two non-blocking NITs (the corner-clip magnitude's backdrop de
 test's coupling to exact JSX attribute order) — see [PR #841](https://github.com/pyrycode/pyrycode-desktop/pull/841).
 
 **Footer placement.** `ComposerOptionsMenu` defaults its optional
-`placement: 'footer' | 'bottom-end'` prop to `'footer'`. The four footer consumers omit
-it and keep their upward placement and window clamp. The `.composer-options` offsets
+`placement: 'footer' | 'bottom-end' | 'bottom-start'` prop to `'footer'`. The four footer consumers omit
+it and keep their upward placement; conversation footer menus clamp to the input pane.
+The `.composer-options` offsets
 resolve against `.composer-options-anchor` (its own block rather than
 `.composer-options__anchor`, since it wraps a *trigger* the panel knows nothing about, and #940 in fact
 put it on the message box rather than on a button — see below for why it did not reuse this class):
@@ -173,29 +173,18 @@ put it on the message box rather than on a button — see below for why it did n
   2026-08-22). Neither centred on the button nor left-aligned to it — both put the labels out of line.
   If the row inset ever moves, this must move with it or the labels drift; writing the token rather
   than the literal makes that automatic.
-- **`--composer-options-shift`** is AC3's right-edge clamp, defaulting to `0px` so the resting rule
-  holds at every legal window width, where the computed shift is in fact always `0` (see #847 below —
-  the sole live consumer's anchor sits over 200px inside the narrowest permitted window). It is computed
-  by `composerOptionsShiftPx()`, a new file,
-  `composerOptionsPlacement.ts`, built to the `threadScrollPosition.ts` shape: framework-free, DOM-free,
-  a total function over three named plain numbers (`anchorLeft`, `panelWidth`, `windowWidth` — named
-  rather than positional so `panelWidth`↔`windowWidth` can't transpose silently at the untested call
-  site). One expression and one `Math.max(0, …)`, no guards: the resting left edge is
-  `anchorLeft − COMPOSER_OPTIONS_LABEL_INSET_PX` (12, paired by comment with `--space-3` on both sides —
-  there is no detector for that coupling since #838 forbids reading `conversation.css` as text from a
-  test, so it is carried by comments plus a pinning test, exactly as `AT_BOTTOM_TOLERANCE_PX` is), and
-  the shift is that plus `panelWidth − windowWidth`, floored at zero. **`windowWidth` is the window's
-  own right edge, not the chat pane's** — a deliberate geometry call: at the 800px minimum the pane's
-  right edge is 780 while the window's is 800, so a clamped panel may overhang that 20px
-  `.paired-shell` gutter, which is empty backdrop with the sidebar on the other side. **There is no left
-  clamp**: the sidebar is `flex: 0 0 400px` and never shrinks, so the leftmost footer button's left edge
-  is `20 + 400 + 20 + 12 + 16 = 468` at every window width and the panel's leftmost resting edge is
-  456 — unreachable by construction, so a guard for it would be an untestable branch defending an
-  unobservable failure. Shipped dormant at #839, exactly like `threadScrollPosition.ts` ahead of #601:
-  no footer button existed yet to open the panel from, so no caller was added to "prove it works." #847
-  (below) is the caller. #940 later added a *second* function to this file, `composerOptionsMaxWidthPx`,
-  for the type-ahead's window-relative width bound — see
-  [Slash command type-ahead § the width bound](conversation-shell-composer-options-slash-type-ahead.md).
+- **`--composer-options-shift`** defaults to `0px` and moves an overflowing panel left.
+  `composerOptionsShiftPx()` in `composerOptionsPlacement.ts` takes named
+  `anchorLeft`, `panelWidth` and `windowWidth` values. The resting left edge is
+  `anchorLeft − COMPOSER_OPTIONS_LABEL_INSET_PX` (12, mirroring `--space-3`); the
+  correction is its right-edge overhang, floored at zero. The numeric `windowWidth`
+  input is a boundary, not necessarily the window: inside conversation input chrome,
+  use the pane's right edge; footer menus subtract the existing right safety margin
+  as well. Other consumers retain `window.innerWidth`. No separate left clamp is
+  added: footer width is bounded to pane width minus right margin and label inset,
+  then the same shift arithmetic places the panel inside the pane. The type-ahead's
+  width bound accounts for its resting anchor position. See the clamp wiring below
+  for the measurement order.
 - The custom property is set on the **anchor**, not the panel, so inheritance carries the shift down
   without widening `ComposerOptionsPanel`'s four-prop surface or forwarding a ref into it — the value
   must carry a unit, or the whole `left` declaration goes invalid at computed-value time and the panel
@@ -211,6 +200,18 @@ on open and resize, but its `--composer-options-shift` has no effect on this pla
 this is not a general width clamp for arbitrary bottom-end consumers. Keep the
 outside-click ref on the shared anchor, so the adjacent conversation title dismisses
 the menu. Only the title clips; clipping the header row would also cut off the panel.
+
+**Sidebar placement.** Opt-in `placement="bottom-start"` adds
+`composer-options-anchor--bottom-start`: a non-shrinking level-1 anchor. Its panel uses
+`top: calc(100% + var(--space-8)); left: calc(-1 * var(--space-1)); right: auto;
+bottom: auto`, placing it 4px left of the trigger and 32px below its bottom.
+As with bottom-end, the clamp hook runs but the placement's left offset does not read
+`--composer-options-shift`. The sidebar fixes the width at 160px and locally overrides
+the ground to `--color-on-primary` and hover to `--color-on-primary-fixed`; two 28px rows
+plus the shared 2px outer padding give 60px height. `currentId={null}` keeps Settings and
+Archive unmarked while focus starts at Settings. Footer upward placement and the thread/
+reader bottom-end placement and surfaces remain unchanged. Keep the toolbar outside
+the tree scrollport and its ancestors unclipped so the popup can paint over the rule/tree.
 
 **Why the wrapper is `display: flex` with no padding and no border.** A block wrapper around an
 inline-block `<button>` establishes an inline formatting context, and the line box's strut leading
@@ -237,8 +238,9 @@ a scrollbar edge case neither worth fixing without a live consumer) — see
 [PR #843](https://github.com/pyrycode/pyrycode-desktop/pull/843). #847's review re-examined the
 `innerWidth`/`clientWidth` NIT now that a live consumer exists and closed it rather than reopening it:
 `html, body, #root` are `height: 100%` with every scroll container interior to a pane, so the document
-root never scrolls and the two values coincide — and independently, the shift is `0` at every legal
-window width, so the branch stays unobservable either way.
+root never scrolls and the two values coincide. At #847 the only live menu also had
+zero shift at legal widths. Wider model labels
+now exercise a real shift within the supported window sizes and zoom levels.
 
 **Interaction (#840).** Two pieces complete the panel: `composerOptionsKeyboard.ts`, a DOM-free total
 function holding the whole keyboard contract, and `ComposerOptionsMenu`, an exported container in
@@ -289,10 +291,20 @@ with Channel info already focused; no Tab is needed to reach the first action. E
 closes and returns focus to the trigger. The old top-bar document keydown listener was
 removed with its separate interaction state.
 
-A document `mousedown` listener handles outside clicks, attached only while open and
-removed on close or unmount. `close()` focuses the trigger before the browser's native
-mousedown focus action, allowing a clicked input to receive focus and caret placement.
-Preventing that default would steal focus from the control the user clicked.
+Outside dismissal defaults to `consumeOutsideClick={false}`. A document `mousedown`
+listener attaches only while open and is removed on close or unmount. `close()` focuses
+the trigger before the browser's native mousedown focus action, allowing a clicked input
+to receive focus and caret placement. This pass-through behavior remains the footer,
+thread and reader default.
+
+The sidebar opts into `consumeOutsideClick`: it omits that listener and mounts a
+transparent fixed `.composer-options-dismiss-layer` across the window while open.
+Mousedown prevents default and propagation but keeps the layer mounted; the following
+click stops propagation, closes and restores trigger focus. Closing on mousedown would
+expose the tree to the click from the same gesture, allowing dismissal to open a chat or
+fold a host. The panel's level 1 inside the anchor keeps its rows above the dismissal
+layer. The next gesture reaches the tree normally. Placement and consumption are
+independent options; existing consumers must opt in to change either default.
 
 **Testing is split at the DOM boundary, deliberately.** `composerOptionsKeyboard.test.ts` executes the
 whole keyboard contract with no DOM, including a totality property (every `optionCount` 1–5, every
@@ -302,6 +314,8 @@ markup half extends `ComposerOptionsPanel.test.tsx` with a `focusedIndex` parame
 static-render assertion of the container's *collapsed* markup (`aria-haspopup="menu"`,
 `aria-expanded="false"`, no `role="menu"` anywhere — reachable because `useState(false)` is what a
 static render sees). Static tests also pin the optional icon name and bottom-end class.
+`ChannelList.test.tsx` pins the collapsed Sidebar menu trigger, absent standalone entries
+and both toolbar controls across loading, empty and populated states.
 They cannot exercise `useState` transitions, document listeners or focus calls:
 `environment: 'node'` fires no clicks and runs no effects. Those belong to Playwright.
 `e2e/composer-actions.spec.ts` retains the footer activation/dismissal proof, and
@@ -312,6 +326,10 @@ destinations, Escape and outside/title dismissal. Its
 [paint-order probes](conversation-shell-chrome.md#layout-contract) detect divider and
 message occlusion that visibility and geometry alone missed, and keep a menu mounted
 under a sheet or dialog to prove overlay precedence.
+`e2e/sidebar-header-menu.spec.ts` checks the sidebar consumer at 1280×800 and 800×600:
+geometry, real overlap/hit testing, keyboard paths, both navigation callbacks' destinations,
+and outside dismissal that leaves a host fold and unopened chat untouched until the second
+click. See [interaction and visual evidence](development-verification.md#layout-and-input).
 
 Code review PASS with one deferred SHOULD FIX: the `switch (outcome.type)` in `handleKeyDown` has no
 `default: return assertNever(outcome)`, the exhaustiveness-guard convention this repo otherwise applies
@@ -336,23 +354,30 @@ anchor is the message box rather than a footer button, and could not reach an ef
 `ComposerOptionsMenu`'s own private refs — so it extracted the measure-and-write body verbatim into an
 exported hook, `useComposerOptionsClamp({ anchorRef, panelRef, active })`, and `ComposerOptionsMenu` now
 calls it with `active: open` rather than running the effect inline. The description immediately below is
-of that hook's body; only its location moved. See [Slash command type-ahead § the clamp is
+of the current hook; #1733 adds a conversation-pane boundary and footer width bound.
+See [Slash command type-ahead § the clamp is
 lifted](conversation-shell-composer-options-slash-type-ahead.md) for the extraction's own reasoning and
 for the width-bound half #940 added alongside it.
 
-A `useLayoutEffect`-shaped effect, gated on `active` (`open` for the menu), measures `anchorRef.current.getBoundingClientRect().left`,
-`panelRef.current.offsetWidth` and `window.innerWidth` — the three named fields `composerOptionsPlacement.ts`
-takes, in that order so the `panelWidth`↔`windowWidth` transposition stays impossible by inspection — feeds
-them to `composerOptionsShiftPx()`, and writes the result onto the anchor with
-`anchor.style.setProperty('--composer-options-shift', \`${shift}px\`)`. **Imperative, not declarative**: a
-`useState` shift plus a `style` prop was the shape `composerOptionsPlacement.ts`'s own dormant-era sketch
-showed, but it re-renders the subtree per resize event, needs an `as CSSProperties` cast the setter form
-doesn't, and — the deciding reason — `ComposerOptionsPanel.test.tsx:229` already pins the anchor's whole
-opening tag as plain `<div class="composer-options-anchor">`; a `style` prop would fail that shipped
-assertion. Applied once on open and again on every `resize` while open, torn down on close and unmount —
-the outside-click listener's lifecycle, copied verbatim. The property is never cleared on close: the panel
-that inherits it unmounts with it, and the next open recomputes before paint, so a stale value is
-inherited by nothing and displayed never.
+A layout effect gated on `active` (`open` for a menu) measures the anchor and its
+closest `.conversation__input-chrome`. That chrome's right edge replaces the window
+boundary. Footer panels use the whole pane width minus
+`COMPOSER_OPTIONS_WINDOW_MARGIN_PX` and `COMPOSER_OPTIONS_LABEL_INSET_PX`; type-ahead
+uses `composerOptionsMaxWidthPx` relative to its anchor. Outside this chrome, the
+previous window boundary remains. Write `--composer-options-max-width` before reading
+`panel.offsetWidth`, then calculate and write `--composer-options-shift` with a pixel
+unit. Measuring first would shift for an unbounded width that the next write removes.
+Apply on open and resize, release the listener on close/unmount, and recompute before
+the next opening paints. Custom properties live on the anchor and inherit into the
+panel without adding React state or a new prop.
+
+Conversation footer rows use `white-space: normal`, `overflow-wrap: anywhere`, auto
+height with a 28px minimum, and vertical padding. Long words and unbroken model names
+remain readable. The row and panel keep visible overflow for keyboard focus outlines;
+type-ahead keeps its existing single-line treatment. A rectangle-only width assertion
+can pass while labels extend outside the panel. Limiting wrapped footer labels to the
+space beside a rightward trigger can also make the menu taller than the viewport at
+minimum width and 125% zoom; taking the pane width and shifting left avoids that trap.
 
 **The alias, not a raw `useLayoutEffect`.** `ComposerOptionsMenu` is reached under
 `renderToStaticMarkup` from three test files, `ConversationScreen.test.tsx`'s ~33 sites among them, and
@@ -364,23 +389,20 @@ exists and the alias resolves to the real `useLayoutEffect`, so the panel still 
 
 **Idempotent by construction, and this is why `anchorLeft` stayed the input.** The panel is `position:
 absolute`, so shifting it moves neither the anchor's rect (an out-of-flow child isn't a flex item) nor
-the panel's own `max-content` width, and `window.innerWidth` is independent of both — every input to
+the panel's bounded width, and the pane/window boundary is independent of both — every input to
 `composerOptionsShiftPx()` is invariant under the shift it produces, so a `resize` re-read converges
 instead of walking the panel further left each time.
 
-**No vitest coverage, and that absence is itself the ticket's finding**, not a gap: `environment: 'node'`
-runs no layout and no effects, so nothing here is executable at the unit tier. The proof is
-`e2e/composer-options-clamp.spec.ts`, a new file rather than an addition to `composer-actions.spec.ts`
-since the clamp belongs to the shared container and Actions is merely the only host that exists yet —
-this is the file #682 and #683 extend, and #940's later host as well. The spec's rig had to manufacture an overflow no shipped consumer
-can produce: the footer's one control sits at anchor x≈468 at every window width (the sidebar never
-shrinks), and its longest label puts the resting right edge near 586 — over 200px inside the 800px
-minimum window width the app enforces. `BrowserWindow.setMinimumSize` is settable at runtime
-(`paired-shell-navigation.spec.ts`'s precedent), so the spec lifts the floor, narrows to 520px to force a
-real overflow, asserts the clamp, widens back past launch width to prove the shift releases, and restores
-the floor. The rig drives a window size no user can reach; that's disclosed rather than hidden, and it's
-sound because the clamp is geometry-independent and the arithmetic is already pinned at legal widths by
-`composerOptionsPlacement.test.ts`.
+Static renderer tests execute neither geometry nor effects. The
+[`composer-options-clamp.spec.ts`](../../../e2e/composer-options-clamp.spec.ts) regression
+uses actual `BrowserWindow` resizing, including temporarily lifting the minimum-size
+floor, to prove a smaller pane bounds width and activates the shift, then widening
+restores both width and position. The two long-model cases use 1280×800 and 800×600
+windows at 100% and 125% zoom. They measure every rendered text line inside its row,
+check multiline height at minimum width, and select via ArrowDown/Enter and an actual
+click on the final wrapped line. Both paths retain focus return to the trigger, and
+the menu's visible overflow preserves the focused row's outline. See
+[recorded evidence](development-verification.md#layout-and-input).
 
 One e2e lesson worth carrying to any future geometry spec: **`expect.poll(...).toBe(0)` on a rounded
 pixel delta is not safe** — `toBe` is `Object.is`, and `Math.round` of a tiny negative fraction returns

@@ -16,6 +16,54 @@ const deferred = () => {
 }
 
 describe('local timeline admission', () => {
+  it.each(['stored', 'missing', 'invalid', 'failure'] as const)(
+    'settles a pending %s read after reconnect without restoring the cleared notice', outcome => {
+      const store = createConversationTimelineStore(undefined, () => 'a')
+      store.getState().dispatchFor('chat', { type: 'sessionError', code: 'session.blocked' })
+      const read = store.getState().beginLocalTimelineRead('a', 'chat')!
+      store.getState().clearSessionErrorsForHost('a')
+      expect(store.getState().timelines.get('chat')?.timeline.sessionError).toBeUndefined()
+      if (outcome === 'failure') read.fail()
+      else read.complete(outcome === 'stored' ? snapshot() : outcome === 'missing' ? null : snapshot('other-host'))
+      const settled = store.getState().timelines.get('chat')!
+      expect(settled.localRead).toBe(outcome === 'failure' || outcome === 'invalid' ? 'failed' : 'loaded')
+      expect(settled.timeline.items).toEqual(outcome === 'stored' ? snapshot().items : [])
+      expect(settled.timeline.sessionError).toBeUndefined()
+      // A completed handle cannot later change the settled state.
+      const before = store.getState()
+      read.fail()
+      read.complete(snapshot())
+      expect(store.getState()).toBe(before)
+    }
+  )
+
+  it.each([false, true])('notice replacement and client clearing retain read ownership (fail=%s)', fail => {
+    let host = 'a'
+    const store = createConversationTimelineStore(undefined, () => host)
+    const read = store.getState().beginLocalTimelineRead('a', 'chat')!
+    store.getState().dispatchFor('chat', { type: 'sessionError', code: 'session.blocked' })
+    store.getState().dispatchFor('chat', { type: 'sessionError', code: 'session.child_crashing' })
+    expect(store.getState().timelines.get('chat')?.localRead).toBe('loading')
+    host = 'b'
+    store.getState().dispatchFor('chat', { type: 'sessionErrorCleared' })
+    if (fail) read.fail(); else read.complete(snapshot())
+    const settled = store.getState().timelines.get('chat')!
+    expect(settled.serverId).toBe('a')
+    expect(settled.localRead).toBe(fail ? 'failed' : 'loaded')
+    expect(settled.timeline.sessionError).toBeUndefined()
+    expect(settled.timeline.items).toEqual(fail ? [] : snapshot().items)
+  })
+
+  it('completion carries the latest notice instead of the notice present when the read began', () => {
+    const store = createConversationTimelineStore(undefined, () => 'a')
+    store.getState().dispatchFor('chat', { type: 'sessionError', code: 'session.blocked' })
+    const read = store.getState().beginLocalTimelineRead('a', 'chat')!
+    store.getState().dispatchFor('chat', { type: 'sessionError', code: 'session.child_crashing' })
+    read.complete(snapshot())
+    expect(store.getState().timelines.get('chat')?.timeline.sessionError).toEqual({ code: 'session.child_crashing' })
+    expect(store.getState().timelines.get('chat')?.timeline.items).toEqual(snapshot().items)
+  })
+
   it('retains host-stamped local echoes on reopen without admitting them to another host', () => {
     const store = createConversationTimelineStore()
     store.getState().dispatchLocalEcho('a', 'chat', {

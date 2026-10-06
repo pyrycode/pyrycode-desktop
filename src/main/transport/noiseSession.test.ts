@@ -1,3 +1,5 @@
+import { createMessageLifecycle } from '../messageLifecycle'
+import { createDiagnosticLog } from '../diagnosticLog'
 import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -489,12 +491,13 @@ describe('rekey re-handshake + atomic cipher swap (#111)', () => {
       remoteStaticPublicKey: respPub,
       prologue: new Uint8Array(0),
       hello: enc(HELLO),
-      sendFrame: (f) => {
+      sendFrame: (f, observe) => {
         if (holdingInitiator) {
           heldInitiator.push(f)
           return
         }
         responder.onFrame(f)
+        observe?.({ type: 'sent', connectionId: '12345678-1234-4123-8123-123456789abc' })
       },
       onEvent: init.onEvent
     })
@@ -791,6 +794,39 @@ describe('rekey re-handshake + atomic cipher swap (#111)', () => {
   // take its tampered-frame branch (WS 4421 + session removal) — fatal, not lossy. So the session
   // holds the PLAINTEXT and re-seals under the new cipher after the swap. The same hold-and-release
   // gate #532 promoted into pair() parks both peers in the window, with no timers.
+
+  it.each(['flush', 'overflow', 'abandon', 'teardown'] as const)('serializes each own rekey %s outcome', async mode => {
+    const { initiator, responder, holdInitiatorFrames, releaseInitiatorFrames } = await pair()
+    const lines: string[] = []
+    const tracker = createMessageLifecycle(createDiagnosticLog({ sink: { write: line => lines.push(line) } }))
+    initiator.start()
+    holdInitiatorFrames()
+    responder.initiateRekey(rekeyRequest())
+    const count = mode === 'overflow' ? MAX_BUFFERED_SENDS + 1 : 2
+    for (let i = 0; i < count; i++) {
+      const id = `${i.toString(16).padStart(8, '0')}-1234-4123-8123-123456789abc`
+      tracker.queued(id, 'chat')
+      initiator.sendMessage(new TextEncoder().encode('TEXT_SECRET'), tracker.sending(id, 'chat', 'host'))
+    }
+    expect(lines.filter(line => JSON.parse(line).event === 'message-sent')).toHaveLength(0)
+    if (mode === 'abandon') initiator.onFrame(new Uint8Array(64).fill(0x5a), 'noise_resp')
+    else if (mode === 'teardown') { initiator.close(); initiator.close() }
+    else releaseInitiatorFrames()
+    const records = lines.map(line => JSON.parse(line))
+    const sent = records.filter(record => record.event === 'message-sent')
+    const dropped = records.filter(record => record.event === 'message-dropped')
+    if (mode === 'flush') {
+      expect(sent).toHaveLength(2)
+      expect(dropped).toHaveLength(0)
+      initiator.close()
+      expect(lines).toHaveLength(4) // Sent without acknowledgment remains delivery-unknown.
+    }
+    if (mode === 'overflow') { expect(sent).toHaveLength(MAX_BUFFERED_SENDS); expect(dropped.map(record => record.code)).toEqual(['rekey-buffer-full']) }
+    if (mode === 'abandon') expect(dropped.map(record => record.code)).toEqual(['rekey-abandoned', 'rekey-abandoned'])
+    if (mode === 'teardown') expect(dropped.map(record => record.code)).toEqual(['rekey-teardown', 'rekey-teardown'])
+    expect(lines.join()).not.toContain('TEXT_SECRET')
+    expect(new Set(records.filter(record => record.event === 'message-queued').map(record => record.messageId)).size).toBe(count)
+  })
 
   it('flushes sends issued in the rekey window after the swap, in issue order (#533 AC1)', async () => {
     const { initiator, responder, init, resp, holdInitiatorFrames, releaseInitiatorFrames } =

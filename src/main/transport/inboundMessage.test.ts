@@ -10196,12 +10196,12 @@ describe('parseInboundMessage — session_settings recognition (#491)', () => {
   )
 
   it.each([
-    ['a Claude reply', { slash_commands: true, mcp_servers: true, context_usage_detail: true }],
-    ['a Codex reply', { slash_commands: false, mcp_servers: false, context_usage_detail: false }]
-  ])('carries the three capability flags of %s and ignores the other keys (#1654)', (_label, flags) => {
+    ['a Claude reply', { slash_commands: true, mcp_servers: true, context_usage_detail: true, mid_turn_input: true }],
+    ['a Codex reply', { slash_commands: false, mcp_servers: false, context_usage_detail: false, mid_turn_input: false }]
+  ])('carries the capability flags of %s and ignores the other keys (#1654, #1726)', (_label, flags) => {
     const decoded = parseInboundMessage(encodeSessionSettings({
       ...RUN_CONFIG,
-      capabilities: { interrupt: true, mid_turn_input: false, ...flags, effort_levels: ['low'], models: [], evil: 'x' }
+      capabilities: { interrupt: true, ...flags, effort_levels: ['low'], models: [], evil: 'x' }
     }))
     expect(decoded).toEqual({
       kind: 'session-settings',
@@ -10210,7 +10210,7 @@ describe('parseInboundMessage — session_settings recognition (#491)', () => {
     })
     if (decoded?.kind !== 'session-settings') throw new Error('expected session settings')
     expect(Object.keys(decoded.sessionSettings.capabilities ?? {}).sort())
-      .toEqual(['context_usage_detail', 'mcp_servers', 'slash_commands'])
+      .toEqual(['context_usage_detail', 'mcp_servers', 'mid_turn_input', 'slash_commands'])
   })
 
   it('leaves capabilities undefined when the reply carries none (#1654)', () => {
@@ -10219,9 +10219,11 @@ describe('parseInboundMessage — session_settings recognition (#491)', () => {
     expect(decoded.sessionSettings.capabilities).toBeUndefined()
   })
 
-  it.each(['slash_commands', 'mcp_servers', 'context_usage_detail'])(
+  it.each(['slash_commands', 'mcp_servers', 'context_usage_detail', 'mid_turn_input'])(
     'leaves a missing %s undefined, distinct from false, and keeps the others (#1654)', (missing) => {
-      const flags: Record<string, boolean> = { slash_commands: false, mcp_servers: false, context_usage_detail: false }
+      const flags: Record<string, boolean> = {
+        slash_commands: false, mcp_servers: false, context_usage_detail: false, mid_turn_input: false
+      }
       delete flags[missing]
       const decoded = parseInboundMessage(encodeSessionSettings({ ...RUN_CONFIG, capabilities: flags }))
       if (decoded?.kind !== 'session-settings') throw new Error('expected session settings')
@@ -10237,6 +10239,7 @@ describe('parseInboundMessage — session_settings recognition (#491)', () => {
     expect(decoded.sessionSettings.capabilities?.slash_commands).toBeUndefined()
     expect(decoded.sessionSettings.capabilities?.mcp_servers).toBeUndefined()
     expect(decoded.sessionSettings.capabilities?.context_usage_detail).toBeUndefined()
+    expect(decoded.sessionSettings.capabilities?.mid_turn_input).toBeUndefined()
   })
 
   it('narrows a full session_settings into { kind: session-settings } with all seven fields', () => {
@@ -10347,7 +10350,7 @@ describe('parseInboundMessage — session_settings fail-closed (#491)', () => {
     }
   )
 
-  it.each(['slash_commands', 'mcp_servers', 'context_usage_detail'].flatMap((flag) =>
+  it.each(['slash_commands', 'mcp_servers', 'context_usage_detail', 'mid_turn_input'].flatMap((flag) =>
     ['true', 1, 0, null, {}, []].map((value) => ({ flag, value }))))(
     'rejects a non-boolean $flag $value without logging content (#1654)', ({ flag, value }) => {
       const { log, lines } = captureLog()
@@ -12079,5 +12082,41 @@ describe('conversation list archive timestamp', () => {
   })
   it.each([false, true, 1, {}, []])('rejects wrong-type archive stamps for the whole list: %s', (archived_at) => {
     expect(() => parseInboundMessage(encodeConversations({ conversations: [CONV_UNNAMED, { ...CONV_NAMED, archived_at }] }))).toThrow(WireDecodeError)
+  })
+})
+
+describe('session_error decoding', () => {
+  const frame = (payload: unknown) => encodeEnvelope({ id: 7, type: 'session_error', ts: FIXED_TS, payload })
+  it.each(['session.blocked', 'session.child_crashing', 'future.code', ''])('accepts %s and strips content', code => {
+    const event = vi.fn()
+    const bytes = frame({ conversation_id: '__proto__', code, message: 'PRIVATE MESSAGE', extra: 'PRIVATE EXTRA' })
+    expect(parseInboundMessage(bytes, { event } as unknown as DiagnosticLog)).toEqual({
+      kind: 'session-error', sessionError: { conversation_id: '__proto__', code }
+    })
+    expect(event).toHaveBeenCalledWith({ event: 'inbound-decoded', code: 'session_error', bytes: bytes.length,
+      hash: expect.stringMatching(/^[a-f0-9]{64}$/) })
+    expect(JSON.stringify(event.mock.calls)).not.toMatch(/PRIVATE|__proto__|future.code|session.blocked|session.child_crashing/)
+  })
+  it.each([null, [], 'PRIVATE', 4, {}, { conversation_id: 4, code: 'PRIVATE' },
+    { conversation_id: 'PRIVATE' }, { conversation_id: 'PRIVATE', code: false }])('rejects malformed payload %j without content', payload => {
+    const event = vi.fn()
+    expect(() => parseInboundMessage(frame(payload), { event } as unknown as DiagnosticLog)).toThrow(WireDecodeError)
+    try { parseInboundMessage(frame(payload)) } catch (error) { expect(String(error)).not.toContain('PRIVATE') }
+    expect(event).not.toHaveBeenCalled()
+  })
+})
+
+describe('assistant parent attribution in live and history decode', () => {
+  it.each(['agent-id', '', undefined])('normalizes parent %s in both lanes', (parent_tool_use_id) => {
+    const payload = { ...DELTA, parent_tool_use_id }
+    const live = parseInboundMessage(encodeAssistantDelta(payload))
+    expect(live).toMatchObject({ kind: 'assistant-delta', delta: { parent_tool_use_id: parent_tool_use_id || undefined } })
+    expect(decodedEntries([historyEntry('assistant_delta', payload)])[0].event)
+      .toMatchObject({ type: 'assistantDelta', parentToolUseId: parent_tool_use_id || undefined })
+  })
+  it.each([null, 42, true, [], {}])('rejects malformed parent %s without exposing its value', (parent_tool_use_id) => {
+    const payload = { ...DELTA, parent_tool_use_id }
+    expect(() => parseInboundMessage(encodeAssistantDelta(payload))).toThrow('malformed optional field: parent_tool_use_id')
+    expect(decodedEntries([historyEntry('assistant_delta', payload)])).toEqual([])
   })
 })

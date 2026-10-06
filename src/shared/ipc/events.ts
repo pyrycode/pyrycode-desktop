@@ -114,7 +114,7 @@ export type ModelRefusalEvent = {
  */
 export type HistoryTimelineEvent =
   | ModelRefusalEvent
-  | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
+  | { type: 'assistantDelta'; turnId: string; seq: number; text: string; parentToolUseId?: string }
   | ({ type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string } & TurnEndMetrics)
   | { type: 'turnState'; state: WireTurnState }
   | {
@@ -389,6 +389,9 @@ type BaseDaemonEvent =
       slashCommands?: boolean
       mcpServers?: boolean
       contextUsageDetail?: boolean
+      /** #1726: whether the session takes a queued message into the running turn (`send_queued_now`).
+       *  undefined = not reported, which the renderer reads as unsupported. */
+      midTurnInput?: boolean
       /** Daemon-owned memory-search status; undefined when omitted by an older daemon. */
       memorySearch?: MemorySearchPayload
     }
@@ -417,7 +420,7 @@ type BaseDaemonEvent =
   // Stateless and un-coalesced: N frames produce N events in arrival order, `seq` rides along for wire
   // fidelity but is not consulted, and merging slices into one bubble is the reducer's job. The added
   // field brings no per-id buffer, dedup, last-seq memo or ordering check with it.
-  | { type: 'assistantDelta'; turnId: string; seq: number; text: string; conversationId: string }
+  | { type: 'assistantDelta'; turnId: string; seq: number; text: string; parentToolUseId?: string; conversationId: string }
   // turnEnd closes the turn and carries turnId / stopReason plus `conversationId` (#752) — the frame's
   // `conversation_id`, copied BY NAME at the emit from an already-validated payload, never by spreading
   // the decoded payload. It crosses for the reason the delta arm above carries it, on the same terms:
@@ -463,6 +466,8 @@ type BaseDaemonEvent =
   // added field brings no dedup or timer state with it. Consumed by the render slice #317 (not yet
   // built), so all three exhaustive bridges no-op it for now — the sessionSettingsRejected-was-a-no-op
   // precedent.
+  // Transient status only. Daemon message/extras never cross IPC; code is compared to client literals.
+  | { type: 'sessionError'; conversationId: string; code: string }
   | { type: 'stallDetected'; conversationId: string }
   // The api-retry arm (#492, widened by #737) — claude is retrying against an API error. It carries the
   // edge (`active` — true is the rising edge, false the explicit falling one) and the attempt counter

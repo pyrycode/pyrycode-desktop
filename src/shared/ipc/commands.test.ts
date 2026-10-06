@@ -8,6 +8,7 @@ import {
   answerQuestionsCommand,
   refuseQuestionsCommand,
   dequeueMessageCommand,
+  sendQueuedNowCommand,
   interruptCommand,
   newSessionCommand,
   type RendererCommand,
@@ -153,6 +154,16 @@ describe('dequeueMessageCommand (#300)', () => {
       // (#720), so the payload reuses the wire type directly (unlike answerModal's Omit-derivative).
       expect(command.payload).toBe(fields)
     }
+  })
+})
+
+describe('sendQueuedNowCommand (#1726)', () => {
+  it('wraps a queued row\'s ids into a sendQueuedNow command, fields unchanged', () => {
+    const fields = { conversation_id: 'c1', queued_msg_id: 7 }
+
+    const command = sendQueuedNowCommand(fields)
+
+    expect(command).toEqual({ type: 'sendQueuedNow', payload: fields })
   })
 })
 
@@ -1501,6 +1512,16 @@ describe('isRendererCommand', () => {
     // A missing key (either field) is rejected.
     expect(isRendererCommand({ type: t, payload: { conversation_id: 'c1' } })).toBe(false)
     expect(isRendererCommand({ type: t, payload: { queued_msg_id: 7 } })).toBe(false)
+  })
+
+  it('accepts a well-formed sendQueuedNow command and refuses a malformed payload (#1726)', () => {
+    expect(isRendererCommand(sendQueuedNowCommand({ conversation_id: 'c1', queued_msg_id: 7 }))).toBe(true)
+    const t = 'sendQueuedNow'
+    expect(isRendererCommand({ type: t })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: null })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { conversation_id: 42, queued_msg_id: 7 } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { conversation_id: 'c1', queued_msg_id: '7' } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { conversation_id: 'c1' } })).toBe(false)
   })
 
   it('accepts a well-formed notify command for each closed kind (#391)', () => {

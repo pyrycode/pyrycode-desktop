@@ -338,6 +338,8 @@ export function translateTimelineEvent(
       return {
         type: 'userText', received: true, text: event.message.text,
         messageId: event.message.message_id,
+        queuedMsgId: event.message.queued_msg_id,
+        sentNow: event.message.sent_now,
         createdAt: Number.isFinite(parsed) ? parsed : undefined
       }
     }
@@ -517,6 +519,8 @@ export function translateTimelineEvent(
       // other sink on any path, and `reason`, a client-owned literal. A missing case would put the
       // former into an Error message, a stack trace and a crash reporter. These cases keep it out.
       return null
+    case 'hostSystemPromptReceived':
+    case 'hostSystemPromptFailed':
     case 'systemPromptReceived':
       // Not a timeline event (#1230). The transport owns the ask, the correlation and the decode; the store that
       // holds a conversation's system prompt is #1231's, in the announcedModelBridge /

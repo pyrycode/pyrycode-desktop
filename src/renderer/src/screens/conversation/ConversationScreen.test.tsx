@@ -1725,6 +1725,7 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
     const markup = renderToStaticMarkup(
       <Timeline
         items={[{ kind: 'userText', text: 'waiting to send', messageId: 'm1', createdAt: 1768312500000 }]}
+        localEchoes={[{ rowKey: 0, messageId: 'm1', waiting: false }]}
         queued={[{ queued_msg_id: 1, text: 'waiting to send', ts: '2026-07-12T00:00:00Z', message_id: 'm1' }]}
       />
     )
@@ -1740,6 +1741,7 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
     const delivered = renderToStaticMarkup(
       <Timeline
         items={[{ kind: 'userText', text: 'waiting to send', messageId: 'm1', createdAt: 1768312500000 }]}
+        localEchoes={[{ rowKey: 0, messageId: 'm1', waiting: false }]}
       />
     )
     expect(delivered).toContain(META)
@@ -3673,6 +3675,10 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
     ...(message_id === undefined ? {} : { message_id })
   })
 
+  const OwnTimeline = (props: React.ComponentProps<typeof Timeline>) => <Timeline {...props}
+    localEchoes={props.items.flatMap((item, rowKey) => item.kind === 'userText' && item.messageId
+      ? [{ rowKey, messageId: item.messageId, waiting: false }] : [])} />
+
   const echo = (text: string, messageId: string): ThreadItem => ({ kind: 'userText', text, messageId })
 
   // renderToStaticMarkup cannot fire clicks (the id→command proof lives in dropQueuedMessage.test.ts and
@@ -3681,7 +3687,7 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
 
   it('keeps one focusable thread region when both timeline and backlog are empty', () => {
     // The empty-thread invitation, not a silent region: EmptyThread is a distinct surface.
-    const markup = renderToStaticMarkup(<Timeline items={[]} queued={[]} />)
+    const markup = renderToStaticMarkup(<OwnTimeline items={[]} queued={[]} />)
     expect(markup.match(/class="conversation__thread"/g)).toHaveLength(1)
     expect(markup).not.toContain('queued-row__drop')
   })
@@ -3689,7 +3695,7 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
   it('draws the queued rows and NOT the empty state when the timeline is empty but the backlog is not', () => {
     // Reachable from a reconnect into another device's backlog, and from a conversation opened fresh in
     // this window. Before the fold this drew the empty-state invitation with queued rows underneath it.
-    const markup = renderToStaticMarkup(<Timeline items={[]} queued={[item(1, 'somebody else queued this')]} />)
+    const markup = renderToStaticMarkup(<OwnTimeline items={[]} queued={[item(1, 'somebody else queued this')]} />)
     expect(markup).toContain('conversation__thread')
     expect(markup).toContain('somebody else queued this')
     expect(markup).not.toContain('conversation__empty')
@@ -3697,7 +3703,7 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
 
   it('renders one row per queued item, in snapshot order, each showing its text (AC1)', () => {
     const markup = renderToStaticMarkup(
-      <Timeline items={[]} queued={[item(1, 'first queued'), item(2, 'second queued')]} />
+      <OwnTimeline items={[]} queued={[item(1, 'first queued'), item(2, 'second queued')]} />
     )
     expect(markup).toContain('first queued')
     expect(markup).toContain('second queued')
@@ -3708,7 +3714,7 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
   it('draws a mid-turn send ONCE — one row, wearing the queued treatment, never a second copy (AC1)', () => {
     // The bug this ticket fixes: the echo and the backlog item are the same message, so they are one row.
     const markup = renderToStaticMarkup(
-      <Timeline items={[echo('sent mid turn', 'm1')]} queued={[item(1, 'sent mid turn', 'm1')]} />
+      <OwnTimeline items={[echo('sent mid turn', 'm1')]} queued={[item(1, 'sent mid turn', 'm1')]} />
     )
     expect(markup.match(/sent mid turn/g)?.length ?? 0).toBe(1)
     expect(markup.match(/class="message-row/g)?.length ?? 0).toBe(1)
@@ -3718,7 +3724,7 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
 
   it('distinguishes the not-yet-run state by an attribute and a class, never by container (AC1)', () => {
     const markup = renderToStaticMarkup(
-      <Timeline
+      <OwnTimeline
         items={[echo('already ran', 'm1'), echo('still waiting', 'm2')]}
         queued={[item(1, 'still waiting', 'm2')]}
       />
@@ -3740,8 +3746,8 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
     // The SAME timeline, folded against a backlog that no longer names the message: same index, same
     // text, no jump to the tail and no second row — only the treatment goes.
     const items: ThreadItem[] = [echo('ran', 'm1'), { kind: 'assistantText', turnId: 't1', text: 'a reply' }]
-    const whileQueued = renderToStaticMarkup(<Timeline items={items} queued={[item(1, 'ran', 'm1')]} />)
-    const afterRunning = renderToStaticMarkup(<Timeline items={items} queued={[]} />)
+    const whileQueued = renderToStaticMarkup(<OwnTimeline items={items} queued={[item(1, 'ran', 'm1')]} />)
+    const afterRunning = renderToStaticMarkup(<OwnTimeline items={items} queued={[]} />)
     expect(whileQueued.indexOf('ran')).toBeLessThan(whileQueued.indexOf('a reply'))
     expect(afterRunning.indexOf('ran')).toBeLessThan(afterRunning.indexOf('a reply'))
     expect(afterRunning).toContain('data-thread-role="user">ran')
@@ -3751,7 +3757,7 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
 
   it('keeps two identical texts queued back to back as two distinct rows (AC4)', () => {
     const markup = renderToStaticMarkup(
-      <Timeline
+      <OwnTimeline
         items={[echo('same words', 'm1'), echo('same words', 'm2')]}
         queued={[item(7, 'same words', 'm1'), item(8, 'same words', 'm2')]}
       />
@@ -3762,7 +3768,7 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
 
   it('draws a queued item matching no local echo as its own row, never attached to another (AC4)', () => {
     const markup = renderToStaticMarkup(
-      <Timeline items={[echo('mine', 'm1')]} queued={[item(9, 'from another device', 'zz')]} />
+      <OwnTimeline items={[echo('mine', 'm1')]} queued={[item(9, 'from another device', 'zz')]} />
     )
     expect(markup.match(/class="message-row/g)?.length ?? 0).toBe(2)
     expect(markup).toContain('data-thread-role="user">mine')
@@ -3771,7 +3777,7 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
 
   it('renders untrusted text as plain text, never live markup (load-bearing)', () => {
     // No apostrophes in the fixture — renderToStaticMarkup escapes ' → &#x27; (a prior desktop lesson).
-    const markup = renderToStaticMarkup(<Timeline items={[]} queued={[item(1, '<b>x</b>')]} />)
+    const markup = renderToStaticMarkup(<OwnTimeline items={[]} queued={[item(1, '<b>x</b>')]} />)
     expect(markup).toContain('&lt;b&gt;x&lt;/b&gt;')
     expect(markup).not.toContain('<b>x</b>')
   })
@@ -3783,7 +3789,7 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
   // in dropQueuedMessage.test.ts.
   it('carries one drop affordance per queued row, each with an accessible name (AC2)', () => {
     const markup = renderToStaticMarkup(
-      <Timeline items={[]} queued={[item(1, 'first queued'), item(2, 'second queued')]} />
+      <OwnTimeline items={[]} queued={[item(1, 'first queued'), item(2, 'second queued')]} />
     )
     // The accessible name is a client-owned aria-label (icon-only control), never a daemon string.
     expect(markup).toContain('aria-label="Drop queued message"')
@@ -3795,7 +3801,7 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
 
   it('rides the queued rows and ONLY those — never a delivered row of any kind (AC2)', () => {
     const markup = renderToStaticMarkup(
-      <Timeline
+      <OwnTimeline
         items={[
           echo('a delivered send', 'm1'),
           { kind: 'assistantText', turnId: 't1', text: 'a reply' },
@@ -3847,9 +3853,9 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
   })
 
   it('draws no queued treatment anywhere when the backlog prop is omitted entirely', () => {
-    // The optional-prop contract the 72 existing `<Timeline` render sites depend on: absent `queued`
+    // The optional-prop contract the 72 existing `<OwnTimeline` render sites depend on: absent `queued`
     // folds against an empty backlog and yields today's rows.
-    const markup = renderToStaticMarkup(<Timeline items={[echo('plain send', 'm1')]} />)
+    const markup = renderToStaticMarkup(<OwnTimeline items={[echo('plain send', 'm1')]} />)
     expect(markup).toContain('class="message-row message-row--user message-row--text"')
     expect(markup).toContain('data-thread-role="user"')
     expect(markup).not.toContain('queued')

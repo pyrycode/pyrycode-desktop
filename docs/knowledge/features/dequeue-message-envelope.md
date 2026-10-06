@@ -114,6 +114,9 @@ detail: [#300 codebase notes](../codebase/300.md).
   `userText` echo from both timeline stores via the `dropUserText` arm; an absent or empty
   `message_id` — a pre-#2092 daemon, or a row this window never sent — still drops the queued row and
   removes no echo. Full design: `docs/specs/architecture/1213-drop-queued-message-removes-echo.md`.
+  The local `dropUserText` event also carries `queuedMsgId`: only a retained local echo record
+  with both ids can be removed. A received/history row or a distinct queue entry sharing the
+  message id cannot be deleted by that collision. The daemon snapshot still owns backlog removal.
 - **Consumer, already wired:** `main/index.ts`'s `onCommand` switch → `connection.dequeueMessage`.
   Fire-and-forget — no reply is expected; the daemon's re-broadcast `queue_state` snapshot (decoded
   by #292, rendered by #294) is the observable effect. **The queued row itself is still never

@@ -21,18 +21,12 @@ Part of [Thread timeline](thread-timeline.md).
   the [keyed holder](conversation-timeline-holder.md) owns separate timelines and the
   bridge selects the destination. A live denial with an empty conversation id is ignored,
   never assigned to whichever conversation happens to be open.
-- **No stable per-item `id`.** `turnId` alone isn't unique (a tool call can split one turn into
-  two `assistantText` items) — [#203](../codebase/203.md) resolved the React-key question at
-  render time by keying on array index instead: the list is append-only with tail-mutation and never
-  reorders or inserts mid-list (`appendDelta` grows the tail in place, every other arm appends a new
-  tail, `fillResult` replaces a `toolCall` at its own index), so index identity is stable per logical
-  item without needing a dedicated `id` field on `ThreadItem`. **That premise is scoped to
-  `reduceTimeline`'s own array and does not extend to a consumer that inserts at the head rather than
-  the tail.** The [keyed holder](conversation-timeline-holder.md)'s `prependHistoryFor`
-  ([#1223](../codebase/1223.md)) does exactly that, and array-index keys broke under it —
-  [#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260) gave the render layer its own
-  origin-relative key for this reason; see [Conversation timeline store § Edge
-  cases](conversation-timeline-store-limits.md#edge-cases-and-limitations).
+- **Stable identity is independent of item position.** `ThreadItem` needs no daemon-owned
+  id field; the timeline keeps client-owned numeric `rowKeys` beside its items. Queue
+  settlement moves a key with its content, and history prepends allocate new keys while
+  retaining every held key. `FoldedRow.itemIndex` supplies source indices for statistics,
+  cursor selection and tool/run expansion through display projection. Saved rows receive
+  keys before their first render; see [restoration and prepend identity](conversation-timeline-store-limits.md#edge-cases-and-limitations).
 - **`stalled` is onset-only with no daemon "cleared" signal** ([#317](../codebase/317.md)) — the daemon
   sends a one-shot `stall` frame and never repeats it or clears it, so the reducer derives the clear
   entirely client-side on the next turn-activity arm. A stall with no following activity stays shown
@@ -71,11 +65,18 @@ Part of [Thread timeline](thread-timeline.md).
   conversation clears nothing.
 - **A retry or compaction genuinely still live across a reconnect shows no banner until the daemon's
   next edge** ([#538](../codebase/538.md)), an accepted residual, not a bug to engineer around. The
-  daemon's connect-time re-assertion set is the outstanding modal (#877) and the queued backlog (#878)
-  only — never `api_retry`/`compacting`/`turn_state` — so `reconnected`'s clear has nothing to
-  re-populate from. A briefly-missing banner (until the next rising edge, or for a compaction possibly
-  only the closing falling edge, landing as a no-op) trades against a permanently-stuck one, which is
-  the worse failure this arm exists to fix.
+  daemon does not reassert `api_retry` or `compacting` as a current-status snapshot.
+  Bounded replay may deliver retained edges, but does not guarantee their recovery.
+  A briefly-missing banner (until the next rising edge, or for a compaction possibly
+  only the closing falling edge, landing as a no-op) trades against a permanently-stuck one.
+- **A running turn's phase is reasserted after replay.** With daemon
+  [pyrycode#2718](https://github.com/pyrycode/pyrycode/pull/2718), the later attributed
+  `turn_state` restores `thinking` or `responding` after `reconnected` clears the
+  open conversation's transient status. The snapshot omits `event_id`; idle
+  conversations produce no snapshot, so an open turn that ended offline stays idle.
+  Held items survive by reference. Repeating the restored phase with other status
+  state unchanged is a same-reference reducer no-op and adds no row. See
+  [cursor, open-conversation scope and mounted regressions](conversation-timeline-store-limits.md#edge-cases-and-limitations).
 - **A late `sessionTransition`/timeline delta for the previous conversation is not suppressed by
   [#530](../codebase/530.md)'s clear.** `ThreadEvent` carries no `conversation_id` (single-active model,
   ADR 0004), so if the previous conversation is still streaming when the switch happens, its in-flight
@@ -128,20 +129,20 @@ Part of [Thread timeline](thread-timeline.md).
   The tempting symmetry — a removal closes what an append opened — is wrong,
   because the window belongs to whatever message is currently pending, not to the one just dropped.
   `dropUserText` carries `localSendPending` through unchanged, same as every other chrome scalar, and
-  leaves the daemon's next `turn_state` to close it. **Only `items` changes on this arm** — the sole
-  removal arm in the reducer; every other arm appends or coalesces.
-- **Queue snapshots do not remove a user row when a queued item disappears.** A live receipt can
-  retain another device's message, and `foldQueuedRows` can match that row by nonempty identity.
+  leaves the daemon's next `turn_state` to close it. The row, its numeric key and its local correlation record are removed together;
+  all activity and recovery readings remain unchanged.
+- **Queue snapshots do not remove a user row when a queued item disappears.** Only local records can
+  correlate with snapshots; a received row from another device remains unowned.
   Removal still requires the explicit `dropUserText` event; receiving a new queue snapshot alone
   does not infer an echo removal. See [queued-row projection](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213).
 - **An echo with no `messageId` can never be removed by a drop**, on the same "absent correlates with
   nothing" rule the field's own paragraph states above (§ Types). Nothing in this module manufactures a
   fallback key for it. [#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)'s history-drawn
   `userText` rows are not this case in practice — a stored `message` always carries the wire's
-  `message_id` — but the reducer draws no distinction: a row is a row, whatever folded it.
+  `message_id` — but those rows never acquire local ownership, even if their id collides with an echo.
 - **Local echoes, live receipts and history share `userText`, but only local submission opens
-  Thinking.** The bridge marks both receipt lanes `received: true`. Duplicate receipts with a
-  held nonempty message id return before all content and sidecar updates; history prepend keeps
+  Thinking.** The bridge marks both receipt lanes `received: true`. Owned queue receipts settle before content/chrome reduction; already settled
+  repeats and other legacy held-id duplicates return unchanged. History prepend keeps
   the held row too. Matching history that arrived first is not enriched by a later receipt.
   See [user-event reduction](thread-timeline-internals.md#the-reducer) and
   [live routing](conversation-timeline-store.md#live-user-receipts).

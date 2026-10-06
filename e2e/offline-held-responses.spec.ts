@@ -64,7 +64,6 @@ test('permission and trust retain selection offline, including pre-opened confir
     await expect(page.getByRole('alert')).toContainText('Your answer was rejected.')
     await page.getByRole('button', { name: 'Dismiss', exact: true }).click()
     await expect(page.getByRole('alert')).toHaveCount(0)
-    await page.screenshot({ path: '/tmp/builder-1381-offline-confirm.png', animations: 'disabled' })
     await panel.getByRole('button', { name: 'Back', exact: true }).click()
     await expect(panel.getByRole('radio', { name: 'Allow', exact: true })).toBeChecked()
     await panel.getByRole('radio', { name: 'Deny Default', exact: true }).press('Space')
@@ -88,7 +87,7 @@ test('permission and trust retain selection offline, including pre-opened confir
   }
 })
 
-test('questions preserve picks, local navigation and draft offline; a second connected host answers', async ({ launchPairedApp }) => {
+test('questions preserve independent picks and draft offline; a second connected host answers', async ({ launchPairedApp }) => {
   const app = await launchPairedApp({ buildReplyFrames: conversationStateFake({ conversations: [SEEDED_ROW] }) },
     { secondServer: { buildReplyFrames: conversationStateFake({ conversations: [SECOND_SEEDED_ROW] }) } })
   const read = await observeCommands(app)
@@ -102,8 +101,7 @@ test('questions preserve picks, local navigation and draft offline; a second con
   await questions(app)
   const panel = page.locator('.question-panel:not(.permission-panel)')
   await panel.getByRole('radio').first().press('Space')
-  await panel.getByRole('button', { name: 'Next', exact: true }).click()
-  await panel.getByRole('radio').first().press('Space')
+  await panel.locator('.question-batch__question').nth(1).getByRole('radio').first().press('Space')
   await panel.getByRole('button', { name: 'Continue', exact: true }).focus()
   await connection(app, 'disconnected')
   await expect(panel.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled()
@@ -111,17 +109,13 @@ test('questions preserve picks, local navigation and draft offline; a second con
   await page.keyboard.press('Enter')
   await page.keyboard.press('Space')
   await panel.getByRole('button', { name: 'Cancel', exact: true }).dispatchEvent('click')
-  await panel.getByRole('button', { name: 'Previous', exact: true }).click()
   await expect(panel.getByRole('radio').first()).toBeChecked()
-  await panel.getByPlaceholder('Other. Type something.').fill('Local answer')
-  await panel.getByRole('button', { name: 'Editor', exact: true }).click()
-  await expect(panel.getByRole('radio').first()).toBeChecked()
-  await panel.getByRole('button', { name: 'Language', exact: true }).click()
-  await expect(panel.getByPlaceholder('Other. Type something.')).toHaveValue('Local answer')
+  await panel.getByRole('textbox', { name: 'Other. Type something.' }).first().fill('Local answer')
+  await expect(panel.locator('.question-batch__question').nth(1).getByRole('radio').first()).toBeChecked()
+  await expect(panel.getByRole('textbox', { name: 'Other. Type something.' }).first()).toHaveValue('Local answer')
   await expect(page.getByPlaceholder('Message…')).toHaveValue('Retained draft')
   await expect(page.locator('[data-thread-role="assistant"]')).toContainText('Retained message')
   expect(await read()).toEqual([])
-  await page.screenshot({ path: '/tmp/builder-1381-offline-question.png', animations: 'disabled' })
   await page.getByRole('button', { name: SECOND_SEEDED_ROW.name!, exact: true }).click()
   await permission(app, 'trust', SECOND_SEEDED_ROW.id, SECOND_SERVER_ID)
   await page.locator('.permission-panel').getByRole('button', { name: 'Cancel', exact: true }).click()
@@ -130,14 +124,13 @@ test('questions preserve picks, local navigation and draft offline; a second con
   await panel.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect.poll(async () => (await read()).length).toBe(2)
   await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
-  await expect(panel.getByPlaceholder('Other. Type something.')).toHaveValue('Local answer')
+  await expect(panel.getByRole('textbox', { name: 'Other. Type something.' }).first()).toHaveValue('Local answer')
   await connection(app, 'connected')
   await expect(panel).toHaveCount(0)
   await questions(app)
   expect(await read()).toHaveLength(2)
   await panel.getByRole('radio').first().press('Space')
-  await panel.getByRole('button', { name: 'Next', exact: true }).click()
-  await panel.getByRole('radio').first().press('Space')
+  await panel.locator('.question-batch__question').nth(1).getByRole('radio').first().press('Space')
   await panel.getByRole('button', { name: 'Continue', exact: true }).click()
   await expect.poll(async () => (await read()).length).toBe(3)
   expect((await read()).map(c => c.type)).toEqual(['cancelModal', 'refuseQuestions', 'answerQuestions'])
@@ -154,8 +147,7 @@ test('all unavailable statuses and missing or ambiguous ownership block both pro
     const panel = page.locator(family === 'permission' ? '.permission-panel' : '.question-panel:not(.permission-panel)')
     await panel.getByRole('radio').first().press('Space')
     if (family === 'question') {
-      await panel.getByRole('button', { name: 'Next', exact: true }).click()
-      await panel.getByRole('radio').first().press('Space')
+      await panel.locator('.question-batch__question').nth(1).getByRole('radio').first().press('Space')
     }
     async function blocked() {
       for (const name of ['Continue', 'Cancel']) {
@@ -178,8 +170,7 @@ test('all unavailable statuses and missing or ambiguous ownership block both pro
     if (family === 'question') {
       await questions(app)
       await panel.getByRole('radio').first().press('Space')
-      await panel.getByRole('button', { name: 'Next', exact: true }).click()
-      await panel.getByRole('radio').first().press('Space')
+      await panel.locator('.question-batch__question').nth(1).getByRole('radio').first().press('Space')
     }
     await event(app, { type: 'conversationsReceived', serverId: 'other-connected', conversations: [SEEDED_ROW] })
     await blocked()

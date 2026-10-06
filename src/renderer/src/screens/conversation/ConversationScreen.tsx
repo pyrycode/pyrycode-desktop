@@ -162,7 +162,6 @@ import type { QuestionBatch } from '../../store/questionBatches'
 import {
   useQuestionPicksStore,
   questionPicksStore,
-  selectQuestionSelection,
   selectBatchSelections
 } from '../../store/questionPicksStore'
 import { sessionBoundaryTitle } from './sessionBoundaryViewModel'
@@ -265,6 +264,8 @@ export function ConversationScreen({
   // `??` and not `||`: an empty-string id must survive as an ordinary key rather than collapse into
   // "nothing open" (the :281 / :1955 spelling this file already uses).
   const openConversationId = activeConversation?.id ?? null
+  const pendingBatch = useQuestionBatchStore(s =>
+    openConversationId === null ? undefined : selectBatchFor(openConversationId)(s))
   const actionsAvailable = useConversationActionAvailability(openConversationId)
   // #1726: the open session's `mid_turn_input` reading, a boolean slice so other snapshot fields re-render
   // nothing. The snapshot is the open conversation's (cleared on switch), so it gates that thread alone.
@@ -543,12 +544,15 @@ export function ConversationScreen({
           rendered, so the overlay (Re-pair above all) still shows when an offline host leaves the
           Timeline nothing to draw; the region then stays empty rather than missing. */}
       <div className="conversation__message-area">
-      {(!offline || items.length > 0 || visibleQueued.length > 0) && <Timeline
+      {(!offline || items.length > 0 || visibleQueued.length > 0 || pendingBatch !== undefined) && <Timeline
         key={openConversationId}
         items={items}
+        rowKeys={thread.rowKeys}
+        localEchoes={thread.localEchoes}
         foldTools={collapseToolUses}
         onReply={replyToMessage}
         scrollPin={scrollPin}
+        trailing={pendingBatch && <QuestionHistorySlot conversationId={openConversationId} />}
         // #1260: NEGATED, so the first held row's key is minus the number of rows history has already
         // put ahead of it. A prepend of N lowers this by N while every surviving row's index rises by N,
         // which is what leaves their keys — and therefore React's identity for them — unmoved.
@@ -895,10 +899,8 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
   //   - the row's trailing slot (ComposerErrorSlotControl) — ITS OWN LEAF ONLY. It reads sessionStore itself,
   //     deliberately (a status read hoisted into the screen would re-render the timeline on every connection
   //     flap), and #963's actionable button grows the row by ~8px. That shrink gets no re-assert.
-  //   - the composer slot's question panel (ComposerSlot → QuestionPanelSlot) — ITS OWN LEAF ONLY. It reads
-  //     the question-batch store itself, deliberately (so a batch, and every keystroke in the panel, never
-  //     wakes the timeline), and the panel takes the slot the covered composer vacates, so its height is not
-  //     the composer's. That shrink gets no re-assert either.
+  //   - the inline question batch grows a direct-child wrapper inside the thread. Arrival is a screen
+  //     render; local picks remain leaf-only, with wrapper growth covered by the observer below.
   //
   // The last two were a known LATENCY gap, not a broken pin: their shrink fires no scroll event (see below), so
   // the flag stayed correct and the next screen render re-pinned. Neither was measured or under test. Closing
@@ -1148,7 +1150,7 @@ function MessageBubble({ message }: { message: Message }): JSX.Element {
 // row's drop control calls; a render that supplies queued rows without it draws them undroppable rather
 // than throwing, which is the honest degradation for a view whose container owns the conversation id.
 //
-// Timeline is still pure props-in / markup-out: the fold is a pure function of the two lists, evaluated
+// Timeline is still pure props-in / markup-out: the fold is a pure function of content, snapshots and local facts, evaluated
 // during render, holding no state between renders. That is what makes a replacement snapshot free (see
 // foldQueuedRows) and what keeps this subtree server-renderable with no store and no bridge.
 export function SavedTimelineNotice({ status }: {
@@ -1162,6 +1164,8 @@ export function SavedTimelineNotice({ status }: {
 
 export function Timeline({
   items,
+  rowKeys,
+  localEchoes,
   foldTools = false,
   scrollPin,
   queued,
@@ -1173,9 +1177,13 @@ export function Timeline({
   saved = false,
   onOpenMarkdownPath,
   agent,
+  trailing,
   onReply
 }: {
+  trailing?: ReactNode
   items: readonly ThreadItem[]
+  rowKeys?: TimelineState['rowKeys']
+  localEchoes?: TimelineState['localEchoes']
   /** Presentation only; absent or false retains ordinary tool rows. */
   foldTools?: boolean
   scrollPin?: ThreadScrollPin
@@ -1200,12 +1208,14 @@ export function Timeline({
   agent?: WireAgent
   onReply?: (role: 'user' | 'assistant', text: string) => void
 }): JSX.Element {
-  const rows = foldQueuedRows(items, queued ?? EMPTY_QUEUED)
-  // #1566: keyed by item index, which is the row index below items.length (foldQueuedRows).
+  const rows = foldQueuedRows(items, queued ?? EMPTY_QUEUED, localEchoes, rowKeys)
+  // Stats use source item indices; projection may move waiting echoes.
   const turnStats = turnStatsByItemIndex(items)
   const [expandedTools, setExpandedTools] = useState<ReadonlySet<number>>(() => new Set())
   const [expandedRuns, setExpandedRuns] = useState<ReadonlySet<number>>(() => new Set())
   const projection = groupToolRows(rows.map((row) => row.item))
+  const rowKeyAt = (index: number) => rowKeys?.[rows[index]?.itemIndex ?? index] ??
+    firstRowKey + (rows[index]?.itemIndex ?? index)
   const drawn = projection.filter((group) => {
     const item = rows[group.index]?.item
     return !(foldTools && item?.kind === 'banner' && item.level === 'info') &&
@@ -1214,13 +1224,13 @@ export function Timeline({
   const runs = foldTools ? foldToolRuns(rows.map((row) => row.item), drawn) : []
   const runByMember = new Map(runs.flatMap((run) => run.members.map((index) => [index, run] as const)))
   const runByStart = new Map(runs.map((run) => [run.index, run]))
-  const runIsExpanded = (run: ToolRun) => run.members.some((index) => expandedRuns.has(firstRowKey + index))
+  const runIsExpanded = (run: ToolRun) => run.members.some((index) => expandedRuns.has(rowKeyAt(index)))
   const expandedRunStarts = new Set(runs.filter(runIsExpanded).map((run) => run.index))
   const hiddenRows = new Set(projection.filter((group) => {
     const run = runByMember.get(group.index)
     return group.ancestors.some((index) => {
       const ancestorRun = runByMember.get(index)
-      return !expandedTools.has(firstRowKey + index) ||
+      return !expandedTools.has(rowKeyAt(index)) ||
         (ancestorRun !== undefined && !expandedRunStarts.has(ancestorRun.index))
     }) || (run !== undefined && !expandedRunStarts.has(run.index))
   }).map((group) => group.index))
@@ -1239,21 +1249,21 @@ export function Timeline({
   return (
     <div className="conversation__thread" ref={scrollPin?.ref} onScroll={scrollPin?.onScroll}
       aria-label="Conversation history" tabIndex={0} onWheel={scrollPin?.onWheel} onKeyDown={scrollPin?.onKeyDown}>
-      {rows.length === 0 && <EmptyThread />}
+      {rows.length === 0 && !trailing && <EmptyThread />}
       {olderSaved && <p className="conversation__banner">Older messages require a connection.</p>}
       {projection.flatMap((group) => {
         const row = rows[group.index]
         if (!row) return null
-        const key = firstRowKey + group.index
+        const key = rowKeyAt(group.index)
         const hidden = hiddenRows.has(group.index)
         if (row.item.kind !== 'toolCall') {
-          const rowKey = group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`
+          const rowKey = row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`
           const content = <TimelineRow key={rowKey}
-            item={row.item} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(group.index)}
+            item={row.item} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(row.itemIndex)}
             midTurnInput={midTurnInput} onSendQueuedNow={onSendQueuedNow}
             onOpenMarkdownPath={onOpenMarkdownPath} agent={agent}
             onReply={onReply}
-            inProgress={!saved && group.index === items.length - 1 && row.item.kind === 'assistantText'} />
+            inProgress={!saved && row.itemIndex === items.length - 1 && row.item.kind === 'assistantText'} />
           // Keep attributed text mounted through collapse and late-owner history regrouping.
           if (row.item.kind === 'assistantText' && row.item.parentToolUseId) return (
             <div key={rowKey} className={`tool-group-row tool-group-row--depth-${group.depth}`} hidden={hidden}>
@@ -1288,18 +1298,19 @@ export function Timeline({
           run && <div key={`run${key}`} className={`tool-group-row tool-run${expanded ? ' tool-group-row--joined-below' : ''}`}>
             <ToolRunHeader run={run} expanded={expanded} onToggle={() => setExpandedRuns((previous) => {
               const next = new Set(previous)
-              if (run.members.some((index) => previous.has(firstRowKey + index))) {
-                for (const index of run.members) next.delete(firstRowKey + index)
+              if (run.members.some((index) => previous.has(rowKeyAt(index)))) {
+                for (const index of run.members) next.delete(rowKeyAt(index))
               } else next.add(key)
               return next
             })} />
           </div>,
-          <div key={group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
+          <div key={row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
             className={`tool-group-row tool-group-row--depth-${group.depth} ${joins.get(group.index) ?? ''}`} hidden={hidden}>
             {content}
           </div>
         ]
       })}
+      {trailing}
     </div>
   )
 }
@@ -4199,7 +4210,7 @@ function Composer({
           the outcome line answers the same way, and load-bearing here for a sharper reason: an element
           that mounted empty would move the message box down on every launch, in every spec, forever.
 
-          It is INSIDE the element that wears `hidden`, so #906's question panel covers the tiles along
+          It is INSIDE the element that wears `hidden`, so a permission panel covers the tiles along
           with the message box and the footer — nothing new to hide. And a conversation switch clears it
           for free: PairedShellView keys the chat pane on the conversation id, so this composer is rebuilt
           around a fresh holder. */}
@@ -4347,45 +4358,8 @@ function Composer({
   return <>{beforeComposer(sendText)}{body}</>
 }
 
-/**
- * #906: the composer's slot — the store-bound container that decides whether the operator sees a message
- * box or a clarifying question. The #224 split: the panel's markup is QuestionPanelView's, the store read
- * is here, and this is also the only place that can own it, because covering the composer needs
- * `Composer`, which is this module's own.
- *
- * `conversationId` arrives as a PROP rather than as a store read of its own, the BackgroundTaskPanel
- * idiom two screens up: ConversationScreen already holds `activeConversation`, and re-reading it here
- * would buy nothing. What that leaves is the question read, isolated in this leaf — so a batch arriving
- * re-renders the composer slot and never ConversationScreen, whose re-render would take the whole
- * timeline with it.
- *
- * `selectBatchFor` IS CALLED INLINE, with no `useMemo` and no per-conversation selector cache, on the
- * store's own ruling: `useStore` compares the selector's RESULT under `Object.is`, not the selector's
- * identity, and the held batch comes back by reference. A memo table keyed on a conversation id would be
- * merely redundant; keyed on anything claude-authored it would put untrusted text in a lookup path, which
- * is this family's named failure mode.
- *
- * `conversationId === null` is an explicit test and deliberately not `?? ''`, matching App.tsx's
- * `openConversationId`: an empty-string id stays an ordinary key rather than collapsing into "nothing
- * open" the way a truthiness test would.
- *
- * The BATCH read is this container's; the PICKS read is `QuestionPanelSlot`'s, one level down, so a pick
- * re-renders the panel without waking the composer this slot is covering. `batch.questions[…]` is read
- * there with no guard and no `!`: `reduceQuestionBatches` returns state unchanged when `questions` is empty
- * — the guard sits before the match — so `[]` never reaches `outstanding`, even though the wire type admits
- * it. WHICH of them is drawn has been the operator's choice since #915; see the slot below.
- *
- * The questionnaire wrapper is hidden only during permission coverage. Keeping it mounted preserves
- * its active question while the composer independently retains the draft beneath both request types.
- */
-export function ComposerSlot({
-  serverId = null,
-  conversationId,
-  phase,
-  onMessageSent,
-  statusArea,
-  replyFocusRequest = 0
-}: {
+// Permission temporarily covers the mounted composer so its local draft survives.
+export function ComposerSlot({ serverId = null, conversationId, phase, onMessageSent, statusArea, replyFocusRequest = 0 }: {
   serverId?: string | null
   conversationId: string | null
   phase: TurnPhase
@@ -4393,160 +4367,69 @@ export function ComposerSlot({
   statusArea?: (sendText: (value: string) => boolean) => ReactNode
   replyFocusRequest?: number
 }): JSX.Element {
-  const batch = useQuestionBatchStore((s) =>
-    conversationId === null ? undefined : selectBatchFor(conversationId)(s)
-  )
   const hasPermission = useModalStore((s) =>
     conversationId !== null && selectHasOutstandingFor(conversationId)(s)
   )
-  return (
-    <Composer
-      serverId={serverId} conversationId={conversationId}
-      replyFocusRequest={replyFocusRequest}
-      phase={phase} onMessageSent={onMessageSent} covered={hasPermission || batch !== undefined}
-      beforeComposer={(sendText) => (
-        <>
-          {statusArea?.(sendText)}
-          <PermissionModal conversationId={conversationId} />
-          {/* Keep the active question mounted while permission temporarily takes precedence. */}
-          {batch && (
-            <div hidden={hasPermission}>
-              <QuestionPanelSlot key={batch.questionBatchId} batch={batch} />
-              <div className="composer__footer">
-                <ComposerModelMenu conversationId={conversationId} />
-              </div>
-            </div>
-          )}
-        </>
-      )}
-    />
-  )
+  return <Composer serverId={serverId} conversationId={conversationId} phase={phase}
+    replyFocusRequest={replyFocusRequest}
+    onMessageSent={onMessageSent} covered={hasPermission} beforeComposer={(sendText) => <>
+      {statusArea?.(sendText)}
+      <PermissionModal conversationId={conversationId} />
+    </>} />
 }
 
-/** The question a batch OPENS on, and since #915 that is all it is: the seed for the slot's own state, not
- *  the only question the panel can draw. The two-places warning it used to carry now belongs to
- *  `activeIndex` below, which is still read once and used twice — the question read and the picks key —
- *  because a silent disagreement there would render one question's rows against another's selection. */
-const FIRST_QUESTION_INDEX = 0
+export function QuestionHistorySlot({ conversationId }: { conversationId: string | null }): JSX.Element {
+  const batch = useQuestionBatchStore((s) => conversationId === null ? undefined : selectBatchFor(conversationId)(s))
+  const hasPermission = useModalStore((s) => conversationId !== null && selectHasOutstandingFor(conversationId)(s))
+  return <div hidden={hasPermission}>
+    {batch && <QuestionPanelSlot key={batch.questionBatchId} batch={batch} />}
+  </div>
+}
 
-/**
- * #912 / #915: the panel's own store-bound container — the picks half of the #224 split, and the seam where
- * a gesture on a row (or, since #915, on a header tab) becomes a store event or a jump.
- *
- * THE JUMP IS PANEL-LOCAL COMPONENT STATE, never a new arm on the picks store, and the asymmetry with the
- * picks is the point. What must survive a chat switch is the PICKS, and they already do because they live
- * outside the pane `PairedShell` keys on the conversation id (#670) — so this leaf remounts on a switch and
- * the batch re-opens on its first question, which is intended rather than a gap to defend. Putting the index
- * in the store instead would widen its event union and every clearing arm for nothing observable.
- *
- * A SEPARATE LEAF FROM `ComposerSlot`, MOUNTED ONLY WHILE A BATCH IS UP, rather than a picks read added
- * beside the batch read above. Hooks cannot be conditional, so reading the picks store in `ComposerSlot`
- * would need a sentinel batch id for the no-batch case AND would subscribe the composer to pick traffic —
- * every keystroke in the Other field re-rendering the message box it is covering. A leaf that only exists
- * while the panel does needs no sentinel and keeps a pick re-rendering the panel alone.
- *
- * `selectQuestionSelection` IS CALLED INLINE, no `useMemo`, on the picks store's own explicit ruling:
- * `useStore` compares the selector's RESULT under `Object.is`, and both of its branches (the held selection,
- * or the shared empty constant) are reference-stable. `ComposerSlot`'s note above applies unchanged — a memo
- * table keyed on anything claude-authored would be this family's named failure mode.
- *
- * **THE KEY IS `batch.questionBatchId`, NOT `conversationId`, and the substitution would compile clean.**
- * The nonce is what makes AC4's second half hold for free: a batch dismissed and immediately replaced for
- * the same conversation reads a FRESH empty selection, with no clearing effect to get wrong and no stale
- * pick reachable. Keyed on the conversation, the new batch would inherit the old one's picks.
- *
- * The two `*PickEventFor` mappings are `QuestionPanelView`'s, deliberately: the view stays variant-neutral
- * so it has no arm to transpose, and this container — which holds `multiSelect`, the nonce and the index —
- * is where the single-versus-multi distinction is told to the store. `dispatch` is read off the store rather
- * than through a hook: it is a stable function on a singleton, so subscribing to it would buy nothing.
- *
- * `reconnected` IS NOT DISPATCHED HERE — `questionBridge` drives it from the transport's own
- * (re)handshake, which this container cannot see. `dismissed` NOW IS (#921), and this slot is the FIRST
- * thing in the family to raise one locally: Cancel refuses the batch and clears it optimistically, so the
- * daemon's own broadcast is no longer the only exit. The bridge still owns the remote path; both go
- * through `refuseQuestionBatch`'s and `subscribeQuestionBatches`' shared picks-first order, so the local
- * and remote clears cannot drift. The daemon's `question_dismissed` arriving afterwards is an unknown-id
- * no-op in both stores, returning the same state reference, so nothing further re-renders.
- *
- * THE SEND ITSELF IS NOT INLINE HERE, and that is what makes it testable at all. Renderer specs in this
- * repo are static server renders with no DOM and nothing to click, so a guarded send written into this
- * closure would put "a throwing bridge still clears the panel" out of vitest's reach entirely. It lives in
- * `refuseQuestionBatch` (the `modalResolution` / `composerSend` seam) with plain-spy coverage, and this
- * container stays thin glue. `window.pyry` is dereferenced only inside the click closure — interaction
- * time, never render — so the container's smoke render still touches no bridge.
- */
+// Compare object identity as well as ownership: redelivery can invalidate captured positions.
+export function isCurrentQuestionBatch(batch: QuestionBatch): boolean {
+  return activeConversationStore.getState().activeConversation?.id === batch.conversationId &&
+    selectBatchFor(batch.conversationId)(questionBatchStore.getState()) === batch &&
+    !selectHasOutstandingFor(batch.conversationId)(modalStore.getState())
+}
+
 export function QuestionPanelSlot({ batch }: { batch: QuestionBatch }): JSX.Element {
   const responseAvailable = usePromptResponseAvailability(batch.conversationId)
-  const [jumpedTo, setJumpedTo] = useState(FIRST_QUESTION_INDEX)
-  // CLAMPED, AND THIS IS A CRASH GUARD RATHER THAN TIDINESS. `jumpedTo` is component state; the batch is
-  // store state; they move independently. A same-nonce `question_shown` re-delivery REPLACES the held batch
-  // in place (reduceQuestionBatches' `shown` arm, latest wins), so the nonce key upstream does not change,
-  // this leaf does not remount, and a re-delivery carrying fewer questions than the operator has jumped past
-  // would read `batch.questions[jumpedTo]` as undefined and throw out of the render — on a frame the daemon
-  // controls and the reducer explicitly supports. `questions` is never empty (the reducer's guard sits
-  // before the match), so `length - 1` is always a valid position.
-  // COMPUTED ONCE and used twice below, which is FIRST_QUESTION_INDEX's old warning in its new home: the
-  // question read and the picks key must be the same value. A `?? questions[0]` fallback would look like the
-  // same fix and be the wrong one — it renders one question's rows against another question's selection.
-  const activeIndex = Math.min(jumpedTo, batch.questions.length - 1)
-  const question = batch.questions[activeIndex]
-  const selection = useQuestionPicksStore(
-    selectQuestionSelection(batch.questionBatchId, activeIndex)
-  )
-  // #922: the WHOLE batch's picks, beside the active question's. Two subscriptions to one store, and
-  // the narrow one is not redundant — it is what the rows are drawn from, and it stays because
-  // deriving it from the map below would need the picks store's deliberately-unexported empty
-  // sentinel. The wide read costs no extra render either: it already changes on every pick in this
-  // batch, so it is a superset of what the narrow one wakes on.
   const selections = useQuestionPicksStore(selectBatchSelections(batch.questionBatchId))
-  // THE GATE AND THE PAYLOAD, FROM ONE CALL. `null` means some question in the batch holds no value:
-  // it renders Continue unavailable AND is what `answerQuestionBatch` refuses, so the button's state
-  // and the frame's contents cannot disagree. Computed inline in the render with no `useMemo` — it is
-  // a pure pass over one batch's questions, and memoising it would need a key derived from the picks.
   const answers = resolveQuestionAnswers(batch.questions, selections)
-  const at = {
-    multiSelect: question.multiSelect,
-    questionBatchId: batch.questionBatchId,
-    questionIndex: activeIndex
-  }
   const dispatch = questionPicksStore.getState().dispatch
-  return (
-    <QuestionPanelView
-      responseAvailable={responseAvailable}
-      questions={batch.questions}
-      activeIndex={activeIndex}
-      onQuestionSelected={setJumpedTo}
-      // #921. The id read is `batch.questionBatchId` — the same value this leaf is keyed on upstream, so
-      // the batch refused is by construction the batch drawn. Both stores' `dispatch` are read off their
-      // singletons rather than through a hook: each is a stable function, so subscribing would buy
-      // nothing (the existing `dispatch` read below made the same call).
-      onCancel={() => {
-        if (!canRespondToPromptNow(batch.conversationId)) return
-        refuseQuestionBatch(batch.questionBatchId, {
-          sendCommand: window.pyry.sendCommand,
-          dispatchPicks: dispatch,
-          dispatchBatch: questionBatchStore.getState().dispatch
-        })
-      }}
-      // #922. The same three injected effects as the refusal above — one `QuestionResolveDeps` serves
-      // both exits — with the assembled entries in place of nothing. The id read is
-      // `batch.questionBatchId`, the value this leaf is keyed on upstream, so the batch answered is by
-      // construction the batch drawn.
-      canAnswer={answers !== null}
-      onAnswer={() => {
-        if (!canRespondToPromptNow(batch.conversationId)) return
-        answerQuestionBatch(batch.questionBatchId, answers, {
-          sendCommand: window.pyry.sendCommand,
-          dispatchPicks: dispatch,
-          dispatchBatch: questionBatchStore.getState().dispatch
-        })
-      }}
-      selection={selection}
-      onOptionChosen={(optionIndex) => dispatch(optionPickEventFor({ ...at, optionIndex }))}
-      onOtherChosen={() => dispatch(otherPickEventFor(at))}
-      onOtherTextChanged={(text) => dispatch({ type: 'otherTextChanged', ...at, text })}
-    />
-  )
+  const at = (questionIndex: number) => {
+    const question = batch.questions[questionIndex]
+    if (!isCurrentQuestionBatch(batch) || question === undefined) return null
+    return { multiSelect: question.multiSelect, questionBatchId: batch.questionBatchId, questionIndex }
+  }
+  const deps = () => ({ sendCommand: window.pyry.sendCommand, dispatchPicks: dispatch,
+    dispatchBatch: questionBatchStore.getState().dispatch })
+  return <QuestionPanelView questions={batch.questions} selections={selections}
+    responseAvailable={responseAvailable} canAnswer={answers !== null}
+    onCancel={() => {
+      if (!isCurrentQuestionBatch(batch) || !canRespondToPromptNow(batch.conversationId)) return
+      refuseQuestionBatch(batch.questionBatchId, deps())
+    }}
+    onAnswer={() => {
+      if (!isCurrentQuestionBatch(batch) || !canRespondToPromptNow(batch.conversationId)) return
+      const currentAnswers = resolveQuestionAnswers(batch.questions,
+        selectBatchSelections(batch.questionBatchId)(questionPicksStore.getState()))
+      answerQuestionBatch(batch.questionBatchId, currentAnswers, deps())
+    }}
+    onOptionChosen={(questionIndex, optionIndex) => {
+      const position = at(questionIndex)
+      if (position && batch.questions[questionIndex]?.options[optionIndex] !== undefined)
+        dispatch(optionPickEventFor({ ...position, optionIndex }))
+    }}
+    onOtherChosen={(questionIndex) => {
+      const position = at(questionIndex)
+      if (position) dispatch(otherPickEventFor(position))
+    }}
+    onOtherTextChanged={(questionIndex, text) => {
+      const position = at(questionIndex)
+      if (position) dispatch({ type: 'otherTextChanged', ...position, text })
+    }} />
 }
 
 // #279: the prominent, disconnected-only connection banner's pure view — the third read of the

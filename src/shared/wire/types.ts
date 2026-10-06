@@ -73,6 +73,9 @@ export interface InnerFrameV2 {
 }
 
 export type EnvelopeType =
+  | 'request_host_system_prompt'
+  | 'set_host_system_prompt'
+  | 'host_system_prompt'
   | 'hello'
   | 'hello_ack'
   | 'message'
@@ -565,6 +568,8 @@ export interface MessagePayload {
   message_id: string
   role: WireRole
   text: string
+  queued_msg_id?: number
+  sent_now?: boolean
 }
 
 export interface MessageChunkPayload {
@@ -4051,4 +4056,11 @@ export interface ModelRefusalNoFallbackPayload {
 export interface ModelRefusalFallbackPayload extends ModelRefusalNoFallbackPayload {
   fallback_model: string
   scope: string
+}
+
+/** Daemon-wide instructions; only the empty string clears, never null. */
+export interface SetHostSystemPromptPayload { system_prompt: string }
+export interface HostSystemPromptPayload {
+  system_prompt: string
+  default_system_prompt: string
 }

@@ -107,6 +107,21 @@ describe('local timeline admission', () => {
     expect(store.getState().beginLocalTimelineRead('a', 'chat')).toBeNull()
   })
 
+  it.each([false, true])('restored keys survive live output and history prepends (history first=%s)', historyFirst => {
+    const store = createConversationTimelineStore(undefined, () => 'a')
+    store.getState().beginLocalTimelineRead('a', 'chat')!.complete(snapshot())
+    const restored = store.getState().timelines.get('chat')!.timeline
+    expect(restored.rowKeys).toEqual([-7, -6])
+    const live = () => store.getState().dispatchFor('chat', { type: 'assistantDelta', turnId: 'live', seq: 0, text: 'new' })
+    const prepend = () => store.getState().prependHistoryFor('chat', [{ kind: 'userText', text: 'older' }])
+    for (const update of historyFirst ? [prepend, live] : [live, prepend]) {
+      update()
+      const current = store.getState().timelines.get('chat')!.timeline
+      restored.items.forEach((item, i) => expect(current.rowKeys?.[current.items.indexOf(item)]).toBe(restored.rowKeys?.[i]))
+      expect(new Set(current.rowKeys).size).toBe(current.items.length)
+    }
+  })
+
   it.each(['clear', 'clearAll', 'receive', 'evict', 'cancel'] as const)('ignores delayed success and failure after %s', action => {
     for (const fail of [false, true]) {
       const store = createConversationTimelineStore()

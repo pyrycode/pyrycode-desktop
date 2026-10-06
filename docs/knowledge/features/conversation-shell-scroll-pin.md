@@ -31,7 +31,8 @@ the drawer uses both heights to leave controls usable.
 
 Measure before re-pinning and before zero-offset prepend compensation. Occupied
 height includes status, attachment previews, multiline draft growth/shrink, and
-permission or question panels replacing the composer. Temporary inline bottom padding
+permission/trust replacing the composer. Inline questionnaires grow inside history and do not add
+input-slot height. Temporary inline bottom padding
 belongs only to short-history compensation. `reassertPinnedToBottom` removes that
 inline property when following resumes, exposing the measured stylesheet clearance;
 putting overlay clearance into the same inline property would lose it on send.
@@ -45,8 +46,9 @@ image grows. Row observation catches that content growth. The callback re-reads 
 refs, measures chrome even without a thread, and pins only a mounted, following
 thread. An empty offline chat can omit `Timeline` while notices and Re-pair remain;
 measurement rooted only in the scroller would place that pill inside the header.
-Observation targets are resynced on renders, disconnected on root changes and at
-teardown. Heights and following remain DOM/ref-local rather than store state.
+Current observation targets are added on renders; the observer disconnects on root changes and
+at teardown. Removed direct children are not unobserved; see the inline-batch limitation below.
+Heights and following remain DOM/ref-local rather than store state.
 
 Resize and Electron zoom can cause native anchoring to emit a scroll before resize
 observations arrive. The hook remembers the last observed `clientWidth` and
@@ -86,6 +88,33 @@ late-image, queued-content and prepend checks. The late-image fixture needs enou
 rows to park more than a viewport away: its 24 synthetic replies preserve that
 precondition after the viewport grew to fill the pane. See
 [recorded browser and capture evidence](development-verification.md#layout-and-input).
+
+## Inline question growth
+
+`Timeline.trailing` places `QuestionHistorySlot` after message rows, even with empty/offline history
+while a batch remains pending. Its wrapper is a direct child observed by `useThreadScrollPin`.
+Arrival, local card edits and same-request growth preserve the existing `following` ref: readers
+reviewing earlier messages stay where they are; readers following the bottom remain pinned as the
+wrapper grows. The batch is not a history row and contributes no pagination or saved-message data.
+Permission hiding can shrink that wrapper while retaining the draft, using the same guarded pin.
+
+A scroll-position assertion can pass before the browser's scroll event updates `following`.
+`question-picks.spec.ts` waits two animation frames after positioning before delivering a batch or
+more cards. Its edit case scrolls the option into view, verifies the reader is still above the bottom
+tolerance, then makes a real label click. A synthetic click on an offscreen label measures a different
+thing: it focuses the visually hidden radio, whose containing block is now the positioned thread,
+and Chromium scrolls it into view. The arrival and bottom-growth assertions remain separate from
+that visible-edit proof. See [verification evidence](development-verification.md#inline-question-verification).
+
+**Open observer-retention limitation:** the observer adds current children but does not unobserve
+removed children while the same pane remains mounted. Resolving/dismissing a batch therefore leaves
+its detached wrapper, including input values, retained by the observer until a root change or teardown;
+repeated batches accumulate such targets for the pane's lifetime. The
+[verifier finding](https://github.com/pyrycode/pyrycode-desktop/pull/1783#issuecomment-6024030746)
+reports no observed answer-routing or scrolling failure and treats this as nonblocking. A future
+hook change should unobserve removed children or rebuild the observation set; the old append-only
+assumption does not hold for transient questionnaires. Store clearing prevents those old values from
+being used as live drafts, but does not release these DOM references.
 
 ## User demand and prepend position
 

@@ -124,6 +124,59 @@ before assigning a cause. Repeated green checks do not establish that an intermi
 pre-existing; retain an undiagnosed classification when no causal defect was found. See the
 [footer review's evaluation diagnosis](https://github.com/pyrycode/pyrycode-desktop/pull/1762#issuecomment-5993150705).
 
+### Host prompt verification
+
+The [Edit host controller](edit-host-dialog.md#prompt-controller-lifetime) has
+three lifetimes to prove: effect setup, modal interaction and individual operation.
+Static markup checks read gates, helper/reset and disabled controls; injected
+controller tests check correlation and draft/save transitions. Neither executes
+React effect replay or the parent name/unpair continuations. Production React
+does not replay effects, so its green browser run cannot establish one read per
+opening in development StrictMode. The development renderer in
+[`host-system-prompt.spec.ts`](../../../e2e/host-system-prompt.spec.ts) checks for
+`commitDoubleInvokeEffectsInDEV`, launches through `rendererUrl`, then counts one
+read per opening, rejects duplicate/old replies and traverses enabled prompt/reset
+controls at 800×240. A cancellable post-subscription microtask avoids sending the
+discarded setup's read.
+
+Hold name persistence, disconnect the selected host, start unpair, then release
+both successful and failed name results. A modal interaction id alone cannot
+protect the newer operation in that same dialog; both identity checks must retain
+the unpair lock while permitting a valid local label update. Separately open a
+terminally disconnected host B, hold its name save, then deliver host A's message
+and terminal status. Wait for visible receipt/status before checking B's lock and
+dismissal controls; release the save and require successful close with no prompt
+write. Cancelling on every session-store update while B is disconnected would
+release the controls and invalidate that close. Compare the selected host's
+previous/current status records; untouched records retain identity. Terminal loss
+keeps the fixture from automatically reconnecting during this proof. Seed each
+host through `conversationStateFake({ conversations: [seed] })`; an array passed
+where the options object belongs silently loses the intended multi-host state.
+
+Recorded acceptance evidence: dispatcher gate 6 at
+`1082bcffb6524c1f507da08ef9e8e250c40125ef` on 2026-10-06 ran
+`npx playwright test --reporter=json`: 301 executed, 301 passed, 0 failed,
+4 skipped. The [final verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1787#issuecomment-6024523660)
+confirms every named case below was present, executed and passed. Host prompt
+had 5 executed/passed and sidebar host-edit had 6 executed/passed; both groups
+had 0 failed and 0 skipped.
+
+| Named host prompt test | Executed / passed | Proof |
+| --- | --- | --- |
+| `selected-host prompt read, reset, durable save, failures and modal lifetime` | 1 / 1 | Selected-host transport, whitespace/empty clearing, reset/cancel, failures/reopen, UTF-8 boundary and disconnect |
+| `each opening reads once under development StrictMode effect replay` | 1 / 1 | Replay, duplicate rejection, fresh read and short-window keyboard controls |
+| `unrelated host traffic preserves a disconnected host name save lock and completion` | 1 / 1 | Connection transition isolation, dismissal and successful name-only completion |
+| `late stored name save cannot unlock an outstanding unpair after disconnect` | 1 / 1 | Valid local persistence without releasing a newer erase |
+| `late error name save cannot unlock an outstanding unpair after disconnect` | 1 / 1 | Late failure cannot release that erase |
+
+The sidebar cases include rename/clear/remount, both Cancel and Close during a
+failed/held save, minimum-width wrapping/short-window reachability, unpair
+arm/disarm/reopen and close-image decoding. Unit evidence in the same verdict is
+8,934 executed/passed, 0 failed, 3 skipped; typecheck/pre-verify, build and docs
+guard passed. This records supplied evidence, not a new documentation-stage run.
+Acceptance uses units and encrypted fake transport; no live Claude turn is
+required. Next-session application and composition order remain daemon-owned.
+
 ### Message lifecycle diagnostics
 
 [Outbound lifecycle diagnostics](outbound-send-path.md#message-lifecycle-diagnostics)
@@ -309,6 +362,25 @@ scratch directories can hide a missing-parent failure; both translucent-control
 size cases write a fresh nested test-output path and compare the saved PNG to the
 returned buffer. Preserve original capture paths when migrating a scenario.
 
+Host prompt/sidebar captures use `testInfo.outputPath` for each PNG, so a clean
+machine needs no pre-existing `/tmp/builder-*` directory. A failed first capture
+once prevented the subsequent acceptance assertions from running despite a
+previous focused pass. On hidden Linux Electron windows, these specs prime a
+native `BrowserWindow.capturePage(undefined, { stayHidden: true, stayAwake: true })`,
+wait two renderer animation frames, then retain a second native capture. A lone
+capture can retain the previous painted frame, and `page.screenshot` stalled on
+the hidden fixture. Retain the paint barrier without showing/focusing the window.
+
+The [host prompt verifier](https://github.com/pyrycode/pyrycode-desktop/pull/1787#issuecomment-6024523660)
+compared current native empty, filled and long-default captures with fresh Figma
+nodes 778-10211, 778-10265 and 780-10336 at the revision recorded above. The 640px
+panel, typography, helper/reset layout and growing default field matched with no
+material discrepancy. Captures cover 1100×773, 800×873 and the scrolled footer at
+800×423; mounted tests separately prove control reachability, including 800×240.
+Reviewed images and a revision/hash manifest were retained under
+`/tmp/verifier-1787/head-1082bcff/`. These are recorded scratch artifacts, not
+committed assets or proof of interaction by themselves.
+
 Recorded [translucent-control design](../../specs/architecture/1733-translucent-thread-controls.md)
 evidence: the dispatcher verifier gate on 2026-10-06 at final production revision
 `d2ef7fc79270a0b01d8d5b9316bb9544c96659d7` ran
@@ -444,8 +516,9 @@ The 24px trigger and exact 6×24px ellipsis, 160×60px popup, 28px rows, 2px out
 menu deviation. Reviewed capture copies were `/tmp/verifier-1795/closed-1280.png`,
 `open-1280.png`, `closed-800.png` and `open-800.png` in that directory; the builder's
 corresponding captures were under `/tmp/builder-1732/`. These are scratch evidence paths,
-not committed assets. Linux Xvfb capture uses the existing `PYRY_E2E_SHOW_WINDOW=1`
-fixture option: hidden Linux windows produce no screenshot frames.
+not committed assets. Those Linux Xvfb Playwright captures used the existing
+`PYRY_E2E_SHOW_WINDOW=1` fixture option. Hidden-window capture can instead use
+Electron's native capture with the paint barrier described above.
 
 Resolution-pill visual evidence covers four states: remote and timeout at both 1280×800 and
 800×600 window sizes (1280×772 and 800×572 content viewports). The
@@ -472,6 +545,53 @@ A simulated keyboard shortcut does not necessarily execute a trusted paste.
 Use the Electron window's native paste operation for this case.
 Seed the clipboard before the first paste and distinguish rejection branches in
 the fake responses.
+
+### Inline question verification
+
+The [final inline-question verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1783#issuecomment-6024030746)
+reviewed `98f3db3893fdbdb56fc4dc5fb46c106b4cf58c4d` on 2026-10-06. Its full fake-transport
+run executed 289 tests: 288 passed, 1 failed, 4 skipped. The unrelated sidebar name-pill tooltip
+failure passed its focused rerun (1 executed, 1 passed, 0 failed, 0 skipped). The verdict explicitly
+confirms all 14 scenarios across the following adapted groups were present, executed and passed:
+question picks/scrolling, Continue answers, Cancel refuses, offline-held responses and permission
+answer paths. Those scenarios had 0 failed and 0 skipped; the full-run failure is not hidden in that
+scoped result. Unit evidence records 8,850 executed/passed, 0 failed, 3 skipped.
+
+Static markup tests check all cards and positional native names, one gated response row, escaping,
+trailing-history placement and permission-only composer coverage. Captured-callback tests drive
+real stores to reject stale replacements/redeliveries, duplicates, cleared drafts and navigated-away
+owners. Browser coverage retains native radio keyboard independence, multi-select/Other behavior,
+ordered trimmed answers, chat navigation, fresh replacement/shortened delivery, offline gates,
+permission hidden-input isolation and restoration of every card's drafts.
+
+Scroll assertions wait two animation frames after positioning so the scroll event has updated
+`following`. The edit case uses a visible option and a real label click while above the bottom;
+focusing an offscreen radio natively scrolls it into view and would confuse focus movement with
+content growth. See [scroll pin](conversation-shell-scroll-pin.md#inline-question-growth), including
+the open observer-retention finding carried forward from review.
+
+The same verifier compared freshly fetched
+[Figma 756:8626](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG/Pyrycode-Client?node-id=756-8626)
+with integrated synthetic captures produced by `question-picks.spec.ts`: 1280×1292 and 800×572 content
+viewports at `/tmp/verifier-1783/inline-desktop.png` and `/tmp/verifier-1783/inline-minimum.png`, with
+reference `/tmp/verifier-1783/figma.png` on the verifier host. Card stacking, theme styling, PyryMark
+headers, Other fields, centered actions and available composer matched. Fixture content, existing
+sidebar chrome, footer availability and translucent chrome differed with state/current main.
+Minimum-width history scrolled with the composer visible. These paths record reviewed scratch
+artifacts; they are not committed product assets or evidence of real-Claude continuation.
+
+The adapted live answer spec selects every inline card before Continue and still requires Claude's
+continuation to name its chosen label first. The Cancel spec refuses the whole surfaced batch and
+still requires continuation/quiescence plus absence of the gated file, while servicing subsequent
+permissions. Optimistic panel disappearance alone proves neither response reached Claude.
+The [latest live run](live-e2e-runbook.md#current-real-claude-gate-state) executed 25 tests: 25 passed,
+0 failed, 1 skipped. The [supplemental per-test evidence](https://github.com/pyrycode/pyrycode-desktop/issues/1729#issuecomment-6024286951)
+confirms both named scenarios were present, executed and passed on their first attempts: the answer
+case in 11.2 s and Cancel in 10.4 s, each with 1 executed, 1 passed, 0 failed and 0 skipped.
+Every test records daemon revision `0.37.0`. The configured gate used
+`npx playwright test --config playwright.real-claude.config.ts --reporter=json` rather than the
+issue's `npm run e2e:real:gate`; counted passes for both required scenarios satisfy its execution
+requirement. This proves continuation through the local test relay, not the production relay.
 
 ## Live-test diagnosis
 

@@ -324,16 +324,18 @@ test('the chat card draws its top bar and its inset, and only the thread scrolls
     }
   }
 
-  // The other half of AC3's 12, which only the BOTTOM of the thread can show. `.composer-status` is the
-  // first element of the drawn Input area (347:5408) and a sibling in a column that declares no gap, so
-  // the thread's own foot is the whole distance.
+  // The newest row clears measured input chrome, whose 16px top inset precedes the status row.
   await page.mouse.wheel(0, 4000)
   await expect.poll(() => scrollTopOf(page)).toBeGreaterThan(0)
   const scrolledRows = await rowBoxesOf(page)
   const lastRow = scrolledRows[scrolledRows.length - 1]
   if (lastRow === undefined) throw new Error('the scrolled thread rendered no rows')
   const statusBox = await rectOf(status)
-  expect(wholePixels(statusBox.y - lastRow.bottom), 'the last row to the input area').toBe(CARD_GAP_PX)
+  const inputChromeBox = await rectOf(page.locator('.conversation__input-chrome'))
+  expect(wholePixels(inputChromeBox.y - lastRow.bottom), 'the last row clears occupied input').toBe(0)
+  expect(wholePixels(statusBox.y - lastRow.bottom), 'the last row to the status area').toBe(CARD_BOTTOM_PX)
+  expect(await thread.evaluate(el => parseFloat(getComputedStyle(el).paddingBottom)))
+    .toBe(inputChromeBox.height)
   expect(wholePixels(statusBox.x - cardBox.x), 'the status area at the content edge').toBe(CARD_SIDE_PX)
 
   // --- 5. The bar does not scroll, and the thread is still the only thing in the pane that does (AC3).

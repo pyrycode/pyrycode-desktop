@@ -443,7 +443,7 @@ export function ConversationScreen({
     [openConversationId]
   )
   const prependedRows = useConversationTimelineStore(selectOpenPrependedRows)
-  const { scrollPin, followBottom } = useThreadScrollPin(openConversationId, prependedRows)
+  const { scrollPin, followBottom, paneRef } = useThreadScrollPin(openConversationId, prependedRows)
   // #1579: every open asks for fresh MCP status, from the handler rather than a mount effect so one open
   // is one request. The sheet shows this same `activeConversation`. #1494: the overflow menu's item and the
   // status row's MCP failure notice both call this one closure, so they open the sheet identically.
@@ -472,7 +472,7 @@ export function ConversationScreen({
           onSave={reader.save}
         />
       )}
-      <div className="conversation__covered" data-covered={readerOpen ? 'true' : undefined}>
+      <div className="conversation__covered" ref={paneRef} data-covered={readerOpen ? 'true' : undefined}>
       {/* #276: the trailing overflow menu (Figma 16-16) — the single entry point to per-conversation
           actions. #365 wires its Channel-info item to open the Channel Info sheet (below): the seam is no
           longer a no-op. Gated on onBack presence, the established "mounted in the paired shell" signal —
@@ -484,6 +484,8 @@ export function ConversationScreen({
           and the composer — the overlays and their open/closed state are untouched, only the affordance
           that flips them moved. This menu is itself mobile-era chrome that a later ticket retires
           together with the sheet, once #683 lands the footer's model and effort controls. */}
+      <div className="conversation__top-chrome">
+        <div className="conversation__blur" aria-hidden="true"><i /><i /><i /><i /></div>
       {onBack && (
         <ThreadOverflowMenu
           name={activeConversation?.name ?? UNNAMED_CONVERSATION_LABEL}
@@ -510,6 +512,7 @@ export function ConversationScreen({
       {reader.state.type === 'closed' && reader.state.notice && (
         <p className="conversation__banner" role="status">{MARKDOWN_OPEN_FAILED_NOTICE}</p>
       )}
+      </div>
       {/* #1214: the backlog goes INTO the thread. `queue_state` is still daemon state held verbatim by
           queueStore and never written through the timeline reducer — the fold is render-time, per
           foldQueuedRows' header — but the two row lists are now joined before they are drawn, so a message
@@ -623,6 +626,8 @@ export function ConversationScreen({
           whole. The conversation id goes down as a prop off the `activeConversation` slice already read
           above (the BackgroundTaskPanel idiom below); the question store read stays inside the slot, so a
           question arriving never re-renders this screen. */}
+      <div className="conversation__input-chrome">
+        <div className="conversation__blur" aria-hidden="true"><i /><i /><i /><i /></div>
       <ComposerSlot
         serverId={selectedHost}
         statusArea={(sendText) => (
@@ -655,6 +660,7 @@ export function ConversationScreen({
         phase={phase}
         onMessageSent={followBottom}
       />
+      </div>
       {sheetOpen && (
         <StatusSheet onClose={() => setSheetOpen(false)}>
           {/* #187: the headless data path — requests a snapshot on open and holds Model/Effort/YOLO.
@@ -713,6 +719,7 @@ export interface ThreadScrollPin {
  * File-local: nothing outside this module names it.
  */
 interface ThreadPin {
+  paneRef: RefObject<HTMLDivElement>
   scrollPin: ThreadScrollPin
   /** Resume following the bottom. Called when the operator's own message enters the timeline (#602). */
   followBottom: () => void
@@ -775,6 +782,17 @@ function reassertPinnedToBottom(
   if (el.scrollTop !== before) pinnedOffset.current = el.scrollTop
 }
 
+// Chrome can remain mounted when an empty offline Timeline is absent.
+function measureThreadChrome(pane: HTMLElement): void {
+  for (const [selector, property] of [
+    ['.conversation__top-chrome', '--thread-header-height'],
+    ['.conversation__input-chrome', '--thread-input-height']
+  ]) {
+    const chrome = pane.querySelector(selector)
+    if (chrome) pane.style.setProperty(property, `${chrome.getBoundingClientRect().height}px`)
+  }
+}
+
 /**
  * #601: keep the thread following the conversation while the operator is already reading at the bottom.
  *
@@ -806,7 +824,9 @@ function reassertPinnedToBottom(
  */
 function useThreadScrollPin(conversationId: string | null, prependedRows: number): ThreadPin {
   const ref = useRef<HTMLDivElement>(null)
+  const paneRef = useRef<HTMLDivElement>(null)
   const following = useRef(true)
+  const viewport = useRef({ width: 0, height: 0 })
   // #1049's growth observer, and the node its observation set was last synced against. Constructed on first
   // use rather than here, so `ResizeObserver` is never referenced under vitest's `node` environment — where
   // neither hook below runs at all, since renderer tests server-render through renderToStaticMarkup.
@@ -912,10 +932,14 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
   // the maximum scroll offset, so the browser never clamps scrollTop and no scroll event fires at all.
   useThreadLayoutEffect(() => {
     const el = ref.current
-    if (el === null) return
+    const pane = paneRef.current
+    if (pane === null) return
+    const header = pane?.querySelector<HTMLElement>('.conversation__top-chrome')
+    const input = pane?.querySelector<HTMLElement>('.conversation__input-chrome')
+    measureThreadChrome(pane)
 
     const anchor = topAnchor.current
-    if (!following.current && el.scrollTop === 0 && anchor !== null &&
+    if (el !== null && !following.current && el.scrollTop === 0 && anchor !== null &&
         anchor.conversationId === conversationId && prependedRows > anchor.prependedRows &&
         anchor.row.parentElement === el) {
       // Chromium suppresses anchoring at zero. Measure the surviving row, not scrollHeight:
@@ -940,17 +964,28 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
       // Re-read the ref rather than closing over `el`: an observation can be delivered in the same frame as
       // an unmount, and the null path is that case.
       const region = ref.current
-      if (region !== null) reassertPinnedToBottom(region, following, pinnedOffset)
+      const currentPane = paneRef.current
+      if (currentPane) measureThreadChrome(currentPane)
+      if (region !== null) {
+        reassertPinnedToBottom(region, following, pinnedOffset)
+        viewport.current = { width: region.clientWidth, height: region.clientHeight }
+      }
     }))
-    if (observedRegion.current !== el) {
+    const observationRoot = el ?? pane
+    if (observedRegion.current !== observationRoot) {
       observer.disconnect()
-      observedRegion.current = el
+      observedRegion.current = observationRoot
     }
-    observer.observe(el)
-    for (const row of el.children) observer.observe(row)
-
-    reassertPinnedToBottom(el, following, pinnedOffset)
-    rememberTop(el)
+    observer.observe(pane)
+    if (header) observer.observe(header)
+    if (input) observer.observe(input)
+    if (el !== null) {
+      observer.observe(el)
+      for (const row of el.children) observer.observe(row)
+      reassertPinnedToBottom(el, following, pinnedOffset)
+      viewport.current = { width: el.clientWidth, height: el.clientHeight }
+      rememberTop(el)
+    }
   })
 
   // The observer's cancellation path, and it needs an effect of its own: the dep-free one above has no
@@ -976,6 +1011,7 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
   }
 
   return {
+    paneRef,
     scrollPin: {
       onWheel: (event) => {
         if (event.isTrusted && event.deltaY < 0) demandHistory(event.currentTarget)
@@ -1002,6 +1038,10 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
         const echo = pinnedOffset.current
         pinnedOffset.current = null
         if (echo !== null && el.scrollTop === echo) return
+        // Native anchoring can emit a scroll during resize/zoom before the observer re-pins.
+        // That movement is layout, not a reader leaving the bottom.
+        if (following.current && (el.clientWidth !== viewport.current.width ||
+            el.clientHeight !== viewport.current.height)) return
         // Measure the local bottom-following position. The mapping is the one thing
         // this glue can get wrong with no type error and no unit test — scrollTop is the offset,
         // clientHeight the viewport, scrollHeight the total content — so it is written exactly once.

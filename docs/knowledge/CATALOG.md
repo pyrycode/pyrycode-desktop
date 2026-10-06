@@ -1310,16 +1310,7 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
 
 - [Channel List — the toolbar's pair-new-host control](features/channel-list-section-header-pair-control.md): Sidebar menu Settings/Archive navigation, fixed Pair new host entry and name pill, popup geometry, consumed dismissal, origin-aware cancel and CSP-safe SVG paint checks.
 
-- [Windows packaging (electron-builder)](features/windows-packaging.md) — `npm run dist:win` (`npm run
-  build` then `electron-builder --win`), producing an unsigned NSIS installer from `electron-builder.yml`.
-  Records the traps a first real packaging run surfaced: `electron-builder --win` with no `arch` key
-  defaults to the **build host's** architecture (fixed here as `[x64, arm64]`); `productName` in the
-  config never reaches `app.getPath('userData')`, only `extraMetadata.productName` does, which is what
-  puts installed data under `%APPDATA%\Pyrycode Desktop` instead of renaming the macOS dev data
-  directory; the `files: [out/**, package.json]` allowlist is what keeps `src/`/`e2e/` test scaffolding
-  out of the shipped asar; and macOS-without-Rosetta-2 cross-builds fail only at the final `makensis`
-  spawn (`EBADARCH`), after the entire packaging stage — including both archs' icon embedding — already
-  succeeded. (#1416)
+- [Windows packaging (electron-builder)](features/windows-packaging.md) — Combined unsigned x64/arm64 NSIS installer, GitHub update feed, Mac-to-pyrybox Podman Wine release command, source-pinned retries and verification before publication; architecture, user-data, allowlist and archive-transfer traps, plus operator acceptance boundaries.
 
 - [Channel List — workspace grouping](features/channel-list-workspace-grouping.md) — split out of
   [Channel List home screen](features/channel-list.md) to stay under the doc-guard's byte cap:

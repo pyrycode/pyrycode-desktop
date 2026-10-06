@@ -605,7 +605,9 @@ export function createConversationTimelineStore(
               return
             }
             settle(current => ({ ...emptySlice, serverId, localRead: 'loaded', coverage: snapshot.coverage, restored: { serverId, coverage: snapshot.coverage },
-              timeline: { ...current.timeline, items: snapshot.items },
+              timeline: { ...current.timeline, items: snapshot.items,
+                rowKeys: snapshot.items.map((_, index) => index - snapshot.prependedRows),
+                nextRowKey: snapshot.items.length - snapshot.prependedRows },
               prependedRows: snapshot.prependedRows }))
           } catch { fail() }
         },
@@ -689,6 +691,8 @@ export function createConversationTimelineStore(
       set((s) => {
         const held = s.timelines.get(conversationId)
         if (held === undefined) return s
+        const origin = receiptHost()
+        if (typeof origin === 'string' && held.serverId !== undefined && held.serverId !== origin) return s
         const timeline = markLocalSendQueued(held.timeline, queued)
         if (timeline === held.timeline) return s
         const next = new Map(s.timelines)
@@ -743,7 +747,10 @@ export function createConversationTimelineStore(
         const next = new Map(s.timelines)
         next.set(conversationId, {
           ...held,
-          timeline: { ...held.timeline, items: [...fresh, ...held.timeline.items] },
+          timeline: { ...held.timeline, items: [...fresh, ...held.timeline.items],
+            rowKeys: [...fresh.map((_, i) => (held.timeline.nextRowKey ?? held.timeline.items.length) + i),
+              ...(held.timeline.rowKeys ?? held.timeline.items.map((_, i) => i))],
+            nextRowKey: (held.timeline.nextRowKey ?? held.timeline.items.length) + fresh.length },
           // `fresh.length`, NOT `items.length`: rows dropped by `withoutHeldEchoes` never entered the
           // list, so counting the ask rather than the insertion would shift every drawn row's key by the
           // number of echoes the page happened to duplicate.

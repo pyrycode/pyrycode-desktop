@@ -29,11 +29,10 @@ Advertising `interactive` stops the daemon's coarse `message` fan-out in the sam
 - **The composer's echo retargets.** `Composer`'s `dispatch` now reads
   `useTimelineStore((s) => s.dispatch)` instead of `useSessionStore((s) => s.dispatch)`;
   `composerSend.ts`'s `submitMessage` dispatches `{ type: 'userText', text: trimmed }` (the
-  [#245](../codebase/245.md) event) instead of a `messageSent` `SessionAction`. The `message_id`
-  minted in `submitMessage` is now used for the **wire** command only — the old "reuse the id so the
-  daemon's re-echo dedupes" rationale is retired: in interactive mode the `DaemonEvent` union carries
-  no user-message arm and the coarse fan-out is off, so the optimistic echo is the sole source of the
-  user's own message and needs no dedup key.
+  [#245](../codebase/245.md) event) instead of a `messageSent` `SessionAction`. The same composer-minted
+  `message_id` now also rides the echo: confirmed user
+  messages arrive through the interactive receipt path, and [local correlation](thread-timeline-internals.md#queued-own-echo-settlement)
+  preserves the held row while settling queued delivery.
 - **`TimelineRow`'s `case 'userText'`** (the [#245](../codebase/245.md) dormant placeholder) now draws
   the right-aligned user bubble — `.message-row--user` / `.bubble--user` (`data-thread-role="user"`,
   distinct from `MessageBubble`'s `data-message-role`), reusing the coarse thread's own user-bubble
@@ -62,49 +61,37 @@ snapshot, and through #1214 that snapshot rendered as a *second*, near-identical
 \#1214 deleted that view and its region outright and folds the two row lists together inside `Timeline`
 itself, so there is exactly one row per message, delivered or waiting.
 
-**`foldQueuedRows(items, queued)`** (`foldQueuedRows.ts`, pure, no store/clock/React) does the join, on
-the correlation [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) established
-(`QueuedItem.message_id` ↔ the echo's `messageId`). Contract, in the order it matters:
+**`foldQueuedRows(items, queued, localEchoes, rowKeys)`** (`foldQueuedRows.ts`, pure,
+no store/clock/React) joins snapshots to the timeline's retained local ownership facts:
 
-1. Every timeline item appears exactly once, at its own index, in order — the fold never reorders,
-   drops or duplicates a row, which is what makes "stays where it is when the message runs" structural
-   rather than conventional.
-2. A backlog item correlates to at most one echo and an echo to at most one backlog item: a greedy,
-   one-to-one, first-come assignment over an index built once from `items` (`messageId → indices`,
-   non-empty ids only), consumed as each is claimed. Two identical texts with distinct ids claim two
-   distinct rows; a same-id-twice backlog claims first-come and leaves the second unmatched rather than
-   double-marking one row.
-3. Only `kind === 'userText'` items are ever candidates — enforced by the type system (`messageId` lives
-   on that arm alone), stated as a contract because it is the guard that keeps a `queue_state` from ever
-   putting the queued treatment, or its drop control, onto daemon-authored content.
-4. Only a non-empty `message_id` on both sides participates; `undefined` and `''` correlate with
-   nothing. This is the *first* guard on this path — #1213's own empty-id rule lives at
-   `dropQueuedMessage`, which this consumer never goes through.
-5. A backlog item that claims no echo becomes its own row **at the tail**, in snapshot order, after
-   every timeline row — a first-class state (`queue_state` reaches every interactive connection, so a
-   window can see ids it never minted, e.g. a message queued from mobile, or a reconnect into a backlog
-   it has no echo for), never an error, and never allowed to attach itself to somebody else's row.
+1. Only locally minted user echoes with nonempty message ids participate. Received/history
+   rows and non-user rows cannot acquire ownership through an id collision. Unbound records
+   claim entries one-to-one by message id; bound records use the exact conversation-scoped
+   queue id. Settled unbound records cannot claim a later snapshot entry.
+2. Every timeline item appears once. Unconfirmed waiting echoes associated with queue entries
+   project below continuing assistant/tool output in submission order; removal-before-receipt
+   preserves that projection. A receipt settles the original item after its observed predecessor
+   boundary, or at the stream point for Send now. See [settlement and late receipts](thread-timeline-internals.md#queued-own-echo-settlement).
+3. Snapshot presence controls the queued treatment and controls independently of settlement.
+   Receipt-before-removal can leave a settled row queued temporarily, but does not move it
+   behind its answering reply. Removal alone cannot imply Send now.
+4. Unclaimed foreign backlog entries remain independent tail rows in snapshot order, with
+   synthesized `{ kind: 'userText', text: entry.text }`, no message id, time or attachments.
+   Equal text and empty/absent ids never correlate.
 
-`message_id` is compared for strict string equality only — never a `Map` key, a lookup path, a React
-key or a rendered value (#1213 § Security review 1's contract, inherited unchanged). An unmatched tail
-row is synthesized as `{ kind: 'userText', text: entry.text }` with **no** `messageId` — an id this
-window did not mint must never look like one it did — and no `createdAt`/`attachments`, since the wire
-item carries neither.
+`message_id` is only an equality comparand, never a rendered value, Map key or React key.
+Each `FoldedRow.itemIndex` names its source timeline index; foreign tail rows use `-1`.
+`Timeline` reads turn statistics and streaming-cursor selection through that source index,
+not the projected display index. Client-owned `rowKeys` provide React identity and all
+ancestor, leaf-tool and tool-run expansion lookups. This keeps expansion attached to the
+same content through projection, settlement and history prepends. Saved restoration
+initializes keys before the first render; see [row identity](conversation-timeline-store-limits.md#edge-cases-and-limitations).
 
-**`Timeline` takes the backlog through two optional props**, `queued?: readonly QueuedItem[]` and
-`onDropQueued?: (queuedMsgId, messageId) => void`, the same `scrollPin` precedent
-([Conversation shell § Thread scroll
-pin](conversation-shell.md#thread-scroll-pin-601-built-on-the-dormant-isatbottom-helper-from-600)) —
-required props would have been a 72-site edit cascade in `ConversationScreen.test.tsx` alone. Absent
-`queued`, the fold runs against an empty backlog and yields today's rows byte-for-byte, so the ~72
-existing render sites needed no edit. `Timeline` calls `foldQueuedRows` and renders the folded list;
-**the empty-thread branch now tests the folded rows, not `items`** — a window with no echoes but a
-non-empty backlog used to draw `<EmptyThread/>` with queued rows underneath it (reachable from a
-reconnect into another device's backlog, or a conversation opened fresh here); after the fold that
-combination draws the queued rows instead. Item rows keep their stable array-index key; tail rows key
-on `` `q${queued_msg_id}` `` — a real per-conversation unique integer, the key the deleted
-`QueuedBacklog` already used, in a string namespace that cannot collide with a numeric index —
-**never `message_id`**, which stays a compared value only.
+`Timeline` accepts optional `queued`, `onDropQueued`, `localEchoes` and `rowKeys` props.
+Absent backlog means an empty snapshot; absent ownership facts cannot claim arbitrary user
+rows. The empty-thread branch checks folded rows, so a foreign backlog alone is a populated
+thread. Foreign rows retain the separate `` `q${queued_msg_id}` `` React-key namespace;
+`firstRowKey + itemIndex` remains the fallback for callers without retained numeric keys.
 
 **`TimelineRow`'s `userText` arm forks on `queued` (`QueuedRowHandle | null`), and that fork is the
 whole visual change:**
@@ -132,8 +119,8 @@ the drop/cancel affordance #296 shipped: an icon-only button, a leading sibling 
 is right-aligned, so leading sits it at the inner edge), `aria-label="Drop queued message"`
 (`DROP_QUEUED_LABEL`, a client-owned constant) plus an inline `aria-hidden` SVG glyph. It rides a row
 **only** while `queued !== null` — before #1214 "no delivered row can reach this button" was structural
-(only `QueuedBacklog` rendered it); it is now a condition, guarded one level up by `foldQueuedRows`
-rule 3 above (only `userText` items are ever candidates), and asserted directly in the renderer spec
+(only `QueuedBacklog` rendered it); it is now a condition, guarded one level up by
+`foldQueuedRows`' local-ownership join above, and asserted directly in the renderer spec
 rather than left to the shape of the file. `onDropQueued` is still wired the same way: `ConversationScreen`
 binds it inline to the pure `dropQueuedMessage` helper (`dropQueuedMessage.ts`), supplying
 `openConversationId` and dereferencing `window.pyry.sendCommand` only inside the click closure, never at
@@ -154,8 +141,8 @@ AC3; removing the echo by backlog-diff would also delete the echo of every messa
 *ran*; a pending-drop ledger across the async boundary is the ledger #1213 §4 reason 3 already
 rejected), so this is tolerated on the same rule the idle flash and the reconnect clear already use: the
 daemon's honest report of its own state, bounded to one relay round trip and strictly display. An
-**unmatched** row's own drop has no such transient — it dispatches `dropUserText` for an id no echo
-carries, the reducer returns the same state reference, and the row leaves on the snapshot as it always
+**unmatched** row's own drop has no such transient — it dispatches `dropUserText` for a queue entry no local record
+owns, the reducer returns the same state reference, and the row leaves on the snapshot as it always
 did.
 
 **Send now preserves the echo.** [#1726](https://github.com/pyrycode/pyrycode-desktop/issues/1726)
@@ -171,8 +158,12 @@ The injected-effects `sendQueuedNow.ts` helper sends one `sendQueuedNowCommand`
 per activation and has no timeline dispatch. Main routes it by conversation and
 rebuilds the `send_queued_now` payload with only `conversation_id` and
 `queued_msg_id`. There is no reply frame: both controls and queued treatment
-remain until `queue_state` omits the item. The matched echo keeps its position;
-the later user `message` push with the same `message_id` is deduplicated. A bridge
+remain until `queue_state` omits the item. The later user `message` push carries
+`queued_msg_id` and `sent_now: true`; it settles
+the owned echo at the stream delivery point, preserving its content and numeric key.
+Ordinary receipts use the predecessor boundary instead. Still-held successors start
+waiting behind the current turn after either delivery mode; released echoes retain
+their observed boundary for late receipts. A bridge
 throw is caught, and a daemon no-op (idle turn, unknown id or Codex session) leaves
 the row queued to drain normally.
 

@@ -48,8 +48,8 @@ Part of [Thread timeline](thread-timeline.md).
   — the pure-reducer / sealed-union / wire-types-are-a-bridge-concern discipline this ADR extends.
 - [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) (PR
   [#1215](https://github.com/pyrycode/pyrycode-desktop/pull/1215)) — added `messageId` to `userText` and
-  the `dropUserText` removal arm + `removeUserEcho`, covered in full above (§ Types, § The reducer, §
-  Internal helpers, § Edge cases). Producer: [composer send](composer-send.md)'s `submitMessage`, which
+  the `dropUserText` removal arm. Current removal uses retained local ownership and queue
+  identity; see [settlement and drops](thread-timeline-internals.md#queued-own-echo-settlement). Producer: [composer send](composer-send.md)'s `submitMessage`, which
   mints the id once for the wire frame and retains it on the echo. Consumer:
   [dequeue message envelope § Configuration and usage](dequeue-message-envelope.md#configuration-and-usage)'s
   `dropQueuedMessage`, which dispatches the removal to both this module's two host stores

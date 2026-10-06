@@ -102,12 +102,13 @@ describe('live user receipts', () => {
   it('preserves the optimistic row through receipts, queued folding and a later history page', () => {
     const store = createConversationTimelineStore()
     store.getState().dispatchFor('background', { type: 'userText', text: 'Original', messageId: 'phone-1', createdAt: 123 })
+    store.getState().markLocalSendQueued('background', [{ queued_msg_id: 1, message_id: 'phone-1', text: 'Daemon version', ts: '' }])
     const held = store.getState()
     const row = selectTimelineFor('background')(held)?.items[0]
     store.getState().dispatchFor('background', translated())
-    expect(store.getState()).toBe(held)
+    expect(selectTimelineFor('background')(store.getState())?.items[0]).toBe(row)
     const items = selectTimelineFor('background')(store.getState())?.items ?? []
-    const folded = foldQueuedRows(items, [{ queued_msg_id: 1, message_id: 'phone-1', text: 'Daemon version', ts: '' }])
+    const folded = foldQueuedRows(items, [{ queued_msg_id: 1, message_id: 'phone-1', text: 'Daemon version', ts: '' }], selectTimelineFor('background')(store.getState())?.localEchoes)
     expect(folded).toHaveLength(1)
     expect(folded[0].item).toBe(row)
     expect(folded[0].queued?.messageId).toBe('phone-1')

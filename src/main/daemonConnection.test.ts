@@ -12355,6 +12355,7 @@ describe('refusal forwarding', () => {
   })
 })
 
+
 describe('pairing rejection lifetime', () => {
   it('preserves rejection through generic failures, isolates hosts and clears on reconnect', async () => {
     const a = build({ serverId: 'host-a' })
@@ -13239,6 +13240,22 @@ describe('createDaemonConnection — switchAgent', () => {
     expect(drivers[0].sent).toEqual([])
     connection.switchAgent(payload)
     expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+  })
+  it('logs only static lifecycle categories for unavailable, sent and encoding-failed requests', async () => {
+    const entries: DiagnosticEvent[] = []
+    const { connection, drivers } = build({ diagnosticLog: { event: e => { entries.push(e) } } })
+    connection.switchAgent(payload)
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    connection.switchAgent({ ...payload, model: 'private-model', effort: 'private-effort' })
+    connection.switchAgent({ ...payload, model: 'x'.repeat(MAX_PLAINTEXT_BYTES) })
+    expect(entries.filter(e => e.event.startsWith('switch-agent'))).toEqual([
+      { event: 'switch-agent-refused', code: 'unavailable' },
+      { event: 'switch-agent-sent' },
+      { event: 'switch-agent-failed', code: 'build-or-send-failed' }
+    ])
+    connection.stop()
   })
   it('contains a throwing send without retries or logging supplied content', async () => {
     const entries: DiagnosticEvent[] = []

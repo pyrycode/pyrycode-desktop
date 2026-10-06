@@ -133,6 +133,49 @@ ticket still touching this region) rather than fixed in #951:
   translucent navy. `--color-surface-container-high` (the token the control already wore before this
   ticket) restores a comparable step and is the likely fix.
 
+### Suggested next reply
+
+When the retained draft is exactly `''` and the selected host/conversation has a
+valid current-session suggestion, `Composer` displays that complete text through
+the native textarea placeholder. It keeps the existing body-medium typography
+and grey `--color-on-surface-variant` treatment. This does not insert draft content.
+Any typed or pasted content, including whitespace, restores the ordinary
+`Message…` placeholder; deleting back to empty can reveal a still-valid suggestion.
+Suggestion text reaches only inert escaped placeholder/input text.
+
+After slash-command type-ahead has first chance to consume the key, unmodified
+Tab outside IME composition accepts a visible suggestion as the normal editable
+draft. It prevents traversal, retains input focus and places both selection ends
+at the text's end after React commits, using the existing textarea ref. It sends
+no message. Shift/Ctrl/Alt/Meta+Tab, composing Tab, Tab with a nonempty draft or
+without a suggestion, and slash-command completion retain their existing behavior.
+
+[Suggestion clears](daemon-event-channel.md#reply-suggestions) never erase drafts,
+including accepted text and subsequent edits. The host/conversation-keyed draft
+store retains that text across navigation independently of suggestion lifetimes.
+
+Coverage lives in the [wire validation tests](../../../src/main/transport/replySuggestion.test.ts),
+[main IPC tests](../../../src/main/daemonConnection.test.ts),
+[suggestion-store unit tests](../../../src/renderer/src/store/replySuggestionStore.test.ts)
+and [mounted fake-transport browser spec](../../../e2e/reply-suggestion.spec.ts).
+Unit coverage pins scoped revision/session behavior and all four translators'
+no-op handling. The four browser tests prove delivery, whitespace/edited drafts,
+Tab focus/caret/editability/no-send, keyboard exceptions, slash completion,
+authoritative clears, off-screen/host isolation and reconnect reconciliation.
+Static renderer tests cannot execute those interactions. The paired launch
+fixture needs one initial chat row; add other navigation targets after launch
+and retain them in reconnect list replies, or a reconnect test can lose the chat
+it needs to inspect.
+
+The [final verifier review](https://github.com/pyrycode/pyrycode-desktop/pull/1810#issuecomment-6026075082)
+at `e0b178ce` records 8,949 unit tests executed/passed, 0 failed and 3 skipped,
+including all eight suggestion-store tests. Its browser evidence records 309
+executed, 307 passed, 2 failed and 4 skipped, with all four suggestion tests present
+and passed, including `reconciled old-session null does not pin an off-screen chat
+after a missed rotation`. The two unrelated failures passed a focused rerun:
+2 executed/passed, 0 failed/skipped. No live-Claude run is required for this client
+behavior.
+
 ## The box grows with the draft, to a five-line ceiling (#1056)
 
 Past the first line the draft used to scroll inside the fixed 52px box, unreadable past a 20px window.

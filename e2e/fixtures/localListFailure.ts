@@ -34,7 +34,7 @@ export async function installUnreadableLocalList(app: Pick<ElectronApplication, 
     let installed: boolean | typeof NOT_YET_AVAILABLE = NOT_YET_AVAILABLE
     for (let inspection = 0; inspection < 3; inspection++) {
       evidence.inspectionAttempts++
-      installed = await readMainProcess(app, ({ ipcMain }) => {
+      installed = await readMainProcess<boolean>(app, ({ ipcMain }) => {
         const state = globalThis as typeof globalThis & { __localListFailureHandler?: Function }
         if (state.__localListFailureHandler === undefined) return false
         const current = (ipcMain as any)._invokeHandlers.get('pyry:chat-history')

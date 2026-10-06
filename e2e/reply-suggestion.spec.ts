@@ -118,3 +118,33 @@ test('host handshake drops off-screen state and watermarks before low revision r
   await expect(input).toHaveAttribute('placeholder', 'Low revision hidden')
   await open(SECOND_SEEDED_ROW.name); await expect(input).toHaveAttribute('placeholder', 'Host two')
 })
+
+test('reconciled old-session null does not pin an off-screen chat after a missed rotation', async ({ launchPairedApp }) => {
+  const conversations = [SEEDED_ROW]
+  const { page, daemon, forwarder } = await launchPairedApp({
+    buildReplyFrames: replies([], conversations),
+    reconnectResendFrames: [suggestion(11, null, other.id, 'old'), suggestion(1, 'Reconnect complete')]
+  })
+  conversations.push(other)
+  daemon.pushFrame(frame('conversations', { conversations }))
+  const input = page.locator('textarea.composer__input')
+  const open = async (name: string) => page.locator('.channel-list__row-open').filter({ hasText: name }).click()
+  daemon.pushFrame(suggestion(10, 'Old session', other.id, 'old'))
+  await open(other.name); await expect(input).toHaveAttribute('placeholder', 'Old session')
+  await open(SEEDED_ROW.name)
+  // Another client rotated the hidden chat while disconnected; only its old clear reconciles.
+  forwarder.dropClientLeg()
+  await expect(input).toHaveAttribute('placeholder', 'Reconnect complete', { timeout: 15000 })
+  await open(other.name); await expect(input).toHaveAttribute('placeholder', 'Message…')
+  daemon.pushFrame(frame('turn_state', { conversation_id: other.id, state: 'thinking' }))
+  daemon.pushFrame(frame('turn_state', { conversation_id: other.id, state: 'idle' }))
+  daemon.pushFrame(suggestion(12, 'Current session reply', other.id, 'current'))
+  await expect(input).toHaveAttribute('placeholder', 'Current session reply')
+  await input.focus(); await input.press('Tab')
+  await expect(input).toHaveValue('Current session reply')
+  await expect(input).toBeFocused()
+  daemon.pushFrame(suggestion(13, null, other.id, 'current'))
+  await open(SEEDED_ROW.name); await expect(input).toHaveAttribute('placeholder', 'Reconnect complete')
+  await open(other.name); await expect(input).toHaveValue('Current session reply')
+  await input.fill(''); await expect(input).toHaveAttribute('placeholder', 'Message…')
+})

@@ -70,3 +70,15 @@ None. Implementation may reuse the existing textarea ref; any required contract 
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-06
+
+## Revisions
+
+2026-10-06 — Verifier finding 1: reconnect reconciliation can carry an old producing session's null after an off-screen transition was missed. `ConversationSuggestion.sessionId` is now nullable: null means current identity is unknown, distinct from the authoritative empty-string identity supplied by a transition. A null frame advances only its producing session's watermark; it never establishes current identity. The first accepted non-null suggestion establishes unknown identity, while an explicit transition still locks it and rejects mismatched frames. Non-idle activity preserves unknown identity and all watermarks. Regression coverage exercises old-session null reconciliation followed by a fresh current-session reply, with and without activity, watermark retention across a later explicit transition, and mounted off-screen reconnect delivery/Tab acceptance/draft preservation. No IPC, validation, logging, persistence or visual contract changes; the security verdict remains PASS.
+
+## Documentation handoff
+
+Pending for the documentation stage, as requested in the verifier review:
+
+- `docs/knowledge/features/inbound-message-decode.md` — Data flow, Error handling and Testing: reply-suggestion validation, explicit-null semantics and content-free diagnostics.
+- `docs/knowledge/features/daemon-event-channel.md` — How it works: named-field suggestion IPC, exclusion from history/timeline and transient host/conversation/session lifecycle, including unknown identity after old-session clear reconciliation.
+- `docs/knowledge/features/conversation-shell-composer-message-box.md` — Message box: empty-input placeholder, editable Tab acceptance, draft preservation and keyboard exceptions; link unit and mounted browser coverage.

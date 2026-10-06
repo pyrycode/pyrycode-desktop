@@ -4,7 +4,8 @@ import type { DaemonEvent } from '@shared/ipc/events'
 
 type SessionSuggestion = { revision: number; text: string | null }
 type ConversationSuggestion = {
-  sessionId: string
+  // Reconciled clears identify their producer, not necessarily the current session.
+  sessionId: string | null
   sessions: ReadonlyMap<string, SessionSuggestion>
 }
 interface ReplySuggestionState {
@@ -27,17 +28,20 @@ export function createReplySuggestionStore() {
       const conversations = new Map(hosts.get(host))
       const held = conversations.get(event.conversationId)
       if (event.type === 'replySuggestion') {
-        if (held !== undefined && held.sessionId !== event.sessionId) return state
+        if (held?.sessionId != null && held.sessionId !== event.sessionId) return state
         const sessions = new Map(held?.sessions)
         if (event.revision <= (sessions.get(event.sessionId)?.revision ?? 0)) return state
         sessions.set(event.sessionId, { revision: event.revision, text: event.suggestedReply })
-        conversations.set(event.conversationId, { sessionId: event.sessionId, sessions })
+        conversations.set(event.conversationId, {
+          sessionId: held?.sessionId ?? (event.suggestedReply === null ? null : event.sessionId),
+          sessions
+        })
       } else {
         if (event.type === 'turnState' && (event.state === 'idle' || held === undefined)) return state
         const sessions = new Map(held?.sessions)
         for (const [id, suggestion] of sessions) sessions.set(id, { ...suggestion, text: null })
         conversations.set(event.conversationId, {
-          sessionId: event.type === 'sessionTransition' ? event.newSessionId : held?.sessionId ?? '',
+          sessionId: event.type === 'sessionTransition' ? event.newSessionId : held?.sessionId ?? null,
           sessions
         })
       }
@@ -54,5 +58,5 @@ export function useReplySuggestionStore<T>(selector: (state: ReplySuggestionStat
 export function selectReplySuggestion(state: ReplySuggestionState, host: string | null, chat: string | null): string | null {
   if (host === null || chat === null) return null
   const held = state.hosts.get(host)?.get(chat)
-  return held?.sessions.get(held.sessionId)?.text ?? null
+  return held?.sessionId == null ? null : held.sessions.get(held.sessionId)?.text ?? null
 }

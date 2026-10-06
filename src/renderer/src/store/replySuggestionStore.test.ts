@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { DaemonEvent, StampedDaemonEvent } from '@shared/ipc/events'
+import type { StampedDaemonEvent } from '@shared/ipc/events'
 import { createReplySuggestionStore, selectReplySuggestion } from './replySuggestionStore'
 import { translateDaemonEvent } from './daemonEventBridge'
 import { translateTimelineEvent } from './timelineBridge'
@@ -58,6 +58,30 @@ describe('transient reply suggestions', () => {
     emit(suggestion(1)); expect(read()).toBe('Continue')
     expect(store.getState().hosts.has('untrusted')).toBe(false)
     expect(selectReplySuggestion(createReplySuggestionStore().getState(), 'h', 'c')).toBeNull()
+  })
+  it.each([false, true])('accepts a fresh session after old-session null reconciliation (activity: %s)', activity => {
+    const { emit, read } = setup()
+    emit(suggestion(10, 'Old session', 'old', 'offscreen'))
+    // The off-screen conversation rotated while disconnected; no transition replays.
+    emit(connected())
+    emit(suggestion(11, null, 'old', 'offscreen'))
+    expect(read('h', 'offscreen')).toBeNull()
+    emit(suggestion(11, 'Duplicate', 'old', 'offscreen'))
+    emit(suggestion(10, 'Older', 'old', 'offscreen'))
+    expect(read('h', 'offscreen')).toBeNull()
+    if (activity) {
+      emit({ type: 'turnState', state: 'thinking', conversationId: 'offscreen', serverId: 'h' })
+      emit({ type: 'turnState', state: 'idle', conversationId: 'offscreen', serverId: 'h' })
+    }
+    emit(suggestion(12, 'Current session', 'current', 'offscreen'))
+    expect(read('h', 'offscreen')).toBe('Current session')
+    emit(suggestion(99, 'Retired session', 'old', 'offscreen'))
+    expect(read('h', 'offscreen')).toBe('Current session')
+    emit(transition('old', 'offscreen'))
+    emit(suggestion(11, 'Cleared revision', 'old', 'offscreen'))
+    expect(read('h', 'offscreen')).toBeNull()
+    emit(suggestion(12, 'New revision', 'old', 'offscreen'))
+    expect(read('h', 'offscreen')).toBe('New revision')
   })
   it('safely excludes suggestions from all exhaustive translators and exception messages', () => {
     const event = suggestion(1, 'private suggestion')

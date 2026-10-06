@@ -72,38 +72,46 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
-**Latest recorded run: #1731, 2026-10-06 — 25 executed, 25 passed, 0 failed, 1 skipped.**
+**Latest verified run: #1731, 2026-10-06 — 25 executed, 25 passed, 0 failed, 1 skipped.**
 The [dispatcher PASS comment](https://github.com/pyrycode/pyrycode-desktop/issues/1731#issuecomment-6023654588)
 records `feature/1731` at `b8b61010e0`, merged with main `2168a4b739`, exit 0.
 The sole listed skip is `real claude picks up a saved channel system prompt at Reset session`;
 no skip reason is recorded in that comment. The configured command built the app then ran
 `npx playwright test --config playwright.real-claude.config.ts --reporter=json`, rather
-than the issue's `npm run e2e:real:gate`. Counted per-scenario passes would establish the
-intended execution despite this command mismatch.
+than the issue's `npm run e2e:real:gate`. The counted per-scenario passes below establish
+the intended execution despite this command mismatch.
 
-**Queue-delivery evidence remains incomplete.** The dispatcher Gate report and issue
-comment provide suite counts but no individual queue-scenario results or executed daemon
-source revision. They do not establish that these three required tests were present and passed:
+The [supplemental live evidence](https://github.com/pyrycode/pyrycode-desktop/issues/1731#issuecomment-6023883060)
+confirms all three required `e2e/real-claude-queue-delivery.spec.ts` scenarios were present,
+executed and passed in that same run, each on its first attempt with no retries:
 
-- `real claude delivers one queued follow-up exactly once`
-- `real claude delivers two queued follow-ups in submission order`
-- `real claude drops the queued head and completes the remaining follow-up`
+| Executed test | Executed | Passed | Failed | Skipped | Duration |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `real claude delivers one queued follow-up exactly once` | 1 | 1 | 0 | 0 | 14.3 s |
+| `real claude delivers two queued follow-ups in submission order` | 1 | 1 | 0 | 0 | 15.2 s |
+| `real claude drops the queued head and completes the remaining follow-up` | 1 | 1 | 0 | 0 | 13.0 s |
 
-All three are implemented in `e2e/real-claude-queue-delivery.spec.ts` with transcript-order
-assertions: first reply, delivered follow-up, its reply, then each next delivery/reply;
-one originating row per delivered send and no dropped row. Each emits `daemon-revision`
-and `queue-delivery-evidence` from the same executable the fixture resolves through
-`PYRY_BIN`/PATH. Required provenance must show the dedicated binary contains daemon commits
-`8581e740` (#2819) and `29f1ab04` (#2820), or a descendant. A closed prerequisite or an
-installed version assumption cannot supply that proof. The dispatcher/operator must supply
-these per-test results and verified executable source revision from the recorded run;
-documentation cannot read the dispatcher logs or run the live suite to manufacture evidence.
+These scenarios assert transcript order: first reply, delivered follow-up, its reply,
+then each next delivery/reply; one originating row per delivered send and no dropped row.
+The same run also passed `real-claude-queue-drop.spec.ts` (11.1 s) and
+`real-claude-queue-send-now.spec.ts` (14.0 s), both first attempt.
+
+**Executed daemon provenance:** `PYRY_BIN=/usr/local/bin/pyry`, the image's test binary
+selected by `config-desktop/dispatcher.env`. The supplemental evidence records
+`daemon-revision: 0.37.0` on every test and verifies source tag `v0.37.0` contains
+both required daemon commits: GitHub comparisons of `8581e740...v0.37.0` (#2819) and
+`29f1ab04...v0.37.0` (#2820) each report the tag ahead of the commit. The dispatcher
+health check requires at least 0.37.0. This records the executed binary's annotated
+release and verified tag ancestry, rather than assuming a closed prerequisite is installed.
+Each queue-delivery scenario also emits `queue-delivery-evidence` using that same
+fixture-resolved executable. The results cover the built desktop, local test relay,
+real daemon and real Claude; the production relay is outside this gate.
 
 The [final verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1790#issuecomment-6023555321)
 confirms all eight `e2e/queued-own-settlement.spec.ts` scenarios executed and passed in the
 current-head fake gate (296 executed, 296 passed, 0 failed, 4 skipped), including the two
 mixed-delivery orders and both restoration orders. This establishes mounted regression
-coverage separately from the incomplete real-Claude provenance above.
+coverage alongside the real-Claude results above.
 
 **Previous verified run: #1785, 2026-10-05 — 24 executed, 24 passed, 0 failed, 1 skipped.**
 At `29e351d298` integrated with main `cb82a7d9d5`, all three required question-answer,

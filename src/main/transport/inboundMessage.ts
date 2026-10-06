@@ -1407,9 +1407,9 @@ function memorySearchAvailability(value: unknown): MemorySearchAvailability | nu
 }
 
 /**
- * Narrow a present `session_settings.capabilities` into its three decoded flags (#1654). A non-object
+ * Narrow a present `session_settings.capabilities` into its decoded flags (#1654, #1726). A non-object
  * rejects; each flag is optional (absent = not reported, distinct from `false`) but a present
- * non-boolean rejects through requireBoolean. Returns a fresh literal of the three flags only, so the
+ * non-boolean rejects through requireBoolean. Returns a fresh literal of the modelled flags only, so the
  * object's other upstream keys are never copied.
  */
 function parseSessionCapabilities(value: unknown): SessionCapabilitiesPayload {
@@ -1421,7 +1421,8 @@ function parseSessionCapabilities(value: unknown): SessionCapabilitiesPayload {
   return {
     slash_commands: optionalBoolean('slash_commands'),
     mcp_servers: optionalBoolean('mcp_servers'),
-    context_usage_detail: optionalBoolean('context_usage_detail')
+    context_usage_detail: optionalBoolean('context_usage_detail'),
+    mid_turn_input: optionalBoolean('mid_turn_input')
   }
 }
 

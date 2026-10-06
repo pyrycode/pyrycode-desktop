@@ -43,6 +43,7 @@ import type {
   InterruptPayload,
   NewSessionPayload,
   DequeueMessagePayload,
+  SendQueuedNowPayload,
   QuestionAnswerPayload,
   QuestionRefusedPayload
 } from '../wire/types'
@@ -375,6 +376,7 @@ export type RendererCommand =
   | { type: 'renameWorkspace'; payload: RenameWorkspacePayload; serverId?: string; attemptId?: string }
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
   | { type: 'dequeueMessage'; payload: DequeueMessagePayload }
+  | { type: 'sendQueuedNow'; payload: SendQueuedNowPayload }
   | { type: 'interrupt'; payload: InterruptCommandPayload }
   | { type: 'newSession'; payload: NewSessionCommandPayload }
   | { type: 'notify'; payload: NotifyPayload }
@@ -446,6 +448,15 @@ export function refuseQuestionsCommand(fields: RefuseQuestionsCommandPayload): R
  */
 export function dequeueMessageCommand(fields: DequeueMessagePayload): RendererCommand {
   return { type: 'dequeueMessage', payload: fields }
+}
+
+/**
+ * Wrap a queued row's `conversation_id` + `queued_msg_id` into a `sendQueuedNow` command (#1726) — asks
+ * the daemon to deliver that queued message into the running turn. Pure; the wire payload verbatim, as
+ * dequeueMessageCommand. Ungated, so there is no token to mint.
+ */
+export function sendQueuedNowCommand(fields: SendQueuedNowPayload): RendererCommand {
+  return { type: 'sendQueuedNow', payload: fields }
 }
 
 /**
@@ -596,6 +607,8 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       )
     case 'dequeueMessage':
       return 'payload' in value && isDequeueMessagePayload(value.payload)
+    case 'sendQueuedNow':
+      return 'payload' in value && isSendQueuedNowPayload(value.payload)
     case 'interrupt':
       // The newSession arm's shape (#1092) — a required payload, refused BY isInterruptPayload rather
       // than by the `in` check, for the reason the requestModelList arm records. NO serverId arm any
@@ -1239,6 +1252,17 @@ function isNewSessionPayload(value: unknown): value is NewSessionCommandPayload 
 }
 
 function isDequeueMessagePayload(value: unknown): value is DequeueMessagePayload {
+  if (typeof value !== 'object' || value === null) return false
+  return (
+    'conversation_id' in value &&
+    typeof value.conversation_id === 'string' &&
+    'queued_msg_id' in value &&
+    typeof value.queued_msg_id === 'number'
+  )
+}
+
+/** The sendQueuedNow boundary guard (#1726): the dequeue guard's structural minimum, field for field. */
+function isSendQueuedNowPayload(value: unknown): value is SendQueuedNowPayload {
   if (typeof value !== 'object' || value === null) return false
   return (
     'conversation_id' in value &&

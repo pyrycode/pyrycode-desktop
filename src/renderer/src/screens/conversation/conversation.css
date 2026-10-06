@@ -1968,7 +1968,10 @@ button.top-overlay-pill {
    opacity is a compositing group a child opacity cannot escape — it was the region's until the queued rows
    moved into the thread) — consistent with the "waiting / not yet run" treatment; the hover-surface +
    focus outline carry the affordance, not full brightness. */
-.queued-row__drop {
+/* #1726: Send now (.queued-row__send-now) shares the drop control's idiom by decision — the design file
+   draws no queued state — so it joins each rule below rather than restating it. */
+.queued-row__drop,
+.queued-row__send-now {
   flex: 0 0 auto;
   align-self: center;
   display: inline-flex;
@@ -1982,16 +1985,19 @@ button.top-overlay-pill {
   cursor: pointer;
 }
 
-.queued-row__drop:hover {
+.queued-row__drop:hover,
+.queued-row__send-now:hover {
   background: var(--color-surface-container-high);
   color: var(--color-on-surface);
 }
 
-.queued-row__drop:focus-visible {
+.queued-row__drop:focus-visible,
+.queued-row__send-now:focus-visible {
   outline: 1px solid var(--color-outline);
 }
 
-.queued-row__drop-icon {
+.queued-row__drop-icon,
+.queued-row__send-now-icon {
   display: block;
 }
 

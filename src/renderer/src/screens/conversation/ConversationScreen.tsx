@@ -112,6 +112,7 @@ import { contextUsagePercent, contextUsageStep } from './contextUsage'
 import {
   useRunConfigStore,
   selectSnapshot,
+  selectMidTurnInputSupported,
   selectMcpServersSupported,
   sessionSupports
 } from '../../store/runConfigStore'
@@ -131,6 +132,7 @@ import {
   selectConversationAgentFor
 } from '../../store/conversationListStore'
 import { dropQueuedMessage } from './dropQueuedMessage'
+import { sendQueuedNow } from './sendQueuedNow'
 import { foldQueuedRows, type QueuedRowHandle } from './foldQueuedRows'
 import { groupToolRows } from './groupToolRows'
 import { foldToolRuns, type ToolRun } from './foldToolRuns'
@@ -264,6 +266,9 @@ export function ConversationScreen({
   // "nothing open" (the :281 / :1955 spelling this file already uses).
   const openConversationId = activeConversation?.id ?? null
   const actionsAvailable = useConversationActionAvailability(openConversationId)
+  // #1726: the open session's `mid_turn_input` reading, a boolean slice so other snapshot fields re-render
+  // nothing. The snapshot is the open conversation's (cleared on switch), so it gates that thread alone.
+  const midTurnInput = useRunConfigStore(selectMidTurnInputSupported)
   // A useMemo-stable selector per id (the BackgroundTaskPanel.tsx:342 idiom) so a fresh closure per render
   // does not churn the subscription. NOTHING wraps, copies, maps or derives the result inside the
   // subscription, which is what keeps the selector's return Object.is-stable: a write for ANOTHER
@@ -551,6 +556,13 @@ export function ConversationScreen({
             dispatch: dispatchTimeline,
             dispatchFor: dispatchTimelineFor
           })
+        } : undefined}
+        midTurnInput={midTurnInput}
+        // #1726: the drop closure's gate and guard, verbatim, so Send now is disabled exactly when the drop
+        // control is. No timeline write: the message is being delivered, so its echo stays true.
+        onSendQueuedNow={actionsAvailable ? (queuedMsgId) => {
+          if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
+          sendQueuedNow(openConversationId, queuedMsgId, { sendCommand: window.pyry.sendCommand })
         } : undefined}
       />}
       <TopOverlayControl onRepairHost={onRepairHost} />
@@ -1143,6 +1155,8 @@ export function Timeline({
   scrollPin,
   queued,
   onDropQueued,
+  midTurnInput = false,
+  onSendQueuedNow,
   firstRowKey = 0,
   olderSaved = false,
   saved = false,
@@ -1155,6 +1169,11 @@ export function Timeline({
   scrollPin?: ThreadScrollPin
   queued?: readonly QueuedItem[]
   onDropQueued?: (queuedMsgId: number, messageId: string | undefined) => void
+  /** #1726: the session's `mid_turn_input` reading — a queued row draws Send now only when true. Optional
+   *  and defaulting to false for `queued`'s reason, so every existing render site is byte-identical. */
+  midTurnInput?: boolean
+  /** #1726: what Send now calls; absent draws it disabled, exactly as `onDropQueued` does the drop. */
+  onSendQueuedNow?: (queuedMsgId: number) => void
   /** #1260: the key the FIRST item row gets; each row after it counts up from there. Optional and
    *  defaulting to 0, for `scrollPin`'s and `queued`'s reason — the existing render sites pass nothing
    *  and get today's keys byte-for-byte. See the row map below for what a caller passes and why. */
@@ -1218,6 +1237,7 @@ export function Timeline({
           const rowKey = group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`
           const content = <TimelineRow key={rowKey}
             item={row.item} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(group.index)}
+            midTurnInput={midTurnInput} onSendQueuedNow={onSendQueuedNow}
             onOpenMarkdownPath={onOpenMarkdownPath} agent={agent}
             inProgress={!saved && group.index === items.length - 1 && row.item.kind === 'assistantText'} />
           // Keep attributed text mounted through collapse and late-owner history regrouping.
@@ -1466,6 +1486,41 @@ function QueuedRowDrop({
   )
 }
 
+const SEND_QUEUED_NOW_LABEL = 'Send queued message now'
+
+// #1726: Send now on a queued row — the drop control's icon-button idiom by decision (the design file
+// draws no queued state), leading it so the drop keeps its place beside the bubble. Drawn only while
+// the session reports `mid_turn_input: true`; disabled under the drop control's own condition. The
+// click writes nothing: the row stays queued until the daemon's next `queue_state` omits it.
+function QueuedRowSendNow({
+  queued,
+  onSendQueuedNow
+}: {
+  queued: QueuedRowHandle
+  onSendQueuedNow?: (queuedMsgId: number) => void
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      className="queued-row__send-now"
+      aria-label={SEND_QUEUED_NOW_LABEL}
+      disabled={!onSendQueuedNow}
+      onClick={() => onSendQueuedNow?.(queued.queuedMsgId)}
+    >
+      <svg
+        className="queued-row__send-now-icon"
+        viewBox="0 0 24 24"
+        width="18"
+        height="18"
+        fill="currentColor"
+        aria-hidden="true"
+      >
+        <path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z" />
+      </svg>
+    </button>
+  )
+}
+
 // One timeline row, discriminated on `kind`. No `default` / `assertNever`: the switch is exhaustive
 // over the six kinds (only turnBoundary null), so a future seventh ThreadItem kind makes it
 // non-exhaustive → a compile-time "not all code paths return" error that forces a render decision —
@@ -1515,6 +1570,8 @@ function TimelineRow({
   inProgress,
   queued = null,
   onDropQueued,
+  midTurnInput = false,
+  onSendQueuedNow,
   turnStats,
   onOpenMarkdownPath,
   agent
@@ -1523,6 +1580,9 @@ function TimelineRow({
   inProgress: boolean
   queued?: QueuedRowHandle | null
   onDropQueued?: (queuedMsgId: number, messageId: string | undefined) => void
+  /** #1726: Timeline's two Send now props, passed through; read only by the queued `userText` arm. */
+  midTurnInput?: boolean
+  onSendQueuedNow?: (queuedMsgId: number) => void
   /** #1566: set only on a closed turn's last assistant bubble; read only by the `assistantText` arm. */
   turnStats?: string
   /** #1627: read only by the settled `assistantText` arm; user messages render no markdown. */
@@ -1673,6 +1733,7 @@ function TimelineRow({
               : 'message-row message-row--user message-row--text'
           }
         >
+          {queued && midTurnInput && <QueuedRowSendNow queued={queued} onSendQueuedNow={onSendQueuedNow} />}
           {queued && <QueuedRowDrop queued={queued} onDropQueued={onDropQueued} />}
           {!queued && <MessageActions text={item.text} />}
           <div className="bubble bubble--user" data-thread-role={queued ? 'queued' : 'user'}>

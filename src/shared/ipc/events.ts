@@ -391,6 +391,9 @@ type BaseDaemonEvent =
       slashCommands?: boolean
       mcpServers?: boolean
       contextUsageDetail?: boolean
+      /** #1726: whether the session takes a queued message into the running turn (`send_queued_now`).
+       *  undefined = not reported, which the renderer reads as unsupported. */
+      midTurnInput?: boolean
       /** Daemon-owned memory-search status; undefined when omitted by an older daemon. */
       memorySearch?: MemorySearchPayload
     }

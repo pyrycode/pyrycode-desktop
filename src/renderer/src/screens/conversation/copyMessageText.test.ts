@@ -1,5 +1,28 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { copyMessageText, copyRichText } from './copyMessageText'
+import { appendMessageQuote, copyMessageText, copyRichText } from './copyMessageText'
+
+describe('appendMessageQuote', () => {
+  it.each([
+    ['user', 'User:'], ['assistant', 'Assistant:']
+  ] as const)('labels %s source without escaping markdown, quotes or line breaks', (role, label) => {
+    const text = '# Heading\nA "literal" quote\n```ts\nconst x = 1\n```'
+    expect(appendMessageQuote('', role, text)).toBe(`${label}\n"${text}"\n`)
+  })
+
+  it.each([
+    ['', ''], ['draft', 'draft\n'], ['draft\n', 'draft\n'],
+    ['  draft\n\n', '  draft\n\n'], [' ', ' \n']
+  ])('preserves draft %j with only the necessary separator', (draft, prefix) => {
+    expect(appendMessageQuote(draft, 'user', 'message')).toBe(`${prefix}User:\n"message"\n`)
+  })
+
+  it('quotes a very long source in full and appends repeated replies in order', () => {
+    const source = 'long\n"source" '.repeat(100_000)
+    const first = appendMessageQuote('', 'assistant', source)
+    expect(first).toBe(`Assistant:\n"${source}"\n`)
+    expect(appendMessageQuote(first, 'user', 'next')).toBe(`${first}User:\n"next"\n`)
+  })
+})
 
 // #969 — the copy control's one effect, isolated from the row that renders it. Renderer tests are
 // static server renders under `environment: 'node'` (vitest.config.ts), so nothing here can click the

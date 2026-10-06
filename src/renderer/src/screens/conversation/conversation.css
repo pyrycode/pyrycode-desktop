@@ -352,6 +352,8 @@ button.top-overlay-pill {
   flex: 0 0 var(--message-actions-width);
   align-self: stretch;
   display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
   align-items: center;
   justify-content: center;
   color: var(--color-inverse-primary);
@@ -788,6 +790,15 @@ button.top-overlay-pill {
    .composer__send-icon idiom); `block` stops the inline baseline gap. */
 .bubble__copy-icon {
   display: block;
+}
+
+.bubble__reply-icon {
+  display: block;
+  width: var(--message-actions-width);
+  height: var(--space-3);
+  background: currentColor;
+  /* The intrinsic SVG viewport fragment keeps Vite from inlining a CSP-blocked data URL. */
+  mask: url('../../assets/reply-solid-full.svg#svgView(viewBox(0,0,13,12))') center / contain no-repeat;
 }
 
 /* #1566 — a turn's tokens and time, on the meta row of its last assistant bubble. The drawing gives the

@@ -53,3 +53,9 @@ Draft append is synchronous and adds no I/O failure mode. Missing pane coordinat
 ## Open Questions
 
 None. The pane-local counter is the simplest focus wiring: it avoids adding transient focus state to the retained draft store.
+
+## Revisions
+
+2026-10-06: Browser capture showed the reply mask missing because Vite inlined the small SVG and the renderer CSP rejects data URLs. Reference the asset's intrinsic SVG viewport fragment so Vite emits the unchanged SVG as an app-local file. Keep the CSP and build configuration unchanged; browser coverage must verify the loaded image as well as geometry.
+
+2026-10-06: The equal-id host test exposed an existing history-writer ownership rejection, tracked separately in #1811. Keep equal-id reply draft isolation and ordinary saved/offline reply coverage active. Preserve a skipped regression for equal-id history persistence pending that bug; no history production code changes belong here.

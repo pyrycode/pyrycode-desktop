@@ -10,16 +10,19 @@ async function expectSpacing(page: Page): Promise<void> {
     const thread = document.querySelector('.conversation__thread')
     const status = document.querySelector('.composer-status')
     const input = document.querySelector('.composer__row')
-    if (!thread || !status || !input) return null
+    const chrome = document.querySelector('.conversation__input-chrome')
+    if (!thread || !status || !input || !chrome) return null
     return {
-      above: status.getBoundingClientRect().top - thread.getBoundingClientRect().bottom,
+      above: status.getBoundingClientRect().top - chrome.getBoundingClientRect().top,
       below: input.getBoundingClientRect().top - status.getBoundingClientRect().bottom,
-      statusHeight: status.getBoundingClientRect().height
+      statusHeight: status.getBoundingClientRect().height,
+      clearance: parseFloat(getComputedStyle(thread).paddingBottom) - chrome.getBoundingClientRect().height,
+      paneBottom: thread.getBoundingClientRect().bottom - chrome.getBoundingClientRect().bottom
     }
-  })).toEqual({ above: 12, below: 8, statusHeight: 24 })
+  })).toEqual({ above: 16, below: 8, statusHeight: 24, clearance: 0, paneBottom: 0 })
 }
 
-test('status spacing stays outside the scrollport with a warning and five-line draft', async ({
+test('status spacing and measured input clearance hold with a warning and five-line draft', async ({
   launchPairedApp
 }, testInfo) => {
   const { page, app, daemon } = await launchPairedApp()
@@ -71,10 +74,12 @@ test('status spacing stays outside the scrollport with a warning and five-line d
       await page.mouse.wheel(0, 100_000)
       await expect.poll(distanceFromBottom).toBeLessThan(1)
       await expectSpacing(page)
-      // The fixed gap replaces the old bottom inset rather than doubling it.
+      // At the bottom the newest row clears the complete, dynamically measured input chrome.
       expect(await thread.evaluate(el => {
         const last = el.lastElementChild
-        return last === null ? null : el.getBoundingClientRect().bottom - last.getBoundingClientRect().bottom
+        const chrome = document.querySelector('.conversation__input-chrome')
+        return last === null || chrome === null ? null
+          : chrome.getBoundingClientRect().top - last.getBoundingClientRect().bottom
       })).toBe(0)
       if (warning) await page.screenshot({
         path: testInfo.outputPath(`status-${width}-bottom.png`), animations: 'disabled'

@@ -185,7 +185,8 @@ test('post-save pending cancel invalidates completion and refreshes saved hosts'
   await expect(page.getByRole('textbox', { name: 'Pairing code', exact: true })).toHaveValue('')
   await page.keyboard.press('Escape')
   await expect(page.getByPlaceholder('Message…')).toHaveValue('Keep this draft')
-  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
   await expect(page.locator('.settings__server-row-id')).toHaveText([servers[1].serverId, servers[0].serverId])
 })
 

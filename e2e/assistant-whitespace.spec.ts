@@ -870,7 +870,7 @@ interface TaskMetrics {
   delColor: string
   mutedTokenRgb: string
   markdownInteractiveCount: number
-  bubbleInteractiveCount: number
+  rowInteractiveCount: number
 }
 
 /**
@@ -893,6 +893,8 @@ const readTaskMetrics = (page: Page, index: number): Promise<TaskMetrics> =>
     // as a module constant: this function is serialised into the page, so a name from the module scope
     // would be a ReferenceError at evaluate time rather than a compile error here.
     const INTERACTIVE = 'input, button, select, textarea, a[href], [tabindex], [contenteditable]'
+    const row = bubble.closest('.message-row')
+    if (row === null) throw new Error('the bubble has no message row')
     const markdown = bubble.querySelector('.bubble__markdown')
     if (markdown === null) throw new Error('the settled reply rendered no .bubble__markdown')
     // Array.from and not a spread: a NodeList is ArrayLike under the bare `DOM` lib but only iterable
@@ -934,12 +936,8 @@ const readTaskMetrics = (page: Page, index: number): Promise<TaskMetrics> =>
       // whole container rather than over the mark, so the claim covers everything the reply rendered and
       // not just the element this ticket added.
       markdownInteractiveCount: markdown.querySelectorAll(INTERACTIVE).length,
-      // The same query over the whole bubble, which is this assertion's VACUITY GUARD rather than a
-      // second claim. A bubble carries exactly one control of its own — .bubble__copy, the meta row's
-      // copy button (#816) — so a selector that had silently stopped matching anything would read 0 here
-      // and make the 0 above meaningless. The reply's markdown is inert; the bubble's chrome is not, and
-      // is not this ticket's subject.
-      bubbleInteractiveCount: bubble.querySelectorAll(INTERACTIVE).length
+      // Positive control guard: markdown is inert, but the message row's copy button is interactive.
+      rowInteractiveCount: row.querySelectorAll(INTERACTIVE).length
     }
   })
 
@@ -1461,10 +1459,9 @@ test('a task list draws two distinguishable inert marks, and struck text reads a
 
   // Nothing the reply rendered is focusable or clickable to begin with — the count that would have been
   // 2 had the extension's own <input type="checkbox" disabled> been accepted verbatim rather than
-  // overridden away. The bubble's own chrome is the guard that this query still finds controls at all:
-  // exactly one, .bubble__copy in the meta row, which is #816's and not this ticket's.
+  // overridden away. The message row's copy button proves this selector still finds controls.
   expect(before.markdownInteractiveCount).toBe(0)
-  expect(before.bubbleInteractiveCount).toBe(1)
+  expect(before.rowInteractiveCount).toBe(1)
   // ...and the click moved focus nowhere into the reply, so there is no keyboard target either.
   const focusedInsideBubble = await page.evaluate(() =>
     Boolean(document.activeElement?.closest('.bubble'))

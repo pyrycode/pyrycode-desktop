@@ -12084,3 +12084,39 @@ describe('conversation list archive timestamp', () => {
     expect(() => parseInboundMessage(encodeConversations({ conversations: [CONV_UNNAMED, { ...CONV_NAMED, archived_at }] }))).toThrow(WireDecodeError)
   })
 })
+
+describe('session_error decoding', () => {
+  const frame = (payload: unknown) => encodeEnvelope({ id: 7, type: 'session_error', ts: FIXED_TS, payload })
+  it.each(['session.blocked', 'session.child_crashing', 'future.code', ''])('accepts %s and strips content', code => {
+    const event = vi.fn()
+    const bytes = frame({ conversation_id: '__proto__', code, message: 'PRIVATE MESSAGE', extra: 'PRIVATE EXTRA' })
+    expect(parseInboundMessage(bytes, { event } as unknown as DiagnosticLog)).toEqual({
+      kind: 'session-error', sessionError: { conversation_id: '__proto__', code }
+    })
+    expect(event).toHaveBeenCalledWith({ event: 'inbound-decoded', code: 'session_error', bytes: bytes.length,
+      hash: expect.stringMatching(/^[a-f0-9]{64}$/) })
+    expect(JSON.stringify(event.mock.calls)).not.toMatch(/PRIVATE|__proto__|future.code|session.blocked|session.child_crashing/)
+  })
+  it.each([null, [], 'PRIVATE', 4, {}, { conversation_id: 4, code: 'PRIVATE' },
+    { conversation_id: 'PRIVATE' }, { conversation_id: 'PRIVATE', code: false }])('rejects malformed payload %j without content', payload => {
+    const event = vi.fn()
+    expect(() => parseInboundMessage(frame(payload), { event } as unknown as DiagnosticLog)).toThrow(WireDecodeError)
+    try { parseInboundMessage(frame(payload)) } catch (error) { expect(String(error)).not.toContain('PRIVATE') }
+    expect(event).not.toHaveBeenCalled()
+  })
+})
+
+describe('assistant parent attribution in live and history decode', () => {
+  it.each(['agent-id', '', undefined])('normalizes parent %s in both lanes', (parent_tool_use_id) => {
+    const payload = { ...DELTA, parent_tool_use_id }
+    const live = parseInboundMessage(encodeAssistantDelta(payload))
+    expect(live).toMatchObject({ kind: 'assistant-delta', delta: { parent_tool_use_id: parent_tool_use_id || undefined } })
+    expect(decodedEntries([historyEntry('assistant_delta', payload)])[0].event)
+      .toMatchObject({ type: 'assistantDelta', parentToolUseId: parent_tool_use_id || undefined })
+  })
+  it.each([null, 42, true, [], {}])('rejects malformed parent %s without exposing its value', (parent_tool_use_id) => {
+    const payload = { ...DELTA, parent_tool_use_id }
+    expect(() => parseInboundMessage(encodeAssistantDelta(payload))).toThrow('malformed optional field: parent_tool_use_id')
+    expect(decodedEntries([historyEntry('assistant_delta', payload)])).toEqual([])
+  })
+})

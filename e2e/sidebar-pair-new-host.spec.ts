@@ -38,7 +38,8 @@ test('toolbar pairing returns to its origin and trigger without losing the conve
     await expect(draft).toHaveValue('Retain this draft')
   }
 
-  await page.getByRole('button', { name: 'Settings', exact: true }).press('Enter')
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).press('Enter')
   await expect(settings).toBeVisible()
   await page.locator('.settings__back').click()
   await expect(list).toBeVisible()
@@ -55,10 +56,12 @@ test('toolbar pairing returns to its origin and trigger without losing the conve
     await expect(pair).toBeFocused()
   }
 
-  await page.getByRole('button', { name: 'Archive', exact: true }).press('Space')
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Archive', exact: true }).press('Space')
   await expect(page.locator('section[aria-label="Archive screen"]')).toBeVisible()
   await page.locator('.archive__back').click()
-  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
   const settingsPair = page.getByRole('button', { name: 'Pair another server' })
   for (const cancel of ['Cancel', 'Escape']) {
     await settingsPair.click()

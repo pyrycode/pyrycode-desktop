@@ -6,33 +6,36 @@ Part of [Conversation shell](conversation-shell.md); see that document for what 
 
 ## Structure
 
-`App.tsx` mounts `<ConversationScreen />` as the **thread view** of the [paired shell](paired-shell.md)'s `list ⇄ thread` router, itself mounted on the `conversation` route ([#80](../codebase/80.md) — see [App shell](app-shell.md); before #80, `App` rendered it directly; before [#140](../codebase/140.md), `AppView` rendered it directly on the `conversation` route with no list and no way back). The screen is a flex column:
+`App.tsx` mounts `<ConversationScreen />` as the **thread view** of the [paired shell](paired-shell.md)'s `list ⇄ thread` router, itself mounted on the `conversation` route ([#80](../codebase/80.md) — see [App shell](app-shell.md); before #80, `App` rendered it directly; before [#140](../codebase/140.md), `AppView` rendered it directly on the `conversation` route with no list and no way back). The conversation surface contains an independently scrolling thread with positioned controls:
 
+```text
+ConversationScreen                         .conversation (full-height containing block)
+├── Covered pane                           .conversation__covered (absolute, inset: 0)
+│   ├── Top chrome                         .conversation__top-chrome (level 1)
+│   │   ├── Decorative fade/blur            .conversation__blur (non-interactive)
+│   │   ├── ThreadOverflowMenu              .conversation__overflow (gated on onBack)
+│   │   │   ├── Title/menu row              .conversation__overflow-content
+│   │   │   └── Divider                     .conversation__overflow-rule
+│   │   └── Connection/history notices      (included in measured occupied height)
+│   ├── Message area                       .conversation__message-area (full pane, level 0)
+│   │   ├── Timeline                       .conversation__thread (focusable scroll container)
+│   │   │   └── TimelineRow × N             (stable identities; includes queued rows)
+│   │   ├── TopOverlayControl              (pills below measured header)
+│   │   └── BackgroundTaskPanel (if open)  .background-task-drawer
+│   ├── Input chrome                       .conversation__input-chrome (level 1)
+│   │   ├── Decorative fade/blur            .conversation__blur (non-interactive)
+│   │   └── ComposerSlot                   (permission/question panel or composer)
+│   │       ├── ComposerStatusArea         .composer-status
+│   │       └── Composer                   (draft, attachments and desktop footer)
+│   └── Sheets and dialogs (if open)       (existing modal precedence)
+└── MarkdownReader (if open)               (independent overlay)
 ```
-ConversationScreen            .conversation        (flex column, full height, position: relative)
-├── ThreadOverflowMenu         .conversation__overflow (in-flow top bar, gated on onBack)
-│   ├── Title/menu row         .conversation__overflow-content (28px, top-aligned)
-│   │   ├── Current name       .conversation__overflow-title (one line, ellipsis)
-│   │   └── ComposerOptionsMenu .composer-options-anchor--bottom-end (24×24px icon anchor)
-│   └── Divider                .conversation__overflow-rule (full-width, 1px)
-├── ConnectionBannerControl    .conversation__banner (null unless not-connected; below the top bar)
-├── (WorkspaceChip used to mount here, #278 — deleted outright by #1486; the empty thread's copy is now the first thing below the banner)
-├── Timeline                  .conversation__thread (null when empty; the single thread surface since #179, #203)
-│   └── TimelineRow × N       .message-row--user/.bubble--user (userText, #179) · .message-row--daemon/.bubble--daemon (assistantText) · .tool-row/.tool-row__chip (toolCall, #218; resolved modifiers #230)
-├── (ApiRetryIndicator / CompactingIndicator / StallIndicator — the three problem-state bubbles right after Timeline; unaffected by #796, see below)
-├── (the region between the thread and the composer is EMPTY since #962 — the run-config row (#177) and the background-task trigger (#581) that used to mount here are retired; both overlays still open, now from the overflow menu above)
-├── ComposerStatusArea         .composer-status     (content-sized row above the composer; NEVER null, #796; min-height not height since #963)
-│   ├── ThinkingIndicator       .composer-status__label ("Thinking…"/"Working…"/"Running <tool>…", #648, #649; off the daemon-bubble surface since #796)
-│   └── ComposerErrorSlotControl .composer-status__error (row's trailing slot, right-aligned; null unless the `error` connection arm, #797; button vs chip since #963, see the composer doc)
-├── Composer                  .composer            (pinned)
-│   ├── ComposerActionsMenu     .composer__footer    (leading item, opens the shared options panel — #680)
-│   └── ContextUsageControl     .composer__footer    (second child, below `.composer__row`; the other three desktop-layout slots (#682/#683/#685) stay empty, #811)
-├── StatusSheet (if open)     .status-sheet-overlay (absolute overlay, #177)
-├── ChannelInfoSheet (if open) .status-sheet-overlay (absolute overlay, #365)
-├── (WorkspacePickerSheet used to mount here when pickerOpen, #383 — its entry point deleted by #1486; `WorkspacePickerSheetView` survives only as Settings' Default workspace row's own picker)
-├── BackgroundTaskPanel (if open)  .status-sheet-overlay (absolute overlay, interim chrome pending #580, #581)
-└── PermissionModal (if any)  .permission-modal-overlay (absolute overlay, last child, null when no outstanding prompt, #224)
-```
+
+The connected empty timeline keeps `EmptyThread` inside the focusable scroller for
+history input. An empty offline chat can omit `Timeline`, but the pane, notices and
+Top overlay remain mounted and measured. Reader opening hides the covered subtree
+without unmounting the composer. The [Markdown reader](conversation-shell-markdown-reader.md#pane-wiring)
+has its own full-pane scrollport and measured fixed header using the same translucent treatment.
 
 The top bar reads the current name through `ConversationScreen`'s existing
 `selectActiveConversation` subscription. A null name or absent snapshot displays
@@ -58,15 +61,15 @@ action, closing the menu and opening its existing sheet or panel. Escape closes 
 returns focus to More actions. Outside clicks, including the title, dismiss; clicking
 a focusable control lets that control receive focus.
 
-The divider's 60% opacity creates a stacking context that previously painted across
-Channel info even when the menu was visible and correctly positioned. The bottom-end
-anchor has `z-index: 2`, raising its entire panel over the divider, positioned message
-content and `.conversation__top-overlay` at level 1. Level 1 on the anchor tied with
-the later Top overlay, allowing pills to cover the menu. `.status-sheet-overlay` and
-existing dialog overlays retain level 2 and paint above the menu through their later
-DOM placement. The header itself gains no stacking context or clipping. See the
-[shared-menu design](../../specs/architecture/1542-shared-messaging-menu.md) and
-[pill stacking fix](../../specs/architecture/1745-thread-overflow-overlay.md).
+The divider's 60% opacity creates a stacking context, so the bottom-end menu
+anchor retains `z-index: 2` above it. Full-pane scrolling adds two outer contexts:
+`.conversation__message-area` at level 0 contains rows, pills and drawer, while top
+and input chrome sit at level 1. Menus therefore paint above rows and pills without
+raising chrome above existing level-2 sheets or later dialog siblings; Create chat
+retains level 3. Raising the sheet to level 3 would let it intercept a dialog opened
+from it. Preserve both scrim hit-testing with a menu still mounted and actual dialog
+clicks. See [verification](development-verification.md#layout-and-input) and the
+[translucent-control design](../../specs/architecture/1733-translucent-thread-controls.md).
 
 `MessageBubble` and `Composer` are **in-file functions** inside `ConversationScreen.tsx` — they are tiny. (`UnpairControl` was a third until [#1061](https://github.com/pyrycode/pyrycode-desktop/issues/1061) deleted it — see [Unpair control](#unpair-control-166-deleted-by-1061) below.) `MessageThread` and `StatusSheet` are also in-file but **exported** ([#69](../codebase/69.md), [#177](../codebase/177.md)), so tests server-render them as pure views — `RepairPrompt` joined them in [#167](../codebase/167.md) and was retired, folded into `ComposerErrorSlot`, by [#963](https://github.com/pyrycode/pyrycode-desktop/issues/963); see [Re-pair control](#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963) below. `PermissionModal`/`PermissionModalView` live in their own file, `PermissionModal.tsx` ([#224](../codebase/224.md)), the same split one level up. `ConversationScreen` is the store-bound container; `MessageThread`/`StatusSheet`/`PermissionModalView` are the props-in/markup-out views — the same container/view split `PairingScreen`/`PairingView` uses ([#55](../codebase/55.md)). The load-bearing contracts are the props/types, not the file boundaries (see Seams).
 
@@ -92,11 +95,27 @@ const messages = useSessionStore(selectMessages).map(toMessageViewModel)
 
 ## Layout contract
 
-Independent scroll rests on three rules; get these right and AC1/AC5 follow:
+The covered pane and message area are absolute with `inset: 0`. The existing
+`.conversation__thread` fills that area; rows can scroll behind both fixed controls.
+`html, body, #root { height: 100% }` and `body { margin: 0 }` keep the height chain.
+The thread retains `flex: 1 1 auto`, `min-height: 0`, `overflow-y: auto` and hidden
+scrollbars. `Timeline` supplies `tabIndex={0}` and the accessible label `Conversation
+history`; native `overflow-anchor` remains at its default.
 
-- `index.css` — `html, body, #root { height: 100% }` establishes the full-height chain; `body { margin: 0 }`.
-- `.conversation__thread` — `flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: none`. The **`min-height: 0`** is load-bearing: without it a flex item refuses to shrink below its content, so the whole window scrolls instead of the thread region. Since [#1074](https://github.com/pyrycode/pyrycode-desktop/issues/1074) the thread hides its scrollbar to match the design — the Figma message area stacks 1026px of content in a 780px column with no strip reserved for a bar at any depth. `scrollbar-width: none` is the operative declaration on Chromium 130; a separate top-level `.conversation__thread::-webkit-scrollbar { display: none }` rule sits below it as an inert fallback (once the standard property is set, the pseudo-element is never consulted — it's kept for an engine that lacks the property, and written flat rather than nested, since this repo's nine stylesheets use no CSS nesting anywhere). It's a paint change only: `overflow-y: auto` stays, `overflow-anchor` stays absent from the rule (see the drift comment above), and no `tabindex` is added — the wheel, the trackpad and the four scroll keys still reach the region through Chromium's own sequential-focus starting point after a click inside it, and that keyboard path was measured working *before* either declaration landed, so it was never dependent on a bar being drawn.
-- `.composer` — `flex: 0 0 auto`: pinned, never grows or shrinks.
+Measured header/input border boxes become `--thread-header-height` and
+`--thread-input-height`. Thread padding is header height plus 12px at the top,
+20px horizontally, and occupied input height at the bottom. At connected history
+start this keeps the existing 97px first-row clearance; input growth changes bottom
+padding rather than viewport height. See [scroll pin](conversation-shell-scroll-pin.md#thread-scroll-pin)
+for resize/zoom following and separate temporary prepend compensation.
+
+Both chrome wrappers have `pointer-events: none`; sharp direct children restore
+`pointer-events: auto`, while decorative blur layers remain non-interactive. Header
+and footer controls receive input above rows. Pills begin 12px below the occupied
+header, including notices, even with no Timeline. The non-modal drawer's top and
+bottom follow the measured chrome heights. Its width is `min(360px, pane width −
+20px right inset)`, preventing clipping outside the minimum-width pane and leaving
+the composer usable. Its existing Escape and conversation-switch behavior remains.
 
 **Proving "no scrollbar" needs a computed-style read on an overflowing scrollport.**
 `offsetWidth - clientWidth === 0` passes on machines drawing overlay scrollbars even with the hiding
@@ -131,7 +150,18 @@ prove these updates, geometry or dismissal; see [test boundaries](development-ve
 
 ## Theme
 
-Every style references a token from `theme/tokens.css` — no color/type/spacing literal in `conversation.css`. Bare structural geometry (`100%`, flex ratios, the `48px` send button, the bubble measure) stays literal; those are layout, not theme. See [ADR 0003](../decisions/0003-m3-theme-tokens-css-custom-properties.md).
+Spacing, typography and shared roles use `theme/tokens.css`; see
+[ADR 0003](../decisions/0003-m3-theme-tokens-css-custom-properties.md). Translucent
+control treatment values are local custom properties on `.conversation`, shared by
+the covered thread and its reader sibling:
+header `#09141D` → transparent, input transparent → `rgb(11 14 17 / 60%)` by 20% of
+its height, and backdrop samples of 10px, 8px, 5px and 2px blended by vertical masks.
+The header eases down to zero blur; the input rises from zero to 10px across its top
+fifth. These layers are siblings behind controls, so control text stays sharp.
+Figma's generated uniform 0px/5px blur does not describe the intended progression.
+Header title and composer status text use `--shadow-thread`; header/status glyphs
+use the equivalent local drop-shadow. The shared Default shadow is black at 20%,
+offset (0, 4), radius 5. Existing glyphs and global token ownership are retained.
 
 For the [messaging top-bar design](../../specs/architecture/1541-channel-name-top-bar.md),
 Figma's generated-code fallback colors use a different scheme. Resolved variables and
@@ -313,8 +343,9 @@ deleted the header row that used to precede it — "the top of the thread." Styl
 `.modal-rejection` (#249) error-accent idiom: `--color-error` left border over
 `--color-surface-container-high`, sized to body-medium — deliberately a step up from a muted body-small
 caption (the distinction was originally drawn against `.composer__hint`, retired by
-[#968](../codebase/968.md)) — `flex: 0 0 auto` so it pushes the thread down rather than overlaying it,
-never growing or shrinking.
+[#968](../codebase/968.md)). It now lives inside the measured top chrome: its height
+adds start-of-history clearance and moves pills below the occupied header while the
+thread viewport continues behind the controls.
 
 Not security-sensitive: a pure renderer read of already-store-held status, no transport/crypto/socket
 code touched. See [#279 codebase notes](../codebase/279.md) for the full design, the code-review record,

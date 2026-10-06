@@ -21,7 +21,7 @@ interface ToolDenial {
 interface MessageAttachment { attachmentId: string; filename: string }
 
 type ThreadItem =
-  | { kind: 'assistantText'; turnId: string; text: string; createdAt?: number }
+  | { kind: 'assistantText'; turnId: string; text: string; createdAt?: number; parentToolUseId?: string }
   | { kind: 'toolCall'; turnId: string; toolUseId: string; parentToolUseId?: string; name: string; inputSummary: string; input?: Readonly<Record<string, string>>; result: ToolResult | null; denial?: ToolDenial; elapsedSeconds?: number }
   | { kind: 'turnBoundary'; turnId: string; stopReason: string
       ; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string
@@ -31,7 +31,7 @@ type ThreadItem =
   | { kind: 'compactionBoundary'; failed: boolean; manual: boolean; preTokens?: number | null; postTokens?: number | null }
 
 type ThreadEvent =
-  | { type: 'assistantDelta'; turnId: string; seq: number; text: string; createdAt?: number }
+  | { type: 'assistantDelta'; turnId: string; seq: number; text: string; parentToolUseId?: string; createdAt?: number }
   | { type: 'toolUse'; turnId: string; toolUseId: string; parentToolUseId?: string; name: string; inputSummary: string; input?: Readonly<Record<string, string>> }
   | { type: 'toolDenied'; turnId: string; toolUseId: string; denial: ToolDenial }
   | { type: 'toolProgress'; turnId: string; toolUseId: string; elapsedSeconds: number }
@@ -73,7 +73,7 @@ rule, not `stalled`'s: the wire's `compacting` frame also carries an explicit fa
 on that edge or a reconnect/reset and survives turn activity. It stays `boolean`:
 completion outcomes and delayed counts belong to retained `compactionBoundary` rows,
 with `pendingCompaction` identifying the row awaiting metadata. See
-[compaction lifetime](conversation-timeline-store.md#what-it-does).
+[compaction lifetime](conversation-timeline-store-compaction.md#what-it-does).
 **`localSendPending` ([#650](../codebase/650.md)) is a fifth such
 scalar** — set by local `userText` (the composer's own accept signal, no separate event);
 live and history receipts carry `received: true` and preserve either pending value. It is cleared
@@ -255,7 +255,10 @@ and the `Number.isFinite` guard's load-bearing role.
 
 Parent attribution and result precedence are documented in
 [Tool parent attribution](conversation-timeline-store.md#tool-parent-attribution).
-Grouping changes display order only.
+Assistant items retain the optional hint too; see
+[assistant parent attribution](conversation-timeline-store.md#assistant-parent-attribution).
+Grouping changes display order only, using loaded Agent/Task owners rather than roster
+membership. Missing owners leave replies top-level until history supplies them.
 
 ### Permission-denial correlation
 
@@ -322,7 +325,7 @@ pins these joins, exact-reference rejection and both pending-send values.
 
 | event | effect |
 |---|---|
-| `assistantDelta` | tail-check coalesce: same-`turnId` tail `assistantText` → replace with concatenated text, keeping the **tail's own** `createdAt` ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013), so a coalesced bubble stays dated by its first delta); otherwise append fresh, carrying the event's `createdAt`. `seq` carried, not consulted — arrival order is authoritative. |
+| `assistantDelta` | tail-check coalesce: tail `assistantText` with equal `turnId` and `parentToolUseId` → replace with concatenated text, retaining attribution and the **tail's own** `createdAt` ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013), so a coalesced bubble stays dated by its first delta); otherwise append fresh, carrying the event's `createdAt` and parent. `seq` carried, not consulted — arrival order is authoritative. |
 | `toolUse` | append a fresh `toolCall` with `result: null` |
 | `toolProgress` | replace `elapsedSeconds` on the exact pending turn/tool match; latest arrival wins, including zero and decreases. Unmatched, resolved, denied or identical readings return the same state. Every scalar and other item stays unchanged. See [live delivery](conversation-timeline-store.md#live-tool-progress). |
 | `toolDenied` | attach the first denial to the exact turn/tool match; empty keys, unmatched calls and duplicates return the same state reference. Clear `elapsedSeconds`; preserve the result and every scalar. |
@@ -358,7 +361,7 @@ turn activity.
 shape as `apiRetry`**: turn activity carries it through unchanged. Its own falling
 edge also appends a retained divider; reconnect clears the flag directly without
 synthesizing that edge. Rows and pending metadata survive reconnect. See
-[association rules and retention limits](conversation-timeline-store.md#what-it-does).
+[association rules and retention limits](conversation-timeline-store-compaction.md#what-it-does).
 **`thinkingTokens` ([#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314)) is a sixth,
 independent axis with a clearing rule that matches neither of the two shapes above** — not
 `stalled`'s self-clear-on-turn-activity (every content arm carries it through unchanged: `stalled` is
@@ -381,13 +384,15 @@ transform, not a selector — it is exported alongside these but takes a `queued
 
 ### Internal helpers (unexported)
 
-- `appendDelta(items, turnId, text, createdAt)` — the tail-check coalesce for `assistantDelta`; always
-  returns a new array (a delta is always a change). `createdAt` ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013))
-  is a **required** fourth parameter — module-private with one call site, so there is no cascade to buy
-  off, and requiring it makes forgetting it a compile error at that one site. The grow branch reads
+- `appendDelta(items, turnId, text, createdAt, parentToolUseId)` — the tail-check coalesce for
+  `assistantDelta`; always returns a new array (a delta is always a change). Both trailing
+  parameters accept `undefined` but are required at its one private call site. Equal turn ids
+  alone would merge main-thread and helper text, or two helpers sharing a turn. Coalescing
+  requires equal parents too; two parentless deltas still coalesce as before. Intervening
+  rows prevent growth even when turn and parent match. The grow branch reads
   `tail.createdAt` (this function rebuilds the item as a fresh literal on every coalesced delta, so
   carrying the incoming stamp instead would silently re-date a bubble to its most recent fragment); only
-  the fresh-append branch reads the parameter.
+  the fresh-append branch reads the incoming stamp.
 - `removeUserEcho(items, messageId)` ([#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213))
   — `dropUserText`'s helper: removes the **first** `userText` item whose `messageId` strictly equals
   `messageId`, `fillResult`'s discipline one shape over (a `removed` flag rather than a bare `filter`, so

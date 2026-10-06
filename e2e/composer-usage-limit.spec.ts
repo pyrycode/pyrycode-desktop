@@ -110,9 +110,14 @@ test('top overlay: the usage pill warns, dismisses, returns on a changed reading
   if (areaBox !== null && pillBox !== null) {
     expect(pillBox.x).toBeGreaterThanOrEqual(areaBox.x)
     expect(Math.round(pillBox.x + pillBox.width)).toBeLessThanOrEqual(Math.round(areaBox.x + areaBox.width))
-    // Pinned to the area's top edge, over the timeline.
-    expect(Math.round(pillBox.y)).toBe(Math.round(areaBox.y))
   }
+  // Pills float over the full-pane timeline below the actual occupied header.
+  await expect.poll(() => warning.evaluate(el => {
+    const header = document.querySelector('.conversation__top-chrome')!.getBoundingClientRect()
+    const pane = document.querySelector('.conversation__message-area')!.getBoundingClientRect()
+    const pill = el.getBoundingClientRect()
+    return { belowHeader: Math.round(pill.top - header.bottom), rightInset: Math.round(pane.right - pill.right) }
+  })).toEqual({ belowHeader: 12, rightInset: 20 })
   // Wrapped, not clipped: the text box holds all of its content.
   expect(await warning.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true)
   expect(

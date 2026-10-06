@@ -1,3 +1,6 @@
+import { createMessageLifecycle } from './messageLifecycle'
+import { createDiagnosticLog } from './diagnosticLog'
+import type { SendOutcome } from './transport/sendObservation'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createHash } from 'node:crypto'
 import { onCommand, type CommandSource } from './receiveCommand'
@@ -104,6 +107,7 @@ interface FakeDriver {
   stopped: boolean
   /** Every plaintext handed to the driver's sendMessage, in order. */
   sent: Uint8Array[]
+  observations: Array<(outcome: SendOutcome) => void>
   handle: NoiseRelayDriver
   /** Drive a RelaySessionEvent back into the consumer's onEvent handler. */
   emit(event: RelaySessionEvent): void
@@ -121,14 +125,16 @@ function makeDriverFactory(options: { throwOnSend?: boolean } = {}): {
         config,
         stopped: false,
         sent: [],
+        observations: [],
         emit: (event) => config.onEvent(event),
         handle: {
           // Record what the connection forwards. The driver's own inertness (pre-handshake /
           // post-terminal) is NOT modelled here — that contract is proven by
           // noiseRelayDriver.test.ts:304-358; this layer only tests what it hands the driver.
-          sendMessage(plaintext) {
+          sendMessage(plaintext, observe) {
             if (options.throwOnSend) throw new Error('driver send boom')
             fake.sent.push(plaintext)
+            if (observe) fake.observations.push(observe)
           },
           stop() {
             fake.stopped = true
@@ -219,6 +225,7 @@ function build(
     save?: () => Promise<void>
     throwOnSend?: boolean
     diagnosticLog?: DiagnosticLog
+    messageLifecycle?: DaemonConnectionDeps['messageLifecycle']
     mintToken?: () => string
     timing?: DaemonConnectionDeps['timing']
     serverId?: string | null
@@ -244,6 +251,7 @@ function build(
     now: () => FIXED_TS,
     createDriver: factory.createDriver,
     diagnosticLog: overrides.diagnosticLog,
+    messageLifecycle: overrides.messageLifecycle,
     // The retrieval idle-deadline seam (#996). Left undefined by default so every pre-existing test
     // keeps the real setTimeout; the retrieval block injects a fake scheduler.
     timing: overrides.timing,
@@ -1528,6 +1536,16 @@ describe('createDaemonConnection — structured stream (assistant_delta / turn_e
     ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
     return ctx
   }
+
+  it('forwards assistant parent attribution through live IPC', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+    drivers[0].emit({ type: 'message', plaintext: assistantDeltaPlaintext({ ...DELTA, parent_tool_use_id: 'agent-parent' }) })
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'assistantDelta', turnId: 'turn-1', seq: 3, text: 'a reply slice',
+        conversationId: 'conv-1', daemonTs: FIXED_TS, parentToolUseId: 'agent-parent' }
+    ])
+  })
 
   it('decodes an inbound assistant_delta into one camelCase assistantDelta, conversation id and all', async () => {
     const { sink, drivers } = await connected()
@@ -11325,6 +11343,16 @@ describe('createDaemonConnection — requestHistory (history page request/reply,
     expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
   })
 
+  it('forwards a stored assistant parent hint through correlated history IPC', async () => {
+    const { sink, drivers, replyTo } = await requested()
+    drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext({ ...PAGE, entries: [
+      { ...ENTRY, payload: { ...ENTRY.payload, parent_tool_use_id: 'historical-agent' } }
+    ] }, replyTo) })
+    expect(emitted(sink).filter(event => event.type === 'historyPageReceived')).toMatchObject([
+      { conversationId: CONV, entries: [{ event: { parentToolUseId: 'historical-agent' } }] }
+    ])
+  })
+
   it('decodes a correlated history_page into historyPageReceived, attributed to the ASKED conversation', async () => {
     // The page names no conversation. What crosses is the id THIS CLIENT put in its own outbound
     // frame, resolved from the envelope the page answers — the only place that fact exists.
@@ -12969,5 +12997,71 @@ describe('reconnect replay cursor', () => {
     expect(b.drivers).toHaveLength(1)
     expect(await hello(b)).toHaveProperty('last_event_id', 99)
     registry.stop()
+  })
+})
+
+describe('composer diagnostics through the daemon connection', () => {
+  const id = '12345678-1234-4123-8123-123456789abc'
+  it('requires own write evidence and correlates decoded snapshots to originating host and conversation', async () => {
+    const lines: string[] = []
+    const log = createDiagnosticLog({ sink: { write: line => lines.push(line) } })
+    const lifecycle = createMessageLifecycle(log)
+    const local = build({ serverId: 'host', messageLifecycle: lifecycle })
+    const other = build({ serverId: 'other-host', messageLifecycle: lifecycle })
+    for (const ctx of [local, other]) { ctx.connection.start(); await tick(); ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() }) }
+    lifecycle.queued(id, 'chat')
+    local.connection.send({ message_id: id, conversation_id: 'chat', text: 'TEXT_SECRET', attachment_ids: ['ATTACHMENT_SECRET'] })
+    expect(lines.map(line => JSON.parse(line).event)).toEqual(['message-queued'])
+    local.drivers[0].observations[0]({ type: 'sent', connectionId: '22345678-1234-4123-8123-123456789abc' })
+    const snapshot = (ctx: typeof local, conversation: string, message_id: string | undefined) => ctx.drivers[0].emit({ type: 'message', plaintext: queueStatePlaintext({ conversation_id: conversation, queued: [{ queued_msg_id: 1, message_id, text: 'WIRE_SECRET', ts: FIXED_TS }] }) })
+    snapshot(other, 'chat', id)
+    snapshot(local, 'other-chat', id)
+    for (const value of [undefined, '', 'WIRE_SECRET']) snapshot(local, 'chat', value)
+    expect(lines).toHaveLength(2)
+    snapshot(local, 'chat', id)
+    snapshot(local, 'chat', id)
+    expect(lines.map(line => JSON.parse(line).event)).toEqual(['message-queued', 'message-sent', 'message-acknowledged'])
+    lifecycle.cancel(id, 'chat')
+    expect(JSON.parse(lines[3]).code).toBe('user-cancel-request')
+    expect(lines.join()).not.toContain('SECRET')
+    for (const ctx of [local, other]) ctx.connection.stop()
+    expect(lines).toHaveLength(4)
+  })
+  it.each(['unavailable', 'driver-failure', 'encode-failure'] as const)('records %s without inventing sent', async mode => {
+    const lines: string[] = []
+    const lifecycle = createMessageLifecycle(createDiagnosticLog({ sink: { write: line => lines.push(line) } }))
+    const ctx = build({ messageLifecycle: lifecycle, throwOnSend: mode === 'driver-failure' })
+    if (mode !== 'unavailable') { ctx.connection.start(); await tick() }
+    lifecycle.queued(id, 'chat')
+    ctx.connection.send({ message_id: id, conversation_id: 'chat', text: mode === 'encode-failure' ? 'SECRET'.repeat(20000) : 'SECRET' })
+    expect(lines.map(line => JSON.parse(line).event)).toEqual(['message-queued', 'message-dropped'])
+    expect(JSON.parse(lines[1]).code).toBe(mode === 'unavailable' ? 'send-refused' : 'send-failed')
+    expect(lines.join()).not.toContain('SECRET')
+    ctx.connection.stop()
+  })
+})
+
+describe('session_error IPC emission', () => {
+  it('emits only conversation id and code, and malformed diagnostics expose no content', async () => {
+    const records: DiagnosticEvent[] = []
+    const log = { event: (event: DiagnosticEvent) => records.push(event) } as DiagnosticLog
+    const { connection, sink, drivers } = build({ diagnosticLog: log })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    const before = emitted(sink).length
+    drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 7, ts: FIXED_TS, type: 'session_error',
+      payload: { conversation_id: 'PRIVATE-ID', code: 'future.PRIVATE-CODE', message: 'PRIVATE-MESSAGE', extra: 'PRIVATE-EXTRA' } }) })
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'sessionError', conversationId: 'PRIVATE-ID', code: 'future.PRIVATE-CODE' }
+    ])
+    const after = emitted(sink).length
+    const logsBefore = records.length
+    drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 8, ts: FIXED_TS, type: 'session_error',
+      payload: { conversation_id: 'PRIVATE-ID', code: 3, message: 'PRIVATE-MESSAGE' } }) })
+    expect(emitted(sink)).toHaveLength(after)
+    expect(records.length).toBe(logsBefore)
+    expect(JSON.stringify(records)).not.toContain('PRIVATE')
+    connection.stop()
   })
 })

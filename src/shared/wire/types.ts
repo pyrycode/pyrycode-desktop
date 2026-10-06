@@ -95,6 +95,7 @@ export type EnvelopeType =
   | 'assistant_delta'
   | 'turn_end'
   | 'turn_state'
+  | 'session_error'
   | 'stall'
   | 'api_retry'
   | 'compacting'
@@ -794,6 +795,8 @@ export interface SessionCapabilitiesPayload {
  * verbatim. See #199.
  */
 export interface AssistantDeltaPayload {
+  /** Spawning Agent/Task id; empty or absent for main-thread text. Display attribution only. */
+  parent_tool_use_id?: string
   conversation_id: string
   turn_id: string
   /** Per-turn sequence, non-negative, resets each turn (daemon Seq int, #607); `0` is a valid value. */

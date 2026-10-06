@@ -1,3 +1,4 @@
+import { capturePairedApp } from './fixtures/capturePairedApp'
 import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { ConversationSummary, Envelope, EnvelopeType, ModalShownPayload, WireQuestion } from '../src/shared/wire/types'
@@ -52,7 +53,7 @@ const openChat = async (page: Page, name: string): Promise<void> => {
 
 test('one session checkbox grants only checked, explicitly confirmed supplied allow options', async ({ launchPairedApp }) => {
   const captured: Envelope[] = []
-  const { page, daemon } = await launchPairedApp({ buildReplyFrames: fake(captured, [SEEDED_ROW]) })
+  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: fake(captured, [SEEDED_ROW]) })
   await page.setViewportSize({ width: 1280, height: 800 })
   const panel = panelFor(page)
   const cases = [
@@ -87,7 +88,7 @@ test('one session checkbox grants only checked, explicitly confirmed supplied al
       await expect(action(panel, 'Continue')).toBeDisabled()
       expect(resolutions(captured, id)).toBe(0)
     }
-    if (index === 0) await page.screenshot({ path: '/tmp/builder-1409-normal.png', animations: 'disabled' })
+    if (index === 0) await capturePairedApp(app, page, '/tmp/builder-1409-normal.png')
     if (scenario.cancel) await action(panel, 'Cancel').click()
     else {
       await panel.getByRole('radio', { name: scenario.option + (scenario.option === (scenario.default ?? 'reject_once') ? ' Default' : ''), exact: true }).press('Space')
@@ -116,7 +117,7 @@ test('one session checkbox grants only checked, explicitly confirmed supplied al
 
 test('same-ID changed, removed, reordered and restored offers clear opt-in during confirmation', async ({ launchPairedApp }) => {
   const captured: Envelope[] = []
-  const { page, daemon } = await launchPairedApp({ buildReplyFrames: fake(captured, [SEEDED_ROW]) })
+  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: fake(captured, [SEEDED_ROW]) })
   const panel = panelFor(page)
   daemon.pushFrame(grantShown('continuous'))
   const checkbox = panel.getByRole('checkbox')
@@ -156,14 +157,14 @@ test('same-ID changed, removed, reordered and restored offers clear opt-in durin
 
 test('complete long and unbroken rules wrap at 800×600 with reachable confirmation actions', async ({ launchPairedApp }) => {
   const captured: Envelope[] = []
-  const { page, daemon } = await launchPairedApp({ buildReplyFrames: fake(captured, [SEEDED_ROW]) })
+  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: fake(captured, [SEEDED_ROW]) })
   await page.setViewportSize({ width: 800, height: 600 })
   const rules = ['Bash(' + 'a'.repeat(500) + ')', ...Array.from({ length: 15 }, (_, i) => `Read(${i} ${'long rule '.repeat(30)})`)]
   daemon.pushFrame(grantShown('Review session permission', { always_allow: { offered: true, rules } }))
   const panel = panelFor(page)
   await expect(panel.locator('.permission-panel__rules li')).toHaveText(rules)
   await panel.getByRole('checkbox').press('Space')
-  await page.screenshot({ path: '/tmp/builder-1409-long.png', animations: 'disabled' })
+  await capturePairedApp(app, page, '/tmp/builder-1409-long.png')
   await panel.getByRole('radio', { name: 'allow_once', exact: true }).press('Space')
   for (const name of ['Continue', 'Confirm']) {
     const widths = await panel.locator('.permission-panel__content, .permission-panel__rules, .permission-panel__rules li').evaluateAll(nodes =>
@@ -178,7 +179,7 @@ test('complete long and unbroken rules wrap at 800×600 with reachable confirmat
     await expect(button).toBeInViewport()
     await panel.locator('.permission-panel__content').evaluate(node => { node.scrollTop = 0 })
     expect(resolutions(captured, 'Review session permission')).toBe(0)
-    if (name === 'Confirm') await page.screenshot({ path: '/tmp/builder-1409-confirm.png', animations: 'disabled' })
+    if (name === 'Confirm') await capturePairedApp(app, page, '/tmp/builder-1409-confirm.png')
     await button.click()
   }
   await expect.poll(() => resolutions(captured, 'Review session permission')).toBe(1)
@@ -186,7 +187,7 @@ test('complete long and unbroken rules wrap at 800×600 with reachable confirmat
 
 test('permission context and initial Cancel focus preserve deliberate keyboard response gates', async ({ launchPairedApp }) => {
   const captured: Envelope[] = []
-  const { page, daemon } = await launchPairedApp({ buildReplyFrames: fake(captured, [SEEDED_ROW]) })
+  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: fake(captured, [SEEDED_ROW]) })
   await page.setViewportSize({ width: 1280, height: 800 })
   const panel = panelFor(page)
   const chat = rowFor(page, SEEDED_ROW.name!).locator('.channel-list__row-open')
@@ -209,7 +210,7 @@ test('permission context and initial Cancel focus preserve deliberate keyboard r
   await expect(action(panel, 'Cancel')).toBeFocused()
   await expect(action(panel, 'Continue')).toBeDisabled()
   await expect(panel.getByRole('radio', { checked: true })).toHaveCount(0)
-  await page.screenshot({ path: '/tmp/builder-1408-context-normal.png', animations: 'disabled' })
+  await capturePairedApp(app, page, '/tmp/builder-1408-context-normal.png')
   await page.keyboard.press('Enter')
   await expect.poll(() => resolutions(captured, 'Review file access', 'modal_cancel')).toBe(1)
   expect(resolutions(captured, 'Review file access')).toBe(0)
@@ -248,7 +249,7 @@ test('permission context and initial Cancel focus preserve deliberate keyboard r
 
 test('permission and trust require selection then Continue; confirmation, cancel and remote dismissal advance FIFO', async ({ launchPairedApp }) => {
   const captured: Envelope[] = []
-  const { page, daemon } = await launchPairedApp({ buildReplyFrames: fake(captured, [SEEDED_ROW]) })
+  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: fake(captured, [SEEDED_ROW]) })
   await page.setViewportSize({ width: 1280, height: 800 })
   const panel = panelFor(page)
   daemon.pushFrame(shown('Default permission'))
@@ -259,7 +260,7 @@ test('permission and trust require selection then Continue; confirmation, cancel
   await expect(page.locator('.permission-modal-overlay')).toHaveCount(0)
   await choose(panel, 'Deny')
   expect(resolutions(captured, 'Default permission')).toBe(0)
-  await page.screenshot({ path: '/tmp/builder-1356-permission-normal.png', animations: 'disabled' })
+  await capturePairedApp(app, page, '/tmp/builder-1356-permission-normal.png')
   await action(panel, 'Continue').click()
   await expect.poll(() => resolutions(captured, 'Default permission', 'modal_answer', 'deny')).toBe(1)
   await expect(panel).toHaveCount(0)
@@ -384,7 +385,7 @@ test('chat-scoped FIFO and rejection feedback survive optimistic removal, switch
 
 test('permission coverage retains draft, questionnaire picks, Other and active question while isolating hidden inputs', async ({ launchPairedApp }) => {
   const captured: Envelope[] = []
-  const { page, daemon } = await launchPairedApp({ buildReplyFrames: fake(captured, [SEEDED_ROW]) })
+  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: fake(captured, [SEEDED_ROW]) })
   await page.setViewportSize({ width: 800, height: 600 })
   const composer = page.getByPlaceholder('Message…')
   await composer.fill('Retained draft')
@@ -432,14 +433,14 @@ test('permission coverage retains draft, questionnaire picks, Other and active q
   expect(dimensions.scroll).toBeGreaterThan(dimensions.client)
   await expect(action(panel, 'Cancel')).toBeInViewport()
   await expect(action(panel, 'Continue')).toBeInViewport()
-  await page.screenshot({ path: '/tmp/builder-1356-rework-permission-long.png', animations: 'disabled' })
+  await capturePairedApp(app, page, '/tmp/builder-1356-rework-permission-long.png')
   await panel.locator('.permission-panel__context').scrollIntoViewIfNeeded()
-  await page.screenshot({ path: '/tmp/builder-1408-context-long.png', animations: 'disabled' })
+  await capturePairedApp(app, page, '/tmp/builder-1408-context-long.png')
   await expect(panel.locator('.permission-panel__context-text').last()).toHaveText(longPath)
   await panel.locator('.permission-panel__context-text').last().scrollIntoViewIfNeeded()
   await expect(action(panel, 'Cancel')).toBeInViewport()
   await expect(action(panel, 'Continue')).toBeInViewport()
-  await page.screenshot({ path: '/tmp/builder-1408-context-path.png', animations: 'disabled' })
+  await capturePairedApp(app, page, '/tmp/builder-1408-context-path.png')
   await scroll.evaluate((el) => { el.scrollTop = el.scrollHeight })
   await choose(panel, 'Allow writing')
   await action(panel, 'Continue').click()
@@ -448,8 +449,8 @@ test('permission coverage retains draft, questionnaire picks, Other and active q
   await expectNoHorizontalOverflow()
   await expect(action(panel, 'Back')).toBeInViewport()
   await expect(action(panel, 'Confirm')).toBeInViewport()
-  await page.screenshot({ path: '/tmp/builder-1356-rework-permission-confirm.png', animations: 'disabled' })
-  await page.screenshot({ path: '/tmp/builder-1408-context-confirm.png', animations: 'disabled' })
+  await capturePairedApp(app, page, '/tmp/builder-1356-rework-permission-confirm.png')
+  await capturePairedApp(app, page, '/tmp/builder-1408-context-confirm.png')
   expect(resolutions(captured, 'Long permission')).toBe(0)
   await action(panel, 'Back').click()
   await choose(panel, 'Deny')

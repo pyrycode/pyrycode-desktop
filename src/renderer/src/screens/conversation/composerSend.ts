@@ -2,6 +2,7 @@
 // and mirroring pairingState.ts / messageViewModel.ts: the effects are injected so the helper
 // is a pure, deterministic function tested with plain spies (no React, no store, no Electron).
 // The React container (ConversationScreen's Composer) is thin glue over this.
+import type { MessageLifecycleDiagnostic } from '@shared/ipc/diagnostics'
 import { sendMessageCommand, type RendererCommand } from '@shared/ipc/commands'
 import type { SendMessagePayload } from '@shared/wire/types'
 import type { ConnectionStatus } from '../../store/sessionStore'
@@ -74,6 +75,7 @@ export interface PendingAttachmentTake {
  * second optional dep that could silently go unwired, the failure mode `now` already documents.
  */
 export interface ComposerSendDeps {
+  diagnose?: (record: MessageLifecycleDiagnostic) => void
   sendCommand: (command: RendererCommand) => void
   dispatch: (event: ThreadEvent) => void
   dispatchFor: (conversationId: string, event: ThreadEvent) => void
@@ -142,12 +144,17 @@ export function submitMessage(
     attachment_ids: named?.map((attachment) => attachment.attachmentId)
   }
 
+  const diagnose = (event: MessageLifecycleDiagnostic['event']): void => {
+    try { deps.diagnose?.({ event, messageId: message_id, conversationId }) } catch { /* Observe only. */ }
+  }
+  diagnose('message-queued')
   let sent = true
   try {
     deps.sendCommand(sendMessageCommand(payload))
-  } catch (error) {
+  } catch {
+    diagnose('message-bridge-failed')
     // AC4: a send-bridge failure must not crash the window. The optimistic echo still posts.
-    console.error('composer send failed', error)
+    console.error('composer send failed')
     // #1055: but it posts WITHOUT the attachments, and the take is undone. If the frame did not go it
     // named nothing, so the echo records nothing and the files stay attached for the retry. The
     // alternative — echo shows them AND they stay pending — duplicates them on the next send. Rolling

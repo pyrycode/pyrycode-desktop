@@ -321,6 +321,51 @@ button.top-overlay-pill {
   justify-content: flex-start;
 }
 
+/* Scoped to live text arms: attachment offers and other timeline chrome keep their sizing. */
+.message-row--text {
+  --message-row-max-width: 900px;
+  --message-actions-width: 13px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--message-row-max-width);
+  margin-inline: auto;
+}
+
+.message-row--text.message-row--daemon {
+  padding-right: calc(var(--space-5) * 2);
+}
+
+.message-row--text.message-row--user {
+  padding-left: calc(var(--space-5) * 2);
+}
+
+.message-row--text:not(.message-row--queued) {
+  gap: var(--space-3);
+}
+
+.message-row--text > .bubble {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.message-actions {
+  flex: 0 0 var(--message-actions-width);
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-inverse-primary);
+}
+
+.bubble__meta-time {
+  visibility: hidden;
+}
+
+.message-row--text:hover .bubble__meta-time,
+.message-row--text:focus-within .bubble__meta-time {
+  visibility: visible;
+}
+
 /* #969 — the desktop drawing's `Message` component (Figma 132:4477 assistant / 132:4508 user),
    replacing the mobile thread's bubble (16-22 / 16-23) this wore until now. ONE SHAPE FOR BOTH SIDES:
    6px on all four corners, so the two side modifiers below no longer carry a radius at all and the
@@ -331,9 +376,9 @@ button.top-overlay-pill {
    the result lost its padding entirely and the field value box moved to the design's --space-4, so
    .tool-row__result / .tool-row__input-value is no longer among them.
 
-   max-width (not a fixed width) so bubbles reflow as the window resizes. The drawing gives one width at
-   one window size — 680px inside the 780px column at 1280px — which min(680px, 75%) already yields
-   there, so the shipped rule stands rather than being replaced by the drawn constant.
+   Text-message rows now own the available width: a centred 900px border-box cap and 40px
+   far-side inset. Their bubbles hug short content and shrink to the remaining width beside actions.
+   The base bubble cap remains for standalone file offers and the retired MessageBubble path.
 
    NOT A FLEX COLUMN, though the drawing's `Message` is one with a 12px gap. The in-progress assistant
    branch renders its text and the streaming cursor <span> as SIBLING direct children of this box
@@ -695,34 +740,10 @@ button.top-overlay-pill {
    the static tier, which has no layout at all. If .bubble's word-break is ever removed or narrowed, that
    spec is what goes red — a deterministic detector rather than a duplicated declaration. */
 
-/* #969 — the meta row at the foot of a text message bubble (Figma `Meta row` 132:4446 assistant /
-   132:4435 user): the timestamp #970 fills, then the copy control, 8px apart on a 16px line. Its colour
-   is --color-inverse-primary, read from the Figma VARIABLE on both nodes — the export prints #9dcbfc
-   there, which is the light-scheme transposition tokens.css:25-33 warns about and NOT what the design
-   says. The glyph inherits this colour through fill: currentColor rather than restating it.
-
-   THE min-height IS LOAD-BEARING, not a belt on the line-height above it. The timestamp slot renders
-   empty until #970, an empty inline element generates no line box, and without this the row would
-   collapse to the glyph's 12px and take the drawn 4px of breathing room with it. The token is the
-   body-small LINE HEIGHT because that is precisely why the row is 16px tall — --space-4 reads 16 by
-   coincidence and would couple the row to the spacing scale it has nothing else to do with.
-
-   MARGIN-TOP, NOT A PARENT GAP, per .bubble's own comment above. It sits between two siblings so it
-   neither collapses through the bubble's padding box nor escapes it, and .bubble__markdown > * (which
-   zeroes margin-block) cannot reach this row — that selector takes the markdown container's children,
-   and this is .bubble's child, a level up.
-
-   align-items: center where the drawing has items-start plus a 1px top pad on its `Copy` frame.
-   Centring is this file's vocabulary for the same intent, lands the 12px glyph within 1px of the drawn
-   position, and is the only value compatible with the enlarged hit area below — items-start would let
-   the control's taller box grow the row.
-
-   ACCEPTED CONSEQUENCE, recorded rather than fixed: --color-inverse-primary measures 2.67:1 on the
-   assistant fill and 2.04:1 on the user fill, against the 4.5:1 WCAG AA wants for 12px text and the 3:1
-   it wants for an icon control. Both message texts are fine (13.3:1 and 10.1:1) — it is only this row.
-   Substituting a colour here would put the app and the Figma out of step, which is the exact failure
-   this whole redraw is unwinding; the fix is a Figma-side change on 132:4446 / 132:4435 and a one-token
-   edit afterwards. The hover state below incidentally clears both thresholds. */
+/* The bubble's final child: body-small timestamp and optional turn stats. The 16px minimum
+   keeps the empty timestamp slot from collapsing. Visibility reserves stamped text's width
+   and height at rest; row hover/focus reveals it without reflow. Margin supplies the existing
+   12px rhythm without turning streaming text and its inline cursor into separate flex items. */
 .bubble__meta {
   margin-top: var(--space-3);
   display: flex;
@@ -742,36 +763,21 @@ button.top-overlay-pill {
   justify-content: flex-end;
 }
 
-/* #969 — the copy control. THE HIT AREA IS BIGGER THAN THE GLYPH WITHOUT BEING BIGGER THAN THE ROW:
-   11x12 is far under the app's 48px target convention, but growing the button would grow the 16px row
-   the drawing specifies. padding + an equal negative margin gives a 27x28 border box (what the pointer
-   and the focus ring get) inside an 11x12 margin box (what the layout gets), so the row's height and
-   the glyph's drawn position are both exactly as drawn. That is the M3 icon button's container trick,
-   expressed through the spacing scale so no pixel literal appears. The negative margin reaches 8px left
-   into the row's own 8px gap, so it stops at the timestamp rather than overlapping it.
-
-   THE DRAWING HAS NO HOVER, FOCUS OR PRESSED STATE, so both take this file's existing answer
-   (.queued-row__drop / .composer__send). Hover BRIGHTENS the glyph rather than lifting a surface under
-   it: --color-surface-container-high, the surface .queued-row__drop lifts to, is a neutral grey that
-   would read as a foreign patch on either navy fill, while --color-primary is the same tonal ramp as
-   the resting --color-inverse-primary one step lighter. No pressed state and no post-copy confirmation
-   — the drawing shows neither, and the AC does not ask for one. */
+/* Copy's 27×20px hit target enlarges the 11×12px glyph without changing its column.
+   Four vertical pixels per side leave room for a future glyph at a 12px gap. Pointer states
+   keep the same ink; the keyboard outline remains visible. */
 .bubble__copy {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: var(--space-2);
-  margin: calc(var(--space-2) * -1);
+  padding: var(--space-1) var(--space-2);
+  margin: calc(var(--space-1) * -1) calc(var(--space-2) * -1);
   border: none;
   border-radius: var(--radius-full);
   background: transparent;
   color: inherit;
   cursor: pointer;
-}
-
-.bubble__copy:hover {
-  color: var(--color-primary);
 }
 
 .bubble__copy:focus-visible {
@@ -6946,16 +6952,50 @@ button.top-overlay-pill {
   visibility: hidden;
 }
 
-/* #1627 — the markdown reader (Figma 552:2404), laid over .conversation's content box in place of the
-   thread and the composer (the inset is .conversation's own padding). The bar mirrors
-   .conversation__overflow's geometry (title-large title, a 0.6 inverse-primary rule 16px below, 16px under
-   it) with the drawn 8px gap between the arrow and the name. */
+/* Full-pane reader scrolls behind the shared translucent treatment. Padding retains its
+   existing alignment and resting offset; all notices belong to the measured sharp chrome. */
 .markdown-reader {
   position: absolute;
-  inset: var(--space-6) var(--space-5) var(--space-4);
+  inset: 0;
   z-index: 1;
   display: flex;
   flex-direction: column;
+}
+
+.markdown-reader__chrome {
+  position: absolute;
+  inset: 0 0 auto;
+  box-sizing: border-box;
+  z-index: 1;
+  padding: var(--space-6) var(--space-5) 0;
+  pointer-events: none;
+}
+
+.markdown-reader__chrome > :not(.conversation__blur) {
+  position: relative;
+  pointer-events: auto;
+}
+
+.markdown-reader__title {
+  text-shadow: var(--shadow-thread);
+}
+
+.markdown-reader__back {
+  filter: drop-shadow(var(--thread-control-shadow));
+}
+
+.markdown-reader .composer-options {
+  max-width: calc(var(--markdown-reader-width) - var(--space-5) * 2);
+}
+
+.markdown-reader .composer-options__item {
+  box-sizing: border-box;
+  height: auto;
+  min-height: var(--space-7);
+  padding-block: var(--space-1);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  flex-shrink: 0;
 }
 
 .markdown-reader__bar {
@@ -7034,6 +7074,11 @@ button.top-overlay-pill {
 /* The only scroll box, so the note scrolls beneath the fixed bar. Body-large on-surface per the drawn
    body; the .bubble__markdown rules inside give the headings, lists, code blocks and quotes. */
 .markdown-reader__body {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  box-sizing: border-box;
+  padding: var(--markdown-reader-header-height, 85px) var(--space-5) var(--space-4);
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -7065,4 +7110,219 @@ button.top-overlay-pill {
 .background-task-panel__stop:disabled {
   opacity: 0.38;
   cursor: default;
+}
+
+/* Run headers share the existing box and joins; members retain their flat mounted wrappers. */
+.tool-run__row {
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+}
+.tool-run__chevron {
+  transform: rotate(90deg);
+  margin-inline: var(--space-1);
+}
+.tool-run__chevron--expanded {
+  transform: rotate(-90deg);
+}
+.tool-run__status {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: calc(var(--space-3) / 2);
+}
+.tool-run__spinner,
+.tool-run__done {
+  display: block;
+  flex: 0 0 auto;
+  color: var(--color-primary);
+}
+.tool-run__done {
+  color: var(--color-on-surface-variant);
+}
+.tool-run__failures {
+  color: var(--color-error);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight-emphasized);
+}
+
+/* Shared visual values reach both sibling surfaces: covered thread and reader. */
+.conversation {
+  --thread-header-ground: #09141d;
+  --thread-input-ground: rgb(11 14 17 / 60%);
+  --thread-blur-low: 2px;
+  --thread-blur-medium: 5px;
+  --thread-blur-high: 8px;
+  --thread-blur-full: 10px;
+  --thread-control-shadow: 0 4px 2.5px rgb(0 0 0 / 20%);
+}
+
+/* Full-pane scrolling: occupied chrome height remains stylesheet padding even when the
+   pin clears short-history compensation. */
+.conversation__covered {
+  position: absolute;
+  inset: 0;
+  display: block;
+  --thread-header-height: 85px;
+  --thread-input-height: 132px;
+}
+
+.conversation__message-area {
+  position: absolute;
+  inset: 0;
+  /* Contain pills and the drawer below chrome, leaving the existing modal levels intact. */
+  z-index: 0;
+}
+
+.conversation__message-area > .conversation__thread {
+  box-sizing: border-box;
+  margin-left: 0;
+  padding: calc(var(--thread-header-height) + var(--space-3)) var(--space-5)
+    var(--thread-input-height);
+}
+
+.conversation__top-chrome,
+.conversation__input-chrome {
+  position: absolute;
+  left: 0;
+  right: 0;
+  box-sizing: border-box;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.conversation__top-chrome {
+  top: 0;
+  padding: var(--space-6) var(--space-5) 0;
+}
+
+.conversation__input-chrome {
+  bottom: 0;
+  padding: var(--space-4) var(--space-5);
+}
+
+.conversation__top-chrome > :not(.conversation__blur),
+.conversation__input-chrome > :not(.conversation__blur) {
+  position: relative;
+  pointer-events: auto;
+}
+
+.conversation__input-chrome .composer-status {
+  margin-top: 0;
+}
+
+.conversation__overflow-title,
+.composer-status__label {
+  text-shadow: var(--shadow-thread);
+}
+
+.conversation__overflow-trigger,
+.composer-status__icon {
+  filter: drop-shadow(var(--thread-control-shadow));
+}
+
+/* Masks blend progressively stronger backdrop samples. Controls are siblings above these
+   decorative layers, so their text and hit targets never inherit a blur. */
+.conversation__blur,
+.conversation__blur::after,
+.conversation__blur > i {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.conversation__blur::after {
+  content: '';
+  background: linear-gradient(to bottom, var(--thread-header-ground), transparent);
+}
+
+.conversation__blur > i:nth-child(1) {
+  backdrop-filter: blur(var(--thread-blur-full));
+  mask-image: linear-gradient(to bottom, black, transparent 40%);
+}
+.conversation__blur > i:nth-child(2) {
+  backdrop-filter: blur(var(--thread-blur-high));
+  mask-image: linear-gradient(to bottom, transparent, black 25%, transparent 65%);
+}
+.conversation__blur > i:nth-child(3) {
+  backdrop-filter: blur(var(--thread-blur-medium));
+  mask-image: linear-gradient(to bottom, transparent 25%, black 55%, transparent 85%);
+}
+.conversation__blur > i:nth-child(4) {
+  backdrop-filter: blur(var(--thread-blur-low));
+  mask-image: linear-gradient(to bottom, transparent 55%, black 80%, transparent);
+}
+
+.conversation__input-chrome .conversation__blur::after {
+  background: linear-gradient(to bottom, transparent, var(--thread-input-ground) 20%);
+}
+.conversation__input-chrome .conversation__blur > i:nth-child(1) {
+  mask-image: linear-gradient(to bottom, transparent, black 20%);
+}
+.conversation__input-chrome .conversation__blur > i:nth-child(2) {
+  mask-image: linear-gradient(to bottom, transparent 8%, black 16%, transparent 24%);
+}
+.conversation__input-chrome .conversation__blur > i:nth-child(3) {
+  mask-image: linear-gradient(to bottom, transparent 3%, black 10%, transparent 18%);
+}
+.conversation__input-chrome .conversation__blur > i:nth-child(4) {
+  mask-image: linear-gradient(to bottom, transparent, black 4%, transparent 10%);
+}
+
+.conversation__top-overlay {
+  top: calc(var(--thread-header-height) + var(--space-3));
+  left: var(--space-5);
+  right: var(--space-5);
+}
+
+.background-task-drawer {
+  top: var(--thread-header-height);
+  bottom: var(--thread-input-height);
+  right: var(--space-5);
+  width: min(360px, calc(100% - var(--space-5)));
+}
+
+.conversation__message-area > .conversation__thread {
+  position: relative;
+  z-index: 0;
+}
+
+.conversation__input-chrome .composer-options {
+  max-width: var(--composer-options-max-width, none);
+}
+
+/* Bounded footer labels wrap fully, including unbroken model names. Keep overflow visible
+   on the row and panel so the existing keyboard focus outline paints outside their edges. */
+.conversation__input-chrome .composer__footer .composer-options__item {
+  box-sizing: border-box;
+  height: auto;
+  min-height: 28px;
+  padding-block: var(--space-1);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  flex-shrink: 0;
+}
+
+/* Left-edge header popup: preserve footer and right-aligned consumers' offsets. */
+.composer-options-anchor--bottom-start {
+  flex: 0 0 auto;
+  z-index: 1;
+}
+
+.composer-options-anchor--bottom-start > .composer-options {
+  top: calc(100% + var(--space-8));
+  left: calc(-1 * var(--space-1));
+  right: auto;
+  bottom: auto;
+}
+
+/* An opt-in dismissal layer consumes the entire gesture before exposing underlying controls. */
+.composer-options-dismiss-layer {
+  position: fixed;
+  inset: 0;
+}
+
+.composer-options-anchor--consume-outside > .composer-options {
+  z-index: 1;
 }

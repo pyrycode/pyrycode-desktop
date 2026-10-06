@@ -76,9 +76,10 @@ One new file, `src/renderer/src/screens/conversation/MarkdownReader.tsx`.
   CLAUDE.md's "rendered, escaped and length-bounded" rule for daemon text. The CSS
   `nowrap`/`ellipsis` on `.markdown-reader__title` is a second, geometric bound for the
   narrow-window residual truncation can't cover — neither is redundant with the other.
-- **`MarkdownReaderView({ state, copied, onBack, onRefresh, onCopy })`** — pure, a function
-  of `loading | loaded` state only (the `closed` variant is never passed in — see § Pane
-  wiring). The bar is drawn in **both** states, so it has somewhere to live while the first
+- **`MarkdownReaderView`** — markup follows `loading | loaded` state, copy confirmation
+  and open/save failure flags (the `closed` variant is never passed in — see § Pane
+  wiring). A mount effect measures chrome through DOM refs; static renders do not execute
+  that effect. The bar is drawn in **both** states, so it has somewhere to live while the first
   fetch is in flight — this is what gave
   [#1630](https://github.com/pyrycode/pyrycode-desktop/issues/1630)'s three-dot menu a mount
   point that isn't gated on content having arrived (see § Note actions menu). The body renders
@@ -113,9 +114,10 @@ explicit operator ruling, since that component already carries an icon-only trig
 reuses `ThreadOverflowMenu`'s own drawing and glyph (`.conversation__overflow-trigger` /
 `.conversation__overflow-icon`), so the desktop chat screen's overflow button and the
 reader's note-actions button are visually the same control in two places. `markdownReaderMenuOptions(state)`
-builds the four rows from state alone (pure, exported for the unit tier): the three copy rows
-carry `unavailable: state.type !== 'loaded'`, Refresh is always available. Escape and an
-outside click close the menu through `ComposerOptionsMenu`'s own handling, not anything local
+builds the six rows from state alone (pure, exported for the unit tier): the three copy rows,
+Open in another app and Save to device carry `unavailable: state.type !== 'loaded'`;
+Refresh is always available. Escape and an outside click close the menu through
+`ComposerOptionsMenu`'s own handling, not anything local
 to the reader.
 
 **The three copy kinds** (`MarkdownCopyKind = 'markdown' | 'plain' | 'html'`) all act on
@@ -226,10 +228,11 @@ in another app.'`), drawn inside the still-open reader over the current text —
 setting it after unmount. Diagnostics are the static codes `open-in-app` and `open-in-app-failed` — never
 the text, the name or the failure reason, matching every other diagnostic this reader emits.
 
-**No Playwright coverage was added on purpose.** An e2e run must never launch a real external app; the
-unit tests against the injected `open` seam (main) and the guard (shared) carry the proof instead.
-`e2e/markdown-reader-menu.spec.ts` (#1630) now expects five rows and asserts the new one is disabled
-while loading and enabled once loaded, but it never chooses it.
+**The OS operation is proven in unit tests.** An e2e run must never launch a real external app;
+unit tests against the injected `open` seam (main) and the guard (shared) carry that proof.
+`e2e/markdown-reader-menu.spec.ts` expects all six rows and checks loading/loaded availability.
+Its layout cases choose Open in another app only after replacing the IPC handler with an
+injected failure, proving banner clearance without calling the OS app or filesystem driver.
 
 ## Save to device (#1632)
 
@@ -284,12 +287,13 @@ reader over the current text on any non-`saved` answer or a rejected invoke — 
 the next attempt and by Back, guarded by the same `alive` ref against a late answer after unmount.
 Diagnostics are the static codes `save` and `save-failed`.
 
-**No Playwright coverage was added, for Open in another app's reason.** An e2e run must never write into
-the real Downloads folder or open Finder/Explorer to reveal a file there; the unit tests against the
+**The filesystem operation is proven in unit tests.** An e2e run must never write into
+the real Downloads folder or open Finder/Explorer to reveal a file there; unit tests against the
 injected `writeIntoDownloads`/`reveal` seams (in `src/main/attachmentSave.test.ts`, alongside the
 attachment save's own tests) and the guard carry the proof instead.
-`e2e/markdown-reader-menu.spec.ts` now expects six rows and asserts Save to device is disabled while
-loading and enabled once loaded, but never chooses it.
+`e2e/markdown-reader-menu.spec.ts` expects six rows and checks Save to device is disabled while
+loading and enabled once loaded. Its layout cases choose it only with an injected IPC failure;
+they exercise the failure banner without writing into Downloads or revealing a file.
 
 ## Pane wiring
 
@@ -302,23 +306,47 @@ listener — a late answer after that point reaches no subscriber to apply itsel
 
 **The reader is a layer over the pane, not a replacement rendered by an early return** — that
 was the shipped shape's first cut, reworked during review (PR #1629). The thread and
-`Composer` now always render, nested inside a wrapper:
+`Composer` always render, nested inside a full-pane wrapper:
 
 ```css
-.conversation__covered { display: contents; }
+.conversation__covered { position: absolute; inset: 0; display: block; }
 .conversation__covered[data-covered] { visibility: hidden; }
 ```
 
-`display: contents` makes the wrapper generate no box of its own, so its children stay direct
-flex items of `.conversation`'s column and the containing block for the screen's other
-absolutely positioned sheets is unchanged. While the reader is open the wrapper carries
+The covered pane contains the full-pane thread and its fixed top/input chrome (see
+[layout contract](conversation-shell-chrome.md#layout-contract)). While the reader is open it carries
 `data-covered`, which sets `visibility: hidden` on the whole subtree — out of the tab order
 and the accessibility tree, and unable to take a pointer hit or a drop, but present in the
 layout, so **the thread's scroll position survives the round trip** rather than resetting.
-`MarkdownReaderView` itself renders as `position: absolute; inset: var(--space-6)
-var(--space-5) var(--space-4)` over `.conversation`'s own content box (those insets equal
-`.conversation`'s own padding), mirroring `.conversation__overflow`'s bar geometry (title-large
-name, a 0.6-opacity `--color-inverse-primary` rule 16px below).
+`MarkdownReaderView` and its only scrollport, `.markdown-reader__body`, use absolute
+`inset: 0` over the whole chat pane. The body sits at local level 0 beneath fixed
+`.markdown-reader__chrome` at level 1. Chrome includes the existing Back/title/Note actions
+bar, divider, every refresh/open/save failure notice and transient copy confirmation.
+The bar retains its title-large name and 0.6-opacity `--color-inverse-primary` rule 16px below.
+
+The reader reuses `.conversation__blur`: a downward `#09141D` → transparent gradient
+and masked 10/8/5/2px backdrop samples taper to zero while text scrolls behind the header.
+Sharp control children stay above those decorative layers; the title uses `--shadow-thread`
+and Back/menu glyphs use the shared drop-shadow. Treatment variables belong to
+`.conversation`, the common ancestor of reader and covered thread; variables on the
+covered sibling would not reach the reader. Thread height variables remain on that sibling.
+Chrome and decoration ignore pointer input, while sharp bar/notices restore it, so overlapping
+Markdown cannot cover Back or Note actions.
+
+A mount effect measures chrome's border box immediately and through `ResizeObserver`,
+writing `--markdown-reader-header-height` and `--markdown-reader-width` on the reader,
+then disconnecting on unmount. Body top padding uses measured height with an 85px fallback;
+horizontal and bottom padding remain 20px and 16px. At scroll zero this preserves the first
+heading's 85px offset without notices, and clears all occupied chrome as notices/copy
+confirmation appear, disappear or wrap during native resizing and zoom. Measurement writes
+CSS properties without React state or Markdown re-renders. The scrolled Figma `756:10358`
+frame establishes the shared treatment, not a new resting offset.
+
+The existing six-action `ComposerOptionsMenu` paints above the body. Its reader-specific
+maximum width is measured pane width minus both 20px insets; rows grow and labels wrap
+when needed at minimum width/125% zoom. Shared focus, Escape and outside-click handling
+remain in the menu component. See [layout and input verification](development-verification.md#layout-and-input)
+for the focused browser proof and retained captures.
 
 **Why this matters beyond visual continuity**: `Composer`'s pending-attachment set and its
 upload listener (`useAttachmentUpload`) are mount-local state. The first shipped cut's early

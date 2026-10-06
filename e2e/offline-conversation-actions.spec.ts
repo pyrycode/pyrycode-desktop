@@ -97,7 +97,7 @@ test('held reading, draft and queue survive offline actions, reopening and copyi
   // Reopen the same held chat: local activation is observable, without any data requests.
   await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
   await page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')) })
-  await page.locator('[data-thread-role="assistant"]').getByRole('button', { name: 'Copy message' }).click()
+  await page.locator('[data-thread-role="assistant"]').locator('..').getByRole('button', { name: 'Copy message' }).click()
   await expect.poll(() => app.app.evaluate(({ clipboard }) => clipboard.readText())).toContain('Held reply')
   await expect(page.getByPlaceholder('Message…')).toHaveValue('Retained local draft')
   expect(await read()).toEqual({ commands: [], attachments: [] })

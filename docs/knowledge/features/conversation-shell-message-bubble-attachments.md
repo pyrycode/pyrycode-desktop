@@ -236,8 +236,9 @@ scaling a naturally-shorter image up) as one mechanism rather than computed and 
 was the rejected alternative and is a real trap, not a style preference: a fixed height makes `max-width`
 clamp the width and *distort* the image — confirmed by mutation-testing the substitution, which reddens the
 capped e2e assertion at a drawn height of 160 against an expected 57. `max-width: 100%` resolves against
-`.bubble`'s own content box (`min(680px, 75%)` less `--space-5` either side), so both bounds move live with
-the window; no fixed pixel width is written anywhere. The fallback (`.bubble__image-fallback`) takes the
+`.bubble`'s own content box, so both bounds move live with the window; no fixed pixel width is written
+on the image. Text rows now use the [900px outer cap and 40px inset](conversation-shell-message-bubble.md#the-restyle-969),
+with actions beside delivered bubbles, rather than the old `min(680px, 75%)` bubble cap. The fallback (`.bubble__image-fallback`) takes the
 file row's typographic block (body-small, `--color-inverse-primary`) and its own `margin-top`, so a failed
 image occupies the rhythm a drawn one would and the thread does not shift as asks settle.
 
@@ -288,7 +289,7 @@ completion** — `attachment-file-row.spec.ts` answers `request_attachment` with
 completion is safe and is the only way real bytes reach an `<img>`. It seeds four fixture PNGs as
 `attachment-chunk` reply frames with a real SHA-256 computed at spec time (a hand-written digest fails
 closed as `verification-failed`): 200×400 (portrait, proves 160-tall with width from the ratio), 800×100
-(proves the width cap and the proportional height at every window size up to a 680px bubble), 40×40 (proves
+(proves the width cap and proportional height against the live bubble content width), 40×40 (proves
 no upscale), and a liar — ASCII bytes under a `.png` name — proving the decode-error fallback. **Fixture
 attachment ids must be canonical** (hex and hyphen, per `CANONICAL_ATTACHMENT_ID`): `attachment-file-row.
 spec.ts`'s `e2e-download-1` shape gets away with not being canonical only because that spec never drives a

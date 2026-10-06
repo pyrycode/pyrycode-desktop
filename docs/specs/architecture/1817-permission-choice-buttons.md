@@ -70,3 +70,7 @@ None. Reuse existing component/token and transport contracts; no dependency or w
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-06
+
+## Revisions
+
+- 2026-10-06 — Verifier finding 1: `PermissionModal`'s controller snapshot reader now derives availability directly from the unique stamped owner and its current session status, without calling the diagnostic-emitting `canRespondToPromptNow`. Construction during render and every subscription refresh are side-effect-free. Action handlers still reread the same current stores synchronously; `permission-choice` and `permission-response` diagnostics remain in action paths. Focused production-wiring tests cover repeated populated/empty renders, silent unrelated transitions, synchronous ownership loss/restoration invalidation and fresh offline response guards. No state, transport or consent-policy change.

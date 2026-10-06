@@ -9,7 +9,7 @@ import { createPermissionChoices } from './permissionChoices'
 import { useModalStore, selectOutstanding, selectRejections } from '../../store/modalStore'
 import type { ModalOption, ModalPrompt } from '../../store/modalPrompts'
 import { QuestionTick } from './QuestionPanel'
-import { canRespondToPromptNow, usePromptResponseAvailability } from './promptResponseAvailability'
+import { usePromptResponseAvailability } from './promptResponseAvailability'
 const PERMISSION_MODAL_TITLE_ID = 'permission-modal-title'
 
 // Permission and questionnaire share visual structure, but never requests or answer state.
@@ -138,8 +138,9 @@ export function PermissionModal({ conversationId }: { conversationId: string | n
   const control = useMemo(() => createPermissionChoices(() => {
     const displayed = activeConversationStore.getState().activeConversation?.id === conversationId
     const prompt = displayed ? modalStore.getState().outstanding.find(p => p.conversationId === conversationId) : undefined
-    return { prompt, serverId: serverIdForOpenConversation(selectConversations(conversationListStore.getState()), conversationId),
-      available: canRespondToPromptNow(conversationId) }
+    const serverId = serverIdForOpenConversation(selectConversations(conversationListStore.getState()), conversationId)
+    return { prompt, serverId,
+      available: serverId !== null && sessionStore.getState().statuses.get(serverId)?.type === 'connected' }
   }, changed => {
     const offs = [modalStore, activeConversationStore, conversationListStore, sessionStore].map(store => store.subscribe(changed))
     return () => offs.forEach(off => off())

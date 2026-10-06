@@ -1,6 +1,11 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { PermissionModal, PermissionModalView, RejectionSurfaceView } from './PermissionModal'
+import * as permissionChoices from './permissionChoices'
+import { modalStore } from '../../store/modalStore'
+import { activeConversationStore } from '../../store/activeConversationStore'
+import { conversationListStore } from '../../store/conversationListStore'
+import { sessionStore, type ConnectionStatus } from '../../store/sessionStore'
 import { resolvePendingOption, type PendingConfirm } from './modalResolution'
 import {
   reduceModal,
@@ -362,5 +367,102 @@ describe('PermissionModal — the store-bound container', () => {
     // The modal store singleton is at its initial (empty) state; zustand v5 reads getInitialState()
     // under server render → no outstanding[0] and no rejections → null.
     expect(renderToStaticMarkup(<PermissionModal conversationId={null} />)).toBe('')
+  })
+})
+
+describe('PermissionModal — snapshot purity', () => {
+  const initialModal = modalStore.getState(), initialActive = activeConversationStore.getState()
+  const initialRows = conversationListStore.getState(), initialSession = sessionStore.getState()
+  const row = { id: PROMPT.conversationId, name: null, cwd: '/', is_promoted: false,
+    is_archived: false, last_message_ts: '', last_used_at: '', workspace_label: null }
+  const prompt = { ...PROMPT, alwaysAllow: { offered: true, rules: ['Read(*)'] } }
+  const connected: ConnectionStatus = { type: 'connected', ack: {
+    protocol_version: '1', server_id: 'daemon', conn_id: 'connection', capabilities: []
+  } }
+  let stop: (() => void) | undefined
+  afterEach(() => {
+    stop?.(); stop = undefined
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+    modalStore.setState(initialModal, true)
+    activeConversationStore.setState(initialActive, true)
+    conversationListStore.setState(initialRows, true)
+    sessionStore.setState(initialSession, true)
+  })
+  function stage() {
+    const sendDiagnostic = vi.fn(), sendCommand = vi.fn()
+    vi.stubGlobal('window', { pyry: { sendDiagnostic, sendCommand } })
+    modalStore.getState().dispatch({ type: 'shown', ...prompt })
+    activeConversationStore.getState().setActiveConversation(row)
+    conversationListStore.getState().setConversations([row], 'owner')
+    sessionStore.setState({ statuses: new Map([['owner', connected], ['other', connected]]) })
+    for (const store of [modalStore, conversationListStore, sessionStore]) {
+      vi.spyOn(store, 'getInitialState').mockImplementation(store.getState)
+    }
+    const create = permissionChoices.createPermissionChoices
+    const controls: ReturnType<typeof create>[] = []
+    vi.spyOn(permissionChoices, 'createPermissionChoices').mockImplementation((...args) => {
+      const control = create(...args)
+      controls.push(control)
+      return control
+    })
+    return { sendDiagnostic, sendCommand, controls, prompt: modalStore.getState().outstanding[0],
+      render: (id: string | null = row.id) => renderToStaticMarkup(<PermissionModal conversationId={id} />) }
+  }
+
+  it('constructs controllers during repeated populated and empty renders without diagnostic IPC', () => {
+    const f = stage()
+    for (const id of [row.id, null, 'other-chat', row.id]) {
+      const markup = f.render(id)
+      expect(markup.includes('permission-panel__choice--default')).toBe(id === row.id)
+    }
+    expect(f.controls).toHaveLength(4)
+    expect(f.sendDiagnostic).not.toHaveBeenCalled()
+    expect(f.sendCommand).not.toHaveBeenCalled()
+  })
+
+  it('keeps subscription reads silent while synchronously invalidating consent and checking fresh availability', () => {
+    const f = stage()
+    const prompt = f.prompt
+    f.render()
+    const control = f.controls[0]
+    stop = control.start()
+    expect(f.sendDiagnostic).not.toHaveBeenCalled()
+    control.toggle(prompt, true)
+    control.activate(prompt, prompt.options[0].id)
+    expect(f.sendDiagnostic).toHaveBeenCalledWith({ event: 'permission-choice', code: 'armed' })
+    f.sendDiagnostic.mockClear()
+
+    // Aggregate status and unrelated chat/store changes do not alter this prompt's owner.
+    sessionStore.setState({ status: { type: 'disconnected' } })
+    conversationListStore.getState().setConversations([{ ...row, id: 'other-chat' }], 'other')
+    modalStore.getState().dispatch({ type: 'rejected', modalId: 'unrelated' })
+    activeConversationStore.getState().setActiveConversation({ ...row, cwd: '/changed-context' })
+    expect(control.checked(prompt)).toBe(true)
+    expect(control.store.getState().armedOptionId).toBe(prompt.options[0].id)
+    expect(f.sendDiagnostic).not.toHaveBeenCalled()
+
+    // Loss then restoration must be observed even without another React render.
+    conversationListStore.getState().setConversations([], 'owner')
+    conversationListStore.getState().setConversations([row], 'owner')
+    expect(control.store.getState()).toEqual({ armedOptionId: null, opted: null })
+    expect(f.sendDiagnostic).not.toHaveBeenCalled()
+    control.activate(prompt, prompt.options[0].id)
+    expect(f.sendCommand).not.toHaveBeenCalled()
+
+    sessionStore.setState({ statuses: new Map<string, ConnectionStatus>([['owner', { type: 'disconnected' }], ['other', connected]]) })
+    f.sendDiagnostic.mockClear()
+    control.activate(prompt, prompt.defaultOptionId)
+    control.toggle(prompt, true)
+    control.cancel(prompt)
+    expect(f.sendCommand).not.toHaveBeenCalled()
+    expect(control.checked(prompt)).toBe(false)
+    expect(f.sendDiagnostic).toHaveBeenCalledWith({ event: 'permission-choice', code: 'stale-or-unavailable' })
+
+    sessionStore.setState({ statuses: new Map([['owner', connected]]) })
+    control.activate(prompt, prompt.defaultOptionId)
+    expect(f.sendCommand).toHaveBeenCalledTimes(1)
+    expect(f.sendCommand.mock.calls[0][0].payload).not.toHaveProperty('always_allow')
+    expect(f.sendDiagnostic).toHaveBeenCalledWith({ event: 'permission-response', code: 'answer-requested' })
   })
 })

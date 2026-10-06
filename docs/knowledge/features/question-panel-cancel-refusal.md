@@ -2,14 +2,14 @@
 
 Split out of [Question panel](conversation-shell-question-panel.md) on 2026-09-02 to keep that document
 under the size cap. Part of the question vertical's render slice; see that document for the panel's frame,
-header tabs and step controls, and [Question-batch model](question-batch-model.md) for the model and
+inline all-question layout, and [Question-batch model](question-batch-model.md) for the model and
 bridge underneath both.
 
 Through #916 the Actions row's Cancel button was inert chrome carrying only its copy constant — the panel
 had a single exit and it had never worked. #919 landed the `question_refused` wire type and #920 the
 `refuseQuestionsCommand` plus the main-side `answer_token` mint (`daemonConnection.refuseQuestions`);
 nothing called either. This slice gives Cancel the row's first sending handler: it refuses the outstanding
-batch and clears both question stores, so the composer returns underneath.
+batch and clears both question stores, removing it from history while the composer stays available.
 
 **The daemon owns what claude is told, not the client.** Cancel's frame carries the batch id and nothing
 else the client composed — no client-authored refusal text. Upstream pyrycode#1990 consumes the batch,
@@ -82,7 +82,7 @@ both read off their singletons the same way the existing picks read already does
 
 ```ts
 onCancel={() => {
-  if (!canRespondToPromptNow(batch.conversationId)) return
+  if (!isCurrentQuestionBatch(batch) || !canRespondToPromptNow(batch.conversationId)) return
   refuseQuestionBatch(batch.questionBatchId, {
     sendCommand: window.pyry.sendCommand,
     dispatchPicks: dispatch,
@@ -91,10 +91,12 @@ onCancel={() => {
 }}
 ```
 
-The current closure checks [host availability](conversation-shell-question-panel.md#cancel-refuses-the-batch-921)
+The current closure checks active-conversation ownership, captured batch object identity and absence
+of current-chat permissions, then [host availability](conversation-shell-question-panel.md#cancel-refuses-the-batch-921)
 before entering the optimistic helper. The view also receives `responseAvailable` and disables Cancel
 when false, muting its text and border while keeping its outlined shape. Blocked attempts leave both
-stores intact; local navigation and editing do not call this response gate.
+stores intact. Duplicate or retired callbacks send nothing. Offline local edits do not call the host
+response gate, but every edit still checks current batch/position and permission precedence.
 
 **The catch logs a static, content-free string and drops the caught error** — a security-review finding
 addressed in the design rather than deferred, and the one place this helper departs from
@@ -121,7 +123,7 @@ envelope, narrows a `question_refused` match to `{ type, question_batch_id }` **
 token is never captured, asserted, or logged even structurally — and delegates every other verb to
 `conversationStateFake()` so the app still seeds. Arc: `daemon.pushFrame` seeds `question_shown` (the #912
 idiom) → panel visible → click Cancel → the captured frame is exactly one `question_refused` carrying the
-spec's own batch id → the panel is gone and the composer is back with a pre-typed draft intact → push the
+spec's own batch id → the inline batch is gone and the already-visible composer retains its pre-typed draft → push the
 daemon's own `question_dismissed` for that id → nothing further changes. The local clear landed before the
 captured frame in practice, but the spec asserts under auto-waiting rather than a fixed order, since the
 frame crosses IPC → main → Noise → the loopback forwarder while the clear is synchronous.
@@ -141,7 +143,8 @@ allow, so a claude that pressed on anyway genuinely could have produced the arte
 via `sendCommand`, already guarded by `isRefuseQuestionsPayload` (#920) with main-side fresh-literal
 construction, so a smuggled `answer_token` cannot reach the wire even from a compromised renderer; nothing
 inbound is parsed here, and `questionBatchId` is passed through opaquely — never parsed, keyed on,
-truncated, or compared. No new `contextBridge` API, `ipcMain` channel, window, or persistence. The
+truncated or logged by the helper. The container compares its captured batch by object identity
+and checks the active conversation before sending. No new `contextBridge` API, `ipcMain` channel, window, or persistence. The
 applicable threat is a hostile or degraded relay dropping the refusal: the design fails open in the safe
 direction — the client clears optimistically, the daemon keeps the batch parked, and the next reconnect
 re-asserts it, so the operator sees the ask again rather than believing a refusal landed that did not. The
@@ -152,7 +155,7 @@ scope and not reachable through anything this slice adds.
 ## Related
 
 - [Question panel](conversation-shell-question-panel.md) — the parent document: the panel's frame,
-  `ComposerSlot`/`QuestionPanelSlot`, header tabs (#915) and step controls (#916).
+  `QuestionHistorySlot`/`QuestionPanelSlot`, independent cards and the batch action row.
 - [Question panel — Continue answers the batch](question-panel-continue-answer.md) — the row's other
   sending control (#922), which reuses this document's guarded-send and picks-first-clear shape verbatim
   and renamed `QuestionRefuseDeps` to `QuestionResolveDeps` to serve both exits.

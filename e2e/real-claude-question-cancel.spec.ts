@@ -120,7 +120,7 @@ const META_SELECTOR = '.bubble__meta'
 // --- The panel surface, fake-tier-proven by #921 ------------------------------
 // Located by STRUCTURE only: the questions, headers and option labels are all CLAUDE-SUPPLIED over the
 // real stack, so none of them can be spelled into this file.
-const PANEL = '.question-panel:not(.permission-panel)'
+const PANEL = '.question-batch'
 // The focus question's own text. Its presence is what makes "at least one question" falsifiable rather
 // than implied by the panel being on screen.
 const QUESTION_TEXT = '.question-panel__question'
@@ -366,11 +366,11 @@ test('real claude raises a clarifying question that refusing through Cancel stop
   // A batch that never surfaced deadlined the wait above; one that surfaced empty or one-sided fails
   // HERE rather than letting the absence walk pass over nothing that could have been refused.
   await expect(
-    page.locator(QUESTION_TEXT),
+    panel.locator(QUESTION_TEXT).first(),
     'the panel is up but draws no question — there is nothing to refuse'
   ).not.toHaveCount(0)
   expect(
-    await panel.locator(OPTION_LABEL).count(),
+    await panel.locator('.question-batch__question').first().locator(OPTION_LABEL).count(),
     'the focus question offers fewer than two options — there is no choice to make, so a refusal ' +
       'checked against it would prove nothing about a claude that could have guessed one'
   ).toBeGreaterThanOrEqual(2)

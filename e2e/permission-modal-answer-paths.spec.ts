@@ -373,7 +373,7 @@ test('chat-scoped FIFO and rejection feedback survive optimistic removal, switch
   await expect(questionnaire).toBeVisible()
   const bannerBox = await banner.boundingBox()
   const questionBox = await questionnaire.boundingBox()
-  expect(bannerBox!.y + bannerBox!.height).toBeLessThanOrEqual(questionBox!.y)
+  expect(questionBox!.y + questionBox!.height).toBeLessThanOrEqual(bannerBox!.y)
   await openChat(page, OTHER.name)
   await expect(banner).toHaveCount(0)
   await openChat(page, SEEDED_ROW.name!)
@@ -383,7 +383,7 @@ test('chat-scoped FIFO and rejection feedback survive optimistic removal, switch
   await expect(questionnaire).toBeVisible()
 })
 
-test('permission coverage retains draft, questionnaire picks, Other and active question while isolating hidden inputs', async ({ launchPairedApp }) => {
+test('permission coverage retains draft, questionnaire picks, Other across all questions while isolating hidden inputs', async ({ launchPairedApp }) => {
   const captured: Envelope[] = []
   const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: fake(captured, [SEEDED_ROW]) })
   await page.setViewportSize({ width: 800, height: 600 })
@@ -391,11 +391,11 @@ test('permission coverage retains draft, questionnaire picks, Other and active q
   await composer.fill('Retained draft')
   daemon.pushFrame(questions('waiting-batch'))
   const questionnaire = page.locator('.question-panel:not(.permission-panel)')
-  const other = questionnaire.getByRole('textbox', { name: 'Other. Type something.' })
-  await questionnaire.locator('.question-panel__option').filter({ hasText: 'First pick' }).click()
+  const other = questionnaire.getByRole('textbox', { name: 'Other. Type something.' }).first()
+  const secondOther = questionnaire.getByRole('textbox', { name: 'Other. Type something.' }).nth(1)
+  await questionnaire.locator('.question-panel__option').filter({ hasText: 'First pick' }).first().click()
   await other.fill('Retained first Other')
-  await questionnaire.getByRole('button', { name: 'Editor', exact: true }).click()
-  await other.fill('Retained editor Other')
+  await secondOther.fill('Retained editor Other')
   const longPath = '/workspace/reports/' + 'a'.repeat(180) + '.json'
   const longText = `Write the generated report to ${longPath}?\n` +
     'A complete explanation must wrap and remain reachable. '.repeat(160) + 'FINAL EXPLANATION'
@@ -457,11 +457,9 @@ test('permission coverage retains draft, questionnaire picks, Other and active q
   await action(panel, 'Continue').click()
   await expect.poll(() => resolutions(captured, 'Long permission', 'modal_answer', 'deny')).toBe(1)
   await expect(questionnaire).toBeVisible()
-  await expect(questionnaire.getByRole('button', { name: 'Editor', exact: true })).toHaveAttribute('aria-current', 'true')
-  await expect(other).toHaveValue('Retained editor Other')
-  await questionnaire.getByRole('button', { name: 'Language', exact: true }).click()
+  await expect(secondOther).toHaveValue('Retained editor Other')
   await expect(other).toHaveValue('Retained first Other')
-  await expect(questionnaire.getByRole('checkbox', { name: /First pick/ })).toBeChecked()
+  await expect(questionnaire.getByRole('checkbox', { name: /First pick/ }).first()).toBeChecked()
   daemon.pushFrame(frame('question_dismissed', { question_batch_id: 'waiting-batch', outcome: 'unanswered', source: 'no_answer' }))
   await expect(composer).toBeVisible()
   await expect(composer).toHaveValue('Retained draft')

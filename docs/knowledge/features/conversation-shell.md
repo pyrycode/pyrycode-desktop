@@ -104,8 +104,10 @@ below.
 
 Permission and trust requests use the open chat's bottom input panel since
 [#1356](https://github.com/pyrycode/pyrycode-desktop/issues/1356). The oldest outstanding request for
-that chat takes precedence over a waiting questionnaire, retaining its picks, Other text and active
-question, and the composer's typed draft. A row selection sends nothing; Continue sends the supplied
+that chat takes precedence over a waiting questionnaire, retaining its picks and Other text, and
+the composer's typed draft. Pending questions render together at the end of history; the composer
+and desktop footer remain available under their existing gates until permission/trust covers them.
+A permission row selection sends nothing; Continue sends the supplied
 default or opens Back/Confirm for a non-default. Chat history and the sidebar remain usable, and
 rejection feedback stays in normal flow in its originating chat. The existing modal bridge and
 answer/cancel commands remain in use. See [Permission panel](conversation-shell-permission-modal.md)
@@ -130,7 +132,7 @@ This screen is large enough that its surfaces live in their own documents. Each 
 - [Conversation surfaces and modals](conversation-shell-conversation-and-modals.md) — Surfaces that act on the conversation as a whole rather than on one turn. Now a map itself: the interactive flip + thread cutover, the queued backlog, and screen-snapshot history stayed here; three larger topics split out on 2026-09-02 (below).
 - [Actions menu and reader cutover](conversation-shell-actions-menu-and-reader-cutover.md) — The composer's Actions menu and the per-conversation timeline reader cutover.
 - [Markdown reader](conversation-shell-markdown-reader.md) — The in-app reader a markdown-path link in an assistant reply opens: its state machine, and the covered-not-unmounted pane layering that keeps the composer's attachments alive underneath it.
-- [Modals](conversation-shell-modals.md) — The permission/trust panel (with its rejection surface) and the questionnaire in the input area.
+- [Modals](conversation-shell-modals.md) — The permission/trust panel (with its rejection surface) and the inline questionnaire at the end of history.
 - [Session boundaries and channel info](conversation-shell-session-and-channel-info.md) — The session-boundary delimiter row and the Channel Info sheet, with its Rename/Archive/Delete actions.
 - [Message bubble](conversation-shell-message-bubble.md) — Desktop bubble shape and body-medium type, sibling copy actions, centred 900px text rows with 40px far-side insets, and reserved timestamps revealed on row hover/focus.
 - [Thread scroll pin](conversation-shell-scroll-pin.md) — Whether the thread stays pinned to the bottom as new content arrives, and the user-input demand band and preservation of reading position across prepends.

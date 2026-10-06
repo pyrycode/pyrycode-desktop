@@ -131,3 +131,16 @@ describe('questionBatchStore (the app singleton)', () => {
     expect(typeof questionBatchStore.getState().dispatch).toBe('function')
   })
 })
+
+it('retires picks before publishing a replacement while same-request redelivery preserves them', () => {
+  const retired: string[] = []
+  const store = createQuestionBatchStore(undefined, id => {
+    retired.push(id)
+    expect(selectBatchFor(shown.conversationId)(store.getState())?.questionBatchId).toBe(shown.questionBatchId)
+  })
+  store.getState().dispatch(shown)
+  store.getState().dispatch(shown)
+  expect(retired).toEqual([])
+  store.getState().dispatch({ ...shown, questionBatchId: 'replacement' })
+  expect(retired).toEqual([shown.questionBatchId])
+})

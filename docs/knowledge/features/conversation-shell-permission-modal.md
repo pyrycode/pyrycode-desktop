@@ -219,4 +219,7 @@ in `real-claude-permission-modal.spec.ts`, `real-claude-permission-mode.spec.ts`
 `real-claude-question-cancel.spec.ts` now activate supplied choice buttons, twice when non-default.
 Live acceptance requires the repeated Bash effect without a new permission in the same session,
 then a fresh permission before an effect in a new session; panel disappearance alone is optimistic.
-See the [counted live evidence and its limits](live-e2e-runbook.md#current-real-claude-gate-state).
+All three named scenarios executed and passed in the dispatcher's 2026-10-06 live run:
+26 executed/passed, 0 failed, 1 skipped. See the
+[counted live evidence](live-e2e-runbook.md#current-real-claude-gate-state) for named results and
+the configured-command mismatch.

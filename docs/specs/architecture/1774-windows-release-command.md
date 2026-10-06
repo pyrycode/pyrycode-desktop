@@ -145,6 +145,20 @@ Claude Code session
   build so `__APP_VERSION__` has the release version. The isolated-clone transaction test pins this
   exact command order; the failed-check retry test proves no draft or publish follows a failed test.
 
+### 2026-10-06 — published-version no-op (verifier finding 1 at `6c5be1c8`)
+
+- `release` checks GitHub for the exact published tag before any local resume-state access.
+  A truncated or malformed `state.json` previously threw before that check, breaking the
+  published-version no-op contract. Completed releases now return without reading local state;
+  unpublished versions still use it to pin retries to their original source SHA.
+- Regression cases in `scripts/release-win.test.ts` cover truncated JSON and non-JSON state with
+  an exact published release. Only the release-list request runs: no local filesystem access,
+  build, tag/release/asset changes or publish call. Both cases failed with `SyntaxError` before
+  the fix. Dry-run mode continues to avoid GitHub entirely.
+- Security review of this ordering change: PASS. The no-op path performs only the existing
+  GitHub read and exits before local file access or credential-bearing build/publication work;
+  validation and verification requirements for unpublished versions remain intact.
+
 ## Documentation handoff
 
 Pending for the documentation stage: update `README.md` under **Build**, including **Windows

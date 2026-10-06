@@ -227,6 +227,31 @@ describe('release validation', () => {
     expect(fs.files.size).toBe(0)
   })
 
+  it.each(['{"version":', 'not JSON'])(
+    'an already published version ignores malformed resume state %j without side effects',
+    async (state) => {
+      const { deps, gh, ex, fs, host } = setup({ releases: [published('v0.2.0')] })
+      fs.write(`${WORK}/0.2.0/state.json`, state)
+      gh.tags.set('v0.2.0', MAIN)
+      const originalFiles = new Map(fs.files)
+      const originalReleases = structuredClone(gh.releases)
+      const originalTags = new Map(gh.tags)
+      const filesystemCalls = (['exists', 'read', 'write', 'mkdir', 'remove'] as const)
+        .map((operation) => vi.spyOn(fs, operation))
+      const hostCalls = (['reset', 'upload', 'build'] as const)
+        .map((operation) => vi.spyOn(host, operation))
+
+      await expect(release('0.2.0', deps)).resolves.toEqual({ status: 'already-published' })
+
+      expect(gh.calls).toEqual(['listReleases'])
+      expect(ex.calls).toEqual([])
+      for (const call of [...filesystemCalls, ...hostCalls]) expect(call).not.toHaveBeenCalled()
+      expect(fs.files).toEqual(originalFiles)
+      expect(gh.releases).toEqual(originalReleases)
+      expect(gh.tags).toEqual(originalTags)
+    }
+  )
+
   it('refuses a draft that targets another commit than the recorded one', async () => {
     const { deps, gh, ex, fs } = setup()
     fs.write(`${WORK}/0.2.0/state.json`, JSON.stringify({ version: '0.2.0', sha: MAIN }))

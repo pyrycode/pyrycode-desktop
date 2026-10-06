@@ -98,6 +98,13 @@ export async function release(version, deps) {
     throw new ReleaseError(`"${version}" is not a stable X.Y.Z version, such as 0.2.0`)
   }
   const tag = `v${version}`
+  // Published versions need no local resume state, even if a previous write was interrupted.
+  const releases = dryRun ? [] : await github.listReleases()
+  const forTag = releases.filter((r) => r.tag_name === tag)
+  if (forTag.some((r) => !r.draft)) {
+    log(`${tag} is already published. Nothing to do.`)
+    return { status: 'already-published' }
+  }
   const work = join(deps.workRoot, version)
   const statePath = join(work, 'state.json')
   const saved = fs.exists(statePath) ? JSON.parse(fs.read(statePath)) : null
@@ -106,12 +113,6 @@ export async function release(version, deps) {
   let sha = saved?.sha ?? null
   let draft = null
   if (!dryRun) {
-    const releases = await github.listReleases()
-    const forTag = releases.filter((r) => r.tag_name === tag)
-    if (forTag.some((r) => !r.draft)) {
-      log(`${tag} is already published. Nothing to do.`)
-      return { status: 'already-published' }
-    }
     if (forTag.length > 1) throw new ReleaseError(`More than one draft is named ${tag}; delete the extras`)
     draft = forTag[0] ?? null
     if (draft) {

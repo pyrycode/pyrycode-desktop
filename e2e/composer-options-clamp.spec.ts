@@ -1,5 +1,7 @@
 import type { Locator, Page } from '@playwright/test'
-import { test, expect } from './fixtures/launchPairedApp'
+import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
+import { capturePairedApp } from './fixtures/capturePairedApp'
 import { COMPOSER_OPTIONS_LABEL_INSET_PX, COMPOSER_OPTIONS_WINDOW_MARGIN_PX } from '../src/renderer/src/screens/conversation/composerOptionsPlacement'
 
 // Fake-stack UI e2e for the shared options panel's RIGHT-EDGE CLAMP (#847) — the measuring half of the
@@ -143,10 +145,10 @@ test('the options panel fits the pane and restores its width on resize', async (
     { width: NARROW_WIDTH_PX, height: startHeight }
   )
 
-  // A narrow pane bounds the menu width before measuring its shift. It stays anchored
-  // while retaining the existing safety margin; the width delta proves this is an active bound.
+  // A narrow pane bounds the menu width, then shifts it to retain the safety margin.
+  // Both deltas prove the bound and placement are active, rather than a clipped panel.
   await expect.poll(overhangPastWindow).toBe(-COMPOSER_OPTIONS_WINDOW_MARGIN_PX)
-  expect(await restingOffset()).toBe(0)
+  expect(await restingOffset()).toBeLessThan(0)
   expect((await panel.boundingBox())?.width).toBeLessThan(restingWidth)
 
   // --- 4. Widen again and the shift is RELEASED — the panel returns to its resting position (AC3's
@@ -166,3 +168,85 @@ test('the options panel fits the pane and restores its width on resize', async (
     { width: startMinWidth, height: startMinHeight }
   )
 })
+
+for (const size of [{ width: 1280, height: 800 }, { width: 800, height: 600 }]) {
+  test(`long footer model labels stay readable and selectable at ${size.width} with zoom`, async ({ launchPairedApp }) => {
+    const labels = [
+      'Synthetic extended model display name with a wide context window and detailed reasoning',
+      'SyntheticUnbrokenModelDisplayNameWithExtendedContextAndDetailedReasoningCapabilities'
+    ]
+    const models = labels.map((display_name, index) => ({
+      value: `1733-${index}`, display_name, resolved_model: `1733-${index}`,
+      effort_levels: [], supports_auto_mode: false, truncated_fields: null
+    }))
+    const selections: unknown[] = []
+    const frame = (type: Parameters<typeof encodeEnvelope>[0]['type'], payload: unknown, in_reply_to?: number) =>
+      encodeEnvelope({ id: 1733, type, ts: '2026-10-06T00:00:00Z', payload, in_reply_to })
+    const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
+      const env = decodeEnvelope(bytes)
+      if (env.type === 'list_conversations') return [seedConversationsFrame()]
+      if (env.type === 'request_session_settings') return [frame('session_settings', {
+        session_id: 'long-label-session', model: models[0].value, effort: 'low', effective_effort: 'low',
+        yolo: false, permission_mode: 'default', used_tokens: 0, window_tokens: 200000
+      }, env.id)]
+      if (env.type === 'set_session_settings') {
+        selections.push(env.payload)
+        return [frame('session_settings_updated', { session_id: 'long-label-session' }, env.id)]
+      }
+      return []
+    } })
+    daemon.pushFrame(frame('model_list', { conversation_id: SEEDED_ROW.id, models, dropped_models: 0 }))
+    await app.evaluate(({ BrowserWindow }, dimensions) =>
+      BrowserWindow.getAllWindows()[0].setSize(dimensions.width, dimensions.height), size)
+    const trigger = page.locator('.composer__model')
+    const panel = page.getByRole('menu', { name: 'Model', exact: true })
+    for (const zoom of [1, 1.25]) {
+      await app.evaluate(({ BrowserWindow }, factor) =>
+        BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(factor), zoom)
+      await trigger.click()
+      await expect(panel).toBeVisible()
+      const geometry = await panel.evaluate(node => {
+        const pane = node.closest('.conversation__input-chrome')!.getBoundingClientRect()
+        const panel = node.getBoundingClientRect()
+        const rows = [...node.querySelectorAll<HTMLElement>('[role="menuitem"]')].map(row => {
+          const box = row.getBoundingClientRect()
+          const range = document.createRange()
+          range.selectNodeContents(row)
+          const lines = [...range.getClientRects()]
+          return { height: box.height, contained: lines.every(line =>
+            line.left >= box.left && line.right <= box.right && line.top >= box.top && line.bottom <= box.bottom),
+            lines: lines.length, bottomLine: { x: lines.at(-1)!.left + 2, y: lines.at(-1)!.bottom - 2 } }
+        })
+        return { insidePane: panel.left > pane.left && panel.right < pane.right && panel.top >= 0, rows }
+      })
+      expect(geometry.insidePane).toBe(true)
+      for (const row of geometry.rows) {
+        expect(row.contained).toBe(true)
+        if (size.width === 800) {
+          expect(row.lines).toBeGreaterThan(1)
+          expect(row.height).toBeGreaterThan(28)
+        }
+      }
+      const first = panel.getByRole('menuitem', { name: labels[0], exact: true })
+      await expect(first).toBeFocused()
+      await page.keyboard.press('ArrowDown')
+      const last = panel.getByRole('menuitem', { name: labels[1], exact: true })
+      await expect(last).toBeFocused()
+      expect(await last.evaluate(node => getComputedStyle(node).outlineStyle)).toBe('solid')
+      // Visible overflow would cut off the row's keyboard focus outline at its panel edge.
+      expect(await panel.evaluate(node => getComputedStyle(node).overflow)).toBe('visible')
+      await capturePairedApp(app, page, `/tmp/builder-1733/long-model-${size.width}-${zoom}.png`)
+      await page.keyboard.press('Enter')
+      await expect(panel).toHaveCount(0)
+      await expect.poll(() => selections.at(-1)).toEqual({ session_id: 'long-label-session', model: models[1].value })
+      await expect(trigger).toBeFocused()
+      await trigger.click()
+      // Click the final wrapped line, proving the visible label belongs to the selectable row.
+      await page.mouse.click(geometry.rows[0].bottomLine.x, geometry.rows[0].bottomLine.y)
+      await expect(panel).toHaveCount(0)
+      await expect.poll(() => selections.at(-1)).toEqual({ session_id: 'long-label-session', model: models[0].value })
+      await expect(trigger).toBeFocused()
+    }
+    expect(selections).toHaveLength(4)
+  })
+}

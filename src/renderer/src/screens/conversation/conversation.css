@@ -7237,6 +7237,18 @@ button.top-overlay-pill {
   max-width: var(--composer-options-max-width, none);
 }
 
+/* Bounded footer labels wrap fully, including unbroken model names. Keep overflow visible
+   on the row and panel so the existing keyboard focus outline paints outside their edges. */
+.conversation__input-chrome .composer__footer .composer-options__item {
+  box-sizing: border-box;
+  height: auto;
+  min-height: 28px;
+  padding-block: var(--space-1);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  flex-shrink: 0;
+}
+
 /* Left-edge header popup: preserve footer and right-aligned consumers' offsets. */
 .composer-options-anchor--bottom-start {
   flex: 0 0 auto;

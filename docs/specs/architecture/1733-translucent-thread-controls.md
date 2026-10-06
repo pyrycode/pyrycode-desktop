@@ -72,6 +72,10 @@ None. Use measured chrome rather than duplicating height formulas; retain the ex
 
 2026-10-06: `capturePairedApp` creates the destination parent recursively before writing; a capture into a fresh nested test-output path must match the returned PNG. Migrate status/newest-row geometry to measured input chrome, pills to occupied-header height plus their gap, and type-ahead width to the input pane boundary. Keep all interaction, overlap and scrim hit-test assertions.
 
+2026-10-06: Verifier finding 2 requires full footer-label containment, beyond panel rectangles. Footer option rows inside the input chrome now wrap words and unbroken names within the existing pane-relative width bound, grow vertically, and retain visible overflow for keyboard focus outlines; type-ahead retains its existing single-line treatment. The clamp regression measures every text line and selects long models by keyboard and by clicking their final line at 1280×800 and 800×600, at 100% and 125% zoom. Finding 1's missing #1749 merge is present in `c147f3d1`; fetch/merge current main again before closing checks. Overlaps with #1726 and #1729 remain in separate CSS blocks. No new production interface, state or failure branch; total written work remains below 800 lines.
+
+2026-10-06: Wrapping reproduced a second geometry failure at minimum width and 125% zoom: restricting the panel to space right of the model trigger made the two long rows taller than the viewport. Footer panels now use the occupied pane width minus the existing right margin and a label inset at the left, then the existing shift arithmetic places them inside the right margin. Other consumers retain their previous bound. The resize regression proves both the width bound and active shift, and restoration after widening; long-label selection coverage proves readable text and focus at both zooms.
+
 ## Documentation handoff
 
 - Pending documentation stage: `docs/knowledge/features/conversation-shell.md` → What it does / How it works: full-pane scrolling behind translucent controls; reader adaptation remains follow-up work.

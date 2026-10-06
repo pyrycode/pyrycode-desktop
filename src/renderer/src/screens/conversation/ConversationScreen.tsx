@@ -1274,52 +1274,19 @@ export function Timeline({
 // identity does not churn per render (the EMPTY_BACKLOG idiom from queueStore).
 const EMPTY_QUEUED: readonly QueuedItem[] = []
 
-// #969: the accessible name on the meta row's copy control — a CLIENT-OWNED constant, beside
+// The accessible name on the message copy control — a CLIENT-OWNED constant, beside
 // DROP_QUEUED_LABEL's precedent below. Never interpolated with the message text: `Copy: ${text}` would
 // put relay-peer-authored text into an ATTRIBUTE, which CLAUDE.md's 2026-08-20 ruling forbids outright,
 // and "the control has an accessible name" is exactly the requirement that invites it.
 const COPY_MESSAGE_LABEL = 'Copy message'
 
-// #969: the meta row at the foot of a text message bubble (Figma `Meta row` 132:4446 assistant /
-// 132:4435 user) — a body-small timestamp and the copy control, in --color-inverse-primary. Rendered as
-// the bubble's LAST child in both TimelineRow message arms and nowhere else: not on the tool rows
-// (which are not bubbles), not on the queued row (nothing sent yet to copy, and no time), and not on
-// the unmounted MessageBubble residue, whose exact-markup tests pin the message text as its sole child.
-//
-// APPENDED, NEVER PREPENDED. interactiveRoundtrip.test.tsx pins the byte string
-// `data-thread-role="assistant"><div class="bubble__markdown"><p>`, so the markdown container must stay
-// the bubble's opening child; and #691/#686's attachment slots will insert themselves above this row
-// simply by being written before it. Last-child is the shape, not a preference.
-//
-// #1014 fills the timestamp slot from the item's own `createdAt`. The slot still renders EMPTY when the
-// item carries no stamp — #1013's contract makes an absent one a LEGAL item, not a defect: it is what
-// every producer with no injected clock yields, and the ~39 stamp-free fixtures in ConversationScreen's
-// spec are exactly that case. So the read is `createdAt === undefined`, NEVER `'createdAt' in item`,
-// which is always true (the reducer assigns the field unconditionally) and would render "undefined".
-// `{null}` children emit the same bytes as the self-closing span #969 shipped, so the empty case is
-// unchanged rather than re-implemented. An empty inline element generates no line box, which is why
-// .bubble__meta carries a min-height rather than taking its 16px from the text — see conversation.css;
-// that is also what makes the fill purely additive, with no CSS change and no reflow either way.
-//
-// NO INJECTED EFFECT, unlike the drop control's `onDropQueued` (Timeline's optional prop, formerly
-// QueuedBacklog's required `onDrop`). That injection exists because a queued row cannot see the
-// conversation id its send needs; a copy needs the row's own text and nothing else, so the handler is a
-// closure over that one value calling the module helper directly. This row therefore added nothing to
-// Timeline's prop surface, which is what kept the ~30 existing `<Timeline` render sites untouched — the
-// same optionality argument #1214's two props had to make when they DID need to reach the container. The
-// promise is explicitly voided — never floating — and copyMessageText handles its own rejection.
-//
-// #1566: `turnStats` is the formatted turn numbers, passed only to a turn's last assistant bubble. It is
-// appended after the copy control as React text only (never an attribute or `title`: the numbers are
-// daemon-supplied), and `.bubble__turn-stats` keeps it `display: none` until the row is hovered, so an
-// unhovered row draws and measures exactly as before. Absent → byte-identical markup to #1014's.
+// Timestamp space remains reserved even without a stamp. Turn stats keep their independent
+// meta-row hover reveal; copy lives in MessageActions beside the bubble.
 function BubbleMeta({
-  text,
   side,
   createdAt,
   turnStats
 }: {
-  text: string
   side: 'user' | 'daemon'
   createdAt?: number
   turnStats?: string
@@ -1329,6 +1296,16 @@ function BubbleMeta({
       <span className="bubble__meta-time">
         {createdAt === undefined ? null : formatMessageTime(createdAt)}
       </span>
+      {turnStats !== undefined && <span className="bubble__turn-stats">{turnStats}</span>}
+    </div>
+  )
+}
+
+// Copy the row's source text, including a partial streaming reply. The helper owns rejection,
+// so this one-shot click promise is deliberately voided and adds no store or subscription.
+function MessageActions({ text }: { text: string }): JSX.Element {
+  return (
+    <div className="message-actions">
       <button
         type="button"
         className="bubble__copy"
@@ -1350,7 +1327,6 @@ function BubbleMeta({
           <path d="M4.71429 0C3.84754 0 3.14286 0.672656 3.14286 1.5V7.5C3.14286 8.32734 3.84754 9 4.71429 9H9.42857C10.2953 9 11 8.32734 11 7.5V2.79844C11 2.39062 10.8257 1.99922 10.5163 1.71562L9.09955 0.417188C8.80737 0.15 8.41696 0 8.01183 0H4.71429ZM1.57143 3C0.704688 3 0 3.67266 0 4.5V10.5C0 11.3273 0.704688 12 1.57143 12H6.28571C7.15246 12 7.85714 11.3273 7.85714 10.5V10.125H6.28571V10.5H1.57143V4.5H1.96429V3H1.57143Z" />
         </svg>
       </button>
-      {turnStats !== undefined && <span className="bubble__turn-stats">{turnStats}</span>}
     </div>
   )
 }
@@ -1398,7 +1374,7 @@ function BubbleMeta({
 // A content-derived name is the one shape that satisfies the criterion without reopening either question.
 //
 // The handler is a closure over this row's own record calling the module helper directly, drilling nothing
-// — BubbleMeta's copy control established that shape in this same bubble, and Timeline's ~30 render sites
+// — the message copy control established that shape in this same bubble, and Timeline's ~30 render sites
 // stay untouched. The conversation id the fetch needs is read outside React from `activeConversationStore`
 // inside `attachmentDownloadDeps`, the conversationLastReadBridge idiom, so it is not a prop either.
 //
@@ -1570,7 +1546,7 @@ function TimelineRow({
         ? 'bubble bubble--daemon bubble--assistant-text'
         : 'bubble bubble--daemon'
       return (
-        <div className="message-row message-row--daemon">
+        <div className="message-row message-row--daemon message-row--text">
           <div className={bubbleClass} data-thread-role="assistant">
             {inProgress ? (
               <>
@@ -1606,8 +1582,9 @@ function TimelineRow({
                 settles, and a partial reply is as copyable as a finished one. #607's pre-wrap reaches
                 this subtree on that branch and is inert there: the JSX transform emits no whitespace
                 text nodes between elements on separate lines. */}
-            <BubbleMeta text={item.text} side="daemon" createdAt={item.createdAt} turnStats={turnStats} />
+            <BubbleMeta side="daemon" createdAt={item.createdAt} turnStats={turnStats} />
           </div>
+          <MessageActions text={item.text} />
         </div>
       )
     }
@@ -1691,10 +1668,13 @@ function TimelineRow({
       return (
         <div
           className={
-            queued ? 'message-row message-row--user message-row--queued' : 'message-row message-row--user'
+            queued
+              ? 'message-row message-row--user message-row--queued message-row--text'
+              : 'message-row message-row--user message-row--text'
           }
         >
           {queued && <QueuedRowDrop queued={queued} onDropQueued={onDropQueued} />}
+          {!queued && <MessageActions text={item.text} />}
           <div className="bubble bubble--user" data-thread-role={queued ? 'queued' : 'user'}>
             {item.text}
             {/* #815: the attachment rows, written between the text and the meta row — the slot BubbleMeta's
@@ -1720,9 +1700,8 @@ function TimelineRow({
               )
             )}
             {/* #969: the same row, right-aligned by its own modifier (the drawing's `justify-end` on
-                132:4435). The copy source is the echo the composer wrote — the text as sent.
-                #1214 suppresses it while the message is queued — see the arm's header for why. */}
-            {!queued && <BubbleMeta text={item.text} side="user" createdAt={item.createdAt} />}
+                132:4435). Queued messages have no delivery meta row. */}
+            {!queued && <BubbleMeta side="user" createdAt={item.createdAt} />}
           </div>
         </div>
       )

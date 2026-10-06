@@ -1,0 +1,195 @@
+import type { Locator } from '@playwright/test'
+import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
+import { ATTACHMENT_UPLOAD_EVENT_CHANNEL } from '../src/shared/ipc/attachmentUpload'
+import type { AttachmentUploadEvent } from '../src/shared/ipc/attachmentUpload'
+import type { SendMessagePayload } from '../src/shared/wire/types'
+
+const TS = '2026-10-05T12:00:00Z'
+const LONG = 'Long message uses the available thread width. '.repeat(45)
+const SHORT = 'Hi'
+let dequeues = 0
+const frames = (inbound: Uint8Array): Uint8Array[] => {
+  const envelope = decodeEnvelope(inbound)
+  if (envelope.type === 'dequeue_message') { dequeues++; return [] }
+  if (envelope.type !== 'send_message') return [seedConversationsFrame()]
+  const payload = envelope.payload as SendMessagePayload
+  const turnId = payload.text === SHORT ? 'short' : 'long'
+  return [
+    encodeEnvelope({ id: 20, type: 'assistant_delta', ts: TS, payload: {
+      conversation_id: SEEDED_ROW.id, turn_id: turnId, seq: 0, text: payload.text
+    } }),
+    encodeEnvelope({ id: 21, type: 'turn_end', ts: TS, payload: {
+      conversation_id: SEEDED_ROW.id, turn_id: turnId, stop_reason: 'end_turn'
+    } })
+  ]
+}
+
+const geometry = (bubble: Locator) => bubble.evaluate(el => {
+  const row = el.parentElement!
+  const thread = row.parentElement!
+  const actions = row.querySelector('.message-actions')!
+  const glyph = actions.querySelector('svg')!
+  const box = (node: Element) => {
+    const r = node.getBoundingClientRect()
+    return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right }
+  }
+  const style = getComputedStyle(thread)
+  return {
+    bubble: box(el), row: box(row), actions: box(actions), glyph: box(glyph),
+    available: thread.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+    threadCenter: box(thread).x + parseFloat(style.paddingLeft) +
+      (thread.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)) / 2,
+    overflow: thread.scrollWidth - thread.clientWidth
+  }
+})
+
+const dimensions = (bubble: Locator) => bubble.evaluate(el => {
+  const b = el.getBoundingClientRect()
+  const r = el.parentElement!.getBoundingClientRect()
+  return [b.width, b.height, r.width, r.height]
+})
+
+test('side copy, row cap and timestamp reveal preserve geometry at minimum and wide windows', async ({ launchPairedApp }) => {
+  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: frames })
+  for (const text of [LONG, SHORT]) {
+    await page.getByPlaceholder('Message…').fill(text)
+    await page.getByRole('button', { name: 'Send' }).click()
+    await expect(page.locator('.bubble__markdown')).toHaveCount(text === SHORT ? 2 : 1)
+  }
+  const users = page.locator('.bubble[data-thread-role="user"]')
+  const assistants = page.locator('.bubble[data-thread-role="assistant"]')
+  for (const width of [800, 1280, 1800]) {
+    await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 1000), width)
+    await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width)
+    for (const [bubbles, user] of [[users, true], [assistants, false]] as const) {
+      const long = await geometry(bubbles.nth(0))
+      const short = await geometry(bubbles.nth(1))
+      expect(long.row.width).toBeCloseTo(Math.min(900, long.available), 0)
+      expect(long.row.x + long.row.width / 2).toBeCloseTo(long.threadCenter, 0)
+      expect(long.bubble.width).toBeCloseTo(long.row.width - 40 - 13 - 12, 0)
+      expect(short.bubble.width).toBeLessThan(long.bubble.width)
+      for (const g of [long, short]) {
+        expect(g.actions.width).toBe(13)
+        expect(g.actions.height).toBe(g.bubble.height)
+        expect(g.glyph.width).toBe(11)
+        expect(g.glyph.height).toBe(12)
+        expect(g.glyph.y + 6).toBeCloseTo(g.bubble.y + g.bubble.height / 2, 0)
+        expect(user ? g.bubble.x - g.actions.right : g.actions.x - g.bubble.right).toBeCloseTo(12, 0)
+        expect(user ? g.bubble.right - g.row.right : g.bubble.x - g.row.x).toBeCloseTo(0, 0)
+        expect(g.overflow).toBeLessThanOrEqual(1)
+      }
+    }
+    await users.nth(1).scrollIntoViewIfNeeded()
+    await page.mouse.move(0, 0)
+    await page.getByPlaceholder('Message…').focus()
+    await page.screenshot({ path: `/tmp/builder-1778/messages-${width}.png`, animations: 'disabled' })
+  }
+
+  // The pointer can be over empty row space; focus can be inside copy or an attachment.
+  for (const bubble of [users.nth(1), assistants.nth(1)]) {
+    const row = bubble.locator('..')
+    const time = bubble.locator('.bubble__meta-time')
+    const copy = row.getByRole('button', { name: 'Copy message' })
+    await bubble.scrollIntoViewIfNeeded()
+    await page.mouse.move(0, 0)
+    await page.getByPlaceholder('Message…').focus()
+    await expect(time).toBeHidden()
+    const size = await dimensions(bubble)
+    await row.hover({ position: { x: 2, y: 2 } })
+    await expect(time).toBeVisible()
+    expect(await dimensions(bubble)).toEqual(size)
+    await page.mouse.move(0, 0)
+    await expect(time).toBeHidden()
+    await page.keyboard.press('Tab')
+    await copy.focus()
+    await expect(time).toBeVisible()
+    expect(await dimensions(bubble)).toEqual(size)
+    expect(await copy.evaluate(el => getComputedStyle(el).outlineStyle)).toBe('solid')
+    if (await bubble.getAttribute('data-thread-role') === 'assistant') await page.screenshot({ path: '/tmp/builder-1778/messages-focus-1800.png' })
+    const ink = await copy.evaluate(el => getComputedStyle(el).color)
+    const token = await row.locator('.message-actions').evaluate(el => getComputedStyle(el).color)
+    expect(ink).toBe(token)
+    await copy.hover()
+    expect(await copy.evaluate(el => getComputedStyle(el).color)).toBe(ink)
+    await page.mouse.down()
+    expect(await copy.evaluate(el => getComputedStyle(el).color)).toBe(ink)
+    await page.mouse.up()
+    await page.getByPlaceholder('Message…').focus()
+    await page.mouse.move(0, 0)
+    await expect(time).toBeHidden()
+    expect(await dimensions(bubble)).toEqual(size)
+    await expect(bubble.locator('.bubble__meta button')).toHaveCount(0)
+  }
+
+  // Upload completion is the production IPC event seam used by attachment-file-row.spec.ts.
+  await app.evaluate(({ BrowserWindow }, payload) => {
+    BrowserWindow.getAllWindows()[0].webContents.send(payload.channel, payload.event)
+  }, { channel: ATTACHMENT_UPLOAD_EVENT_CHANNEL, event: {
+    type: 'completed', uploadId: 'side-copy-upload', filename: 'report.pdf'
+  } satisfies AttachmentUploadEvent })
+  await page.getByPlaceholder('Message…').fill('Attached report')
+  await page.getByRole('button', { name: 'Send' }).click()
+  const attached = users.last()
+  const attachment = attached.locator('.bubble__file')
+  await expect(attachment).toBeVisible()
+  await page.mouse.move(0, 0)
+  await page.getByPlaceholder('Message…').focus()
+  const attachedSize = await dimensions(attached)
+  await expect(attached.locator('.bubble__meta-time')).toBeHidden()
+  await attachment.focus()
+  await expect(attached.locator('.bubble__meta-time')).toBeVisible()
+  expect(await dimensions(attached)).toEqual(attachedSize)
+
+  daemon.pushFrame(encodeEnvelope({ id: 30, type: 'assistant_delta', ts: TS, payload: {
+    conversation_id: SEEDED_ROW.id, turn_id: 'stream', seq: 0, text: 'Streaming partial reply'
+  } }))
+  const tail = assistants.last()
+  await expect(tail.locator('.bubble__cursor')).toBeVisible()
+  await tail.locator('..').getByRole('button', { name: 'Copy message' }).click()
+  await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText())).toBe('Streaming partial reply')
+
+  daemon.pushFrame(encodeEnvelope({ id: 31, type: 'queue_state', ts: TS, payload: {
+    conversation_id: SEEDED_ROW.id, queued: [{ queued_msg_id: 1, text: LONG, ts: TS }]
+  } }))
+  const queued = page.locator('.message-row--queued')
+  await expect(queued).toBeVisible()
+  await expect(queued.locator('.message-actions, .bubble__meta')).toHaveCount(0)
+  const q = await queued.evaluate(el => {
+    const b = el.querySelector('.bubble')!.getBoundingClientRect()
+    const r = el.getBoundingClientRect()
+    const drop = el.querySelector('.queued-row__drop')!.getBoundingClientRect()
+    return { width: r.width, bubbleWidth: b.width, dropWidth: drop.width,
+      inset: getComputedStyle(el).paddingLeft, opacity: getComputedStyle(el).opacity,
+      gap: b.x - drop.right, centered: drop.y + drop.height / 2 - b.y - b.height / 2 }
+  })
+  expect(q.width).toBe(900)
+  expect(q.bubbleWidth).toBeCloseTo(900 - 40 - q.dropWidth, 0)
+  expect(q.inset).toBe('40px')
+  expect(q.opacity).toBe('0.5')
+  expect(q.gap).toBeCloseTo(0, 0)
+  expect(q.centered).toBeCloseTo(0, 0)
+  await queued.getByRole('button', { name: 'Drop queued message' }).click()
+  await expect.poll(() => dequeues).toBe(1)
+
+  // Standalone file offers share base row classes but keep their original width and chrome.
+  daemon.pushFrame(encodeEnvelope({ id: 32, type: 'attachment_offered', ts: TS, payload: {
+    conversation_id: SEEDED_ROW.id,
+    attachment_id: '4a5b6c7d-8e9f-4a0b-8c9d-4e5f6a7b8c9d',
+    filename: 'report'.repeat(40) + '.pdf'
+  } }))
+  const offer = page.locator('.bubble--attachment-offer')
+  await expect(offer).toBeVisible()
+  await expect(offer.locator('..')).not.toHaveClass(/message-row--text/)
+  await expect(offer.locator('..').locator('.message-actions, .bubble__meta')).toHaveCount(0)
+  const offered = await offer.evaluate(el => ({
+    rowWidth: el.parentElement!.getBoundingClientRect().width,
+    bubbleWidth: el.getBoundingClientRect().width,
+    bubblePadding: parseFloat(getComputedStyle(el).paddingLeft) + parseFloat(getComputedStyle(el).paddingRight),
+    padding: getComputedStyle(el.parentElement!).paddingRight
+  }))
+  expect(offered.rowWidth).toBeGreaterThan(900)
+  expect(offered.bubbleWidth).toBeLessThanOrEqual(680 + offered.bubblePadding)
+  expect(offered.padding).toBe('0px')
+
+})

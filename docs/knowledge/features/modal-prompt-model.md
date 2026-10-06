@@ -45,12 +45,14 @@ interface ModalPrompt {
   blockedPath?: string
   description?: string
   defaultToNo?: boolean
+  alwaysAllow?: { offered: boolean; rules: string[] }
 }
 
 type ModalEvent =
   | { type: 'shown'; conversationId: string; modalId: string; class: ModalClass; title: string;
       prompt: string; options: readonly ModalOption[]; defaultOptionId: string;
-      reason?: unknown; reasonType?: string; blockedPath?: string; description?: string; defaultToNo?: boolean }
+      reason?: unknown; reasonType?: string; blockedPath?: string; description?: string; defaultToNo?: boolean;
+      alwaysAllow?: ModalPrompt['alwaysAllow'] }
   | { type: 'dismissed'; modalId: string; outcome: string; source: 'remote' | 'local' | 'timeout' }
   // #249: a modal answer that round-tripped to a daemon `error`. Produced by the bridge from the
   // content-free `modalAnswerRejected` daemon event (#248) — carries ONLY the `modalId` nonce.
@@ -178,6 +180,24 @@ re-exported from `modalStore.ts` alongside the Zustand container. `resolved` has
 internal reducer bookkeeping only, never read outside `reduceModal` itself. `PermissionModal` reads
 `rejectionOwners` directly from the store alongside `selectRejections`.
 
+### Continuous choice and offer identity
+
+On same-outstanding-ID `shown`, `reduceModal` preserves the previous `options` array only when
+class, conversation, supplied default and every option ID/label/order match. It preserves
+`alwaysAllow` only when those choices also match and the offer's `offered` flag and complete ordered
+rules match. Otherwise it copies fresh choices/offer; an absent offer removes the old one. Context-only
+re-delivery builds a fresh prompt but retains these identities. This distinguishes continuous consent
+from identical text restored after an interruption, including multiple transitions batched by React.
+
+The [choice controller](conversation-shell-permission-modal.md#selection-and-confirmation) observes
+modal, active-conversation, conversation-list and session transitions synchronously. It clears arm
+and checked consent on request/choice/offer changes, navigation and unique-owner loss/change;
+scoped reconnect clearing and pairing reset also invalidate the held request. It rejects callbacks
+unless their exact displayed snapshot is still the first outstanding request in the active chat and
+its unique stamped host is connected. No other host supplies availability. Reads during construction
+and subscriptions are side-effect-free; diagnostics belong to actions. These pane drafts stay in
+memory and clear on navigation; inline placement and navigation-retained grants remain #1818's scope.
+
 ### Internal helpers (unexported)
 
 - `removeById(outstanding, modalId)` — filters by `modalId`, returning the **same array reference**
@@ -213,8 +233,8 @@ internal reducer bookkeeping only, never read outside `reduceModal` itself. `Per
 
 ## Configuration and usage
 
-Nothing imports this module yet. The vertical is decomposed into six slices (ADR 0009); the first has
-landed:
+The modal store imports this reducer and selectors; the permission panel and Top overlay consume
+its state. The original vertical was decomposed into six slices (ADR 0009), now shipped:
 
 - **[#201](../codebase/201.md) (shipped)** — the modal wire types (`ModalShownPayload`/
   `ModalDismissedPayload`/`WireModalOption`/`WireModalClass`/`WireModalSource`) and the fail-closed

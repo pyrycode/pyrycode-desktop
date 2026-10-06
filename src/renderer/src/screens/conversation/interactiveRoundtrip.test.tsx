@@ -120,12 +120,8 @@ describe('#179 interactive round-trip — the flip lights up the mounted pipelin
         sessionPermissionChecked={false}
         onSessionPermissionChange={() => {}}
         prompt={outstanding[0]}
-        pendingOption={null}
-        selectedOption={null}
-        onContinue={() => {}}
-        onSelect={() => {}}
-        onConfirm={() => {}}
-        onBack={() => {}}
+        armedOption={null}
+        onActivate={() => {}}
         onCancel={() => {}}
       />
     )
@@ -133,11 +129,11 @@ describe('#179 interactive round-trip — the flip lights up the mounted pipelin
     // One native choice per supplied option, default indication and explicit action controls.
     expect(markup).toContain('role="region"')
     expect(markup).toContain('run the build')
-    const optionInputs = markup.match(/type="radio"/g)?.length ?? 0
+    const optionInputs = markup.match(/class="permission-panel__choice(?: |")/g)?.length ?? 0
     expect(optionInputs).toBe(2)
-    expect(markup).toContain('permission-panel__default')
-    expect(markup).toContain('>Allow</span>')
-    expect(markup).toContain('>Deny<span')
+    expect(markup).toContain('permission-panel__choice--default')
+    expect(markup).toContain('>Allow</button>')
+    expect(markup).toContain('>Deny</button>')
     expect(markup).toContain('>Cancel</button>')
   })
 })

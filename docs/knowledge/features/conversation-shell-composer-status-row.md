@@ -269,3 +269,17 @@ says "there is no Figma node for this state; the indicator is one muted run" —
 muted tint) even though the paragraph's conclusion (one text run, so overflow draws a single ellipsis) is
 still correct and still load-bearing. Left as prose upkeep rather than a gate. See [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796).
 
+## Reconnect status observation
+
+A foreground tool can replace generic “Thinking…” / “Working…” with “Running Bash…”
+and optional elapsed time. A live reconnect check that accepts only generic copy
+times out before dropping the connection, despite a valid running turn. The
+[phase-reconnect observer](../../../e2e/fixtures/phaseReconnectEvidence.ts) recognizes
+the held Bash presentation at both checkpoints and returns only a boolean, retaining
+no daemon text. Its unit cases also reject idle and superseding notices.
+
+Visible status alone cannot establish reconnect: require a new `connected`, an
+attributed phase delivered on that connection and the original turn still open.
+The [mounted reconnect regressions](conversation-timeline-store-limits.md#testing)
+also check transcript preservation and idle silence; the status row continues to
+reserve its height when the label is absent.

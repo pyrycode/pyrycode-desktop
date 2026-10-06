@@ -366,9 +366,10 @@ entry-independent — `fillResult` writes a result into a `toolCall` row an earl
 turn's deltas coalesce in the order they fold. Two content-losing failures followed, both reproduced as
 failing tests before the fix:
 
-- **An orphaned result.** The live lane drew a `tool_use` and lost the `tool_result` to a reconnect (this
-  client advertises no `last_event_id`, so a dropped live frame is gone and the served page is the only
-  repair path). Dropping the page's `toolUse` while keeping its `toolResult` left `fillResult` with no row
+- **An orphaned result.** The live lane drew a `tool_use` and lost the `tool_result` across disconnect.
+  The served history page must still repair it when the result lies outside the bounded replay tail
+  (desktop now sends [`last_event_id`](daemon-connection-lifecycle.md#replay-cursor-lifetime)).
+  Dropping the page's `toolUse` while keeping its `toolResult` left `fillResult` with no row
   to write into — the result was discarded, and the live row stayed pending forever.
 - **A turn read backwards.** The live lane drew a turn's older deltas but not its newer ones. Dropping the
   older while keeping the newer folded the surviving text into a bubble `prependHistoryFor` places ABOVE

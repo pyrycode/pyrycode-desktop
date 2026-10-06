@@ -9,9 +9,10 @@ Retention, send windows and row identity in the [conversation timeline](conversa
   trusting the ordered transport.
 - **Orphan/duplicate `toolResult` and turn-phase churn are the reducer's concern**, already
   same-reference no-ops (#121) — not re-handled by the store or bridge.
-- **No dedicated test for `useTimelineBridge`.** A bare hook is untestable without a React renderer
-  (none in this repo), exactly as `useDaemonEventBridge` has none — its behavior is fully carried by
-  the pure `subscribeTimeline` tests. See [#202 codebase notes](../codebase/202.md) § Lessons learned.
+- **Static renderer tests cannot exercise `useTimelineBridge`'s effect.** The pure
+  `subscribeTimeline` tests cover translation and subscription behavior; the
+  [mounted reconnect regressions](#testing) exercise its production wiring through
+  decode, IPC and the keyed store. A static render alone cannot prove that delivery.
 - **Zero live traffic until [#179](../codebase/179.md).** Through #178, desktop withheld the
   `interactive` capability, so no `assistant_delta`/`turn_end`/`turn_state`/`tool_use`/`tool_result`
   frame reached this bridge in production — the store, bridge, #203's `Timeline` view, and #215's
@@ -43,12 +44,26 @@ Retention, send windows and row identity in the [conversation timeline](conversa
   association. This feature does not recover missed offline events or replay
   `compaction_boundary` from history. History's existing `compacting` decoder carries
   outcomes, but prepending its reduced rows does not create a live pending association.
-- **The relay never resumes a session and desktop advertises no replay cursor, so a reconnect cannot
-  recover a lost falling edge — it can only reconcile forward** ([#538](../codebase/538.md)). The daemon
-  re-asserts only the outstanding modal (#877) and the queued backlog (#878) on connect, never
-  `api_retry`/`compacting`/`turn_state`, so a status genuinely still live across the reconnect shows no
-  banner until the daemon's next edge. Accepted by design: a briefly-missing banner beats a
-  permanently-stuck one.
+- **Replay and running-phase reconciliation serve different purposes.** Desktop sends
+  the latest valid `event_id` as `last_event_id` on reconnect with the same pairing,
+  requesting the daemon's bounded retained tail for its current conversation. The
+  [cursor is held per host in main-process memory](daemon-connection-lifecycle.md#replay-cursor-lifetime);
+  an expired or unavailable tail still needs history recovery. After replay, a daemon
+  containing [pyrycode#2718](https://github.com/pyrycode/pyrycode/pull/2718) reasserts
+  the open interactive turn's current `thinking` or `responding` as `turn_state`,
+  keyed by `conversation_id` and without `event_id`; this delivery does not advance
+  the replay cursor. The mounted bridge first translates `connected` to `reconnected`,
+  clearing transient status in the conversation on screen while preserving held rows,
+  then routes the attributed phase into its keyed slice. The existing status returns
+  before another phase transition or send. If the turn ended offline, the daemon
+  sends no phase snapshot and the open timeline stays idle. This proof covers the
+  conversation kept open across disconnect, not navigation to another conversation.
+- **`api_retry` and `compacting` still have no connect-time reassertion.** Reconnect
+  clears their held status; a genuinely live retry or compaction waits for its next
+  wire edge. Replay of a retained edge is not a current-status snapshot and cannot
+  guarantee recovery outside the bounded tail. Retaining stale status instead would
+  leave it stuck when its falling edge was lost. Running-phase restoration does not
+  restore either status.
 - **`localSendPending` has no daemon falling edge — a bridge
   reconcile is not optional the way it is for `apiRetry`/`compacting` ([#650](../codebase/650.md)).**
   A send whose bridge call throws still posts the echo (`composerSend.ts`'s swallowed-failure
@@ -98,3 +113,28 @@ Retention, send windows and row identity in the [conversation timeline](conversa
   prepend scroll events do not chain requests; failures require new connected
   input. See [history admission](chat-history.md#received-state-admission-and-ownership)
   and [zero-offset compensation](conversation-shell-scroll-pin.md#user-demand-and-prepend-position).
+
+## Testing
+
+[`e2e/timeline-phase-reconnect.spec.ts`](../../../e2e/timeline-phase-reconnect.spec.ts)
+drops the real client socket under fake transport and sends event-ID-free thinking
+and responding frames immediately after the fresh handshake. It retains transcript
+rows, checks ended-offline silence, and observes duplicate phase delivery before
+comparing status markup and row counts. Absence before a newly observed `connected`
+could pass against the old connection; unchanged markup before observed delivery
+could pass without exercising the duplicate at all. The content-free
+[evidence watcher](../../../e2e/fixtures/phaseReconnectEvidence.ts) observes typed
+preload events without dispatching into stores. Existing
+[`threadTimeline.test.ts`](../../../src/renderer/src/store/threadTimeline.test.ts)
+reference-identity coverage remains the reducer's no-churn proof when the phase and
+other status state are unchanged.
+
+Withholding handshake-tail reassertions must fail the two restoration assertions;
+idle silence still requires positive evidence of the new connection.
+[`e2e/real-claude-phase-reconnect.spec.ts`](../../../e2e/real-claude-phase-reconnect.spec.ts)
+holds one foreground tool open, drops only the app's relay connection, and requires
+a new connection, a fresh attributed same-phase delivery and the original turn still
+running before releasing it. Its observer cannot distinguish replay from reconciliation
+by event ID; the fake regression supplies the event-ID-free proof. See the
+[status-label testing constraint](conversation-shell-composer-status-row.md#reconnect-status-observation)
+and [recorded live gate evidence](live-e2e-runbook.md#current-real-claude-gate-state).

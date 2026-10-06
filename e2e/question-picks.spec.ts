@@ -2,6 +2,7 @@ import { test, expect } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
 import { mintChatInWorkspace } from './fixtures/mintChatRow'
 import { encodeEnvelope } from '../src/main/transport/codec'
+import { AT_BOTTOM_TOLERANCE_PX } from '../src/renderer/src/screens/conversation/threadScrollPosition'
 import type {
   QuestionDismissedPayload,
   QuestionShownPayload,
@@ -173,9 +174,19 @@ test('inline question arrival and edits respect an earlier reader and bottom fol
   const cards = page.locator('.question-batch__question')
   await expect(cards).toHaveCount(2)
   await expect.poll(() => thread.evaluate(el => el.scrollTop)).toBe(before)
-  await cards.nth(1).locator('.question-panel__option').first().dispatchEvent('click')
+  // Edit the way a pointer reader can: with the option on screen and the reader still above the bottom. A
+  // label click focuses its visually hidden radio, and since #1733 made the thread that radio's containing
+  // block, focusing an OFFSCREEN one scrolls the thread natively. Clicking an offscreen label would measure
+  // that browser behaviour, not the app's response to the pick.
+  const option = cards.nth(1).locator('.question-panel__option').first()
+  await option.evaluate(label => label.scrollIntoView({ block: 'center' }))
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  const reading = await thread.evaluate(el => el.scrollTop)
+  expect(await thread.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeGreaterThan(AT_BOTTOM_TOLERANCE_PX)
+  await option.click()
   await expect(cards.nth(1).getByRole('radio', { name: /Rust/ })).toBeChecked()
-  expect(await thread.evaluate(el => el.scrollTop)).toBe(before)
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  expect(await thread.evaluate(el => el.scrollTop)).toBe(reading)
   await thread.evaluate(el => { el.scrollTop = el.scrollHeight })
   await expect.poll(() => thread.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThanOrEqual(2)
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))

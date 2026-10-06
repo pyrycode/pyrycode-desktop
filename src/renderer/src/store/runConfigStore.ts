@@ -49,6 +49,9 @@ export interface RunConfigSnapshot {
   slashCommands?: boolean
   mcpServers?: boolean
   contextUsageDetail?: boolean
+  /** #1726: whether the session takes a queued message into the running turn. OPT-IN, unlike the three
+   *  flags above: only an explicit `true` offers Send now, read through `selectMidTurnInputSupported`. */
+  midTurnInput?: boolean
   /** Optional daemon report; omission is unknown, and explicit provider flags stay verbatim. */
   memorySearch?: MemorySearchPayload
 }
@@ -132,3 +135,11 @@ export const selectSlashCommandsSupported = (s: RunConfigState): boolean =>
   sessionSupports(s.snapshot, 'slashCommands')
 export const selectMcpServersSupported = (s: RunConfigState): boolean =>
   sessionSupports(s.snapshot, 'mcpServers')
+
+/**
+ * Whether the open conversation's session accepts `send_queued_now` (#1726). TRUE ONLY for the daemon's
+ * explicit `true`, deliberately not `sessionSupports`: Send now is a new control, so a snapshot not yet
+ * arrived, an older daemon's absent flag and a Codex `false` all draw the queued row as it was before.
+ */
+export const selectMidTurnInputSupported = (s: RunConfigState): boolean =>
+  s.snapshot?.midTurnInput === true

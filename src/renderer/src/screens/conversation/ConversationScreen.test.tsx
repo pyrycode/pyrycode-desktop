@@ -3809,6 +3809,40 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
     expect(markup.indexOf('queued-row__drop')).toBeLessThan(markup.indexOf('the only queued one'))
   })
 
+  // #1726: Send now rides a queued row only while the session reports mid_turn_input: true.
+  it('draws Send now before the drop control on each queued row when the session supports it (#1726)', () => {
+    const markup = renderToStaticMarkup(
+      <Timeline
+        items={[echo('a delivered send', 'm1')]}
+        queued={[item(1, 'first queued'), item(2, 'second queued')]}
+        midTurnInput
+        onSendQueuedNow={() => {}}
+        onDropQueued={() => {}}
+      />
+    )
+    expect(markup.match(/<button type="button" class="queued-row__send-now" aria-label="Send queued message now">/g)
+      ?.length ?? 0).toBe(2)
+    expect(markup.indexOf('a delivered send')).toBeLessThan(markup.indexOf('queued-row__send-now'))
+    expect(markup.indexOf('queued-row__send-now')).toBeLessThan(markup.indexOf('class="queued-row__drop"'))
+    expect(markup.indexOf('class="queued-row__drop"')).toBeLessThan(markup.indexOf('first queued'))
+  })
+
+  it('draws the queued row byte-identically to today when the flag is false or absent (#1726)', () => {
+    const queued = [item(1, 'first queued')]
+    const today = renderToStaticMarkup(<Timeline items={[]} queued={queued} onDropQueued={() => {}} />)
+    const off = renderToStaticMarkup(
+      <Timeline items={[]} queued={queued} onDropQueued={() => {}} midTurnInput={false} onSendQueuedNow={() => {}} />
+    )
+    expect(off).toBe(today)
+    expect(today).not.toContain('queued-row__send-now')
+  })
+
+  it('disables Send now exactly as the drop control is disabled — without an action closure (#1726)', () => {
+    const markup = renderToStaticMarkup(<Timeline items={[]} queued={[item(1, 'first queued')]} midTurnInput />)
+    expect(markup).toContain('class="queued-row__send-now" aria-label="Send queued message now" disabled=""')
+    expect(markup).toContain('class="queued-row__drop" aria-label="Drop queued message" disabled=""')
+  })
+
   it('draws no queued treatment anywhere when the backlog prop is omitted entirely', () => {
     // The optional-prop contract the 72 existing `<Timeline` render sites depend on: absent `queued`
     // folds against an empty backlog and yields today's rows.

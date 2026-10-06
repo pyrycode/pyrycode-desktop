@@ -114,6 +114,7 @@ whole visual change:**
 | row class | `message-row message-row--user message-row--queued` (modifier **appended**, never prepended — `ConversationScreen.test.tsx` asserts the class run with `toContain`) | `message-row message-row--user` |
 | `data-thread-role` | `queued` | `user` |
 | drop control | `QueuedRowDrop`, a leading sibling of the bubble | none |
+| Send now control | `QueuedRowSendNow`, before Drop, only for explicit `midTurnInput: true` | none |
 | `<BubbleMeta>` | **suppressed** | rendered |
 | attachments | rendered (message content, not chrome) | rendered |
 
@@ -157,6 +158,37 @@ daemon's honest report of its own state, bounded to one relay round trip and str
 carries, the reducer returns the same state reference, and the row leaves on the snapshot as it always
 did.
 
+**Send now preserves the echo.** [#1726](https://github.com/pyrycode/pyrycode-desktop/issues/1726)
+adds `midTurnInput` and `onSendQueuedNow` optional props to `Timeline` / `TimelineRow`.
+The [run-config selector](run-config-store.md#session-capability-flags-1655) requires
+the open conversation's latest `mid_turn_input: true`; false, omission or no
+capabilities object preserves the queued row's previous markup. `QueuedRowSendNow`
+is a native button named "Send queued message now", with the same action gate,
+connected-host click guard and disabled conditions as Drop. Both controls share
+hover and focus styling, and Tab can reach Send now.
+
+The injected-effects `sendQueuedNow.ts` helper sends one `sendQueuedNowCommand`
+per activation and has no timeline dispatch. Main routes it by conversation and
+rebuilds the `send_queued_now` payload with only `conversation_id` and
+`queued_msg_id`. There is no reply frame: both controls and queued treatment
+remain until `queue_state` omits the item. The matched echo keeps its position;
+the later user `message` push with the same `message_id` is deduplicated. A bridge
+throw is caught, and a daemon no-op (idle turn, unknown id or Codex session) leaves
+the row queued to drain normally.
+
+Both controls stay available until that snapshot, with no pending-action ledger
+or repeat-click debounce. Once the daemon removes the item, additional Send now
+frames are no-ops. Drop clicked after Send now can still remove the echo before
+the snapshot arrives; if the daemon already delivered it, the later user receipt
+restores a truthful row at the tail. This accepted display race is recorded in
+the [plan's concurrency review](../../specs/architecture/1726-send-queued-now.md#security-review).
+`e2e/queued-send-now.spec.ts` covers the single-frame click, retained controls,
+Tab reachability and receipt deduplication; static markup alone cannot exercise
+the click. The live spec `e2e/real-claude-queue-send-now.spec.ts` holds Bash on a
+test-owned gate file and checks the marker in the held turn, no separate later
+turn and one delivered row. Its marker evidence accepts any assistant delta
+in that turn, rather than specifically the final response, as the verifier accepted.
+
 **CSS: the compositing group moved from the region to the row.** `.conversation__queued`'s `opacity:
 0.5` is now `.message-row--queued { opacity: 0.5 }` — the row is the smallest element containing both
 the bubble and `QueuedRowDrop`, which #296 made a *sibling* of the bubble, so a bubble-level opacity
@@ -182,6 +214,10 @@ thread (node 16-8/16-21), and node 102-4's desktop Message area has no queued/pe
 [#1214 architecture spec](../../specs/architecture/1214-fold-queued-backlog-into-thread.md) for full
 design, the security review (hostile-daemon capability bounded to display, §4/§5) and patterns
 established.
+
+Send now also has no separate Figma frame. By the decision in
+[#1726](https://github.com/pyrycode/pyrycode-desktop/issues/1726), it follows the
+drop control's icon-button idiom beside Drop; Juhana may overrule this decision.
 
 ## Screen-snapshot action & display (#324, removed #618)
 

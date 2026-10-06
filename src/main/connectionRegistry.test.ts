@@ -159,6 +159,7 @@ function createFactoryFake() {
       createConversation: noop,
       createWorkspaceFolder: noop,
       dequeueMessage: noop,
+      sendQueuedNow: noop,
       promoteConversation: noop,
       archiveConversation: noop,
       unarchiveConversation: noop,

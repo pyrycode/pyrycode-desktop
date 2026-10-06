@@ -24,6 +24,18 @@ const ackBytes = (payload: unknown, extra: Partial<Envelope> = {}): Uint8Array =
   encodeEnvelope({ id: 1, type: 'hello_ack', ts: '2026-07-04T12:00:00Z', payload, ...extra })
 
 describe('buildClientHello', () => {
+  it.each([undefined, 42])('reports the exact Desktop features with replay position %s', (lastEventId) => {
+    const expected = "Markdown links to absolute paths of markdown files under the daemon's served folders open in-app. Paths with spaces need angle brackets: [Note](</Users/me/My Vault/note.md>). Bare paths in backticks do not open. Attached files and photos upload to the daemon; on Send, Claude receives daemon-host paths and instructions to read them, not inline content."
+    const capabilities = lastEventId === undefined ? undefined : ['interactive', 'multi_agent', 'stop_background_task']
+    const encoded = buildClientHello({ ...baseInput, lastEventId, capabilities })
+    expect(utf8.decode(encoded)).toContain(`"client_features":${JSON.stringify(expected)}`)
+    const payload = decodeEnvelope(encoded).payload as { client_features: string; capabilities: string[] }
+    expect(payload.client_features).toBe(expected)
+    expect(Buffer.byteLength(payload.client_features, 'utf8')).toBeLessThanOrEqual(512)
+    expect(payload.client_features).not.toMatch(/[\u0000-\u001f\u007f-\u009f"]/) // C0, DEL, C1, quotes
+    expect(payload.capabilities).toEqual(capabilities ?? [])
+  })
+
   it('encodes the replay position and omits absent replay and timestamp fields', () => {
     const withCursor = decodeEnvelope(buildClientHello({ ...baseInput, lastEventId: 42 }))
     expect(withCursor.payload).toMatchObject({ last_event_id: 42 })

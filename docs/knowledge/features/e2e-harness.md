@@ -249,7 +249,7 @@ CI, so one such read turns a green branch red with no `flaky` line.
 [#1380](https://github.com/pyrycode/pyrycode-desktop/issues/1380) hit this first, in
 `pairing-authentication.spec.ts`'s `readAuthentication` (see [pairing input
 screen](pairing-input-screen.md#edge-cases-and-limitations)), and tolerated the exact message on
-**reads only**: a mutation must never be replayed — a retried `app.evaluate` that installs a counting
+**reads only**: a mutation must never be blindly replayed — a retried `app.evaluate` that installs a counting
 wrapper would wrap the wrapper, and a retried click or pushed frame would double the thing under test.
 
 [#1502](https://github.com/pyrycode/pyrycode-desktop/issues/1502) lifted that rule into a shared
@@ -341,6 +341,42 @@ includes that scenario passing (286 executed, 286 passed, 0 failed, 4 skipped).
 These passes supplement the deterministic recovery proof; the reason Electron lost its
 inspection context remains unproven. The original evaluation error and running-at-outcome
 launch-fate do not establish renderer navigation, an app crash or completed installation.
+
+Native window setup has two independently observable fields. The single-consumer
+[`configureComposerWindow`](../../../e2e/fixtures/composerWindowSetup.ts) serves only
+the long-model cases in `composer-options-clamp.spec.ts`. Its control callback checks
+outer size and zoom separately before setting either; partial application or a late
+original callback cannot repeat an already-applied setter. It then reads outer size,
+content size and zoom through `readMainProcess`, returning content dimensions only
+when outer size and zoom match. Mutations never enter the read-only helper.
+
+Recovery permits at most two control evaluations, each followed by at most three
+inspections, 100ms apart. Matching state succeeds immediately. Only transient control
+loss plus a **final conclusive mismatch** permits the second guarded control. An earlier
+mismatch cannot authorize resend if the final inspection is unavailable. An acknowledged
+control with persistent mismatch fails without resend. Permanent inspection loss,
+exhaustion and missing windows fail; unrelated errors and non-`Error` throws propagate
+unchanged. Confirm native state before waiting for
+[renderer geometry to settle](development-verification.md#layout-and-input).
+
+The [composer diagnosis](https://github.com/pyrycode/pyrycode-desktop/issues/1822#issuecomment-6030141371)
+records the initial resize evaluation failing after 1268ms at `e0b178ce89`, before menu
+assertions, while launch-fate showed the app alive with exit code 0 and clean teardown.
+The focused retry-0 rerun passed in 2407ms. The direct mutation setup aborted on lost
+inspection acknowledgement; whether that resize executed and the upstream
+Playwright/Electron trigger remain unproven. Neither a product layout failure nor an
+external prerequisite is established.
+
+[`composerWindowSetup.test.ts`](../../../e2e/fixtures/composerWindowSetup.test.ts)
+executes the actual serialized callbacks against fake native state, rather than
+substituting confirmation answers. Coverage includes loss before/after effect, read loss, partial and late
+execution, final-inconclusive rejection, finite exhaustion and fatal failures. The
+[verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1838#issuecomment-6030292632)
+confirms all 17 fault tests present and passed (17 executed, 0 failed, 0 skipped) in
+the unit gate (9,208 executed/passed, 0 failed, 3 skipped). Fault injection proves
+recovery semantics, not reproduction of the upstream trigger. Counted browser
+[repetition and full-suite evidence](development-verification.md#composer-native-setup-verification)
+preserve the menu proof separately.
 
 `readAuthentication` keeps its own private copy of the same tolerance.
 

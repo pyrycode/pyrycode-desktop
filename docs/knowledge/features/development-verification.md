@@ -242,6 +242,15 @@ the requested zoom (allowing pixel rounding), then wait two animation frames bef
 checking clearance or the final scroll endpoint. An immediate endpoint assertion
 produced a transient minimum-width failure in the reader proof.
 
+The composer long-model cases first confirm native outer size and zoom through
+[`configureComposerWindow`](../../../e2e/fixtures/composerWindowSetup.ts), then poll
+both renderer dimensions against its returned content size divided by zoom with
+one-pixel tolerance and a five-second bound. Two animation frames elapse before
+opening the menu. A lost setter acknowledgement does not establish whether a change
+ran; use [guarded native setup recovery](e2e-harness.md#tolerating-a-transient-inspection-context-loss-on-reads)
+to inspect the effect, rather than passing setters to `readMainProcess` or blindly
+replaying them. Native confirmation alone does not prove renderer reflow.
+
 The [Markdown reader](conversation-shell-markdown-reader.md#pane-wiring) needs its own
 full-pane viewport assertion: header padding alone can pass while the scrollport still
 starts below the header and cannot overlap it. Check the unchanged 85px resting heading
@@ -481,6 +490,38 @@ A simulated keyboard shortcut does not necessarily execute a trusted paste.
 Use the Electron window's native paste operation for this case.
 Seed the clipboard before the first paste and distinguish rejection branches in
 the fake responses.
+
+### Composer native setup verification
+
+The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1838#issuecomment-6030292632)
+records the reliability proof on 2026-10-07 at
+`6c41d12d725fa8f60c80ad6524ce001a662a2c4d`. It independently checked the builder's
+focused JSON report for `playwright test e2e/composer-options-clamp.spec.ts
+--grep 'long footer model labels' --repeat-each=10 --retries=0 --reporter=json`
+under Xvfb: 20 executed, 20 passed, 0 failed, 0 skipped, 0 flaky, every result retry 0.
+Both named tests were present and passed ten times:
+
+| Named test | Executed / passed |
+| --- | --- |
+| `long footer model labels stay readable and selectable at 1280 with zoom` | 10 / 10 |
+| `long footer model labels stay readable and selectable at 800 with zoom` | 10 / 10 |
+
+Each case still covers native 1280×800 or 800×600 at both 100% and 125% zoom:
+panel and complete wrapped/unbroken label containment, visible focus outlines,
+keyboard selection, a real click on the final label line, intended model values
+and restored trigger focus. The separate `the options panel fits the pane and
+restores its width on resize` case retains its width/shift restoration proof.
+
+The builder's full fake suite (`playwright test --retries=0 --reporter=json`) used
+the default 3 workers: 324 executed/passed, 0 failed, 4 platform skips, 0 flaky,
+all retry 0. Dispatcher verifier gate 6 (`npx playwright test --reporter=json`)
+independently records 324 executed/passed, 0 failed, 4 skipped at the reviewed head.
+The verdict confirms all three composer cases were present, executed and passed
+in both full runs (3 executed/passed, 0 failed, 0 skipped). The skips were two
+app-badge cases, history close/reopen and window-reopen convergence on Linux;
+none counts as proof. Global retry/worker settings and menu assertions are
+unchanged. This is fake-transport evidence; no live Claude or upstream-trigger
+reproduction is claimed. See [diagnosis and deterministic fault coverage](e2e-harness.md#tolerating-a-transient-inspection-context-loss-on-reads).
 
 ### Inline question verification
 

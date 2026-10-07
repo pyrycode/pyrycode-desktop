@@ -117,19 +117,46 @@ it('reconstructs allowlisted primitives and drops arbitrary secret-bearing extra
   expect(JSON.stringify(h.report())).not.toContain('private')
 })
 
-it('cancels a pending acquisition and stops/disposes a late renderer handle', async () => {
+it('keeps acquisition ownership after click completion and stops/disposes its late handle', async () => {
   const h = harness(), click = deferred()
   let release = (_handle: typeof h.handle) => {}
   h.page.evaluateHandle.mockImplementation(() => new Promise((resolve) => { release = resolve }))
   const result = h.run(() => click.promise)
+  const settled = vi.fn()
+  void result.then(settled) // Prove the pairing tail cannot resume before renderer cleanup.
   await vi.advanceTimersByTimeAsync(5100)
   click.resolve()
-  await result
-  expect(h.report().renderer).toEqual({ status: 'cancelled' })
-  expect(vi.getTimerCount()).toBe(0)
+  await vi.advanceTimersByTimeAsync(100)
+  expect(settled).not.toHaveBeenCalled()
   release(h.handle)
+  await result
   await vi.advanceTimersByTimeAsync(0)
   expect(h.handle.evaluate).toHaveBeenCalledOnce()
+  expect(h.handle.dispose).toHaveBeenCalledOnce()
+  expect(vi.getTimerCount()).toBe(0)
+})
+
+it('an acquisition arriving after its deadline is disposed without installing renderer callbacks', async () => {
+  const h = harness(), click = deferred()
+  let release = () => {}
+  const requestFrame = vi.fn()
+  vi.stubGlobal('requestAnimationFrame', requestFrame)
+  h.page.evaluateHandle.mockImplementation((...args: unknown[]) => new Promise((resolve) => {
+    release = () => {
+      const install = args[0] as (params: unknown) => unknown
+      expect(install(args[1])).toBeUndefined()
+      resolve(h.handle)
+    }
+  }))
+  const result = h.run(() => click.promise)
+  await vi.advanceTimersByTimeAsync(5100)
+  click.resolve()
+  await vi.advanceTimersByTimeAsync(1700)
+  await result
+  expect(h.report().renderer).toEqual({ status: 'timed-out' })
+  release()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(requestFrame).not.toHaveBeenCalled()
   expect(h.handle.dispose).toHaveBeenCalledOnce()
   expect(vi.getTimerCount()).toBe(0)
 })

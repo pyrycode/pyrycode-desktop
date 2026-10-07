@@ -106,7 +106,7 @@ async function capture(page: Page, app: ElectronApplication, signal: AbortSignal
     timer = window.setTimeout(onTimer, 50)
     expiry = window.setTimeout(stop, sampleMs)
     return { stop }
-  }, { expiresAt: deadline, sampleMs: SAMPLE_MS })
+  }, { expiresAt: deadline - 200, sampleMs: SAMPLE_MS })
   let handle: Awaited<typeof installation> | undefined
   // A timed-out acquisition can still arrive later. Stop/dispose it, without observing more state.
   void installation.then(async (late) => {
@@ -115,7 +115,9 @@ async function capture(page: Page, app: ElectronApplication, signal: AbortSignal
       await bounded(() => late.dispose(), Date.now() + 200)
     }
   }, () => {}) // Rejection is classified by the bounded acquisition below.
-  const installed = await bounded(async () => { handle = await installation }, deadline - 200, signal)
+  // Keep acquisition ownership until cleanup or expiry, even when the click settles first. Otherwise
+  // its queued install could begin sampling after the pairing tail has resumed.
+  const installed = await bounded(async () => { handle = await installation }, deadline - 200)
   let renderer: Reading = installed.status === 'available' ? { status: 'unavailable' } : installed
   let cleanup: Reading = { status: 'unavailable' }
   if (handle) {
@@ -154,6 +156,7 @@ export async function withWelcomeDiagnostics<T>(
       await click()
       stop.abort()
     } catch (error) {
+      clearTimeout(timer)
       if (!diagnostic) start('failed')
       else stop.abort()
       await diagnostic

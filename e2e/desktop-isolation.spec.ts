@@ -12,7 +12,7 @@ import { e2eShowsWindow, expectDesktopIsolated, readDesktopIsolation } from './f
 // THERE IS NO FAILS-ON-MAIN TEST FOR THE FLAKE ITSELF and this file does not pretend otherwise: it
 // reproduces about once per 77 tests, non-deterministically, and only under operator interference. What
 // is provable is that the isolation is applied and that the whole pairing drive completes under it, and
-// that is what these three tests hold down.
+// that is what the tests below hold down.
 //
 // The two tests split AC1's two consequences, because no single check can see both:
 //  - dropping the isolation → the in-app read-backs (here and in smoke.spec.ts, one per launch site);
@@ -94,4 +94,42 @@ test('every default-tier Electron launch goes through the shared module', async 
   }
 
   expect(launchSites.sort()).toEqual([...ALLOWED].sort())
+})
+
+// #1813's cover. Under Xvfb every worker's window is shown on ONE display whose own pointer never moves
+// from where the server put it, and Playwright's pointer is a separate, CDP-injected one. When another
+// worker maps a window over the display pointer, X sends this window a LeaveNotify; Chromium turns it
+// into a mouse exit, the document loses `:hover`, and nothing moves the CDP pointer again to restore it.
+// Measured on pyrybox: a hover spec failed at its pill-visible and tooltip-box steps under three workers
+// and CPU load, with a `pointerout` at exactly the display pointer's window coordinates and an empty
+// `:hover` chain. This maps the same window deterministically. On a hidden presentation no display
+// pointer can reach the window, so there is nothing to hold down.
+test('a window mapped over the display pointer does not end a Playwright hover', async ({
+  launchPairedApp
+}) => {
+  test.skip(!e2eShowsWindow(), 'a never-shown window receives no pointer from the display')
+  const { app, page } = await launchPairedApp()
+  const control = page
+    .locator('.channel-list__actions')
+    .getByRole('button', { name: 'Pair new host', exact: true })
+  const pill = control.locator('.channel-list__control-name')
+  await control.hover()
+  await expect(pill).toBeVisible()
+
+  // Another launch's window, mapped at the display pointer. `ready-to-show` is its first paint, which
+  // cannot come before the map that sends this window its crossing event.
+  await app.evaluate(async ({ BrowserWindow, screen }) => {
+    const { x, y } = screen.getCursorScreenPoint()
+    const cover = new BrowserWindow({ x: x - 100, y: y - 100, width: 200, height: 200, show: true })
+    const painted = new Promise<void>((resolve) => cover.once('ready-to-show', () => resolve()))
+    await cover.loadURL('data:text/html,<p>cover</p>')
+    await painted
+  })
+  // Two frames in this renderer, so an input event already forwarded to it has been dispatched.
+  await page.evaluate(
+    () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+  )
+
+  expect(await control.evaluate((el) => el.matches(':hover'))).toBe(true)
+  await expect(pill).toBeVisible()
 })

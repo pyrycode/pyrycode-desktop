@@ -25,3 +25,7 @@ Add a pointer-transparent absolute pseudo-element on hover to the existing chat 
 - Deliver a dismissible usage warning and pairing rejection through fake transport. Assert both pill fills survive beneath the hover image, inert notices have no hover layer, and pill geometry remains fixed.
 - Drive keyboard modality and confirm bare controls retain their 1px outline and pills retain their native focus outline. Capture integrated hovered states for comparison with Figma.
 - After the final merge of main, run pre-verify, build and the focused fake-transport spec. No live tests change.
+
+## Revisions
+
+2026-10-07: Visual comparison showed that isolating Pair new host trapped its existing fixed name pill beneath the conversation chrome. Sidebar layers now paint before relatively positioned glyphs in source order, without creating a stacking context; the chat menu retains isolation because it has no fixed name pill. This preserves the tooltip's existing stacking contract.

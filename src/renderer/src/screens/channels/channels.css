@@ -68,6 +68,27 @@
   outline: 1px solid var(--color-outline);
 }
 
+.channel-list__pair,
+.channel-list__menu {
+  position: relative;
+}
+
+/* Paint glyphs above the layer without trapping the pairing button's fixed name pill. */
+.channel-list__pair-icon,
+.channel-list__menu-icon {
+  position: relative;
+}
+
+.channel-list__pair:hover::before,
+.channel-list__menu:hover::before {
+  content: '';
+  position: absolute;
+  inset: calc(-1 * var(--space-1));
+  pointer-events: none;
+  background: var(--color-state-hover);
+  border-radius: var(--radius-xs);
+}
+
 .channel-list__pair:hover .channel-list__control-name,
 .channel-list__pair:focus-visible .channel-list__control-name {
   display: block;

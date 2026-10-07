@@ -253,6 +253,11 @@ button.top-overlay-pill {
   cursor: pointer;
 }
 
+button.top-overlay-pill:hover,
+.top-overlay-pill:has(> .top-overlay-pill__dismiss):hover {
+  background-image: linear-gradient(var(--color-state-hover), var(--color-state-hover));
+}
+
 .top-overlay-pill__text {
   min-width: 0;
 }
@@ -4795,6 +4800,21 @@ button.top-overlay-pill {
 
 .conversation__overflow-trigger:focus-visible {
   outline: 1px solid var(--color-outline);
+}
+
+.conversation__overflow-trigger {
+  position: relative;
+  isolation: isolate;
+}
+
+.conversation__overflow-trigger:hover::before {
+  content: '';
+  position: absolute;
+  inset: calc(-1 * var(--space-1));
+  z-index: -1;
+  pointer-events: none;
+  background: var(--color-state-hover);
+  border-radius: var(--radius-xs);
 }
 
 .conversation__overflow-icon {

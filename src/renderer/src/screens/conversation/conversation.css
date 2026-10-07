@@ -771,9 +771,11 @@ button.top-overlay-pill {
 }
 
 /* Copy's 27×20px hit target enlarges the 11×12px glyph without changing its column.
-   Four vertical pixels per side leave room for a future glyph at a 12px gap. Pointer states
+   Four vertical pixels per side leave room for the reply glyph at a 12px gap. Pointer states
    keep the same ink; the keyboard outline remains visible. */
 .bubble__copy {
+  position: relative;
+  isolation: isolate;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -785,6 +787,17 @@ button.top-overlay-pill {
   background: transparent;
   color: inherit;
   cursor: pointer;
+}
+
+/* The hit target is 8px wider per side; inset its paint to reach 4px past the glyph. */
+.bubble__copy:hover::before {
+  content: '';
+  position: absolute;
+  inset: 0 var(--space-1);
+  z-index: -1;
+  pointer-events: none;
+  background: var(--color-state-hover);
+  border-radius: var(--radius-xs);
 }
 
 .bubble__copy:focus-visible {

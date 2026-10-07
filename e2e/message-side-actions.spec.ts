@@ -54,6 +54,87 @@ const dimensions = (bubble: Locator) => bubble.evaluate(el => {
   return [b.width, b.height, r.width, r.height]
 })
 
+test('copy and reply hover layers surround only the pointed glyph without changing layout or keyboard focus', async ({ launchPairedApp }) => {
+  const { page, app } = await launchPairedApp({ buildReplyFrames: frames })
+  await page.getByPlaceholder('Message…').fill(SHORT)
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.locator('.bubble__markdown')).toHaveCount(1)
+  const layer = (button: Locator) => button.evaluate(el => {
+    const style = getComputedStyle(el, '::before')
+    const probe = document.createElement('span')
+    probe.style.background = 'var(--color-state-hover)'
+    el.append(probe)
+    const fill = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return { content: style.content, fill: style.backgroundColor, expectedFill: fill,
+      radius: style.borderRadius, top: parseFloat(style.top), bottom: parseFloat(style.bottom),
+      left: parseFloat(style.left), right: parseFloat(style.right) }
+  })
+  const focus = (button: Locator) => button.evaluate(el => {
+    const style = getComputedStyle(el)
+    return { visible: el.matches(':focus-visible'), outline: style.outlineStyle,
+      width: style.outlineWidth, color: style.outlineColor, radius: style.borderRadius }
+  })
+  for (const width of [800, 1280]) {
+    await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 800), width)
+    await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width)
+    for (const role of ['user', 'assistant']) {
+      const bubble = page.locator(`.bubble[data-thread-role="${role}"]`)
+      const row = bubble.locator('..')
+      const copy = row.getByRole('button', { name: 'Copy message' })
+      const reply = row.getByRole('button', { name: 'Reply to message' })
+      await bubble.scrollIntoViewIfNeeded()
+      await page.mouse.move(0, 0)
+      await page.getByPlaceholder('Message…').focus()
+      const before = await geometry(bubble)
+      for (const [button, sibling, box, glyph, name] of [
+        [copy, reply, before.copy, before.copyGlyph, 'copy'],
+        [reply, copy, before.reply, before.replyGlyph, 'reply']
+      ] as const) {
+        expect((await layer(button)).content).toBe('none')
+        await button.hover()
+        const hovered = await layer(button)
+        expect(hovered.content).toBe('""')
+        expect(hovered.fill).toBe(hovered.expectedFill)
+        expect(hovered.radius).toBe('6px')
+        expect(box.x + hovered.left).toBeCloseTo(glyph.x - 4, 5)
+        expect(box.y + hovered.top).toBeCloseTo(glyph.y - 4, 5)
+        expect(box.right - hovered.right).toBeCloseTo(glyph.right + 4, 5)
+        expect(box.bottom - hovered.bottom).toBeCloseTo(glyph.bottom + 4, 5)
+        expect((await layer(sibling)).content).toBe('none')
+        expect(await geometry(bubble)).toEqual(before)
+        if (role === 'assistant') await row.screenshot({ path: `/tmp/builder-1864/${name}-hover-${width}.png` })
+        await page.mouse.move(0, 0)
+        expect((await layer(button)).content).toBe('none')
+        expect(await geometry(bubble)).toEqual(before)
+      }
+      // Enter keyboard modality and reach each action with a real Tab transition.
+      await reply.focus()
+      await page.keyboard.press('Shift+Tab')
+      for (const button of [copy, reply]) {
+        await expect(button).toBeFocused()
+        const focused = await focus(button)
+        expect(focused.visible).toBe(true)
+        expect(focused.outline).toBe('solid')
+        expect(focused.width).toBe('1px')
+        expect(focused.color).toBe(await button.evaluate(el => {
+          const probe = document.createElement('span')
+          probe.style.color = 'var(--color-outline)'
+          el.append(probe)
+          const color = getComputedStyle(probe).color
+          probe.remove()
+          return color
+        }))
+        expect(focused.radius).toBe('9999px')
+        expect((await layer(button)).content).toBe('none')
+        expect(await geometry(bubble)).toEqual(before)
+        if (role === 'assistant') await row.screenshot({ path: `/tmp/builder-1864/${button === copy ? 'copy' : 'reply'}-focus-${width}.png` })
+        await page.keyboard.press('Tab')
+      }
+    }
+  }
+})
+
 test('side copy, row cap and timestamp reveal preserve geometry at minimum and wide windows', async ({ launchPairedApp }) => {
   const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: frames })
   for (const text of [LONG, SHORT]) {

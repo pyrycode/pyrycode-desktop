@@ -4,14 +4,15 @@ import { joinKeyFor, translateTimelineEvent } from './timelineBridge'
 import { initialTimelineState, reduceTimeline, type ThreadItem, type TimelineState } from './threadTimeline'
 import { withoutLiveEntries } from './historyPageBridge'
 
-function contribution(entry: HistoryTimelineEntry): HistoryContribution | undefined {
+function contribution(entry: HistoryTimelineEntry, compaction?: ThreadItem): HistoryContribution | undefined {
   const event = translateTimelineEvent(entry.event)
   const fields = { id: entry.id, joinKey: entry.event.type === 'messageReceived' ? undefined : joinKeyFor(entry.event.type, entry.ts) }
   if (event?.type === 'toolResult') return { ...fields, kind: 'patch', toolUseId: event.toolUseId,
     parentToolUseId: event.parentToolUseId, result: { isError: event.isError, resultSummary: event.resultSummary, resultDetail: event.resultDetail } }
-  if (event?.type === 'toolDenied') return { ...fields, kind: 'patch', toolUseId: event.toolUseId, denial: event.denial }
+  if (event?.type === 'toolDenied') return event.turnId === '' || event.toolUseId === '' ? undefined
+    : { ...fields, kind: 'patch', turnId: event.turnId, toolUseId: event.toolUseId, denial: event.denial }
   if (event === null) return undefined
-  const item = reduceTimeline(initialTimelineState, event).items[0]
+  const item = event.type === 'compacting' ? compaction : reduceTimeline(initialTimelineState, event).items[0]
   if (item === undefined || item.kind === 'attachmentOffer') return undefined
   // Project terminal metrics away before retaining a display operation.
   const durable: DurableThreadItem = item.kind === 'turnBoundary'
@@ -40,9 +41,15 @@ export function reconcileHistory(
   const sorted = [...entries].sort((a, b) => b.id - a.id)
   const admitted = new Set(withoutLiveEntries(sorted, liveKeys))
   const ranges = (retainedRows ?? []).filter(d => d.lastId !== undefined)
-  for (const entry of sorted) {
+  let scratch = initialTimelineState
+  for (const entry of [...sorted].reverse()) {
+    // Reconstruct original page edges before overlap filtering; never reduce held live state.
+    const event = translateTimelineEvent(entry.event)
+    const compacted = event?.type === 'compacting' ? reduceTimeline(scratch, event) : undefined
+    const compaction = compacted?.items[0]
+    if (compacted !== undefined) scratch = { ...compacted, items: [] }
     if (known.has(entry.id) || ranges.some(d => entry.id >= d.id && entry.id <= (d.lastId ?? d.id))) continue
-    const d = contribution(entry)
+    const d = contribution(entry, compaction)
     if (d === undefined) continue
     const messageId = d.kind === 'row' && d.item.kind === 'userText' ? d.item.messageId : undefined
     const echoIndex = messageId ? oldItems.findIndex(item => item.kind === 'userText' && item.messageId === messageId) : -1
@@ -62,6 +69,7 @@ export function reconcileHistory(
   const contributions = [...known.values()].sort((a, b) => a.id - b.id)
   const represented = new Set(retainedRows?.flatMap(d => d.kind === 'row' && d.rowKey !== undefined ? [d.rowKey] : []))
   const groups: { item: DurableThreadItem; members: HistoryContribution[]; key?: number }[] = []
+  const groupsByKey = new Map<number, typeof groups[number]>()
   const oldPosition = new Map(oldKeys.map((key, index) => [key, index]))
   const previousTexts = new Map<number, string>()
   for (const d of retainedRows ?? []) {
@@ -70,20 +78,38 @@ export function reconcileHistory(
     }
   }
   let previousRowKey: number | undefined
+  let canJoin = false
   for (const d of contributions) {
+    if (d.kind === 'suppressed' && d.rowKey !== undefined) {
+      const held = oldItems[oldPosition.get(d.rowKey) ?? -1]
+      if (held !== undefined && held.kind !== 'attachmentOffer') {
+        const existing = groupsByKey.get(d.rowKey)
+        if (existing !== undefined) existing.members.push(d)
+        else {
+          const group = { item: held, members: [d], key: d.rowKey }
+          groups.push(group); groupsByKey.set(d.rowKey, group)
+        }
+      }
+      previousRowKey = d.rowKey
+      canJoin = false
+      continue
+    }
     if (d.kind !== 'row') continue
     const item = d.item
     const tail = groups.at(-1)
     const left = previousRowKey === undefined ? undefined : oldPosition.get(previousRowKey)
     const right = d.rowKey === undefined ? undefined : oldPosition.get(d.rowKey)
     const barrier = left !== undefined && right !== undefined && oldKeys.slice(left + 1, right).some(k => !represented.has(k))
-    if (!barrier && tail?.item.kind === 'assistantText' && item.kind === 'assistantText' &&
+    if (canJoin && !barrier && tail?.item.kind === 'assistantText' && item.kind === 'assistantText' &&
       tail.item.turnId === item.turnId && tail.item.parentToolUseId === item.parentToolUseId) {
       tail.item = { ...tail.item, text: tail.item.text + item.text }
       tail.members.push(d)
       tail.key ??= d.rowKey
     } else groups.push({ item, members: [d], key: d.rowKey })
+    const group = groups.at(-1)
+    if (group?.key !== undefined) groupsByKey.set(group.key, group)
     previousRowKey = d.rowKey ?? previousRowKey
+    canJoin = true
   }
   const used = new Set<number>()
   for (const group of groups) {
@@ -95,7 +121,7 @@ export function reconcileHistory(
     }
     const heldIndex = group.key === undefined ? -1 : oldPosition.get(group.key) ?? -1
     const held = oldItems[heldIndex]
-    if (group.item.kind === 'assistantText' && held?.kind === 'assistantText') {
+    if (group.members.some(d => d.kind === 'row') && group.item.kind === 'assistantText' && held?.kind === 'assistantText') {
       const previousText = group.key === undefined ? '' : previousTexts.get(group.key) ?? ''
       if (held.text.startsWith(previousText)) group.item = { ...group.item,
         text: group.item.text + held.text.slice(previousText.length), createdAt: held.createdAt }
@@ -136,18 +162,24 @@ export function reconcileHistory(
     if (group.key !== undefined) { items.push(group.item); keys.push(group.key) }
   }
   const calls = new Map<string, number>()
+  const denialCalls = new Map<string, Map<string, number>>()
   items.forEach((item, index) => {
-    if (item.kind === 'toolCall' && !calls.has(item.toolUseId)) calls.set(item.toolUseId, index)
+    if (item.kind !== 'toolCall') return
+    if (!calls.has(item.toolUseId)) calls.set(item.toolUseId, index)
+    const turn = denialCalls.get(item.turnId) ?? new Map<string, number>()
+    if (!turn.has(item.toolUseId)) turn.set(item.toolUseId, index)
+    denialCalls.set(item.turnId, turn)
   })
   for (const d of contributions) {
     if (d.kind !== 'patch') continue
-    const index = calls.get(d.toolUseId) ?? -1
+    if (d.denial !== undefined && (!d.turnId || !d.toolUseId)) continue
+    const index = (d.denial !== undefined ? denialCalls.get(d.turnId ?? '')?.get(d.toolUseId) : calls.get(d.toolUseId)) ?? -1
     const item = items[index]
     if (item?.kind !== 'toolCall') continue
     d.rowKey = keys[index]
     items[index] = { ...item, result: item.result ?? d.result ?? null, denial: item.denial ?? d.denial,
       parentToolUseId: item.parentToolUseId ?? d.parentToolUseId,
-      elapsedSeconds: d.result ? undefined : item.elapsedSeconds }
+      elapsedSeconds: d.result || d.denial ? undefined : item.elapsedSeconds }
   }
   // Retire whole represented groups only for the explicit capacity limit, never receipt expiry.
   let display = contributions

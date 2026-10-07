@@ -58,7 +58,7 @@ export type HistoryContribution = {
   rowKey?: number
 } & (
   | { kind: 'row'; item: DurableThreadItem }
-  | { kind: 'patch'; toolUseId: string; parentToolUseId?: string;
+  | { kind: 'patch'; toolUseId: string; turnId?: string; parentToolUseId?: string;
       result?: Extract<DurableThreadItem, { kind: 'toolCall' }>['result'];
       denial?: Extract<DurableThreadItem, { kind: 'toolCall' }>['denial'] }
   | { kind: 'suppressed' }
@@ -316,7 +316,8 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
           (source === 'toolUse' && item.kind === 'toolCall') || (source === 'turnEnd' && item.kind === 'turnBoundary') ||
           (source === 'sessionTransition' && item.kind === 'sessionBoundary') ||
           (source === 'unrecognizedMessage' && item.kind === 'unrecognizedMessage') ||
-          (['apiRetry', 'compacting'].includes(source) && item.kind === 'banner') ||
+          (source === 'apiRetry' && item.kind === 'banner') ||
+          (source === 'compacting' && item.kind === 'compactionBoundary') ||
           (['modelRefusalFallback', 'modelRefusalNoFallback'].includes(source) && item.kind === 'modelRefusal'))) return invalid()
         if (held === undefined || held.kind !== item.kind ||
           ('turnId' in item && (!('turnId' in held) || item.turnId !== held.turnId)) ||
@@ -329,9 +330,12 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
       const toolUseId = id(d.toolUseId)
       const parsed = threadItem({ kind: 'toolCall', turnId: '', toolUseId, name: '', inputSummary: '',
         result: d.result === undefined ? null : d.result, denial: d.denial })
+      const turnId = parsed.kind === 'toolCall' && parsed.denial !== undefined ? id(d.turnId) : undefined
       if (parsed.kind !== 'toolCall' || (parsed.result === null && parsed.denial === undefined) ||
+        (parsed.denial !== undefined && (turnId === '' || toolUseId === '' || d.result !== undefined ||
+          (held !== undefined && (held.kind !== 'toolCall' || held.turnId !== turnId)))) ||
         (held !== undefined && (held.kind !== 'toolCall' || held.toolUseId !== toolUseId))) return invalid()
-      return { ...fields, kind, toolUseId, parentToolUseId: optional(d.parentToolUseId, id),
+      return { ...fields, kind, toolUseId, ...(turnId === undefined ? {} : { turnId }), parentToolUseId: optional(d.parentToolUseId, id),
         ...(d.result === undefined ? {} : { result: parsed.result }),
         ...(parsed.denial === undefined ? {} : { denial: parsed.denial }) }
     })

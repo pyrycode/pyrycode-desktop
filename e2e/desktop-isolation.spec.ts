@@ -1,4 +1,7 @@
-import { readFile, readdir } from 'node:fs/promises'
+import { readFile, readdir, mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import type { ElectronApplication } from '@playwright/test'
+import { electron } from './fixtures/electronLaunch'
 import { join, relative } from 'node:path'
 import { test, expect } from './fixtures/launchPairedApp'
 import { e2eShowsWindow, expectDesktopIsolated, readDesktopIsolation } from './fixtures/desktopIsolation'
@@ -96,15 +99,11 @@ test('every default-tier Electron launch goes through the shared module', async 
   expect(launchSites.sort()).toEqual([...ALLOWED].sort())
 })
 
-// #1813's cover. Under Xvfb every worker's window is shown on ONE display whose own pointer never moves
-// from where the server put it, and Playwright's pointer is a separate, CDP-injected one. When another
-// worker maps a window over the display pointer, X sends this window a LeaveNotify; Chromium turns it
-// into a mouse exit, the document loses `:hover`, and nothing moves the CDP pointer again to restore it.
-// Measured on pyrybox: a hover spec failed at its pill-visible and tooltip-box steps under three workers
-// and CPU load, with a `pointerout` at exactly the display pointer's window coordinates and an empty
-// `:hover` chain. This maps the same window deterministically. On a hidden presentation no display
-// pointer can reach the window, so there is nothing to hold down.
-test('a window mapped over the display pointer does not end a Playwright hover', async ({
+type PointerWindow = Window & { displayPointerExits: number }
+
+// An independent process retains display input, unlike windows created inside the protected app.
+// The unprotected arm proves that this cover really crosses the hovered window's display pointer.
+test('an independent input-enabled cover crosses an unprotected window but preserves isolated hover', async ({
   launchPairedApp
 }) => {
   test.skip(!e2eShowsWindow(), 'a never-shown window receives no pointer from the display')
@@ -113,23 +112,91 @@ test('a window mapped over the display pointer does not end a Playwright hover',
     .locator('.channel-list__actions')
     .getByRole('button', { name: 'Pair new host', exact: true })
   const pill = control.locator('.channel-list__control-name')
-  await control.hover()
-  await expect(pill).toBeVisible()
+  const scratch = await mkdtemp(join(tmpdir(), 'pyry-independent-cover-'))
+  let coverApp: ElectronApplication | undefined
+  try {
+    const entry = join(scratch, 'cover.cjs')
+    await writeFile(entry, `
+      const { app, BrowserWindow, screen } = require('electron')
+      app.whenReady().then(() => {
+        const { x, y } = screen.getCursorScreenPoint()
+        const window = new BrowserWindow({
+          x: x - 100, y: y - 100, width: 200, height: 200, show: false,
+          webPreferences: { backgroundThrottling: false }
+        })
+        // Fixed content only; the driver waits for this navigation before mapping the cover.
+        void window.loadURL('data:text/html,<p>independent cover</p>')
+      })
+    `)
+    const env = { ...process.env }
+    delete env.ELECTRON_RENDERER_URL
+    coverApp = await electron.launch({ args: [entry, `--user-data-dir=${join(scratch, 'profile')}`], env })
+    const coverPage = await coverApp.firstWindow()
+    await expect(coverPage.locator('p')).toHaveText('independent cover')
 
-  // Another launch's window, mapped at the display pointer. `ready-to-show` is its first paint, which
-  // cannot come before the map that sends this window its crossing event.
-  await app.evaluate(async ({ BrowserWindow, screen }) => {
-    const { x, y } = screen.getCursorScreenPoint()
-    const cover = new BrowserWindow({ x: x - 100, y: y - 100, width: 200, height: 200, show: true })
-    const painted = new Promise<void>((resolve) => cover.once('ready-to-show', () => resolve()))
-    await cover.loadURL('data:text/html,<p>cover</p>')
-    await painted
-  })
-  // Two frames in this renderer, so an input event already forwarded to it has been dispatched.
-  await page.evaluate(
-    () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
-  )
-
-  expect(await control.evaluate((el) => el.matches(':hover'))).toBe(true)
-  await expect(pill).toBeVisible()
+    for (const isolated of [true, false]) {
+      await app.evaluate(({ BrowserWindow, screen }, isolated) => {
+        const window = BrowserWindow.getAllWindows()[0]
+        const { x, y } = screen.getCursorScreenPoint()
+        const { width, height } = window.getBounds()
+        if (!isolated) window.setIgnoreMouseEvents(false)
+        window.setPosition(x + 200, y + 200)
+        window.setPosition(x - Math.floor(width / 2), y - Math.floor(height / 2))
+        window.setAlwaysOnTop(true, 'screen-saver')
+        window.moveTop()
+      }, isolated)
+      await control.hover()
+      await expect(pill).toBeVisible()
+      await page.evaluate(() => {
+        // This fixed counter observes native crossing events without recording rendered content.
+        (window as unknown as PointerWindow).displayPointerExits = 0
+        document.addEventListener('pointerout', () => {
+          (window as unknown as PointerWindow).displayPointerExits++
+        }, { once: true })
+      })
+      await coverApp.evaluate(({ BrowserWindow, screen }) => {
+        const window = BrowserWindow.getAllWindows()[0]
+        const { x, y } = screen.getCursorScreenPoint()
+        window.setPosition(x - 100, y - 100)
+        window.setIgnoreMouseEvents(false)
+        window.setAlwaysOnTop(true, 'screen-saver')
+        window.show()
+        window.moveTop()
+      })
+      await coverPage.evaluate(() => new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      ))
+      if (isolated) {
+        await page.evaluate(() => new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+        ))
+        expect(await control.evaluate((el) => ({
+          hovered: el.matches(':hover'),
+          displayPointerExits: (window as unknown as PointerWindow).displayPointerExits
+        }))).toEqual({ hovered: true, displayPointerExits: 0 })
+        await expect(pill).toBeVisible()
+      } else {
+        await expect.poll(() => page.evaluate(() =>
+          (window as unknown as PointerWindow).displayPointerExits
+        )).toBeGreaterThan(0)
+        await expect.poll(() => control.evaluate((el) => el.matches(':hover'))).toBe(false)
+        await expect(pill).not.toBeVisible()
+      }
+      await coverApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].hide())
+    }
+  } finally {
+    try {
+      await app.evaluate(({ BrowserWindow }) => {
+        const window = BrowserWindow.getAllWindows()[0]
+        window.setIgnoreMouseEvents(true)
+        window.setAlwaysOnTop(false)
+      })
+    } finally {
+      try {
+        await coverApp?.close()
+      } finally {
+        await rm(scratch, { recursive: true, force: true })
+      }
+    }
+  }
 })

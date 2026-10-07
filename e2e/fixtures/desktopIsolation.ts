@@ -130,8 +130,18 @@ export async function launchIsolatedApp(options: {
     env: withWindowPresentation(options.env)
   })
   options.fate.watch(app)
-  if (e2eShowsWindow()) await ignoreDisplayPointer(app)
-  return app
+  try {
+    if (e2eShowsWindow()) await ignoreDisplayPointer(app)
+    return app
+  } catch (error) {
+    // Until initialization returns, the caller cannot register its app teardown.
+    try {
+      await options.fate.closeWatched(app)
+    } catch {
+      options.fate.recordTeardownFailure('app')
+    }
+    throw error
+  }
 }
 
 /**

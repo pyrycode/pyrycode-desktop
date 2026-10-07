@@ -59,7 +59,9 @@ const cases: Case[] = [
 
 function assertSurfaces(models: ModelListEntry, input: ComposerModelLayers, expected: string | null, label: string | null, agent: WireAgent = 'claude'): void {
   const menu = composerModelMenuModel(models, input, agent)
-  expect(menu?.currentId ?? null).toBe(expected)
+  const visibleRows = models.models.filter(row => row.value !== 'default')
+  const position = expected === null ? -1 : visibleRows.findIndex(row => row.value === expected && (row.agent ?? 'claude') === agent)
+  expect(menu?.currentId ?? null).toBe(position < 0 ? null : String(position))
   expect(menu?.label ?? null).toBe(label)
   const panel = renderToStaticMarkup(<ComposerOptionsPanel options={menu?.options ?? []} currentId={menu?.currentId ?? null}
     onSelect={noop} ariaLabel="Model" focusedIndex={0} />)
@@ -71,10 +73,9 @@ function assertSurfaces(models: ModelListEntry, input: ComposerModelLayers, expe
     .filter(match => match[0].includes('aria-label="Current model"'))
     .map(match => /class="run-config__model-name">([^<]*)</.exec(match[0])?.[1])).toEqual(selected.map(id => `${id} published`))
   expect((panel.match(/aria-current="true"/g) ?? []).length).toBe(selected.length)
-  const visibleRows = models.models.filter(row => (row.agent ?? 'claude') === agent && row.value !== 'default')
   const markedPositions = [...panel.matchAll(/<button\b[^>]*role="menuitem"[\s\S]*?<\/button>/g)]
     .flatMap((match, index) => match[0].includes('aria-current="true"') ? [index] : [])
-  expect(markedPositions).toEqual(selected.map(id => visibleRows.findIndex(row => row.value === id)))
+  expect(markedPositions).toEqual(selected.map(id => visibleRows.findIndex(row => row.value === id && (row.agent ?? 'claude') === agent)))
   expect(sheet).not.toContain('>default published<')
   expect(panel).not.toContain('>Default<')
   const trigger = renderToStaticMarkup(<ComposerModelMenuView models={models} layers={input} agent={agent} />)

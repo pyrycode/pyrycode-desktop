@@ -1525,7 +1525,7 @@ describe('RunConfigSections (container)', () => {
 // #1651 — a MERGED list: PUBLISHED_ROWS are Claude's (untagged, as a daemon sending no tags writes them),
 // then one Codex row per family. The first Codex row shares a Claude row's `value`, so a match that ignored
 // the agent would answer with the Claude row.
-describe('#1651 — the sheet offers only the conversation agent\'s rows', () => {
+describe('merged sheet with agent-scoped offerings', () => {
   const CODEX_ROWS: readonly WireModelOption[] = [
     modelRow({ value: 'haiku', display_name: 'Vendor shared value', resolved_model: 'vendor-6-shared',
       effort_levels: ['low', 'medium', 'high', 'xhigh'], agent: 'codex' }),
@@ -1539,19 +1539,20 @@ describe('#1651 — the sheet offers only the conversation agent\'s rows', () =>
         announced={{ model: 'vendor-6-shared', truncated: false }} />
     )
 
-  it('lists only Claude rows on a Claude conversation, byte-identical to an untagged list', () => {
+  it('lists both agents on a Claude conversation and preserves untagged selection', () => {
     const untagged = renderToStaticMarkup(
       <RunConfigView model="haiku" effort="" yolo={false} {...NO_USAGE} models={PUBLISHED}
         announced={{ model: 'vendor-6-shared', truncated: false }} />
     )
-    expect(sheet(undefined, 'haiku')).toBe(untagged)
-    expect(sheet('claude', 'haiku')).toBe(untagged)
+    expect(sheet(undefined, 'haiku')).toBe(sheet('claude', 'haiku'))
+    expect(untagged).not.toContain('Vendor shared value')
+    expect(sheet('claude', 'haiku')).toContain('Vendor shared value')
   })
 
-  it('lists only Codex rows, display_name verbatim and in the daemon\'s order, on a Codex conversation', () => {
+  it('lists both agents with display_name verbatim in daemon order on a Codex conversation', () => {
     const markup = sheet('codex', 'haiku')
     const names = [...markup.matchAll(/run-config__model-name">([^<]*)</g)].map((m) => m[1])
-    expect(names).toEqual(['Vendor shared value', 'Vendor face'])
+    expect(names).toEqual([...PUBLISHED_ROWS.filter(row => row.value !== 'default').map(row => row.display_name), 'Vendor shared value', 'Vendor face'])
     expect(segmentFor(markup, 'run-config__model-row', 'Vendor shared value')).toContain('Current model')
     expect(markup.split('Current model').length - 1).toBe(1)
   })
@@ -1583,11 +1584,12 @@ describe('#1651 — the sheet offers only the conversation agent\'s rows', () =>
     expect(running('claude')).toContain('run-config__running-value">Quick tier<')
   })
 
-  it('reads an agent with no rows as the empty list', () => {
+  it('lists Claude choices even when the conversation agent has no rows', () => {
     const markup = renderToStaticMarkup(
       <RunConfigView model="" effort="" yolo={false} {...NO_USAGE} models={PUBLISHED} agent="codex" />
     )
-    expect(markup).toContain(MODELS_EMPTY)
+    expect(markup).not.toContain(MODELS_EMPTY)
+    expect(markup).toContain('run-config__model-row')
   })
 })
 

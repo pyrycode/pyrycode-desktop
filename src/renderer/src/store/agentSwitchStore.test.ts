@@ -12,6 +12,7 @@ import { runSettingsWriteStore } from './runSettingsWriteStore'
 import { serverInfoStore } from './serverInfoStore'
 import { subscribeConversations } from './conversationListBridge'
 import { subscribeAgentSwitchData } from './AgentSwitchData'
+import { createAnnouncedModelStore, selectAnnouncedModelFor } from './announcedModelStore'
 
 const row = (agent?: WireAgent, value = ''): WireModelOption => ({
   agent, value, display_name: '<Model>', resolved_model: 'resolved', effort_levels: ['high'],
@@ -81,7 +82,7 @@ function setup(agent: WireAgent = 'claude') {
   const commands: RendererCommand[] = []
   const store = createAgentSwitchStore({
     binding: id => !removed && id === 'chat-a' ? binding : null,
-    send: command => commands.push(command), log: () => {}
+    send: command => commands.push(command), log: () => {}, onSucceeded: () => {}
   })
   const dispatch = store.getState().dispatch
   const open = (picked = row('codex')) => dispatch({ type: 'open', conversationId: 'chat-a', row: picked })
@@ -119,7 +120,7 @@ describe('agent switch dispatch', () => {
     let store: ReturnType<typeof createAgentSwitchStore>
     store = createAgentSwitchStore({
       binding: () => ({ serverId: 'host', agent: 'claude', connected: true, open: true, effort: '' }),
-      log: () => {}, send: () => {
+      log: () => {}, onSucceeded: () => {}, send: () => {
         expect(store.getState().statuses.get('chat')?.type).toBe('pending')
         store.getState().dispatch({ type: 'outcome', event: {
           type: 'switchAgentRejected', serverId: 'host', conversationId: 'chat', retryable: false
@@ -141,6 +142,45 @@ describe('agent switch dispatch', () => {
 })
 
 describe('agent switch outcomes and lifecycle', () => {
+  it.each(['claude', 'codex'] as const)('invalidates only the switched %s announcement on owning-host success', outgoing => {
+    const target = outgoing === 'claude' ? 'codex' : 'claude'
+    const announcements = createAnnouncedModelStore()
+    announcements.getState().setAnnouncedModel({ conversationId: 'chat-a', model: 'outgoing', truncated: false })
+    announcements.getState().setAnnouncedModel({ conversationId: 'chat-b', model: 'other', truncated: true })
+    const held = selectAnnouncedModelFor('chat-a')(announcements.getState())
+    const other = selectAnnouncedModelFor('chat-b')(announcements.getState())
+    const onSucceeded = vi.fn((id: string) => announcements.getState().clearAnnouncedModelFor(id))
+    const store = createAgentSwitchStore({
+      binding: () => ({ serverId: 'host-a', agent: outgoing, connected: true, open: true, effort: 'high' }),
+      send: () => {}, log: () => {}, onSucceeded
+    })
+    const dispatch = store.getState().dispatch
+    const open = () => dispatch({ type: 'open', conversationId: 'chat-a', row: row(target) })
+    const event = (event: DaemonEvent, serverId = 'host-a') => dispatch({ type: 'outcome', event: { ...event, serverId } })
+    open(); dispatch({ type: 'cancel' })
+    open(); dispatch({ type: 'confirm' })
+    event({ type: 'switchAgentRejected', conversationId: 'chat-a', retryable: true })
+    open(); dispatch({ type: 'confirm' })
+    event(listed(target), 'host-b')
+    event(listed(outgoing))
+    event({ type: 'sessionTransition', conversationId: 'chat-a', newSessionId: 'new',
+      reason: 'clear', occurredAt: '', workspaceCwd: null })
+    expect(onSucceeded).not.toHaveBeenCalled()
+    expect(selectAnnouncedModelFor('chat-a')(announcements.getState())).toBe(held)
+    event(listed(target))
+    expect(onSucceeded).toHaveBeenCalledTimes(1)
+    expect(onSucceeded).toHaveBeenCalledWith('chat-a')
+    expect(selectAnnouncedModelFor('chat-a')(announcements.getState())).toBeNull()
+    expect(selectAnnouncedModelFor('chat-b')(announcements.getState())).toBe(other)
+    event(listed(target))
+    expect(onSucceeded).toHaveBeenCalledTimes(1)
+    announcements.getState().setAnnouncedModel({ conversationId: 'chat-a', model: 'incoming', truncated: false })
+    expect(selectAnnouncedModelFor('chat-a')(announcements.getState())?.model).toBe('incoming')
+    open(); dispatch({ type: 'confirm' })
+    event({ type: 'conversationsReceived', conversations: [] })
+    expect(onSucceeded).toHaveBeenCalledTimes(1)
+    expect(selectAnnouncedModelFor('chat-a')(announcements.getState())?.model).toBe('incoming')
+  })
   it('keeps pending on reset, transition and unchanged lists; only a fresh target row succeeds', () => {
     const s = setup(); s.open(); s.confirm()
     s.event({ type: 'sessionTransition', conversationId: 'chat-a', newSessionId: 'new',

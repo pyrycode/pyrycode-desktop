@@ -7,6 +7,7 @@ import { conversationListStore, selectConversations, selectConversationsFor, sel
 import { sessionStore } from './sessionStore'
 import { runConfigStore } from './runConfigStore'
 import { runSettingsWriteStore } from './runSettingsWriteStore'
+import { announcedModelStore } from './announcedModelStore'
 import { selectDisplayedEffort } from '../screens/conversation/ComposerEffortMenu'
 import { serverIdForOpenConversation } from '../screens/conversation/unpairAction'
 import { requestRunConfigSnapshot } from '../screens/conversation/runConfigSnapshot'
@@ -28,6 +29,7 @@ export function createAgentSwitchStore(deps: {
   binding: (conversationId: string, owningServerId?: string) => Binding | null
   send: (command: RendererCommand) => void
   log: (code: string) => void
+  onSucceeded: (conversationId: string) => void
   onActiveSucceeded?: (conversationId: string) => void
 }) {
   return createStore<{
@@ -103,6 +105,7 @@ export function createAgentSwitchStore(deps: {
               const row = e.conversations.find(r => r.id === id)
               if (row === undefined || (row.agent ?? 'claude') === pending.target) {
                 next.delete(id); deps.log(row === undefined ? 'abandoned' : 'succeeded')
+                if (row !== undefined) deps.onSucceeded(id)
                 const pane = get().pane
                 const binding = deps.binding(id, pending.serverId)
                 if (row !== undefined && pane?.conversationId === id && pane.serverId === pending.serverId &&
@@ -130,6 +133,7 @@ export const agentSwitchStore = createAgentSwitchStore({
   },
   send: command => window.pyry.sendCommand(command),
   log: code => window.pyry.sendDiagnostic({ event: 'agent-switch', code }),
+  onSucceeded: id => announcedModelStore.getState().clearAnnouncedModelFor(id),
   onActiveSucceeded: id => {
     runSettingsWriteStore.getState().dispatch({ type: 'agentSwitched' })
     requestRunConfigSnapshot(window.pyry.sendCommand, id)

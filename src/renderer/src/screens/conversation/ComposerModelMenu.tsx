@@ -11,7 +11,8 @@ import {
   modelRowsFor,
   useConversationAgent,
   useSessionSettingsConnected,
-  changeConnectedSetting
+  selectConnectedModel,
+  usePendingAgentSwitchRow
 } from './RunConfigSections'
 import { isAddressableSessionId } from './runSettingsControls'
 
@@ -108,7 +109,7 @@ export function composerModelRowLabel(row: WireModelOption): string {
  *
  *  `options` EMPTY is AC4's inert arm and is a different thing from a menu with rows: it never reaches
  *  ComposerOptionsMenu, which renders aria-haspopup and aria-expanded unconditionally and would open
- *  exactly the empty panel AC4 forbids. `currentId` is the value AC1 matched, or `null` when nothing
+ *  exactly the empty panel AC4 forbids. `currentId` is the visible row position matched, or `null` when nothing
  *  matched — the panel marks nothing through the same branch, no special case. */
 export interface ComposerModelMenuModel {
   label: string
@@ -143,11 +144,13 @@ function inheritedModelRow(
 export function composerModelMenuModel(
   models: ModelListEntry | null | undefined,
   layers: ComposerModelLayers,
-  agent: WireAgent = 'claude'
+  agent: WireAgent = 'claude',
+  pendingSwitchRow: WireModelOption | null = null
 ): ComposerModelMenuModel | null {
-  if (layers.stored === null && layers.picked === '' && layers.announced === '') return null
+  if (pendingSwitchRow === null && layers.stored === null && layers.picked === '' && layers.announced === '') return null
+  const visibleRows = (models?.models ?? []).filter(row => row.value !== 'default')
   const rows = modelRowsFor(models, agent).filter(row => row.value !== 'default')
-  const options = rows.map(row => ({ id: row.value, label: composerModelRowLabel(row) }))
+  const options = visibleRows.map((row, index) => ({ id: String(index), label: composerModelRowLabel(row) }))
   const explicit = layers.picked !== '' || (layers.stored !== null && layers.stored !== '' && layers.stored !== 'default')
   const resolution = agent === 'claude' ? publishedRowFor(models, 'default', agent)?.resolved_model ?? '' : ''
   const defaultResolution = resolution === '<unmeasured>' ? '' : resolution
@@ -173,7 +176,13 @@ export function composerModelMenuModel(
       COMPOSER_MODEL_MENU_LABEL
     )
   }
-  return { label, currentId: sessionRow?.value ?? null, options }
+  const selectedIndex = pendingSwitchRow
+    ? visibleRows.findIndex(row => row.value === pendingSwitchRow.value &&
+      (row.agent ?? 'claude') === (pendingSwitchRow.agent ?? 'claude') &&
+      row.display_name === pendingSwitchRow.display_name && row.resolved_model === pendingSwitchRow.resolved_model)
+    : visibleRows.findIndex(row => row === sessionRow)
+  return { label: pendingSwitchRow ? composerModelRowLabel(pendingSwitchRow) : label,
+    currentId: selectedIndex < 0 ? null : String(selectedIndex), options }
 }
 
 /**
@@ -194,10 +203,8 @@ export function composerModelMenuModel(
  * strictly less exposure, not more: a family is a `[A-Za-z]+` prefix with one character upper-cased, so a
  * control byte or a terminal escape can now reach the DOM only through the unchanged verbatim fallback —
  * the same path that carries it today. The positions themselves are the same two, and the derivation adds
- * no sink. `value` reaches four non-sink places, all the panel's:
- * `key={option.id}` (React's own keyed reconciliation, a Map internally), a string comparison against
- * currentId, the onSelect pass-through, and an array index. No plain object is keyed by any of it, and
- * nothing on this path is logged at all.
+ * no sink. Panel IDs are client-owned row positions. A click recovers the published row
+ * for agent-aware dispatch; neither its value nor its label is logged.
  *
  * The label is LENGTH-BOUNDED at this boundary rather than trusted to the daemon's own bound: it sits in
  * its own element so .composer__model-label can cap it and ellipsize. .composer__actions' `white-space:
@@ -208,15 +215,17 @@ export function ComposerModelMenuView({
   layers,
   models,
   agent = 'claude',
+  pendingSwitchRow = null,
   onSelect
 }: {
   layers: ComposerModelLayers
   models: ModelListEntry | null
   /** #1651 — the conversation's agent; absent reads Claude. */
   agent?: WireAgent
-  onSelect?: (value: string) => void
+  pendingSwitchRow?: WireModelOption | null
+  onSelect?: (row: WireModelOption) => void
 }): JSX.Element | null {
-  const menu = composerModelMenuModel(models, layers, agent)
+  const menu = composerModelMenuModel(models, layers, agent, pendingSwitchRow)
   if (menu === null) return null
 
   // AC4. Not `options={[]}` through the shared menu, which would advertise a popup and open an empty
@@ -238,9 +247,12 @@ export function ComposerModelMenuView({
       // AC2's marking, and the first consumer to pass a non-null one — ComposerActionsMenu passes null
       // because a list of actions is not a choice. This is a choice, and the panel already renders
       // aria-current="true" on the matching row and omits the attribute entirely otherwise, so the
-      // marking needs no new prop: it is the value AC1 matched on.
+      // marking uses the matched visible row position.
       currentId={menu.currentId}
-      onSelect={onSelect}
+      onSelect={id => {
+        const row = models?.models.filter(row => row.value !== 'default')[Number(id)]
+        if (row) onSelect(row)
+      }}
       ariaLabel={COMPOSER_MODEL_MENU_LABEL}
       triggerContent={
         <>
@@ -309,6 +321,7 @@ export function ComposerModelMenu({ conversationId }: { conversationId: string |
   )
   const models = useModelListStore(selectModels)
   const agent = useConversationAgent(conversationId)
+  const pendingSwitchRow = usePendingAgentSwitchRow(conversationId)
 
   // THE PICK ALONE: the pending optimistic overlay over the client-confirmed override, with NO daemon
   // base under it — which is what a null snapshot means to selectEffectiveSettings, by its own documented
@@ -338,12 +351,13 @@ export function ComposerModelMenu({ conversationId }: { conversationId: string |
       }}
       models={models}
       agent={agent}
+      pendingSwitchRow={pendingSwitchRow}
       // An arrow, so `window.pyry` is dereferenced at INTERACTION time and never during render — hoisting
       // it (or the deps object) would move the dereference into the render path, where window.pyry does
       // not exist under renderToStaticMarkup and every container smoke test would throw
       // (ConversationScreen.tsx:2523-2526 and RunConfigSections.tsx:687-696 state this from both sides).
       onSelect={connected && isAddressableSessionId(sessionId)
-        ? (value) => changeConnectedSetting(conversationId, { field: 'model', value })
+        ? (row) => selectConnectedModel(conversationId, row)
         : undefined}
     />
   )

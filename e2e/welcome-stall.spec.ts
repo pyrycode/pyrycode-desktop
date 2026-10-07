@@ -1,5 +1,5 @@
 import { test as base, expect } from './fixtures/launchPairedApp'
-import type { Page } from '@playwright/test'
+import type { ElectronApplication } from '@playwright/test'
 import { WELCOME_STALL_ATTACHMENT } from './fixtures/welcomeDiagnostics'
 import { LAUNCH_FATE_ATTACHMENT } from './fixtures/desktopIsolation'
 
@@ -13,7 +13,7 @@ const test = base.extend<{ evidenceCheck: void }>({
     expect(fate).toBeDefined()
     const launches = JSON.parse(fate?.body?.toString() ?? '{}').launches
     expect(launches).toHaveLength(2)
-    // Closing the first launch's last page deliberately exits it before ordinary fixture teardown.
+    // Explicit app close deliberately exits the first launch before ordinary fixture teardown.
     expect(launches.map((launch: { runningAtOutcome: boolean }) => launch.runningAtOutcome)).toEqual([false, true])
     expect(launches.map((launch: { exitCode: number }) => launch.exitCode)).toEqual([0, 0])
     expect(JSON.parse(fate?.body?.toString() ?? '{}').teardownFailures).toEqual([])
@@ -21,9 +21,10 @@ const test = base.extend<{ evidenceCheck: void }>({
 })
 
 test('a controlled real Welcome stall retains progress evidence before teardown and correlates multiple launches', async ({ launchPairedApp }, testInfo) => {
-  let stalledPage: Page | undefined
+  let stalledApp: ElectronApplication | undefined
   const launched = launchPairedApp({}, { onLaunched: async (app) => {
-    stalledPage = await app.firstWindow()
+    stalledApp = app
+    const stalledPage = await app.firstWindow()
     await expect(stalledPage.getByRole('button', { name: 'I already have pyrycode', exact: true })).toBeVisible()
     await stalledPage.evaluate(() => {
       const button = document.querySelector<HTMLButtonElement>('button.welcome__pair')
@@ -49,8 +50,8 @@ test('a controlled real Welcome stall retains progress evidence before teardown 
   expect(report.renderer.value.intervalMs).toBeLessThanOrEqual(1000)
   expect(report.captureMs).toBeLessThanOrEqual(2000)
   expect(body).not.toMatch(/dummy-token|pyry-e2e|pairing.code|argv|environment|\/fake/)
-  if (!stalledPage) throw new Error('missing test page')
-  await stalledPage.close()
+  if (!stalledApp) throw new Error('missing test app')
+  await stalledApp.close()
   expect(await outcome).toBe('click-failed')
 
   // The second launch drives normal Welcome → pairing → confirmation; it adds no diagnostics.

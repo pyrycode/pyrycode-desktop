@@ -138,8 +138,8 @@ content-free in action handlers; prompt content and grant drafts are neither per
 For `class === 'permission'` with `alwaysAllow.offered === true`, one initially unchecked checkbox
 covers the complete offer: “Don't ask again this session for:” followed by every escaped rule as an
 ordered sequence of `<li>` children. It reuses `QuestionTick` and client-owned ARIA metadata. Trust,
-absent and unavailable offers show no checkbox. Toggling edits only `opted`: it neither arms nor
-answers and leaves an existing arm unchanged.
+absent and unavailable offers show no checkbox. Toggling updates the local `opted` snapshot and
+retained checked consent: it neither arms nor answers and leaves an existing arm unchanged.
 
 `hasSessionPermission(prompt, opted)` requires matching modal/conversation IDs, permission class,
 a currently offered grant and reference equality of `alwaysAllow`. `reduceModal` preserves that

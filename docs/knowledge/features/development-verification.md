@@ -135,11 +135,16 @@ The [dispatcher live gate comment](https://github.com/pyrycode/pyrycode-desktop/
 records run `2026-10-07T02-23-21-880Z` on branch `5d1b88adaa` integrated with main `59efab093c`:
 26 executed, 26 passed, 0 failed, 1 skipped. The listed skip is the system-prompt Reset-session case.
 The configured test command was `npx playwright test --config playwright.real-claude.config.ts
---reporter=json`, rather than the requested `npm run e2e:real:gate`. Counted execution of the
-required named test would satisfy that command mismatch. However, neither the supplied per-test
-gate report nor the issue comment confirms this named grant test was present, executed and passed.
-The suite totals establish the run result only; named acceptance still needs supplemental dispatcher
-evidence. No new named live pass is claimed here or inferred from the earlier choice-controller run.
+--reporter=json`, rather than the requested `npm run e2e:real:gate`. The
+[supplemental named result](https://github.com/pyrycode/pyrycode-desktop/issues/1818#issuecomment-6029885598)
+confirms `real claude session checkbox grants repeated Bash use only in the current session`
+in `e2e/real-claude-permission-modal.spec.ts` was present, executed and passed on its first attempt
+in that same run (37.2 s): 1 executed, 1 passed, 0 failed, 0 skipped. Every test records
+`daemon-revision: 0.37.0`. This counted named pass satisfies the required execution despite the
+command mismatch, preserving the repeated Bash effect and fresh-session permission proofs.
+The suite totals alone did not establish this named result; the supplemental evidence closes that
+gap. These results cover the local test relay, not the production relay. Documentation recorded
+the supplied evidence without reading dispatcher logs or running live tests.
 
 ## Evidence that cannot pass too early
 

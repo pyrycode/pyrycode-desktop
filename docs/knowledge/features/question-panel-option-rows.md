@@ -70,7 +70,7 @@ chat-switch retention, fresh replacement, shorter redelivery and remote dismissa
 refusal specs check the outbound command and optimistic removal while the composer stays available.
 `permission-modal-answer-paths.spec.ts` verifies all-question draft restoration and isolation of
 hidden questionnaire/composer controls; `offline-held-responses.spec.ts` verifies local edits and
-guarded responses against the owning host. See [recorded verification](development-verification.md#inline-question-verification).
+guarded responses against the owning host. See [recorded verification](development-verification-test-tiers.md#inline-question-verification).
 
 Daemon fields remain escaped React children; drafts, request IDs and answer content are neither
 persisted nor logged. Array-position control identity closes the label-as-key trap while implicit

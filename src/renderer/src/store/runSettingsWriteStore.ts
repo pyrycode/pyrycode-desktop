@@ -54,12 +54,15 @@ export type SettingsChange =
  *  `activateConversation` and `exitActiveConversation` rather than by any bridge — no wire edge
  *  produces it. It carries nothing, because which chat is open is not a fact this store holds; the
  *  helpers own that decision and this store only obeys it. */
+// `agentSwitched` is the same full overlay reset within one conversation, admitted only by the
+// owning-host success path. The factory also publishes its generation to private confirmation state.
 export type RunSettingsWriteEvent =
   | { type: 'changeDispatched'; changeId: string; change: SettingsChange }
   | { type: 'settingsConfirmed'; changeId: string }
   | { type: 'settingsRejected'; changeId: string }
   | { type: 'reconnected' }
   | { type: 'conversationSwitched' }
+  | { type: 'agentSwitched' }
 
 /**
  * The write machine's whole state.
@@ -84,6 +87,8 @@ export interface RunSettingsWriteState {
 
 /** Store shape = state + the single reducer entry point (the sessionStore dispatch idiom). */
 export type RunSettingsWriteStore = RunSettingsWriteState & {
+  /** Proven active-agent lifetime changes, including when no visible overlays were held. */
+  agentGeneration: number
   dispatch: (event: RunSettingsWriteEvent) => void
 }
 
@@ -202,6 +207,7 @@ function reduceRunSettingsWrite(
       // will not force it.
       return { ...state, pending: new Map() }
     }
+    case 'agentSwitched':
     case 'conversationSwitched': {
       // Nothing held → the SAME reference, for `reconnected`'s reason one arm up: #257 selects the
       // whole raw write state, so this is what keeps a switch between two chats that never wrote
@@ -235,7 +241,12 @@ export function createRunSettingsWriteStore(
 ) {
   return createStore<RunSettingsWriteStore>((set) => ({
     ...init,
-    dispatch: (event) => set((s) => reduceRunSettingsWrite(s, event))
+    agentGeneration: 0,
+    dispatch: (event) => set((s) => {
+      const next = reduceRunSettingsWrite(s, event)
+      return event.type === 'agentSwitched'
+        ? { ...next, agentGeneration: s.agentGeneration + 1 } : next
+    })
   }))
 }
 

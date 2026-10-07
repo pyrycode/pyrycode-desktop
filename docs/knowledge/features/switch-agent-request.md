@@ -176,6 +176,28 @@ reset completion, session transition or metadata reconciliation cannot succeed.
 correlated success acknowledgement is added. A published new binding also counts
 as success after a daemon post-commit cleanup error.
 
+`createAgentSwitchStore`'s optional `onActiveSucceeded(conversationId)` callback runs only for that
+authoritative success while the mounted pane's conversation and host and the current open binding
+still match the pending attempt. The singleton dispatches the write store's `agentSwitched` edge,
+then requests fresh settings through `requestRunConfigSnapshot`. Synchronous generation notification
+clears all outgoing write overlays/errors and cancels private permission/YOLO correlations and
+polling, clears the outgoing snapshot and resets its replacement-session guard before the request.
+See [settings lifetime](run-settings-write-store.md#settings-lifetime-on-agent-switch) and
+[permission confirmation](run-config-store.md#permission-mode-1020).
+
+Success while navigated away still settles the retained attempt, but never clears the newly active
+pane's settings, including another host with the same conversation ID. Opening, cancellation,
+refusal, abandonment, progress, standalone session transitions and unchanged/foreign/unstamped
+lists do not invoke this callback. Raw model equality is irrelevant. Ordinary same-agent refreshes
+and reconnect keep their existing confirmed-choice semantics.
+
+Integration with [#1662 / PR #1846](https://github.com/pyrycode/pyrycode-desktop/pull/1846)
+must preserve its outgoing model-announcement cleanup beside this settings-success callback.
+That ticket's builder must enable and pass both skipped prior-own-pick cases in
+`e2e/merged-model-pickers.spec.ts`; its separate live hand-over acceptance remains with that ticket
+and the dispatcher/operator. This settings repair supplies neither announcement invalidation nor
+live switching evidence.
+
 A matching, main-stamped `switchAgentRejected` consumes only pending for that
 host/conversation and stores retryability with fixed
 [status copy](conversation-shell-composer-status.md#agent-switch-progress).
@@ -186,6 +208,11 @@ automatic retry or claim that wrap-up had no effects.
 
 ## Testing
 
+- `agentSettingsLifecycle.test.ts` composes real stores and event subscriptions to pin active
+  owning-pane success, all four settings fields, equal raw models, late replies, navigation/host
+  isolation and private confirmation cleanup. The existing ticket-local opening fixture in
+  `agent-switch-confirmation.spec.ts` exercises a confirmed own-agent model write followed by
+  incoming footer/sheet readings; see [baseline, counted gate and capture evidence](development-verification.md#agent-switch-settings-verification).
 - `agentSwitchStore.test.ts` covers both directions, empty/verbatim model values,
   supported/unsupported effort, synchronous pending, duplicate confirmation,
   stale pane/connection/binding guards, list-only success, both refusal kinds and

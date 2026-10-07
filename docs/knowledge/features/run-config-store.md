@@ -248,6 +248,21 @@ A replacement during reset keeps that suppression, and completion keeps the new 
 Main discards superseded requests and requests invalidated by reset or replacement.
 Late replies cannot restore a previous context's permission label.
 
+Authoritative [active owning-pane agent-switch success](switch-agent-request.md#renderer-outcomes-and-lifetime)
+ends the entire outgoing settings lifetime. `subscribeConfirmedRunConfig` observes the write store's
+`agentGeneration` before tracking new writes: it cancels the timer and target, clears private
+permission/YOLO acknowledgement correlations and awaiting status, rereads the current context,
+resets `expectedSession` and reset suppression, and clears the whole snapshot. The switch callback
+then sends `requestRunConfigSnapshot` for that conversation, so the footer and an already-open sheet
+can show incoming settings without reopening. Late outgoing acknowledgements cannot restart polling.
+
+A replacement-session guard belongs to its agent lifetime. Retaining an outgoing guard at proven
+switch success would reject a fresh incoming session indefinitely, even after public writes were
+cleared. This differs from standalone reset/replacement handling above, which retains its admission
+guard. Equal raw models do not suppress invalidation. Ordinary same-agent refreshes preserve
+confirmed choices; reconnect retains the write store's confirmed overrides/errors while clearing
+pending writes and private permission confirmation. Applied-effort selection is unchanged.
+
 The read accepts any string, including empty and future mode names.
 The write accepts only the five settable modes and excludes `bypassPermissions`.
 The [footer permission menu](composer-permission-mode-menu.md#permission-mode) renders
@@ -381,9 +396,10 @@ helpers plus a headless leaf) supplies both:
 
 - **`RunConfigLiveData(): null`** — the ninth app-level headless leaf, mounted in `App.tsx`
   alongside the other eight. It is now the **only** listener that lands `runConfigReceived` into
-  `runConfigStore` and `sessionIdStore` (`subscribeRunConfig`, reused verbatim, unedited). Two
-  effects, each returning its `onDaemonEvent` off handle as cleanup, net exactly one live listener
-  of each kind across a StrictMode double-mount.
+  `runConfigStore` and `sessionIdStore`, through `subscribeConfirmedRunConfig` and its owning-host,
+  conversation and expected-session admission. Its first effect also observes context and write
+  generations; cleanup removes all subscriptions and cancels permission confirmation polling.
+  The second effect owns the usage refresh listener. StrictMode cleanup leaves one of each active.
 - **`createRunConfigRefreshTrigger()`** — a stateful factory returning a predicate over the
   daemon-event stream, closing over one `Set<string>` of conversations whose turn is currently
   running. `connected` clears the set and returns `true` (a genuine rising edge — the daemon emits

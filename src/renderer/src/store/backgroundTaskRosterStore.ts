@@ -324,6 +324,8 @@ export interface BackgroundAgentTimeline {
 
 export interface BackgroundTaskRosterState {
   agentTimeline: ReadonlyMap<string, ReadonlyMap<string, BackgroundAgentTimeline>>
+  /** Latest roster's exact local_agent ids; started-sourced display types cannot qualify a join. */
+  rosterAgentIds: ReadonlyMap<string, ReadonlySet<string>>
   rosters: ReadonlyMap<string, BackgroundTaskRosterEntry>
   unlistedStarts: ReadonlyMap<string, ReadonlyMap<string, HeldBackgroundTask>>
   finishedTasks: ReadonlyMap<string, ReadonlySet<string>>
@@ -348,6 +350,7 @@ export type BackgroundTaskRosterStore = BackgroundTaskRosterState & {
 
 export const initialBackgroundTaskRosterState: BackgroundTaskRosterState = {
   agentTimeline: new Map(),
+  rosterAgentIds: new Map(),
   rosters: new Map(),
   unlistedStarts: new Map(),
   finishedTasks: new Map(),
@@ -576,10 +579,11 @@ export function createBackgroundTaskRosterStore(
     }),
     setRoster: (snapshot) =>
       set((s) => {
+        const agentIds = new Set(snapshot.tasks.filter(row => row.task_type === 'local_agent').map(row => row.task_id))
+        const rosterAgentIds = new Map(s.rosterAgentIds).set(snapshot.conversationId, agentIds)
         const evidence = new Map(s.agentTimeline.get(snapshot.conversationId))
         for (const [id, entry] of evidence) {
-          const listed = snapshot.tasks.some(row => row.task_id === id && row.task_type === 'local_agent')
-          if (listed && !entry.confirmed) evidence.set(id, { ...entry, confirmed: true })
+          if (agentIds.has(id) && !entry.confirmed) evidence.set(id, { ...entry, confirmed: true })
         }
         const agentTimeline = new Map(s.agentTimeline).set(snapshot.conversationId, evidence)
         const previous = s.rosters.get(snapshot.conversationId)?.tasks
@@ -631,10 +635,10 @@ export function createBackgroundTaskRosterStore(
         // Every roster empties the conversation's holds: the listed ones moved in above, the rest were
         // foreground work no roster will ever name (#1563).
         const pendingStops = keepTaskStopWaits(s.pendingStops, snapshot.conversationId, id => tasks.has(id))
-        if (holds === undefined) return { rosters: next, finishedTasks, pendingStops, agentTimeline }
+        if (holds === undefined) return { rosters: next, finishedTasks, pendingStops, agentTimeline, rosterAgentIds }
         const unlistedStarts = new Map(s.unlistedStarts)
         unlistedStarts.delete(snapshot.conversationId)
-        return { rosters: next, unlistedStarts, finishedTasks, pendingStops, agentTimeline }
+        return { rosters: next, unlistedStarts, finishedTasks, pendingStops, agentTimeline, rosterAgentIds }
       }),
     setStartedTask: (snapshot) =>
       set((s) => {
@@ -647,7 +651,8 @@ export function createBackgroundTaskRosterStore(
         if (!evidence?.has(snapshot.taskId) && snapshot.taskType === 'local_agent' && snapshot.toolCallId.length > 0) {
           agentTimeline = new Map(s.agentTimeline).set(snapshot.conversationId,
             new Map(evidence).set(snapshot.taskId, { toolCallId: snapshot.toolCallId,
-              confirmed: listed?.taskType === 'local_agent', finishBefore: null, finishOrder: null }))
+              confirmed: s.rosterAgentIds.get(snapshot.conversationId)?.has(snapshot.taskId) === true,
+              finishBefore: null, finishOrder: null }))
         }
         const record: HeldBackgroundTask = {
           taskId: snapshot.taskId,
@@ -776,6 +781,8 @@ export function createBackgroundTaskRosterStore(
         if (doomedAgents.length === 0 && doomed.length === 0 && doomedHolds.length === 0 && doomedFinished.length === 0 && doomedStops.length === 0) return s
         const next = new Map(s.rosters)
         for (const id of doomed) next.delete(id)
+        const rosterAgentIds = new Map(s.rosterAgentIds)
+        for (const id of doomed) rosterAgentIds.delete(id)
         const unlistedStarts = new Map(s.unlistedStarts)
         for (const id of doomedHolds) unlistedStarts.delete(id)
         const finishedTasks = new Map(s.finishedTasks)
@@ -784,7 +791,7 @@ export function createBackgroundTaskRosterStore(
         for (const id of doomedStops) pendingStops.delete(id)
         const agentTimeline = new Map(s.agentTimeline)
         for (const id of doomedAgents) agentTimeline.delete(id)
-        return { rosters: next, unlistedStarts, finishedTasks, pendingStops, agentTimeline }
+        return { rosters: next, unlistedStarts, finishedTasks, pendingStops, agentTimeline, rosterAgentIds }
       }),
     clearAllRosters: () =>
       set((s) =>

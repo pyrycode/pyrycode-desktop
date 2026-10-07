@@ -979,6 +979,7 @@ describe('backgroundTaskRosterStore', () => {
     ])
     const store = createBackgroundTaskRosterStore({
       agentTimeline: new Map(),
+      rosterAgentIds: new Map(),
       rosters: seed,
       unlistedStarts: new Map(),
       finishedTasks: new Map(),
@@ -990,9 +991,10 @@ describe('backgroundTaskRosterStore', () => {
     })
   })
 
-  it('initialBackgroundTaskRosterState holds five empty maps', () => {
+  it('initialBackgroundTaskRosterState holds six empty maps', () => {
     expect(initialBackgroundTaskRosterState).toEqual({
       agentTimeline: new Map(),
+      rosterAgentIds: new Map(),
       rosters: new Map(),
       unlistedStarts: new Map(),
       finishedTasks: new Map(),
@@ -1150,6 +1152,7 @@ describe('selectLiveTaskCountFor — terminal status leaves the count (#1561)', 
   it('clears a store holding only a finished hold rather than short-circuiting', () => {
     const store = createBackgroundTaskRosterStore({
       agentTimeline: new Map(),
+      rosterAgentIds: new Map(),
       rosters: new Map(),
       unlistedStarts: new Map(),
       finishedTasks: new Map([['c1', new Set(['t1'])]]),

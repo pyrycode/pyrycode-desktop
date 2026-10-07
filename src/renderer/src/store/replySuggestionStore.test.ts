@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { StampedDaemonEvent } from '@shared/ipc/events'
-import { createReplySuggestionStore, selectReplySuggestion } from './replySuggestionStore'
+import { createReplySuggestionStore, selectReplySuggestion, visibleReplySuggestion } from './replySuggestionStore'
 import { translateDaemonEvent } from './daemonEventBridge'
 import { translateTimelineEvent } from './timelineBridge'
 import { translateModalEvent } from './modalBridge'
@@ -82,6 +82,22 @@ describe('transient reply suggestions', () => {
     expect(read('h', 'offscreen')).toBeNull()
     emit(suggestion(12, 'New revision', 'old', 'offscreen'))
     expect(read('h', 'offscreen')).toBe('New revision')
+  })
+  it('is visible only over an empty draft and reappears when the draft empties again', () => {
+    expect(visibleReplySuggestion('', 'Continue')).toBe('Continue')
+    expect(visibleReplySuggestion('a', 'Continue')).toBeNull()
+    expect(visibleReplySuggestion(' ', 'Continue')).toBeNull()
+    expect(visibleReplySuggestion('', null)).toBeNull()
+  })
+  it('a sent suggestion is spent until a newer revision arrives, leaving other chats alone', () => {
+    const { emit, read, store } = setup()
+    emit(suggestion(3)); emit(suggestion(1, 'Other', 's', 'other'))
+    store.getState().spend('h', 'c'); expect(read()).toBeNull(); expect(read('h', 'other')).toBe('Other')
+    emit(suggestion(3)); expect(read()).toBeNull()
+    emit(suggestion(4, 'Next')); expect(read()).toBe('Next')
+    const before = store.getState().hosts
+    store.getState().spend('h', 'missing'); store.getState().spend('nobody', 'c')
+    expect(store.getState().hosts).toBe(before)
   })
   it('safely excludes suggestions from all exhaustive translators and exception messages', () => {
     const event = suggestion(1, 'private suggestion')

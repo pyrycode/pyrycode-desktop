@@ -3764,6 +3764,12 @@ button.top-overlay-pill {
   color: var(--color-on-surface-variant);
 }
 
+/* A suggested reply sits one step quieter than the ordinary placeholder, in the outline role the
+   background-task panel already uses for its quiet meta text. */
+.composer__input--suggestion::placeholder {
+  color: var(--color-outline);
+}
+
 /* #1063 RETIRED THE MESSAGE BOX'S FOCUS RING — `.composer__row:has(.composer__input:focus-visible)`, which
    painted this file's `1px solid --color-outline` around the whole 52px box. #951 had moved that ring off
    the textarea and onto the box; #1063 took it off the box too, and nothing replaced it. The drawing is the

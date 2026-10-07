@@ -138,21 +138,25 @@ ticket still touching this region) rather than fixed in #951:
 
 When the retained draft is exactly `''` and the selected host/conversation has a
 valid current-session suggestion, `Composer` displays that complete text through
-the native textarea placeholder. It keeps the existing body-medium typography
-and grey `--color-on-surface-variant` treatment. This does not insert draft content.
+the native textarea placeholder. It keeps the existing body-medium typography,
+and the `composer__input--suggestion` modifier draws it in `--color-outline`, one
+step quieter than the ordinary placeholder's `--color-on-surface-variant`. This
+does not insert draft content.
 Any typed or pasted content, including whitespace, restores the ordinary
 `Message…` placeholder; deleting back to empty can reveal a still-valid suggestion.
 Suggestion text reaches only inert escaped placeholder/input text.
 
 After slash-command type-ahead has first chance to consume the key, unmodified
-Tab outside IME composition accepts a visible suggestion as the normal editable
-draft. It prevents traversal, retains input focus and places both selection ends
-at the text's end after React commits, using the existing textarea ref. It sends
-no message. Shift/Ctrl/Alt/Meta+Tab, composing Tab, Tab with a nonempty draft or
-without a suggestion, and slash-command completion retain their existing behavior.
+Tab outside IME composition sends a visible suggestion at once, through the same
+`sendText` path Enter uses, so the connection gate, attachments and queueing
+during a running turn behave as for a typed send. It prevents traversal and keeps
+input focus. A successful send spends the suggestion in the store, so it stays
+hidden until a newer revision arrives and a second Tab cannot resend it.
+Shift/Ctrl/Alt/Meta+Tab, composing Tab, Tab with a nonempty draft or without a
+suggestion, and slash-command completion retain their existing behavior. Until
+2026-10-07 Tab inserted the suggestion as an editable draft instead.
 
-[Suggestion clears](daemon-event-channel.md#reply-suggestions) never erase drafts,
-including accepted text and subsequent edits. The host/conversation-keyed draft
+[Suggestion clears](daemon-event-channel.md#reply-suggestions) never erase drafts. The host/conversation-keyed draft
 store retains that text across navigation independently of suggestion lifetimes.
 
 Coverage lives in the [wire validation tests](../../../src/main/transport/replySuggestion.test.ts),
@@ -161,7 +165,8 @@ Coverage lives in the [wire validation tests](../../../src/main/transport/replyS
 and [mounted fake-transport browser spec](../../../e2e/reply-suggestion.spec.ts).
 Unit coverage pins scoped revision/session behavior and all four translators'
 no-op handling. The four browser tests prove delivery, whitespace/edited drafts,
-Tab focus/caret/editability/no-send, keyboard exceptions, slash completion,
+the quieter placeholder colour, Tab sending once and spending the suggestion,
+Tab traversal with a draft or without a suggestion, keyboard exceptions, slash completion,
 authoritative clears, off-screen/host isolation and reconnect reconciliation.
 Static renderer tests cannot execute those interactions. The paired launch
 fixture needs one initial chat row; add other navigation targets after launch

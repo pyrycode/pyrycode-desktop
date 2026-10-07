@@ -1,5 +1,5 @@
 import { agentSwitchStore, type AgentSwitchStatus } from '../../store/agentSwitchStore'
-import { useReplySuggestionStore, selectReplySuggestion } from '../../store/replySuggestionStore'
+import { useReplySuggestionStore, selectReplySuggestion, visibleReplySuggestion } from '../../store/replySuggestionStore'
 import { useSessionFactsStore, selectSessionFactsFor } from '../../store/sessionFactsStore'
 import { McpServersSection, boundMcpText, requestMcpStatus } from './McpServersSection'
 import { mcpStatusStore, selectUnacknowledgedMcpFailureFor, useMcpStatusStore } from '../../store/mcpStatusStore'
@@ -4033,8 +4033,9 @@ function Composer({
 }): JSX.Element {
   // Selected coordinates survive metadata refreshes; only transient UI belongs to the keyed pane.
   const suggestion = useReplySuggestionStore(s => selectReplySuggestion(s, serverId, conversationId))
-  const acceptedSuggestionEnd = useRef<number | null>(null)
+  const spendSuggestion = useReplySuggestionStore(s => s.spend)
   const text = useComposerDraftStore(s => selectDraft(s, serverId, conversationId))
+  const shownSuggestion = visibleReplySuggestion(text, suggestion)
   const setDraft = useComposerDraftStore(s => s.setDraft)
   const setText = (value: string): void => {
     if (serverId !== null && conversationId !== null) setDraft(serverId, conversationId, value)
@@ -4188,13 +4189,6 @@ function Composer({
     attach.pasteImage()
   }
 
-  useThreadLayoutEffect(() => {
-    const end = acceptedSuggestionEnd.current
-    if (end === null) return
-    acceptedSuggestionEnd.current = null
-    typeAhead.inputRef.current?.setSelectionRange(end, end)
-  }, [text, typeAhead.inputRef])
-
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
     // #940: the open type-ahead sees the keystroke FIRST, and reports whether it consumed it. That one
     // line is the whole of "Enter completes, it does not send": on a consumed key the composer returns
@@ -4202,10 +4196,12 @@ function Composer({
     // meets a closed panel, is not consumed, and sends exactly as a typed message does.
     if (typeAhead.handleKeyDown(event)) return
     if (event.key === 'Tab' && !event.shiftKey && !event.ctrlKey && !event.altKey &&
-        !event.metaKey && !event.nativeEvent.isComposing && text === '' && suggestion !== null) {
+        !event.metaKey && !event.nativeEvent.isComposing && shownSuggestion !== null) {
+      // Tab sends the visible suggestion through the one send path Enter uses, then spends it.
       event.preventDefault()
-      acceptedSuggestionEnd.current = suggestion.length
-      setText(suggestion)
+      if (sendText(shownSuggestion) && serverId !== null && conversationId !== null) {
+        spendSuggestion(serverId, conversationId)
+      }
       return
     }
     // ONE record, TWO questions (#1072). `isComposing` is on the DOM event, not React's synthetic one, so
@@ -4281,8 +4277,8 @@ function Composer({
             onto a button that then unmounts, so the completion hands focus back to the box. */}
         <textarea
           ref={typeAhead.inputRef}
-          className="composer__input"
-          placeholder={text === '' && suggestion !== null ? suggestion : 'Message…'}
+          className={shownSuggestion === null ? 'composer__input' : 'composer__input composer__input--suggestion'}
+          placeholder={shownSuggestion ?? 'Message…'}
           rows={1}
           value={text}
           onChange={(e) => setText(e.target.value)}

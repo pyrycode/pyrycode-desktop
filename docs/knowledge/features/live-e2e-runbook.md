@@ -72,7 +72,35 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
-**Latest verified run: #1818, 2026-10-07 — 26 executed, 26 passed, 0 failed, 1 skipped.** The
+**Latest verified run: #1815, 2026-10-07 — 26 executed, 26 passed, 0 failed, 1 skipped.** The
+[dispatcher PASS comment](https://github.com/pyrycode/pyrycode-desktop/issues/1815#issuecomment-6047160427)
+records `feature/1815` at `b4eee350bb4d`, integrated with main `66ce9425cd88` in run
+`2026-10-07T21-21-05-639Z`. The configured command installed/built then ran
+`npx playwright test --config playwright.real-claude.config.ts --reporter=json`;
+exit 0, 4m 22s. Its sole listed skip is
+`real claude picks up a saved channel system prompt at Reset session`, with no
+reason recorded. The dispatcher removed `needs-real-claude` and advanced the ticket.
+
+The dispatcher's per-test gate report lists the required
+`real-daemon-history-on-open.spec.ts` →
+`a real daemon refreshes saved history with a channel post written while Electron is closed`
+as present, executed and passed on its first attempt in this run (3.1 s;
+1 executed, 1 passed, 0 failed, 0 skipped). The spec saves a baseline with served/
+display evidence, fully exits Electron, writes a unique channel post in the
+fixture's awaited while-closed callback, and relaunches the same protected profile.
+Opening shows exactly one matching bubble and one newest ask without upward input;
+the marker was absent from the saved baseline. This is real daemon storage and
+transport through the local test relay with `spawnClaude: false`, not a Claude-turn
+or production-relay proof. Suite annotations report daemon `0.37.0` on 8 of 27 tests;
+the history test has no daemon-revision annotation.
+
+Earlier builder evidence at `490ba22e` (1 executed, 1 passed, 0 failed, 0 skipped)
+does not substitute for this dispatcher acceptance at the reviewed head. Evidence
+above comes from the supplied counted gate report and linked PASS comment;
+documentation did not read dispatcher logs or run live tests. See
+[fake/unit evidence and input-gate trap](development-verification.md#what-each-test-tier-proves).
+
+**Previous verified run: #1818, 2026-10-07 — 26 executed, 26 passed, 0 failed, 1 skipped.** The
 [dispatcher PASS comment](https://github.com/pyrycode/pyrycode-desktop/issues/1818#issuecomment-6029664454)
 records `feature/1818` at `5d1b88adaa`, integrated with main `59efab093c` in run
 `2026-10-07T02-23-21-880Z`. Its sole listed skip is

@@ -185,7 +185,7 @@ export function createChatHistoryWriter(deps: {
         (held === undefined ? previousItems.length === 0 || replacedHost : held.owner === supplied) ? supplied : null
       if (owner === null) forgetComparison(id)
       const coverage: TimelineSnapshot['coverage'] = slice.history?.status === 'loaded'
-        ? { status: 'received', cursor: slice.history.cursor, atStart: slice.history.atStart }
+        ? slice.coverage ?? { status: 'received', cursor: slice.history.cursor, atStart: slice.history.atStart }
         : held?.coverage ?? { status: 'unknown' }
       observations.set(id, { owner, coverage })
       if (owner === null) { report('unknown-ownership'); continue }

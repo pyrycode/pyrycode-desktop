@@ -1,7 +1,7 @@
 import type { ConversationSlice, HistoryRequestState } from '../../store/conversationTimelineStore'
 import { conversationTimelineStore } from '../../store/conversationTimelineStore'
 import { activeConversationStore } from '../../store/activeConversationStore'
-import { historyAskDeps, requestOlderHistory, type HistoryAskDeps } from '../../store/historyPageBridge'
+import { historyAskDeps, requestHistoryPage, type HistoryAskDeps } from '../../store/historyPageBridge'
 import { connectedConversationHostNow } from './conversationActionAvailability'
 
 type HistoryFailure = Extract<HistoryRequestState, { status: 'failed' }>
@@ -31,8 +31,9 @@ export function retryHistoryPage(
   if (deps.getOpen() !== open || deps.getConnectedHost(open.id) !== serverId) return
   const held = deps.getHeld(open.id)
   if (!failure.retryable || selectHistoryFailure(held, serverId) !== failure ||
-      held?.localRead === 'loading' || (held?.coverage?.status === 'received' && held.coverage.atStart)) return
-  requestOlderHistory(deps, open.id, true)
+      held?.localRead === 'loading' || (failure.purpose !== 'newest' && held?.coverage?.status === 'received' && held.coverage.atStart)) return
+  requestHistoryPage(deps, open.id, failure.cursor ?? (held?.coverage?.status === 'received' ? held.coverage.cursor : ''),
+    failure.purpose ?? 'older')
   deps.logRequested()
 }
 

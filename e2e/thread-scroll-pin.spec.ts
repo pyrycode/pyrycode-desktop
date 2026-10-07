@@ -1321,7 +1321,7 @@ for (const [initialRows, pageRows] of [[1, 1], [1, REPLY_TURNS], [REPLY_TURNS, R
     const before = await readThreadMetrics(page)
     expect(before.scrollTop).toBe(0)
     expect(before.scrollHeight > before.clientHeight).toBe(initialRows > 1)
-    expect(requests).toHaveLength(0)
+    expect(requests).toHaveLength(1)
     const content = await assistantRowContentAt(page, 0)
     const top = await viewportTopOfAssistantRowWithContent(page, content)
     await thread.focus()
@@ -1353,9 +1353,6 @@ test('a page walked back above the reader leaves them looking at the same row', 
 }) => {
   const withheld = withheldWalk()
   const { page, daemon } = await launchPairedApp({ buildReplyFrames: withheld.buildReplyFrames })
-
-  await page.locator('.conversation__thread').focus()
-  await page.keyboard.press('Home')
 
   // The opening page lands first, so the conversation holds a cursor and the walk has something to ask
   // with. Waiting for its row is what proves that happened rather than assuming it.

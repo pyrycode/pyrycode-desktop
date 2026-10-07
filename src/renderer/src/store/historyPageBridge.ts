@@ -1,8 +1,9 @@
-// User-demand history pages: typed events prepend rows and retain successful coverage.
-// Requests are driven by thread input; failures settle without starting a retry.
+// Typed history pages retain rows, contribution evidence and successful paging coverage.
+// Opening/reconnect and explicit reader input create demand; failures never retry automatically.
 import { useEffect } from 'react'
 import { backgroundTaskRosterStore, type HistoryAgentPlacement } from './backgroundTaskRosterStore'
 import { connectedConversationHostNow } from '../screens/conversation/conversationActionAvailability'
+import { activeConversationStore } from './activeConversationStore'
 import type { RendererCommand } from '@shared/ipc/commands'
 import type { DaemonEvent, HistoryRequestFailure, HistoryTimelineEntry } from '@shared/ipc/events'
 import { joinKeyFor, translateTimelineEvent } from './timelineBridge'
@@ -283,7 +284,8 @@ export function subscribeHistoryPage(
 export interface HistoryAskDeps {
   sendCommand: (command: RendererCommand) => void
   getHeld: (conversationId: string) => Pick<ConversationSlice, 'history' | 'coverage' | 'localRead'> | null
-  markRequested: (conversationId: string) => void
+  markRequested: (conversationId: string, cursor?: string, purpose?: 'older' | 'newest') => void
+  canRequest?: (conversationId: string) => boolean
 }
 
 /**
@@ -292,6 +294,17 @@ export interface HistoryAskDeps {
  * so this is a request, not a promise; a page can still come back shorter.
  */
 export const HISTORY_PAGE_LIMIT = 200
+
+export function requestHistoryPage(deps: HistoryAskDeps, conversationId: string, cursor: string,
+  purpose: 'older' | 'newest'): void {
+  if (deps.canRequest?.(conversationId) === false) return
+  const held = deps.getHeld(conversationId)
+  if (held?.localRead === 'loading' || held?.history?.status === 'requested') return
+  deps.markRequested(conversationId, cursor, purpose)
+  deps.sendCommand({ type: 'requestHistory', payload: {
+    conversation_id: conversationId, cursor, limit: HISTORY_PAGE_LIMIT
+  } })
+}
 
 export function requestOlderHistory(
   deps: HistoryAskDeps,
@@ -303,24 +316,21 @@ export function requestOlderHistory(
   if (held?.localRead === 'loading' || held?.history?.status === 'requested') return
   const coverage = held?.coverage
   if (coverage?.status === 'received' && coverage.atStart) return
-  deps.markRequested(conversationId)
-  deps.sendCommand({
-    type: 'requestHistory',
-    payload: { conversation_id: conversationId,
-      cursor: coverage?.status === 'received' ? coverage.cursor : '', limit: HISTORY_PAGE_LIMIT }
-  })
+  requestHistoryPage(deps, conversationId, coverage?.status === 'received' ? coverage.cursor : '', 'older')
 }
 
 export const historyAskDeps: HistoryAskDeps = {
   sendCommand: (command) => window.pyry.sendCommand(command),
+  canRequest: conversationId => activeConversationStore.getState().activeConversation?.id === conversationId &&
+    connectedConversationHostNow(conversationId) !== null,
   getHeld: (conversationId) => {
     const host = connectedConversationHostNow(conversationId)
     const held = conversationTimelineStore.getState().timelines.get(conversationId)
     return held?.serverId !== undefined && held.serverId !== host ? null : held ?? null
   },
-  markRequested: (conversationId) => {
+  markRequested: (conversationId, cursor, purpose) => {
     const host = connectedConversationHostNow(conversationId)
-    if (host !== null) conversationTimelineStore.getState().markHistoryRequested(conversationId, host)
+    if (host !== null) conversationTimelineStore.getState().markHistoryRequested(conversationId, host, cursor, purpose)
   }
 }
 
@@ -335,7 +345,7 @@ export const historyAskDeps: HistoryAskDeps = {
  * per-conversation key, so a page — which always names one — has nowhere correct to land in it, and no
  * screen reads that store's `items` anyway.
  *
- * Pages are requested only by explicit upward input in the thread.
+ * Pages come from opening/reconnect demand, explicit upward input, or Retry.
  *
  * DRAW FIRST, THEN SETTLE, and the order is load-bearing rather than stylistic. `prependHistoryFor`'s
  * absent-key branch CREATES the slice, and all three of the store's request-state paths are absent-key

@@ -138,15 +138,16 @@ Retention, send windows and row identity in the [conversation timeline](conversa
   rows through a memory-only display projection; synthetic items never enter saved
   history. Daemon pages now reconstruct finished Agents from started/updated placement
   evidence; saved snapshots alone cannot. Durable history admission/persistence and
-  automatic newest-page requests remain with #1814/#1815.
-- **`prependHistoryFor` is not idempotent, by design** ([#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)).
-  Applying the same page twice prepends its non-`userText` rows twice — only `userText` rows are
-  suppressed, by the AC4 echo dedup. Unreachable today; see the
-  [history write path](conversation-timeline-store-internals.md) for why a guard was
-  deliberately not built here.
+  newest-page refresh use [retained contributions and receipts](chat-history.md#received-state-admission-and-ownership).
+- **Repeat admission needs retained display evidence.** The mounted entry path
+  joins newest/older overlaps and split replies against contributions, preserving
+  surviving rows once. Legacy row-only admission cannot infer durable contribution
+  ids from saved rows; served receipts alone do not prove display retention. See
+  [the contribution join](conversation-timeline-store-internals.md#the-page-half--the-join).
 - **User demand checks the near-top band, including zero.** Unknown coverage asks
   for the first page; received coverage uses its retained cursor unless `atStart`
-  is true. Local reads and pending requests discard demand. Empty/short pages and
+  is true. Local reads and pending requests discard backwards demand; the opening/
+  reconnect controller defers its existing newest demand instead. Empty/short pages and
   prepend scroll events do not chain requests; failures require new connected
   input. See [history admission](chat-history.md#received-state-admission-and-ownership)
   and [zero-offset compensation](conversation-shell-scroll-pin.md#user-demand-and-prepend-position).

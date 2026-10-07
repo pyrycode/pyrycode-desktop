@@ -1,5 +1,7 @@
 import './pairedShell.css'
 import { readSavedTimeline } from './store/savedTimelineRestorer'
+import { createNewestHistoryDemand } from './store/newestHistoryDemand'
+import { historyAskDeps } from './store/historyPageBridge'
 import { createSavedListRestorer } from './store/savedListRestorer'
 import { connectedConversationHostNow, initializeCreatedConversationAfterList } from './screens/conversation/conversationActionAvailability'
 import { useEffect, useReducer, useRef, useState } from 'react'
@@ -413,6 +415,29 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   const [route, dispatch] = useReducer(nextPairedRoute, 'list')
   const localRead = useRef<ReturnType<typeof readSavedTimeline> | null>(null)
   const [savedTimelineTarget, setSavedTimelineTarget] = useState<{ serverId: string; conversationId: string }>()
+  const [newestHistory] = useState(() => createNewestHistoryDemand(historyAskDeps))
+  useEffect(() => {
+    let listening = true
+    const sync = (): void => {
+      const target = route === 'thread' && savedTimelineTarget !== undefined &&
+        activeConversationStore.getState().activeConversation?.id === savedTimelineTarget.conversationId
+        ? savedTimelineTarget : null
+      newestHistory.sync(target, target !== null &&
+        connectedConversationHostNow(target.conversationId) === target.serverId)
+    }
+    // Let receipt admission and writer capture finish before releasing deferred demand.
+    const schedule = (): void => { queueMicrotask(() => { if (listening) sync() }) }
+    const connectionChanged = (): void => {
+      // Observe loss immediately even if a reconnect arrives in the same event turn.
+      if (savedTimelineTarget !== undefined &&
+        sessionStore.getState().statuses.get(savedTimelineTarget.serverId)?.type !== 'connected') sync()
+      else schedule()
+    }
+    const offs = [activeConversationStore.subscribe(schedule), conversationListStore.subscribe(schedule),
+      sessionStore.subscribe(connectionChanged), conversationTimelineStore.subscribe(schedule)]
+    sync()
+    return () => { listening = false; offs.forEach(off => off()) }
+  }, [newestHistory, route, savedTimelineTarget])
 
   useEffect(() => {
     const off = activeConversationStore.subscribe((state, previous) => {

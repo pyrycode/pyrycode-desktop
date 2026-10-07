@@ -182,10 +182,15 @@ exactly the thread the operator stepped away from.
 
 `beginLocalTimelineRead` admits validated saved rows through an explicit completion
 handle, not fabricated daemon events. A process-local `localReadOwner` symbol,
-host and loading status reject stale success/failure after live content, local
-sends, cancellation, host replacement, clear or eviction. Notice replacement and
+host and loading status reject stale success/failure after live content, successful
+owned page admission (including empty/undrawable/legacy settlement), local sends,
+cancellation, host replacement, clear or eviction. Notice replacement and
 consumption preserve the owner; settlement carries current sidecars and retires the
 owner, preventing both stranded loading and resurrection of a cleared notice.
+Same-host outstanding history and its cursor/purpose survive read start, settlement
+and cancellation; navigation cancels disk ownership, not the correlated page.
+Settled saved presentation survives newest pending/admission/failure so partial
+assistant rows stay quiescent until owned live content supersedes them.
 The holder remains keyed by conversation id; per-slice host evidence and the
 screen's selected-host check prevent equal ids from sharing saved content, including
 while connected. Reconnect and list refresh do not clear the slice or its ownership.
@@ -270,9 +275,10 @@ boundary and transient reading with their slice.
 
 ## Edge cases and limitations
 
-- **History backfills rows only.** Reopening an evicted conversation sends no history
-  request. New [upward user demand](chat-history.md#received-state-admission-and-ownership)
-  can request pages using the coverage then held or restored.
+- **History backfills rows only.** Reopening an evicted conversation restores its
+  saved slice then requests one newest page while connected. Further
+  [upward user demand](chat-history.md#received-state-admission-and-ownership)
+  uses held/restored oldest-end coverage; opening never fills the missing range.
   An old stopped boundary can return; its live recovery reading cannot.
 - **Bounds slice count, not slice bytes.** `MAX_RETAINED_TIMELINES` caps how many conversations' threads
   are retained at once; it does not cap the size of any one thread. A hostile daemon inside an already-

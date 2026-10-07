@@ -51,8 +51,9 @@ Detail from the [conversation timeline overview](conversation-timeline-store.md)
   passed every renderer unit test (a static server render mounts no effects) and only reddened the three
   `question-*` e2e specs. Takes no `openConversationId` unlike `useTimelineBridge`: a page's
   `conversationId` is required and client-owned, so there is nothing to fall back to.
-- **`historyPageBridge.ts` has one asker, `requestOlderHistory`.** Its production
-  caller is the scroll pin's trusted upward input handler, never activation or
-  `onScroll`. `historyAskDeps` reads the current held slice and supplying host,
-  marks before sending, and uses retained successful coverage independently of
-  pending/failed request state. See [history admission](chat-history.md#received-state-admission-and-ownership).
+- **`requestHistoryPage` shares ownership and pending exclusion across asks.**
+  `PairedShell`'s retained controller asks newest once per connected opening and
+  owning-host connection edge after read/request settlement. `requestOlderHistory`
+  is called by trusted upward input, using oldest-end coverage; Retry resends its
+  failed cursor/purpose. All mark before sending and recheck current ownership.
+  `onScroll` never creates demand. See [history admission](chat-history.md#received-state-admission-and-ownership).

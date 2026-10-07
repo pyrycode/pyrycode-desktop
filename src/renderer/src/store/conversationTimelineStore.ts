@@ -129,9 +129,9 @@ export const MAX_RETAINED_TIMELINES = 10
  * so failure or interruption never resets the next cursor. Cursors remain opaque
  * payload values and never enter paths, URLs, React keys or diagnostics. */
 export type HistoryRequestState =
-  | { status: 'requested' }
+  | { status: 'requested'; cursor?: string; purpose?: 'older' | 'newest' }
   | { status: 'loaded'; cursor: string; atStart: boolean }
-  | { status: 'failed'; reason: HistoryRequestFailure; retryable: boolean }
+  | { status: 'failed'; reason: HistoryRequestFailure; retryable: boolean; cursor?: string; purpose?: 'older' | 'newest' }
 
 /**
  * What one key holds: the thread, and the state of the ask that backfilled it (#1259).
@@ -331,7 +331,7 @@ export type ConversationTimelineStore = ConversationTimelineState & {
   markLocalSendQueued: (conversationId: string, queued: readonly QueuedItem[]) => void
   prependHistoryFor: (conversationId: string, items: readonly ThreadItem[], retainBoundary?: boolean, entries?: readonly HistoryTimelineEntry[]) => readonly number[]
   recordPlacementJoin: (conversationId: string, joinKey: string | undefined) => void
-  markHistoryRequested: (conversationId: string, serverId?: string) => void
+  markHistoryRequested: (conversationId: string, serverId?: string, cursor?: string, purpose?: 'older' | 'newest') => void
   recordHistoryPage: (conversationId: string, cursor: string, atStart: boolean, servedIds?: readonly number[]) => void
   recordHistoryFailure: (
     conversationId: string,
@@ -499,10 +499,14 @@ function withHistory(
 ): ConversationTimelineState {
   const held = state.timelines.get(conversationId)
   if (held === undefined || (serverId !== undefined && held.serverId !== undefined && held.serverId !== serverId)) return state
-  const coverage = history.status === 'loaded'
+  const newest = held.history?.status === 'requested' && held.history.purpose === 'newest'
+  const keepOldest = newest && held.coverage?.status === 'received'
+  const coverage = history.status === 'loaded' && !keepOldest
     ? { status: 'received' as const, cursor: history.cursor, atStart: history.atStart } : held.coverage
+  const preserveLocalRead = newest && (history.status === 'failed' || held.localRead === 'loaded')
   const next = new Map(state.timelines)
-  next.set(conversationId, { ...held, history, coverage, localRead: undefined })
+  next.set(conversationId, { ...held, history, coverage, localRead: preserveLocalRead ? held.localRead : undefined,
+    localReadOwner: preserveLocalRead ? held.localReadOwner : undefined })
   return { timelines: next }
 }
 
@@ -578,6 +582,7 @@ export function createConversationTimelineStore(
         (held.localRead !== undefined || held.timeline.items.length > 0)) return null
       const owner = Symbol()
       const pending: ConversationSlice = { ...emptySlice, serverId, localRead: 'loading', localReadOwner: owner,
+        history: held?.serverId === serverId ? held.history : null,
         // Opening history must not consume a live notice received while this chat was off-screen.
         timeline: { ...initialTimelineState,
           sessionError: held?.serverId === serverId ? held.timeline.sessionError : undefined }
@@ -609,7 +614,7 @@ export function createConversationTimelineStore(
               fail()
               return
             }
-            settle(current => ({ ...emptySlice, serverId, localRead: 'loaded', coverage: snapshot.coverage, served: snapshot.served, display: snapshot.display, restored: { serverId, coverage: snapshot.coverage },
+            settle(current => ({ ...emptySlice, serverId, history: current.history, localRead: 'loaded', coverage: snapshot.coverage, served: snapshot.served, display: snapshot.display, restored: { serverId, coverage: snapshot.coverage },
               timeline: { ...current.timeline, items: snapshot.items,
                 rowKeys: snapshot.rowIdentity?.rowKeys ?? snapshot.items.map((_, index) => index - snapshot.prependedRows),
                 nextRowKey: snapshot.rowIdentity?.nextRowKey ?? snapshot.items.length - snapshot.prependedRows },
@@ -617,7 +622,9 @@ export function createConversationTimelineStore(
           } catch { fail() }
         },
         fail,
-        cancel: () => settle(null)
+        // Navigation cancels the disk read, never the independently correlated page request.
+        cancel: () => settle(get().timelines.get(conversationId)?.history == null
+          ? null : current => ({ ...current, localRead: undefined }))
       }
     },
     dispatchLocalEcho: (serverId, conversationId, event) =>
@@ -754,7 +761,10 @@ export function createConversationTimelineStore(
     prependHistoryFor: (conversationId, items, retainBoundary = false, entries) => {
       let boundaries: readonly number[] = []
       set((s) => {
-        const held = receivedSlice(s.timelines.get(conversationId))
+        const current = s.timelines.get(conversationId)
+        // Pages supersede loading reads, while settled saved rows keep their presentation.
+        const held = receivedSlice(current, current?.history?.status === 'requested' &&
+          current.history.purpose === 'newest' && current.localRead === 'loaded')
         if (entries !== undefined) {
           const base = held ?? emptySlice
           const joined = reconcileHistory(base.timeline, base.display, entries, base.liveKeys, retainBoundary)
@@ -794,22 +804,26 @@ export function createConversationTimelineStore(
     },
     // Requests preserve same-host rows and coverage without changing holder order.
     // A different host starts with an empty slice; its cursor cannot come from the old host.
-    markHistoryRequested: (conversationId, serverId) =>
+    markHistoryRequested: (conversationId, serverId, cursor, purpose) =>
       set((s) => {
         const held = s.timelines.get(conversationId)
-        if (held === undefined) return s
-        const base = serverId !== undefined && held.serverId !== undefined && held.serverId !== serverId
+        if (held === undefined && serverId === undefined) return s
+        const base = held === undefined || (serverId !== undefined && held.serverId !== undefined && held.serverId !== serverId)
           ? emptySlice : held
         const timelines = new Map(s.timelines)
         timelines.set(conversationId, { ...base, serverId: serverId ?? base.serverId,
-          history: { status: 'requested' }, localRead: undefined })
+          history: { status: 'requested', ...(cursor === undefined ? {} : { cursor }),
+            ...(purpose === undefined ? {} : { purpose }) },
+          localRead: purpose === 'newest' && base.localRead === 'loaded' ? base.localRead : undefined })
         return { timelines }
       }),
     // Only a successful page advances coverage, even when it contains no drawable rows.
     recordHistoryPage: (conversationId, cursor, atStart, servedIds) =>
       set(s => {
         if (servedIds === undefined) return withHistory(s, conversationId, { status: 'loaded', cursor, atStart })
-        const held = receivedSlice(s.timelines.get(conversationId)) ?? emptySlice
+        const current = s.timelines.get(conversationId)
+        const newest = current?.history?.status === 'requested' && current.history.purpose === 'newest'
+        const held = receivedSlice(current, newest && current?.localRead === 'loaded') ?? emptySlice
         const pageIds = [...new Set(servedIds)].sort((a, b) => a - b)
         const receipt = { ids: pageIds, cursor, atStart }
         // Preserve the latest exact cursor even when an identical older receipt is repeated.
@@ -829,14 +843,21 @@ export function createConversationTimelineStore(
         const slice: ConversationSlice = { ...held, serverId: receiptHost() ?? held.serverId,
           served: receipts.length === 0 ? undefined : { ids, receipts, ...(highestId === undefined ? {} : { highestId }) },
           history: { status: 'loaded', cursor, atStart },
-          coverage: { status: 'received', cursor, atStart }, localRead: undefined }
+          coverage: newest && held.coverage?.status === 'received'
+            ? held.coverage : { status: 'received', cursor, atStart }, localRead: newest ? held.localRead : undefined }
         return { timelines: s.timelines.has(conversationId)
           ? new Map(s.timelines).set(conversationId, slice)
           : withNewSliceAtHead(s.timelines, conversationId, slice) }
       }),
     // Settle without retrying; the next qualifying user input decides whether to ask.
     recordHistoryFailure: (conversationId, reason, retryable) =>
-      set((s) => withHistory(s, conversationId, { status: 'failed', reason, retryable }, receiptHost() ?? undefined)),
+      set((s) => {
+        const request = s.timelines.get(conversationId)?.history
+        return withHistory(s, conversationId, { status: 'failed', reason, retryable,
+          ...(request?.status === 'requested' && request.cursor !== undefined ? { cursor: request.cursor } : {}),
+          ...(request?.status === 'requested' && request.purpose !== undefined ? { purpose: request.purpose } : {})
+        }, receiptHost() ?? undefined)
+      }),
     markViewed: (conversationId) =>
       set((s) => {
         if (tailKey(s.timelines) === conversationId) return s

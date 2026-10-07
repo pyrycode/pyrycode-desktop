@@ -214,7 +214,6 @@ test('scrolling back walks the thread page by page and stops at the start of the
   const captured: Envelope[] = []
   const { page } = await launchPairedApp({ buildReplyFrames: walkingFake(captured) })
 
-  await scrollBack(page, 0)
   const userBubbles = page.locator('.bubble[data-thread-role="user"]')
   const thread = page.locator('.conversation__thread')
 
@@ -327,7 +326,6 @@ test('an upward input asks from up to two viewport heights below the top and not
   const { page } = await launchPairedApp({ buildReplyFrames: boundaryFake(captured) })
   const thread = page.locator('.conversation__thread')
 
-  await scrollBack(page, 0)
   await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveCount(BOUNDARY_ENTRIES, {
     timeout: ROUNDTRIP_TIMEOUT_MS
   })

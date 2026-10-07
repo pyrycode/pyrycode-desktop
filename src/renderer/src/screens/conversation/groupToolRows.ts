@@ -17,7 +17,7 @@ export interface GroupedToolRow {
 export function groupToolRows(
   items: readonly ThreadItem[],
   evidence: ReadonlyMap<string, BackgroundAgentTimeline> = new Map(),
-  rowKeys: readonly number[] = items.map((_, index) => index),
+  rowArrivalOrder: readonly number[] = items.map((_, index) => index),
   historyCount = 0
 ): GroupedToolRow[] {
   const owners = new Map<string, number>()
@@ -110,7 +110,7 @@ export function groupToolRows(
       (a[1].finishOrder ?? 0) - (b[1].finishOrder ?? 0))
   for (const [index, entry] of settled) {
     const boundary = entry.finishBefore
-    const at = ordinary.findIndex(row => !row.relocated && row.index >= historyCount && boundary !== null && (rowKeys[row.index] ?? Infinity) >= boundary)
+    const at = ordinary.findIndex(row => !row.relocated && row.index >= historyCount && boundary !== null && (rowArrivalOrder[row.index] ?? Infinity) >= boundary)
     ordinary.splice(at === -1 ? ordinary.length : at, 0, ...(groups.get(index) ?? []))
   }
   for (const [index, entry] of agents) if (entry.finishBefore === null) ordinary.push(...(groups.get(index) ?? []))

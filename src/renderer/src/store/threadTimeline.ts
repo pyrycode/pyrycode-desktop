@@ -419,6 +419,9 @@ export interface LocalSendPending {
 export interface TimelineState {
   /** Client-owned identities; keys survive receipt settlement and history prepends. */
   rowKeys?: readonly number[]
+  /** Receipt placement overrides keyed by stable identity, never saved. */
+  rowArrivalOrder?: ReadonlyMap<number, number>
+  /** Shared monotonic allocator for row identities and receipt placement. */
   nextRowKey?: number
   receivedQueueIds?: readonly number[]
   localEchoes?: readonly {
@@ -631,7 +634,10 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       } else if (!own.waiting && event.sentNow !== true) insertion = index
       items.splice(insertion, 0, item)
       rowKeys.splice(insertion, 0, own.rowKey)
-      return { ...state, items, rowKeys, localEchoes: echoes.map(e => e === own ? {
+      const arrival = state.nextRowKey ?? state.items.length
+      const rowArrivalOrder = new Map(state.rowArrivalOrder)
+      rowArrivalOrder.set(own.rowKey, arrival)
+      return { ...state, items, rowKeys, rowArrivalOrder, nextRowKey: arrival + 1, localEchoes: echoes.map(e => e === own ? {
         ...e, queuedMsgId: e.queuedMsgId ?? event.queuedMsgId, settled: true
       } : own.waiting && own.afterKey !== undefined && e.waiting && !e.settled && !e.released &&
           e.afterKey === own.afterKey ? { ...e, afterKey: undefined, waitTurnId: undefined } : e) }
@@ -642,8 +648,10 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       (event.queuedMsgId === undefined || e.queuedMsgId === event.queuedMsgId))
     if (own === undefined) return state
     const index = keys.indexOf(own.rowKey)
+    const rowArrivalOrder = state.rowArrivalOrder === undefined ? undefined : new Map(state.rowArrivalOrder)
+    rowArrivalOrder?.delete(own.rowKey)
     return { ...state, items: state.items.filter((_, i) => i !== index),
-      rowKeys: keys.filter((_, i) => i !== index), localEchoes: echoes.filter(e => e !== own) }
+      rowKeys: keys.filter((_, i) => i !== index), rowArrivalOrder, localEchoes: echoes.filter(e => e !== own) }
   }
   // Reject a held receipt before content or chrome sidecars can change anything.
   if (event.type === 'userText' && event.received === true &&
@@ -673,6 +681,7 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         ? { ...e, afterKey } : e)
     }
     next = { ...next, rowKeys, nextRowKey, localEchoes }
+    if (state.rowArrivalOrder !== undefined) next = { ...next, rowArrivalOrder: state.rowArrivalOrder }
     const receivedQueueIds = event.type === 'userText' && event.received === true && event.queuedMsgId !== undefined
       ? [...(state.receivedQueueIds ?? []), event.queuedMsgId] : state.receivedQueueIds
     if (receivedQueueIds !== undefined) next = { ...next, receivedQueueIds }

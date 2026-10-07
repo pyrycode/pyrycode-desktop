@@ -1,6 +1,6 @@
 import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
-import type { EnvelopeType } from '../src/shared/wire/types'
+import type { EnvelopeType, SendMessagePayload } from '../src/shared/wire/types'
 
 const ts = '2026-09-11T12:00:00Z'
 const payload = (id: string, parent?: string, name = 'Agent') => ({
@@ -171,8 +171,13 @@ test('visible tool rows keep joined borders across collapsed descendants', async
 // Synthetic lifecycle inputs; no daemon ids are exposed in DOM attributes.
 test('started background agents follow the tail, navigate markers, and settle on inactive delivery', async ({ launchPairedApp }) => {
   const quiet = { ...SEEDED_ROW, id: 'quiet-agent-chat', name: 'Quiet agent room' }
+  let sentMessageId: string | undefined
   const { page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
     const envelope = decodeEnvelope(bytes)
+    if (envelope.type === 'send_message') {
+      sentMessageId = (envelope.payload as SendMessagePayload).message_id
+      return []
+    }
     if (envelope.type === 'request_history') return []
     return [seedConversationsFrame()]
   } })
@@ -306,4 +311,35 @@ test('started background agents follow the tail, navigate markers, and settle on
   roster(['agent-live-b', 'agent-live-c'])
   await expect(marker('agent-live-b')).toContainText('Agent finished')
   expect(await isBefore(row('agent-live-c'), row('agent-live-b'))).toBeTruthy()
+
+  // A queued echo keeps its identity when delivered after the Agent's finish.
+  use('agent-live-d')
+  resolve('agent-live-d')
+  start('agent-live-d')
+  roster(['agent-live-d'])
+  const composer = page.getByPlaceholder('Message…')
+  await composer.fill('Own queued message after finish')
+  await composer.press('Enter')
+  await expect.poll(() => sentMessageId).toBeDefined()
+  daemon.pushFrame(frame('queue_state', { conversation_id: SEEDED_ROW.id, queued: [
+    { queued_msg_id: 88, text: 'Own queued message after finish', message_id: sentMessageId, ts }
+  ] }))
+  const own = thread.locator('.message-row', { hasText: 'Own queued message after finish' })
+  await expect(own).toHaveClass(/message-row--queued/)
+  const ownNode = await own.elementHandle()
+  terminal('agent-live-d')
+  await expect(marker('agent-live-d')).toContainText('Agent finished')
+  const delivery = { conversation_id: SEEDED_ROW.id, message_id: sentMessageId, queued_msg_id: 88,
+    role: 'user', text: 'Receipt preserves own copy', sent_now: true }
+  daemon.pushFrame(frame('message', delivery))
+  daemon.pushFrame(frame('queue_state', { conversation_id: SEEDED_ROW.id, queued: [] }))
+  await expect(own).not.toHaveClass(/message-row--queued/)
+  expect(await ownNode?.evaluate(node => node.isConnected)).toBe(true)
+  expect(await isBefore(row('agent-live-d'), own)).toBeTruthy()
+  daemon.pushFrame(frame('message', delivery))
+  user('ordinary after queued delivery')
+  await expect(thread).toContainText('ordinary after queued delivery')
+  await expect(own).toHaveCount(1)
+  expect(await isBefore(row('agent-live-d'), own)).toBeTruthy()
+  await page.screenshot({ path: '/tmp/builder-1839/queued-after-finish.png' })
 })

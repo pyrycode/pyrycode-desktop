@@ -567,6 +567,7 @@ export function ConversationScreen({
         key={openConversationId}
         items={items}
         rowKeys={thread.rowKeys}
+        rowArrivalOrder={thread.rowArrivalOrder}
         localEchoes={thread.localEchoes}
         foldTools={collapseToolUses}
         backgroundAgents={backgroundAgents}
@@ -1187,6 +1188,7 @@ export function Timeline({
   items,
   backgroundAgents,
   rowKeys,
+  rowArrivalOrder,
   localEchoes,
   foldTools = false,
   scrollPin,
@@ -1206,6 +1208,7 @@ export function Timeline({
   items: readonly ThreadItem[]
   backgroundAgents?: ReadonlyMap<string, BackgroundAgentTimeline>
   rowKeys?: TimelineState['rowKeys']
+  rowArrivalOrder?: TimelineState['rowArrivalOrder']
   localEchoes?: TimelineState['localEchoes']
   /** Presentation only; absent or false retains ordinary tool rows. */
   foldTools?: boolean
@@ -1244,7 +1247,10 @@ export function Timeline({
     setRevealAgent(null)
   }, [revealAgent])
   const projection = groupToolRows(rows.map((row) => row.item), backgroundAgents,
-    rows.map(row => row.itemIndex === -1 ? Infinity : rowKeys?.[row.itemIndex] ?? firstRowKey + row.itemIndex), -firstRowKey)
+    rows.map(row => {
+      const key = rowKeys?.[row.itemIndex] ?? firstRowKey + row.itemIndex
+      return row.itemIndex === -1 ? Infinity : rowArrivalOrder?.get(key) ?? key
+    }), -firstRowKey)
   const rowKeyAt = (index: number) => rowKeys?.[rows[index]?.itemIndex ?? index] ??
     firstRowKey + (rows[index]?.itemIndex ?? index)
   const drawn = projection.filter((group) => {

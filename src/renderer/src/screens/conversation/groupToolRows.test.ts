@@ -1,6 +1,11 @@
 import { expect, it } from 'vitest'
 import { groupToolRows } from './groupToolRows'
 import type { ThreadItem } from '../../store/threadTimeline'
+import { initialTimelineState, markLocalSendQueued, reduceTimeline } from '../../store/threadTimeline'
+import { createBackgroundTaskRosterStore } from '../../store/backgroundTaskRosterStore'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { Timeline } from './ConversationScreen'
 const tool = (toolUseId: string, name = 'Agent', parentToolUseId?: string): ThreadItem => ({
   kind: 'toolCall', turnId: 't', toolUseId, name, parentToolUseId, inputSummary: 'work', result: null
 })
@@ -8,6 +13,36 @@ const text = (text: string): ThreadItem => ({ kind: 'userText', text })
 const evidence = (finishBefore: number | null = null) => new Map([
   ['task', { toolCallId: 'a', confirmed: true, finishBefore, finishOrder: finishBefore === null ? null : 1 }]
 ])
+
+it.each(['completed', 'failed', 'stopped'])('keeps a %s Agent above a later queued receipt without replacing row identity', status => {
+  const store = createBackgroundTaskRosterStore()
+  store.getState().setStartedTask({ conversationId: 'c', taskId: 'task', toolCallId: 'a',
+    taskType: 'local_agent', description: 'work', truncatedFields: null })
+  store.getState().setRoster({ conversationId: 'c', droppedTasks: 0, tasks: [
+    { task_id: 'task', task_type: 'local_agent', description: 'work', truncated_fields: null }
+  ] })
+  let timeline = reduceTimeline(initialTimelineState, { type: 'toolUse', turnId: 't', toolUseId: 'a', name: 'Agent', inputSummary: 'work' })
+  timeline = reduceTimeline(timeline, { type: 'userText', text: 'queued', messageId: 'q' })
+  timeline = markLocalSendQueued(timeline, [{ queued_msg_id: 1, message_id: 'q', text: 'queued', ts: '' }])
+  const echo = timeline.items[1]
+  const key = timeline.rowKeys?.[1]
+  expect(timeline.nextRowKey).toBe(2)
+  store.getState().setUpdatedTask({ conversationId: 'c', taskId: 'task', status, patch: '', summary: '', truncatedFields: null }, timeline.nextRowKey)
+  const receipt = { type: 'userText', text: 'receipt', messageId: 'q', queuedMsgId: 1, received: true, sentNow: true } as const
+  timeline = reduceTimeline(timeline, receipt)
+  const project = () => groupToolRows(timeline.items, store.getState().agentTimeline.get('c'),
+    timeline.rowKeys?.map(key => timeline.rowArrivalOrder?.get(key) ?? key))
+    .map(row => [row.index, row.marker === true])
+  expect(project()).toEqual([[0, true], [0, false], [1, false]])
+  expect(timeline.items[1]).toBe(echo)
+  expect(timeline.rowKeys?.[1]).toBe(key)
+  const markup = renderToStaticMarkup(createElement(Timeline, { ...timeline, backgroundAgents: store.getState().agentTimeline.get('c') }))
+  expect(markup.indexOf('tool-row__name')).toBeLessThan(markup.indexOf('data-thread-role="user"'))
+  expect(reduceTimeline(timeline, receipt)).toBe(timeline)
+  timeline = reduceTimeline(timeline, { type: 'userText', text: 'later', received: true })
+  expect(project()).toEqual([[0, true], [0, false], [1, false], [2, false]])
+  expect(reduceTimeline(timeline, { type: 'reset' }).rowArrivalOrder).toBeUndefined()
+})
 
 it('projects a marker and moves the whole group below ordinary and queued rows', () => {
   const items: ThreadItem[] = [tool('a'), tool('child', 'Read', 'a'), text('new'),

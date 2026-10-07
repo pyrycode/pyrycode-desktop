@@ -57,6 +57,21 @@ Preserve typed IPC/main validation, remote-permission restrictions, optimistic r
 
 None. Retention uses the reducer's existing continuous identity rather than comparing restored text.
 
+## Revisions
+
+2026-10-07: static verification showed Timeline treats any trailing element as content, suppressing its normal empty state. Mount the trailing wrapper only for a pending questionnaire, permission or owning-chat rejection. Keep it stable across those active surfaces so leaf growth remains observed. Rejection feedback also keeps empty/offline history mounted. Removed Composer's now-unused coverage prop and focus guard; reply-to-composer behavior remains wired.
+
+2026-10-07: a failing security guard test demonstrated owner changes can retain the prompt object. PermissionModal callbacks now capture their displayed stamped server and pass it to activate/toggle/cancel; admission compares it with the current unique owner as well as prompt identity. Retained consent never supplies that callback authority.
+
+2026-10-07: integrated comparison found inherited questionnaire padding inset the inline permission card from the message column. Clear that outer padding for permissions so the border and Cancel align with desktop history; keep the card's existing inner padding and tokens.
+
+## Documentation handoff
+
+- Pending documentation stage: `docs/knowledge/features/conversation-shell-permission-modal.md` § Presentation and § Selection and confirmation — inline scrolling and navigation-retained checked grants with pane-local arming and continuous invalidation.
+- Pending documentation stage: `docs/knowledge/features/conversation-shell-question-panel.md` § Composer placement — permission hides only the retained questionnaire, leaving composer/footer available.
+- Pending documentation stage: `docs/knowledge/features/conversation-shell-scroll-pin.md` § Thread scroll pin — inline permission growth and preventScroll initial focus evidence.
+- Pending documentation stage: `docs/knowledge/features/development-verification.md` § What each test tier proves — fake interaction/visual evidence versus dispatcher-owned named live grant proof.
+
 ## Security review
 
 **Verdict:** PASS

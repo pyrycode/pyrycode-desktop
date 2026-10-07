@@ -48,11 +48,15 @@ test('permission and trust retain selection offline, including pre-opened confir
   const panel = page.locator('.permission-panel')
   for (const kind of ['permission', 'trust']) {
     await permission(app, kind)
+    await expect(page.locator('.conversation__thread .permission-panel')).toBeVisible()
+    await expect(page.getByPlaceholder('Message…')).toBeVisible()
     if (kind === 'permission') await panel.getByRole('checkbox').press('Space')
     await panel.getByRole('button', { name: 'Allow', exact: true }).press('Space')
     await panel.getByRole('button', { name: 'Allow', exact: true }).focus()
     const before = (await read()).length
     await connection(app, 'disconnected')
+    await expect(page.locator('.conversation__thread .permission-panel')).toBeVisible()
+    await expect(page.locator('.composer__footer')).toBeVisible()
     await expect(panel.getByRole('button', { name: 'Allow', exact: true })).toBeDisabled()
     await page.keyboard.press('Enter')
     await page.keyboard.press('Space')

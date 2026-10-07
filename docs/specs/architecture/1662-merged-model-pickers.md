@@ -71,3 +71,9 @@ None. Reuse the shipped switch state path rather than adding another routing sto
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-07
+
+## Revisions
+
+2026-10-07: Focused UI tests found outgoing confirmed settings overriding incoming snapshots after authoritative agent success. This lifecycle bug belongs to `runSettingsWriteStore`/its bridge and is filed separately as [#1845](https://github.com/pyrycode/pyrycode-desktop/issues/1845). Preserve the prior-own-write regression as skipped pending that fix. Active picker tests prove success from underlying daemon settings and cover incoming own-agent writes separately; no picker workaround infers ownership from model strings. Operator hand-over and dispatcher live validation remain pending.
+
+2026-10-07: A test with two target rows sharing a raw value showed pending marking selecting the first row. Pending matching now also compares the retained display name and resolution so the picked presentation is marked; ordinary current/inherited matching remains agent-scoped and unchanged.

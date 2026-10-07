@@ -11,6 +11,8 @@ type ConversationSuggestion = {
 interface ReplySuggestionState {
   hosts: ReadonlyMap<string | null, ReadonlyMap<string, ConversationSuggestion>>
   receive: (event: DaemonEvent) => void
+  // A suggestion sent with Tab is spent; only a newer revision shows one again.
+  spend: (host: string, chat: string) => void
 }
 
 export function createReplySuggestionStore() {
@@ -47,6 +49,16 @@ export function createReplySuggestionStore() {
       }
       hosts.set(host, conversations)
       return { hosts }
+    }),
+    spend: (host, chat) => set(state => {
+      const held = state.hosts.get(host)?.get(chat)
+      const current = held?.sessionId == null ? undefined : held.sessions.get(held.sessionId)
+      if (held?.sessionId == null || current === undefined) return state
+      const sessions = new Map(held.sessions)
+      sessions.set(held.sessionId, { ...current, text: null })
+      const conversations = new Map(state.hosts.get(host))
+      conversations.set(chat, { ...held, sessions })
+      return { hosts: new Map(state.hosts).set(host, conversations) }
     })
   }))
 }
@@ -59,4 +71,9 @@ export function selectReplySuggestion(state: ReplySuggestionState, host: string 
   if (host === null || chat === null) return null
   const held = state.hosts.get(host)?.get(chat)
   return held?.sessionId == null ? null : held.sessions.get(held.sessionId)?.text ?? null
+}
+
+// The suggestion shows only over an empty draft, so typing hides it and clearing restores it.
+export function visibleReplySuggestion(draft: string, suggestion: string | null): string | null {
+  return draft === '' ? suggestion : null
 }

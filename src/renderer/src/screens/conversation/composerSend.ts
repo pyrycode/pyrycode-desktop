@@ -90,8 +90,8 @@ export interface ComposerSendDeps {
 /**
  * Submit the composer's current text into the ACTIVE conversation (#448). `conversationId` is the
  * id of the conversation this thread shows — the activeConversationStore's id at the container.
- * Returns `true` when a message was sent (the container clears the input on `true`), `false` for
- * whitespace-only input or a null conversation id (no effect either way).
+ * Returns `true` when the bridge accepts the submission (the container clears the input), `false` for
+ * whitespace-only input, a null conversation id or a bridge exception.
  *
  * The null guard is #448's contract: the daemon validates `conversation_id` and rejects an unknown
  * id with an error frame, so sending under a placeholder is never correct. No active conversation →
@@ -104,15 +104,10 @@ export interface ComposerSendDeps {
  * `message` fan-out is off), so the echo is the sole source of the user message and needs no dedup key.
  * #1213 puts the id back on the echo for an unrelated purpose — CORRELATION with the queued row the daemon
  * draws when it parks this message mid-turn — and the field's own comment below carries that argument. The
- * send is guarded (AC4): a bridge failure is swallowed, never propagated. The echo is
- * dispatched regardless of the send outcome — "optimistic" means show-immediately, and this
- * milestone has no send-failure UI surface.
- *
- * #1055 QUALIFIES THAT LAST SENTENCE IN EXACTLY ONE PLACE. The echo still posts on a bridge failure and
- * this still returns `true`; what a failed send no longer carries is the message's ATTACHMENTS. Their
- * ids ride the frame now, so a frame that did not go named none — and recording them anyway, while the
- * files stay pending for the retry, would show them twice. "Optimistic" covers text, which the operator
- * can see and re-send; it does not cover a claim about what the daemon was handed.
+ * send is guarded (AC4): a bridge failure is swallowed, never propagated. The echo is published before
+ * the bridge call so synchronous delivery observations find its identity. A bridge exception marks
+ * that echo Not sent, preserving its text and attachments, rolls pending attachments back and returns
+ * false so the container retains the draft for resubmission. An echo does not claim daemon delivery.
  */
 export function submitMessage(
   text: string,

@@ -2,6 +2,16 @@ import { test, expect, SEEDED_ROW, SECOND_SEEDED_ROW, seedConversationsFrame } f
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { SendMessagePayload } from '../src/shared/wire/types'
 
+function luminance(colour: string): number {
+  const channels = /^rgb\((\d+), (\d+), (\d+)\)$/.exec(colour)
+  if (channels === null) throw new Error(`Expected opaque RGB colour: ${colour}`)
+  const [r, g, b] = channels.slice(1).map(value => {
+    const channel = Number(value) / 255
+    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
 for (const mode of ['automatic', 'explicit', 'terminal'] as const) {
   test(`accepted disconnected messages drain and settle: ${mode}`, async ({ launchPairedApp }) => {
     const sends: SendMessagePayload[] = []
@@ -72,7 +82,16 @@ for (const mode of ['automatic', 'explicit', 'terminal'] as const) {
     await expect(page.getByText('Waiting for connection', { exact: true })).toHaveCount(2)
     await expect(page.locator('.message-row--queued')).toHaveCount(0)
     expect(sends).toHaveLength(0)
-    await page.screenshot({ path: `/tmp/builder-1853/waiting-${mode}.png` })
+    const colours = await page.getByText('Waiting for connection', { exact: true }).first().evaluate(label => {
+      const bubble = label.closest('.bubble--user')
+      if (bubble === null) throw new Error('Waiting label must belong to its user bubble')
+      return { text: getComputedStyle(label).color, fill: getComputedStyle(bubble).backgroundColor }
+    })
+    const levels = [luminance(colours.text), luminance(colours.fill)]
+    const contrast = (Math.max(...levels) + 0.05) / (Math.min(...levels) + 0.05)
+    await page.screenshot({ path: `/tmp/builder-1853/rework-contrast/waiting-${mode}.png` })
+    expect(contrast).toBeGreaterThanOrEqual(4.5)
+    expect(colours).toEqual({ text: 'rgb(207, 228, 255)', fill: 'rgb(0, 51, 85)' })
     if (mode === 'terminal') {
       await page.locator('.channel-list__row').filter({ hasText: SECOND_SEEDED_ROW.name ?? '' }).locator('.channel-list__row-open').click()
       await expect(page.getByText('Waiting for connection', { exact: true })).toHaveCount(0)

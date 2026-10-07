@@ -348,10 +348,8 @@ describe('submitMessage', () => {
     )
   })
 
-  // ⭐ AC3, and what it retires: the #1039 contract said a bridge failure "still records and still
-  // clears". It cannot, now that the ids ride the frame — if the frame did not go it named nothing, so
-  // the echo records nothing and the files stay attached for the retry. The alternative (echo shows
-  // them AND they stay pending) would duplicate them on the next send.
+  // A bridge failure retains the draft and pending files for retry while preserving the failed echo's
+  // text and attachment presentation. Not sent makes clear that the echo does not claim delivery.
   it('a throwing send rolls attachments back and marks the echo failed', () => {
     const dispatch = vi.fn()
     const dispatchFor = vi.fn()

@@ -765,6 +765,11 @@ button.top-overlay-pill {
   justify-content: flex-end;
 }
 
+/* Delivery copy stays readable at rest on the user bubble's fill. */
+.bubble__delivery--waiting {
+  color: var(--color-on-primary-container);
+}
+
 /* Copy's 27×20px hit target enlarges the 11×12px glyph without changing its column.
    Four vertical pixels per side leave room for a future glyph at a 12px gap. Pointer states
    keep the same ink; the keyboard outline remains visible. */

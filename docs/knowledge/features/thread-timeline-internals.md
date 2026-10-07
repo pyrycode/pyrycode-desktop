@@ -310,7 +310,7 @@ estimate, never recomputed here. Carried as received: no summing, differencing o
 so `0` and a negative both survive; what "not reported" means (absent or `0`) is left to the
 display tickets that read the field, not this reducer. **Live-only by design**:
 `TurnEndMetrics` is not part of `DurableThreadItem`
-([Protected local chat history § API](chat-history.md#api)), so a reload never restores
+([Protected local chat history § Durable display rows](chat-history.md#durable-display-rows)), so a reload never restores
 these six fields, and `chatHistoryContract.test.ts`'s exact-equality guard is narrowed to
 compare against `ThreadItem` with them omitted from `turnBoundary`, rather than widened to
 include them. See [Inbound message decode § Optional stopped-turn

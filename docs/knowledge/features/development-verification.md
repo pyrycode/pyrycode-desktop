@@ -125,8 +125,9 @@ Verify served envelope coverage separately from retained display contributions.
 The [history verification reference](development-verification-history.md) covers
 partial/repeated overlaps, split replies and orphan patches, strict saved metadata,
 held-row/live-state regressions, protected fresh restoration and counted mounted
-tool-expansion/content-anchor evidence. Legacy receipt-only data cannot prove
-retained content. Paging remains reader-driven with opaque cursors.
+tool-expansion/content-anchor evidence, known-gap fixture traps and the counted
+closed-Electron 205-post proof. Legacy receipt-only data cannot prove retained
+content. Fresh reader steps use opaque cursors; opening performs one newest ask.
 
 ### Equal-id received history
 

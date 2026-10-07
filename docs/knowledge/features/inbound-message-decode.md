@@ -240,7 +240,8 @@ named-field literal by the exported `turnEndMetricsOf`, shared by both the live 
 above — never a spread of the parsed payload, so a later decoder field cannot cross into the
 shared `TurnEndMetrics` IPC shape by accident. See [Thread timeline §
 Types](thread-timeline-internals.md#types) for where they land on `turnBoundary`/`turnEnd`
-and [Protected local chat history § API](chat-history.md#api) for why they never reach disk.
+and [Protected local chat history § Durable display rows](chat-history.md#durable-display-rows)
+for why they never reach disk.
 
 ### Required model-refusal reports
 

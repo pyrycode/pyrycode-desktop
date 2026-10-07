@@ -19,6 +19,7 @@ Search this catalog for a topic. Start with INDEX.md. The documentation stage ma
 ## Features
 
 - [Protected local chat history](features/chat-history.md) — Versioned saved-host snapshots, guarded protected storage, received-state recording and echo cancellation, durable coverage, host ownership, coalescing, close/quit flushing and saved-list and on-demand offline timeline restoration, stale-read admission, restored ownership and local read failures.
+- [Protected chat history — API and operations](features/chat-history-api.md) — Fixed IPC, saved-host authorization, main-process removal ordering and operation contracts.
 - [Protected local chat history — testing](features/chat-history-testing.md) — Admission/refusal, restoration, protected persistence, offline reply regressions and durable-contract verification.
 - [Development verification](features/development-verification.md): source checks, test boundaries, layout evidence and live-test diagnosis.
 - [History admission and protected-restoration verification](features/development-verification-history.md) — Served receipts versus display contributions, held-row regressions and counted protected-relaunch tool/reader-anchor evidence.
@@ -29,6 +30,7 @@ Search this catalog for a topic. Start with INDEX.md. The documentation stage ma
 - [Conversation shell — timeline render and stopped-turn records](features/conversation-shell-timeline-render.md) — Structured timeline rendering and retained stopped-turn labels.
 - [Conversation shell — thinking and working indicator](features/conversation-shell-working-indicator.md) — Composer activity label, tool elapsed readings and retry/compacting/stall precedence.
     - [Conversation timeline store — internals](features/conversation-timeline-store-internals.md) — The store itself, the translator and React binding that feed it from the daemon event stream, and the flow between them.
+    - [Conversation timeline store — data flow](features/conversation-timeline-store-data-flow.md) — Live delivery, reader-driven newest/oldest/gap demand and served-page admission.
     - [Conversation shell — thread scroll pin](features/conversation-shell-scroll-pin.md) — Bottom following, late content growth, prepend reader preservation and demand band; inline questionnaire growth and the open removed-wrapper observer-retention limitation.
     - [Paired shell — conversation exits and stamps](features/paired-shell-conversation-exits.md) — What happens to the open thread when its conversation is deleted or archived, the last-read and view stamps written as the user moves between conversations, and (#1184) the list reseed that keeps the open chat's own snapshot in step with a rename or auto-name.
     - [Paired shell — the pair server route](features/paired-shell-pair-server-route.md) — The pairServer route: how the shell reaches the pairing surface and what it does while it is there.

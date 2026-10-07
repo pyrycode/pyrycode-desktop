@@ -139,7 +139,9 @@ being used as live drafts, but does not release these DOM references.
 [`useThreadScrollPin`](../../../src/renderer/src/screens/conversation/ConversationScreen.tsx)
 separates local scroll measurement from download intent. `onScroll` updates bottom
 following only. Trusted upward wheel input or ArrowUp/PageUp/Home targeted at the
-thread itself checks host availability and `isNearTop` before the browser scrolls.
+thread itself checks host availability before the browser scrolls. A visible known
+gap between measured header/input overlays takes priority, selecting the first
+marker from newer toward older rows; otherwise `isNearTop` governs oldest-end demand.
 The band includes offsets from zero through `HISTORY_ASK_BAND_VIEWPORTS` (2) viewport
 heights, scaled by the thread's own measured `clientHeight` rather than a fixed pixel
 rim (widened from a fixed 200px band by [#1752](https://github.com/pyrycode/pyrycode-desktop/issues/1752)).
@@ -168,6 +170,10 @@ the measured stylesheet input clearance, including after a successful send. The 
 `pinnedOffset` echo guard prevents compensation's scroll event from re-arming
 following. Measuring row displacement matters: `scrollHeight` includes unused
 viewport space in short threads and is not the inserted content's height.
+Convert the measured content bottom to absolute scroll coordinates by adding
+`scrollTop` before computing missing room. A stable reader row alone can hide
+unnecessary blank-space growth at nonzero offset; retain the exact insertion/
+scroll-height assertion as well as anchor geometry.
 
 [`thread-scroll-pin.spec.ts`](../../../e2e/thread-scroll-pin.spec.ts) covers a
 one-row held thread receiving one or twenty rows, an overflowing thread at zero,

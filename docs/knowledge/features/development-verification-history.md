@@ -28,6 +28,63 @@ settlement before absence checks. Cancelling an echo retains content/keys with
 advanced allocation; whole-snapshot equality would stop quit/relaunch proof early.
 This is fake transport; no live-Claude run was required or performed.
 
+### Known-gap recovery verification
+
+`historyGaps.test.ts` exercises admission, one-entry/multi-page and older holes,
+newest high-water overlap, adjacency, first opening, skipped ids, saved-position
+fallback, covered/empty steps and independent held `atStart`. It also covers
+strict gap parsing/allowlisting, fresh restoration, receipt expiry and structural
+host/removal/eviction lifetimes. The writer's metadata-only regression saves and
+restores cursor progress without pending/failure state. Static `Timeline` tests
+place a marker inside joined text before its whole bubble and check count-free
+idle/loading/failure copy and Retry gates; they do not exercise input or effects.
+
+Fixtures must separate served envelope ids from command ids and drawable rows.
+Sparse synthetic ids can create real gaps once coverage is held, diverting reader
+input from an intended oldest-end ask. Declare consecutive envelope coverage,
+including undrawable entries, when no gap is intended, and explicitly allow
+optional `gaps: []` in protected snapshot expectations. Demand tests must fail one
+of two gaps and then ask the other, also after newest/oldest and nonretryable
+failures: a global failure guard would pass a single-gap Retry test while blocking
+healthy boundaries.
+
+[`history-gaps.spec.ts`](../../../e2e/history-gaps.spec.ts) →
+`known gaps require fresh input, retain failure/resume, anchor and expansion through protected restoration`
+checks chronological marker placement, overlay visibility, thread-focus/trusted
+input, pending-input exclusion, no settlement cascade, loading/failure/Retry,
+expanded-tool retention and content-anchor geometry. It polls the protected gap
+cursor before reloading the renderer, then verifies a newest overlap leaves the
+restored walk intact and fresh input uses that cursor. This is a fresh renderer
+over protected storage; full Electron exit is established by the live proof below.
+
+The [final verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1881#issuecomment-6048495036)
+and supplied dispatcher report record gate 6 at `609a8ba87db3520fc306b07daa626b18a598856d`
+on 2026-10-07: 350 executed, 350 passed, 0 failed, 4 skipped. The verdict confirms
+the named fake gap test above was present, executed and passed, along with all
+eight repaired persistence/Retry/tool/Agent/status regressions. Units/build passed;
+no per-test unit artifact was supplied, so source coverage is not an individual
+unit-result claim. Visual review accepted idle/failure at 800×600 and completion
+at 1280×800 against Figma `132:4171`; loading status was verified by interaction,
+without a separate loading capture.
+
+[`real-daemon-history-on-open.spec.ts`](../../../e2e/real-daemon-history-on-open.spec.ts) →
+`a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed`
+establishes a protected served/display baseline, awaits Electron process exit,
+posts 205 entries in `relaunch(whileClosed)`, then reopens the same protected
+profile. Exactly one newest ask exposes the gap. Programmatic positioning sends
+nothing; each fresh focused ArrowUp adds one ask, and settlement adds none. Final
+transcript assertions require the baseline followed by every post in order with
+no duplicate. `spawnClaude: false` isolates real daemon storage/transport through
+the local test relay; this is not a Claude-turn or production-relay proof.
+
+The supplied per-test dispatcher report for run `2026-10-07T22-53-47-094Z` confirms
+that exact live test was present, executed and passed once in 6.2 s. Run counts:
+26 executed, 26 passed, 0 failed, 1 skipped; named-test counts: 1 executed,
+1 passed, 0 failed, 0 skipped. The [dispatcher PASS comment](https://github.com/pyrycode/pyrycode-desktop/issues/1879#issuecomment-6048554295)
+records the same counts at `609a8ba87db3`, integrated with main `bb34dbf6d3f7`.
+See [current live gate state](live-e2e-runbook.md#current-real-claude-gate-state).
+Documentation records this evidence and runs only the docs guard.
+
 ## Contribution joins and held-row regressions
 
 `historyContributions.test.ts` exercises the production bridge/holder admission

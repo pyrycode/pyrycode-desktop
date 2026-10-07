@@ -107,7 +107,7 @@ The production `dir` is `join(app.getPath('userData'), 'secrets')`, passed in by
 
 The primitive exposes no IPC, preload or `BrowserWindow` capability. Its consumer
 controls any typed display data returned to the renderer, such as
-[saved chat snapshots](chat-history.md#api); credentials and raw storage bytes stay
+[saved chat snapshots](chat-history-api.md#api); credentials and raw storage bytes stay
 in main. Ciphertext is all that is ever persisted.
 
 ## Security properties

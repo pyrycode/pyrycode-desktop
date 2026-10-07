@@ -126,6 +126,7 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // a compile error (the workspaceFolderCreated-is-a-no-op precedent).
       return null
     case 'conversationCreateRejected':
+    case 'switchAgentRejected':
       // No session-store action: #1308's Add workspace dialog (not yet built) consumes the create
       // rejection, not the session store. Present only because the assertNever guard below makes a new arm
       // a compile error (the workspaceFolderRejected-is-a-no-op precedent).

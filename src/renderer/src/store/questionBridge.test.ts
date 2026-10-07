@@ -841,3 +841,7 @@ describe('subscribeQuestionBatches fans out to the picks store (#911, AC5)', () 
     expect(picks.getState().picks.size).toBe(0)
   })
 })
+
+it('ignores switchAgentRejected in the questionBridge translator', () => {
+  expect(translateQuestionEvent({ type: 'switchAgentRejected', conversationId: 'conv-1', retryable: true })).toBeNull()
+})

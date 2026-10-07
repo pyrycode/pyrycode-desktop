@@ -670,3 +670,7 @@ describe('subscribeModal', () => {
     expect(selectOutstanding(store.getState()).map((p) => p.modalId)).toEqual(['mdl-a'])
   })
 })
+
+it('ignores switchAgentRejected in the modalBridge translator', () => {
+  expect(translateModalEvent({ type: 'switchAgentRejected', conversationId: 'conv-1', retryable: true }, () => new Set())).toBeNull()
+})

@@ -55,7 +55,25 @@ and `now()`, advances the counter after successful encoding, then calls
 `driver.sendMessage` once. Oversize encoding and throwing sends are contained by
 `catch`; the caught object is discarded. An encoding failure consumes no ID;
 a send failure occurs after the ID has advanced. There is no retry, queued replay
-on reconnect, pending request map or timer: resending could initiate another switch.
+on reconnect or timer: resending could initiate another switch.
+
+Each connection holds `pendingSwitchAgents: Map<number, string>`, mapping a sent
+envelope ID to the client-supplied conversation ID. Registration happens after
+the synchronous send returns, before the sent diagnostic, and only while
+authentication remains live, the captured driver is still current and the
+connection generation is unchanged. A send can report failure or trigger
+teardown synchronously without throwing; checking only its return would restore
+an abandoned request after cleanup.
+
+A correlated daemon `error` consumes the entry before emitting one
+[`switchAgentRejected`](daemon-event-channel.md#what-it-does) event with the mapped
+conversation and `retryable ?? false`. Duplicate, missing or unknown correlations
+emit no switch rejection. Daemon message text and any daemon-supplied conversation
+ID are excluded. Any decoded `conversation_updated` clears all pending switches
+for its conversation while preserving the normal update event and other
+conversations' entries. Relay loss, connection failure, dial/reconnect and stop
+clear the whole map, so a recovered session inherits no pending switch. See
+[Switch-agent rejection correlation](daemon-connection-correlation-requests.md#switch-agent-rejection-correlation).
 
 Diagnostics contain only static fields:
 
@@ -64,15 +82,22 @@ Diagnostics contain only static fields:
 | Unknown conversation | `conversation-route-refused` / `unknown-conversation` |
 | Owner absent from registry | `conversation-route-refused` / `server-not-connected` |
 | Driver absent or unauthenticated | `switch-agent-refused` / `unavailable` |
-| Send returns | `switch-agent-sent` |
+| Send returns with authentication, driver and generation intact | `switch-agent-sent` |
+| Send returns after failure or session change | `switch-agent-failed` / `connection-lost` |
 | Encoding or send throws | `switch-agent-failed` / `build-or-send-failed` |
+| Correlated daemon refusal | `switch-agent-failed` / `server-rejected` |
 
 Payloads, IDs, settings and exception text never enter these records.
 `switch-agent-sent` records local dispatch, not daemon acceptance. Success uses the
 existing inbound `resetting`, `session_transition` with reason `clear`, and
-`conversation_updated` handling. Refusal correlation through `in_reply_to` belongs
-to [#1660](https://github.com/pyrycode/pyrycode-desktop/issues/1660); the menu sender
-and confirmation belong to [#1661](https://github.com/pyrycode/pyrycode-desktop/issues/1661).
+`conversation_updated` handling. Refusal correlation through `in_reply_to` shipped
+in [#1660](../../specs/architecture/1660-switch-agent-rejection.md).
+The four exhaustive renderer translators, `translateDaemonEvent`,
+`translateModalEvent`, `translateQuestionEvent` and `translateTimelineEvent`,
+explicitly return `null` for `switchAgentRejected`. Adding a union member requires
+these no-op arms even before it has a consumer. Menu sending, confirmation,
+rollback and notification belong to
+[#1661](https://github.com/pyrycode/pyrycode-desktop/issues/1661).
 
 ## Testing
 
@@ -83,6 +108,12 @@ and confirmation belong to [#1661](https://github.com/pyrycode/pyrycode-desktop/
   effort and absent payloads. `daemonConnection.test.ts` covers unavailable owners,
   lifecycle drops, shared ID/time, oversize encoding, throwing sends, no retries
   and exact content-free diagnostic records.
+- Rejection tests send real encoded error frames through the fake driver and IPC
+  sink: both retryability booleans, false defaults, exact client-attributed events,
+  duplicates and unrelated errors, per-conversation update cleanup and session
+  teardown. A send that reports teardown and returns normally is covered
+  separately from a throwing send, including rejection after recovery. Each of
+  the four renderer translator specs asserts the event maps to `null`.
 - `connectionRegistry.test.ts` proves the named connection view forwards the same
   payload object while the other host remains untouched.
 - [The fake-daemon spec](../../../e2e/switch-agent-command.spec.ts) sends through

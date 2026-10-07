@@ -503,8 +503,10 @@ function withHistory(
   const keepOldest = newest && held.coverage?.status === 'received'
   const coverage = history.status === 'loaded' && !keepOldest
     ? { status: 'received' as const, cursor: history.cursor, atStart: history.atStart } : held.coverage
+  const preserveLocalRead = newest && (history.status === 'failed' || held.localRead === 'loaded')
   const next = new Map(state.timelines)
-  next.set(conversationId, { ...held, history, coverage, localRead: newest ? held.localRead : undefined })
+  next.set(conversationId, { ...held, history, coverage, localRead: preserveLocalRead ? held.localRead : undefined,
+    localReadOwner: preserveLocalRead ? held.localReadOwner : undefined })
   return { timelines: next }
 }
 
@@ -760,7 +762,9 @@ export function createConversationTimelineStore(
       let boundaries: readonly number[] = []
       set((s) => {
         const current = s.timelines.get(conversationId)
-        const held = receivedSlice(current, current?.history?.status === 'requested' && current.history.purpose === 'newest')
+        // Pages supersede loading reads, while settled saved rows keep their presentation.
+        const held = receivedSlice(current, current?.history?.status === 'requested' &&
+          current.history.purpose === 'newest' && current.localRead === 'loaded')
         if (entries !== undefined) {
           const base = held ?? emptySlice
           const joined = reconcileHistory(base.timeline, base.display, entries, base.liveKeys, retainBoundary)
@@ -819,7 +823,7 @@ export function createConversationTimelineStore(
         if (servedIds === undefined) return withHistory(s, conversationId, { status: 'loaded', cursor, atStart })
         const current = s.timelines.get(conversationId)
         const newest = current?.history?.status === 'requested' && current.history.purpose === 'newest'
-        const held = receivedSlice(current, newest) ?? emptySlice
+        const held = receivedSlice(current, newest && current?.localRead === 'loaded') ?? emptySlice
         const pageIds = [...new Set(servedIds)].sort((a, b) => a - b)
         const receipt = { ids: pageIds, cursor, atStart }
         // Preserve the latest exact cursor even when an identical older receipt is repeated.

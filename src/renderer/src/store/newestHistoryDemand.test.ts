@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest'
 import { createConversationTimelineStore } from './conversationTimelineStore'
 import { parseChatHistorySnapshot } from '@shared/chatHistory'
+import type { HistoryTimelineEntry } from '@shared/ipc/events'
 import { createNewestHistoryDemand } from './newestHistoryDemand'
 import { readSavedTimeline } from './savedTimelineRestorer'
 import { retryHistoryPage, selectHistoryFailure } from '../screens/conversation/historyRetry'
@@ -123,6 +124,56 @@ it('cancelling a saved read after the outstanding page settles preserves its row
   expect(h.deps.getHeld('c')?.timeline.items).toMatchObject([{ text: 'received row' }])
   expect(h.deps.getHeld('c')?.served?.ids).toEqual([7])
   h.navigate({ serverId: 'a', conversationId: 'c' })
+  expect(h.deps.sendCommand).toHaveBeenCalledTimes(2)
+})
+
+it.each(['missing', 'stored'])('a newest page supersedes a reopened %s read even if the following refresh fails', outcome => {
+  const h = harness()
+  h.sync(); h.navigate(null)
+  const read = h.store.getState().beginLocalTimelineRead('a', 'c')!
+  h.navigate({ serverId: 'a', conversationId: 'c' })
+  const entries: HistoryTimelineEntry[] = [{ id: 7, ts: 'received', event: {
+    type: 'messageReceived', message: { message_id: 'received-message', role: 'user', text: 'received row' }
+  } }]
+  h.store.getState().prependHistoryFor('c', [], false, entries)
+  h.store.getState().recordHistoryPage('c', 'newest-cursor', false, [7, 8])
+  const admitted = h.deps.getHeld('c')!
+  expect(admitted.timeline.items).toMatchObject([{ text: 'received row' }])
+  expect(admitted.display?.map(entry => entry.id)).toEqual([7])
+  read.complete(outcome === 'missing' ? null : { version: 1, kind: 'timeline', serverId: 'a', conversationId: 'c',
+    items: [{ kind: 'userText', text: 'older saved row' }], prependedRows: 0,
+    coverage: { status: 'received', cursor: 'saved-oldest', atStart: true } })
+  expect(h.deps.getHeld('c')).toBe(admitted)
+  expect(admitted.localRead).toBeUndefined()
+  expect(admitted.localReadOwner).toBeUndefined()
+  expect(admitted.history).toEqual({ status: 'requested', cursor: '', purpose: 'newest' })
+  expect(h.deps.sendCommand).toHaveBeenCalledTimes(2)
+  h.store.getState().recordHistoryFailure('c', 'unclassified', true)
+  const failed = h.deps.getHeld('c')!
+  expect(failed.timeline).toBe(admitted.timeline)
+  expect(failed.display).toBe(admitted.display)
+  expect(failed.coverage).toEqual({ status: 'received', cursor: 'newest-cursor', atStart: false })
+  expect(failed.served).toEqual({ ids: [7, 8], highestId: 8,
+    receipts: [{ ids: [7, 8], cursor: 'newest-cursor', atStart: false }] })
+  read.fail(); read.cancel(); h.sync()
+  expect(h.deps.getHeld('c')).toBe(failed)
+  expect(h.deps.sendCommand).toHaveBeenCalledTimes(2)
+})
+
+it.each([undefined, [], [7]])('empty newest settlement supersedes loading reads with served IDs %j', ids => {
+  const h = harness()
+  h.sync(); h.navigate(null)
+  const read = h.store.getState().beginLocalTimelineRead('a', 'c')!
+  h.navigate({ serverId: 'a', conversationId: 'c' })
+  h.store.getState().recordHistoryPage('c', 'empty-cursor', false, ids)
+  const admitted = h.deps.getHeld('c')!
+  read.complete({ version: 1, kind: 'timeline', serverId: 'a', conversationId: 'c',
+    items: [{ kind: 'userText', text: 'older saved row' }], prependedRows: 0, coverage: { status: 'unknown' } })
+  expect(h.deps.getHeld('c')).toBe(admitted)
+  expect(admitted.timeline.items).toEqual([])
+  expect(admitted.localRead).toBeUndefined()
+  expect(admitted.localReadOwner).toBeUndefined()
+  expect(admitted.coverage).toEqual({ status: 'received', cursor: 'empty-cursor', atStart: false })
   expect(h.deps.sendCommand).toHaveBeenCalledTimes(2)
 })
 

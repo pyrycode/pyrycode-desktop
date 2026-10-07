@@ -64,6 +64,8 @@ None. Prefer the small retained controller over a new persistent lifecycle store
 
 2026-10-07: The protected-restoration browser test exposed that clearing a settled `localRead` on newest demand makes a saved partial assistant appear to stream. Preserve settled saved presentation across newest pending, admission and failure; only owned live data supersedes it. Schedule subscription-driven eligibility checks after receipt/writer settlement, while observing connection loss synchronously so rapid connection edges cannot disappear.
 
+2026-10-07 rework (finding 1 at `490ba22e`): Successful owned page admission supersedes a loading saved read and clears its owner, including empty/undrawable settlement and legacy responses without served IDs. Only settled saved presentation is retained on newest admission; session notices still preserve pending reads. Late missing/stored completion, failure or cancellation cannot replace admitted rows, identities, display contributions, served receipts or coverage. The reopened demand releases once after the outstanding page settles, and failure of that refresh retains the admission. Regression units cover both page-first completion orders and preserved settled presentation. Security concurrency review remains PASS: the existing host replacement guard and owned-read token reject obsolete disk results without expanding IPC, storage or transport capabilities.
+
 ## Documentation handoff
 
 - Pending documentation stage: `docs/knowledge/features/chat-history.md`, introduction and `### Received-state admission and ownership`: replace opening/reconnect no-demand claims with one newest page per owned opening/connection edge after read/request settlement, offline deferral/cancellation and no automatic range fill.

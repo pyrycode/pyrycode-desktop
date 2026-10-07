@@ -234,5 +234,32 @@ executed/passed 100 launches, 0 failed, 0 skipped, three workers, retries zero
 (`observed-launches-after-build.json` in that directory); none reproduced the
 stall or triggered its delayed observer. The earlier `observed-launches.json`
 overlapped rebuilding `out/` and is invalid evidence. Green launches cannot
-diagnose the original failure; #1842 needs renderer responsiveness, frame/timer
-progress and native window state from a failing launch before teardown.
+diagnose the original failure.
+
+Default-tier `launchPairedApp` now registers page-specific Welcome diagnostics
+around its initial `pairFromUnpairedLaunch(page, payload, label?)` drive. The
+shared helper wraps the ordinary click without changing its contract or callers;
+unregistered pages, including the real tier, click directly. A click pending for
+five seconds or rejecting earlier starts one capture, before teardown. Fast
+success performs no diagnostic renderer/native probes, attachment or extra wait.
+The observer ends at click settlement; pairing and confirmation are not sampled.
+The 30-second actionability timeout, retries, real input, native-pointer protection
+and normal flow remain unchanged.
+
+The fixed `welcome-stall` JSON attachment correlates with launch-fate through a
+one-based launch ordinal captured at `watch` registration, before concurrent
+launch setup can change the count. Native visibility/minimization/focus/bounds
+are read independently of renderer response. Renderer readings contain Welcome
+presence/enabled/bounds and frame/timer progress over a recorded interval.
+Probes share a two-second capture budget, with a 750ms sampling target and
+explicit unavailable outcomes; only validated primitives and fixed labels enter
+the report. See [capture and cleanup ownership](e2e-harness-launch-fate.md#welcome-stall-diagnostics)
+and [revision-separated acceptance](e2e-harness-launch-fate.md#recorded-welcome-diagnostic-acceptance).
+
+No natural Welcome stall was captured while validating this instrumentation.
+Controlled nonresponse and advancing-timer/zero-frame faults prove capture only,
+without requiring actual OS minimization. The historical cause remains unknown.
+When the first natural failure arrives, retain its attachments and file a
+follow-up that distinguishes observations from hypotheses, establishes a
+confirmed cause with a check separating alternatives, then fixes that boundary
+with a regression. The separate hover diagnosis supplies no Welcome cause.

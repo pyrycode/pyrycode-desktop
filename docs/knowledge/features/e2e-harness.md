@@ -73,7 +73,7 @@ See [Desktop isolation (default-tier launches)](e2e-harness-desktop-isolation.md
 Shown default-tier launches ignore the display's native pointer on current and
 later windows while retaining Playwright renderer input and normal pairing.
 The linked guidance covers the independent input-enabled cover, initialization
-cleanup, counted acceptance and the separate unresolved Welcome stall in #1842.
+cleanup, counted acceptance and the separate unresolved Welcome stall.
 Existing row regressions also re-deliver hover and observe actual `:hover` with
 exact computed treatment; those local observations retain styling sensitivity.
 
@@ -112,6 +112,12 @@ proof, not just setup for a rendering assertion.
 ### Launch-fate diagnostics
 
 See [Launch-fate diagnostics](e2e-harness-launch-fate.md#launch-fate-diagnostics) for launch liveness, exit reports and unconditional diagnostic attachments.
+
+Default-tier Welcome clicks pending after five seconds or failing earlier also
+retain [bounded progress evidence](e2e-harness-launch-fate.md#welcome-stall-diagnostics)
+in `welcome-stall`, correlated to launch-fate by launch ordinal. Fast clicks add
+no probes or waits; observation ends before pairing continues. Controlled capture
+coverage establishes no cause for the historical Welcome stall.
 
 ### Pre-Electron fake-daemon setup failures
 

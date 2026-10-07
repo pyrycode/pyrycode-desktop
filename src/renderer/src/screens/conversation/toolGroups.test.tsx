@@ -25,7 +25,7 @@ it('caps depth and preserves missing parents until history supplies them', () =>
   const items = [call('a'), call('b', 'a'), call('c', 'b'), call('d', 'c', 'Read')]
   expect(groupToolRows(items).map((r) => r.depth)).toEqual([0, 1, 2, 2])
   const html = renderToStaticMarkup(<Timeline items={items} />)
-  expect(html).toContain('3 tools · running')
+  expect(html).toContain('running · 3 tools')
   expect(html).toContain('tool-group-row--depth-2')
   expect(html).toContain('hidden=""')
   const fallback = renderToStaticMarkup(<Timeline items={[orphan]} />)
@@ -122,7 +122,7 @@ it('keeps orphan replies until history supplies a completed Agent owner, never a
 it('gives a pending text-only owner a collapse control without counting text as tools', () => {
   const html = renderToStaticMarkup(<Timeline items={[call('a'), text('reply', 'a')]} />)
   expect(html).toContain('aria-expanded="false"')
-  expect(html).toContain('0 tools · running')
+  expect(html).toContain('running · 0 tools')
   expect(html).toContain('hidden=""')
 })
 it('preserves assistant history attribution through the real history bridge', () => {

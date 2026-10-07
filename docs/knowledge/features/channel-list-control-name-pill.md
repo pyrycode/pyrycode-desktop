@@ -160,6 +160,33 @@ It parks at `dx: 12` rather than the 4px its siblings use: the pen's and the che
 8px, so a point in the pen's own left 8px would resolve to the pen only by sibling order, not by being
 clear of the other control.
 
+## Host Edit pill verification
+
+`e2e/sidebar-host-row-control-name-pill.spec.ts` retains the complete contract in
+`Edit host keeps its pointer name pill without a host Add workspace control`:
+exactly one host and Edit host button, no host Add workspace control, a pill
+hidden at rest (`display: none`), visible on hover (`display: block`) with text
+`Edit host`, non-null pill boxes at both pointer positions, and a changed
+horizontal position after ordinary `page.mouse.move` within the Edit control.
+A text or visibility check alone cannot prove that the pill follows the pointer;
+the two box reads must still reject a missing or stationary pill.
+
+A hidden pill has no layout box, so a null box after a completed `hover()` does
+not by itself establish a placement defect. Capture actual hover, computed pill
+visibility and control/pill geometry together before teardown if it recurs; see
+[Layout and input](development-verification.md#layout-and-input). Use the paired
+fixture's shared native-pointer protection before considering a local correction.
+Preserve ordinary Playwright input and all assertions without retries, increased
+timeouts, arbitrary sleeps or suite serialization.
+
+The spec stayed unchanged in #1823: it passed all 40 repetitions (20 with one
+worker, 20 with three) and executed/passed in the three-worker full suite on the
+merged #1836 protection. See
+[revision, presentation, counts and retained paths](e2e-harness-desktop-isolation.md#recorded-host-pill-acceptance).
+That evidence supports retaining the spec; the shared native-pointer mechanism
+is confirmed, while its attribution to the historical host failures remains
+inferred. The separate Welcome stall remains assigned to #1842.
+
 ## Related
 
 - [Channel List — the row's desktop geometry](channel-list-desktop-row-geometry.md) — the map page.

@@ -109,7 +109,7 @@ export function groupToolRows(
     .sort((a, b) => (a[1].finishBefore ?? 0) - (b[1].finishBefore ?? 0))
   for (const [index, entry] of settled) {
     const boundary = entry.finishBefore
-    const at = ordinary.findIndex(row => !row.marker && !row.relocated && row.index >= historyCount && boundary !== null && (rowKeys[row.index] ?? Infinity) >= boundary)
+    const at = ordinary.findIndex(row => !row.relocated && row.index >= historyCount && boundary !== null && (rowKeys[row.index] ?? Infinity) >= boundary)
     ordinary.splice(at === -1 ? ordinary.length : at, 0, ...(groups.get(index) ?? []))
   }
   for (const [index, entry] of agents) if (entry.finishBefore === null) ordinary.push(...(groups.get(index) ?? []))

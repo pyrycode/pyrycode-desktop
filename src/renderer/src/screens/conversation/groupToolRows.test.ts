@@ -23,6 +23,18 @@ it('places the first finish by retained chronological keys even with prepends an
   expect(rows.map(r => [r.index, r.marker === true])).toEqual([[0, false], [1, true], [2, false], [1, false], [3, false]])
   expect(rows.find(r => r.index === 1 && !r.marker)?.running).toBe(false)
 })
+it('keeps an established finish before a newer launch after late roster confirmation', () => {
+  const items = [text('history'), tool('a'), tool('b'), text('after b')]
+  const tasks = new Map([
+    ['a', { toolCallId: 'a', confirmed: true, finishBefore: 1 }],
+    ['b', { toolCallId: 'b', confirmed: false, finishBefore: null }]
+  ])
+  const project = () => groupToolRows(items, tasks, [99, 0, 1, 2], 1)
+    .map(row => [row.index, row.marker === true])
+  expect(project()).toEqual([[0, false], [1, true], [1, false], [2, false], [3, false]])
+  tasks.set('b', { toolCallId: 'b', confirmed: true, finishBefore: null })
+  expect(project()).toEqual([[0, false], [1, true], [1, false], [2, true], [3, false], [2, false]])
+})
 it('requires confirmed exact Agent calls and preserves received start order over launch order', () => {
   const tasks = new Map([['b', { toolCallId: 'b', confirmed: true, finishBefore: null }],
     ['a', { toolCallId: 'a', confirmed: true, finishBefore: null }]])

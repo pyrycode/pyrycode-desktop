@@ -79,3 +79,5 @@ Size: approximately 700 total written lines, one new exported evidence type, few
 2026-10-07: History prepends receive fresh retained keys too, rather than negative keys. Pass the existing prepended-row count to the projection and exclude that prefix when locating a live terminal boundary; late history remains chronologically older even when its new key exceeds the boundary.
 
 2026-10-07: Marker navigation runs after commit in an effect, after the parent scroll-pin layout pass, so explicit navigation wins and static markup remains effect-free. Background group treatment lifts launch-pending dimming and suppresses its elapsed timer independently of the launch result.
+
+2026-10-07 (verifier finding 1): Launch markers retain their chronological source keys and remain eligible finish anchors. Late roster confirmation cannot move a newer launch above an established finish. Historical-prefix and relocated-group rows remain excluded from anchor lookup; a projection regression covers confirmation with prepended history.

@@ -52,8 +52,23 @@ reconciliation remain daemon-owned; receiving a suggestion sends no request.
 | Layer | Result | Failure behavior |
 |---|---|---|
 | `parseInboundMessage` (transport) | `InboundDaemonMessage \| null` | Throws a single type — `WireDecodeError` — on oversized / malformed / unparseable / mistyped. `null` for a well-formed but unmodeled envelope type (**not** a failure). |
-| `case 'message'` arm (consumer) | `void` | `try/catch` → a throw is **dropped silently** (no event, no log, caught object not forwarded); `null` → ignored; a result → exactly one `DaemonEvent`. **Never throws out of the module.** |
+| `case 'message'` arm (consumer) | `void` | `try/catch` → a throw is **dropped silently** (no event, no log, caught object not forwarded); `null` → ignored; a result → routed to its event or correlation consumer. **Never throws out of the module.** |
 | UI | — | A dropped inbound frame surfaces **nothing** (no `failed`, no banner). A single malformed *message* frame is not connection-fatal — the session continues. Deliberately different from a malformed `hello_ack`, which **is** fatal (`failed('malformed-hello-ack')`) because the handshake cannot complete without it. |
+
+### Daemon-error retryability
+
+The decoded `daemon-error` arm carries optional `retryable?: boolean` alongside
+`inReplyTo` and the existing client-owned rejection classifiers. It preserves
+only literal `true` or `false` from a record payload. An absent field, null,
+string, number or non-record payload leaves retryability `undefined` without
+rejecting the frame or disabling other error consumers. Daemon message text
+remains discarded; code strings are used only by the existing classifiers, never
+forwarded verbatim. Decode diagnostics retain static `error`, byte count and
+whole-frame hash, without payload text or retryability.
+
+The [switch-rejection emit](daemon-event-channel.md#what-it-does) applies
+`retryable ?? false`; the decoder itself keeps absence distinct from `false`.
+Attachment outcome classifiers and their consumers keep their existing behavior.
 
 ### Reply-suggestion validation
 
@@ -296,6 +311,11 @@ In `inboundMessage.test.ts`, wrap malformed array payloads in object rows such a
 rows into callback arguments: `[]` can test `undefined`, and `['private-effort']`
 can test a string, leaving array rejection untested. The connection mapping tests
 use the same object-row shape to exercise rejection through the IPC boundary.
+
+Decoder and fake-daemon tests expect `daemon-error.retryable` in exact result-shape
+assertions while retaining their checks that daemon text is excluded. Widening
+an assertion to ignore extra fields would lose that protection. Both booleans
+and absent/mistyped flags have decoder coverage.
 
 Construct oversized inbound fixtures with `Buffer.from(JSON.stringify(...))`.
 Using `encodeEnvelope` can reject the fixture at its outbound size guard before

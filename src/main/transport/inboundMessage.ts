@@ -361,11 +361,12 @@ interface FrameTimestamp {
  *
  * The three debug-bundle kinds (#116) are recognised additively: the `message` / `message_chunk`
  * path is unchanged, and `daemon-error`'s content-free rule is now SCOPED rather than absolute (#965)
- * — narrowed for the codes named in DaemonErrorOutcome, still closed for everything else. Exactly ONE
- * of ErrorPayload's four fields is read, `code`, and it is read as a COMPARAND: matched against
+ * — narrowed for the codes named in DaemonErrorOutcome, still closed for everything else.
+ * ErrorPayload's `code` is read as a COMPARAND: matched against
  * client-owned literals and dropped. No daemon text is narrowed or surfaced; what crosses in its place
  * is a client-owned `outcome`, which is REQUIRED on the kind so there is no absent state to mishandle.
- * `message` and the wire `retryable` / `retry_after_s` are still not read at all. It DOES also carry the
+ * Only a boolean wire `retryable` is carried for switch refusals; `message` and `retry_after_s`
+ * are discarded. It DOES also carry the
  * optional numeric `inReplyTo` — the `Envelope.in_reply_to` routing id already surfaced by
  * decodeEnvelope (#269), propagated (not re-decoded, no ErrorPayload re-parsed for it) so the consumer
  * can correlate the error back to a pending `set_session_settings` request and surface a rejection;
@@ -818,6 +819,7 @@ export type InboundDaemonMessage =
   | {
       kind: 'daemon-error'
       inReplyTo?: number
+      retryable?: boolean
       outcome: DaemonErrorOutcome
       pairingReject?: 'pairing-rejected'
       // The app-too-old rejection (#1613): set only for the exact `client.update_required` code. The
@@ -5040,10 +5042,11 @@ export function parseInboundMessage(
     }
     case 'error': {
       // Now MODELED (#116): a single daemon `error` reply terminates an in-flight bundle request.
-      // Its content-free rule is now SCOPED, not absolute (#965): exactly one ErrorPayload field is
-      // read, `code`, and only as a comparand against client-owned literals — see
+      // Its content-free rule is SCOPED, not absolute (#965): `code` is read only
+      // as a comparand against client-owned literals — see
       // narrowDaemonErrorOutcome, which owns the boundary and the argument for why it cannot throw.
-      // `message` and the wire `retryable` / `retry_after_s` are still read by nothing. It moves from
+      // A boolean `retryable` is carried for switch refusals; message and retry_after_s are dropped.
+      // It moves from
       // inbound-unmodeled to inbound-decoded(error) now that it is recognised — a content-free,
       // more-accurate log that applies to ALL `error` frames, bundle-related or not (intentional; see
       // the #116 spec). The numeric `in_reply_to` is a routing id, not logged (no new DiagnosticEvent
@@ -5078,12 +5081,15 @@ export function parseInboundMessage(
       // Propagate the ALREADY-decoded Envelope.in_reply_to (#269) — do not re-decode it, and parse no
       // ErrorPayload for it. `undefined` when the frame omits it, which makes the consumer's correlation
       // to a pending set_session_settings request fail closed. Carries ONLY the numeric id and the
-      // client-owned outcome, never daemon text. `outcome` is REQUIRED rather than optional so a
+      // client-owned outcome and optional boolean retryability, never daemon text. `outcome` is
+      // REQUIRED rather than optional so a
       // mangled payload yields 'unclassified' instead of absence: a consumer has no "field missing"
       // state to mishandle, and no `if (outcome)` branch that behaves differently for a hostile frame.
       return {
         kind: 'daemon-error',
         inReplyTo: envelope.in_reply_to,
+        retryable: isRecord(envelope.payload) && typeof envelope.payload.retryable === 'boolean'
+          ? envelope.payload.retryable : undefined,
         outcome,
         pairingReject: isRecord(envelope.payload) && envelope.payload.code === 'auth.invalid_token'
           ? 'pairing-rejected' : undefined,

@@ -2267,3 +2267,7 @@ it('forwards an assistant parent hint through the timeline bridge', () => {
     type: 'assistantDelta', turnId: 't', text: 'reply', parentToolUseId: 'agent'
   })
 })
+
+it('ignores switchAgentRejected in the timelineBridge translator', () => {
+  expect(translateTimelineEvent({ type: 'switchAgentRejected', conversationId: 'conv-1', retryable: true })).toBeNull()
+})

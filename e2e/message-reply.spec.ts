@@ -280,23 +280,45 @@ test('reply appends and focuses in a reopened saved offline chat', async ({ laun
   await expect(input).toHaveValue('Other offline draft')
 })
 
-// https://github.com/pyrycode/pyrycode-desktop/issues/1811 — the writer rejects an explicitly supplied
-// host when another host advertises the same id. Reply draft isolation above remains live coverage.
-test.skip('blocked on #1811 — received history is saved for equal ids on different hosts', async ({ launchPairedApp }) => {
+test('received history is saved for equal ids on different hosts and replies reopen offline', async ({ launchPairedApp }) => {
+  const secondRow = { ...SECOND_SEEDED_ROW, id: SEEDED_ROW.id }
+  const secondSource = 'Only the second host supplied this reply'
   const { page, servers } = await launchPairedApp({
     buildReplyFrames: conversationStateFake({ conversations: [SEEDED_ROW] })
   }, { secondServer: {
-    buildReplyFrames: conversationStateFake({ conversations: [{ ...SECOND_SEEDED_ROW, id: SEEDED_ROW.id }] })
+    buildReplyFrames: conversationStateFake({ conversations: [secondRow] })
   } })
+  const savedReplies = async (serverId: string) => {
+    const result = await page.evaluate(host => window.pyry.chatHistory({
+      operation: 'readTimeline', serverId: host, conversationId: 'seed-conversation'
+    }), serverId)
+    return result.status === 'stored' && result.snapshot.kind === 'timeline'
+      ? result.snapshot.items.filter(item => item.kind === 'assistantText').map(item => item.text) : null
+  }
   await openRow(page, SEEDED_ROW.name as string)
   servers[0].daemon.pushFrame(assistant(SOURCE))
   servers[0].daemon.pushFrame(turnEnd())
-  await expect(page.getByRole('button', { name: 'Reply to message' })).toBeVisible()
-  await expect.poll(async () => {
-    const result = await page.evaluate(serverId => window.pyry.chatHistory({
-      operation: 'readTimeline', serverId, conversationId: 'seed-conversation'
-    }), servers[0].serverId)
-    return result.status === 'stored' && result.snapshot.kind === 'timeline'
-      ? result.snapshot.items.some(item => item.kind === 'assistantText' && item.text === SOURCE) : false
-  }).toBe(true)
+  const reply = page.getByRole('button', { name: 'Reply to message' })
+  await expect(reply).toBeVisible()
+  await expect.poll(() => savedReplies(servers[0].serverId)).toEqual([SOURCE])
+  await openRow(page, secondRow.name as string)
+  servers[1].daemon.pushFrame(assistant(secondSource))
+  servers[1].daemon.pushFrame(turnEnd())
+  await expect(reply).toBeVisible()
+  await expect.poll(() => savedReplies(servers[1].serverId)).toEqual([secondSource])
+  await expect.poll(() => savedReplies(servers[0].serverId)).toEqual([SOURCE])
+  await expect(page.getByText(secondSource, { exact: true })).toBeVisible()
+
+  servers[0].forwarder.closeClientLeg(4401)
+  await openRow(page, SEEDED_ROW.name as string)
+  await expect(page.getByText('Offline. Showing saved messages.', { exact: true })).toBeVisible()
+  await expect(reply).toHaveCount(1)
+  await expect(page.getByText(secondSource, { exact: true })).toHaveCount(0)
+  const input = page.locator('.composer__input')
+  await input.fill('First host offline draft\n')
+  await reply.click()
+  await expectDraftEnd(input, 'First host offline draft\n' + quote('Assistant', SOURCE))
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
+  await expect.poll(() => savedReplies(servers[0].serverId)).toEqual([SOURCE])
+  await expect.poll(() => savedReplies(servers[1].serverId)).toEqual([secondSource])
 })

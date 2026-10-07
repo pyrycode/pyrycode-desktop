@@ -169,11 +169,20 @@ export function createChatHistoryWriter(deps: {
       if (!changed && slice.history === before?.history) continue
       if (items.length === 0 && slice.history?.status !== 'loaded' && !droppedEcho) continue
       const claims = [...deps.lists.getState().byServer].filter(([, rows]) => rows.some((row) => row.id === id))
+      // receivedSlice clears rows and coverage only when replacing an explicitly stamped host.
+      // Stamping previously unowned content retains it and cannot release an unknown observation.
+      const replacedHost = receipt !== null && typeof receipt.serverId === 'string' &&
+        before?.serverId !== undefined && before.serverId !== receipt.serverId && slice.serverId === receipt.serverId
+      if (replacedHost) {
+        forgetComparison(id)
+        observations.delete(id)
+      }
       const held = observations.get(id)
       const supplied = receipt === null
         ? (droppedEcho ? held?.owner : claims.length === 1 ? claims[0][0] : null) : receipt.serverId
-      const owner = typeof supplied === 'string' && claims.every(([host]) => host === supplied) &&
-        (held === undefined ? previousItems.length === 0 : held.owner === supplied) ? supplied : null
+      const owner = typeof supplied === 'string' &&
+        (receipt !== null || claims.every(([host]) => host === supplied)) &&
+        (held === undefined ? previousItems.length === 0 || replacedHost : held.owner === supplied) ? supplied : null
       if (owner === null) forgetComparison(id)
       const coverage: TimelineSnapshot['coverage'] = slice.history?.status === 'loaded'
         ? { status: 'received', cursor: slice.history.cursor, atStart: slice.history.atStart }

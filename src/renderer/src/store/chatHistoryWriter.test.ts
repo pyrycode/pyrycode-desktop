@@ -167,6 +167,7 @@ describe('chat history recording', () => {
   it('adopts explicit restored ownership and coverage without saving restoration or eviction', async () => {
     const h = harness()
     h.list()
+    h.list(['chat'], 'b')
     await h.writer.flush()
     h.save.mockClear()
     h.timelines.getState().beginLocalTimelineRead('a', 'chat')!.complete({
@@ -315,7 +316,7 @@ describe('chat history recording', () => {
     expect(timelineRequests(h)[1].snapshot).toMatchObject({ items: [], coverage: { status: 'unknown' } })
   })
 
-  it.each(['restored', 'conflicting'])('does not authorize %s content by removing an echo', async (mode) => {
+  it.each(['restored', 'replacement'])('does not authorize %s content by removing an echo', async (mode) => {
     const h = harness()
     h.list()
     h.delta('safe')
@@ -331,7 +332,14 @@ describe('chat history recording', () => {
     h.timelines.getState().dispatchFor('chat', { type: 'dropUserText', messageId: 'echo' })
     h.delta('later')
     await h.writer.stop()
-    expect(timelineRequests(h)).toHaveLength(1)
+    const requests = timelineRequests(h)
+    expect(requests).toHaveLength(mode === 'restored' ? 1 : 3)
+    if (mode === 'replacement') {
+      expect(requests.slice(1).map(r => [r.serverId, r.snapshot.items])).toEqual([
+        ['b', [{ kind: 'assistantText', turnId: 'turn', text: 'foreign' }]],
+        ['a', [{ kind: 'assistantText', turnId: 'turn', text: 'later' }]]
+      ])
+    }
   })
 
   it('keeps the newest content received during an in-flight write and drains it on stop', async () => {
@@ -390,19 +398,61 @@ describe('chat history recording', () => {
     expect([...disk.values()].filter((r) => r.serverId === 'b')).toHaveLength(10)
   })
 
-  it('refuses ambiguous/missing ownership and never reattributes a contaminated slice', async () => {
+  it('saves clean stamped host replacements independently despite equal list ids', async () => {
     const h = harness()
     h.list()
-    h.delta('safe')
     h.list(['chat'], 'b')
-    h.delta('foreign', 'chat', 'b')
-    h.lists.getState().clearConversationsFor('b')
-    h.delta('still mixed')
+    const complete = (serverId: string) => h.receive('turnEnd', () => h.timelines.getState().dispatchFor('chat', {
+      type: 'turnEnd', turnId: 'turn', stopReason: 'end_turn'
+    }), serverId)
+    const page = (serverId: string, cursor: string, atStart: boolean) => h.receive('historyPageReceived',
+      () => h.timelines.getState().recordHistoryPage('chat', cursor, atStart), serverId)
+    h.delta('first a')
+    page('a', 'cursor-a', true)
+    complete('a')
+    h.delta('first b', 'chat', 'b')
+    page('b', 'cursor-b', false)
+    complete('b')
+    // Replace A again before any buffered snapshot has reached storage.
+    h.delta('second a')
+    complete('a')
+    expect(h.save).not.toHaveBeenCalled()
+    await h.writer.flush()
+    expect(timelineRequests(h).map(r => [r.serverId, r.snapshot])).toEqual([
+      ['a', { version: 1, kind: 'timeline', serverId: 'a', conversationId: 'chat', prependedRows: 0,
+        items: [{ kind: 'assistantText', turnId: 'turn', text: 'second a' },
+          { kind: 'turnBoundary', turnId: 'turn', stopReason: 'end_turn' }], coverage: { status: 'unknown' } }],
+      ['b', { version: 1, kind: 'timeline', serverId: 'b', conversationId: 'chat', prependedRows: 0,
+        items: [{ kind: 'assistantText', turnId: 'turn', text: 'first b' },
+          { kind: 'turnBoundary', turnId: 'turn', stopReason: 'end_turn' }],
+        coverage: { status: 'received', cursor: 'cursor-b', atStart: false } }]
+    ])
+    h.delta('second b', 'chat', 'b')
+    complete('b')
+    h.delta('third a')
+    page('a', 'new-a', false)
+    complete('a')
+    await h.writer.stop()
+    expect(timelineRequests(h).slice(2)).toMatchObject([
+      { serverId: 'b', snapshot: { items: [{ text: 'second b' }, { kind: 'turnBoundary' }], coverage: { status: 'unknown' } } },
+      { serverId: 'a', snapshot: { items: [{ text: 'third a' }, { kind: 'turnBoundary' }],
+        coverage: { status: 'received', cursor: 'new-a', atStart: false } } }
+    ])
+    expect(h.log).not.toHaveBeenCalledWith({ event: 'history-writer-result', code: 'unknown-ownership' })
+  })
+
+  it('refuses missing origins and cannot attribute retained unowned rows with a later stamp', async () => {
+    const h = harness()
+    h.list()
+    h.list(['chat'], 'b')
+    h.timelines.getState().dispatchFor('chat', { type: 'userText', text: 'ambiguous echo', messageId: 'echo' })
+    h.delta('cannot own the echo')
     h.delta('unknown', 'missing', null)
     h.delta('cannot repair unknown', 'missing')
     await h.writer.stop()
-    expect(timelineRequests(h)).toHaveLength(1)
-    expect(timelineRequests(h)[0].snapshot.items[0]).toMatchObject({ text: 'safe' })
+    expect(timelineRequests(h)).toHaveLength(0)
+    expect(h.timelines.getState().timelines.get('missing')?.timeline.items[0]).toMatchObject({ text: 'unknowncannot repair unknown' })
+    expect(h.log).toHaveBeenCalledWith({ event: 'history-writer-result', code: 'unknown-ownership' })
   })
 
   it('does not attribute existing restored rows or save transient-only/empty slices', async () => {

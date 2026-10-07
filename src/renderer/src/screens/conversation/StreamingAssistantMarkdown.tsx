@@ -85,7 +85,8 @@ export function pendingMarkdown(source: string): { text: string; allowElement: A
   let text = table?.text ?? source
   const inserted: { start: number; end: number }[] = []
   const tableStart = table?.start
-  for (let pass = 0; pass < 32 && table === null; pass++) {
+  let probes = 64
+  for (let pass = 0; pass < 32 && probes > 0 && table === null; pass++) {
     const tree = parseMarkdown(text)
     const nodes = descendants(tree)
     const leaf = nodes.filter(node => node.type === 'paragraph' || node.type === 'heading').at(-1)
@@ -107,6 +108,7 @@ export function pendingMarkdown(source: string): { text: string; allowElement: A
     for (const candidate of candidates) {
       const closers = candidate.marker === '[' ? [')', '))', ']()'] : [candidate.marker]
       for (const closer of closers) {
+        if (probes-- <= 0) break
         const trial = text.slice(0, at) + closer + text.slice(at)
         const trialNodes = descendants(parseMarkdown(trial))
         const node = trialNodes.find(node => inlineTypes.has(node.type)

@@ -61,6 +61,8 @@ Sizing: one deliverable; forecast at most 800 written lines including deletions,
 
 2026-10-07: `remark-parse` already renders an unclosed fenced block as code after its opener ends and keeps an end-of-input closer growing into ` ```x ` in that block. No virtual fence insertion is needed; raw-source fence fixtures and browser deltas pin this behavior. Pending table cells retain parser-literal markers (the unescaped pipe inside backticks creates two cells), with whitespace between the unwrapped cells collapsing to spaces. V8 mounted function counters prove memo skips, and a scoped parser breakpoint proves subsequent inputs exclude frozen source, without production instrumentation.
 
+Security follow-up: bound inline probing to 64 candidate parses as well as 32 accepted completion passes. Otherwise a long punctuation-only paragraph could trigger a parse for every unpaired marker within one pass. Exhaustion retains uncompleted original syntax. Accepted closers are also checked against text/code-content positions so re-pairing cannot expose an earlier synthetic delimiter.
+
 ## Documentation handoff
 
 Pending for documentation stage:

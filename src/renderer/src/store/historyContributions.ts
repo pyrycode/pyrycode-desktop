@@ -1,7 +1,7 @@
 import { MAX_CHAT_HISTORY_ITEMS, type DurableThreadItem, type HistoryContribution } from '@shared/chatHistory'
 import type { HistoryTimelineEntry } from '@shared/ipc/events'
 import { joinKeyFor, translateTimelineEvent } from './timelineBridge'
-import { initialTimelineState, openBubbleIndex, reduceTimeline, type ThreadItem, type TimelineState } from './threadTimeline'
+import { initialTimelineState, isSubagentToolCall, openBubbleIndex, reduceTimeline, type ThreadItem, type TimelineState } from './threadTimeline'
 import { withoutLiveEntries } from './historyPageBridge'
 
 function contribution(entry: HistoryTimelineEntry, compaction?: ThreadItem): HistoryContribution | undefined {
@@ -131,7 +131,8 @@ export function reconcileHistory(
     groupItems[group.index] = group.item
     if (group.key !== undefined) bound.set(group.key, group)
     if (position !== undefined) anchor = position
-    open = d.kind === 'row' && (existing === undefined || existing === candidate)
+    // A suppressed concurrent subagent call leaves the main reply joinable just like a retained call.
+    open = isSubagentToolCall(item) || d.kind === 'row' && (existing === undefined || existing === candidate)
   }
   // Held rows keep their order; new groups enter before the first later bound row, older ones on top.
   // Every group key here is a held key, so an unbound group is exactly a new row.

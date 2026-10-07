@@ -74,6 +74,65 @@ const unchanged = (before: ConversationSlice, after: ConversationSlice) => {
 }
 
 const seam: { name: string; steps: Step[]; check: (run: Run) => void }[] = [
+  ...[false, true].flatMap(suppressed => [false, true].map(done => ({
+    name: `older main text joins across a subagent call, suppressed=${suppressed}, done=${done}`,
+    steps: [
+      ...(suppressed ? [live(subcall(2))] : [{ page: [subcall(2)] }]),
+      { live: { type: 'assistantDelta', turnId: 't', seq: 3, text: 'world', createdAt: 123 }, key: 'assistantDelta ts-3' },
+      on({ type: 'toolProgress', turnId: 't', toolUseId: 'tool', elapsedSeconds: 5 }),
+      ...(done ? [on({ type: 'toolResult', turnId: 't', toolUseId: 'tool', isError: false, resultSummary: 'live result' })] : []),
+      { mark: 'live' }, { page: [text(3, 'world'), subcall(2)] }, 'restore', { mark: 'held' },
+      { page: [subcall(2), text(1, 'hello ')] }, { mark: 'joined' },
+      { page: [text(3, 'world'), subcall(2), text(1, 'hello ')] }
+    ] satisfies Step[],
+    check: ({ h, marks }: Run) => {
+      const held = marks.get('held')!.timeline
+      const joined = marks.get('joined')!
+      expect(texts(h)).toEqual(['toolCall', 'hello world'])
+      expect(h.held().timeline.rowKeys).toEqual(marks.get('live')!.timeline.rowKeys)
+      expect(h.held().timeline.items[0]).toBe(held.items[0])
+      expect(h.held().timeline.items[1]).not.toBe(held.items[1])
+      expect(h.held().timeline.items[1]).toMatchObject({ text: 'hello world', createdAt: 123 })
+      if (done) {
+        expect(h.held().timeline.items[0]).toMatchObject({ result: { resultSummary: 'live result' } })
+        expect((h.held().timeline.items[0] as { result: unknown }).result).toBe((held.items[0] as { result: unknown }).result)
+      } else expect(h.held().timeline.items[0]).toMatchObject({ result: null, elapsedSeconds: 5 })
+      unchanged(joined, h.held())
+    }
+  }))),
+  ...[
+    { name: 'main tool', entry: { ...call(3), event: { ...call(3).event, toolUseId: 'main' } } },
+    { name: 'empty-parent tool', entry: { ...subcall(3, ''), event: { ...subcall(3, '').event, toolUseId: 'main' } } },
+    { name: 'subagent text', entry: text(3, 'child', 'agent') },
+    { name: 'other turn', entry: text(3, 'other turn', undefined, 'other') },
+    { name: 'operator', entry: message(3) }
+  ].map(({ name, entry }) => ({
+    name: `a ${name} remains a barrier beside a suppressed subagent call`,
+    steps: [live(subcall(2)), live(entry), live(text(4, 'after')),
+      { page: [text(4, 'after'), entry, subcall(2)] }, 'restore', { mark: 'held' },
+      { page: [subcall(2), text(1, 'before')] }, { mark: 'joined' },
+      { page: [text(4, 'after'), entry, subcall(2), text(1, 'before')] }
+    ] satisfies Step[],
+    check: ({ h, marks }: Run) => {
+      const held = marks.get('held')!.timeline
+      expect(texts(h)).toEqual(['before', 'toolCall', ...held.items.slice(1).map(item => 'text' in item ? item.text : item.kind)])
+      expect(h.held().timeline.rowKeys!.slice(1)).toEqual(held.rowKeys)
+      held.items.forEach((item, index) => expect(h.held().timeline.items[index + 1]).toBe(item))
+      unchanged(marks.get('joined')!, h.held())
+    }
+  })),
+  { name: 'an unrepresented held operator remains a barrier beside a suppressed subagent call',
+    steps: [live(subcall(2)), { echo: 'm' }, live(text(4, 'after')),
+      { page: [text(4, 'after'), subcall(2)] }, 'restore', { mark: 'held' },
+      { page: [subcall(2), text(1, 'before')] }],
+    check: ({ h, marks }) => {
+      const held = marks.get('held')!.timeline
+      expect(texts(h)).toEqual(['before', 'toolCall', 'operator', 'after'])
+      expect(h.held().timeline.rowKeys!.slice(1)).toEqual(held.rowKeys)
+      held.items.forEach((item, index) => expect(h.held().timeline.items[index + 1]).toBe(item))
+      expect(h.held().timeline.localEchoes).toBe(held.localEchoes)
+      expect(h.held().timeline.localSendPending).toBe(held.localSendPending)
+    } },
   { name: 'new history after the final bound tool precedes an unrepresented held suffix',
     steps: [{ page: [call(2)] }, on({ type: 'assistantDelta', turnId: 'live', seq: 1, text: 'live suffix' }),
       'restore', { mark: 'held' }, { page: [message(4), call(2)] }],

@@ -124,7 +124,7 @@ reconnect, permission precedence and navigation; it does not pretend to exercise
 The existing fake-transport question, offline and permission specs prove native keyboard groups,
 all-question validation, ordered/trimmed answer and refusal frames, navigation retention, replacement,
 shorter redelivery, offline activation, hidden-input isolation and scrolling. See
-[recorded coverage and Figma comparison](development-verification.md#inline-question-verification)
+[recorded coverage and Figma comparison](development-verification-test-tiers.md#inline-question-verification)
 and [scroll pin](conversation-shell-scroll-pin.md#inline-question-growth) for the reader-position and
 observer-retention details. Both [real-Claude specs](real-claude-liveness-e2e.md) address inline cards;
 their continuation proof must be established by counted live results in the

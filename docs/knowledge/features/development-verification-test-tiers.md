@@ -224,3 +224,51 @@ passed, 0 failed and 4 skipped. The verdict records aggregate unit evidence of
 Controlled transports and snapshots establish this diagnostic contract; no
 live-Claude result is claimed.
 
+### Inline question verification
+
+The [final inline-question verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1783#issuecomment-6024030746)
+reviewed `98f3db3893fdbdb56fc4dc5fb46c106b4cf58c4d` on 2026-10-06. Its full fake-transport
+run executed 289 tests: 288 passed, 1 failed, 4 skipped. The unrelated sidebar name-pill tooltip
+failure passed its focused rerun (1 executed, 1 passed, 0 failed, 0 skipped). The verdict explicitly
+confirms all 14 scenarios across the following adapted groups were present, executed and passed:
+question picks/scrolling, Continue answers, Cancel refuses, offline-held responses and permission
+answer paths. Those scenarios had 0 failed and 0 skipped; the full-run failure is not hidden in that
+scoped result. Unit evidence records 8,850 executed/passed, 0 failed, 3 skipped.
+
+Static markup tests check all cards and positional native names, one gated response row, escaping,
+trailing-history placement and, at that revision, permission-only composer coverage (superseded by
+[inline permission placement](development-verification.md#inline-permission-verification)). Captured-callback tests drive
+real stores to reject stale replacements/redeliveries, duplicates, cleared drafts and navigated-away
+owners. Browser coverage retains native radio keyboard independence, multi-select/Other behavior,
+ordered trimmed answers, chat navigation, fresh replacement/shortened delivery, offline gates,
+permission hidden-input isolation and restoration of every card's drafts.
+
+Scroll assertions wait two animation frames after positioning so the scroll event has updated
+`following`. The edit case uses a visible option and a real label click while above the bottom;
+focusing an offscreen radio natively scrolls it into view and would confuse focus movement with
+content growth. See [scroll pin](conversation-shell-scroll-pin.md#inline-question-growth), including
+the open observer-retention finding carried forward from review.
+
+The same verifier compared freshly fetched
+[Figma 756:8626](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG/Pyrycode-Client?node-id=756-8626)
+with integrated synthetic captures produced by `question-picks.spec.ts`: 1280×1292 and 800×572 content
+viewports at `/tmp/verifier-1783/inline-desktop.png` and `/tmp/verifier-1783/inline-minimum.png`, with
+reference `/tmp/verifier-1783/figma.png` on the verifier host. Card stacking, theme styling, PyryMark
+headers, Other fields, centered actions and available composer matched. Fixture content, existing
+sidebar chrome, footer availability and translucent chrome differed with state/current main.
+Minimum-width history scrolled with the composer visible. These paths record reviewed scratch
+artifacts; they are not committed product assets or evidence of real-Claude continuation.
+
+The adapted live answer spec selects every inline card before Continue and still requires Claude's
+continuation to name its chosen label first. The Cancel spec refuses the whole surfaced batch and
+still requires continuation/quiescence plus absence of the gated file, while servicing subsequent
+permissions. Optimistic panel disappearance alone proves neither response reached Claude.
+The [latest live run](live-e2e-runbook.md#current-real-claude-gate-state) executed 25 tests: 25 passed,
+0 failed, 1 skipped. The [supplemental per-test evidence](https://github.com/pyrycode/pyrycode-desktop/issues/1729#issuecomment-6024286951)
+confirms both named scenarios were present, executed and passed on their first attempts: the answer
+case in 11.2 s and Cancel in 10.4 s, each with 1 executed, 1 passed, 0 failed and 0 skipped.
+Every test records daemon revision `0.37.0`. The configured gate used
+`npx playwright test --config playwright.real-claude.config.ts --reporter=json` rather than the
+issue's `npm run e2e:real:gate`; counted passes for both required scenarios satisfy its execution
+requirement. This proves continuation through the local test relay, not the production relay.
+

@@ -173,7 +173,8 @@ Module-local `MessageActions({ text, role, onReply })` in `ConversationScreen.ts
 of the bubble**: after assistant bubbles (actions on the right), before delivered user bubbles (actions
 on the left), including bubbles with code blocks or attachments. `.message-actions` is a fixed 13px
 flex column stretching to the bubble's height and vertically centring the whole copy/reply stack,
-separated from the bubble by 12px. Queued rows render neither action nor the column.
+separated from the bubble by 12px. Queued rows use a 12px variant for Send now/Cancel;
+see [queued side actions](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213).
 
 `BubbleMeta({ side, createdAt, turnStats })` remains the bubble's **last child**, after markdown or the
 inline streaming cursor on the assistant side and after user text and attachments on the other. It
@@ -287,9 +288,8 @@ rather than a list of today's two filename classes, so a child added to the bubb
 reset without anyone remembering to add it.
 
 `.bubble--user` reaches every site that draws the user's own words in one declaration — the delivered
-`userText` row, the same row while queued (`.message-row--queued`, dimmed via that modifier since
-[#1214](https://github.com/pyrycode/pyrycode-desktop/issues/1214) folded the once-separate `QueuedBacklog`
-into it, but otherwise the same markup), and the retired `MessageBubble`'s user branch — so all three keep
+`userText` row, the same row while queued (only `.message-row--queued > .bubble` dims at 50%),
+and the retired `MessageBubble`'s user branch — so all three keep
 whitespace with no markup change and no unit-tier edit. An unmatched queued row's text is daemon-supplied
 (`QueuedItem.text` over `queue_state`, not a local echo), so this preserves whitespace a hostile daemon
 chose; two existing bounds already cover it — `pre-wrap` hangs a trailing run past the line's end rather
@@ -374,9 +374,8 @@ The value is one new token, `--shadow-thread` in `tokens.css`, because four rule
 share it — where the FAB's M3 level-3 shadow stays an inlined literal with a single consumer and a
 different value. `.bubble` takes it as `box-shadow`: the design draws the effect on the message
 *container* frame, which has no fill and hugs the bubble, so the container's shadow is the bubble's, and
-a box-shadow follows the 6px corner. The queued row inherits it through `.bubble--user`, dimmed with the
-rest of the row by `.message-row--queued`'s 50% opacity (the region's, before
-[#1214](https://github.com/pyrycode/pyrycode-desktop/issues/1214) moved it onto the row).
+a box-shadow follows the 6px corner. The queued bubble inherits it through `.bubble--user`;
+`.message-row--queued > .bubble` dims the bubble and shadow to 50%, keeping actions fully opaque.
 
 **The blur is 5, not 2.5.** The design's export prints this one effect two ways:
 `shadow-[0px_4px_5px_0px_…]` on the filled tool row and `drop-shadow-[0px_4px_2.5px_…]` on the unfilled
@@ -447,12 +446,10 @@ would reject the expected timestamp reveal instead of proving that no stats were
   [Conversation shell — conversation surfaces and modals § Queued rows folded into the
   thread](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213))
   reuses `.bubble--user` and `.message-row--text`, taking the centred 900px outer cap and 40px left inset
-  while retaining row dimming, attachments and the leading drop control's placement and behavior.
-  The delivered row's 12px actions gap does not apply to queued rows. They render no `BubbleMeta`,
-  copy, reply or actions column: a queued message has no timestamp and nothing sent yet to copy or quote.
-  Its `data-thread-role="queued"` distinguishes it from a
-  delivered row's `"user"`, so the two are distinguishable in a markup assertion that counts meta rows
-  rather than greping for a class.
+  with bubble-only 50% dimming and attachments. Its 12px actions column sits 12px left of the bubble,
+  with Send now above Cancel and 25px glyph top-edge spacing. It renders no `BubbleMeta`, copy or reply.
+  Availability, glyphs and tokens are detailed in the queued-row topic linked above.
+  `data-thread-role="queued"` distinguishes it from a delivered row's `"user"`.
 - **`MessageBubble`** — the retired, unmounted residue of the coarse `MessageThread` path
   [#179](../codebase/179.md) cut over from (still exported, still unit-tested, never rendered in the
   app) — emits `bubble bubble--user` / `bubble bubble--daemon` and so inherits the original CSS restyle
@@ -489,7 +486,7 @@ ordering against the message text and against `.bubble__markdown`), the user met
 settled or streaming assistant bubbles, including file/image children and fenced code. The meta row
 contains no button. Reply follows copy as a second native named button on both sides, including the
 streaming tail and attached bubbles; its icon introduces no focus stop. Queued rows carry the text-row
-modifier but have no actions, copy, reply or meta;
+modifier and queued actions column but have no copy, reply or meta;
 standalone offers have none of that text-row treatment. The queued row / `MessageBubble` residue
 render **zero** `.bubble__meta` (a count assertion over the whole markup, not a per-string absence).
 `messageTime.test.ts` covers the
@@ -525,7 +522,9 @@ correct two-control stack.
 It checks unchanged inverse-primary ink on hover/press, a visible keyboard outline, and timestamp
 reveal over empty row space and on copy/file-button focus with identical bubble and row dimensions.
 It also copies a streaming partial reply through the OS clipboard, verifies queued sizing/dimming
-and drop activation without actions/meta, and guards standalone-offer sizing. Static tests establish
+and Cancel activation without copy/reply/meta, and guards standalone-offer sizing.
+Queued geometry, fixture setup and counted browser/visual evidence are in
+[queued-action testing](conversation-shell-conversation-and-modals.md#queued-action-testing). Static tests establish
 the image-button markup; the row's `:focus-within` rule applies to image buttons too.
 
 **Side-actions hover** (same spec): both message roles at 800px and 1280px, token fill,

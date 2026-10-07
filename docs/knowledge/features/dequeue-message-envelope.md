@@ -145,12 +145,9 @@ detail: [#300 codebase notes](../codebase/300.md).
 - **Zero `EnvelopeType` consumer cascade.** No production code does an exhaustive `switch` over
   `EnvelopeType` (unlike the `DaemonEvent` union, which has three independent exhaustive switches) —
   adding the member needed no companion `assertNever` fix-up anywhere.
-- **Row-dimmed drop control.** The [#296](../codebase/296.md) drop button inherits
-  `.message-row--queued`'s 50%-opacity dimming (moved off the deleted `.conversation__queued` region by
-  [#1214](https://github.com/pyrycode/pyrycode-desktop/issues/1214), same compositing group, same
-  effect) — a child element's own `opacity: 1` cannot escape a parent's opacity compositing group, so the
-  button cannot be rendered at full brightness without restructuring the row-level dimming. Shipped
-  dimmed by design; see [#296 codebase notes](../codebase/296.md) Lessons learned.
+- **Bubble-only dimming.** The Cancel control in the queued side-action column stays fully opaque;
+  `.message-row--queued > .bubble` applies 50% opacity only to the bubble and its shadow.
+  See [queued side actions](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213).
 
 ## Related
 

@@ -344,7 +344,7 @@ button.top-overlay-pill:hover,
   padding-left: calc(var(--space-5) * 2);
 }
 
-.message-row--text:not(.message-row--queued) {
+.message-row--text {
   gap: var(--space-3);
 }
 
@@ -407,9 +407,7 @@ button.top-overlay-pill:hover,
    corner a box-shadow follows. The design draws the effect on the message CONTAINER frame (114:3558 /
    114:3559), which has no fill and hugs the bubble, so the container's shadow is the bubble's. It reaches
    the queued row too, which reuses .bubble--user, where the 50% opacity dims the shadow with the rest of
-   the row — the design draws no queued state, and a shadow that dims with its box is the same compositing
-   the Figma effect renders. (#1214 moved that opacity off the deleted .conversation__queued region onto
-   .message-row--queued; the compositing, and therefore this sentence, is unchanged.) e2e/thread-shadow.spec.ts reads the computed value on both sides. */
+   bubble. Queued actions remain outside the bubble's dimmed compositing group. e2e/thread-shadow.spec.ts reads the computed value on both sides. */
 .bubble {
   max-width: min(680px, 75%);
   padding: var(--space-4) var(--space-5);
@@ -778,7 +776,9 @@ button.top-overlay-pill:hover,
 /* Copy's 27×20px hit target enlarges the 11×12px glyph without changing its column.
    Four vertical pixels per side leave room for the reply glyph at a 12px gap. Pointer states
    keep the same ink; the keyboard outline remains visible. */
-.bubble__copy {
+.bubble__copy,
+.queued-row__drop,
+.queued-row__send-now {
   position: relative;
   isolation: isolate;
   flex: 0 0 auto;
@@ -795,7 +795,9 @@ button.top-overlay-pill:hover,
 }
 
 /* The hit target is 8px wider per side; inset its paint to reach 4px past the glyph. */
-.bubble__copy:hover::before {
+.bubble__copy:hover::before,
+.queued-row__drop:hover::before,
+.queued-row__send-now:hover::before {
   content: '';
   position: absolute;
   inset: 0 var(--space-1);
@@ -805,7 +807,9 @@ button.top-overlay-pill:hover,
   border-radius: var(--radius-xs);
 }
 
-.bubble__copy:focus-visible {
+.bubble__copy:focus-visible,
+.queued-row__drop:focus-visible,
+.queued-row__send-now:focus-visible {
   outline: 1px solid var(--color-outline);
 }
 
@@ -1944,70 +1948,31 @@ button.top-overlay-pill:hover,
   text-overflow: ellipsis;
 }
 
-/* #294, relocated by #1214 — the "waiting / not yet run" treatment on a message the daemon has queued.
-   The mobile Figma file draws only the delivered thread (no queued/pending component — the documented
-   #148 gap), so the treatment is within-token: 50% opacity, the .tool-row pending-dimming precedent
-   (opacity as a de-emphasis device, not a color literal). The row is otherwise the delivered user row
-   unchanged — .message-row--user / .bubble--user, because a queued message is the user's own pending
-   send — so this dimming is the entire "queued" modifier, exactly as it was when it sat on the region.
-
-   IT IS ON THE ROW, NOT ON THE BUBBLE, and that is what the deleted region's own comment already implied:
-   opacity establishes a compositing group, and the group has to contain BOTH things that were dimmed —
-   the bubble and the .queued-row__drop button beside it. #294 sketched "moving opacity onto a future
-   bubble--queued modifier is a one-line relocation", which predates #296 making the drop control a
-   SIBLING of the bubble; a bubble-level opacity would leave that button at full brightness. The row is
-   the smallest element containing both, so the rendered result is identical to the region's.
-
-   NOTHING ELSE FROM THE REGION NEEDED A HOME. Its flex/column/gap/padding existed to make a standalone
-   strip sit thread-consistent, and .conversation__thread already declares that rhythm as its own gap and
-   padding — so a merged row inherits it with no rule at all, at whatever step those are currently at
-   (--space-4 and --space-3 since #1444; the point is that the row restates neither). */
-.message-row--queued {
+/* Queued actions stay fully opaque; only the pending bubble and its shadow dim. */
+.message-row--queued > .bubble {
   opacity: 0.5;
 }
 
-/* #296 — the drop / cancel affordance on a queued row (an icon-only button). A LEADING sibling of the
-   queued bubble: because .message-row--user is right-aligned (justify-content: flex-end), placing it
-   before the bubble sits it at the row's inner (left) edge, next to the bubble. The compact icon-button
-   treatment — the .archive__restore / .status-sheet__close idiom (it read .channel-list__save until
-   #1171 redrew that control as a hover-revealed --color-primary glyph): de-emphasized on-surface-variant
-   content, a round hover surface, a focus-visible outline. The 18px icon + --space-2 padding makes a
-   compact ~34px touch target (no bare width literal — the file convention). align-self centers it against
-   the bubble regardless of bubble height. It inherits the row's 50% dimming (#1214: .message-row--queued's
-   opacity is a compositing group a child opacity cannot escape — it was the region's until the queued rows
-   moved into the thread) — consistent with the "waiting / not yet run" treatment; the hover-surface +
-   focus outline carry the affordance, not full brightness. */
-/* #1726: Send now (.queued-row__send-now) shares the drop control's idiom by decision — the design file
-   draws no queued state — so it joins each rule below rather than restating it. */
-.queued-row__drop,
-.queued-row__send-now {
-  flex: 0 0 auto;
-  align-self: center;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-2);
-  border: none;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--color-on-surface-variant);
-  cursor: pointer;
-}
-
-.queued-row__drop:hover,
-.queued-row__send-now:hover {
-  background: var(--color-surface-container-high);
-  color: var(--color-on-surface);
-}
-
-.queued-row__drop:focus-visible,
-.queued-row__send-now:focus-visible {
-  outline: 1px solid var(--color-outline);
+.message-actions--queued {
+  --message-actions-width: var(--space-3);
+  /* Figma's queued glyph top edges are 25px apart: 12px glyph + 13px gap. */
+  gap: calc(var(--space-3) + var(--space-1) / 4);
 }
 
 .queued-row__drop-icon,
 .queued-row__send-now-icon {
   display: block;
+  width: var(--space-3);
+  height: var(--space-3);
+  background: currentColor;
+}
+
+.queued-row__drop-icon {
+  mask: url('../../assets/queued-cancel.svg#svgView(viewBox(0,0,12,12))') center / contain no-repeat;
+}
+
+.queued-row__send-now-icon {
+  mask: url('../../assets/queued-send-now.svg#svgView(viewBox(0,0,12,12))') center / contain no-repeat;
 }
 
 /* #218 — the tool row (Figma node 16-28, redrawn 152:5215): the tool name and its one-line input summary

@@ -3,12 +3,7 @@ import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { readFile } from 'node:fs/promises'
 import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/realDaemon'
-import { electron } from './fixtures/electronLaunch'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
-import { e2eShowsWindow, expectDesktopIsolated, RENDERER_THROTTLING_SWITCHES } from './fixtures/desktopIsolation'
-import { HIDDEN_WINDOW_ENV_FLAG } from '../src/main/windowPresentation'
-import { LOOPBACK_RELAY_ENV_FLAG } from '../src/main/relayPolicy'
-import { TEST_SECRET_BACKEND_ENV_FLAG } from '../src/main/secretBackend'
 
 // Channel posts append daemon-owned assistant entries without starting a Claude turn.
 // This acceptance uses real daemon storage and a fully exited, protected desktop profile.
@@ -27,7 +22,7 @@ test('a real daemon refreshes saved history with a channel post written while El
     } catch { throw new Error('channel post failed') } // Never print argv, payload or child output.
   }
   await withIsolatedElectronApp(async initial => {
-    const { page, app, userDataDir } = initial
+    const { page, app } = initial
     await pairFromUnpairedLaunch(page, encodePairingPayload({ ...daemon.pairFields, relay: `${relay.url}/v1/client` }))
     await expect(page.locator('.channel-list__rename')).toBeVisible({ timeout: 45_000 })
     await page.locator('.channel-list__rename').click()
@@ -63,33 +58,23 @@ test('a real daemon refreshes saved history with a channel post written while El
     expect(await savedText()).not.toContain(marker)
     await expect(page.locator('.conversation__thread .bubble').filter({ hasText: marker })).toHaveCount(0)
     const child = app.process()
-    await app.close()
-    await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true)
-    // The unique post is created only after full process exit; it cannot be in the saved timeline.
-    await post(marker)
-    const env = { ...process.env, [LOOPBACK_RELAY_ENV_FLAG]: '1', [TEST_SECRET_BACKEND_ENV_FLAG]: '1' }
-    delete env.ELECTRON_RENDERER_URL
-    if (e2eShowsWindow()) delete env[HIDDEN_WINDOW_ENV_FLAG]
-    else env[HIDDEN_WINDOW_ENV_FLAG] = '1'
-    const reopened = await electron.launch({
-      args: ['.', `--user-data-dir=${userDataDir}`, ...RENDERER_THROTTLING_SWITCHES.map(name => `--${name}`)], env
+    const { app: reopened, page: fresh } = await initial.relaunch(async () => {
+      await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true)
+      // The unique post is created only after full process exit; it cannot be in the saved timeline.
+      await post(marker)
     })
-    try {
-      await expectDesktopIsolated(reopened)
-      await reopened.evaluate(({ ipcMain }) => {
-        const proof = { asks: 0 }
-        ;(globalThis as any).__openingHistoryProof = proof
-        ipcMain.on('pyry:command', (_event, command) => { if (command.type === 'requestHistory') proof.asks++ })
-      })
-      const fresh = await reopened.firstWindow()
-      await expect(fresh.locator('.channel-list__row-open').filter({ hasText: channel })).toBeVisible({ timeout: 45_000 })
-      await fresh.locator('.channel-list__row-open').filter({ hasText: channel }).click()
-      const thread = fresh.locator('.conversation__thread')
-      await expect(thread.locator('.bubble').filter({ hasText: marker })).toHaveCount(1, { timeout: 20_000 })
-      await expect(thread).toContainText(baseline)
-      await expect.poll(() => reopened.evaluate(() => (globalThis as any).__openingHistoryProof.asks)).toBe(1)
-      await fresh.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
-      await expect(thread.locator('.bubble').filter({ hasText: marker })).toHaveCount(1)
-    } finally { await reopened.close() }
+    await reopened.evaluate(({ ipcMain }) => {
+      const proof = { asks: 0 }
+      ;(globalThis as any).__openingHistoryProof = proof
+      ipcMain.on('pyry:command', (_event, command) => { if (command.type === 'requestHistory') proof.asks++ })
+    })
+    await expect(fresh.locator('.channel-list__row-open').filter({ hasText: channel })).toBeVisible({ timeout: 45_000 })
+    await fresh.locator('.channel-list__row-open').filter({ hasText: channel }).click()
+    const thread = fresh.locator('.conversation__thread')
+    await expect(thread.locator('.bubble').filter({ hasText: marker })).toHaveCount(1, { timeout: 20_000 })
+    await expect(thread).toContainText(baseline)
+    await expect.poll(() => reopened.evaluate(() => (globalThis as any).__openingHistoryProof.asks)).toBe(1)
+    await fresh.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    await expect(thread.locator('.bubble').filter({ hasText: marker })).toHaveCount(1)
   })
 })

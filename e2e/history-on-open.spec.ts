@@ -4,9 +4,9 @@ import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { Envelope } from '../src/shared/wire/types'
 
 const ts = '2026-07-07T12:00:00.000Z'
-const history = (id: number, count: number, cursor = 'older') => encodeEnvelope({
+const history = (id: number, count: number, cursor = 'older', firstId = 0) => encodeEnvelope({
   id: 90, type: 'history_page', ts, in_reply_to: id,
-  payload: { entries: Array.from({ length: count }, (_, i) => ({ id: i, type: 'message', ts,
+  payload: { entries: Array.from({ length: count }, (_, i) => ({ id: firstId + i, type: 'message', ts,
     payload: { conversation_id: SEEDED_ROW.id, message_id: `${id}-${i}`, role: 'user', text: `History row ${id}-${i}` }
   })), cursor, at_start: false }
 })
@@ -23,6 +23,50 @@ async function settle(page: Page) {
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
 }
 
+test('leave and reopen defers newest until the owned saved read and original request settle', async ({ launchPairedApp }) => {
+  const asks: Envelope[] = []
+  const { app, page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
+    const env = decodeEnvelope(bytes)
+    if (env.type === 'list_conversations') return [seedConversationsFrame()]
+    if (env.type === 'request_history') asks.push(env)
+    return []
+  } }, { onLaunched: async app => {
+    await observe(app)
+    await app.evaluate(({ ipcMain }) => {
+      const original = (ipcMain as any)._invokeHandlers.get('pyry:chat-history')
+      if (!original) throw new Error('Missing history handler')
+      let reads = 0
+      ipcMain.removeHandler('pyry:chat-history')
+      ipcMain.handle('pyry:chat-history', (event, request) => {
+        if (request.operation !== 'readTimeline') return original(event, request)
+        if (++reads === 1) return { status: 'error', code: 'unreadable' }
+        return new Promise(resolve => {
+          ;(globalThis as any).__releaseOpeningRead = () => resolve({ status: 'missing' })
+        })
+      })
+    })
+  } })
+  await expect.poll(() => asks.length).toBe(1)
+  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
+  await page.locator('.archive__back').click()
+  await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await expect.poll(() => app.evaluate(() => typeof (globalThis as any).__releaseOpeningRead)).toBe('function')
+  await settle(page)
+  expect(await count(app)).toBe(1)
+  await app.evaluate(() => (globalThis as any).__releaseOpeningRead())
+  await expect(page.getByText('Loading saved messages…', { exact: true })).toHaveCount(0)
+  await settle(page)
+  expect(await count(app)).toBe(1)
+  daemon.pushFrame(history(asks[0].id, 1))
+  await expect.poll(() => asks.length).toBe(2)
+  expect(asks.map(e => e.payload.cursor)).toEqual(['', ''])
+  daemon.pushFrame(history(asks[1].id, 0))
+  await expect(page.locator('.conversation__thread .bubble')).toHaveCount(1)
+  await settle(page)
+  expect(await count(app)).toBe(2)
+})
+
 test('opening asks once and only trusted upward input asks for subsequent pages', async ({ launchPairedApp }) => {
   const asks: Envelope[] = []
   const { app, page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
@@ -35,12 +79,18 @@ test('opening asks once and only trusted upward input asks for subsequent pages'
   await expect.poll(() => asks.length).toBe(1)
   await settle(page)
   expect(await count(app)).toBe(1)
+  expect(asks[0].payload.cursor).toBe('')
+  // Settle opening with backwards paging eligible before exercising each input gate.
+  daemon.pushFrame(history(asks[0].id, 1, 'older', 18))
+  await expect(thread.locator('.bubble')).toHaveCount(1)
+  await settle(page)
   await page.getByPlaceholder('Message…').fill('local draft')
   for (const key of ['ArrowUp', 'PageUp', 'Home']) await page.keyboard.press(key)
   await thread.evaluate(el => {
     el.scrollTop = 0
     el.dispatchEvent(new Event('scroll'))
     el.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true }))
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
   })
   await page.setViewportSize({ width: 1280, height: 800 })
   await settle(page)
@@ -49,21 +99,14 @@ test('opening asks once and only trusted upward input asks for subsequent pages'
   await page.mouse.wheel(0, 100)
   await settle(page)
   expect(await count(app)).toBe(1)
-  await page.mouse.wheel(0, -100)
-  await expect.poll(() => asks.length).toBe(1)
-  expect(asks[0].payload.cursor).toBe('')
-  await thread.focus()
+  // Keys from an interactive child bubble to the thread without becoming reader demand.
+  await thread.getByRole('button', { name: 'Copy message', exact: true }).first().focus()
   for (const key of ['ArrowUp', 'PageUp', 'Home']) await page.keyboard.press(key)
   await settle(page)
   expect(await count(app)).toBe(1)
-  daemon.pushFrame(history(asks[0].id, 0))
-  // A later live frame is the renderer receipt barrier for the empty history reply.
-  daemon.pushFrame(encodeEnvelope({ id: 91, type: 'assistant_delta', ts,
-    payload: { conversation_id: SEEDED_ROW.id, turn_id: 'receipt-barrier', seq: 0, text: 'Live receipt barrier' } }))
-  await expect(thread.locator('.bubble')).toHaveCount(1)
-  await settle(page)
-  expect(await count(app)).toBe(1)
-  await page.keyboard.press('PageUp')
+  await thread.focus()
+  await thread.hover()
+  await page.mouse.wheel(0, -100)
   await expect.poll(() => asks.length).toBe(2)
   expect(asks[1].payload.cursor).toBe('older')
   daemon.pushFrame(history(asks[1].id, 18, 'oldest'))
@@ -78,6 +121,24 @@ test('opening asks once and only trusted upward input asks for subsequent pages'
   await expect.poll(() => asks.length).toBe(3)
   expect(asks[2].payload.cursor).toBe('oldest')
   await page.screenshot({ path: '/tmp/builder-1394-thread-1280.png', animations: 'disabled' })
+})
+
+test('an outstanding opening page excludes further trusted backwards demand', async ({ launchPairedApp }) => {
+  const asks: Envelope[] = []
+  const { app, page } = await launchPairedApp({ buildReplyFrames: bytes => {
+    const env = decodeEnvelope(bytes)
+    if (env.type === 'list_conversations') return [seedConversationsFrame()]
+    if (env.type === 'request_history') asks.push(env)
+    return []
+  } }, { onLaunched: observe })
+  await expect.poll(() => asks.length).toBe(1)
+  const thread = page.locator('.conversation__thread')
+  await thread.focus()
+  for (const key of ['ArrowUp', 'PageUp', 'Home']) await page.keyboard.press(key)
+  await thread.hover()
+  await page.mouse.wheel(0, -100)
+  await settle(page)
+  expect(await count(app)).toBe(1)
 })
 
 test('reconnect settles the interrupted page and asks newest while preserving backwards cursor', async ({ launchPairedApp }) => {

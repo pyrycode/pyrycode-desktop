@@ -88,6 +88,44 @@ it('defers a newest opening behind an owned ask, without settlement generating d
   expect(h.deps.sendCommand).toHaveBeenCalledTimes(1)
 })
 
+it.each(['created', 'failed-read'])('reopening an empty %s slice retains its outstanding ask through a saved read', source => {
+  for (const outcome of ['stored', 'missing', 'failure', 'cancel']) {
+    const h = harness()
+    if (source === 'created') h.store.getState().initializeCreatedTimeline('a', 'c')
+    else h.store.getState().beginLocalTimelineRead('a', 'c')!.fail()
+    h.sync()
+    const outstanding = h.deps.getHeld('c')!.history
+    h.navigate(null)
+    const read = h.store.getState().beginLocalTimelineRead('a', 'c')!
+    expect(h.deps.getHeld('c')?.history).toBe(outstanding)
+    h.navigate({ serverId: 'a', conversationId: 'c' })
+    if (outcome === 'failure') read.fail()
+    else if (outcome === 'cancel') read.cancel()
+    else read.complete(outcome === 'stored' ? { version: 1, kind: 'timeline', serverId: 'a', conversationId: 'c',
+      items: [{ kind: 'userText', text: 'saved row' }], prependedRows: 0, coverage: { status: 'unknown' } } : null)
+    expect(h.deps.getHeld('c')?.history).toBe(outstanding)
+    expect(h.deps.sendCommand).toHaveBeenCalledTimes(1)
+    h.settle()
+    expect(h.deps.sendCommand).toHaveBeenCalledTimes(2)
+    expect(h.deps.sendCommand.mock.calls[1][0].payload.cursor).toBe('')
+    h.settle(); h.sync()
+    expect(h.deps.sendCommand).toHaveBeenCalledTimes(2)
+  }
+})
+
+it('cancelling a saved read after the outstanding page settles preserves its rows and receipt', () => {
+  const h = harness()
+  h.sync(); h.navigate(null)
+  const read = h.store.getState().beginLocalTimelineRead('a', 'c')!
+  h.store.getState().prependHistoryFor('c', [{ kind: 'userText', text: 'received row' }])
+  h.store.getState().recordHistoryPage('c', 'end', true, [7])
+  read.cancel()
+  expect(h.deps.getHeld('c')?.timeline.items).toMatchObject([{ text: 'received row' }])
+  expect(h.deps.getHeld('c')?.served?.ids).toEqual([7])
+  h.navigate({ serverId: 'a', conversationId: 'c' })
+  expect(h.deps.sendCommand).toHaveBeenCalledTimes(2)
+})
+
 it('departure cancels demand deferred behind a request and ownership gates every send', () => {
   const h = harness()
   h.store.getState().markHistoryRequested('c', 'a', 'older', 'older')

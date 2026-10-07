@@ -58,9 +58,17 @@ None. Prefer the small retained controller over a new persistent lifecycle store
 
 ## Revisions
 
+2026-10-07 rework (findings 1–4): `beginLocalTimelineRead` must carry the same-host history request through read start, completion and cancellation so reopening waits for the original correlated settlement. Add actual shell leave/reopen coverage and unit cases for created/failed-read empty slices. Settle opening before asserting trusted-input gates, keeping pending exclusion separate. Consume the automatic first page in the agent reconstruction test. Use the existing real-daemon fixture's protected-profile `relaunch` and its isolation checks; add an optional `whileClosed(): Promise<void>` callback after awaited process exit and before launch so the test can post while closed. Fixture edits stay additive beside in-flight #1364 and #1544; neither supplies a needed dependency.
+
 2026-10-07: `createChatHistoryWriter` derived coverage from the last response rather than the slice's retained paging coverage. Capture `slice.coverage` on successful settlement so newest receipts and oldest-end paging evidence survive protected restoration together. This adds a sixth production file, without another deliverable or exported declaration; total written work remains below 800 lines.
 
 2026-10-07: The protected-restoration browser test exposed that clearing a settled `localRead` on newest demand makes a saved partial assistant appear to stream. Preserve settled saved presentation across newest pending, admission and failure; only owned live data supersedes it. Schedule subscription-driven eligibility checks after receipt/writer settlement, while observing connection loss synchronously so rapid connection edges cannot disappear.
+
+## Documentation handoff
+
+- Pending documentation stage: `docs/knowledge/features/chat-history.md`, introduction and `### Received-state admission and ownership`: replace opening/reconnect no-demand claims with one newest page per owned opening/connection edge after read/request settlement, offline deferral/cancellation and no automatic range fill.
+- Pending documentation stage: `docs/knowledge/features/conversation-shell-composer-status.md`, `## History page failure and Retry`: captured cursor/purpose, newest Retry with `cursor: ''` despite held `atStart`, and retained backwards trusted-input/two-viewport guards.
+- Pending documentation stage: `docs/knowledge/features/chat-history.md`, `## Snapshot contract` and `### Protected row identities and saving`: retained oldest-end coverage versus newest served receipts/high-water/display evidence and saved partial-assistant presentation. Record actual fake/dispatcher-live counts in `docs/knowledge/features/development-verification.md`, `## What each test tier proves`, and `docs/knowledge/features/live-e2e-runbook.md`, `## Current real-claude gate state`, after dispatcher acceptance finishes.
 
 ## Security review
 

@@ -580,6 +580,7 @@ export function createConversationTimelineStore(
         (held.localRead !== undefined || held.timeline.items.length > 0)) return null
       const owner = Symbol()
       const pending: ConversationSlice = { ...emptySlice, serverId, localRead: 'loading', localReadOwner: owner,
+        history: held?.serverId === serverId ? held.history : null,
         // Opening history must not consume a live notice received while this chat was off-screen.
         timeline: { ...initialTimelineState,
           sessionError: held?.serverId === serverId ? held.timeline.sessionError : undefined }
@@ -611,7 +612,7 @@ export function createConversationTimelineStore(
               fail()
               return
             }
-            settle(current => ({ ...emptySlice, serverId, localRead: 'loaded', coverage: snapshot.coverage, served: snapshot.served, display: snapshot.display, restored: { serverId, coverage: snapshot.coverage },
+            settle(current => ({ ...emptySlice, serverId, history: current.history, localRead: 'loaded', coverage: snapshot.coverage, served: snapshot.served, display: snapshot.display, restored: { serverId, coverage: snapshot.coverage },
               timeline: { ...current.timeline, items: snapshot.items,
                 rowKeys: snapshot.rowIdentity?.rowKeys ?? snapshot.items.map((_, index) => index - snapshot.prependedRows),
                 nextRowKey: snapshot.rowIdentity?.nextRowKey ?? snapshot.items.length - snapshot.prependedRows },
@@ -619,7 +620,9 @@ export function createConversationTimelineStore(
           } catch { fail() }
         },
         fail,
-        cancel: () => settle(null)
+        // Navigation cancels the disk read, never the independently correlated page request.
+        cancel: () => settle(get().timelines.get(conversationId)?.history == null
+          ? null : current => ({ ...current, localRead: undefined }))
       }
     },
     dispatchLocalEcho: (serverId, conversationId, event) =>

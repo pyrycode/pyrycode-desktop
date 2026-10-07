@@ -524,7 +524,7 @@ export type IsolatedElectronApp = {
   page: Page
   app: ElectronApplication
   userDataDir: string
-  relaunch(): Promise<IsolatedElectronApp>
+  relaunch(whileClosed?: () => Promise<void>): Promise<IsolatedElectronApp>
 }
 
 /**
@@ -579,12 +579,13 @@ export async function withIsolatedElectronApp(
     await expectDesktopIsolated(app)
     return {
       app, page, userDataDir,
-      async relaunch() {
+      async relaunch(whileClosed) {
         if (current !== app || relaunching) throw new Error('restart fixture: stale app handle')
         relaunching = true
         try {
           await close(app)
           current = null
+          await whileClosed?.()
           return await launch()
         } finally {
           relaunching = false

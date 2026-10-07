@@ -50,6 +50,23 @@ assistant → overlapping tool/operator ID 4 reproduction as tool, operator, liv
 assistant. Numeric allocation order and reconstructed contribution objects cannot
 stand in for chronological boundaries or held objects.
 
+Subagent overlap cases dispatch live calls/text with timestamp join keys, admit
+the newest-first partial pages through `prependHistoryFor`, optionally restore
+into a fresh store through validated snapshot admission, then replay complete
+pages. Pending and completed calls have retained-call controls: a suppressed
+nonempty-parent call must also let `hello ` join held `world` as
+`[toolCall, 'hello world']`. Assert the surviving assistant key and first timestamp,
+the exact tool object and pending progress/existing result, and unchanged content,
+keys and objects on replay. A reducer-only test misses the suppression branch in
+`reconcileHistory`, which shares `isSubagentToolCall` with live lookback.
+
+Barrier cases place a main tool with absent/empty parent, attributed subagent text,
+a different turn or an operator row beside the suppressed call. Both restoration
+variants must keep texts separate and held keys/order/objects intact. An operator
+row absent from display contributions must still block joining and preserve its
+live echo/send state. These cases guard against treating transparency of the
+subagent call as permission to cross every intervening row.
+
 `chatHistoryWriter.test.ts` checks saving when only display metadata changes;
 `chatHistoryStore.test.ts` preserves orphan denial correlation through actual
 protected writes and fresh service reads. `historyPageBridge` and
@@ -97,7 +114,24 @@ restoration case above was present, executed once and passed (1 executed/passed,
 The [earlier inspected named result](https://github.com/pyrycode/pyrycode-desktop/pull/1858#issuecomment-6037536453)
 also identifies that exact test title and its assertions.
 
-This evidence covers the selected same-host mounted scenario. It does not prove
-the suppressed live-subagent overlap interleaving explicitly deferred to
-[#1875](https://github.com/pyrycode/pyrycode-desktop/issues/1875). No real-Claude
-acceptance or Figma capture was required or performed for these history joins.
+This evidence covers the selected same-host mounted scenario. Suppressed
+live-subagent overlap has separate production-store evidence below. No real-Claude
+acceptance or Figma capture was required or performed for the #1851 history joins.
+
+### Suppressed subagent overlap evidence
+
+The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1877#issuecomment-6045674463)
+records the 2026-10-07 gate at `4d6b76c244c90da9ac2fb31eb3849cf7c952c280`:
+units 9,489 executed/passed, 0 failed, 3 skipped. It confirms all 104 contribution
+tests executed and passed, including 20 added retained/suppressed-call, restoration,
+identity and barrier scenarios described above. No individual unit-result artifact
+was supplied; these are file/suite counts and source coverage, not per-title results.
+
+Dispatcher gate 6, `npx playwright test --reporter=json`, recorded 345
+executed/passed, 0 failed, 4 skipped. Neither the issue nor plan names a test in
+that run; the total supplies no separate interactive overlap proof. Static
+production-admission captures reviewed at 1280×800 and 800×600 show a separate
+tool row followed by one assistant bubble against Figma Message area `132:4171`.
+Those captures establish presentation; store regressions establish reconciliation
+and identity. No real-Claude run or interactive reproduction was performed or
+required for this renderer-store fix.

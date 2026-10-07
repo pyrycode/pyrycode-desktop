@@ -401,13 +401,24 @@ trigger/token counts or orphan its pending completion.
 Matching turn/parent assistant fragments assemble across page boundaries. Known
 suppressed assistant references can anchor an older prefix on the held key, while
 preserving live-only suffix text once. Operator rows, root tool rows, different
-parents, compaction boundaries and intervening unrepresented held rows separate
-text. A suppressed row with unknown held position also separates text unless it
+turns or parents, attributed subagent text, compaction boundaries and intervening
+unrepresented held rows separate text. A suppressed row with unknown held position
+also separates text unless it
 represents only a tool patch. Main-thread grouping reuses `openBubbleIndex` across
-ordinary retained subagent calls with nonempty parents. The remaining overlap
-where a live subagent call suppresses its history counterpart still splits the
-main reply; [#1875](https://github.com/pyrycode/pyrycode-desktop/issues/1875) owns
-that correction, including fresh-restoration variants.
+subagent calls. Its shared `isSubagentToolCall` predicate recognizes a `toolCall`
+with a nonempty `parentToolUseId`, whether pending or completed. `reconcileHistory`
+uses the same predicate to keep grouping open when live overlap suppresses that
+call's history contribution; suppression must not introduce a barrier that the
+retained call would not create. Missing or empty parents remain root-tool barriers.
+
+Held positioning wins over durable fragment order. With a held subagent call ID 2
+followed by assistant ID 3 (`world`), admitting `[text(3), subcall(2)]` then
+`[subcall(2), text(1, 'hello ')]` yields `[toolCall, 'hello world']` on the surviving
+assistant key. The assistant keeps its original first timestamp; the tool keeps
+its key, exact object, pending progress or existing result. Only the assistant's
+added content replaces an object. Validated fresh restoration retains the same
+joining behavior, and repeating the complete page preserves content, keys and
+row objects. See [production-admission regressions](development-verification-history.md#contribution-joins-and-held-row-regressions).
 
 New groups enter at chronological held boundaries without reordering any held
 rows. History following the last represented row enters immediately after the

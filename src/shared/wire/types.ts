@@ -3281,6 +3281,9 @@ export type ListConversationsPayload = Record<string, never>
  * key counts as Claude.
  */
 export interface ConversationSummary {
+  /** Durable history IDs from the daemon; absent on legacy rows. */
+  read_up_to?: number
+  latest_entry_id?: number
   id: string
   name: string | null
   is_promoted: boolean
@@ -3660,6 +3663,7 @@ export interface RenameWorkspacePayload {
  * sidebar here without a fresh list request.
  */
 export interface ConversationUpdatedPayload {
+  read_up_to?: number
   id: string
   is_promoted: boolean
   name: string | null

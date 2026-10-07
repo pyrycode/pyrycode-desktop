@@ -83,13 +83,14 @@ string-to-string map with its supplied keys.
 ## Snapshot contract
 
 Every snapshot has `version: 1`, `serverId` and a `kind` of `list` or `timeline`.
-A list's `conversations` array retains all eight required `ConversationSummary` fields:
+A list retains the eight required `ConversationSummary` fields:
 `id`, `name`, `is_promoted`, `is_archived`, `cwd`, `last_message_ts`, `last_used_at`
-and `workspace_label`, plus optional fields carried when present:
-`is_muted` ([#1594](https://github.com/pyrycode/pyrycode-desktop/issues/1594)) and `agent`
-([#1649](https://github.com/pyrycode/pyrycode-desktop/issues/1649), mapped through `agentFromWire` —
-a row saved before #1649 restores with no `agent` key at all, exactly as it did before). Duplicate
-conversation ids within one list are invalid; array order is preserved without sorting.
+and `workspace_label`. Optional `is_muted` and `agent` (mapped through `agentFromWire`) are retained;
+older rows restore without an agent key. Duplicate IDs within a list are invalid; order is preserved.
+
+Optional `read_up_to` and `latest_entry_id` retain non-negative safe integers, including zero.
+Null, negative, fractional, nonnumeric and unsafe values reject the snapshot without coercion.
+Older version-1 lists remain valid with neither field; omission never becomes zero.
 
 `archived_at?: string | null` is also retained. Snapshot validation preserves strings (including
 invalid timestamps) and explicit `null`, rejects other value types, and restores pre-field rows
@@ -300,7 +301,9 @@ exposes only the event type and main-stamped `serverId` during a daemon subscrib
 synchronous call, restoring the previous context in `finally`. This gives store
 observers the supplying host without a second event subscription whose ordering
 could misattribute content. List recording accepts changed `byServer` arrays only
-during `conversationsReceived`, preserving received order. Timeline updates folded
+during `conversationsReceived`, preserving received order and reconciled read fields.
+Read pushes patch held attention immediately but do not themselves write history; a later list
+reply captures the monotonic held mark. Timeline updates folded
 during daemon delivery use that receipt's origin, never the active host at save time.
 
 Outside daemon delivery, two local edits qualify:
@@ -574,12 +577,10 @@ synthetic events and programmatic movement, including empty/short threads and
 reconnect. An empty page needs a later received live frame as a receipt barrier;
 row count alone cannot prove that the empty response has settled.
 
-[`chatHistory.test.ts`](../../../src/shared/chatHistory.test.ts) exercises every
-current row shape, optional/empty values, coverage, nested field projection,
-detached inputs, admission limits and request coordinates.
-Its assistant-attribution cases JSON-round-trip an owner, parented text and an older
-parentless row, and reject malformed or oversized saved parents. Renderer
-`toolGroups.test.tsx` also verifies identical grouping after that version-1 round trip.
+[`chatHistory.test.ts`](../../../src/shared/chatHistory.test.ts) checks row shapes, projection,
+detached inputs, limits and coordinates. Read-ID cases round-trip zero/safe maximum, restore older
+omitted fields and reject invalid values. Attribution cases round-trip parented/older parentless
+rows and reject malformed parents; `toolGroups.test.tsx` checks restored grouping.
 [`chatHistoryStore.test.ts`](../../../src/main/chatHistoryStore.test.ts) uses real
 temporary files with injected reversible encryption to cover fresh-instance
 reads, empty-versus-missing records, host separation, retained unlisted timelines,
@@ -649,6 +650,11 @@ covers ordered host isolation with equal ids, missing/empty/error results, dupli
 admission and delayed success/failure after received lists, clears and cancellation.
 It runs the real writer alongside restoration: installing and clearing local lists
 must schedule no save, while a later received list must still record.
+
+[`received-read-marks.spec.ts`](../../../e2e/received-read-marks.spec.ts) separates immediate mounted
+dot/badge clearing from persistence: after host A's push, saved host marks remain the received
+list values `[0, 2]`. A store update alone cannot prove a saved mark. See
+[counted verifier evidence](development-verification.md#what-each-test-tier-proves).
 
 [`chat-history-recording.spec.ts`](../../../e2e/chat-history-recording.spec.ts)
 exercises the mounted production observer and handler, real composer cancellation,

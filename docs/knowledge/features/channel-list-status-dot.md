@@ -9,8 +9,8 @@ host row, workspace grouping, CSS) stays on the parent page.
 
 Split from #676, the last of the three ([#799](conversation-status.md)'s resolver,
 [#800](conversation-status-dot.md)'s leaf, and this ticket's wiring). A module-private, nullary-prop-free
-`ConversationStatusDotControl({ conversationId })`, mirroring `HostConnectionDotsControl`'s shape one level
-down: five narrow per-id subscriptions —
+`ConversationStatusDotControl({ row })` derives `conversationId` from the actual row and composes
+its received read fields with five narrow per-id subscriptions —
 `useModalStore(selectHasOutstandingFor(id))`,
 `useQuestionBatchStore((s) => selectBatchFor(id)(s) !== undefined)`,
 `useConversationActivityStore(selectActivityFor(id))`, `useConversationTimelineStore(selectTimelineFor(id))`,
@@ -19,6 +19,15 @@ down: five narrow per-id subscriptions —
 and handed straight to `ConversationStatusDot`. It renders as `Row`'s **first child**, ahead of the
 `.channel-list__row-open` button, in both `renderBody` map sites (`:558`, `:589`) — so both trees, every
 workspace group, get exactly one unconditional dot, idle included.
+
+With both daemon fields, `isConversationUnread(timeline, lastRead, row)` compares
+`latest_entry_id > read_up_to` even without a held timeline. Passing the actual host-stamped row
+keeps equal IDs on different hosts independent; an ID-only lookup could silently select the other
+host's read state. A received read advance clears that row's green dot before any refresh reply,
+while local opening/timeline stamps are suppressed. Incomplete rows keep the local-count fallback.
+Permission/trust prompts and pending questions still take precedence, followed by working, new
+messages and idle. Archived rows remain outside the active sidebar; muting affects badge and
+notifications, not this dot. No geometry, colour or animation changes accompany received read state.
 
 [#873](https://github.com/pyrycode/pyrycode-desktop/issues/873) added
 [`resolveConversationStatus`](conversation-status.md)'s leading `inputRequired` parameter, landing
@@ -66,8 +75,8 @@ therefore leaves a later test's seed silently doing nothing, and that test rende
 its initial state.
 
 This is also the answer to the question [`conversationUnread.ts`](conversation-unread.md) deliberately left
-open — **where the two-store unread composition lives.** It lives here, per row, keyed by the row's own
-conversation id: never the open conversation's, so a chat the operator has never opened still shows its
+open — **where unread composition lives.** It lives here, using the actual row and that row's own
+conversation id for local selectors, so a chat the operator has never opened still shows its
 working or unread state correctly.
 
 **Placement — a sibling of the open button, not a child of it.** `ConversationStatusDot` ships a named

@@ -175,7 +175,7 @@ The [final verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1
 confirms all five host prompt and six sidebar tests were present and passed in the
 2026-10-06 gate at `1082bcffb6524c1f507da08ef9e8e250c40125ef`: 301 executed,
 301 passed, 0 failed, 4 skipped overall; each of these groups had 0 failed and
-0 skipped. See [verification evidence and capture guidance](development-verification.md#host-prompt-verification)
+0 skipped. See [verification evidence and capture guidance](development-verification-test-tiers.md#host-prompt-verification)
 for the named cases and visual comparison. No live Claude turn is required.
 
 ## Related

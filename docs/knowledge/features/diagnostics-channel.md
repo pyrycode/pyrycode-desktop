@@ -203,7 +203,7 @@ before the logger's spread. Nothing returns to the renderer.
 
 ## Related
 
-- [Message lifecycle verification](development-verification.md#message-lifecycle-diagnostics) — real-serializer hostile-field checks and the production renderer-to-sink Playwright regression.
+- [Message lifecycle verification](development-verification-test-tiers.md#message-lifecycle-diagnostics) — real-serializer hostile-field checks and the production renderer-to-sink Playwright regression.
 - [Content-free diagnostic log](diagnostic-log.md) / [#126](../codebase/126.md) — the logger this channel feeds; the `DiagnosticEvent` allowlist `RendererDiagnosticEvent` mirrors and the `event()` spread that forces the project-not-forward-raw deviation. The renderer boundary is a **new** producer for the same single instance the transport legs ([#127](../codebase/127.md)/[#128](../codebase/128.md)) and the [decode boundary](inbound-message-decode.md) ([#130](../codebase/130.md)) write to.
 - [Session store](session-store.md) / [#134 codebase notes](../codebase/134.md) — the first real consumer: an optional `dispatch`-level observer that emits one content-free `store-transition` record per action.
 - [Command channel](command-channel.md) / [#17](../codebase/17.md) — the one-way, boundary-validated renderer→main pattern this copies end-to-end; read for the shared conventions and the trust-boundary contrast. The **one** divergence (project-not-guard) is documented above.

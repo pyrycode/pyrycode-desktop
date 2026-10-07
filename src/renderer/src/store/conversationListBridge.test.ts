@@ -559,3 +559,26 @@ describe('host connection list lifecycle', () => {
     }
   )
 })
+
+describe('received read-mark bridge', () => {
+  it('patches before refresh, omits absent marks, and rejects invalid origins', () => {
+    let deliver: (event: DaemonEvent) => void = () => {}
+    const store = createConversationListStore()
+    store.getState().setConversations([row({ read_up_to: 2, latest_entry_id: 10 })], 'a')
+    const refresh = vi.fn(() => expect(store.getState().byServer.get('a')?.[0].read_up_to).toBe(10))
+    const patch = vi.fn((host: string, id: string, mark: number) => store.getState().advanceReadMark(host, id, mark))
+    const off = vi.fn()
+    const unsubscribe = subscribeConversations((listener) => { deliver = listener; return off },
+      store.getState().setConversations, refresh, patch)
+    const event = { type: 'conversationUpdated' as const, conversation: { ...updated(), read_up_to: 10 } }
+    deliver({ ...event, serverId: 'a' } as DaemonEvent)
+    expect(patch).toHaveBeenCalledWith('a', event.conversation.id, 10)
+    deliver({ ...event, conversation: updated(), serverId: 'a' } as DaemonEvent)
+    expect(patch).toHaveBeenCalledTimes(1)
+    for (const serverId of [undefined, null, '', 7]) deliver({ ...event, serverId } as DaemonEvent)
+    expect(patch).toHaveBeenCalledTimes(1)
+    expect(refresh).toHaveBeenCalledTimes(2)
+    unsubscribe()
+    expect(off).toHaveBeenCalledOnce()
+  })
+})

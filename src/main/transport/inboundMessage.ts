@@ -3172,8 +3172,20 @@ function parseConversationSummary(payload: unknown): ConversationSummary {
     last_used_at,
     archived_at,
     workspace_label,
-    ...optionalAgent(payload)
+    ...optionalAgent(payload),
+    ...optionalReadId(payload, 'read_up_to'),
+    ...optionalReadId(payload, 'latest_entry_id')
   }
+}
+
+/** Omitted legacy fields remain unknown; numeric IDs are admitted without coercion. */
+function optionalReadId(payload: Record<string, unknown>, key: 'read_up_to' | 'latest_entry_id'): { read_up_to?: number; latest_entry_id?: number } {
+  const value = payload[key]
+  if (value === undefined) return {}
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new WireDecodeError('malformed conversation read ID')
+  }
+  return key === 'read_up_to' ? { read_up_to: value } : { latest_entry_id: value }
 }
 
 /**
@@ -3286,7 +3298,7 @@ function parseConversationUpdatedPayload(payload: unknown): ConversationUpdatedP
   const cwd = requireString(payload, 'cwd')
   const last_used_at = requireString(payload, 'last_used_at')
   const workspace_label = requireStringOrNull(payload, 'workspace_label')
-  return { id, is_promoted, name, cwd, last_used_at, workspace_label }
+  return { id, is_promoted, name, cwd, last_used_at, workspace_label, ...optionalReadId(payload, 'read_up_to') }
 }
 
 /**

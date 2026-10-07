@@ -115,3 +115,17 @@ describe('saved assistant attribution', () => {
     ] })).toThrow()
   })
 })
+
+describe('saved received read IDs', () => {
+  const list = (row: unknown) => ({ version: 1, kind: 'list', serverId: 'host', conversations: [row] })
+  it('restores zero, safe maximum and legacy omission without inventing fields', () => {
+    const row = { ...summary, read_up_to: 0, latest_entry_id: Number.MAX_SAFE_INTEGER }
+    expect(parseChatHistorySnapshot(JSON.parse(JSON.stringify(list(row))))).toEqual(list(row))
+    expect(parseChatHistorySnapshot(list(summary))).toEqual(list(summary))
+  })
+  it.each([null, -1, 0.5, '1', {}, Number.MAX_SAFE_INTEGER + 1])('rejects invalid marks %j', (value) => {
+    for (const key of ['read_up_to', 'latest_entry_id']) {
+      expect(() => parseChatHistorySnapshot(list({ ...summary, [key]: value }))).toThrow()
+    }
+  })
+})

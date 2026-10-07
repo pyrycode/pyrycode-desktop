@@ -1,9 +1,9 @@
 # Conversation last-read store
 
 The renderer's held mark of how far the operator has read into **each** conversation — a count of
-[thread timeline](thread-timeline.md) items seen, keyed by `conversationId`, so a future sidebar has
-something true to compare a chat's latest activity against. Client-side fiction: the daemon carries no
-read cursor at all.
+[thread timeline](thread-timeline.md) items seen, keyed by `conversationId`. This is the legacy
+fallback for rows without both daemon read fields. Complete rows use received durable history IDs
+through [conversation unread](conversation-unread.md), independently of this local count.
 
 Introduced in [#775](../codebase/775.md), split from #677. Shipped dormant — the holder and its read
 surface only, no writer, no reader — the same "populated and unread" posture the [conversation activity
@@ -16,8 +16,7 @@ over this store's `selectLastReadFor` and [conversation timeline holder](convers
 `selectTimelineFor`, reading neither via a bound hook here. **#779 clears it at the pairing boundary** — see
 [Configuration and usage](#configuration-and-usage) below. **[#1197](https://github.com/pyrycode/pyrycode-desktop/issues/1197)
 added a second, scoped clear** for the boundary the pairing does not fully end at — forgetting one of
-several paired servers now drops only that server's marks, and only that server's — see below. #676,
-drawing the resulting dot, is still open.
+several paired servers now drops only that server's exclusive marks — see below.
 
 ## What it does
 
@@ -28,6 +27,13 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
 
 ## How it works
 
+- **Complete daemon rows suppress local stamping.** Both activation and timeline-driven writes call
+  `stampLastReadFor`, whose production `isDaemonBacked(id)` dependency reads the current list at
+  invocation time. Any matching row with both `read_up_to` and `latest_entry_id` (including zero)
+  suppresses the write. The local map is ID-keyed, so a duplicate ID with a complete row on any host
+  also suppresses stamping for its legacy peer; selecting only the first match would make protection
+  depend on host order. Daemon unread still compares each actual row independently. The store's direct
+  `recordLastRead` API remains a local count writer, not a daemon mark publisher.
 - **Shape:** the house four-part store (`zustand/vanilla` DI factory → app-wide singleton → `useStore`
   hook → selector factory bound to one id), the same shape as [conversation activity
   store](conversation-activity-store.md) and [conversation timeline
@@ -95,8 +101,8 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
     loop would be re-minted by a later iteration. It is also the only effect in that helper's set reaching
     outside memory, so running it last means a `localStorage` throw aborts no other clear. See [Paired
     shell routing](paired-shell-routing.md) for the call site.
-- **Value shape — a count, not a timestamp.** No timestamp exists anywhere the renderer can reach: the
-  turn-stream IPC arms carry `conversationId` and `turnId` but no time field, `ConversationActivityEntry`
+- **Legacy value shape — a count, not a timestamp or daemon history ID.** The older count design uses
+  live timeline growth: the turn-stream IPC arms carry `conversationId` and `turnId` but no time field, `ConversationActivityEntry`
   is four booleans with no arrival marker, and the daemon's own `last_message_ts`/`last_used_at` do not
   move on message arrival. The chosen comparand is `conversationTimelineStore`'s per-conversation
   `items.length` ([thread timeline](thread-timeline.md)), which is fed per conversation since #756 and is
@@ -152,11 +158,13 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
 - Persistence key: `pyry.conversationLastRead` (the app's third `localStorage` key — a shared
   key-namespacing helper was considered and declined; see Related decisions).
 - **Writer since #777.** `conversationLastReadBridge.ts` (`src/renderer/src/store/`) is
-  `recordLastRead`'s one caller: `activateConversation` stamps the conversation being opened
-  (`stampLastReadFor`, called unconditionally, outside the id-change gate — a re-open re-stamps), and
+  `recordLastRead`'s one caller: `activateConversation` invokes the guarded `stampLastReadFor` outside
+  the id-change gate — a legacy re-open re-stamps — and
   `useConversationLastRead()`, mounted in `PairedShell`, re-stamps the **open** conversation on every
   `conversationTimelineStore` emission so content landing while it stays open never pushes its count past
-  its own mark. See [Paired shell § The last-read
+  its own local mark. Complete daemon rows skip both writes, including opening without a held
+  timeline; incomplete rows retain the old behavior. Persistence under `pyry.conversationLastRead`
+  and both pairing/per-server clears remain in place. See [Paired shell § The last-read
   stamp](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777) for the write path,
   including a reachable, deliberately unfixed edge case where the pairing- and conversation-teardown
   clears can persist a spurious `0` over a true mark (below).
@@ -177,7 +185,7 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
 
 ## Edge cases and limitations
 
-- **A recreated timeline slice restarts below a stale mark, and reads as read — decided in
+- **A recreated legacy timeline slice restarts below a stale mark, and reads as read — decided in
   [#778](conversation-unread.md), not a bug.** [Conversation timeline
   holder](conversation-timeline-holder.md) evicts at ten slices; an evicted key reads absent, and if
   content later arrives the slice is recreated with `items.length` starting near zero. A held mark of, say,
@@ -190,7 +198,7 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   conversations since the last pairing), and the keyspace is bounded by the operator's own opening of
   conversations rather than by anything the daemon can mint. No bound, no prune-on-load, no LRU. #779's
   whole-app pairing-boundary clear and #1197's per-server scoped clear are the only floors.
-- **A teardown clear can persist a spurious `0` over a true mark on conversation delete/archive — reachable,
+- **A legacy teardown clear can persist a spurious `0` over a true mark on conversation delete/archive — reachable,
   not fixed. Resolved for both boundaries the pairing can end or narrow at: the whole-app one by #779, the
   per-server one by #1197.** Both `clearPairingScopedState` and `exitActiveConversation` clear
   `conversationTimelineStore` one line before they clear `activeConversationStore` (code review, PR #792),

@@ -105,6 +105,42 @@ describe('finished Agent history', () => {
     expect(h.agents.getState().rosters.size).toBe(0)
   })
 
+  it.each(['completed', 'failed', 'stopped'])('qualifies a historical start on live %s and preserves it through terminal replay', status => {
+    const h = harness()
+    h.page([user(3), start(), launch()])
+    h.timelines.getState().dispatchFor('c', { type: 'turnState', state: 'thinking' })
+    const prior = h.agents.getState().agentTimeline.get('c')?.get('a')
+    const membership = h.agents.getState()
+    const boundary = h.state().timeline.nextRowKey
+    expect(prior).toMatchObject({ historyStarted: true, confirmed: false, finishBefore: null })
+    expect(h.project().some(r => r.marker || r.background)).toBe(false)
+
+    h.agents.getState().setUpdatedTask({ conversationId: 'c', taskId: 'a', status,
+      patch: '', summary: '', truncatedFields: null }, boundary)
+    h.timelines.getState().recordPlacementJoin('c', joinKeyFor('backgroundTaskUpdated', 'ts-4'))
+    h.timelines.getState().dispatchFor('c', { type: 'userText', text: 'after live finish' })
+    const settled = h.agents.getState().agentTimeline.get('c')?.get('a')
+    const assertFinished = () => {
+      expect(h.agents.getState().agentTimeline.get('c')?.get('a')).toMatchObject({
+        identity: prior?.identity, toolCallId: 'a', confirmed: true, finishBefore: boundary, finishOrder: 1
+      })
+      expect(h.project().map(r => [r.index, !!r.marker])).toEqual([
+        [0, true], [1, false], [0, false], [2, false]
+      ])
+      expect(h.project().filter(r => r.background)).toMatchObject([{ running: false }])
+      for (const key of ['rosters', 'rosterAgentIds', 'unlistedStarts', 'finishedTasks', 'pendingStops'] as const) {
+        expect(h.agents.getState()[key]).toBe(membership[key])
+      }
+      expect(h.state().timeline.phase).toBe('thinking')
+    }
+    assertFinished()
+    const items = h.state().timeline.items
+    h.page([finish('a', status)])
+    expect(h.agents.getState().agentTimeline.get('c')?.get('a')).toBe(settled)
+    expect(h.state().timeline.items).toEqual(items)
+    assertFinished()
+  })
+
   it('keeps historical qualification on the exact start id and never replays live turn state', () => {
     const h = harness()
     h.agents.getState().setStartedTask({ conversationId: 'c', taskId: 'a', toolCallId: 'different', taskType: 'local_agent', description: 'live', truncatedFields: null })

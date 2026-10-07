@@ -715,6 +715,7 @@ export function createBackgroundTaskRosterStore(
         const agentTimeline = terminal && agent?.finishBefore === null
           ? new Map(s.agentTimeline).set(snapshot.conversationId,
               new Map(evidence).set(snapshot.taskId, { ...agent, finishBefore,
+                confirmed: agent.confirmed || agent.historyStarted === true,
                 finishOrder: [...(evidence?.values() ?? [])].reduce((last, entry) => Math.max(last, entry.finishOrder ?? 0), 0) + 1 }))
           : s.agentTimeline
         const pendingStops = terminal

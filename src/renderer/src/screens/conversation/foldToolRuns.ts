@@ -19,7 +19,7 @@ export function foldToolRuns(items: readonly ThreadItem[], projection: readonly 
   }
   for (const group of projection) {
     const item = items[group.index]
-    if (item?.kind !== 'toolCall') {
+    if (group.marker || group.background || item?.kind !== 'toolCall') {
       finish()
       continue
     }

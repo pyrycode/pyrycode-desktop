@@ -39,7 +39,9 @@ either source held verbatim:
   one. `patch` (opaque text, held verbatim) and its own cut report are latest-wins, one nested record
   ([#577](../codebase/577.md)): `null` means no update has ever matched the task, `{ patch: '', … }` is a
   recorded value meaning "claude sent no change", and the two never substitute for each other. An update
-  naming an unknown conversation or an unknown `taskId` is silently ignored. Unlike the started frame's
+  naming an unknown conversation or an unknown `taskId` leaves display records unchanged;
+  existing [Agent timeline evidence](background-task-roster-store-internals.md#retained-agent-timeline-evidence)
+  can still capture its first terminal position after roster removal. Unlike the started frame's
   fields, a patch **survives** a roster replacement of its task regardless of provenance — no roster row
   can report a patch, so a later roster's row still refreshes the task's label/type/own cut report while
   leaving the recorded patch alone. Since #1560 the same frame also carries `status` (an open string,
@@ -58,8 +60,9 @@ either source held verbatim:
   never on arrival order, checking the listed task first and then the unlisted hold. Latest wins, one
   record per task (`HeldBackgroundTask.progress`), and it rides across a later roster or started rebuild
   the same way `latestUpdate`/`status`/`summary` already do, since neither a roster row nor a started
-  frame can report it. A report for a task held in neither place is silently dropped, the same
-  `Object.is`-provable miss `setUpdatedTask` already has: a report never opens a task. It is **not** a
+  frame can report it. A report for a task held in neither place is silently dropped,
+  a same-state no-op as for an update with no matching display or timeline evidence: a report
+  never opens a task. It is **not** a
   finish signal — it never touches `finishedTasks` or a roster's `droppedTasks` — and its three counters
   (`totalTokens`, `toolUses`, `durationMs`) are claude's cumulative readings, held exactly as received,
   never summed or diffed and not guaranteed monotonic; the frame is rate-bounded, so a gap between reports

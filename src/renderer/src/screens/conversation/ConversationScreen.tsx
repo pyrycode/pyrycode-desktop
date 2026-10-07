@@ -58,6 +58,7 @@ import {
 import { useReportedContextStore, selectReportedContextFor } from '../../store/reportedContextStore'
 import { contextTokenSource } from './contextTokenSource'
 import {
+  type BackgroundAgentTimeline,
   useBackgroundTaskRosterStore,
   selectLiveTaskCountFor
 } from '../../store/backgroundTaskRosterStore'
@@ -310,6 +311,8 @@ export function ConversationScreen({
   const offline = useSessionStore(s => selectedHost !== null && s.statuses.get(selectedHost)?.type !== 'connected')
   const heldSlice = useConversationTimelineStore(s => openConversationId === null ? undefined : s.timelines.get(openConversationId))
   const ownSlice = heldSlice?.serverId === selectedHost ? heldSlice : undefined
+  const backgroundAgents = useBackgroundTaskRosterStore(s => openConversationId === null || ownSlice === undefined
+    ? undefined : s.agentTimeline.get(openConversationId))
   const openTimeline = selectedHost !== null && ownSlice === undefined ? null : heldTimeline
   const localStatus = ownSlice?.localRead ?? (ownSlice === undefined ? 'loading' : 'loaded')
   const coverage = ownSlice?.coverage ?? (ownSlice?.history?.status === 'loaded'
@@ -564,8 +567,10 @@ export function ConversationScreen({
         key={openConversationId}
         items={items}
         rowKeys={thread.rowKeys}
+        rowArrivalOrder={thread.rowArrivalOrder}
         localEchoes={thread.localEchoes}
         foldTools={collapseToolUses}
+        backgroundAgents={backgroundAgents}
         onReply={replyToMessage}
         scrollPin={scrollPin}
         trailing={(pendingBatch || hasPermissionSurface) && <QuestionHistorySlot conversationId={openConversationId} />}
@@ -1181,7 +1186,9 @@ export function SavedTimelineNotice({ status }: {
 
 export function Timeline({
   items,
+  backgroundAgents,
   rowKeys,
+  rowArrivalOrder,
   localEchoes,
   foldTools = false,
   scrollPin,
@@ -1199,7 +1206,9 @@ export function Timeline({
 }: {
   trailing?: ReactNode
   items: readonly ThreadItem[]
+  backgroundAgents?: ReadonlyMap<string, BackgroundAgentTimeline>
   rowKeys?: TimelineState['rowKeys']
+  rowArrivalOrder?: TimelineState['rowArrivalOrder']
   localEchoes?: TimelineState['localEchoes']
   /** Presentation only; absent or false retains ordinary tool rows. */
   foldTools?: boolean
@@ -1230,7 +1239,18 @@ export function Timeline({
   const turnStats = turnStatsByItemIndex(items)
   const [expandedTools, setExpandedTools] = useState<ReadonlySet<number>>(() => new Set())
   const [expandedRuns, setExpandedRuns] = useState<ReadonlySet<number>>(() => new Set())
-  const projection = groupToolRows(rows.map((row) => row.item))
+  const agentNodes = useRef(new Map<number, HTMLDivElement>())
+  const [revealAgent, setRevealAgent] = useState<{ key: number } | null>(null)
+  useEffect(() => {
+    if (revealAgent === null) return
+    agentNodes.current.get(revealAgent.key)?.scrollIntoView({ block: 'center' })
+    setRevealAgent(null)
+  }, [revealAgent])
+  const projection = groupToolRows(rows.map((row) => row.item), backgroundAgents,
+    rows.map(row => {
+      const key = rowKeys?.[row.itemIndex] ?? firstRowKey + row.itemIndex
+      return row.itemIndex === -1 ? Infinity : rowArrivalOrder?.get(key) ?? key
+    }), -firstRowKey)
   const rowKeyAt = (index: number) => rowKeys?.[rows[index]?.itemIndex ?? index] ??
     firstRowKey + (rows[index]?.itemIndex ?? index)
   const drawn = projection.filter((group) => {
@@ -1244,6 +1264,7 @@ export function Timeline({
   const runIsExpanded = (run: ToolRun) => run.members.some((index) => expandedRuns.has(rowKeyAt(index)))
   const expandedRunStarts = new Set(runs.filter(runIsExpanded).map((run) => run.index))
   const hiddenRows = new Set(projection.filter((group) => {
+    if (group.marker) return false
     const run = runByMember.get(group.index)
     return group.ancestors.some((index) => {
       const ancestorRun = runByMember.get(index)
@@ -1252,15 +1273,15 @@ export function Timeline({
     }) || (run !== undefined && !expandedRunStarts.has(run.index))
   }).map((group) => group.index))
   // Hidden descendants stay mounted; undrawn rows are skipped when joining tool rows.
-  const visible = drawn.filter((group) => !hiddenRows.has(group.index))
+  const visible = drawn.filter((group) => group.marker || !hiddenRows.has(group.index))
   const joins = new Map(visible.map((group, index) => {
     const previous = visible[index - 1]
     const next = visible[index + 1]
     const above = previous?.depth === group.depth ? rows[previous.index]?.item : undefined
     const below = next?.depth === group.depth ? rows[next.index]?.item : undefined
     return [group.index, [
-      (above?.kind === 'toolCall' || runByStart.has(group.index)) && 'tool-group-row--joined-above',
-      below?.kind === 'toolCall' && 'tool-group-row--joined-below'
+      (!previous?.marker && above?.kind === 'toolCall' || runByStart.has(group.index)) && 'tool-group-row--joined-above',
+      !next?.marker && below?.kind === 'toolCall' && 'tool-group-row--joined-below'
     ].filter(Boolean).join(' ')]
   }))
   return (
@@ -1272,7 +1293,22 @@ export function Timeline({
         const row = rows[group.index]
         if (!row) return null
         const key = rowKeyAt(group.index)
-        const hidden = hiddenRows.has(group.index)
+        const hidden = !group.marker && hiddenRows.has(group.index)
+        if (group.marker && row.item.kind === 'toolCall') return (
+          <button key={`agent-marker${key}`} type="button" className="agent-start-marker"
+            onClick={() => {
+              setExpandedTools(previous => new Set(previous).add(key))
+              const run = runByMember.get(group.index)
+              if (run) setExpandedRuns(previous => new Set(previous).add(key))
+              setRevealAgent({ key })
+            }}>
+            <span className={`conversation-status-dot ${group.running ? 'agent-start-marker__running' : 'agent-start-marker__finished'}`} aria-hidden="true" />
+            <span className="agent-start-marker__state">{group.running ? 'Agent started, still working' : 'Agent finished'}</span>
+            <span aria-hidden="true">·</span>
+            <span className="agent-start-marker__description">{(toolHeadlineRuns(row.item).subject ?? '').slice(0, 4096)}</span>
+            <span className="agent-start-marker__action">Go to agent ↓</span>
+          </button>
+        )
         if (row.item.kind !== 'toolCall') {
           const rowKey = row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`
           const content = <TimelineRow key={rowKey}
@@ -1292,9 +1328,10 @@ export function Timeline({
         const content = (
           <ToolRow
             item={row.item}
-            group={group.hasChildren ? {
+            group={group.hasChildren || group.background ? {
               count: group.count,
-              running: !saved && group.running
+              background: group.background,
+              running: group.background ? group.running : !saved && group.running
             } : undefined}
             expansion={{
               expanded: expandedTools.has(key),
@@ -1322,6 +1359,7 @@ export function Timeline({
             })} />
           </div>,
           <div key={row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
+            ref={node => { if (node) agentNodes.current.set(key, node); else agentNodes.current.delete(key) }}
             className={`tool-group-row tool-group-row--depth-${group.depth} ${joins.get(group.index) ?? ''}`} hidden={hidden}>
             {content}
           </div>
@@ -2093,16 +2131,16 @@ export function ToolRow({
 }: {
   item: Extract<ThreadItem, { kind: 'toolCall' }>
   defaultExpanded?: boolean
-  group?: { count: number; running: boolean }
+  group?: { count: number; running: boolean; background?: boolean }
   expansion?: { expanded: boolean; onToggle: () => void }
 }): JSX.Element {
   const { result, denial } = item
-  const elapsed = result === null && denial === undefined ? item.elapsedSeconds : undefined
+  const elapsed = !group?.background && result === null && denial === undefined ? item.elapsedSeconds : undefined
   const expandable = group !== undefined || result !== null || denial !== undefined
   const [localExpanded, setExpanded] = useState(defaultExpanded)
   const expanded = expansion?.expanded ?? localExpanded
   const rowClass =
-    denial !== undefined
+    group?.background ? 'tool-row tool-row--resolved' : denial !== undefined
       ? 'tool-row tool-row--resolved tool-row--denied'
       : result
         ? `tool-row tool-row--resolved${result.isError ? ' tool-row--error' : ''}`

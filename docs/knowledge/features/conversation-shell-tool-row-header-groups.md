@@ -105,13 +105,56 @@ New groups start collapsed. `hasChildren` controls disclosure independently of t
 distinct descendant tool count: a pending Agent/Task with only text still has a
 chevron and a “0 tools · running” count. Assistant text never adds to the count.
 Headers retain the call description and count distinct descendant tool-use ids,
-excluding the parent. `running` remains visible while the parent or any descendant
-tool has neither a result nor a denial. Both readings update while
+excluding the parent. For ordinary groups, `running` remains visible while the parent
+or any descendant tool has neither a result nor a denial. Both readings update while
 collapsed. Expanding a pending group reveals children without drawing an empty result
 body; nested groups keep their own collapse state. Text is hidden while its owner
-is collapsed, visible when expanded, and hidden again on collapse. Marker and
-live-row placement remain assigned to #1780/#1781; attribution reuses the existing
-group presentation independently of that work.
+is collapsed, visible when expanded, and hidden again on collapse.
+
+### Started background agents
+
+A received `local_agent` start with a nonempty tool-call id qualifies for relocation
+only after roster-derived `local_agent` confirmation and an exact match to a loaded
+call named `Agent`. Ids are matched without trimming or coercion. Foreground calls,
+`Task`, other task types, unconfirmed starts and matching non-Agent calls keep their
+ordinary presentation. A roster alone creates no row. See
+[retained lifecycle evidence](background-task-roster-store-internals.md#retained-agent-timeline-evidence)
+for qualification and ownership.
+
+The launch position becomes a one-line “Agent started, still working” marker with
+the Agent description and “Go to agent ↓”. The whole marker is a native button:
+pointer activation or Enter/Space expands the destination Agent and any enclosing
+collapsed tool run, then scrolls the full row into view after commit. This effect runs
+after the parent's scroll-pin layout pass so explicit navigation wins. The description
+is escaped plain text, bounded to 4096 characters and ellipsized; the action keeps its
+width. Refs and row keys use retained client-owned numbers, never daemon ids as DOM
+attributes or selectors.
+
+While running, full Agent groups follow all ordinary rows, including user and queued
+messages, in received-start order. Later confirmation, roster refresh or older launch
+history does not reorder established starts. Descendants and attributed assistant text
+move with their group; text adds no tools. The background lifecycle controls the
+header's distinct descendant count and running treatment independently of “Async agent
+launched” resolving the parent or gaps between child calls. A childless Agent shows
+“0 tools · running”; background treatment removes launch-pending dimming and elapsed
+timing. Markers and background roots break folded tool runs, while visible live rows
+reuse the existing joined borders.
+
+The first received update whose status is exactly `completed`, `failed` or `stopped`
+settles the full group at that update's chronological position, before later ordinary
+arrivals. Equal boundaries follow terminal arrival order, rather than start order.
+The launch marker reads “Agent finished” with a green dot and retains navigation;
+the full header shows the tool count without “running”. Roster omission cannot finish
+an Agent, and repeats cannot move or revive an established finish. Placement survives
+roster removal before the update, inactive-conversation delivery and late launch/child
+history. Launch markers remain chronological anchors: confirming a newer Agent must
+not move its marker above an already settled group. See
+[placement and history limits](conversation-timeline-store-limits.md#edge-cases-and-limitations).
+
+Retained row identity preserves expansion through relocation, prepends and late child
+attachment. A pinned thread follows live-row growth; a scrolled-up thread holds the
+reader's position until explicit navigation. Roster-only connect rows and paged
+background-task reconstruction remain separate work in #1840 and #1781.
 
 ### Expansion identity
 
@@ -177,6 +220,21 @@ borders on both sides of a failed row at a collapsed-group boundary. Keep the or
 stack assertion in `e2e/tool-row-toggle.spec.ts`: unchanged inner ToolRow markup did
 not prevent the wrapper regression. Fake transport proves this client behavior; no
 additional live-Claude acceptance gate is needed.
+
+Background lifecycle units in `backgroundAgentTimeline.test.ts` and
+`groupToolRows.test.ts` cover roster provenance, retained first finish/order, exact
+qualification, projection and queued receipt chronology. Static Timeline coverage
+checks escaped marker content and a zero-child running row; it cannot exercise
+navigation or scrolling. The dispatcher gate at
+`a85d004b2144461c7fb65716e469797f471ebf11` on 2026-10-07 executed 327 fake-transport tests:
+327 passed, 0 failed, 4 skipped. Its named
+“started background agents follow the tail, navigate markers, and settle on inactive
+delivery” test in `e2e/tool-groups.spec.ts` is present and passed, covering pointer and
+Enter/Space navigation, expansion, pinned/held scrolling, inactive delivery, late
+confirmation, equal-boundary finishes and composer-driven queued settlement with
+mounted identity retained. The
+[verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1843#issuecomment-6032197466)
+confirms that evidence; no live-Claude acceptance was required.
 
 [`e2e/assistant-parent-text.spec.ts`](../../../e2e/assistant-parent-text.spec.ts)
 streams deltas before the owner has a result, then checks text-only and mixed groups,

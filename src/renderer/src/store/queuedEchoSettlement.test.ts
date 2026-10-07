@@ -148,6 +148,25 @@ describe('queued own echo settlement', () => {
     expect(selectTimelineFor('a')(store.getState())).toBe(next)
   })
 
+  it('retains receipt placement through history and navigation, then clears it with its row', () => {
+    const store = createConversationTimelineStore()
+    for (const event of [delta('first', 'first'), { type: 'userText', text: 'own', messageId: 'm' } satisfies ThreadEvent]) {
+      store.getState().dispatchFor('a', event)
+    }
+    store.getState().markLocalSendQueued('a', [queue()])
+    store.getState().dispatchFor('a', receipt(7, true))
+    const held = selectTimelineFor('a')(store.getState())!
+    expect(held.rowArrivalOrder?.get(1)).toBe(2)
+    expect(held.nextRowKey).toBe(3)
+    store.getState().prependHistoryFor('a', [{ kind: 'userText', text: 'older' }])
+    store.getState().dispatchFor('b', receipt())
+    const after = selectTimelineFor('a')(store.getState())!
+    expect(after.rowArrivalOrder).toBe(held.rowArrivalOrder)
+    expect(after.rowKeys?.slice(1)).toEqual(held.rowKeys)
+    store.getState().dispatchFor('a', { type: 'dropUserText', messageId: 'm', queuedMsgId: 7 })
+    expect(selectTimelineFor('a')(store.getState())?.rowArrivalOrder?.size).toBe(0)
+  })
+
   it('uses the bound queue identity even when receipt message IDs collide or differ', () => {
     let s = reduceTimeline(waiting(), end('first'))
     const translated = translateTimelineEvent({ type: 'messageReceived', message: {

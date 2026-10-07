@@ -16,6 +16,7 @@
 // of text under a structured-looking shape. This path has no DOM sink and runs no JSON.parse; it copies
 // named fields and never interprets them. The inert-plain-text obligation binds #568.
 import { useEffect } from 'react'
+import { conversationTimelineStore } from './conversationTimelineStore'
 import type { DaemonEvent } from '@shared/ipc/events'
 import {
   backgroundTaskRosterStore,
@@ -320,7 +321,10 @@ export function BackgroundTaskRosterData(): null {
           .getState()
           .resetRostersFor(selectConversationIdsFor(origin)(conversationListStore.getState())),
       (snapshot) => backgroundTaskRosterStore.getState().setStartedTask(snapshot),
-      (snapshot) => backgroundTaskRosterStore.getState().setUpdatedTask(snapshot),
+      (snapshot) => {
+        const timeline = conversationTimelineStore.getState().timelines.get(snapshot.conversationId)?.timeline
+        backgroundTaskRosterStore.getState().setUpdatedTask(snapshot, timeline?.nextRowKey ?? timeline?.items.length ?? 0)
+      },
       (snapshot) => backgroundTaskRosterStore.getState().setTaskProgress(snapshot),
       (conversationId, taskId) => backgroundTaskRosterStore.getState().endTaskStopWait(conversationId, taskId)
     )

@@ -1254,7 +1254,8 @@ export function Timeline({
     rows.map(row => {
       const key = rowKeys?.[row.itemIndex] ?? firstRowKey + row.itemIndex
       return row.itemIndex === -1 ? Infinity : rowArrivalOrder?.get(key) ?? key
-    }), -firstRowKey, provisionalIndices)
+    }), -firstRowKey, provisionalIndices,
+    rows.map(row => rowKeys?.[row.itemIndex] ?? firstRowKey + row.itemIndex))
   const identities = new Map<string, number>()
   for (const entry of backgroundAgents?.values() ?? []) {
     if (entry.confirmed && entry.identity !== undefined && !identities.has(entry.toolCallId)) identities.set(entry.toolCallId, entry.identity)
@@ -1311,21 +1312,26 @@ export function Timeline({
         if (!row) return null
         const key = rowKeyAt(group.index)
         const hidden = !group.marker && hiddenRows.has(group.index)
-        if (group.marker && row.item.kind === 'toolCall') return (
-          <button key={`agent-marker${key}`} type="button" className="agent-start-marker"
-            onClick={() => {
-              setExpandedTools(previous => new Set(previous).add(key))
-              const run = runByMember.get(group.index)
-              if (run) setExpandedRuns(previous => new Set(previous).add(key))
-              setRevealAgent({ key })
-            }}>
-            <span className={`conversation-status-dot ${group.running ? 'agent-start-marker__running' : 'agent-start-marker__finished'}`} aria-hidden="true" />
-            <span className="agent-start-marker__state">{group.running ? 'Agent started, still working' : 'Agent finished'}</span>
-            <span aria-hidden="true">·</span>
-            <span className="agent-start-marker__description">{(toolHeadlineRuns(row.item).subject ?? '').slice(0, 4096)}</span>
-            <span className="agent-start-marker__action">Go to agent ↓</span>
-          </button>
-        )
+        if (group.marker && row.item.kind === 'toolCall') {
+          const launchId = row.item.toolUseId
+          const historicalDescription = [...(backgroundAgents?.values() ?? [])]
+            .find(entry => entry.historyOnly && entry.toolCallId === launchId)?.description
+          return (
+            <button key={`agent-marker${key}`} type="button" className="agent-start-marker"
+              onClick={() => {
+                setExpandedTools(previous => new Set(previous).add(key))
+                const run = runByMember.get(group.index)
+                if (run) setExpandedRuns(previous => new Set(previous).add(key))
+                setRevealAgent({ key })
+              }}>
+              <span className={`conversation-status-dot ${group.running ? 'agent-start-marker__running' : 'agent-start-marker__finished'}`} aria-hidden="true" />
+              <span className="agent-start-marker__state">{group.running ? 'Agent started, still working' : 'Agent finished'}</span>
+              <span aria-hidden="true">·</span>
+              <span className="agent-start-marker__description">{(historicalDescription ?? toolHeadlineRuns(row.item).subject ?? '').slice(0, 4096)}</span>
+              <span className="agent-start-marker__action">Go to agent ↓</span>
+            </button>
+          )
+        }
         if (row.item.kind !== 'toolCall') {
           const rowKey = row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`
           const content = <TimelineRow key={rowKey}

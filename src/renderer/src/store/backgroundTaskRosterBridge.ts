@@ -16,6 +16,7 @@
 // of text under a structured-looking shape. This path has no DOM sink and runs no JSON.parse; it copies
 // named fields and never interprets them. The inert-plain-text obligation binds #568.
 import { useEffect } from 'react'
+import { liveJoinKeyFor } from './timelineBridge'
 import { conversationTimelineStore } from './conversationTimelineStore'
 import type { DaemonEvent } from '@shared/ipc/events'
 import {
@@ -247,7 +248,8 @@ export function subscribeBackgroundTaskRoster(
   setStartedTask: (snapshot: BackgroundTaskStartedSnapshot) => void,
   setUpdatedTask: (snapshot: BackgroundTaskUpdatedSnapshot) => void,
   setTaskProgress: (snapshot: BackgroundTaskProgressSnapshot) => void,
-  endTaskStopWait?: (conversationId: string, taskId: string) => void
+  endTaskStopWait?: (conversationId: string, taskId: string) => void,
+  recordPlacementJoin?: (event: DaemonEvent) => void
 ): () => void {
   return onDaemonEvent((event) => {
     if (event.type === 'connected') {
@@ -266,11 +268,13 @@ export function subscribeBackgroundTaskRoster(
     }
     const started = translateBackgroundTaskStarted(event)
     if (started !== null) {
+      recordPlacementJoin?.(event)
       setStartedTask(started)
       return
     }
     const updated = translateBackgroundTaskUpdated(event)
     if (updated !== null) {
+      recordPlacementJoin?.(event)
       setUpdatedTask(updated)
       return
     }
@@ -326,7 +330,12 @@ export function BackgroundTaskRosterData(): null {
         backgroundTaskRosterStore.getState().setUpdatedTask(snapshot, timeline?.nextRowKey ?? timeline?.items.length ?? 0)
       },
       (snapshot) => backgroundTaskRosterStore.getState().setTaskProgress(snapshot),
-      (conversationId, taskId) => backgroundTaskRosterStore.getState().endTaskStopWait(conversationId, taskId)
+      (conversationId, taskId) => backgroundTaskRosterStore.getState().endTaskStopWait(conversationId, taskId),
+      event => {
+        if (event.type === 'backgroundTaskStarted' || event.type === 'backgroundTaskUpdated') {
+          conversationTimelineStore.getState().recordPlacementJoin(event.conversationId, liveJoinKeyFor(event))
+        }
+      }
     )
   }, [])
 

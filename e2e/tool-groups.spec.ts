@@ -10,6 +10,89 @@ const payload = (id: string, parent?: string, name = 'Agent') => ({
 })
 const frame = (type: EnvelopeType, value: unknown) => encodeEnvelope({ id: 1, type, ts, payload: value })
 
+test('finished agents reconstruct across pages, attach late children, navigate and preserve the reader', async ({ launchPairedApp }) => {
+  let request: number | undefined
+  const { app, page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
+    const envelope = decodeEnvelope(bytes)
+    if (envelope.type === 'request_history') { request = envelope.id; return [] }
+    return [seedConversationsFrame()]
+  } })
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const thread = page.locator('.conversation__thread')
+  const marker = page.locator('.agent-start-marker')
+  const row = page.locator('.tool-row:not(.tool-run__row)').filter({
+    has: page.locator('.tool-row__summary', { hasText: /^historical-agent$/ })
+  })
+  const child = page.locator('.tool-row__summary', { hasText: /^historical-child$/ })
+  const user = (id: number) => ({ id, ts: `history-${id}`, type: 'message', payload: {
+    conversation_id: SEEDED_ROW.id, message_id: `history-${id}`, role: 'user', text: `history user ${id}`
+  } })
+  const ask = async () => {
+    request = undefined
+    await thread.focus()
+    await thread.evaluate(element => { element.scrollTop = 0 })
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    await page.keyboard.press('Home')
+    await expect.poll(() => request).toBeDefined()
+  }
+  const reply = (entries: unknown[], cursor: string) => daemon.pushFrame(encodeEnvelope({
+    id: 2, type: 'history_page', ts, in_reply_to: request,
+    payload: { entries, cursor, at_start: cursor === '' }
+  }))
+  await ask()
+  reply([user(50), user(49), {
+    id: 48, ts: 'finish', type: 'background_task_updated', payload: {
+      conversation_id: SEEDED_ROW.id, task_id: 'history-task', status: 'completed', patch: '', summary: '', truncated_fields: null
+    }
+  }, ...Array.from({ length: 28 }, (_, i) => user(47 - i))], 'starts')
+  await expect(thread.locator('.message-row--user')).toHaveCount(30)
+  await ask()
+  reply([{ id: 19, ts: 'start', type: 'background_task_started', payload: {
+    conversation_id: SEEDED_ROW.id, task_id: 'history-task', tool_call_id: 'historical-agent',
+    task_type: 'local_agent', description: 'historical-agent', truncated_fields: null
+  } }], 'launch')
+  await expect(marker).toHaveCount(0)
+  await expect(row).toHaveCount(0)
+  await ask()
+  const anchor = thread.locator('.message-row--user').filter({ hasText: 'history user 20' })
+  const node = await anchor.elementHandle()
+  const before = await anchor.boundingBox()
+  reply([{ id: 18, ts: 'launch', type: 'tool_use', payload: payload('historical-agent') }], 'children')
+  await expect(marker).toContainText('Agent finished')
+  await expect(row).toHaveCount(1)
+  await expect.poll(async () => (await anchor.boundingBox())?.y).toBeCloseTo(before?.y ?? 0, 0)
+  expect(await node?.evaluate(element => element.isConnected)).toBe(true)
+  await marker.click()
+  await expect(row).toBeInViewport()
+  await expect(row.locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'true')
+  const agentNode = await row.locator('..').elementHandle()
+  const after = thread.locator('.message-row--user').filter({ hasText: 'history user 49' })
+  const afterNode = await after.elementHandle()
+  expect(await row.evaluate((a, b) => Boolean(b && a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING), afterNode)).toBe(true)
+  await ask()
+  reply([{ id: 17, ts: 'child', type: 'tool_use', payload: payload('historical-child', 'historical-agent', 'Read') }], '')
+  await expect(child).toBeVisible()
+  expect(await agentNode?.evaluate(element => element.isConnected)).toBe(true)
+  await expect(marker).toHaveCount(1)
+  await expect(row).toHaveCount(1)
+  for (const key of ['Enter', 'Space']) {
+    await marker.focus()
+    await page.keyboard.press(key)
+    await expect(row).toBeInViewport()
+    await expect(child).toBeVisible()
+  }
+  for (const width of [1280, 800]) {
+    await page.setViewportSize({ width, height: width === 1280 ? 800 : 600 })
+    await marker.click()
+    await app.evaluate(async ({ BrowserWindow }) => {
+      await BrowserWindow.getAllWindows()[0].capturePage(undefined, { stayHidden: true, stayAwake: true })
+    })
+    await capturePairedApp(app, page, `/tmp/builder-1781/finished-${width}.png`)
+    await thread.evaluate(element => { element.scrollTop = 0 })
+    await capturePairedApp(app, page, `/tmp/builder-1781/marker-${width}.png`)
+  }
+})
+
 test('interleaved subagents group, update while collapsed, and retain expansion through history', async ({ launchPairedApp }) => {
   let historyRequest: number | undefined
   const { page, daemon } = await launchPairedApp({ buildReplyFrames: (bytes) => {

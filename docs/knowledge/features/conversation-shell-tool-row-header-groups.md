@@ -168,8 +168,32 @@ Retained row identity preserves expansion through provisional-to-loaded attachme
 relocation, prepends and late children. A pinned thread follows live-row growth;
 a scrolled-up thread holds the reader's position until explicit navigation.
 `readSavedTimeline` contains no task frames and keeps its existing saved format and
-placement. A saved Agent/result alone cannot recover this lifecycle; background-task
-history reconstruction remains #1781.
+placement. A saved Agent/result alone cannot recover this lifecycle.
+
+Daemon pages reconstruct finished rows when a valid historical start names exactly
+`local_agent`, has a nonempty tool-call id matching a loaded call named exactly
+`Agent`, and joins an exact `completed`, `failed` or `stopped` update. Current roster
+membership is unnecessary. Finish, start, launch and children can load on separate
+newest-first pages; unmatched evidence stays retained without creating historical
+running/provisional rows. Foreground, other-type, empty-id and matching non-Agent
+calls keep ordinary placement. Existing connect-roster provisional rows can still
+attach their late launches, retaining established start order and roster fallback.
+
+The full historical group settles at its first retained terminal entry, above later
+ordinary rows; tied anchors follow chronological finish-entry order. Its launch
+marker reads “Agent finished” and uses the retained historical start description,
+escaped and bounded to 4096 characters through the existing marker. Older launch/child
+pages reuse the same row/marker and client-owned identity, without moving an established
+finish or losing expansion/navigation. History overlapping live evidence keeps one
+row and marker; replay never revives finished evidence or changes roster/panel/pill
+membership or live turn state. A historical start/launch followed by the first live
+terminal also qualifies without roster membership, retaining the live finish under
+later historical replay. See [retained qualification](background-task-roster-store-internals.md#retained-agent-timeline-evidence)
+and [ordinary-row/echo anchors and host/reset boundaries](conversation-timeline-store-internals.md#background-agent-history-placement).
+
+Durable history admission/persistence and automatic newest-page requests remain
+with #1814/#1815; memory-only lifecycle joins from daemon pages do not change saved
+snapshots.
 
 ### Expansion identity
 
@@ -288,6 +312,34 @@ deviation. Builder captures were `two-provisional-{1280,800}.png` and
 in `/tmp/verifier-1847/capture-manifest.json`. These scratch paths are not durable
 artifacts; the linked verdict records the reviewed evidence.
 
+Finished-history coverage in `finishedAgentHistory.test.ts` includes separate-page
+start/finish/launch joins, late children, tied anchors, echo mapping, evidence-only
+tails and live/history overlap. The history-start → live-terminal → terminal-replay
+regressions exercise all three exact terminal statuses and assert unchanged live
+membership/turn state and finish identity; testing only live → history misses that
+qualification transition.
+
+For reviewed head `eefeb6ffb20ec8aeba135e7b8aa4aeb931557e1a`, the
+[verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1848#issuecomment-6033846146)
+records 9,297 unit tests executed/passed, 0 failed and 3 skipped, including all
+14 tests in `finishedAgentHistory.test.ts` present and passed. Its browser evidence
+records 5 `tool-groups.spec.ts` tests executed/passed, 0 failed and 0 skipped,
+including the named “finished agents reconstruct across pages, attach late children,
+navigate and preserve the reader” scenario and the four existing scenarios listed
+above. The new scenario serves finish, start, launch and child on separate pages;
+it checks unique rows/markers, retained DOM nodes/expansion, later-row chronology,
+pointer/Enter/Space navigation and a held reader anchor after prepend. The initial
+full browser gate recorded 329 executed, 328 passed, 1 failed and 4 skipped; its
+unrelated offline-conversation-actions failure passed the dispatcher rerun
+(1 executed/passed, 0 failed, 0 skipped). No live-Claude run was required or performed.
+
+The [initial visual verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1848#issuecomment-6033526700)
+records comparison with Figma section `789:10437` at 1280×800 and 800×600, covering
+finished chronology, green marker, description and Go to agent with no additional
+in-scope visual finding. The qualification repair did not change presentation;
+the final verdict retains that comparison. Scratch captures under `/tmp/builder-1781`
+are not durable artifacts; the verdicts record the evidence.
+
 [`e2e/assistant-parent-text.spec.ts`](../../../e2e/assistant-parent-text.spec.ts)
 streams deltas before the owner has a result, then checks text-only and mixed groups,
 single occurrence, arrival order, tool-only counts, collapse/expand/collapse and
@@ -308,7 +360,9 @@ and [reviewed implementation](https://github.com/pyrycode/pyrycode-desktop/pull/
 [assistant parent attribution design](../../specs/architecture/1789-assistant-parent-attribution.md)
 and [implementation](https://github.com/pyrycode/pyrycode-desktop/pull/1791);
 [provisional live Agent design](../../specs/architecture/1840-provisional-live-agent-rows.md)
-and [implementation](https://github.com/pyrycode/pyrycode-desktop/pull/1847).
+and [implementation](https://github.com/pyrycode/pyrycode-desktop/pull/1847);
+[finished Agent history design](../../specs/architecture/1781-finished-agent-history.md)
+and [implementation](https://github.com/pyrycode/pyrycode-desktop/pull/1848).
 
 
 ## Adjacent tool runs

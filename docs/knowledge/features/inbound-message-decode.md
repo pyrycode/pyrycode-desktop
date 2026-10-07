@@ -148,8 +148,12 @@ Availability and metadata provenance are separate concerns in the
 [roster store](background-task-roster-store-internals.md#retained-agent-timeline-evidence).
 
 `inboundMessage.test.ts` covers old missing-id rows, empty/exact strings, supplied
-non-string rejection and unknown-key filtering. This contract does not add
-background-task history decoding or change the saved timeline format (#1781).
+non-string rejection and unknown-key filtering. The roster id is a live placement
+hint; [background Agent history](request-history-send.md#background-agent-placement-events)
+separately decodes started/updated frames with the existing live payload parsers.
+History IPC carries placement fields only, skips malformed payloads individually and
+continues excluding roster/progress/modal/question frames. Live lifecycle envelope
+timestamps reach the bounded overlap join. The saved timeline format is unchanged.
 
 ### Optional permission context
 

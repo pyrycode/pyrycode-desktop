@@ -113,6 +113,8 @@ export type ModelRefusalEvent = {
  * daemon); an empty map and `''` are different facts and are never collapsed into it.
  */
 export type HistoryTimelineEvent =
+  | { type: 'backgroundTaskStarted'; taskId: string; toolCallId: string; taskType: string; description: string }
+  | { type: 'backgroundTaskUpdated'; taskId: string; status: string }
   | ModelRefusalEvent
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string; parentToolUseId?: string }
   | ({ type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string } & TurnEndMetrics)

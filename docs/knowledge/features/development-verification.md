@@ -80,6 +80,72 @@ was required or performed for this fake-transport persistence acceptance.
 - `reply appends and focuses in a reopened saved offline chat`
 - `received history is saved for equal ids on different hosts and replies reopen offline`
 
+The earlier covered-reply title above records the test at that revision. Inline permissions now
+require immediate reply focus with the composer visible; retaining the old deferred-focus assertions
+would reject the intended behavior. The current execution is recorded below.
+
+### Inline permission verification
+
+Static renders establish trailing-history placement, visible composer/footer, native-hidden
+questionnaire markup, choice treatments and escaped text. Controller tests separately exercise
+retained consent, continuous closed-pane invalidation and callbacks capturing the displayed host;
+prompt object identity alone cannot reject ownership changes. Static markup cannot prove focus,
+clicks, scrolling, painted alignment or real session grants.
+
+The [final verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1831#issuecomment-6029539634)
+reviewed `5d1b88adaaff94e7624bddbae55b422aedf25222` on 2026-10-07. Dispatcher verifier gate 6
+(`npx playwright test --reporter=json`) executed 324 tests: 322 passed, 2 failed, 4 skipped.
+The verdict records a dispatcher rerun of the two known unrelated flaky failures: 2 executed,
+2 passed, 0 failed, 0 skipped. It confirms all 20 affected browser scenarios were present,
+executed and passed in the initial run, with 0 failed and 0 skipped:
+
+| Fake-transport spec | Executed / passed | Proof retained |
+| --- | --- | --- |
+| `permission-modal-answer-paths.spec.ts` | 9 / 9 | Navigation retains checks but clears arm; closed-chat invalidation; FIFO/peer resolution; hidden questionnaire drafts; composer/attachments; whole-card scrolling and held/pinned growth |
+| `message-reply.spec.ts` | 5 / 5 | Immediate pointer/keyboard reply focus with end caret, no dismissal/navigation replay, isolated retained drafts and saved-history replies |
+| `offline-held-responses.spec.ts` | 3 / 3 | Empty/offline placement, unavailable-owner response guards and explicit responses after reconnect |
+| `permission-resolution-notices.spec.ts` | 3 / 3 | Owning-chat remote/timeout notice lifetime and isolation |
+
+The verdict explicitly confirms `inline permission replies focus immediately without dismissal
+replay, and drafts and focus stay isolated on chat switch` executed and passed (1 executed,
+1 passed, 0 failed, 0 skipped). It also confirms `history-walk.spec.ts` (2 executed/passed) and
+`thread-scroll-pin.spec.ts` (11 executed/passed), each with 0 failed and 0 skipped. The inline
+growth assertions preserve held-reader arrival/Cancel focus, content growth and draft/grant edits,
+while pinned readers follow card arrival/arming. Minimum 800×600 checks bound horizontal overflow
+and reach every choice, rules/checkbox and Cancel through thread scrolling.
+
+The same verdict independently compared current-head synthetic integrated captures with
+[desktop Figma 756:9170](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=756-9170)
+and supplementary unchecked/checked grant, armed, trust and behavior states. Message-column
+alignment, inner padding, default/armed choices, checkbox, wrapping and external Cancel matched,
+with no material discrepancy. Captures and a revision/hash manifest were retained under
+`/tmp/verifier-1831/head-5d1b88ad/`: `safe-default.png`, `armed.png`, `grant-unchecked.png`,
+`grant-checked.png`, `inline-armed.png` at 1280×800; `minimum-rules.png`, `minimum-armed.png`,
+`minimum-context-armed.png` at 800×600. These are reviewed host scratch paths, not committed assets
+or proof of live Claude effects.
+
+Live grant acceptance belongs to the dispatcher. The preserved test in
+[`real-claude-permission-modal.spec.ts`](../../../e2e/real-claude-permission-modal.spec.ts),
+`real claude session checkbox grants repeated Bash use only in the current session`, requires a
+fresh Bash file effect without another permission in the same session, then a renewed permission
+before any effect in a distinct session in the same workspace. It checks file modification time,
+session identity and observed permission events; optimistic card disappearance alone cannot prove it.
+
+The [dispatcher live gate comment](https://github.com/pyrycode/pyrycode-desktop/issues/1818#issuecomment-6029664454)
+records run `2026-10-07T02-23-21-880Z` on branch `5d1b88adaa` integrated with main `59efab093c`:
+26 executed, 26 passed, 0 failed, 1 skipped. The listed skip is the system-prompt Reset-session case.
+The configured test command was `npx playwright test --config playwright.real-claude.config.ts
+--reporter=json`, rather than the requested `npm run e2e:real:gate`. The
+[supplemental named result](https://github.com/pyrycode/pyrycode-desktop/issues/1818#issuecomment-6029885598)
+confirms `real claude session checkbox grants repeated Bash use only in the current session`
+in `e2e/real-claude-permission-modal.spec.ts` was present, executed and passed on its first attempt
+in that same run (37.2 s): 1 executed, 1 passed, 0 failed, 0 skipped. Every test records
+`daemon-revision: 0.37.0`. This counted named pass satisfies the required execution despite the
+command mismatch, preserving the repeated Bash effect and fresh-session permission proofs.
+The suite totals alone did not establish this named result; the supplemental evidence closes that
+gap. These results cover the local test relay, not the production relay. Documentation recorded
+the supplied evidence without reading dispatcher logs or running live tests.
+
 ## Evidence that cannot pass too early
 
 A closing absence assertion can pass before an action completes.
@@ -406,7 +472,8 @@ answer paths. Those scenarios had 0 failed and 0 skipped; the full-run failure i
 scoped result. Unit evidence records 8,850 executed/passed, 0 failed, 3 skipped.
 
 Static markup tests check all cards and positional native names, one gated response row, escaping,
-trailing-history placement and permission-only composer coverage. Captured-callback tests drive
+trailing-history placement and, at that revision, permission-only composer coverage (superseded by
+[inline permission placement](#inline-permission-verification)). Captured-callback tests drive
 real stores to reject stale replacements/redeliveries, duplicates, cleared drafts and navigated-away
 owners. Browser coverage retains native radio keyboard independence, multi-select/Other behavior,
 ordered trimmed answers, chat navigation, fresh replacement/shortened delivery, offline gates,

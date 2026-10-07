@@ -102,13 +102,13 @@ overlay, toggled by a Primary-outlined composer pill and by the overflow-menu it
 surviving a conversation switch. See [Background-task panel](conversation-shell-background-tasks.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583)
 below.
 
-Permission and trust requests use the open chat's bottom input panel since
-[#1356](https://github.com/pyrycode/pyrycode-desktop/issues/1356). The oldest outstanding request for
-that chat takes precedence over a waiting questionnaire, retaining its picks and Other text, and
-the composer's typed draft. Pending questions render together at the end of history; the composer
-and desktop footer remain available under their existing gates until permission/trust covers them.
-A permission row selection sends nothing; Continue sends the supplied
-default or opens Back/Confirm for a non-default. Chat history and the sidebar remain usable, and
+Permission and trust requests scroll after the open chat's message and queued rows, including
+empty/offline histories. The oldest outstanding request hides only a waiting questionnaire,
+retaining its picks and Other text. The composer, attachments and desktop footer remain visible
+under existing gates. The supplied default answers on one activation; any non-default requires
+two activations of the same choice. Checked session consent survives navigation while arming
+clears; interrupted request/offer/ownership evicts consent even with the pane closed.
+Chat history and the sidebar remain usable, and
 rejection feedback stays in normal flow in its originating chat. The existing modal bridge and
 answer/cancel commands remain in use. See [Permission panel](conversation-shell-permission-modal.md)
 and [Questionnaire placement](conversation-shell-question-panel.md#composer-placement).
@@ -239,7 +239,7 @@ See [verification boundaries](development-verification.md#what-each-test-tier-pr
 
 ## Edge cases and limitations
 
-- An empty connected timeline keeps a focusable history scroller with `EmptyThread` inside. An empty offline chat omits `Timeline`; its chrome and Top overlay still mount and measure.
+- An empty connected timeline keeps a focusable history scroller with `EmptyThread` inside. An empty offline chat omits `Timeline` unless a pending questionnaire, permission/trust or owned rejection needs it; its chrome and Top overlay still mount and measure.
 - Since [#179](../codebase/179.md), the timeline is the **only** thread surface — no split-brain, no empty second region. `MessageThread`/`selectMessages` are retained but unread residue.
 - The send button is **wired** ([#66](../codebase/66.md)): a click (or Enter) sends the composed message and appends an optimistic echo, now into the timeline ([#179](../codebase/179.md)). A whitespace-only input does nothing; a send-bridge failure is swallowed (no crash). See [Composer send](composer-send.md).
 - **Dark scheme only**; the desktop sidebar stays fixed while the chat pane reflows down to the 800px minimum window width.

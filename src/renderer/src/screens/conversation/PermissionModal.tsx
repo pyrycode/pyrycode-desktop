@@ -6,11 +6,22 @@ import { conversationListStore, selectConversations } from '../../store/conversa
 import { sessionStore } from '../../store/sessionStore'
 import { serverIdForOpenConversation } from './unpairAction'
 import { createPermissionChoices } from './permissionChoices'
+import { createPermissionConsent } from './permissionConsent'
 import { useModalStore, selectOutstanding, selectRejections } from '../../store/modalStore'
 import type { ModalOption, ModalPrompt } from '../../store/modalPrompts'
 import { QuestionTick } from './QuestionPanel'
-import { usePromptResponseAvailability } from './promptResponseAvailability'
+import { canRespondToPromptNow, usePromptResponseAvailability } from './promptResponseAvailability'
 const PERMISSION_MODAL_TITLE_ID = 'permission-modal-title'
+
+// App-process lifetime: closed panes must still observe invalidating transitions.
+const permissionConsent = createPermissionConsent(() => {
+  const rows = selectConversations(conversationListStore.getState())
+  return modalStore.getState().outstanding.map(prompt => ({ prompt,
+    serverId: serverIdForOpenConversation(rows, prompt.conversationId) }))
+}, changed => {
+  const offs = [modalStore.subscribe(changed), conversationListStore.subscribe(changed)]
+  return () => offs.forEach(off => off())
+})
 
 // Permission and questionnaire share visual structure, but never requests or answer state.
 export function PermissionModalView({
@@ -31,7 +42,7 @@ export function PermissionModalView({
     if (displayedModalId.current === prompt.modalId) return
     displayedModalId.current = prompt.modalId
     // Only initial display moves focus; updates and availability changes never steal it.
-    if (prompt.defaultToNo === true && responseAvailable) cancelButton.current?.focus()
+    if (prompt.defaultToNo === true && responseAvailable) cancelButton.current?.focus({ preventScroll: true })
   }, [prompt.modalId, prompt.defaultToNo, responseAvailable])
   // The inbound parser supplies JSON; keep false, zero and null as meaningful display text.
   const reason = typeof prompt.reason === 'string' ? prompt.reason : JSON.stringify(prompt.reason)
@@ -129,7 +140,7 @@ export function RejectionSurfaceView({
   )
 }
 
-// Choice consent is local to this chat instance. Rejection ownership lives as long as the feedback.
+// Arming is pane-local; checked consent observes request/owner transitions app-wide.
 export function PermissionModal({ conversationId }: { conversationId: string | null }): JSX.Element | null {
   const outstanding = useModalStore(selectOutstanding)
   const rejections = useModalStore(selectRejections)
@@ -144,11 +155,15 @@ export function PermissionModal({ conversationId }: { conversationId: string | n
   }, changed => {
     const offs = [modalStore, activeConversationStore, conversationListStore, sessionStore].map(store => store.subscribe(changed))
     return () => offs.forEach(off => off())
-  }, { sendCommand: command => window.pyry.sendCommand(command), dispatch,
-    report: code => window.pyry.sendDiagnostic?.({ event: 'permission-choice', code }) }), [conversationId, dispatch])
+  }, { sendCommand: command => {
+    if (canRespondToPromptNow(conversationId)) window.pyry.sendCommand(command)
+  }, dispatch,
+    report: code => window.pyry.sendDiagnostic?.({ event: 'permission-choice', code }) }, permissionConsent), [conversationId, dispatch])
   useEffect(() => control.start(), [control])
   const { armedOptionId } = useStore(control.store)
   const prompt = conversationId === null ? undefined : outstanding.find(p => p.conversationId === conversationId)
+  const rows = useStore(conversationListStore, selectConversations)
+  const displayedServerId = serverIdForOpenConversation(rows, conversationId)
   const responseAvailable = usePromptResponseAvailability(prompt?.conversationId ?? null)
   const armedOption = prompt?.options.find(o => o.id === armedOptionId) ?? null
   const sessionPermissionChecked = control.checked(prompt)
@@ -163,10 +178,10 @@ export function PermissionModal({ conversationId }: { conversationId: string | n
           prompt={prompt}
           responseAvailable={responseAvailable}
           sessionPermissionChecked={sessionPermissionChecked}
-          onSessionPermissionChange={checked => control.toggle(prompt, checked)}
+          onSessionPermissionChange={checked => control.toggle(prompt, checked, displayedServerId)}
           armedOption={armedOption}
-          onActivate={optionId => control.activate(prompt, optionId)}
-          onCancel={() => control.cancel(prompt)}
+          onActivate={optionId => control.activate(prompt, optionId, displayedServerId)}
+          onCancel={() => control.cancel(prompt, displayedServerId)}
         />
       )}
     </>

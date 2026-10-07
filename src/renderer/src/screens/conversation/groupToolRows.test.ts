@@ -110,7 +110,7 @@ it('renders roster-only Agent rows before launch with escaped held descriptions 
   const markup = renderToStaticMarkup(createElement(Timeline, { items: [], backgroundAgents: store.getState().agentTimeline.get('c') }))
   expect(markup.match(/tool-row__name/g)).toHaveLength(2)
   expect(markup).toContain('roster a')
-  expect(markup).toContain('0 tools · running')
+  expect(markup).toContain('running · 0 tools')
   expect(markup).not.toContain('agent-start-marker')
   expect(markup).not.toContain('Start a conversation')
 })
@@ -127,7 +127,7 @@ it('retains provisional finishes before late launches and attaches exact Agent c
   expect(markup.match(/agent-start-marker__state/g)).toHaveLength(1)
   expect(markup.indexOf('roster b')).toBeLessThan(markup.indexOf('tool-row__summary\">work'))
   expect(markup.indexOf('tool-row__name')).toBeLessThan(markup.indexOf('>after<'))
-  expect(markup).not.toContain('· running')
+  expect(markup).not.toContain('running ·')
 })
 
 it('joins provisional descendants in retained order and suppresses matching non-Agent calls exactly', () => {

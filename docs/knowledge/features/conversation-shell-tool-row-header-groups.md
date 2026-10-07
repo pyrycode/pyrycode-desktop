@@ -104,7 +104,7 @@ current tokens). Deeper descendants retain their full ancestry for visibility an
 
 New groups start collapsed. `hasChildren` controls disclosure independently of the
 distinct descendant tool count: a pending Agent/Task with only text still has a
-chevron and a “0 tools · running” count. Assistant text never adds to the count.
+chevron and a “running · 0 tools” count. Assistant text never adds to the count.
 Headers retain the call description and count distinct descendant tool-use ids,
 excluding the parent. For ordinary groups, `running` remains visible while the parent
 or any descendant tool has neither a result nor a denial. Both readings update while
@@ -118,7 +118,7 @@ A connect roster's exact `local_agent` task with a usable launch id immediately
 supplies one provisional full Agent row at the bottom, before either a start frame
 or launch history. Placement prefers the latest nonempty roster id, falling back to
 a known usable started id; neither means no new provisional row. The existing Agent
-header uses the held description and “0 tools · running” treatment, without a launch
+header uses the held description and “running · 0 tools” treatment, without a launch
 marker until a real call loads. See
 [retained lifecycle evidence](background-task-roster-store-internals.md#retained-agent-timeline-evidence)
 for qualification and ownership.
@@ -134,8 +134,8 @@ host; they remain inert equality hints, never authority, DOM attributes or selec
 
 The launch position becomes a one-line “Agent started, still working” marker with
 the Agent description and “Go to agent ↓”. The whole marker is a native button:
-pointer activation or Enter/Space expands the destination Agent and any enclosing
-collapsed tool run, then scrolls the full row into view after commit. This effect runs
+pointer activation or Enter/Space scrolls the destination Agent's full row into view,
+without expanding it or any enclosing collapsed tool run. This effect runs
 after the parent's scroll-pin layout pass so explicit navigation wins. The description
 is escaped plain text, bounded to 4096 characters and ellipsized; the action keeps its
 width. Refs and row keys use retained client-owned identities, never daemon ids as DOM
@@ -149,7 +149,7 @@ Descendants and attributed assistant text
 move with their group; text adds no tools. The background lifecycle controls the
 header's distinct descendant count and running treatment independently of “Async agent
 launched” resolving the parent or gaps between child calls. A childless Agent shows
-“0 tools · running”; background treatment removes launch-pending dimming and elapsed
+“running · 0 tools”; background treatment removes launch-pending dimming and elapsed
 timing. Markers and background roots break folded tool runs, while visible live rows
 reuse the existing joined borders.
 

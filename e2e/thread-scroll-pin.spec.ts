@@ -1268,7 +1268,7 @@ function withheldWalk(): WithheldWalk {
       return historyPageFrame(
         walkRequestId,
         Array.from({ length: WALKED_BACK_ROWS }, (_, i) =>
-          historyEntry(200 + i, walkedBackText(WALKED_BACK_ROWS - i))
+          historyEntry(99 - i, walkedBackText(WALKED_BACK_ROWS - i))
         ),
         'cursor-older-still',
         false

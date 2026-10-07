@@ -102,27 +102,12 @@ sheet node `20:100` was unavailable, and the verifier made no fresh Figma compar
 
 ### Served-page persistence verification
 
-Parser/store regressions in `inboundMessage`, `historyPageBridge`, `chatHistory`,
-`chatHistoryWriter`, `chatHistoryStore` and `finishedAgentHistory` cover skipped ids,
-admission, strict metadata, protected restoration/allocation, host lifetimes and
-immutable finish evidence.
-
-The [final verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1852#issuecomment-6035527996)
-at `ea4d7d35` on 2026-10-07 records units: 9,329 executed/passed, 0 failed,
-3 skipped; no per-test unit counts supplied. Dispatcher gate 6
-(`npx playwright test --reporter=json`): 332 executed/passed, 0 failed, 4 skipped.
-It confirms these named browser cases were present, executed and passed:
-
-- `a correlated repeated served page contributes assistant and tool rows only once`
-- `receipt saturation still saves a repeated page and later live content across fresh relaunches`
-- `records received content, drains buffered quit, and reads locally after relaunch`
-
-Scoped counts: history-walk 3 executed/passed, 0 failed/skipped; recording
-8 executed/passed, 0 failed, 1 window-close platform skip. Assistant/tool counts defeat
-user-message-only suppression; asking from the updated cursor proves repeat
-settlement before absence checks. Cancelling an echo retains content/keys with
-advanced allocation; whole-snapshot equality would stop quit/relaunch proof early.
-This is fake transport; no live-Claude run was required or performed.
+Verify served envelope coverage separately from retained display contributions.
+The [history verification reference](development-verification-history.md) covers
+partial/repeated overlaps, split replies and orphan patches, strict saved metadata,
+held-row/live-state regressions, protected fresh restoration and counted mounted
+tool-expansion/content-anchor evidence. Legacy receipt-only data cannot prove
+retained content. Paging remains reader-driven with opaque cursors.
 
 ### Equal-id received history
 

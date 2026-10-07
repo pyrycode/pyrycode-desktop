@@ -153,20 +153,65 @@ Runtime receipts form a bounded retention window: after moving an exact repeat
 expires oldest whole receipts until both receipt count and aggregate receipt-id
 count are at most 100,000. It rebuilds exact coverage and its maximum from the
 survivors before writer capture. Exclusive evidence from expired receipts becomes
-unknown, so a later repeat may draw again. Display rows, row allocation and pager
-settlement are preserved. One page exceeding the entire id bound clears all served
+unknown; only independently retained display evidence can still suppress those
+contributions. Display rows, row allocation and pager settlement are preserved.
+One page exceeding the entire id bound clears all served
 provenance while still allowing successful settlement and later content saves.
 Disk admission rejects oversized metadata rather than trimming it. Repeated spans
 with changed cursors can exhaust the aggregate bound even with few distinct ids
 and unchanged rows; bounding only unique coverage would eventually stop saving.
 
-For the supplying host/conversation, a nonempty page whose entire served-id set
-is already covered adds no ordinary rows, but still records its cursor/start and
-collects original-page lifecycle evidence. Any unseen id, or absent metadata,
-uses the existing reducer and conservative live timestamp/message-id joins.
-Receipts establish neither entry-to-display contributions nor partial-overlap
-filtering or split-reply assembly; those remain with
-[#1851](https://github.com/pyrycode/pyrycode-desktop/issues/1851).
+The legacy row-only bridge suppresses ordinary rows for a fully covered nonempty
+page. The mounted contribution path instead admits typed entries against retained
+`display`, even when every served id is known: a receipt-only snapshot may lack
+the contribution needed to finish a reply. Both paths record exact cursor/start
+and collect lifecycle evidence from the original page. Served coverage never
+proves display retention.
+
+### Retained display contributions
+
+Version-1 timelines optionally carry sorted `display: HistoryContribution[]`,
+independent of `served`. Each contribution has a nonnegative safe-integer durable
+`id`, an optional bounded `joinKey` (`type` plus timestamp), and an optional surviving
+client `rowKey`. Its operation is a durable `row` with an allowlisted `item`, a
+tool-result/denial `patch`, or an explicitly `suppressed` contribution. Assistant
+items retain fragment text rather than whole replies or raw envelopes. Suppressed
+operator contributions reference the surviving message-id row; these references
+remain chronological anchors and text barriers.
+
+Rows must reference a retained `rowIdentity` key and agree with its row kind and
+turn, tool, message or parent identity as applicable. Patches may remain unbound
+until their call arrives; a bound patch must reference that call's tool identity.
+Denials require nonempty `turnId` and `toolUseId` and matching retained-call turn
+correlation. Declared patch sources must match the operation: `toolResult` for a
+result, `toolDenied` for a denial. Both cross-source mismatches reject the snapshot;
+omitting the source remains valid. Otherwise a restored denial could falsely
+suppress a later live result sharing its timestamp.
+
+Declared ids/ranges must be strictly increasing and nonoverlapping. A `lastId`
+range is inclusive, belongs only to an assistant-text row and carries no join key.
+The parser applies the existing array, string and map bounds, allows only known
+join sources and nonempty timestamp suffixes of at most 64 characters, and rejects
+malformed declared operations or row references. Unknown fields are projected
+away. Permissions, questions, attachment offers, terminal metrics and transient
+live state cannot enter this metadata.
+
+`reconcileHistory` admits unseen contributions in durable-id order regardless of
+receipt coverage, joins adjacent matching turn/parent text and retains orphan
+patches for a later call. Protected writes and fresh reads preserve these joins
+and surviving row keys. Absence of `display` in older version-1 data, including
+receipt-only snapshots, means unknown display provenance: keep the saved rows,
+without inferring entry ids or completeness from timestamps or row counts.
+
+Runtime retention is bounded at 100,000 contributions before writer capture.
+At saturation, consecutive retained assistant fragments for the same row compact
+into an `id`/`lastId` range; only contiguous contributed ids qualify, never gaps
+filled from receipts. Compaction drops timestamp evidence, keeping reverse live
+suppression conservative. If still oversized, represented groups retire to
+unknown provenance while their rows survive; unresolved calls/patches remain
+while capacity permits, with a final bounded tail ensuring later saves stay valid.
+Receipt expiry alone never retires display evidence. See
+[reconciliation and held-row boundaries](conversation-timeline-store-internals.md#the-page-half--the-join).
 
 ### Protected row identities and saving
 
@@ -184,9 +229,10 @@ Later appends/prepends allocate fresh identities without reordering retained row
 Cancelling an echo removes its row but leaves its identity consumed: unchanged
 durable content does not imply whole-snapshot equality or permit allocator rewind.
 
-The writer observes served changes even when row references are unchanged;
-receipt/cursor/start and allocator changes participate in canonical snapshot
-comparison and saving. Restoration itself still schedules no save and restores
+The writer observes served and display changes even when row references are unchanged;
+contribution, receipt/cursor/start and allocator changes participate in canonical snapshot
+comparison and saving. Contribution row references are filtered to the same retained
+durable keys as snapshot items. Restoration itself still schedules no save and restores
 no live phase, pending send, permission or recovery state. Metadata inherits
 [received-host ownership and removal](#received-state-admission-and-ownership);
 content, ids and cursors never enter diagnostics.

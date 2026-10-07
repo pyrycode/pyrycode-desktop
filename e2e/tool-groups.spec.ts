@@ -1,4 +1,5 @@
 import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { capturePairedApp } from './fixtures/capturePairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { EnvelopeType, SendMessagePayload } from '../src/shared/wire/types'
 
@@ -342,4 +343,106 @@ test('started background agents follow the tail, navigate markers, and settle on
   await expect(own).toHaveCount(1)
   expect(await isBefore(row('agent-live-d'), own)).toBeTruthy()
   await page.screenshot({ path: '/tmp/builder-1839/queued-after-finish.png' })
+})
+
+
+test('connect roster Agents appear before history and keep identity through live and historical launches', async ({ launchPairedApp }) => {
+  const quiet = { ...SEEDED_ROW, id: 'connect-quiet', name: 'Connect quiet room' }
+  let historyRequest: number | undefined
+  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
+    const envelope = decodeEnvelope(bytes)
+    if (envelope.type === 'request_history') { historyRequest = envelope.id; return [] }
+    return [seedConversationsFrame()]
+  } })
+  await page.setViewportSize({ width: 1280, height: 800 })
+  daemon.pushFrame(frame('conversations', { conversations: [SEEDED_ROW, quiet] }))
+  const thread = page.locator('.conversation__thread')
+  const row = (id: string) => page.locator('.tool-row:not(.tool-run__row)').filter({
+    has: page.locator('.tool-row__summary', { hasText: new RegExp(`^${id}$`) })
+  })
+  const marker = (id: string) => page.locator('.agent-start-marker').filter({ hasText: id })
+  const roster = (ids: string[]) => daemon.pushFrame(frame('background_task_roster', {
+    conversation_id: SEEDED_ROW.id, dropped_tasks: 0, tasks: ids.map(id => ({
+      task_id: `task-${id}`, tool_call_id: id, task_type: 'local_agent', description: id, truncated_fields: null
+    }))
+  }))
+  const use = (id: string, parent?: string, name = 'Agent') => daemon.pushFrame(frame('tool_use', payload(id, parent, name)))
+  const user = (text: string) => daemon.pushFrame(frame('message', {
+    message_id: text, conversation_id: SEEDED_ROW.id, role: 'user', text
+  }))
+  const terminal = () => daemon.pushFrame(frame('background_task_updated', {
+    conversation_id: SEEDED_ROW.id, task_id: 'task-connect-b', status: 'completed', patch: '', summary: '', truncated_fields: null
+  }))
+  const capture = async (name: string) => {
+    await app.evaluate(async ({ BrowserWindow }) => {
+      await BrowserWindow.getAllWindows()[0].capturePage(undefined, { stayHidden: true, stayAwake: true })
+    })
+    await capturePairedApp(app, page, `/tmp/builder-1840/${name}.png`)
+  }
+  roster(['connect-a', 'connect-b', 'matching-read'])
+  use('matching-read', undefined, 'Read')
+  await expect(row('connect-a').locator('.tool-row__count')).toHaveText('0 tools · running')
+  await expect(row('connect-b').locator('.tool-row__count')).toHaveText('0 tools · running')
+  await expect(row('matching-read').locator('.tool-row__name')).toHaveText('Read')
+  await expect(page.locator('.agent-start-marker')).toHaveCount(0)
+  await expect(page.locator('.tool-row__summary:visible')).toHaveText(['matching-read', 'connect-a', 'connect-b'])
+  const aNode = await row('connect-a').locator('..').elementHandle()
+  await row('connect-a').locator('.tool-row__chip').click()
+  roster(['connect-b', 'connect-a'])
+  daemon.pushFrame(frame('background_task_started', {
+    conversation_id: SEEDED_ROW.id, task_id: 'task-connect-b', tool_call_id: '',
+    task_type: 'local_agent', description: 'connect-b', truncated_fields: null
+  }))
+  use('connect-child', 'connect-a', 'Read')
+  await expect(row('connect-child')).toBeVisible()
+  await row('connect-a').locator('.tool-row__chip').click()
+  user('ordinary during connect')
+  await capture('two-provisional-1280')
+  await page.setViewportSize({ width: 800, height: 600 })
+  await capture('two-provisional-800')
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await row('connect-a').locator('.tool-row__chip').click()
+  use('connect-a')
+  await expect(marker('connect-a')).toBeVisible()
+  expect(await aNode?.evaluate(node => node.isConnected)).toBe(true)
+  await expect(row('connect-a')).toHaveCount(1)
+  await expect(row('connect-child')).toBeVisible()
+  await expect(row('connect-a').locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'true')
+  user('ordinary before connect finish')
+  roster([])
+  await page.locator('.channel-list__row').filter({ hasText: quiet.name }).locator('.channel-list__row-open').click()
+  terminal()
+  user('ordinary after connect finish')
+  await page.locator('.channel-list__row').filter({ hasText: SEEDED_ROW.name ?? '' }).locator('.channel-list__row-open').click()
+  await expect(row('connect-b').locator('.tool-row__count')).toHaveText('0 tools')
+  await thread.focus()
+  await page.keyboard.press('Home')
+  await expect.poll(() => historyRequest).toBeDefined()
+  daemon.pushFrame(encodeEnvelope({ id: 2, type: 'history_page', ts, in_reply_to: historyRequest,
+    payload: { cursor: '', at_start: true, entries: [
+      { id: 12, type: 'tool_use', ts, payload: payload('history-connect-child', 'connect-b', 'Read') },
+      { id: 11, type: 'tool_use', ts, payload: payload('connect-b') }
+    ] }
+  }))
+  await expect(marker('connect-b')).toContainText('Agent finished')
+  await expect(row('connect-b')).toHaveCount(1)
+  const after = thread.locator('.message-row--user').filter({ hasText: 'ordinary after connect finish' })
+  const afterNode = await after.elementHandle()
+  expect(await row('connect-b').evaluate((a, b) => Boolean(b && a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING), afterNode)).toBe(true)
+  for (const key of ['Enter', 'Space']) {
+    await marker('connect-b').focus()
+    await page.keyboard.press(key)
+    await expect(row('history-connect-child')).toBeVisible()
+    await expect(row('connect-b')).toBeInViewport()
+    await row('connect-b').locator('.tool-row__chip').click()
+  }
+  await marker('connect-b').click()
+  await expect(row('history-connect-child')).toBeVisible()
+  terminal()
+  roster(['connect-b', 'connect-a'])
+  await expect(marker('connect-b')).toContainText('Agent finished')
+  await expect(row('connect-b')).toHaveCount(1)
+  await capture('finished-1280')
+  await page.setViewportSize({ width: 800, height: 600 })
+  await capture('finished-800')
 })

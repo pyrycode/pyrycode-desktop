@@ -185,6 +185,7 @@ describe('backgroundTaskRosterStore', () => {
       expect(store.getState().unlistedStarts.get('c9')?.get('t1')).toEqual({
         taskId: 't1',
         toolCallId: 'tc-1',
+        startedToolCallId: 'tc-1',
         taskType: 'local_bash',
         description: 'grep -rn "a<b&c" . --include="*.ts" --color=never',
         truncatedFields: null,
@@ -215,6 +216,7 @@ describe('backgroundTaskRosterStore', () => {
       expect(heldTask(store, 'c1', 't1')).toEqual({
         taskId: 't1',
         toolCallId: 'tc-1',
+        startedToolCallId: 'tc-1',
         taskType: 'local_bash',
         description: 'grep -rn "a<b&c" . --include="*.ts" --color=never',
         truncatedFields: null,
@@ -325,6 +327,7 @@ describe('backgroundTaskRosterStore', () => {
     expect(heldTask(store, 'c1', 't1')).toEqual({
       taskId: 't1',
       toolCallId: 'tc-1',
+        startedToolCallId: 'tc-1',
       taskType: 'local_bash',
       description: 'grep -rn "a<b&c" . --include="*.ts" --color=never',
       truncatedFields: null,
@@ -363,6 +366,7 @@ describe('backgroundTaskRosterStore', () => {
     expect(heldTask(store, 'c1', 't1')).toEqual({
       taskId: 't1',
       toolCallId: 'tc-1',
+        startedToolCallId: 'tc-1',
       taskType: 'local_bash',
       description: 'grep -rn "a<b&c" . --include="*.ts" --color=never',
       truncatedFields: null,
@@ -596,6 +600,7 @@ describe('backgroundTaskRosterStore', () => {
     expect(heldTask(store, 'c1', 't1')).toEqual({
       taskId: 't1',
       toolCallId: 'tc-1',
+        startedToolCallId: 'tc-1',
       taskType: 'local_bash',
       description: 'grep -rn "a<b&c" . --include="*.ts" --color=never',
       truncatedFields: null,
@@ -1392,4 +1397,73 @@ describe('latest progress report (#1640)', () => {
     expect(heldTask(store, 'c1', 't1')?.latestUpdate?.patch).toBe('{"is_backgrounded":true}')
     expect(heldTask(store, 'c1', 't1')?.status).toBe('completed')
   })
+})
+
+describe('connect Agent provenance and placement', () => {
+  const agent = (id: string, tool_call_id?: string, description = id): BackgroundTask => ({
+    task_id: id, task_type: 'local_agent', description, truncated_fields: null, tool_call_id
+  })
+  it('refreshes roster metadata despite an id, and preserves started metadata even with an empty started id', () => {
+    const store = createBackgroundTaskRosterStore()
+    const roster = (row: BackgroundTask) => store.getState().setRoster({ conversationId: 'c1', droppedTasks: 0, tasks: [row] })
+    roster(agent('t1', 'roster-id', 'first'))
+    roster({ ...agent('t1', 'roster-id', 'refreshed'), truncated_fields: ['description'] })
+    expect(heldTask(store, 'c1', 't1')).toMatchObject({ toolCallId: 'roster-id', description: 'refreshed', truncatedFields: ['description'] })
+    store.getState().setStartedTask(started({ toolCallId: '', taskType: 'started-type', description: 'started' }))
+    roster(agent('t1', 'roster-id', 'third'))
+    expect(heldTask(store, 'c1', 't1')).toMatchObject({ toolCallId: 'roster-id', description: 'started', taskType: 'started-type', truncatedFields: null })
+    expect(store.getState().agentTimeline.get('c1')?.get('t1')).toMatchObject({ toolCallId: 'roster-id', description: 'started', confirmed: true })
+  })
+  it('prefers roster ids, falls back to started ids and does not reorder established starts', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setStartedTask(started({ taskId: 'b', toolCallId: 'started-b', taskType: 'local_agent' }))
+    store.getState().setStartedTask(started({ taskId: 'a', toolCallId: 'started-a', taskType: 'local_agent' }))
+    const roster = (rows: BackgroundTask[]) => store.getState().setRoster({ conversationId: 'c1', droppedTasks: 0, tasks: rows })
+    roster([agent('a', 'roster-a'), agent('b', ''), agent('c', ' c '), agent('unknown', '')])
+    const evidence = () => store.getState().agentTimeline.get('c1')
+    expect([...evidence()?.keys() ?? []]).toEqual(['b', 'a', 'c'])
+    expect(evidence()?.get('a')?.toolCallId).toBe('roster-a')
+    expect(evidence()?.get('b')?.toolCallId).toBe('started-b')
+    const identity = evidence()?.get('a')?.identity
+    roster([agent('c', ' c '), agent('a'), agent('b', 'roster-b')])
+    expect([...evidence()?.keys() ?? []]).toEqual(['b', 'a', 'c'])
+    expect(evidence()?.get('a')?.toolCallId).toBe('started-a')
+    expect(evidence()?.get('a')?.identity).toBe(identity)
+  })
+  it('refreshes display types without qualifying non-agent rosters from started types', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', droppedTasks: 0, tasks: [agent('t1', 'r')] })
+    store.getState().setRoster({ conversationId: 'c1', droppedTasks: 0, tasks: [{ ...agent('t1', 'r'), task_type: 'local_bash' }] })
+    expect(heldTask(store, 'c1', 't1')?.taskType).toBe('local_bash')
+    store.getState().setStartedTask(started({ taskId: 'other', taskType: 'local_agent', toolCallId: 'other' }))
+    store.getState().setRoster({ conversationId: 'c1', droppedTasks: 0, tasks: [{ ...agent('other', 'other'), task_type: 'local_bash' }] })
+    expect(store.getState().agentTimeline.get('c1')?.get('other')?.confirmed).toBe(false)
+  })
+})
+
+it('retains a provisional terminal through empty repeated starts, then resets identity at ownership boundaries', () => {
+  const store = createBackgroundTaskRosterStore()
+  const roster = () => store.getState().setRoster({ conversationId: 'c1', droppedTasks: 0, tasks: [
+    { task_id: 't1', tool_call_id: 'r', task_type: 'local_agent', description: 'work', truncated_fields: null }
+  ] })
+  roster()
+  const first = store.getState().agentTimeline.get('c1')?.get('t1')
+  store.getState().setRoster({ conversationId: 'c1', droppedTasks: 0, tasks: [] })
+  expect(selectLiveTaskCountFor('c1')(store.getState())).toBe(0)
+  expect(store.getState().agentTimeline.get('c1')?.get('t1')?.finishBefore).toBeNull()
+  store.getState().setUpdatedTask(updated({ status: 'future-status' }), 4)
+  expect(store.getState().agentTimeline.get('c1')?.get('t1')?.finishBefore).toBeNull()
+  store.getState().setUpdatedTask(updated({ status: 'completed' }), 4)
+  store.getState().setStartedTask(started({ toolCallId: '', taskType: 'local_agent' }))
+  store.getState().setUpdatedTask(updated({ status: 'stopped' }), 9)
+  expect(store.getState().agentTimeline.get('c1')?.get('t1')).toMatchObject({ toolCallId: 'r', finishBefore: 4, finishOrder: 1 })
+  store.getState().resetRostersFor(new Set(['c1']))
+  expect(store.getState().agentTimeline.has('c1')).toBe(false)
+  roster()
+  const second = store.getState().agentTimeline.get('c1')?.get('t1')?.identity
+  expect(second).not.toBe(first?.identity)
+  store.getState().clearAllRosters()
+  expect(store.getState().agentTimeline.size).toBe(0)
+  roster()
+  expect(store.getState().agentTimeline.get('c1')?.get('t1')?.identity).not.toBe(second)
 })

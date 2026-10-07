@@ -5279,10 +5279,8 @@ describe('parseInboundMessage — background_task_roster recognition (#566, addi
     })
   })
 
-  it('drops unknown server keys at the ROW level, keeping exactly the four known fields (AC4)', () => {
-    // The pointed extras are the SCALAR siblings' fields, which a roster row must never have and must
-    // not ride through — the regression test for a row narrower wrongly cloned from
-    // parseBackgroundTaskStartedPayload.
+  it('keeps the additive roster tool id while dropping unknown row keys', () => {
+    // The daemon now supplies the optional id; scalar patches still do not ride through.
     const withRowExtras = {
       ...BACKGROUND_TASK_ROSTER,
       tasks: [
@@ -5297,7 +5295,7 @@ describe('parseInboundMessage — background_task_roster recognition (#566, addi
       kind: 'background-task-roster',
       backgroundTaskRoster: {
         ...BACKGROUND_TASK_ROSTER,
-        tasks: [BACKGROUND_TASK_ROSTER.tasks[0]]
+        tasks: [{ ...BACKGROUND_TASK_ROSTER.tasks[0], tool_call_id: 'toolu_01XYZ' }]
       }
     })
   })
@@ -5305,6 +5303,18 @@ describe('parseInboundMessage — background_task_roster recognition (#566, addi
   it('still returns null for a well-formed envelope of another unmodeled type (no widening)', () => {
     const bytes = encodeEnvelope({ id: 1, type: 'ack', ts: FIXED_TS, payload: {} })
     expect(parseInboundMessage(bytes)).toBeNull()
+  })
+})
+
+describe('connect roster tool-call id', () => {
+  it.each(['', ' id ', '__proto__'])('preserves exact string %j', tool_call_id => {
+    const result = parseInboundMessage(encodeBackgroundTaskRoster({ ...BACKGROUND_TASK_ROSTER,
+      tasks: [{ ...BACKGROUND_TASK_ROSTER.tasks[0], tool_call_id }] }))
+    expect(result).toMatchObject({ backgroundTaskRoster: { tasks: [{ tool_call_id }] } })
+  })
+  it.each([null, 42, false, {}, []])('rejects a supplied non-string %j', tool_call_id => {
+    expect(() => parseInboundMessage(encodeBackgroundTaskRoster({ ...BACKGROUND_TASK_ROSTER,
+      tasks: [{ ...BACKGROUND_TASK_ROSTER.tasks[0], tool_call_id }] }))).toThrow(WireDecodeError)
   })
 })
 

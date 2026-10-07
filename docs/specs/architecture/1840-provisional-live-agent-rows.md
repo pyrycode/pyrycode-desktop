@@ -74,3 +74,7 @@ None. Considered storing provisional rows in timeline state; rejected because ro
 **Date:** 2026-10-07
 
 Sizing recheck: one deliverable, approximately 650 total written lines (production/tests/plan), one new exported helper, one additive projection consumer update, four observable acceptance criteria and fewer than ten new ignore/reject branches. All boundaries hold.
+
+## Revisions
+
+2026-10-07: Reset verification requires client identities to remain unique for the lifetime of the store factory, including across reconnect/pairing clears, so a mounted Timeline cannot inherit an old provisional expansion. An empty later id leaves already-retained evidence intact; it cannot discard a settled row after roster removal. Held placement readings and first-terminal boundaries remain independent.

@@ -13,12 +13,28 @@ export interface GroupedToolRow {
   running: boolean
 }
 
+/** Synthetic display items never enter stored arrival order or saved history. */
+export function withProvisionalAgents(
+  items: readonly ThreadItem[], evidence: ReadonlyMap<string, BackgroundAgentTimeline> = new Map()
+): readonly ThreadItem[] {
+  const loaded = new Set(items.flatMap(item => item.kind === 'toolCall' ? [item.toolUseId] : []))
+  const provisional: ThreadItem[] = []
+  for (const entry of evidence.values()) {
+    if (!entry.confirmed || entry.toolCallId.length === 0 || entry.description === undefined || loaded.has(entry.toolCallId)) continue
+    loaded.add(entry.toolCallId)
+    provisional.push({ kind: 'toolCall', turnId: '', name: 'Agent', toolUseId: entry.toolCallId,
+      inputSummary: entry.description.slice(0, 4096), result: null })
+  }
+  return provisional.length === 0 ? items : [...items, ...provisional]
+}
+
 /** Display projection only. Identifiers are equality hints local to this conversation. */
 export function groupToolRows(
   items: readonly ThreadItem[],
   evidence: ReadonlyMap<string, BackgroundAgentTimeline> = new Map(),
   rowArrivalOrder: readonly number[] = items.map((_, index) => index),
-  historyCount = 0
+  historyCount = 0,
+  provisionalIndices: ReadonlySet<number> = new Set()
 ): GroupedToolRow[] {
   const owners = new Map<string, number>()
   items.forEach((item, index) => {
@@ -102,7 +118,7 @@ export function groupToolRows(
       group.push({ ...row, ancestors, depth: Math.min(ancestors.length, 2),
         relocated: true, background: row.index === owner, running: row.index === owner ? entry.finishBefore === null : row.running })
       groups.set(owner, group)
-      if (row.index === owner) ordinary.push({ ...row, marker: true, ancestors: [], depth: 0, running: entry.finishBefore === null, hasChildren: false })
+      if (row.index === owner && !provisionalIndices.has(row.index)) ordinary.push({ ...row, marker: true, ancestors: [], depth: 0, running: entry.finishBefore === null, hasChildren: false })
     }
   }
   const settled = [...agents].filter(([, entry]) => entry.finishBefore !== null)

@@ -217,7 +217,20 @@ resting fill, and correct open fill/control opacities. Recovery from input inter
 must still detect a broken style. The replay recovered confirmed hover and exact fill
 in 30/30 cycles; neither observation is a replacement for counted suite evidence.
 See [Desktop isolation](e2e-harness-desktop-isolation.md#desktop-isolation-default-tier-launches) for the
-distinction between this local observation and the separate shared harness work.
+distinction between this local observation and shared launch protection.
+
+The display's real pointer is separate from Playwright's injected pointer.
+A competing window over the real pointer can trigger native exit and clear
+`:hover`; moving the same window to a corner retains hover despite focus change.
+Shown default-tier launches now ignore native mouse events on current and later
+windows, preserving Playwright renderer hit tests and actionability. Regression
+interference must come from an independent input-enabled process: a same-app
+cover inherits the protection and can falsely pass a deletion mutation.
+Keep an unprotected mutation serial, because concurrent negative controls
+contend for the display's single pointer. See the
+[controlled boundary and counted evidence](e2e-harness-desktop-isolation.md#native-display-pointer-protection).
+This hover diagnosis does not establish the cause of the unresolved
+[Welcome actionability stall](e2e-harness-desktop-isolation.md#separate-welcome-readiness-boundary).
 
 A sticky offset is relative to the scrollport content box.
 Read the running window's boxes when a padded scroller is involved.

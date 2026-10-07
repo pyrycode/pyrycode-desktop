@@ -70,9 +70,12 @@ restart while retaining the daemon and its conversations.
 
 See [Desktop isolation (default-tier launches)](e2e-harness-desktop-isolation.md#desktop-isolation-default-tier-launches) for window presentation, renderer throttling and real-pointer observations.
 
-Shown Linux windows share native pointer input. The failed-host regression
-re-delivers real hover and observes host `:hover` with exact Edit opacity together;
-the linked guidance records competing-window loss and styling-sensitivity evidence.
+Shown default-tier launches ignore the display's native pointer on current and
+later windows while retaining Playwright renderer input and normal pairing.
+The linked guidance covers the independent input-enabled cover, initialization
+cleanup, counted acceptance and the separate unresolved Welcome stall in #1842.
+Existing row regressions also re-deliver hover and observe actual `:hover` with
+exact computed treatment; those local observations retain styling sensitivity.
 
 ### Two-server launches
 

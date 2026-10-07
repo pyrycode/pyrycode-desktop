@@ -30,8 +30,12 @@ for (const width of [1280, 800]) {
       document.body.append(probe)
       const style = getComputedStyle(probe)
       const result = { hover: style.backgroundColor, image: style.backgroundImage, outline: style.color }
+      probe.style.backgroundColor = 'var(--color-primary-container)'
+      const primaryFill = getComputedStyle(probe).backgroundColor
+      probe.style.backgroundColor = 'var(--color-error-container)'
+      const errorFill = getComputedStyle(probe).backgroundColor
       probe.remove()
-      return result
+      return { ...result, primaryFill, errorFill }
     })
     const park = () => page.mouse.move(width - 10, 790)
     const toolbar = page.locator('.channel-list__actions')
@@ -80,6 +84,7 @@ for (const width of [1280, 800]) {
       expect(focusBefore.style).not.toBe('none')
       expect(focusBefore.width).not.toBe('0px')
       const fill = await pill.evaluate(el => getComputedStyle(el).backgroundColor)
+      expect(fill).toBe(name === 'warning' ? paint.primaryFill : paint.errorFill)
       const before = await geometry(pill)
       await expect.poll(async () => {
         await pill.hover()

@@ -6,15 +6,27 @@ Received ownership and storage behavior are defined in the parent overview.
 ## Demand and snapshot contracts
 
 [`historyDemand.test.ts`](../../../src/renderer/src/store/historyDemand.test.ts)
-checks unknown/restored/complete coverage, discarded pending demand, failure retry
-from the retained cursor and host isolation. Main connection tests cover abandoned
+checks unknown/restored/complete coverage, discarded pending backwards demand,
+failure retry from the retained cursor and host isolation. Main connection tests cover abandoned
 requests and late replies. [`history-on-open.spec.ts`](../../../e2e/history-on-open.spec.ts)
-now tests explicit demand: its main IPC observer is installed before pairing and
-activation, so zero commands cannot be confused with commands discarded by host
-routing. Genuine wheel/keyboard input is compared with composer navigation,
-synthetic events and programmatic movement, including empty/short threads and
-reconnect. An empty page needs a later received live frame as a receipt barrier;
+counts opening/reconnect asks and leave/reopen deferral behind an owned read and
+original request. Its IPC observer is installed before pairing/activation, so
+counts cannot be confused with commands discarded by host routing. Settle opening
+with backwards paging eligible before rejecting composer/synthetic/downward input,
+resize and programmatic movement; pending exclusion alone would hide broken input
+gates. A separate case withholds opening to prove pending exclusion. Mounted newest
+content appears without upward input and arrival creates no scroll cascade.
+An empty page needs a later received live frame as a receipt barrier;
 row count alone cannot prove that the empty response has settled.
+
+[`newestHistoryDemand.test.ts`](../../../src/renderer/src/store/newestHistoryDemand.test.ts)
+covers offline opening, connection edges, navigation/equal-id host isolation,
+duplicate sync, read settlement/cancellation/live supersession, pending deferral,
+held `atStart`, newest failure/Retry and retained coverage/receipts. Page-first
+missing/stored read completion must also be covered after reopening, including a
+failed following refresh: read-first tests alone miss disk results erasing newly
+admitted rows and evidence. Empty/undrawable/legacy settlement retires loading read
+ownership while settled saved presentation survives.
 
 [`chatHistory.test.ts`](../../../src/shared/chatHistory.test.ts) checks row shapes, projection,
 detached inputs, limits and coordinates. Read-ID cases round-trip zero/safe maximum, restore older
@@ -144,12 +156,21 @@ keychain adapter.
 ## History continuity and overlap
 
 The continuity scenario starts with incomplete saved coverage, restarts offline,
-reads, reconnects and receives new same-host text, then demands one older page with
-the saved cursor. A connected restart checks ordered older/restored/new content and
-the advanced coverage, with no duplicate rows on reopening. Holding the local read
-and observing commands before host routing proves opening, pending demand, settlement
-and reconnect send zero history requests; only fresh qualifying input requests a page.
-Overlap fixtures must place the live overlap at the newest end of the newest-first
+reads, then reconnects and asks newest once while retaining saved partial-assistant
+presentation. Later same-host live text resumes normal rendering; trusted upward
+input asks older with the saved cursor. A connected restart checks ordered content,
+retained coverage and no duplicate rows. Holding the local read proves zero asks
+before settlement, then exactly one newest ask without further reader input.
+
+[`real-daemon-history-on-open.spec.ts`](../../../e2e/real-daemon-history-on-open.spec.ts)
+saves a baseline with served/display evidence, fully exits Electron through the
+shared protected-profile relaunch fixture, and posts a unique `pyry channel post`
+only in its awaited while-closed callback. Reopening observes exactly one marker
+bubble and one newest command without upward input. The marker was absent from the
+saved baseline. This proves real daemon storage/transport, not a Claude turn or
+production-relay delivery; see [counted live acceptance](live-e2e-runbook.md#current-real-claude-gate-state).
+
+Legacy row-fold overlap fixtures must place the live overlap at the newest end of the newest-first
 page. Putting an unmatched older entry first exercises the intentional
 stop-at-first-unmatched rule in `withoutLiveEntries`, producing a duplicate instead
 of testing overlap suppression. A `messageReceived` entry is the one exception to

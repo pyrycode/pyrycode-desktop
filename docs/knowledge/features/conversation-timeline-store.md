@@ -247,8 +247,11 @@ See [configuration and usage](conversation-timeline-store-usage.md#configuration
   symbol checked with host and loading status, survives notice replacement, client
   consumption and host error clearing. Completion/failure uses current sidecars,
   preventing a cleared notice from returning or a read from remaining loading forever.
-  Live content, local sends, cancellation, eviction and host replacement still invalidate
-  the request; settled handles cannot settle again. Neither owner nor notice is saved.
+  Live content, successful owned page admission, local sends, cancellation, eviction
+  and host replacement invalidate the disk read; settled handles cannot settle again.
+  Read start/settlement/cancellation preserves an independently pending same-host
+  history request. Settled saved presentation survives newest refreshes. Neither
+  owner nor notice is saved.
   See [local admission](conversation-timeline-holder.md#local-timeline-admission).
 - **Navigation cleanup must distinguish departure from StrictMode effect replay.**
   The overlay keys cleanup by conversation, defers consumption to a microtask and

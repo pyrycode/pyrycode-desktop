@@ -32,6 +32,25 @@ Use the fake-transport browser tier to prove event delivery through the app.
 Detailed [permission/session verification, host prompt verification and message lifecycle diagnostics](development-verification-test-tiers.md)
 live in the test-tier reference; static proofs and mounted delivery establish different facts.
 
+Newest-history acceptance for [#1815](https://github.com/pyrycode/pyrycode-desktop/issues/1815)
+at `b4eee350bb4d` is counted in the [verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/1878#issuecomment-6047087442):
+units 9,517 executed/passed, 0 failed, 3 skipped; fake Playwright 349 executed/passed,
+0 failed, 4 skipped. All 26 newest-demand units and all five `history-on-open.spec.ts`
+scenarios were present and passed, including mounted newest content without upward
+input/no arrival cascade, read/request deferral on reopening, trusted input gates,
+pending exclusion and reconnect cursor retention. Settle opening with backwards
+paging eligible before negative input assertions; otherwise pending exclusion can
+make broken input gates pass.
+
+The dispatcher live report `2026-10-07T21-21-05-639Z` records 26 executed, 26 passed,
+0 failed, 1 skipped and lists `real-daemon-history-on-open.spec.ts` →
+`a real daemon refreshes saved history with a channel post written while Electron is closed`
+as present and passed (one attempt, 3.1 s). This is dispatcher acceptance at the
+reviewed head, beyond earlier builder evidence. It proves a post absent from the
+saved baseline appears once after full process exit and protected-profile relaunch,
+without upward input, against real daemon storage/transport. See
+[live provenance and excluded case](live-e2e-runbook.md#current-real-claude-gate-state).
+
 Received read-mark coverage in
 [`received-read-marks.spec.ts`](../../../e2e/received-read-marks.spec.ts) withholds metadata refresh
 replies while asserting dot/badge clearing from unsolicited and correlated read updates. It covers

@@ -217,26 +217,42 @@ hole silently.
 
 ## The opening ask (#1259)
 
-The original opening ask was removed by
-[#1394](https://github.com/pyrycode/pyrycode-desktop/issues/1394). The heading remains
-for existing links; the current policy is [user-demand paging](chat-history.md#received-state-admission-and-ownership).
-`PairedShell` no longer calls a history helper during activation.
+`PairedShell` retains `createNewestHistoryDemand` across effect replay. Navigation
+to a host/conversation and its connected edges create one newest demand; duplicate
+sync, renders and metadata refresh do not. Offline opening waits for connection.
+The controller defers behind owned reads/requests, consumes demand before marking
+pending and invalidates it on departure, host replacement or disconnect. Settlement
+only releases demand already created. See [history admission](chat-history.md#received-state-admission-and-ownership).
 
 `ConversationSlice` owns transient `history` alongside successful `coverage`.
-`markHistoryRequested(id, serverId)` marks before send, preserving same-host rows
-and coverage; a differently owned slice starts empty. `recordHistoryPage` updates
-coverage only after page admission, even for an empty page. `recordHistoryFailure`
+`markHistoryRequested(id, serverId, cursor, purpose)` marks before send, preserving same-host rows
+and coverage; an absent or differently owned slice starts empty under the request's host.
+`recordHistoryPage` updates
+coverage only after page admission, even for an empty page. Newest responses retain
+received oldest-end coverage, seeding it only when unknown, while recording their
+own complete served receipts and display evidence. `recordHistoryFailure`
 retains coverage and rows, rejects a conflicting receipt host, and releases pending
-state without retrying. Requests, failures and legacy pages without served metadata
+state without retrying. Failures and legacy pages without served metadata
 do not create absent slices or reorder the holder. A page declaring served ids can
 create a host-owned slice even with no drawable rows. Restoration seeds coverage
 and optional receipts through its explicit read handle.
 
-`requestOlderHistory(deps, conversationId, nearTop)` is the sole asker. It declines
+`requestHistoryPage` shares current ownership and local-read/pending exclusion across
+newest, older and Retry asks, using `HISTORY_PAGE_LIMIT` (200). Newest demand uses
+`cursor: ''` regardless of held `atStart`; Retry uses captured cursor/purpose.
+`requestOlderHistory(deps, conversationId, nearTop)` additionally declines
 unaddressable ids, input outside the band, pending local reads/requests and received
 `atStart`. Otherwise it marks synchronously before sending the exact successful
 cursor, or `''` for unknown coverage, with `limit: HISTORY_PAGE_LIMIT` (200). The production dependency
 reads current host ownership on each invocation; no coverage is captured at mount.
+
+Same-host pending history survives saved-read start, completion and cancellation.
+Successful owned page admission clears a loading read and its owner, even for
+empty/undrawable pages and legacy responses without served ids. Late disk success,
+failure or cancellation then cannot erase admitted rows, identities or evidence.
+Only settled saved presentation survives newest pending/admission/failure, keeping
+partial saved assistants quiescent until owned live content arrives. Eligibility
+checks run after receipt/writer settlement; connection loss is observed synchronously.
 
 `subscribeHistoryPage` owns both page and failure events independently of the live
 bridges. Pages are drawn before recording successful coverage. All failure reasons
@@ -598,9 +614,15 @@ operator presses Enter ─(composerSend.ts, submitMessage, guard passed)→ opti
 trusted upward thread input near top, connected owner →
    requestOlderHistory(historyAskDeps, conversationId, nearTop)
    → pending local read/request or received atStart ? return
-     : markHistoryRequested(id, host)
+     : requestHistoryPage → markHistoryRequested(id, host, cursor, 'older')
        → sendCommand(requestHistory, cursor: last successful cursor or '', limit: 200)
-   // Opening, scroll events, page settlement and reconnect do not initiate requests.
+   // Scroll events and page settlement create no backwards demand.
+
+owned connected opening / owning-host connected edge →
+   createNewestHistoryDemand.sync(target, connected)
+   → loading read / pending request ? defer existing demand
+     : consume demand → requestHistoryPage(cursor: '', purpose: 'newest', limit: 200)
+   // Departure/disconnect cancels delayed demand; settlement never creates it.
 
 served history page ─(#1222 ask + transport decode, #1227 per-entry decode)→ DaemonEvent{historyPageReceived,
    conversationId, entries: HistoryTimelineEntry[], servedIds?, cursor, atStart}
@@ -616,7 +638,8 @@ served history page ─(#1222 ask + transport decode, #1227 per-entry decode)→
         → return entry boundary keys for original-page lifecycle placement mapping
         → spread held slice with timeline/display; held live state survives
    → conversationTimelineStore.getState().recordHistoryPage(conversationId, cursor, atStart, servedIds)
-        → bound receipts, rebuild exact retained ids/highestId, settle successful coverage
+        → bound receipts, rebuild exact retained ids/highestId, retain oldest-end coverage on newest
+        → supersede loading saved-read owner; preserve settled saved presentation
    (#1223 — no reader wiring needed beyond the existing selectTimelineFor(conversationId): the keyed
     holder's read surface does not distinguish a live-appended row from a prepended one. Draw runs BEFORE
     settle so a page for a since-evicted slice still finds a key to record against.)
@@ -626,5 +649,5 @@ refused history ask ─(daemon-error tier's fourth member — see Request histor
    → window.pyry.onDaemonEvent → subscribeHistoryPage's settleFailure arm
    → conversationTimelineStore.getState().recordHistoryFailure(conversationId, reason, retryable)   (#1259)
    (all six `reason` members land here identically — nothing drawn, no banner, no timer, no re-ask;
-    `retryable` is carried for #1260's walk and read by nothing in this slice)
+    captured cursor/purpose survives; explicit Retry requires retryable/current ownership)
 ```

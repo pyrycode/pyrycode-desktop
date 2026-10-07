@@ -11,11 +11,13 @@ history pages automatically. Saved lists restore into the sidebar on launch,
 including unavailable and pairing-rejected hosts. Opening a saved chat restores its
 timeline on demand whether its host is connected or unavailable. Restored rows remain
 readable through reconnect and subsequent same-host receipts continue saving.
-Downloads require explicit upward thread input or a retryable failed page's Retry
-action, including after reconnect; explicit Forget/Unpair removes the host's saved content after credential removal.
+Each actual connected opening and owning-host reconnect requests one newest page
+after owned read/request settlement. Offline opening waits for connection; opening
+never fills the missing range. Older pages require trusted upward thread input;
+a retryable failed page has a Retry action. Explicit Forget/Unpair removes the host's saved content after credential removal.
 Confirmed conversation deletion removes that host/conversation's saved timeline
 and list entry.
-Observing, saving, flushing and restoration add no history requests.
+Observing, saving, flushing and restoration create no lifecycle demand themselves.
 Offline opening and scrolling retain the existing host-scoped request gates. Disk
 retention is independent of the renderer holder's ten-conversation memory limit.
 
@@ -104,8 +106,9 @@ A timeline adds `conversationId`, ordered `items`, `prependedRows` and `coverage
 also used by the legacy [row-key fallback](conversation-timeline-store-limits.md#edge-cases-and-limitations).
 Coverage is either `{ status: 'unknown' }`, when no history page has been received,
 or `{ status: 'received', cursor: string, atStart: boolean }`. The cursor is the
-exact opaque cursor from the last successfully admitted page, and `atStart` records the server's report
-that history has reached its beginning. Empty cursor strings are valid. Successful
+exact opaque cursor at the held oldest paging end, and `atStart` records the server's report
+that this backwards walk reached its beginning. Newest responses preserve received
+coverage; without it, they seed backwards paging. Empty cursor strings are valid. Successful
 coverage stays separate from later pending or failed requests; row count alone
 does not establish coverage or the beginning of history.
 
@@ -120,8 +123,9 @@ The holder retains successful `ConversationSlice.coverage` independently of tran
 `history`; the writer also retains it beside each observed timeline.
 `HistoryRequestState` alone is insufficient: `markHistoryRequested` and
 `recordHistoryFailure` replace its loaded cursor and `atStart`. A served page
-updates rows before `recordHistoryPage` publishes successful coverage; only that
-loaded state advances durable coverage. A live-only timeline stays `unknown`,
+updates rows before `recordHistoryPage` publishes successful settlement. The writer
+captures `slice.coverage`, not the newest response's loaded cursor/start flag:
+using the latter would lose the oldest paging end on restart. A live-only timeline stays `unknown`,
 and a successfully received empty page still establishes coverage.
 
 ### Served provenance and page suppression
@@ -142,7 +146,9 @@ the maximum covered id, or absent when that union is empty. Holes remain unknown
 neither the maximum, timestamps, drawable ids nor row counts prove coverage.
 An empty page retains an empty receipt, and an all-skipped page retains its ids;
 both settle successfully. An empty receipt does not prove an empty conversation.
-The pager's `coverage.cursor`/`atStart` may differ from the latest receipt: a narrow
+The pager's `coverage.cursor`/`atStart` may differ from the latest receipt: a newest
+page retains its own complete receipt and updates retained high-water evidence
+without replacing the oldest paging end or covering holes. A narrow
 legacy event can advance successful paging without declaring served provenance.
 It preserves known receipts rather than manufacturing a new empty receipt.
 Older snapshots/events without `served` remain valid with unknown provenance.
@@ -229,6 +235,11 @@ Later appends/prepends allocate fresh identities without reordering retained row
 Cancelling an echo removes its row but leaves its identity consumed: unchanged
 durable content does not imply whole-snapshot equality or permit allocator rewind.
 
+Protected restoration keeps oldest-end coverage beside newest receipts, high-water,
+display evidence and row identities. Legacy display-only rows imply no entry ids or
+completeness. Settled saved presentation survives newest pending/admission/failure;
+clearing it on demand would make a partial saved assistant appear to stream.
+
 The writer observes served and display changes even when row references are unchanged;
 contribution, receipt/cursor/start and allocator changes participate in canonical snapshot
 comparison and saving. Contribution row references are filtered to the same retained
@@ -300,27 +311,44 @@ Renderer web storage remains prohibited for conversation content.
 
 ### Received-state admission and ownership
 
-Apart from explicit Retry of a failed page, history downloads require trusted
-upward wheel/trackpad input over the thread, or
+`PairedShell` retains `createNewestHistoryDemand` across effect replay. Each actual
+opening of a connected host/conversation asks once with `cursor: ''` and
+`HISTORY_PAGE_LIMIT = 200`, regardless of held backwards `atStart`. Leaving and
+returning creates a new opening; re-clicks, renders, metadata refresh and effect
+replay do not. Offline opening sends nothing; the first connected transition and
+each later owning-host connection edge ask once for the still-open target.
+
+Lifecycle demand waits for its owned saved read (stored, missing, failed or
+superseded by live data) and any outstanding same-host request. Departure, host
+replacement or connection loss invalidates a delayed ask. Main settles an
+interrupted request before reconnect's newest ask. Read/page settlement releases
+only existing demand; it never creates another opening or an automatic range fill.
+The controller consumes demand before marking pending to prevent subscription replay;
+shell eligibility checks run after admission/writer capture, while connection loss
+is observed synchronously so rapid connection edges survive.
+
+Backwards downloads require trusted upward wheel/trackpad input over the thread, or
 ArrowUp/PageUp/Home with the thread itself focused. The current offset must be
 within the near-top band — two viewport heights, scaled by the thread's own measured
 height — before that input scrolls. Input outside
 the band only scrolls locally; entering the band needs another qualifying input.
 The same focusable region contains empty and short threads, so first-page demand
 does not depend on overflow. Composer navigation, synthetic events, ordinary
-scroll events, mounting, resize, bottom pinning and prepend compensation send no
-history command. Launch, opening, restoration and reconnect do not request pages.
+scroll events, mounting, resize, bottom pinning and prepend compensation create no
+backwards demand.
 
 `requestOlderHistory` reads successful coverage at demand time: unknown coverage
-uses `cursor: ''`, while received coverage uses the exact last successful cursor,
+uses `cursor: ''`, while received coverage uses the exact oldest-end cursor,
 including one restored from disk. Only `atStart: true` establishes completion;
 short, empty and all-undrawable pages do not. One request may be outstanding per
-host/conversation. Demand during a local read or pending request is discarded,
-not queued; settling either does not trigger a download. Remaining in the band
+host/conversation, shared by newest, older and Retry. Backwards demand during a
+local read or pending request is discarded; lifecycle demand defers instead.
+Remaining in the band
 after a response also requires new input. There is no timer or automatic walk.
 
 Requests and failures retain same-host rows, prepend metadata and successful
-coverage. Main clears outstanding history correlations before emitting classified
+coverage. Pending/failed history retains the requested cursor and purpose (`older`
+or `newest`). Main clears outstanding history correlations before emitting classified
 failure events on connection drop, terminal/error, pairing rejection or explicit
 redial, including when no server failure reply arrived. Unavailable/build/send
 failures also settle immediately. This releases pending state without retrying:
@@ -328,15 +356,24 @@ new qualifying upward input while connected can ask again from the retained curs
 even when the server's failure classification is nonretryable. The separate
 [composer Retry action](conversation-shell-composer-status.md#history-page-failure-and-retry)
 requires `retryable: true`, the displayed conversation and its connected owning host,
-and the same held failure at activation. It calls `requestOlderHistory` with the
-same cursor and `limit: 200` (`HISTORY_PAGE_LIMIT`); pending state removes the failure affordance and rejects
+and the same held failure at activation. It calls `requestHistoryPage` with the
+captured cursor/purpose and `limit: 200`; newest Retry resends `''` despite held
+`atStart`. Legacy failures fall back to backwards coverage. Pending state removes the failure affordance and rejects
 duplicate demand without changing rows or successful coverage. A partial history walk
-never restarts itself at the newest page. Offline scrolling only exposes held
+retains its oldest-end cursor through newest refreshes. Offline scrolling only exposes held
 content. Host-stamped requests cannot borrow another host's cursor, and stale
 cross-host failures cannot settle its replacement slice.
 
-Page admission keeps the existing [history/live overlap filter](conversation-timeline-store-internals.md#the-historylive-join-1225)
-and row order. [Scroll compensation](conversation-shell-scroll-pin.md#user-demand-and-prepend-position)
+Owned page admission supersedes a loading saved read and clears its token, including
+empty/all-undrawable and legacy settlement. Late stored/missing completion, failure
+or cancellation cannot replace admitted rows or evidence. Starting, settling or
+cancelling a saved read preserves an independently correlated same-host request;
+otherwise reopening could send a duplicate that main ignores and consume its one refresh.
+
+The retained [contribution join](conversation-timeline-store-internals.md#the-page-half--the-join)
+admits overlap and split assistant turns once in chronological order, preserving
+held live/saved rows, surviving row keys and tool expansion. Existing following
+and parked-reader behavior remains. [Scroll compensation](conversation-shell-scroll-pin.md#user-demand-and-prepend-position)
 preserves a surviving row at zero offset as well as through native nonzero
 anchoring; compensation itself cannot request another page.
 

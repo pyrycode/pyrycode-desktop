@@ -33,10 +33,12 @@ Each section below keeps the heading it had here, so an existing `#anchor` still
 ## What it does
 
 Conversation activation requests configuration and the [context reading](reported-context-store.md#how-it-works)
-only for a connected owner, including on same-chat reopening; it never requests history.
-First and subsequent history pages require new
-[upward thread input](chat-history.md#received-state-admission-and-ownership),
-including after reconnect or reopening an evicted conversation.
+only for a connected owner, including on same-chat reopening. A retained controller
+separately requests one newest history page per owned connected opening/reconnect
+after saved-read and outstanding-request settlement. Offline opening waits for its
+first connection; departure/disconnect invalidates delayed demand. Further
+[backwards pages](chat-history.md#received-state-admission-and-ownership)
+require trusted upward thread input; opening never fills the missing range.
 
 The container mounts `createSavedListRestorer` for its lifetime, independently of
 route changes. Saved identities can populate the sidebar without a connected host;

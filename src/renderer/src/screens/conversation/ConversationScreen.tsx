@@ -268,6 +268,9 @@ export function ConversationScreen({
   const openConversationId = activeConversation?.id ?? null
   const pendingBatch = useQuestionBatchStore(s =>
     openConversationId === null ? undefined : selectBatchFor(openConversationId)(s))
+  const hasPermissionSurface = useModalStore(s => openConversationId !== null &&
+    (selectHasOutstandingFor(openConversationId)(s) || s.rejectionOwners.some(owner =>
+      owner.conversationId === openConversationId && s.rejections.includes(owner.modalId))))
   const actionsAvailable = useConversationActionAvailability(openConversationId)
   // #1726: the open session's `mid_turn_input` reading, a boolean slice so other snapshot fields re-render
   // nothing. The snapshot is the open conversation's (cleared on switch), so it gates that thread alone.
@@ -546,7 +549,7 @@ export function ConversationScreen({
           rendered, so the overlay (Re-pair above all) still shows when an offline host leaves the
           Timeline nothing to draw; the region then stays empty rather than missing. */}
       <div className="conversation__message-area">
-      {(!offline || items.length > 0 || visibleQueued.length > 0 || pendingBatch !== undefined) && <Timeline
+      {(!offline || items.length > 0 || visibleQueued.length > 0 || pendingBatch !== undefined || hasPermissionSurface) && <Timeline
         key={openConversationId}
         items={items}
         rowKeys={thread.rowKeys}
@@ -554,7 +557,7 @@ export function ConversationScreen({
         foldTools={collapseToolUses}
         onReply={replyToMessage}
         scrollPin={scrollPin}
-        trailing={pendingBatch && <QuestionHistorySlot conversationId={openConversationId} />}
+        trailing={(pendingBatch || hasPermissionSurface) && <QuestionHistorySlot conversationId={openConversationId} />}
         // #1260: NEGATED, so the first held row's key is minus the number of rows history has already
         // put ahead of it. A prepend of N lowers this by N while every surviving row's index rises by N,
         // which is what leaves their keys — and therefore React's identity for them — unmoved.
@@ -3926,15 +3929,11 @@ export function ComposerSendButton({
 // destructured by the container, handed down so the send button can derive its stop variant. A required
 // prop, not a subscription of its own.
 //
-// #906: `covered` is the third prop and arrives on the same required terms. When an outstanding question
-// batch belongs to the conversation on screen, ComposerSlot below draws the panel in this component's
-// slot and passes `covered` so the whole composer goes behind it.
 function Composer({
   serverId,
   conversationId,
   phase,
   onMessageSent,
-  covered,
   beforeComposer,
   replyFocusRequest
 }: {
@@ -3942,7 +3941,6 @@ function Composer({
   conversationId: string | null
   phase: TurnPhase
   onMessageSent: () => void
-  covered: boolean
   beforeComposer: (sendText: (value: string) => boolean) => ReactNode
   replyFocusRequest: number
 }): JSX.Element {
@@ -4065,14 +4063,14 @@ function Composer({
   })
   const consumedReplyFocus = useRef(0)
   useThreadLayoutEffect(() => {
-    // Permission coverage keeps the request pending until this pane's composer is visible.
-    if (covered || replyFocusRequest === consumedReplyFocus.current) return
+    // Consume each reply gesture once; inline permission leaves this input visible.
+    if (replyFocusRequest === consumedReplyFocus.current) return
     const input = typeAhead.inputRef.current
     if (input === null) return
     consumedReplyFocus.current = replyFocusRequest
     input.focus()
     input.setSelectionRange(input.value.length, input.value.length)
-  }, [covered, replyFocusRequest, typeAhead.inputRef])
+  }, [replyFocusRequest, typeAhead.inputRef])
 
   /**
    * #1033: the PASTE entry into the attach flow, and the third gesture that reaches it.
@@ -4157,25 +4155,9 @@ function Composer({
   }
 
   const body = (
-    // #906: the native `hidden` attribute is the WHOLE cover mechanism, and one attribute doing three
-    // jobs is why it was chosen over the alternatives. It hides the subtree, drops it from the tab order
-    // and drops it from the accessibility tree, while leaving every element MOUNTED — so the draft in
-    // `text` above survives the batch and is still in the message box when the daemon dismisses it. A
-    // conditional render would reset transient controls; `aria-hidden` alone would leave a focusable invisible
-    // textarea whose Enter still sends. `.composer__footer` and `.composer__row` are CHILDREN of this
-    // div, so the one attribute takes the footer menus, the context reading and the send/stop control
-    // with it — there is no second element to hide separately, and nothing to draw a disabled state for.
-    // ComposerStatusArea is a SIBLING of this div in the conversation column, not a descendant, so the
-    // working indicator above the composer is deliberately untouched.
-    // conversation.css MUST carry `.composer[hidden] { display: none }`: the UA's `[hidden]` rule loses
-    // to the author-level `.composer { display: flex }` regardless of specificity, so without it this
-    // attribute is a no-op for layout and only the accessibility half works.
-    // #890: the whole block is the drop target, so a drop on the footer row counts as much as one on the
-    // message box. `composerClassName` is a BRANCH rather than an interpolation because the resting run
-    // must stay byte-identical — three shipped assertions in composerSlot.test.tsx match `class="composer"`
-    // as a whole attribute run, two of them as `class="composer" hidden=""` — so `className` also stays
-    // ahead of `hidden` in this list. The spread carries event handlers only and renders no markup.
-    <div className={composerClassName(fileDrop.active)} hidden={covered} {...fileDrop.handlers}>
+    // The whole composer, including its footer, is the file-drop target.
+    // Keep the resting class stable; the handlers render no markup.
+    <div className={composerClassName(fileDrop.active)} {...fileDrop.handlers}>
       {/* #1262: the pending attachments, this column's FIRST child (Figma `Attachment area` 390:7136, at
           y=40 between a status area ending at 32 and an input beginning at 108 — the drawn 8px above and
           below). Note that ComposerAttachOutcome below is the same column's LAST child: "the composer
@@ -4189,10 +4171,9 @@ function Composer({
           the outcome line answers the same way, and load-bearing here for a sharper reason: an element
           that mounted empty would move the message box down on every launch, in every spec, forever.
 
-          It is INSIDE the element that wears `hidden`, so a permission panel covers the tiles along
-          with the message box and the footer — nothing new to hide. And a conversation switch clears it
-          for free: PairedShellView keys the chat pane on the conversation id, so this composer is rebuilt
-          around a fresh holder. */}
+          Inline permission leaves these tiles, the message box and the footer visible. A conversation
+          switch clears pending attachments: PairedShellView keys the chat pane on the conversation id,
+          so this composer is rebuilt around a fresh holder. */}
       {/* #1264: each tile's remove control takes that tile back out of the pending set, so the next send
           does not name its id. Nothing crosses the wire — the hook writes its two holdings and stops. */}
       <ComposerAttachmentStrip attachments={attach.pending} onRemove={attach.removePending} />
@@ -4337,7 +4318,7 @@ function Composer({
   return <>{beforeComposer(sendText)}{body}</>
 }
 
-// Permission temporarily covers the mounted composer so its local draft survives.
+// Permission waits in history; the composer keeps its normal draft and send gates.
 export function ComposerSlot({ serverId = null, conversationId, phase, onMessageSent, statusArea, replyFocusRequest = 0 }: {
   serverId?: string | null
   conversationId: string | null
@@ -4346,22 +4327,21 @@ export function ComposerSlot({ serverId = null, conversationId, phase, onMessage
   statusArea?: (sendText: (value: string) => boolean) => ReactNode
   replyFocusRequest?: number
 }): JSX.Element {
-  const hasPermission = useModalStore((s) =>
-    conversationId !== null && selectHasOutstandingFor(conversationId)(s)
-  )
   return <Composer serverId={serverId} conversationId={conversationId} phase={phase}
     replyFocusRequest={replyFocusRequest}
-    onMessageSent={onMessageSent} covered={hasPermission} beforeComposer={(sendText) => <>
+    onMessageSent={onMessageSent} beforeComposer={(sendText) => <>
       {statusArea?.(sendText)}
-      <PermissionModal conversationId={conversationId} />
     </>} />
 }
 
 export function QuestionHistorySlot({ conversationId }: { conversationId: string | null }): JSX.Element {
   const batch = useQuestionBatchStore((s) => conversationId === null ? undefined : selectBatchFor(conversationId)(s))
   const hasPermission = useModalStore((s) => conversationId !== null && selectHasOutstandingFor(conversationId)(s))
-  return <div hidden={hasPermission}>
-    {batch && <QuestionPanelSlot key={batch.questionBatchId} batch={batch} />}
+  return <div>
+    <PermissionModal conversationId={conversationId} />
+    <div hidden={hasPermission}>
+      {batch && <QuestionPanelSlot key={batch.questionBatchId} batch={batch} />}
+    </div>
   </div>
 }
 

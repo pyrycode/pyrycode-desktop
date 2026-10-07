@@ -3985,17 +3985,14 @@ button.top-overlay-pill {
   overflow-y: auto;
 }
 
-/* Permission variant of the questionnaire: actions stay outside the scrollable content. */
+/* The complete permission card and Cancel scroll with the thread. */
 .question-panel.permission-panel {
-  flex: 0 1 auto;
-  min-height: 0;
-  max-height: 60vh;
+  flex: 0 0 auto;
+  padding: 0;
 }
 
 .permission-panel__title {
   margin: 0;
-  max-height: 15vh;
-  overflow-y: auto;
 }
 
 .permission-panel > .question-panel__title,
@@ -4013,7 +4010,6 @@ button.top-overlay-pill {
   flex-direction: column;
   gap: var(--space-4);
   min-height: 0;
-  overflow-y: auto;
 }
 
 .permission-panel__content > * {

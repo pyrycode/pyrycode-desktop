@@ -9,6 +9,7 @@ import {
   selectCompacting,
   selectLocalSendPending,
   markLocalSendQueued,
+  openBubbleIndex,
   type MessageAttachment,
   type ThreadEvent,
   type ThreadItem,
@@ -251,6 +252,128 @@ describe('reduceTimeline — assistantDelta coalescing', () => {
     expect(state.items.map((i) => i.kind)).toEqual(['assistantText', 'assistantText'])
     expect((state.items[0] as { turnId: string }).turnId).toBe('A')
     expect((state.items[1] as { turnId: string }).turnId).toBe('B')
+  })
+})
+
+// #1872: a subagent runs concurrently with the main thread, so its rows arrive in the middle of the
+// main thread's sentence. They must not end the main thread's bubble; a main thread tool call still does.
+describe('reduceTimeline: a subagent’s rows do not split the main thread bubble (#1872)', () => {
+  const AGENT = 'toolu_agent'
+
+  function subagentToolUse(turnId: string, toolUseId: string, parentToolUseId = AGENT): ThreadEvent {
+    return { type: 'toolUse', turnId, toolUseId, parentToolUseId, name: 'WebFetch', inputSummary: toolUseId }
+  }
+
+  function subagentDelta(turnId: string, text: string, parentToolUseId = AGENT): ThreadEvent {
+    return { type: 'assistantDelta', turnId, seq: 0, text, parentToolUseId }
+  }
+
+  function texts(state: TimelineState): { text: string; parent?: string }[] {
+    return state.items.flatMap((item) => item.kind === 'assistantText'
+      ? [{ text: item.text, parent: item.parentToolUseId }] : [])
+  }
+
+  it('keeps the issue’s sequence, delta, subagent tool, delta, subagent tool, delta, as one bubble', () => {
+    const state = run([
+      delta('A', 'That is a we', 35),
+      subagentToolUse('A', 'fetch-1'),
+      delta('A', 'ekend sized project. ', 36),
+      delta('A', 'What is pushing this, or the f', 37),
+      subagentToolUse('A', 'fetch-2'),
+      delta('A', 'act that Figma is the one piece', 38),
+      delta('A', ' that lives elsewhere?', 39)
+    ])
+    expect(state.items.map((i) => i.kind)).toEqual(['assistantText', 'toolCall', 'toolCall'])
+    expect(texts(state)).toEqual([{
+      text: 'That is a weekend sized project. What is pushing this, or the fact that Figma is the one piece that lives elsewhere?',
+      parent: undefined
+    }])
+    // The subagent rows stay where they arrived, in order, still attributed.
+    expect(state.items.slice(1).map((i) => i.kind === 'toolCall' ? [i.toolUseId, i.parentToolUseId] : null))
+      .toEqual([['fetch-1', AGENT], ['fetch-2', AGENT]])
+  })
+
+  it('looks back past a subagent tool call whose result has already arrived', () => {
+    const state = run([
+      delta('A', 'one '),
+      subagentToolUse('A', 'fetch-1'),
+      { type: 'toolResult', turnId: 'A', toolUseId: 'fetch-1', parentToolUseId: AGENT, isError: false, resultSummary: 'ok' },
+      delta('A', 'two')
+    ])
+    expect(state.items.map((i) => i.kind)).toEqual(['assistantText', 'toolCall'])
+    expect(texts(state)).toEqual([{ text: 'one two', parent: undefined }])
+  })
+
+  it('keeps the bubble’s first stamp and the subagent row’s identity when the bubble grows behind it', () => {
+    const T0 = 1_700_000_000_000
+    const before = run([deltaAt('A', 'one ', T0), subagentToolUse('A', 'fetch-1')])
+    const after = reduceTimeline(before, deltaAt('A', 'two', T0 + 5_000))
+    expect((after.items[0] as Extract<ThreadItem, { kind: 'assistantText' }>).createdAt).toBe(T0)
+    expect(after.items[1]).toBe(before.items[1])
+    expect(after.rowKeys).toEqual(before.rowKeys)
+  })
+
+  it('still ends the bubble at a main thread tool call', () => {
+    const state = run([delta('A', 'before'), toolUse('A', 'main-1'), delta('A', 'after')])
+    expect(texts(state).map((t) => t.text)).toEqual(['before', 'after'])
+  })
+
+  it('stops looking back at a main thread tool call behind the subagent rows', () => {
+    const state = run([
+      delta('A', 'before'), toolUse('A', 'main-1'), subagentToolUse('A', 'fetch-1'), delta('A', 'after')
+    ])
+    expect(state.items.map((i) => i.kind)).toEqual(['assistantText', 'toolCall', 'toolCall', 'assistantText'])
+    expect(texts(state).map((t) => t.text)).toEqual(['before', 'after'])
+  })
+
+  it('starts a fresh bubble for a new turn even across subagent rows', () => {
+    const state = run([delta('A', 'first'), subagentToolUse('A', 'fetch-1'), delta('B', 'second')])
+    expect(state.items.map((i) => i.kind)).toEqual(['assistantText', 'toolCall', 'assistantText'])
+    expect(state.items.map((i) => 'turnId' in i ? i.turnId : null)).toEqual(['A', 'A', 'B'])
+  })
+
+  it('never merges attributed subagent text into the main thread bubble, in either direction', () => {
+    expect(texts(run([delta('A', 'main'), subagentDelta('A', 'helper')])))
+      .toEqual([{ text: 'main', parent: undefined }, { text: 'helper', parent: AGENT }])
+    expect(texts(run([subagentDelta('A', 'helper'), delta('A', 'main')])))
+      .toEqual([{ text: 'helper', parent: AGENT }, { text: 'main', parent: undefined }])
+  })
+
+  it('stops looking back at attributed subagent text, so only tool calls are skipped', () => {
+    const state = run([delta('A', 'one'), subagentDelta('A', 'helper'), subagentToolUse('A', 'fetch-1'), delta('A', 'two')])
+    expect(texts(state)).toEqual([
+      { text: 'one', parent: undefined }, { text: 'helper', parent: AGENT }, { text: 'two', parent: undefined }
+    ])
+  })
+
+  it('does not let attributed subagent text look back into the main thread bubble', () => {
+    const state = run([delta('A', 'main'), subagentToolUse('A', 'fetch-1'), subagentDelta('A', 'helper')])
+    expect(texts(state)).toEqual([{ text: 'main', parent: undefined }, { text: 'helper', parent: AGENT }])
+  })
+})
+
+describe('openBubbleIndex (#1872)', () => {
+  const main: ThreadItem = { kind: 'assistantText', turnId: 'A', text: 'main' }
+  const subTool: ThreadItem = {
+    kind: 'toolCall', turnId: 'A', toolUseId: 'f', parentToolUseId: 'agent', name: 'WebFetch', inputSummary: '', result: null
+  }
+  const subText: ThreadItem = { kind: 'assistantText', turnId: 'A', text: 'helper', parentToolUseId: 'agent' }
+  const mainTool: ThreadItem = { kind: 'toolCall', turnId: 'A', toolUseId: 'm', name: 'Read', inputSummary: '', result: null }
+
+  it('is the last index when the tail is not a subagent tool call', () => {
+    expect(openBubbleIndex([main, mainTool])).toBe(1)
+    expect(openBubbleIndex([main, subText])).toBe(1)
+  })
+
+  it('skips trailing subagent tool calls, and only those', () => {
+    expect(openBubbleIndex([main, subTool, subTool])).toBe(0)
+    expect(openBubbleIndex([main, subText, subTool])).toBe(1)
+    expect(openBubbleIndex([main, { ...subTool, parentToolUseId: '' }])).toBe(1)
+  })
+
+  it('is -1 for an empty list or a list of subagent tool calls only', () => {
+    expect(openBubbleIndex([])).toBe(-1)
+    expect(openBubbleIndex([subTool, subTool])).toBe(-1)
   })
 })
 

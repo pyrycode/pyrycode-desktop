@@ -16,7 +16,7 @@ Playwright's `_electron` API launches the project's **own** `electron` binary an
 
 | File | Role |
 |---|---|
-| `playwright.config.ts` (repo root) | `testDir: './e2e'` (Playwright scans only `e2e/`), several workers with `fullyParallel: false` (files spread across workers, the tests in one file stay in order), `reporter: 'list'`, CI-gated `forbidOnly`/`retries`. The worker count defaults to four, or half the cores when that is fewer, and `PW_WORKERS` overrides it; `PW_WORKERS=1` is the old serial run. Every launch already owns its user-data dir, its loopback ports and its process, so the only shared resource is the OS clipboard: the specs that copy or paste are listed in `CLIPBOARD_SPECS` and run in a `clipboard` project capped at one worker, beside the `parallel` project. A new spec that touches the clipboard belongs in that list. There is no `browserName` — Electron launches its own binary, so there is **no** `npx playwright install` step. |
+| `playwright.config.ts` (repo root) | `testDir: './e2e'` (Playwright scans only `e2e/`), several workers with `fullyParallel: false` (files spread across workers, the tests in one file stay in order), `reporter: 'list'`, CI-gated `forbidOnly`/`retries`. The worker count defaults to four, or half the cores when that is fewer, and `PW_WORKERS` overrides it; `PW_WORKERS=1` is the old serial run. Every launch owns its user-data dir, its loopback ports and its process. The OS clipboard is shared: the specs that copy or paste are listed in `CLIPBOARD_SPECS` and run in a `clipboard` project capped at one worker, beside the `parallel` project. A new spec that touches the clipboard belongs in that list. Shown windows also share native pointer input; see Desktop isolation below. There is no `browserName` — Electron launches its own binary, so there is **no** `npx playwright install` step. |
 | `e2e/smoke.spec.ts` | The single smoke assertion: `expect(page.locator('.pairing')).toBeVisible()`, launched through its own local isolated-userData fixture (see below) — see [#105](../codebase/105.md). |
 
 ### The launch fixture (retired)
@@ -74,6 +74,28 @@ Both launch sites — `launchPairedApp.ts` and `smoke.spec.ts` — now go throug
 **Show-window opt-out for headless Linux (2026-10-04).** On Linux under Xvfb, as in the pyrybox dispatcher container, a window that is never shown produces no frames, so every `page.screenshot` and `locator.screenshot` waits out its 30-second timeout. Measured: three specs went from 3 failed in 2.3 minutes with the window hidden to 4 passed in 10 seconds with it shown. Setting `PYRY_E2E_SHOW_WINDOW=1` (`SHOW_WINDOW_E2E_ENV_FLAG` in `desktopIsolation.ts`) makes both launch sites, `launchIsolatedApp` and `realDaemon.ts`, leave `HIDDEN_WINDOW_ENV_FLAG` off. The throttling switches still apply, and `expectDesktopIsolated` and the isolation spec skip only the not-visible clause. Only the harness reads the variable, so the app's own gate is unchanged. Leave it unset on a machine someone is using: a shown window takes focus.
 
 **Linux shows the window by default (\#1796, 2026-10-06).** The dispatcher sets the flag for its gates, but a Codex agent's shell keeps only allowlisted variables, so a builder's own Playwright runs in the same container launched hidden and timed out on screenshots the gate passed. `e2eShowsWindow` now returns true on Linux whatever the flag says, so agent runs and gates share one presentation. macOS and Windows keep the hidden default and the exact `'1'` opt-out.
+
+Shown Xvfb windows share native pointer input even though each launch owns its process
+and profile. Throttling exemptions do not isolate that input. In the
+[sidebar hover investigation](https://github.com/pyrycode/pyrycode-desktop/issues/1819#issuecomment-6029550135),
+showing a second native window after a completed Playwright `hover()` cleared the row's
+`:hover` in 11 of 30 snapshots with unchanged CSS. One cycle recorded an outside-row
+pointer move; the resting fill became transparent while the open fill stayed correct.
+Two animation frames did not restore hover, and separate unfocused-window observations
+kept the correct treatment. Focus loss alone therefore does not explain this failure.
+
+The Chats-row test's local `expectPointerTreatment` re-delivers real pointer input on
+each polling attempt and reads target hover, hovered-row count, exact fills and both
+control opacity sets in one synchronous renderer snapshot. Pointer-away observations
+also deliver input before checking that no row is hovered. Polling style alone could
+time out while hover stays lost. Geometry, keyboard focus and activation retain
+their existing checks; timeout, retry and parallelism settings are unchanged. See
+[the verification method](development-verification.md#layout-and-input) and
+[row regression evidence](channel-list-row-hover-control.md#testing-pointer-observations).
+This local observation fix is distinct from the shared native-pointer isolation work
+in [#1813 / PR #1836](https://github.com/pyrycode/pyrycode-desktop/pull/1836);
+that change is not included here or required for this assertion, and combined execution
+was not part of the recorded validation.
 
 The [collapse-tool preference review](https://github.com/pyrycode/pyrycode-desktop/pull/1793#issuecomment-6003905659)
 records the same trap for Settings on/off captures: a hidden Linux window reached

@@ -531,10 +531,13 @@ The skipped case is not a pass. No live-Claude evidence is required for this pre
 confirms all four active `e2e/message-reply.spec.ts` scenarios were present and passed, covering
 pointer/keyboard append and outgoing text, covered-composer focus, equal-ID host draft isolation and
 reopened saved/offline drafting. It also confirms the named side-actions geometry test and task-list
-test passed, with all 13 assistant-whitespace scenarios passing. The reply spec's fifth case, equal-ID
-history persistence, remains skipped pending [#1811](https://github.com/pyrycode/pyrycode-desktop/issues/1811);
-draft isolation and ordinary offline drafting do not prove that persistence works. SVG decoding and
-current-head captures at 1280×800 and 800×800 were accepted against Figma in that review.
+test passed, with all 13 assistant-whitespace scenarios passing. Equal-ID history persistence was
+skipped in that run; it is now enabled and checks both protected timelines before reopening the
+first host offline and quoting its own reply. All five reply scenarios executed and passed at
+`0b0bfe73` (full gate: 322 executed, 322 passed, 0 failed, 4 skipped; reply spec: 5 executed,
+5 passed, 0 failed, 0 skipped); see [counted evidence](development-verification.md#equal-id-received-history).
+Draft isolation and ordinary offline drafting alone do not prove persistence. SVG decoding and
+captures at 1280×800 and 800×800 were accepted against Figma in the earlier review.
 
 **The attachment slots' own coverage (#815, #816, #1045, #869)** is in
 [Conversation shell — message bubble attachment slots § Testing](conversation-shell-message-bubble-attachments.md#testing),

@@ -127,12 +127,18 @@ Retention, send windows and row identity in the [conversation timeline](conversa
   render-time capture would settle it at the wrong arrival position. See
   [roster evidence](background-task-roster-store-internals.md#retained-agent-timeline-evidence)
   and [background Agent presentation](conversation-shell-tool-row-header-groups.md#started-background-agents).
+  Historical finishes instead resolve stable ordinary-row identities in array order,
+  including surviving echo rows and reserved evidence-only page tails. Numeric keys
+  do not establish history chronology. See
+  [page boundary mapping](conversation-timeline-store-internals.md#background-agent-history-placement).
 - **Saved timelines have no background-task frames.** `readSavedTimeline` snapshots
   retain the unchanged format and existing placement; neither task lifecycle evidence
   nor `rowArrivalOrder` is persisted. A saved Agent/result alone cannot reconstruct a
   live-tail row or its terminal boundary. Connect rosters now supply provisional
   rows through a memory-only display projection; synthetic items never enter saved
-  history. Paged background-task reconstruction remains #1781.
+  history. Daemon pages now reconstruct finished Agents from started/updated placement
+  evidence; saved snapshots alone cannot. Durable history admission/persistence and
+  automatic newest-page requests remain with #1814/#1815.
 - **`prependHistoryFor` is not idempotent, by design** ([#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)).
   Applying the same page twice prepends its non-`userText` rows twice — only `userText` rows are
   suppressed, by the AC4 echo dedup. Unreachable today; see the

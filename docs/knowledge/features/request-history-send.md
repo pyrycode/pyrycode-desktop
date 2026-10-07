@@ -268,16 +268,15 @@ export interface DecodedHistoryPage {
 }
 ```
 
-`DecodedHistoryEvent` is an eleven-arm union, one per type the timeline draws — the non-null arms of
-`translateTimelineEvent` (`timelineBridge.ts`) minus its client-side `connected` edge, plus the
-operator's own `message`. Each arm carries the same camelCase render fields its live `DaemonEvent` twin
-carries, so a consumer can run the window's existing live-lane mapping over one unchanged; the IPC side
+`DecodedHistoryEvent` carries drawable timeline events plus placement-only background
+lifecycle events. Ordinary arms carry the camelCase render fields their live `DaemonEvent` twins
+carry, so a consumer can run the window's existing live-lane mapping over them; the IPC side
 mirrors it by hand as `HistoryTimelineEvent`/`HistoryTimelineEntry` in `events.ts` (`inboundMessage.ts`
 is IPC-free by placement rule, so the transport type cannot cross the boundary it exists to define — the
 same reason `HistoryRequestFailure` duplicates `HistoryRejectReason`).
 
 - **`decodeHistoryEvent(type: string, payload: Record<string, unknown>): DecodedHistoryEvent | null`**
-  — a `switch` over the eleven wire type strings, each arm calling its existing live-lane parser
+  — a `switch` over supported wire type strings, each arm calling its existing live-lane parser
   (`parseAssistantDeltaPayload`, `parseToolUsePayload`, `parseMessagePayload`, …) and building a
   **fresh named-field literal**, dropping `conversation_id` (and, on `session_transition`,
   `previous_session_id`) the same way `translateTimelineEvent` drops it on every live arm — one layer
@@ -288,7 +287,7 @@ same reason `HistoryRequestFailure` duplicates `HistoryRejectReason`).
   `Object.prototype` (truthy, then invoked) and `'constructor'` is worse. The same rule binds any later
   "which types do we draw?" set in this codebase — a `Set`, never a bare object used as a map.
 - **`decodeHistoryPage`'s loop wraps the call in `try { … } catch { event = null }`, binding no error.**
-  A payload that fails to parse and a type outside the eleven both fall out as `null` and are skipped
+  A payload that fails to parse and an unsupported type both fall out as `null` and are skipped
   the same way; order is preserved among survivors, and a page every entry of which was skipped crosses
   as `entries: []` rather than as a failure, so #1260's walk can still step past it. Never throws.
 - **`modal_shown`/`question_shown` have no arm at all — the sharpest case, closed by construction.**
@@ -296,13 +295,11 @@ same reason `HistoryRequestFailure` duplicates `HistoryRejectReason`).
   reaches the window from history, whether a future daemon starts logging one or a hostile one plants
   one in a page. A replayed prompt answered "now" would be a resolution for a modal that closed hours
   ago.
-- **The other `default`-covered types are all ordinary, not errors**: eight the live lane decodes but
-  never draws in a thread (`background_task_started`/`_updated`/`_roster`, `model_announced`,
-  `model_list`, `slash_command_list`, and — since [#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312)
-  and \#1318 — `thinking_progress` and `rate_limited`, each armless here on purpose), and any type a
-  later daemon invents.
+- **Live-only frames remain excluded**: `background_task_roster`,
+  `background_task_progress`, `model_announced`, `model_list`, `slash_command_list`,
+  `thinking_progress`, `rate_limited`, `context_usage` and `resetting`, plus unsupported types.
 - **No `conversation_id` crosses on any arm — the daemon-asserted value is dropped, the page's
-  correlation-resolved `conversationId` stays the only routing key.** Every one of the eleven parsers
+  correlation-resolved `conversationId` stays the only routing key.** The reused live parsers
   requires `conversation_id` (it is the live-lane routing key, and that fail-closed read is what makes
   `?? ''` misattribution impossible there), but carrying it onward here would hand a consumer two ids
   that can disagree — exactly the misattribution #1222's correlation exists to remove.
@@ -313,6 +310,30 @@ same reason `HistoryRequestFailure` duplicates `HistoryRejectReason`).
   `{ event: 'inbound-decode-skipped', code: 'history_page_entry', count, hash }` — `hash` is the same
   page-line digest, so the two lines correlate. Never the entry's `type`, `id`, `ts`, or any payload
   field.
+
+### Background Agent placement events
+
+`background_task_started` and `background_task_updated` reuse
+`parseBackgroundTaskStartedPayload` and `parseBackgroundTaskUpdatedPayload`, including
+their required-field validation. The fresh history literals expose only these fields:
+
+| Event | Fields besides `type` |
+| --- | --- |
+| `backgroundTaskStarted` | `taskId`, `toolCallId`, `taskType`, `description` |
+| `backgroundTaskUpdated` | `taskId`, `status` |
+
+Patch, summary, truncation reports and per-entry conversation ids are not copied to
+history IPC. A malformed lifecycle payload skips individually; malformed entry/page
+envelopes still reject the whole page. Diagnostics remain static codes, counts and
+digests, without ids, descriptions or payload text. There is no daemon/wire change.
+
+The renderer collects these events into
+[retained placement evidence](background-task-roster-store-internals.md#retained-agent-timeline-evidence)
+instead of calling live roster setters or dispatching them into the turn reducer.
+Live started/updated frames separately carry their envelope `ts` as optional
+`daemonTs` through main-process parsing and named-field emits. The roster bridge
+records bounded `(type, ts)` overlap keys, without a timeline event or rendering-time
+clock. See [history placement and page anchors](conversation-timeline-store-internals.md#background-agent-history-placement).
 
 **The two mirrors (`DecodedHistoryEvent` / `HistoryTimelineEvent`) are held in agreement at two
 points**: the `daemonConnection.ts` emit assigns the decoded array straight into the IPC-typed field, so

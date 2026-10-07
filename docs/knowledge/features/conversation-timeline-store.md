@@ -54,6 +54,13 @@ has no host attribution; open-timeline reconciliation alone would miss held erro
 See [compaction completion and metadata](conversation-timeline-store-compaction.md#what-it-does)
 for retained dividers and pending associations.
 
+Paged history also reconstructs finished background Agents from retained start/finish
+evidence, attaching launches and children loaded on older pages. The projection places
+each full row at its first terminal entry and leaves a navigation marker at launch,
+without replay changing live roster membership or turn state. See
+[history placement and page anchors](conversation-timeline-store-internals.md#background-agent-history-placement)
+and [qualification](background-task-roster-store-internals.md#retained-agent-timeline-evidence).
+
 ## Live user receipts
 
 `messageReceived` translates only role `user` into `userText` with `received: true`.

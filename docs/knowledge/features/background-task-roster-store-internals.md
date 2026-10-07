@@ -79,9 +79,12 @@ export interface BackgroundTaskProgressSnapshot {              // progress write
 }
 export interface BackgroundAgentTimeline {
   identity?: number              // client-owned identity, never recycled by this store factory
+  historyOnly?: boolean         // cannot manufacture a provisional row
+  historyStarted?: boolean      // validated historical local_agent start with nonempty join
+  finishFromHistory?: boolean   // finishBefore resolves row identity, not live receipt order
   description?: string           // held text survives roster removal; display bounds apply later
   toolCallId: string              // exact placement join; frozen once terminal
-  confirmed: boolean             // roster-derived local_agent qualification, retained once true
+  confirmed: boolean             // live roster qualification or valid historical start + terminal
   finishBefore: number | null    // immutable first terminal placement boundary
   finishOrder: number | null     // immutable conversation-local terminal ordinal
 }
@@ -94,6 +97,7 @@ export interface BackgroundTaskRosterState {
   pendingStops: ReadonlyMap<string, ReadonlySet<string>>           // conv -> taskId with an outstanding user stop; renderer-only
 }
 export type BackgroundTaskRosterStore = BackgroundTaskRosterState & {
+  recordHistoryPlacements: (conversationId: string, placements: readonly HistoryAgentPlacement[]) => void
   setRoster: (snapshot: BackgroundTaskRosterSnapshot) => void
   setStartedTask: (snapshot: BackgroundTaskStartedSnapshot) => void   // #576
   setUpdatedTask: (snapshot: BackgroundTaskUpdatedSnapshot, finishBefore?: number) => void // also retains first terminal placement
@@ -116,7 +120,7 @@ selectPendingTaskStopsFor(conversationId)(state) // selector FACTORY — the pan
 Keyed by `conversationId`, not a flat slot, for the same reason [`queueStore`](queue-store.md) is: the
 daemon fans these frames out to every interactive connection and each carries `conversation_id`, so
 frames for *different* conversations can arrive back-to-back and a flat "hold the latest" slot would let
-one clobber another. **Eight named mutation methods** (`setRoster`, `setStartedTask`, `setUpdatedTask`,
+one clobber another. **Nine named mutation methods** (`recordHistoryPlacements`, `setRoster`, `setStartedTask`, `setUpdatedTask`,
 `setTaskProgress`, `resetRostersFor`, `clearAllRosters`, `beginTaskStop`, `endTaskStopWait`) preserve the
 existing store contract. #1561 added no extra setter, only a third state field
 (`finishedTasks`) three of the setters also maintain, and #1640's `setTaskProgress` is a fourth "record"
@@ -272,70 +276,76 @@ dead-export `queueStore` already carries (see [queue store § Edge cases](queue-
 ### Retained Agent timeline evidence
 
 `agentTimeline` is a conversation/task Map for the
-[started background Agent projection](conversation-shell-tool-row-header-groups.md#started-background-agents).
-An exact `local_agent` roster row can create confirmed evidence from a usable roster
-id, falling back to a usable held started id, without a loaded launch or a start frame.
-A usable exact `local_agent` start can create unconfirmed evidence before the roster.
-No usable id means no new evidence. Map insertion order retains already-received start
-order; new roster entries append in roster order. Refreshes, later starts and history
-pages never delete/reinsert established entries. Nonempty ids compare exactly, without
-trimming or coercion. The display projection synthesizes one provisional Agent row
-per confirmed unmatched id; a loaded matching non-Agent suppresses that presentation.
+[background Agent projection](conversation-shell-tool-row-header-groups.md#started-background-agents).
+An exact `local_agent` roster row creates confirmed evidence from a nonempty roster
+id, falling back to a usable held started id, without a loaded launch or start frame.
+A usable exact `local_agent` live start creates unconfirmed evidence before the roster.
+Map insertion order retains received-start order; new connect entries append in roster
+order. Refreshes, later starts and older pages never delete/reinsert established entries.
+Ids compare exactly without trimming/coercion. Confirmed unmatched live evidence can
+synthesize a provisional Agent; a loaded matching non-Agent suppresses that presentation.
 
-`rosterAgentIds` holds each conversation's latest exact `local_agent` ids from roster
-rows. Only `setRoster` replaces it; start-time and later roster confirmation both use
-this set. `HeldBackgroundTask.taskType` cannot prove qualification: even an empty-id
-start can overwrite that display type. Trusting it would let a roster-listed
-`local_bash` task relocate an Agent without genuine local-agent confirmation. Omission
-removes eligibility for a new join, while an established `confirmed` flag stays true.
+`rosterAgentIds` holds the latest roster's exact `local_agent` task ids; only `setRoster`
+replaces it. Live start and later roster confirmation use this set. Display
+`HeldBackgroundTask.taskType` cannot qualify a live join: even an empty-id start can
+replace that display type, letting a roster-listed `local_bash` task wrongly relocate
+an Agent if trusted. Omission removes eligibility for new live joins, while established
+confirmation and minimal unconfirmed evidence survive. `unlistedStarts` display records
+still prune normally; neither retained evidence nor `finishedTasks` extends membership.
 
-Minimal unconfirmed evidence survives roster omission too, retaining received order
-for later confirmation; `unlistedStarts` display records still prune as before.
-Confirmed evidence outlives membership and can attach when tool-use history loads its
-launch or children. Neither evidence map extends panel/pill membership or counts.
-`finishedTasks` remains roster-pruned and cannot substitute for timeline evidence.
+`recordHistoryPlacements` writes only `agentTimeline`, never live roster setters.
+`HistoryAgentPlacement` carries a placement-only started/updated event and its mapped
+ordinary-row boundary `before`. A start must name exactly `local_agent` with a nonempty
+tool-call id. A finish must be exactly `completed`, `failed` or `stopped`. Either may
+arrive first on separate newest-first pages; unmatched evidence stays until it joins.
+A finish alone can retain an empty join, filled by its later valid start. Historical
+qualification requires both start and terminal, without current roster membership;
+projection additionally requires a loaded call named exactly `Agent`. Starts alone
+and unmatched finishes create no running/provisional rows (`historyOnly`), and
+foreground, non-Agent, other-type and empty-id joins retain ordinary placement.
 
-Retained descriptions refresh from the held metadata source; identity stays fixed.
-An empty later placement reading keeps existing evidence, including after roster
-removal. While running, a usable new reading can update the join. Once terminal,
-the join id stays fixed alongside the finish boundary: replacing it on a repeated
-start would detach the settled row when its launch finally loads. Unchanged
-id/description/qualification returns the evidence record by reference.
+When history attaches to live evidence, its start id must match the retained id.
+It can qualify a held live finish, without changing established identity/order.
+Conversely, the first live terminal update promotes `historyStarted` qualification
+when a validated historical start/launch loaded first. Qualification only in the
+history writer misses this order: terminal replay then finds an already settled
+entry and cannot repair it. Both writers preserve a known finish rather than revive
+it; exact completed/failed/stopped regressions cover history → live → history.
 
-`setUpdatedTask(snapshot, finishBefore?)` records the first exact `completed`, `failed`
-or `stopped` against existing evidence, even before confirmation or after the
-display task was removed. It retains the boundary and a `finishOrder` one greater than
-the largest held terminal ordinal in that conversation. Projection uses that ordinal
-when boundaries are equal: if B finishes before A with no ordinary arrival between,
-B stays first even when A started earlier or B's launch loads later. Repeats, roster
-refresh and nonterminal updates cannot move or revive a finish; roster absence,
-unknown/empty statuses and progress never invent one. Updates without retained evidence
-cannot reconstruct it.
+Live `setUpdatedTask(snapshot, finishBefore?)` captures the first terminal boundary
+against existing evidence, even before confirmation or after roster removal. The
+app-mounted task listener supplies the addressed timeline's `nextRowKey` synchronously,
+including inactive conversations, with item-count/zero fallback. It records an ordinal
+above the conversation's largest held `finishOrder`. Historical terminals instead
+retain stable ordinary-row identity with `finishFromHistory`; older pages receive
+ordinals before retained finishes, preserving finish-entry order for tied anchors.
+Projection resolves historical anchor position separately from live receipt chronology;
+numeric prepend keys cannot establish history order. Repeated terminals never replace
+an established boundary/order. Roster omission, progress and nonterminal/unknown/empty
+statuses never finish or revive a row. See [page/echo/tail boundary mapping](conversation-timeline-store-internals.md#background-agent-history-placement).
 
-The existing app-mounted `BackgroundTaskRosterData` listener supplies the addressed
-retained timeline's `nextRowKey` synchronously, falling back to item count or zero;
-callers omitting the boundary use zero. This captures arrival position independently
-of the visible pane, including inactive-conversation updates, under the existing
-owning-host admission. See
-[receipt chronology and history-prefix exclusions](conversation-timeline-store-limits.md#edge-cases-and-limitations).
-The maps are memory-only. Scoped reconnect drops evidence and roster eligibility for
-the server's listed conversations; pairing clear drops both for every conversation.
-Other conversations retain their held evidence references. No new subscription,
-persistence or panel/pill lifetime is introduced.
+Retained descriptions refresh from live held metadata; history-only entries hold the
+start description. Identity stays fixed. Empty later readings preserve an existing
+join; usable live readings can change it while running. Once terminal, a nonempty
+join stays fixed, so repeated starts cannot detach a settled row whose launch loads
+later. Late launch/child pages attach to that row and marker, preserving expansion
+and navigation. Evidence outlives roster membership; replay leaves roster/panel/pill
+counts and live turn state untouched.
 
-`retainAgent` allocates a client-owned numeric identity when evidence is first created.
-Its counter belongs to the store factory and survives both resets; recycling a number
-would give a fresh provisional row an old mounted Timeline's expansion. Optional
-identity/description fields keep older narrow evidence doubles valid.
+The maps are memory-only under existing owning-host receipt and conversation boundaries.
+Scoped reconnect drops evidence and roster eligibility for the server's listed chats;
+pairing clear drops all. Other conversations retain evidence references. The identity
+counter belongs to the store factory and survives both resets: recycling it would give
+a fresh provisional row an old mounted Timeline's expansion. Saved snapshots contain
+no task frames; durable admission/persistence and automatic newest-page requests
+remain #1814/#1815.
 
-`backgroundAgentTimeline.test.ts` covers actual-store/projection qualification,
-empty-id display-type overwrite, omission, both clears, first terminal boundaries and
-equal-boundary order for all three terminal statuses. This provenance sequence must
-be tested through the store: projecting pre-confirmed fixtures alone cannot expose
-the wrong qualification source. `backgroundTaskRosterStore.test.ts` also covers roster
-metadata refresh with an id, empty-start provenance, roster-first fallback, stable order,
-settled id retention and identities across both clears. See the tool-group documentation's
-[recorded fake-transport evidence](conversation-shell-tool-row-header-groups.md#verification).
+Actual-store `backgroundAgentTimeline.test.ts` and `backgroundTaskRosterStore.test.ts`
+cover genuine roster provenance, empty-start overwrite, fallback/omission, stable
+order, immutable finishes and identities across clears. Pre-confirmed projection
+fixtures alone cannot expose wrong qualification. `finishedAgentHistory.test.ts`
+covers cross-page joins, live overlap in both orders, tied finishes, echo/tail anchors,
+isolated roster/turn state and retained identity. See [recorded browser evidence](conversation-shell-tool-row-header-groups.md#verification).
 
 ### The pill's count, `selectLiveTaskCountFor` (#1561)
 

@@ -349,11 +349,12 @@ export function withoutLiveEntries(
 
 export function reduceHistoryPage(
   entries: readonly HistoryTimelineEntry[],
-  liveKeys?: ReadonlySet<string>
+  liveKeys?: ReadonlySet<string>,
+  collectPlacement?: (placement: HistoryAgentPlacement) => void
 ): readonly ThreadItem[]
 ```
 
-`reduceHistoryPage` runs `withoutLiveEntries` ahead of its existing reverse-and-fold; absent `liveKeys`
+`reduceHistoryPage` runs `withoutLiveEntries` before folding drawable ordinary events; absent `liveKeys`
 (the optional-trailing idiom again) suppresses nothing, which is both the pre-#1225 behaviour and the
 fail-open default. Dropping happens on the PAGE side, never the live side — AC3: the live row stays
 exactly where the live stream put it, and the page's copy — which `prependHistoryFor` would otherwise put
@@ -413,6 +414,66 @@ alongside `applyPage`/`settleFailure`. `useHistoryPageBridge` supplies it from a
 `selectLiveJoinKeysFor(conversationId)` selector, read AFRESH per page rather than captured at subscribe
 time — the existing bridge idiom, since one app-lifetime subscription must see every conversation's
 current keys, not whichever were live when it mounted.
+
+### Background Agent history placement
+
+`reduceHistoryPage` returns rows only. Its optional collector receives started/updated
+events with `before`, the scratch ordinary-item count at that chronological entry.
+It traverses the **original** newest-first page in reverse, collecting lifecycle
+events even when `withoutLiveEntries` suppresses their drawable overlap. Collecting
+only the filtered entries would lose the historical start needed to qualify held
+unconfirmed live evidence. Ordinary events still use the safe suffix join above;
+scratch phase, stalls, retries, compaction and other turn state never enter the live slice.
+
+`subscribeHistoryPage` passes rows and placements together. `prependHistoryFor` returns
+a boundary key for each original folded row plus the page tail. Fresh rows get fresh
+client-owned keys; a deduplicated user echo maps to the surviving held row's key.
+The tail maps to the first held row, or a reserved allocator key when none exists.
+With lifecycle evidence, `retainBoundary` advances the allocator even on a rows-empty
+page and keeps that reservation out of later prepend allocations. Otherwise an older
+launch could take an unmatched finish's tail identity and pull the finish backward.
+Only inserted rows increase `prependedRows`; existing row keys and receipt-order
+overrides survive unchanged. The bridge maps collector offsets through these returned
+keys before calling `recordHistoryPlacements`.
+
+Historical `finishBefore` resolves against the row-key sequence in chronological
+array order; numeric prepend allocation order does not establish chronology. Live
+finishes retain receipt-boundary interpretation and exclude the history prefix.
+Projection orders finished groups by resolved ordinary-row position, then retained
+`finishOrder` for ties, leaving later ordinary rows below the group. Source items
+remain in arrival order: `groupToolRows`/`Timeline` own relocation. Stable wrappers
+preserve expansion, while the existing scroll-pin layout pass holds the reader's
+position across prepends; explicit marker navigation runs afterward.
+
+The app-mounted roster bridge records live started/updated `daemonTs` via
+`liveJoinKeyFor` and `recordPlacementJoin`. This uses the same 64-character timestamp
+bound and 512-key retention as ordinary joins, without dispatching a `ThreadEvent`.
+Missing/empty/oversized stamps create no key; ambiguous page keys still fail open.
+The ordinary-event requirement that a live fold changed the timeline remains intact.
+Lifecycle keys record receipt evidence separately, since their placement can join later.
+
+Page routing uses the main process's request-correlated conversation, and timeline
+writes use the existing owning-host receipt admission. Placement is conversation/task
+Map evidence; daemon ids never become DOM attributes, selectors, paths or logs.
+Reconnect's scoped roster reset and pairing's whole-store clear remove retained
+lifecycle joins; other conversations keep their evidence references. Lifecycle replay
+changes only `agentTimeline`, without roster/panel/pill membership or live turn state.
+See [qualification and first-finish rules](background-task-roster-store-internals.md#retained-agent-timeline-evidence).
+
+`finishedAgentHistory.test.ts` covers cross-page joins, tied anchors, deduplicated
+echoes, evidence-only tail reservation, malformed qualification, live overlap and
+both history/live orders. In particular, qualification only at history ingestion
+misses historical start/launch → live terminal: the live writer must also qualify
+the retained validated start. The completed/failed/stopped regressions then replay
+the terminal and assert immutable evidence and roster/turn-state isolation. Browser
+[verification](conversation-shell-tool-row-header-groups.md#verification) supplies
+interaction and reader-position evidence that static renderer units cannot produce.
+
+`readSavedTimeline` snapshots contain no task frames and retain their existing
+placement and format. This reconstruction is memory-only from daemon pages;
+durable history admission/persistence and automatic newest-page requests remain
+with [#1814](https://github.com/pyrycode/pyrycode-desktop/issues/1814) and
+[#1815](https://github.com/pyrycode/pyrycode-desktop/issues/1815).
 
 ### Error handling — every row fails open
 

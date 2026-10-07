@@ -1335,7 +1335,7 @@ export function Timeline({
         if (row.item.kind !== 'toolCall') {
           const rowKey = row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`
           const content = <TimelineRow key={rowKey}
-            item={row.item} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(row.itemIndex)}
+            item={row.item} delivery={localEchoes?.find(e => e.rowKey === rowKeys?.[row.itemIndex])?.delivery} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(row.itemIndex)}
             midTurnInput={midTurnInput} onSendQueuedNow={onSendQueuedNow}
             onOpenMarkdownPath={onOpenMarkdownPath} agent={agent}
             onReply={onReply}
@@ -1684,6 +1684,7 @@ function TimelineRow({
   item,
   inProgress,
   queued = null,
+  delivery,
   onDropQueued,
   midTurnInput = false,
   onSendQueuedNow,
@@ -1695,6 +1696,7 @@ function TimelineRow({
   item: ThreadItem
   inProgress: boolean
   queued?: QueuedRowHandle | null
+  delivery?: 'waiting' | 'not-sent'
   onDropQueued?: (queuedMsgId: number, messageId: string | undefined) => void
   /** #1726: Timeline's two Send now props, passed through; read only by the queued `userText` arm. */
   midTurnInput?: boolean
@@ -1815,6 +1817,9 @@ function TimelineRow({
           {!queued && <MessageActions text={item.text} role="user" onReply={onReply} />}
           <div className="bubble bubble--user" data-thread-role={queued ? 'queued' : 'user'}>
             {item.text}
+            {delivery !== undefined && <div className={delivery === 'not-sent' ? 'composer-status__error' : 'bubble-meta'}>
+              {delivery === 'waiting' ? 'Waiting for connection' : 'Not sent'}
+            </div>}
             {/* #815: the attachment rows, written between the text and the meta row — the slot BubbleMeta's
                 header reserved. The read is `=== undefined`, never `'attachments' in item`, which is always
                 true because the reducer assigns the field unconditionally. `[]` is unreachable from the
@@ -4094,6 +4099,7 @@ function Composer({
       dispatch,
       dispatchFor: (conversationId, event) => {
         if (event.type === 'userText') dispatchLocalEcho(serverId, conversationId, event)
+        else if (event.type === 'messageDelivery') conversationTimelineStore.getState().dispatchFor(conversationId, { ...event, serverId })
       },
       newMessageId: () => crypto.randomUUID(),
       // #1013: the echo's clock. Referenced, not called — `submitMessage` reads it once, past both of its

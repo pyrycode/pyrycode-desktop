@@ -352,7 +352,7 @@ describe('submitMessage', () => {
   // clears". It cannot, now that the ids ride the frame — if the frame did not go it named nothing, so
   // the echo records nothing and the files stay attached for the retry. The alternative (echo shows
   // them AND they stay pending) would duplicate them on the next send.
-  it('#1055: a throwing send rolls the take back and records nothing on the echo (AC3)', () => {
+  it('a throwing send rolls attachments back and marks the echo failed', () => {
     const dispatch = vi.fn()
     const dispatchFor = vi.fn()
     const take = takeOf([REPORT])
@@ -368,11 +368,10 @@ describe('submitMessage', () => {
       takeAttachments: () => take
     })
 
-    // The guarded-send contract is unchanged: swallowed, echo still posts, still `true`.
-    expect(result).toBe(true)
+    expect(result).toBe(false)
     expect(take.rollback).toHaveBeenCalledTimes(1)
     const [echo] = dispatch.mock.calls[0] as [Extract<ThreadEvent, { type: 'userText' }>]
-    expect(echo.attachments).toBe(undefined)
+    expect(echo.attachments).toEqual([REPORT])
     // Both writes share the one object, so neither can disagree with the frame either.
     expect(dispatchFor.mock.calls[0][1]).toBe(echo)
     errorSpy.mockRestore()
@@ -411,7 +410,7 @@ describe('submitMessage', () => {
     expect(echoText).toBe('spaced')
   })
 
-  it('swallows a send-bridge failure (AC4): still echoes optimistically and returns true', () => {
+  it('shows bridge failure and returns false to preserve the draft', () => {
     const sendCommand = vi.fn(() => {
       throw new Error('bridge down')
     })
@@ -429,18 +428,18 @@ describe('submitMessage', () => {
       })
     }).not.toThrow()
 
-    expect(result).toBe(true)
+    expect(result).toBe(false)
     // The optimistic echo is appended regardless of send outcome.
-    expect(dispatch).toHaveBeenCalledTimes(1)
+    expect(dispatch).toHaveBeenCalledTimes(2)
     // #756: the guarded-send contract covers sendCommand only, so the keyed write is reached too.
-    expect(dispatchFor).toHaveBeenCalledTimes(1)
+    expect(dispatchFor).toHaveBeenCalledTimes(2)
     expect(dispatchFor).toHaveBeenCalledWith('conv-1', {
       type: 'userText',
       text: 'hello',
       messageId: 'g1'
     })
     // The swallowed error stays content-free — no conversation id and no message text (ADR 0007).
-    expect(errorSpy).toHaveBeenCalledWith('composer send failed')
+    expect(dispatch).toHaveBeenLastCalledWith({ type: 'messageDelivery', messageId: 'g1', status: 'not-sent' })
     errorSpy.mockRestore()
   })
 
@@ -758,9 +757,9 @@ describe('composer lifecycle diagnostics', () => {
     expect(submitMessage(' ', 'chat', deps)).toBe(false)
     expect(submitMessage('text', null, deps)).toBe(false)
     expect(calls).toEqual([])
-    expect(submitMessage('text', 'chat', deps)).toBe(true)
+    expect(submitMessage('text', 'chat', deps)).toBe(false)
     expect(calls).toEqual(['message-queued', 'dispatch', 'message-bridge-failed'])
-    expect(error).toHaveBeenCalledWith('composer send failed')
+    expect(error).not.toHaveBeenCalled()
     error.mockRestore()
   })
   it('diagnostic failure cannot prevent sending', () => {

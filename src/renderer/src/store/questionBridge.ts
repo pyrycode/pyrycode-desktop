@@ -293,6 +293,7 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
       // be the ONE route by which it lands in an Error message, a stack trace and a crash reporter.
       // This case is what keeps it out.
       return null
+    case 'messageDelivery': return null
     case 'sessionError':
       return null // Owned by the conversation timeline, never an error diagnostic here.
     default:

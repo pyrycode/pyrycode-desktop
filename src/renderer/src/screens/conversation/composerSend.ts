@@ -117,105 +117,34 @@ export function submitMessage(
   deps: ComposerSendDeps
 ): boolean {
   const trimmed = text.trim()
-  if (trimmed.length === 0) return false
-  if (conversationId === null) return false
-
+  if (trimmed.length === 0 || conversationId === null) return false
   const message_id = deps.newMessageId()
-
-  // #1039/#1055: the attachments are TAKEN here, and the position of this line is load-bearing twice
-  // over. It sits below BOTH `false` returns — the take is destructive, so a whitespace-only submit and
-  // a submit with no active conversation take nothing and the operator's attached file survives for the
-  // next send — and it sits ABOVE the payload literal, which is what #1055 moved: the ids ride the
-  // frame, so they have to be known before it is built. It is called ONCE; there is no second call site
-  // and no re-read.
   const take = deps.takeAttachments?.()
-  // An unwired take and a take of nothing both mean "this message names no files" — the `now`/`createdAt`
-  // rule, restated for the set — so the two collapse to one length here rather than to two branches.
   const named = take !== undefined && take.attachments.length > 0 ? take.attachments : undefined
-
   const payload: SendMessagePayload = {
-    conversation_id: conversationId,
-    message_id,
-    text: trimmed,
-    // ⭐ EMPTY NORMALISES TO ABSENT, and `undefined` is assigned unconditionally — the `createdAt`
-    // idiom — because JSON.stringify drops such a key and buildSendMessage serializes this object
-    // verbatim. That is the whole of "a message sent with none carries no `attachment_ids` key at all,
-    // not `null`, not `[]`": no conditional key, and one rule shared with the echo below.
-    attachment_ids: named?.map((attachment) => attachment.attachmentId)
+    conversation_id: conversationId, message_id, text: trimmed,
+    attachment_ids: named?.map(attachment => attachment.attachmentId)
   }
-
   const diagnose = (event: MessageLifecycleDiagnostic['event']): void => {
     try { deps.diagnose?.({ event, messageId: message_id, conversationId }) } catch { /* Observe only. */ }
   }
   diagnose('message-queued')
-  let sent = true
+  // Both identities exist before the bridge can synchronously report delivery.
+  const echo: ThreadEvent = { type: 'userText', text: trimmed, messageId: message_id,
+    createdAt: deps.now?.(), attachments: named }
+  deps.dispatch(echo)
+  deps.dispatchFor(conversationId, echo)
   try {
     deps.sendCommand(sendMessageCommand(payload))
+    return true
   } catch {
     diagnose('message-bridge-failed')
-    // AC4: a send-bridge failure must not crash the window. The optimistic echo still posts.
-    console.error('composer send failed')
-    // #1055: but it posts WITHOUT the attachments, and the take is undone. If the frame did not go it
-    // named nothing, so the echo records nothing and the files stay attached for the retry. The
-    // alternative — echo shows them AND they stay pending — duplicates them on the next send. Rolling
-    // back is sound because this function is synchronous end to end: the upload listener that appends
-    // to the pending set runs as a separate task, so nothing can have arrived in the gap.
-    sent = false
     take?.rollback()
+    const failed: ThreadEvent = { type: 'messageDelivery', messageId: message_id, status: 'not-sent' }
+    deps.dispatch(failed)
+    deps.dispatchFor(conversationId, failed)
+    return false
   }
-
-  // Route the optimistic echo into the timeline as the `userText` item (#245). The timeline reducer
-  // tail-appends it, so it renders in arrival order beside the daemon's structured reply.
-  //
-  // Built ONCE and handed to both write paths (#756). Sharing one `ThreadEvent` reference across two
-  // stores is safe for the reason `conversationTimelineStore.ts:268-270` already states:
-  // `reduceTimeline` is pure and always builds fresh arrays. Both writes sit outside the `try` above —
-  // the guarded-send contract covers `sendCommand` only and must not grow to cover a store write.
-  //
-  // #1013: stamped HERE, at the echo, which is the moment the operator sent the message — and stamped
-  // once, on the single object both writes share, so the flat store and the keyed holder can never record
-  // two different instants for one message. Below both `false` returns, so a refused submit reads no clock
-  // at all. `deps.now?.()` yields `undefined` when no clock was injected, assigned unconditionally.
-  //
-  // #1055: the echo records EXACTLY what the frame named, which is the second criterion and is
-  // structural rather than conventional — one `attachments` value feeds both, normalised by one rule
-  // (empty ⇒ absent) and gated by one boolean. The two cannot disagree on any path, including the
-  // throwing one, where the frame named nothing and this records nothing.
-  const echo: ThreadEvent = {
-    type: 'userText',
-    text: trimmed,
-    createdAt: deps.now?.(),
-    // ⭐ #1213: THE ID MINTED ABOVE FOR THE WIRE FRAME, RETAINED. The old rationale on `message_id` — "minted
-    // for the WIRE command only", because the daemon streams no user-message event so the echo needs no
-    // dedup key — was right about dedup and is retired for a different reason. The daemon PARKS a mid-turn
-    // send instead of running it, echoes it back in a `queue_state` snapshot naming this exact id
-    // (pyrycode#2092), and draws a second row for it; dropping that row has to be able to find this echo
-    // again, and nothing else in the two rows is a key (text is not unique, position mis-aligns on the first
-    // drop). So one mint, two uses: assigned unconditionally beside the two fields above, on the single
-    // object both writes share, so the frame and both stores can never name different messages.
-    //
-    // It is recorded EVEN WHEN THE SEND THREW, which is where it parts company with `attachments` below.
-    // That field is a claim about what the daemon was handed, so a frame that did not go must claim
-    // nothing. This is not a claim at all — it is this window's own name for its own message — and an
-    // id-less echo could never be dropped if a retry did enqueue it.
-    messageId: message_id,
-    // ⭐ EMPTY NORMALISES TO ABSENT, and this is the ONLY place it happens — which is what lets the
-    // timeline item's contract read "absent means none" with no second meaning to explain. A message sent
-    // with nothing pending must produce the item today's producer already produces, so `[]` may not reach
-    // the store: the take answers an empty array whenever the operator attached nothing, and an unwired
-    // take answers `undefined`. Both land here as `undefined`, assigned unconditionally (the `createdAt`
-    // discipline), which is what the store tests as absence.
-    attachments: sent ? named : undefined
-  }
-  deps.dispatch(echo)
-  // The keyed fold, under the conversation this message was SENT TO — it rides the wire as
-  // `conversation_id` in the payload above. This is NOT the fallback AC3 bans: that ban is on inventing
-  // an id for an event that ARRIVED without one, not on knowing where you just sent something. The id
-  // is non-null here by control flow — the `conversationId === null` guard already returned `false`
-  // above — so there is no `?? ''`, no default and no non-null assertion.
-  deps.dispatchFor(conversationId, echo)
-
-  return true
 }
 
 /**

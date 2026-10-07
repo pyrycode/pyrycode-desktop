@@ -67,3 +67,7 @@ None. The cleaner shape is to reuse the existing send observer and echo/receipt 
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-07
+
+## Revisions
+
+2026-10-07: Reserve the draining head's count/bytes until the driver accepts it, rather than removing it before handoff. The draining guard still appends reentrant submissions behind all existing entries, and a refusal leaves the head in place. This closes a reentrant overflow window while keeping the FIFO bounded. Delivery presentation lives in the existing `localEchoes` sidecar; it never changes message content or the durable row contract. Existing exhaustive session/modal/question bridges explicitly ignore the new delivery event.

@@ -6,7 +6,7 @@ It is the **third instance** of the [loopback relay affordance](loopback-relay-a
 
 ## Why it exists
 
-[`e2e/fixtures/desktopIsolation.ts`](e2e-harness.md#desktop-isolation-default-tier-launches) needed two levers to stop the default tier's launches from being disturbed by the operator's own desktop: Chromium switches that exempt a renderer from occlusion/backgrounding throttling, and not showing the window at all. Neither alone is sufficient — a hidden window is still an occluded one, so hiding it without the switches earns back exactly the throttling being removed; the switches alone leave every launch stealing the operator's focus 49 times a run. This affordance is the second lever, on the main-process side.
+[`e2e/fixtures/desktopIsolation.ts`](e2e-harness-desktop-isolation.md#desktop-isolation-default-tier-launches) needed two levers to stop the default tier's launches from being disturbed by the operator's own desktop: Chromium switches that exempt a renderer from occlusion/backgrounding throttling, and not showing the window at all. Neither alone is sufficient — a hidden window is still an occluded one, so hiding it without the switches earns back exactly the throttling being removed; the switches alone leave every launch stealing the operator's focus 49 times a run. This affordance is the second lever, on the main-process side.
 
 ## What it does
 
@@ -60,5 +60,5 @@ The builder self-review verdict is **PASS**. The finding the `security-sensitive
 - [Native edit context menu](edit-context-menu.md) — its `editContextMenu.ts` copies this module's pure,
   injected-Electron shape; it also names this affordance as the reason no e2e spec can observe its native
   popup actually opening, since the default tier's harness launches the window hidden (#1445).
-- [E2E test harness § Desktop isolation](e2e-harness.md#desktop-isolation-default-tier-launches) — the sole consumer: `e2e/fixtures/desktopIsolation.ts` sets `HIDDEN_WINDOW_ENV_FLAG` alongside the Chromium renderer-throttling switches.
+- [E2E test harness § Desktop isolation](e2e-harness-desktop-isolation.md#desktop-isolation-default-tier-launches) — the sole consumer: `e2e/fixtures/desktopIsolation.ts` sets `HIDDEN_WINDOW_ENV_FLAG` alongside the Chromium renderer-throttling switches.
 - [Loopback relay dev affordance](loopback-relay-affordance.md) / [#97](../codebase/97.md) and [Secret-backend dev affordance](secret-backend-affordance.md) / [#99](../codebase/99.md) — the two prior instances of this exact shape; this is their third. [Dock icon (dev-only, macOS)](dock-icon-affordance.md) / [#1446](https://github.com/pyrycode/pyrycode-desktop/issues/1446) is the fourth, though it gates an unconditional dev affordance rather than an env-opt-in relaxation.

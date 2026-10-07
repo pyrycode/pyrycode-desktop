@@ -442,7 +442,7 @@ compared all four Settings on/off captures at `08f34a4f` with
 Windows were 800×800 and 1280×800, content viewports 800×773 and 1280×773.
 Thread placement, shared typography, spacing and the 52×32 switch matched the
 Desktop adaptation. The linked review preserves the evidence independently of
-scratch captures; see the [Linux frame-generation requirement](e2e-harness.md#desktop-isolation-default-tier-launches).
+scratch captures; see the [Linux frame-generation requirement](e2e-harness-desktop-isolation.md#desktop-isolation-default-tier-launches).
 
 ## The Storage section (`ArchivedCountRow.tsx` + `conversationListStore.ts`, #351)
 

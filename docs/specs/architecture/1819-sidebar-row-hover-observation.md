@@ -26,3 +26,6 @@ Scope: one verifiable deliverable, about 180–240 written lines including plan 
 - After final main merge, run pre-verify and build.
 - Run the named test 20 times with three configured/actual workers, retries disabled, zero skips; then run the complete default fake-transport suite with three workers and retries disabled. Record revision, Linux/Xvfb shown-window presentation, actual worker count and executed/pass/fail/skip totals, separating the named test from unrelated failures.
 - No live Claude test or visual change is required.
+
+## Revisions
+2026-10-07: The sensitivity check uses a scratch copy of the built renderer with the single hover-background declaration removed, rather than an incorrect expected value. The synchronized assertion fails with `hoveredRows: 1` and the resting fill transparent, while control reveal and the open fill remain correct. This directly proves that re-delivering input cannot hide a missing hover style. The test's production expectation remains unchanged.

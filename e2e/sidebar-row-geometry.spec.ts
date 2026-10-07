@@ -177,6 +177,38 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   // its own selector" — the property twelve shipped locators, six of them `real-daemon-*`, rest on.
   const chatEdit = page.locator('.channel-list__chat-edit')
 
+  // A shown Linux window arriving after hover() can deliver native pointer input and clear :hover.
+  // Re-deliver real input on each observation, and read hover and treatment in the same snapshot.
+  // Polling colours alone cannot restore lost input; a broken hover rule still fails this exact set.
+  const expectPointerTreatment = async (
+    target: Locator | null,
+    fills: string[],
+    controlOpacities: string[]
+  ): Promise<void> => {
+    await expect.poll(async () => {
+      if (target === null) await page.mouse.move(0, 0)
+      else await target.hover()
+      return (target ?? page.locator('html')).evaluate((el) => {
+        const rows = [...document.querySelectorAll('.channel-list__row')]
+        const opacities = (selector: string): string[] =>
+          [...document.querySelectorAll(selector)].map(control => getComputedStyle(control).opacity).sort()
+        return {
+          targetHovered: el.matches(':hover'),
+          hoveredRows: rows.filter(row => row.matches(':hover')).length,
+          fills: rows.map(row => getComputedStyle(row).backgroundColor).sort(),
+          saveOpacities: opacities('.channel-list__save'),
+          editOpacities: opacities('.channel-list__chat-edit')
+        }
+      })
+    }).toEqual({
+      targetHovered: true,
+      hoveredRows: target === null ? 0 : 1,
+      fills: [...fills].sort(),
+      saveOpacities: [...controlOpacities].sort(),
+      editOpacities: [...controlOpacities].sort()
+    })
+  }
+
   await expect(row).toHaveCount(1)
   await expect(save).toHaveCount(1)
   await expect(chatEdit).toHaveCount(1)
@@ -250,7 +282,7 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   // SAME element and the wrapper read genuinely separates `--color-on-primary` from the hover colour.
   // The button read is kept as the standing guard that nothing has painted its way back onto the button.
   // ---
-  await open.hover()
+  await expectPointerTreatment(open, [OPEN_FILL_RGB], [SHOWN_OPACITY])
   expect(await computed(open, 'background-color')).toBe(NO_FILL_RGBA)
   expect(await computed(row, 'background-color')).toBe(OPEN_FILL_RGB)
 
@@ -367,9 +399,7 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   const resting = page.locator('.channel-list__row-open:not([aria-current])')
   const restingRow = page.locator('.channel-list__row').filter({ has: resting })
   await expect(resting).toHaveCount(1)
-  await resting.hover()
-  const fillsWhileHovering = await computedAll(row, 'background-color')
-  expect([...fillsWhileHovering].sort()).toEqual([OPEN_FILL_RGB, HOVER_FILL_RGB].sort())
+  await expectPointerTreatment(resting, [OPEN_FILL_RGB, HOVER_FILL_RGB], [HIDDEN_OPACITY, SHOWN_OPACITY])
 
   // --- 10. #1171's AC2, the reveal. AT REST EVERY control is transparent, THE OPEN ROW'S INCLUDED —
   // read as a set over both rows, so the open row is covered by the same read rather than by a locator
@@ -382,34 +412,31 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   // hidden — nine shipped specs click or await it without hovering first, five of them `real-daemon-*`
   // readiness gates under a handshake timeout. `display: none` or `visibility: hidden` would satisfy a
   // "not visible" assertion and hang those gates; this one fails against both. ---
-  await page.mouse.move(0, 0)
-  expect(await computedAll(save, 'opacity')).toEqual([HIDDEN_OPACITY, HIDDEN_OPACITY])
+  await expectPointerTreatment(null, [OPEN_FILL_RGB, NO_FILL_RGBA], [HIDDEN_OPACITY, HIDDEN_OPACITY])
   await expect(save).toHaveCount(2)
   // #1441 — the pen inherits the mechanism wholesale, and asserting it here rather than trusting the
   // restated block is what would catch a new token left out of the shared reveal rule: it would be
   // permanently visible (no `opacity: 0` reached it) or permanently hidden (no reveal did).
-  expect(await computedAll(chatEdit, 'opacity')).toEqual([HIDDEN_OPACITY, HIDDEN_OPACITY])
   await expect(chatEdit).toHaveCount(2)
 
   // Hovering a row reveals ITS control and leaves the other row's alone — sorted, so this is a set claim
   // and not an ordering one. A reveal hung off the wrong scope (the control's own `:hover`, or the whole
   // list's) would give two zeroes or two ones here.
-  await resting.hover()
-  const opacities = await computedAll(save, 'opacity')
-  expect([...opacities].sort()).toEqual([HIDDEN_OPACITY, SHOWN_OPACITY])
   // BOTH of the hovered row's controls come up together, which is the arrangement the chevron's 20px
   // inset exists for. One reveal rule carries all three selectors, so this is also what says the pen was
   // added to that rule rather than given a second one that could drift out of step with it.
-  expect([...(await computedAll(chatEdit, 'opacity'))].sort()).toEqual([HIDDEN_OPACITY, SHOWN_OPACITY])
+  await expectPointerTreatment(resting, [OPEN_FILL_RGB, HOVER_FILL_RGB], [HIDDEN_OPACITY, SHOWN_OPACITY])
 
   // --- 11. #1171's AC3, the clause the whole fill move exists for: the fill does not drop as the
   // pointer travels from the title onto the glyph. The control is a SIBLING of the button, not its
   // child, so a fill left on the button would lose `:hover` the instant the pointer crossed onto the
   // control that sits over its trailing padding, and the row would flicker. Same set as block 9, with
   // the pointer somewhere block 9 never put it. ---
-  await restingRow.locator('.channel-list__save-icon').hover()
-  const fillsOverGlyph = await computedAll(row, 'background-color')
-  expect([...fillsOverGlyph].sort()).toEqual([OPEN_FILL_RGB, HOVER_FILL_RGB].sort())
+  await expectPointerTreatment(
+    restingRow.locator('.channel-list__save-icon'),
+    [OPEN_FILL_RGB, HOVER_FILL_RGB],
+    [HIDDEN_OPACITY, SHOWN_OPACITY]
+  )
 
   // --- 11b. Both idle dots retain their half-opacity rings on resting, open and hovered rows.
   await expect(page.locator('.conversation-status-dot--idle')).toHaveCount(2)

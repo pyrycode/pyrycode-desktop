@@ -197,6 +197,28 @@ from running to idle. Drive the prerequisite transition when the fixture require
 
 ## Layout and input
 
+A completed Playwright `hover()` does not guarantee that Chromium still matches
+`:hover` at the following style read. Shown windows on one Xvfb display can deliver
+native pointer input between those operations. Observe the target's `matches(':hover')`,
+the hovered-row count and exact computed treatment together; a transparent resting
+row with absent hover and a correct open fill does not establish a CSS defect.
+The [sidebar investigation](https://github.com/pyrycode/pyrycode-desktop/issues/1819#issuecomment-6029550135)
+reproduced that state by showing a second window after pointer delivery. Two frames
+did not restore hover; an unfocused window could still retain the correct fill.
+
+For that regression, each `expect.poll` attempt re-delivers real Playwright pointer
+input, then captures hover, fills and control opacities in one synchronous renderer
+snapshot. Apply the same observation over the trailing glyph and when parked away
+from rows. Polling colours alone cannot restore persistently lost hover. Keep the
+exact treatment and the geometry, keyboard-focus and activation assertions.
+Prove sensitivity separately: removing only the hover-background declaration from
+a scratch built renderer made this assertion fail with `hoveredRows: 1`, a transparent
+resting fill, and correct open fill/control opacities. Recovery from input interference
+must still detect a broken style. The replay recovered confirmed hover and exact fill
+in 30/30 cycles; neither observation is a replacement for counted suite evidence.
+See [Desktop isolation](e2e-harness.md#desktop-isolation-default-tier-launches) for the
+distinction between this local observation and the separate shared harness work.
+
 A sticky offset is relative to the scrollport content box.
 Read the running window's boxes when a padded scroller is involved.
 Flow arithmetic alone can predict the wrong boundary.

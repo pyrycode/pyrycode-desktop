@@ -42,7 +42,7 @@ enrich the original position across intervening content and history prepend.
 durable contract for these display rows, separately from running state, pending
 permissions and recovery offers. The app records received rows and local echoes
 through an app-lifetime observer; restoration remains a separate integration.
-The [exact contract test](chat-history.md#testing) lives in the
+The [exact contract test](chat-history-testing.md#durable-type-contract) lives in the
 renderer test project so the shared/main project never imports this implementation.
 
 ## Configuration and usage

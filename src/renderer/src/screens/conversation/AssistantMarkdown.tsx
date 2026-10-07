@@ -1,5 +1,5 @@
 import { Children, isValidElement, useMemo, useRef, type ReactNode } from 'react'
-import Markdown, { type Components } from 'react-markdown'
+import Markdown, { type AllowElement, type Components } from 'react-markdown'
 import { gfmTable } from 'micromark-extension-gfm-table'
 import { gfmTableFromMarkdown } from 'mdast-util-gfm-table'
 import { gfmTaskListItem } from 'micromark-extension-gfm-task-list-item'
@@ -46,12 +46,9 @@ import { copyMessageText } from './copyMessageText'
 // http/https-only setWindowOpenHandler, the same-document will-navigate guard (src/main/index.ts),
 // and a CSP with no img-src so a remote subresource fails by policy (src/renderer/index.html).
 //
-// #609 wired this in and settled what it owns: ConversationScreen.tsx:522 renders it inside a
-// `.bubble__markdown` container for a SETTLED reply only. It chose a CONDITIONAL bubble--assistant-text
-// over neutralising `white-space: pre-wrap` inside that container — markdown owns the whitespace by
-// ABSENCE of the declaration — and it DECLINED React.memo, with the reason stated at that call site
-// (parsing does re-run on every timeline render; nothing in this test tier can observe a skipped one).
-// #623 then added the `pre` override below: a fenced block's header bar and border (Figma 16:45).
+// TimelineRow uses this same boundary for settled replies and progressive streaming units.
+// Streaming presentation unwraps pending elements; frozen units use a memoized wrapper.
+// Markdown owns block whitespace on both branches.
 
 /**
  * #1079 / #1080 — registers the GFM table, task-list and strikethrough constructs on the processor, and
@@ -403,8 +400,10 @@ function CodeBlock({ children }: { children?: ReactNode }): JSX.Element {
  * CommonMark ends the language token at the first whitespace character and CSS class separators ARE
  * whitespace, so a fence can never contribute more than that one token.
  */
-export function AssistantMarkdown({ text, onOpenMarkdownPath }: {
+export function AssistantMarkdown({ text, onOpenMarkdownPath, allowElement }: {
   text: string
+  /** Streaming presentation can remove elements; all renderer security rules still apply. */
+  allowElement?: AllowElement
   /** #1627: when passed, a link to a markdown path (see `markdownLinkPath`) renders as a button that
    *  calls this with the path. Absent — the reader, and every caller that predates it — such a link keeps
    *  its plain-text rendering and the module-constant table is used unchanged. */
@@ -429,7 +428,7 @@ export function AssistantMarkdown({ text, onOpenMarkdownPath }: {
     }
   }, [onOpenMarkdownPath])
   return (
-    <Markdown components={table} remarkPlugins={remarkPlugins}>
+    <Markdown components={table} remarkPlugins={remarkPlugins} allowElement={allowElement} unwrapDisallowed={allowElement !== undefined}>
       {text}
     </Markdown>
   )

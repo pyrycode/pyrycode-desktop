@@ -10,30 +10,45 @@ and can be server-rendered from injected items. `TimelineRow` switches exhaustiv
 on each item's `kind`; wire-to-render translation belongs to the bridge.
 
 - `assistantText` → one bubble, carrying `data-thread-role="assistant"` as the test hook
-  (`MessageThread`'s `data-message-role` counterpart). Since [#609](../codebase/609.md), the bubble
-  forks on the same `inProgress` prop the streaming cursor below reads — no new state:
-  - **In progress** (the tail, still growing): unchanged from #199/#607 — text as React children
-    (never `dangerouslySetInnerHTML`, so HTML inside a delta renders as visible characters), plus the
-    dedicated `.bubble--assistant-text` modifier (`white-space: pre-wrap`) so a multi-paragraph reply
-    keeps its blank lines and space runs instead of collapsing to one run-on line. Hung on its own
-    class rather than `.bubble--daemon` so the four chrome affordances below
-    (thinking/stall/api-retry/compacting) and the coarse path's `.bubble--user` stay structurally
-    unreachable by the rule.
-  - **Settled** (every other item, and the tail once its turn's `turn_end` arrives): renders through
-    [`AssistantMarkdown`](assistant-markdown-renderer.md) (#608, wired in by #609) inside a
-    `<div className="bubble__markdown">` — a flex column with `gap: var(--space-2)` for Figma `16:43`'s
-    8px block rhythm, `margin-block: 0` on direct children (`index.css` resets only `body`, so UA block
-    margins would otherwise stack on top of the flex gap), and `pre { white-space: pre-wrap }` so
-    fenced code wraps within the bubble's measure instead of spilling out of it. `bubble--assistant-text`
-    is **not** carried here — the settled branch never gets the class at all, making "markdown owns the
-    whitespace" true by construction rather than by an override one level down. `React.memo` was
-    considered and declined (unmeasured cost, no test tier in this repo can observe a skipped
-    re-render); the seam is named in a code comment at the render site.
+  (`MessageThread`'s `data-message-role` counterpart). Both branches use
+  `<div className="bubble__markdown">`; `inProgress` selects their rendering policy:
+  - **In progress** (the tail, still growing): `StreamingAssistantMarkdown` feeds parser-verified
+    frozen source units and a stabilized tail through
+    [`AssistantMarkdown`](assistant-markdown-renderer.md#configuration-and-usage). Each delta parses
+    from the first unfrozen block's line. Units freeze in order only after the following top-level
+    block has two ended lines and independently parsed halves reproduce the tree at shifted offsets.
+    A unit cannot end in a list, quote or indented code block; failed verification grows the candidate.
+    Frozen objects retain identity and memoized renderers skip unchanged props. A reference definition
+    anywhere, including nested definitions and next-line titles, discards frozen units and switches
+    to whole-reply parsing/rendering for the remaining append-only stream. Replacement source resets
+    the local cache.
+  - **Pending presentation**: only the trailing paragraph/heading leaf receives inline completion,
+    including inside quotes. Pending `**bold`, backtick code and `[text](https://exa` show their text
+    without the pending style or link behavior. Insertion-only virtual closers are hidden by element
+    unwrapping; escaped markers and ordinary punctuation stay literal. A pending pipe header, alone
+    or with a partial delimiter, shows parser-derived cells separated by spaces until its complete
+    separator establishes a table. Partial separator syntax stays hidden; this layout change is
+    accepted. Unclosed fences render as code once the opening line ends, using the parser's raw-source
+    behavior, including a closing candidate that grows into backticks followed by `x`.
+  - **Settled** (after `turn_end` or a following tool row): the streaming component unmounts and
+    `AssistantMarkdown` renders the original `item.text` in one pass. Stored source is never modified.
+    Without pending inline/header syntax, streaming and settled content match apart from whitespace
+    between top-level blocks. Unfinished syntax may correct: streaming `**bold` shows `bold`, but the
+    settled renderer shows literal `**bold`.
 
-  The fork exists because the daemon emits one event per *complete* content block and the store
-  coalesces a turn's deltas in place, so a settled item's text is always a whole document — a fenced
-  block never arrives half-open — while the in-progress tail must never be shown half-parsed, which is
-  why it stays plain text permanently rather than gaining markdown once "enough" of it has streamed in.
+  Markdown owns whitespace on both branches: the container's flex column and
+  `gap: var(--space-2)` provide the 8px block rhythm, with direct-child margins reset.
+  `.code-block__body` preserves and wraps code whitespace. The assistant-tail
+  `bubble--assistant-text` modifier and its `pre-wrap` rule have been removed.
+  The renderer's security boundary is unchanged: no `rehypePlugins` or `skipHtml`,
+  only the table/task-list/strikethrough `remarkGfmSubset`, the existing
+  `allowedLinkHref`/`markdownLinkPath` checks, escaped HTML and alt-only images.
+  Stabilization only inserts source syntax and removes presentation elements; it adds no raw markup sink.
+
+  Historically, [#607](../codebase/607.md) preserved plain-text tail whitespace and
+  [#609](../codebase/609.md) introduced settled-only markdown while declining memoization.
+  [#1751](../../specs/architecture/1751-progressive-assistant-markdown.md) reverses the permanent
+  plain-tail policy and verifies parser/render reuse in the mounted fake-transport tier.
 - `toolCall` → the tool-row chip ([#218](conversation-shell-tool-rows.md#pending-tool-call-row-218), below) — no longer a no-op as
   of that ticket; the resolved success/error treatment ([#230](conversation-shell-tool-rows.md#resolved-tool-call-row-230), below)
   lifts the pending dimming. Failed, non-denied calls now use the accessible
@@ -44,11 +59,11 @@ on each item's `kind`; wire-to-render translation belongs to the bridge.
 aria-hidden="true">` inside the in-progress bubble, rendered only on the tail item when
 `item.kind === 'assistantText'` — derived from array position, never from `selectPhase` (which had no
 source at the time; [#214](../codebase/214.md) later wired one up, but this render still doesn't read
-it — the thinking indicator is a separate, still-open slice). CSS blink guarded by
-`@media (prefers-reduced-motion: reduce)`. Since #607's `pre-wrap` rule, a reply whose text ends in a
-newline now carries the cursor onto the following line — the whitespace rule working as intended, not
-a regression; the cursor `<span>` sits flush against `{item.text}` in the JSX with no intervening
-whitespace so no extra blank line is introduced by the markup itself.
+it). CSS blink is guarded by `@media (prefers-reduced-motion: reduce)`.
+The cursor follows the `.bubble__markdown` container as a sibling, before `BubbleMeta`,
+and disappears on settlement. Its placement follows rendered block layout rather than
+raw trailing newlines. Historically, #607's plain `pre-wrap` tail placed it in the
+source's text run; that newline-driven placement ended with progressive markdown.
 
 **React key = array index**, deliberately: the reducer's `appendDelta`/`fillResult` invariants
 guarantee the list is append-only with tail-mutation, never reordering or inserting mid-list, so index

@@ -21,6 +21,7 @@ import { useStore } from 'zustand'
 import { rememberedModel } from '../../store/rememberedModel'
 import { connectedConversationHostNow, useConversationActionAvailability } from './conversationActionAvailability'
 import { AssistantMarkdown } from './AssistantMarkdown'
+import { StreamingAssistantMarkdown } from './StreamingAssistantMarkdown'
 import { MARKDOWN_OPEN_FAILED_NOTICE, MarkdownReaderView, useMarkdownReader } from './MarkdownReader'
 import { PyryMark } from '../../theme/PyryMark'
 import type { Message } from './messageViewModel'
@@ -1627,7 +1628,7 @@ function TimelineRow({
   onSendQueuedNow?: (queuedMsgId: number) => void
   /** #1566: set only on a closed turn's last assistant bubble; read only by the `assistantText` arm. */
   turnStats?: string
-  /** #1627: read only by the settled `assistantText` arm; user messages render no markdown. */
+  /** #1627: read only by the `assistantText` arm; user messages render no markdown. */
   onOpenMarkdownPath?: (path: string) => void
   /** #1656: read by the banner and turnBoundary arms, which name the conversation's agent. */
   agent?: WireAgent
@@ -1635,56 +1636,16 @@ function TimelineRow({
 }): JSX.Element | null {
   switch (item.kind) {
     case 'assistantText': {
-      // #609: the bubble forks on `inProgress` — the settled reply renders as markdown, the still-growing
-      // tail as plain text. No new state: `inProgress` (Timeline:466) already means "the tail, still open",
-      // and because the daemon emits one event per COMPLETE content block and the store coalesces a turn's
-      // deltas in place, a settled item's text is a whole document — never a half-open fence.
-      //
-      // #607's bubble--assistant-text (white-space: pre-wrap, see conversation.css) rides the same fork.
-      // Making it conditional rather than neutralising it inside the container makes "markdown owns the
-      // whitespace" true BY CONSTRUCTION — an absent declaration needs no re-verifying when a new element
-      // type appears inside the container, and no stray text node can render as a visible blank. Appended,
-      // never inserted — the `bubble bubble--daemon` pair stays contiguous.
-      const bubbleClass = inProgress
-        ? 'bubble bubble--daemon bubble--assistant-text'
-        : 'bubble bubble--daemon'
+      // Streaming owns only derived presentation; settlement always renders the original source.
       return (
         <div className="message-row message-row--daemon message-row--text">
-          <div className={bubbleClass} data-thread-role="assistant">
-            {inProgress ? (
-              <>
-                {/* Text passed as React children (auto-escaped) — never dangerouslySetInnerHTML — so HTML
-                    inside a delta renders as visible characters, discharging #199's untrusted-text
-                    handoff. AssistantMarkdown holds the same posture on the settled branch: it escapes
-                    raw HTML rather than interpreting it, and returns elements rather than an HTML
-                    string, so neither branch can hand a sink anything. */}
-                {item.text}
-                {/* The streaming cursor (Figma 16:56, ▎ U+258E): a trailing inline visual on the
-                    in-progress bubble's text run, inheriting the bubble's color/size. Derived structurally
-                    (the tail, still-open assistantText), never from `phase` (which has no source until
-                    #204). Decorative → aria-hidden. */}
-                <span className="bubble__cursor" aria-hidden="true">
-                  ▎
-                </span>
-              </>
-            ) : (
-              // AssistantMarkdown emits no wrapper of its own (#608), so this container is what the
-              // block rhythm hangs on. NOT memoized: parsing does re-run on every timeline render, but no
-              // failure has been observed, `React.memo` appears nowhere in src/ (this file declines it
-              // twice already, :376 and :394), and nothing in this repo's server-render test tier can
-              // observe a skipped re-render — it would ship unverified. If it is ever measured to matter,
-              // the seam is a memoized wrapper component keyed on `text` (not useMemo — hooks cannot be
-              // called from inside this switch), which is sound because the render is a pure function of
-              // that one prop.
-              <div className="bubble__markdown">
-                <AssistantMarkdown text={item.text} onOpenMarkdownPath={onOpenMarkdownPath} />
-              </div>
-            )}
-            {/* #969: appended AFTER the fork, so it is the bubble's last child on BOTH branches. The
-                in-progress tail gets it too — excluding it would reflow the bubble the moment the turn
-                settles, and a partial reply is as copyable as a finished one. #607's pre-wrap reaches
-                this subtree on that branch and is inert there: the JSX transform emits no whitespace
-                text nodes between elements on separate lines. */}
+          <div className="bubble bubble--daemon" data-thread-role="assistant">
+            <div className="bubble__markdown">
+              {inProgress
+                ? <StreamingAssistantMarkdown text={item.text} onOpenMarkdownPath={onOpenMarkdownPath} />
+                : <AssistantMarkdown text={item.text} onOpenMarkdownPath={onOpenMarkdownPath} />}
+            </div>
+            {inProgress && <span className="bubble__cursor" aria-hidden="true">▎</span>}
             <BubbleMeta side="daemon" createdAt={item.createdAt} turnStats={turnStats} />
           </div>
           <MessageActions text={item.text} role="assistant" onReply={onReply} />

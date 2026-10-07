@@ -56,16 +56,35 @@ parsing, which is #609's markdown work, not this slice's.
 
 ## Context
 
-Assistant text renders as a bare text node inside `.bubble` (`ConversationScreen.tsx:454`). `.bubble`
+At this ticket's implementation, assistant text rendered as a bare text node inside `.bubble`
+(`ConversationScreen.tsx:454`). `.bubble`
 sets the measure, padding, `word-break` and type but no `white-space`, so the initial value `normal`
 applies: every newline and every run of spaces collapses to a single space. A multi-paragraph reply
 arrives as one run-on block. Reported by the operator on 2026-08-20 while using the app as his
 day-to-day client.
 
-This is the whitespace half of #598. It is **not** made redundant by the markdown siblings
-(#608/#609/#610): once markdown lands, a settled message renders as markup, but the in-progress tail
-— the bubble carrying the streaming cursor — deliberately keeps rendering as plain text so it is
-never shown half-parsed. That path needs this rule permanently.
+This was the whitespace half of #598. The markdown siblings (#608/#609/#610) initially
+kept the in-progress tail plain while rendering settled messages as markup, so this
+rule continued to serve the streaming path. The original expectation that it would
+remain necessary permanently was superseded by
+[#1751's progressive markdown](1751-progressive-assistant-markdown.md).
+
+Current behavior: both branches render through `AssistantMarkdown` inside
+`.bubble__markdown`, whose block rhythm owns whitespace; the assistant-tail `pre-wrap`
+modifier is removed, while code bodies retain their own wrapping/preservation rules.
+The streaming helper parses only the unfrozen tail, freezing verified independent units
+with stable identity and memoized rendering. Any reference definition, including a nested
+definition or next-line title, switches to whole-reply parsing/rendering. Pending inline
+syntax shows unformatted, untappable text; pending table headers show cells separated by
+spaces with partial delimiters hidden until a complete separator establishes a table.
+Unclosed fences already render as code through the shared parser. `turn_end` or a following
+tool row settles using original `item.text`, so unfinished syntax may become literal again.
+The decorative cursor follows the markdown container before metadata and disappears on
+settlement. Raw HTML escaping, alt-only images, the GFM table/task-list/strikethrough subset
+and `allowedLinkHref`/`markdownLinkPath` allowlists remain unchanged; no `rehypePlugins`,
+`skipHtml` or raw markup sink is added. The design and tests below describe #607's historical
+plain-text implementation; current usage and limitations are in
+[the renderer overview](../../knowledge/features/assistant-markdown-renderer.md#configuration-and-usage).
 
 ## Design
 

@@ -13,7 +13,7 @@ const end = (turn: string, eventId: number): Uint8Array => encodeEnvelope({
   payload: { conversation_id: SEEDED_ROW.id, turn_id: turn, stop_reason: 'end_turn' } satisfies TurnEndPayload
 })
 
-test('reconnect negotiates the retained tail before subsequent live events without history reload', async ({ launchPairedApp }) => {
+test('reconnect negotiates the retained tail alongside one newest history refresh', async ({ launchPairedApp }) => {
   const hellos: { type: string; cursor: unknown; hasTimestamp: boolean }[] = []
   const requests: string[] = []
   const { page, daemon, forwarder } = await launchPairedApp({
@@ -52,6 +52,6 @@ test('reconnect negotiates the retained tail before subsequent live events witho
   await expect(rows.nth(0).locator('.bubble__markdown')).toHaveText('Held prefix and recovered tail')
   await expect(rows.nth(1).locator('.bubble__markdown')).toHaveText('Missed reply')
   await expect(rows.nth(2).locator('.bubble__markdown')).toHaveText('Later live reply')
-  expect(requests.filter(type => type === 'request_history')).toHaveLength(historyBefore)
+  await expect.poll(() => requests.filter(type => type === 'request_history').length).toBe(historyBefore + 1)
   expect(hellos).toHaveLength(1)
 })

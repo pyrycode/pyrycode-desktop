@@ -33,6 +33,25 @@ function harness(write = async (_request: ChatHistoryRequest): Promise<ChatHisto
   return { lists, timelines, writer, save, log, receive, list, delta, offEvents,
     event: (event: StampedDaemonEvent) => listener(event), run: () => scheduled?.() }
 }
+
+it('saves newest receipts with retained oldest-end coverage through protected restoration', async () => {
+  const h = harness()
+  h.list(); h.delta('held row')
+  h.receive('historyPageReceived', () => h.timelines.getState().recordHistoryPage('chat', 'oldest', true, [1]))
+  h.timelines.getState().markHistoryRequested('chat', 'a', '', 'newest')
+  h.receive('historyPageReceived', () => h.timelines.getState().recordHistoryPage('chat', 'fresh', false, [4, 6]))
+  await h.writer.flush()
+  const saved = timelineRequests(h).at(-1)!.snapshot
+  expect(saved.coverage).toEqual({ status: 'received', cursor: 'oldest', atStart: true })
+  expect(saved.served?.ids).toEqual([1, 4, 6])
+  const parsed = parseChatHistorySnapshot(JSON.parse(JSON.stringify(saved)))
+  if (parsed.kind !== 'timeline') throw new Error('Expected timeline')
+  const fresh = createConversationTimelineStore()
+  fresh.getState().beginLocalTimelineRead('a', 'chat')!.complete(parsed)
+  expect(fresh.getState().timelines.get('chat')?.coverage).toEqual(saved.coverage)
+  expect(fresh.getState().timelines.get('chat')?.served).toEqual(saved.served)
+  await h.writer.stop()
+})
 const timelineRequests = (h: ReturnType<typeof harness>) => h.save.mock.calls
   .map(([r]) => r).filter((r) => r.operation === 'replaceTimeline')
 

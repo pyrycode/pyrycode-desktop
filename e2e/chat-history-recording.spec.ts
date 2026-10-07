@@ -86,7 +86,7 @@ test('confirmed deletion removes saved content through restart without waiting f
     .toMatchObject({ status: 'stored', snapshot: { conversations: [] } })
   expect(snapshotText(await read(second.page, serverId, 'surviving-chat'))).toBe('same-host saved peer')
   expect(snapshotText(await read(second.page, otherId))).toBe('saved before confirmed deletion')
-  expect(commands.filter(c => c === 'request_history')).toEqual([])
+  expect(commands.filter(c => c === 'request_history')).toHaveLength(1)
 })
 
 test('explicit unpair discards buffered history across restart while same-server repair retains it', async ({ launchPairedApp }) => {
@@ -128,7 +128,7 @@ test('explicit unpair discards buffered history across restart while same-server
   await expect(first.page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
   expect(await read(first.page)).toEqual(saved)
   expect(await read(first.page, serverId, 'omitted-chat')).toMatchObject({ status: 'stored' })
-  expect(commands).not.toContain('request_history')
+  expect(commands.filter(c => c === 'request_history')).toHaveLength(1)
   await first.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
   await expect(first.page.locator('.bubble[data-thread-role="assistant"]')).toContainText('saved before removal')
 
@@ -163,7 +163,7 @@ test('explicit unpair discards buffered history across restart while same-server
     conversation_id: 'omitted-chat', turn_id: 'fresh-omitted', seq: 0, text: 'fresh omitted timeline' }))
   await expect.poll(async () => snapshotText(await read(second.page))).toBe('fresh after re-pair')
   await expect.poll(async () => snapshotText(await read(second.page, serverId, 'omitted-chat'))).toBe('fresh omitted timeline')
-  expect(commands).not.toContain('request_history')
+  expect(commands.filter(c => c === 'request_history')).toHaveLength(3)
   await second.app.close()
   const third = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
   expect(snapshotText(await read(third.page))).toBe('fresh after re-pair')
@@ -212,8 +212,7 @@ test('receipt saturation still saves a repeated page and later live content acro
   await expect(second.page.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(1)
   await expect(second.page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled({ timeout: 20_000 })
   await second.page.locator('.conversation__thread').focus()
-  await second.page.keyboard.press('Home')
-  const expected = { ...snapshot, coverage: { status: 'received', cursor: 'repeat', atStart: false },
+  const expected = { ...snapshot, coverage: snapshot.coverage,
     served: { ids, highestId: 199, receipts: [...receipts.slice(1), { ids, cursor: 'repeat', atStart: false }] } }
   await expect.poll(() => read(second.page)).toEqual({ status: 'stored', snapshot: expected })
   await expect(second.page.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(1)
@@ -252,8 +251,6 @@ test('records received content, drains buffered quit, and reads locally after re
   const serverId = servers[0].serverId
   const read = () => page.evaluate(({ serverId, conversationId }) => window.pyry.chatHistory({
     operation: 'readTimeline', serverId, conversationId }), { serverId, conversationId: SEEDED_ROW.id })
-  await page.locator('.conversation__thread').focus()
-  await page.keyboard.press('Home')
   await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveCount(14)
   await expect.poll(async () => {
     await page.locator('.conversation__thread').evaluate((el) => { el.scrollTop = el.scrollTop === 1 ? 2 : 1 })
@@ -532,9 +529,7 @@ test('saved coverage survives offline restart, reconnect, live receipts and conn
   } }, { onLaunched: observe })
   drop = () => first.forwarder.dropClientLeg()
   await settle(first.page)
-  expect(await count(first.app)).toBe(0)
-  await first.page.locator('.conversation__thread').focus()
-  await first.page.keyboard.press('Home')
+  expect(await count(first.app)).toBe(1)
   await expect(first.page.locator('.bubble')).toHaveCount(1)
   await first.daemon.pushFrame(frame('assistant_delta', {
     conversation_id: SEEDED_ROW.id, turn_id: 'saved-partial', seq: 0, text: 'Restored partial reply' }))
@@ -557,7 +552,7 @@ test('saved coverage survives offline restart, reconnect, live receipts and conn
   await expect(second.page.locator('.bubble__cursor')).toHaveCount(0)
   await expect(second.page.locator('.bubble')).toHaveCount(2)
   await settle(second.page)
-  expect(await count(second.app)).toBe(0)
+  expect(await count(second.app)).toBe(1)
   await second.page.setViewportSize({ width: 800, height: 800 })
   await second.page.screenshot({ path: '/tmp/builder-1395-reconnected-800.png', animations: 'disabled' })
   await first.daemon.pushFrame(frame('assistant_delta', newPayload))
@@ -568,8 +563,8 @@ test('saved coverage survives offline restart, reconnect, live receipts and conn
   await second.page.locator('.conversation__thread').focus()
   await second.page.keyboard.press('Home')
   await expect(second.page.locator('.bubble')).toHaveCount(4)
-  expect(cursors).toEqual(['', 'saved-cursor'])
-  expect(await count(second.app)).toBe(1)
+  expect(cursors).toEqual(['', '', 'saved-cursor'])
+  expect(await count(second.app)).toBe(2)
   await expect.poll(() => read(second.page)).toMatchObject({ status: 'stored', snapshot: {
     prependedRows: 2, coverage: { status: 'received', cursor: 'advanced-cursor', atStart: false } } })
   const saved = await read(second.page)
@@ -608,7 +603,7 @@ test('saved coverage survives offline restart, reconnect, live receipts and conn
   await third.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
   await expect(third.page.locator('.bubble')).toHaveCount(4)
   await settle(third.page)
-  expect(await count(third.app)).toBe(0)
+  await expect.poll(() => count(third.app)).toBe(1)
   expect(await third.page.locator('.bubble').allTextContents()).toEqual([
     expect.stringContaining('loaded history 0'), expect.stringContaining('loaded history 1'),
     expect.stringContaining('Restored partial reply'), expect.stringContaining('New same-host reply')])
@@ -617,8 +612,8 @@ test('saved coverage survives offline restart, reconnect, live receipts and conn
   await third.page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0 })
   await third.page.locator('.conversation__thread').focus()
   await third.page.keyboard.press('ArrowUp')
-  await expect.poll(() => count(third.app)).toBe(1)
-  expect(cursors).toEqual(['', 'saved-cursor', 'advanced-cursor'])
+  await expect.poll(() => count(third.app)).toBe(2)
+  expect(cursors).toEqual(['', '', 'saved-cursor', '', 'advanced-cursor'])
 })
 
 test('protected restoration joins partial pages while retaining an expanded tool and content anchor', async ({ launchPairedApp }) => {
@@ -643,8 +638,6 @@ test('protected restoration joins partial pages while retaining an expanded tool
   const serverId = first.servers[0].serverId
   const read = (page: PairedApp['page']) => page.evaluate(({ serverId, conversationId }) =>
     window.pyry.chatHistory({ operation: 'readTimeline', serverId, conversationId }), { serverId, conversationId: SEEDED_ROW.id })
-  await first.page.locator('.conversation__thread').focus()
-  await first.page.keyboard.press('Home')
   await expect.poll(async () => {
     const saved = await read(first.page)
     return saved.status === 'stored' && saved.snapshot.kind === 'timeline' ? saved.snapshot.display?.length : 0
@@ -654,7 +647,7 @@ test('protected restoration joins partial pages while retaining an expanded tool
   await second.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
   const thread = second.page.locator('.conversation__thread')
   await expect(thread).toContainText('newer text')
-  expect(asks).toBe(1)
+  await expect.poll(() => asks).toBe(2)
   await expect(second.page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled({ timeout: 20_000 })
   const survivor = thread.locator('.tool-row:not(.tool-run__row)').filter({ has: second.page.locator('.tool-row__summary', { hasText: /^survivor$/ }) })
   await survivor.locator('.tool-row__chip').click()
@@ -686,7 +679,7 @@ test('protected restoration joins partial pages while retaining an expanded tool
     return saved.status === 'stored' && saved.snapshot.kind === 'timeline'
       ? saved.snapshot.items.filter(item => item.kind === 'toolCall' && item.result !== null).length : 0
   }).toBe(3)
-  expect(asks).toBe(2)
+  expect(asks).toBe(3)
   request = undefined
   await thread.focus()
   await second.page.keyboard.press('Home')

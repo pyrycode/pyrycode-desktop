@@ -167,7 +167,7 @@ test('offline opening does not consume first-history eligibility', async ({ laun
   await event(app, { type: 'conversationsReceived', serverId: FIRST_SERVER_ID, conversations: [SEEDED_ROW, held] })
   await app.page.getByRole('button', { name: held.name, exact: true }).click()
   await settle(app)
-  expect((await read()).commands.filter(c => c.type === 'requestHistory')).toEqual([])
+  expect((await read()).commands.filter(c => c.type === 'requestHistory' && c.payload.conversation_id === held.id)).toHaveLength(1)
   await app.page.locator('.conversation__thread').focus()
   await app.page.keyboard.press('Home')
   await expect.poll(async () => (await read()).commands.filter(c => c.type === 'requestHistory' && c.payload.conversation_id === held.id).length).toBe(1)

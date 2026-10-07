@@ -56,6 +56,12 @@ Reuse typed IPC history failures and protected-read results. Missing, failed or 
 
 None. Prefer the small retained controller over a new persistent lifecycle store; the opening identity belongs to shell navigation, not page state.
 
+## Revisions
+
+2026-10-07: `createChatHistoryWriter` derived coverage from the last response rather than the slice's retained paging coverage. Capture `slice.coverage` on successful settlement so newest receipts and oldest-end paging evidence survive protected restoration together. This adds a sixth production file, without another deliverable or exported declaration; total written work remains below 800 lines.
+
+2026-10-07: The protected-restoration browser test exposed that clearing a settled `localRead` on newest demand makes a saved partial assistant appear to stream. Preserve settled saved presentation across newest pending, admission and failure; only owned live data supersedes it. Schedule subscription-driven eligibility checks after receipt/writer settlement, while observing connection loss synchronously so rapid connection edges cannot disappear.
+
 ## Security review
 
 **Verdict:** PASS

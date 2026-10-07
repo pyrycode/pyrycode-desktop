@@ -23,7 +23,7 @@ async function settle(page: Page) {
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
 }
 
-test('only upward user input in the thread requests pages, including empty and short threads', async ({ launchPairedApp }) => {
+test('opening asks once and only trusted upward input asks for subsequent pages', async ({ launchPairedApp }) => {
   const asks: Envelope[] = []
   const { app, page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
     const env = decodeEnvelope(bytes)
@@ -32,8 +32,9 @@ test('only upward user input in the thread requests pages, including empty and s
     return []
   } }, { onLaunched: observe })
   const thread = page.locator('.conversation__thread')
+  await expect.poll(() => asks.length).toBe(1)
   await settle(page)
-  expect(await count(app)).toBe(0)
+  expect(await count(app)).toBe(1)
   await page.getByPlaceholder('Message…').fill('local draft')
   for (const key of ['ArrowUp', 'PageUp', 'Home']) await page.keyboard.press(key)
   await thread.evaluate(el => {
@@ -43,11 +44,11 @@ test('only upward user input in the thread requests pages, including empty and s
   })
   await page.setViewportSize({ width: 1280, height: 800 })
   await settle(page)
-  expect(await count(app)).toBe(0)
+  expect(await count(app)).toBe(1)
   await thread.hover()
   await page.mouse.wheel(0, 100)
   await settle(page)
-  expect(await count(app)).toBe(0)
+  expect(await count(app)).toBe(1)
   await page.mouse.wheel(0, -100)
   await expect.poll(() => asks.length).toBe(1)
   expect(asks[0].payload.cursor).toBe('')
@@ -79,7 +80,7 @@ test('only upward user input in the thread requests pages, including empty and s
   await page.screenshot({ path: '/tmp/builder-1394-thread-1280.png', animations: 'disabled' })
 })
 
-test('reconnect releases a pending page and preserves the cursor until new demand', async ({ launchPairedApp }) => {
+test('reconnect settles the interrupted page and asks newest while preserving backwards cursor', async ({ launchPairedApp }) => {
   const asks: Envelope[] = []
   const { app, page, daemon, forwarder } = await launchPairedApp({ buildReplyFrames: bytes => {
     const env = decodeEnvelope(bytes)
@@ -101,10 +102,32 @@ test('reconnect releases a pending page and preserves the cursor until new deman
   await settle(page)
   expect(await count(app)).toBe(2)
   await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled({ timeout: 20_000 })
-  expect(await count(app)).toBe(2)
+  await expect.poll(() => asks.length).toBe(3)
+  expect(asks[2].payload.cursor).toBe('')
+  daemon.pushFrame(history(asks[2].id, 0, 'newest'))
+  daemon.pushFrame(encodeEnvelope({ id: 92, type: 'assistant_delta', ts, payload: {
+    conversation_id: SEEDED_ROW.id, turn_id: 'reconnect-barrier', seq: 0, text: 'Reconnect receipt' } }))
+  await expect(thread.locator('.bubble')).toHaveCount(2)
   await thread.focus()
   await page.keyboard.press('Home')
-  await expect.poll(() => asks.length).toBe(3)
-  expect(asks.map(e => e.payload.cursor)).toEqual(['', 'retained', 'retained'])
-  await expect(thread.locator('.bubble')).toHaveCount(1)
+  await expect.poll(() => asks.length).toBe(4)
+  expect(asks.map(e => e.payload.cursor)).toEqual(['', 'retained', '', 'retained'])
+  await expect(thread.locator('.bubble')).toHaveCount(2)
+})
+
+test('mounted newest content appears without upward input and page arrival creates no cascade', async ({ launchPairedApp }) => {
+  const asks: Envelope[] = []
+  const { app, page } = await launchPairedApp({ buildReplyFrames: bytes => {
+    const env = decodeEnvelope(bytes)
+    if (env.type === 'list_conversations') return [seedConversationsFrame()]
+    if (env.type === 'request_history') { asks.push(env); return [history(env.id, 18)] }
+    return []
+  } }, { onLaunched: observe })
+  await expect(page.locator('.conversation__thread .bubble')).toHaveCount(18)
+  await page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0 })
+  await page.setViewportSize({ width: 800, height: 600 })
+  await settle(page)
+  expect(await count(app)).toBe(1)
+  expect(asks[0].payload).toEqual({ conversation_id: SEEDED_ROW.id, cursor: '', limit: 200 })
+  await page.screenshot({ path: '/tmp/builder-1815/newest-800.png', animations: 'disabled' })
 })

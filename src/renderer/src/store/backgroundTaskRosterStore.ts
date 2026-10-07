@@ -24,9 +24,9 @@
 // The held value is PER TASK (`HeldBackgroundTask`, camelCase, keyed by `taskId`) rather than the wire
 // rows verbatim. #573 held the rows by reference in snake_case, which is the correct house rule for a
 // nested array passed through untouched; it stops applying the moment a join exists, because a
-// started-sourced task carries a `toolCallId` and a fuller description that NO roster row can report
-// (`BackgroundTask` deliberately has no `tool_call_id` — CLAUDE.md and ADR 0002 forbid drifting it and
-// src/shared/wire/types.test.ts pins the absence). Synthesising a `BackgroundTask` for a started-only
+// started-sourced task carries authoritative metadata independently of the optional roster id.
+// Both sources provide placement hints, while started provenance decides which metadata is retained.
+// Synthesising a `BackgroundTask` for a started-only
 // task would put a manufactured object into a type documented as mirroring the daemon field-for-field,
 // so the mapping goes the other way: both sources map INTO the renderer-side held record.
 //
@@ -155,30 +155,11 @@ export interface HeldBackgroundTaskProgress {
 /** ONE background task as this app holds it — the join of what the three frames each report, mapped to
  *  renderer-side camelCase from whichever source last spoke about it.
  *
- *  `toolCallId: string | null`, REQUIRED and nullable rather than optional: only the
- *  `background_task_started` frame reports a tool call, and a task the app only ever learns about from
- *  a roster genuinely has none. `null` is outside the identifier's domain, so it cannot be mistaken for
- *  a real tool call — whereas `''` is the SAME identifier `toolUse` / `toolResult` carry and would join
- *  wrongly against a real one. Required-and-nullable also makes every construction site state the
- *  value; an optional property would let one silently omit it and still compile.
- *
- *  That field doubles as the PROVENANCE PREDICATE: a held task is started-sourced exactly when
- *  `toolCallId !== null`, which is exact by the wire's construction (the started frame always reports
- *  one, no roster row ever can). It must be tested with `!== null` and NEVER for truthiness —
- *  `requireString` admits `''`, so a daemon-sent `tool_call_id: ''` is a valid value that a truthiness
- *  check would silently demote to roster-sourced.
- *
- *  A field added here that NO ROSTER ROW CAN REPORT is one of exactly two kinds, and choosing wrongly
- *  is silent — both readings compile and break no test:
- *
- *    - It GATES KEEPING THE RECORD WHOLE, like `toolCallId`. The started frame reports a copy of every
- *      OTHER field too, and its copies are authoritative (fuller label, tighter-capped row), so once
- *      that frame has been seen there is nothing a later row can improve.
- *    - It RIDES ACROSS THE REBUILD INDIVIDUALLY, like `latestUpdate`. An update frame reports NOTHING
- *      but the patch pair, so the row's other fields must still refresh from each new roster. Widening
- *      the provenance predicate to cover it would freeze a patched roster-sourced task's label, type
- *      and own cut report forever; leaving it out of the rebuilt literal would drop the patch at the
- *      next roster.
+ *  `toolCallId` is the placement hint: prefer a usable current roster id, falling back to the
+ *  received started id. `startedToolCallId !== undefined` records started provenance independently
+ *  of availability, because even an empty started id establishes authoritative metadata.
+ *  Otherwise roster labels, types and cut reports refresh on every snapshot. Patch/status/progress
+ *  readings ride across either metadata source and never establish started provenance.
  *
  *  `truncatedFields` is assigned straight across from whichever frame supplied it — `null` ("nothing
  *  was cut") is a distinct value from `[]` and is never collapsed into it. The three frames' lists name
@@ -214,6 +195,9 @@ export interface HeldBackgroundTaskProgress {
  *  `progress` (#1640) is the latest running report (see `HeldBackgroundTaskProgress`), the same
  *  rides-across kind; `null` means no report has matched the task. */
 export interface HeldBackgroundTask {
+  /** Presence records started provenance even when its id is empty. */
+  startedToolCallId?: string
+  rosterToolCallId?: string
   taskId: string
   toolCallId: string | null
   taskType: string
@@ -313,7 +297,31 @@ export interface BackgroundTaskProgressSnapshot {
  *  Every id in it is an id held in `rosters` or `unlistedStarts` of the same conversation: it is written
  *  only on an update that HITS, pruned to the rows of each roster, and dropped by both clears. Read by
  *  `selectLiveTaskCountFor` for the pill and `selectFinishedTasksFor` for the panel's groups (#1635). */
+export interface HistoryAgentPlacement {
+  event: Extract<import('@shared/ipc/events').HistoryTimelineEvent, { type: 'backgroundTaskStarted' | 'backgroundTaskUpdated' }>
+  before: number
+}
+
+export interface BackgroundAgentTimeline {
+  /** Client-owned identity and held text also survive roster removal. */
+  identity?: number
+  /** Historical evidence cannot manufacture provisional rows. */
+  historyOnly?: boolean
+  historyStarted?: boolean
+  finishFromHistory?: boolean
+  description?: string
+  toolCallId: string
+  confirmed: boolean
+  /** First live terminal arrival: insert before this retained ordinary row key. */
+  finishBefore: number | null
+  /** Conversation-local first terminal arrival order, including when boundaries are equal. */
+  finishOrder: number | null
+}
+
 export interface BackgroundTaskRosterState {
+  agentTimeline: ReadonlyMap<string, ReadonlyMap<string, BackgroundAgentTimeline>>
+  /** Latest roster's exact local_agent ids; started-sourced display types cannot qualify a join. */
+  rosterAgentIds: ReadonlyMap<string, ReadonlySet<string>>
   rosters: ReadonlyMap<string, BackgroundTaskRosterEntry>
   unlistedStarts: ReadonlyMap<string, ReadonlyMap<string, HeldBackgroundTask>>
   finishedTasks: ReadonlyMap<string, ReadonlySet<string>>
@@ -326,9 +334,10 @@ export interface BackgroundTaskRosterState {
  *  `connected` edge (#573's AC5, scoped by #1139), and drop EVERY conversation's at a pairing boundary
  *  (#1139), and claim/settle one stop wait (#1771). Named setters preserve the existing store contract. */
 export type BackgroundTaskRosterStore = BackgroundTaskRosterState & {
+  recordHistoryPlacements: (conversationId: string, placements: readonly HistoryAgentPlacement[]) => void
   setRoster: (snapshot: BackgroundTaskRosterSnapshot) => void
   setStartedTask: (snapshot: BackgroundTaskStartedSnapshot) => void
-  setUpdatedTask: (snapshot: BackgroundTaskUpdatedSnapshot) => void
+  setUpdatedTask: (snapshot: BackgroundTaskUpdatedSnapshot, finishBefore?: number) => void
   setTaskProgress: (snapshot: BackgroundTaskProgressSnapshot) => void
   resetRostersFor: (conversationIds: ReadonlySet<string>) => void
   clearAllRosters: () => void
@@ -337,6 +346,8 @@ export type BackgroundTaskRosterStore = BackgroundTaskRosterState & {
 }
 
 export const initialBackgroundTaskRosterState: BackgroundTaskRosterState = {
+  agentTimeline: new Map(),
+  rosterAgentIds: new Map(),
   rosters: new Map(),
   unlistedStarts: new Map(),
   finishedTasks: new Map(),
@@ -388,20 +399,11 @@ function keepTaskStopWaits(
  * identical, so a component watching a different `conversationId` sees `Object.is` true and does not
  * re-render.
  *
- * `setRoster` rebuilds the conversation's set from the snapshot's rows IN ROW ORDER. For each row: if a
- * task is already held for that `task_id` AND is started-sourced (`toolCallId !== null` — see
- * `HeldBackgroundTask`), the held record is KEPT UNCHANGED; otherwise a fresh record is built from the
- * row with `toolCallId: null` and the held `latestUpdate` carried onto it. That carry-over is the one
- * thing the rebuild preserves, and it is deliberately NOT folded into the provenance predicate: no
- * roster row can report a patch, but a row CAN report a better label, type and cut report, so a patched
- * roster-sourced task must still refresh from each new row (AC4). Widening the predicate instead would
- * freeze such a task's label forever, and omitting the field from the rebuilt literal would drop its
- * patch at the next roster — both compile clean, which is why each has its own test. Keeping the started record is AC2 and the point of this slice: the
- * daemon's own cap comment states the roster label is the same text under a tighter cap and that its
- * authoritative full-length copy already crossed the wire on the `background_task_started` the row
- * joins back to, so refreshing from the row would throw the better copy away at the first roster and
- * never get it back (the started frame never repeats). Roster-sourced records ARE rebuilt from each new
- * row, so the roster stays replacement truth for everything it can actually report.
+ * `setRoster` rebuilds the conversation's set from the snapshot's rows IN ROW ORDER. Started metadata is retained when `startedToolCallId` is present, including empty ids;
+ * otherwise description/type/cut fields refresh from the row. Placement ids are joined independently,
+ * preferring the latest usable roster reading. Patch, status, summary and progress ride across either
+ * path. Panel membership remains replacement truth, while timeline identity and terminal evidence
+ * survive removal until an owning-host or pairing reset.
  *
  * MEMBERSHIP is replacement truth regardless of provenance (AC5): a held task whose id is absent from
  * the new roster is simply not carried over, whether a roster or a started frame first reported it.
@@ -546,8 +548,55 @@ function keepTaskStopWaits(
 export function createBackgroundTaskRosterStore(
   init: BackgroundTaskRosterState = initialBackgroundTaskRosterState
 ) {
+  // Resets remove evidence without recycling UI identities still held by a mounted Timeline.
+  let nextAgentIdentity = 0
+  function retainAgent(
+    evidence: Map<string, BackgroundAgentTimeline>, taskId: string,
+    toolCallId: string, description: string, confirmed: boolean
+  ): void {
+    const previous = evidence.get(taskId)
+    if (!previous && toolCallId.length === 0) return
+    const placementId = previous && ((previous.finishBefore !== null && previous.toolCallId.length > 0) || toolCallId.length === 0)
+      ? previous.toolCallId : toolCallId
+    const qualified = previous?.confirmed === true || confirmed
+    if (previous?.toolCallId === placementId && previous.description === description && previous.confirmed === qualified && (!confirmed || previous.historyOnly !== true)) return
+    evidence.set(taskId, previous
+      ? { ...previous, toolCallId: placementId, description, confirmed: qualified, ...(confirmed && previous.historyOnly ? { historyOnly: false } : {}) }
+      : { toolCallId, description, identity: nextAgentIdentity++, confirmed, finishBefore: null, finishOrder: null })
+  }
+
   return createStore<BackgroundTaskRosterStore>((set, get) => ({
     ...init,
+    recordHistoryPlacements: (conversationId, placements) => set(s => {
+      if (placements.length === 0) return s
+      const evidence = new Map(s.agentTimeline.get(conversationId))
+      // Older pages precede already retained finishes; ties follow entry order within this page.
+      let order = [...evidence.values()].reduce((first, x) => Math.min(first, x.finishOrder ?? 0), 0) - placements.length
+      for (const { event, before } of placements) {
+        const prior = evidence.get(event.taskId)
+        if (event.type === 'backgroundTaskStarted') {
+          if (event.taskType !== 'local_agent' || event.toolCallId.length === 0) continue
+          if (prior && prior.historyOnly !== true) {
+            if (prior.toolCallId !== event.toolCallId) continue
+            evidence.set(event.taskId, { ...prior, historyStarted: true,
+              confirmed: prior.confirmed || prior.finishBefore !== null })
+            continue
+          }
+          const base = prior ?? { identity: nextAgentIdentity++, toolCallId: event.toolCallId,
+            confirmed: false, finishBefore: null, finishOrder: null, historyOnly: true }
+          evidence.set(event.taskId, { ...base, toolCallId: base.toolCallId || event.toolCallId,
+            description: base.description ?? event.description, historyStarted: true,
+            confirmed: base.finishBefore !== null })
+        } else {
+          if (!isTerminalTaskStatus(event.status) || prior?.finishBefore != null) continue
+          const base = prior ?? { identity: nextAgentIdentity++, toolCallId: '', confirmed: false,
+            finishBefore: null, finishOrder: null, historyOnly: true }
+          evidence.set(event.taskId, { ...base, finishBefore: before, finishOrder: order++,
+            finishFromHistory: true, confirmed: base.confirmed || base.historyStarted === true })
+        }
+      }
+      return { agentTimeline: new Map(s.agentTimeline).set(conversationId, evidence) }
+    }),
     // Claim before the caller sends. A stale render or repeated activation cannot send twice.
     beginTaskStop: (conversationId, taskId) => {
       const state = get()
@@ -565,40 +614,32 @@ export function createBackgroundTaskRosterStore(
     }),
     setRoster: (snapshot) =>
       set((s) => {
+        const agentIds = new Set(snapshot.tasks.filter(row => row.task_type === 'local_agent').map(row => row.task_id))
+        const rosterAgentIds = new Map(s.rosterAgentIds).set(snapshot.conversationId, agentIds)
+        const evidence = new Map(s.agentTimeline.get(snapshot.conversationId))
         const previous = s.rosters.get(snapshot.conversationId)?.tasks
         const holds = s.unlistedStarts.get(snapshot.conversationId)
         const tasks = new Map<string, HeldBackgroundTask>()
         for (const row of snapshot.tasks) {
-          // A held start is always started-sourced, so a listing moves it in WHOLE (#1563).
           const held = previous?.get(row.task_id) ?? holds?.get(row.task_id)
-          // `!== null`, never truthiness: `''` is a valid `tool_call_id` and still proves the started
-          // frame was seen, so a truthy check would demote such a task and lose its fuller label.
-          tasks.set(
-            row.task_id,
-            held !== undefined && held.toolCallId !== null
-              ? held
-              : {
-                  taskId: row.task_id,
-                  toolCallId: null,
-                  taskType: row.task_type,
-                  description: row.description,
-                  // Straight across — no `?? []`. `null` means nothing was cut for this row and is a
-                  // distinct value; this assignment plus its test is the whole AC3 defence.
-                  truncatedFields: row.truncated_fields,
-                  // The patch pair RIDES ACROSS the rebuild: no roster row can report it, and unlike
-                  // `toolCallId` it must not gate keeping the record whole, or the row's own fields
-                  // would freeze. `??` is right HERE and is not the collapse the rule above forbids —
-                  // it normalises "no prior record" and "held, never updated" to the one reading they
-                  // share, and no wire value passes through it.
-                  latestUpdate: held?.latestUpdate ?? null,
-                  // The status word and summary ride across for the same reason (#1639).
-                  status: held?.status ?? null,
-                  summary: held?.summary ?? null,
-                  // …and the running report (#1640).
-                  progress: held?.progress ?? null
-                }
-          )
+          const rosterToolCallId = row.tool_call_id && row.tool_call_id.length > 0 ? row.tool_call_id : undefined
+          const toolCallId = rosterToolCallId ?? held?.startedToolCallId ?? null
+          const record: HeldBackgroundTask = held?.startedToolCallId !== undefined
+            ? held.rosterToolCallId === rosterToolCallId && held.toolCallId === toolCallId
+              ? held : { ...held, rosterToolCallId, toolCallId }
+            : {
+                taskId: row.task_id, toolCallId,
+                ...(rosterToolCallId === undefined ? {} : { rosterToolCallId }),
+                taskType: row.task_type, description: row.description,
+                truncatedFields: row.truncated_fields,
+                latestUpdate: held?.latestUpdate ?? null,
+                status: held?.status ?? null, summary: held?.summary ?? null,
+                progress: held?.progress ?? null
+              }
+          tasks.set(row.task_id, record)
+          if (agentIds.has(row.task_id)) retainAgent(evidence, row.task_id, toolCallId ?? '', record.description, true)
         }
+        const agentTimeline = new Map(s.agentTimeline).set(snapshot.conversationId, evidence)
         const next = new Map(s.rosters)
         next.set(snapshot.conversationId, { tasks, droppedTasks: snapshot.droppedTasks })
         // A finish survives a roster that lists the task and dies with one that omits it (#1561).
@@ -614,10 +655,10 @@ export function createBackgroundTaskRosterStore(
         // Every roster empties the conversation's holds: the listed ones moved in above, the rest were
         // foreground work no roster will ever name (#1563).
         const pendingStops = keepTaskStopWaits(s.pendingStops, snapshot.conversationId, id => tasks.has(id))
-        if (holds === undefined) return { rosters: next, finishedTasks, pendingStops }
+        if (holds === undefined) return { rosters: next, finishedTasks, pendingStops, agentTimeline, rosterAgentIds }
         const unlistedStarts = new Map(s.unlistedStarts)
         unlistedStarts.delete(snapshot.conversationId)
-        return { rosters: next, unlistedStarts, finishedTasks, pendingStops }
+        return { rosters: next, unlistedStarts, finishedTasks, pendingStops, agentTimeline, rosterAgentIds }
       }),
     setStartedTask: (snapshot) =>
       set((s) => {
@@ -625,9 +666,13 @@ export function createBackgroundTaskRosterStore(
         const listed = existing?.tasks.get(snapshot.taskId)
         const holds = s.unlistedStarts.get(snapshot.conversationId)
         const prior = listed ?? holds?.get(snapshot.taskId)
+        const startedToolCallId = snapshot.toolCallId.length > 0 ? snapshot.toolCallId
+          : prior?.startedToolCallId ?? snapshot.toolCallId
         const record: HeldBackgroundTask = {
           taskId: snapshot.taskId,
-          toolCallId: snapshot.toolCallId,
+          toolCallId: prior?.rosterToolCallId ?? startedToolCallId,
+          startedToolCallId,
+          ...(prior?.rosterToolCallId === undefined ? {} : { rosterToolCallId: prior.rosterToolCallId }),
           taskType: snapshot.taskType,
           description: snapshot.description,
           truncatedFields: snapshot.truncatedFields,
@@ -638,6 +683,12 @@ export function createBackgroundTaskRosterStore(
           summary: prior?.summary ?? null,
           progress: prior?.progress ?? null
         }
+        const evidence = new Map(s.agentTimeline.get(snapshot.conversationId))
+        const confirmed = s.rosterAgentIds.get(snapshot.conversationId)?.has(snapshot.taskId) === true
+        if (snapshot.taskType === 'local_agent' || confirmed || evidence.has(snapshot.taskId)) {
+          retainAgent(evidence, snapshot.taskId, record.toolCallId ?? '', record.description, confirmed)
+        }
+        const agentTimeline = new Map(s.agentTimeline).set(snapshot.conversationId, evidence)
         if (existing === undefined || listed === undefined) {
           // No roster lists this task, so it is held where no surface reads it (#1563): `rosters` is
           // handed back by reference and no entry is created for a never-observed conversation.
@@ -645,20 +696,28 @@ export function createBackgroundTaskRosterStore(
           nextHolds.set(snapshot.taskId, record)
           const unlistedStarts = new Map(s.unlistedStarts)
           unlistedStarts.set(snapshot.conversationId, nextHolds)
-          return { unlistedStarts }
+          return { unlistedStarts, agentTimeline }
         }
         const tasks = new Map(existing.tasks)
         tasks.set(snapshot.taskId, record)
         const next = new Map(s.rosters)
         next.set(snapshot.conversationId, { tasks, droppedTasks: existing.droppedTasks })
-        return { rosters: next }
+        return { rosters: next, agentTimeline }
       }),
-    setUpdatedTask: (snapshot) =>
+    setUpdatedTask: (snapshot, finishBefore = 0) =>
       set((s) => {
         const existing = s.rosters.get(snapshot.conversationId)
         const held = existing?.tasks.get(snapshot.taskId)
         const latestUpdate = { patch: snapshot.patch, truncatedFields: snapshot.truncatedFields }
         const terminal = isTerminalTaskStatus(snapshot.status)
+        const evidence = s.agentTimeline.get(snapshot.conversationId)
+        const agent = evidence?.get(snapshot.taskId)
+        const agentTimeline = terminal && agent?.finishBefore === null
+          ? new Map(s.agentTimeline).set(snapshot.conversationId,
+              new Map(evidence).set(snapshot.taskId, { ...agent, finishBefore,
+                confirmed: agent.confirmed || agent.historyStarted === true,
+                finishOrder: [...(evidence?.values() ?? [])].reduce((last, entry) => Math.max(last, entry.finishOrder ?? 0), 0) + 1 }))
+          : s.agentTimeline
         const pendingStops = terminal
           ? keepTaskStopWaits(s.pendingStops, snapshot.conversationId, id => id !== snapshot.taskId)
           : s.pendingStops
@@ -685,12 +744,12 @@ export function createBackgroundTaskRosterStore(
           // short-circuits and no listener churns: an update never OPENS a task and never creates a
           // conversation entry. Silently, too — a "dropped an unmatched update" log line would put
           // patch text in a file.
-          if (holds === undefined || pending === undefined) return s
+          if (holds === undefined || pending === undefined) return agentTimeline === s.agentTimeline ? s : { agentTimeline }
           const nextHolds = new Map(holds)
           nextHolds.set(snapshot.taskId, { ...pending, ...outcome(pending) })
           const unlistedStarts = new Map(s.unlistedStarts)
           unlistedStarts.set(snapshot.conversationId, nextHolds)
-          return { unlistedStarts, finishedTasks, pendingStops }
+          return { unlistedStarts, finishedTasks, pendingStops, agentTimeline }
         }
         const tasks = new Map(existing.tasks)
         // A spread is right here and not in the translators: this is a same-type held → held write
@@ -701,7 +760,7 @@ export function createBackgroundTaskRosterStore(
         const next = new Map(s.rosters)
         // `droppedTasks` PRESERVED: an update reports nothing about roster truncation.
         next.set(snapshot.conversationId, { tasks, droppedTasks: existing.droppedTasks })
-        return { rosters: next, finishedTasks, pendingStops }
+        return { rosters: next, finishedTasks, pendingStops, agentTimeline }
       }),
     // #1640: the same join as `setUpdatedTask` — the listed task first, else the unlisted hold — and the
     // same silent same-reference miss, so a report never opens a task. A hit replaces `progress` whole
@@ -737,24 +796,29 @@ export function createBackgroundTaskRosterStore(
       }),
     resetRostersFor: (conversationIds) =>
       set((s) => {
+        const doomedAgents = [...s.agentTimeline.keys()].filter(id => conversationIds.has(id))
         const doomed = [...s.rosters.keys()].filter((id) => conversationIds.has(id))
         const doomedHolds = [...s.unlistedStarts.keys()].filter((id) => conversationIds.has(id))
         const doomedFinished = [...s.finishedTasks.keys()].filter((id) => conversationIds.has(id))
         const doomedStops = [...s.pendingStops.keys()].filter(id => conversationIds.has(id))
-        if (doomed.length === 0 && doomedHolds.length === 0 && doomedFinished.length === 0 && doomedStops.length === 0) return s
+        if (doomedAgents.length === 0 && doomed.length === 0 && doomedHolds.length === 0 && doomedFinished.length === 0 && doomedStops.length === 0) return s
         const next = new Map(s.rosters)
         for (const id of doomed) next.delete(id)
+        const rosterAgentIds = new Map(s.rosterAgentIds)
+        for (const id of doomed) rosterAgentIds.delete(id)
         const unlistedStarts = new Map(s.unlistedStarts)
         for (const id of doomedHolds) unlistedStarts.delete(id)
         const finishedTasks = new Map(s.finishedTasks)
         for (const id of doomedFinished) finishedTasks.delete(id)
         const pendingStops = new Map(s.pendingStops)
         for (const id of doomedStops) pendingStops.delete(id)
-        return { rosters: next, unlistedStarts, finishedTasks, pendingStops }
+        const agentTimeline = new Map(s.agentTimeline)
+        for (const id of doomedAgents) agentTimeline.delete(id)
+        return { rosters: next, unlistedStarts, finishedTasks, pendingStops, agentTimeline, rosterAgentIds }
       }),
     clearAllRosters: () =>
       set((s) =>
-        s.rosters.size === 0 && s.unlistedStarts.size === 0 && s.finishedTasks.size === 0 && s.pendingStops.size === 0
+        s.agentTimeline.size === 0 && s.rosters.size === 0 && s.unlistedStarts.size === 0 && s.finishedTasks.size === 0 && s.pendingStops.size === 0
           ? s
           : initialBackgroundTaskRosterState
       )

@@ -1725,11 +1725,9 @@ export interface BackgroundTaskProgressPayload {
  * § background_task_roster), wire order `task_id, task_type, description, truncated_fields` — all always
  * present (no `omitempty` on any of them).
  *
- * FOUR FIELDS, AND THEY ARE NOT THE SCALAR SIBLINGS' FOUR. There is deliberately NO `tool_call_id` and
- * NO `patch`: the daemon's comment is explicit that those ride the scalar frames because their LINES do,
- * and claude's roster line carries only these four. A row type cloned from BackgroundTaskStartedPayload
- * would require `tool_call_id` and fail-close every valid roster. `task_id` is the join key back to the
- * `background_task_started` that opened the task — the same identifier all three frames carry.
+ * Daemon #2753 additionally supplies optional `tool_call_id`. Older rosters omit it; empty means
+ * unknown. It is a display join hint, never authority, and nonempty strings compare exactly.
+ * `task_id` remains the scalar-frame join key. No patch is carried in roster rows.
  *
  * `task_type` is an OPEN string. `local_bash` is the only observed value and one observation does not
  * earn an enum; a closed set would fail-close a valid future frame (the drift risk CLAUDE.md / ADR 0002
@@ -1754,6 +1752,8 @@ export interface BackgroundTaskProgressPayload {
  * (this decode), #567 (the task store) and #568 (the panel).
  */
 export interface BackgroundTask {
+  /** Optional on older daemon rosters; empty means an unknown launch id. */
+  tool_call_id?: string
   task_id: string
   task_type: string
   description: string

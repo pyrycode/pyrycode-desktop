@@ -2,6 +2,7 @@ import { mkdir, mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { build, loadConfigFromFile, preview } from 'vite'
+import { capturePairedApp } from './fixtures/capturePairedApp'
 import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { Envelope, EnvelopeType, WireModelOption } from '../src/shared/wire/types'
@@ -13,8 +14,7 @@ const frame = (type: EnvelopeType, payload: unknown, in_reply_to?: number) => en
   id: 90, type, ts: '2026-10-07T12:00:00.000Z', payload, ...(in_reply_to === undefined ? {} : { in_reply_to })
 })
 
-test('mounted agent switch dismissals, single dispatch, progress, refusal and authoritative success', async ({ launchPairedApp }) => {
-  test.setTimeout(120_000)
+async function openingFixture() {
   // This ticket-local build exposes only the production opening function in its fixture.
   // No production test API, menu entry point or shared harness is added.
   const loaded = await loadConfigFromFile({ command: 'build', mode: 'production' }, resolve('electron.vite.config.ts'))
@@ -27,6 +27,12 @@ test('mounted agent switch dismissals, single dispatch, progress, refusal and au
     } }], build: { ...renderer.build, outDir }, logLevel: 'silent' })
   const server = await preview({ configFile: false, root: resolve('src/renderer'), build: { outDir },
     preview: { host: '127.0.0.1', port: 0 }, logLevel: 'silent' })
+  return server
+}
+
+test('mounted agent switch dismissals, single dispatch, progress, refusal and authoritative success', async ({ launchPairedApp }) => {
+  test.setTimeout(120_000)
+  const server = await openingFixture()
   try {
     const sent: Envelope[] = []
     const { page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
@@ -110,5 +116,79 @@ test('mounted agent switch dismissals, single dispatch, progress, refusal and au
     await reverse.getByRole('button', { name: 'Cancel', exact: true }).click()
     expect(switches()).toHaveLength(3)
     await expect(page.locator('.conversation')).not.toContainText('PRIVATE')
+  } finally { await server.close() }
+})
+
+test('confirmed own-agent settings yield to incoming footer and open sheet on authoritative switch', async ({ launchPairedApp }) => {
+  test.setTimeout(120_000)
+  const server = await openingFixture()
+  try {
+    const sent: Envelope[] = []
+    const models: WireModelOption[] = [
+      { ...picked, agent: 'claude', value: 'opus', display_name: 'Opus', effort_levels: ['high'] },
+      { ...picked, agent: 'claude', value: 'sonnet', display_name: 'Sonnet', effort_levels: ['high'] },
+      { ...picked, value: 'gpt-luna', effort_levels: ['low'] }
+    ]
+    let incoming = false
+    let holdNextRead = false
+    let heldRead: Envelope | undefined
+    const settings = (id: number) => frame('session_settings', {
+      session_id: incoming ? 'codex-session' : 'claude-session',
+      model: incoming ? 'gpt-luna' : 'opus', effort: incoming ? 'low' : 'high',
+      effective_effort: incoming ? 'low' : 'high', yolo: false,
+      permission_mode: incoming ? 'acceptEdits' : 'default', used_tokens: 0, window_tokens: 0
+    }, id)
+    const { app, page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
+      const e = decodeEnvelope(bytes); sent.push(e)
+      if (e.type === 'list_conversations') return [frame('conversations', { conversations: [SEEDED_ROW] })]
+      if (e.type === 'request_model_list') return [frame('model_list', {
+        conversation_id: SEEDED_ROW.id, models, dropped_models: 0
+      }, e.id)]
+      if (e.type === 'request_session_settings') {
+        if (holdNextRead) { heldRead = e; holdNextRead = false; return [] }
+        return [settings(e.id)]
+      }
+      if (e.type === 'set_session_settings') return [frame('session_settings_updated', { session_id: 'claude-session' }, e.id)]
+      return []
+    } }, { rendererUrl: server.resolvedUrls!.local[0] })
+    const footer = page.locator('.composer__footer')
+    await expect(footer.getByRole('button', { name: 'Opus', exact: true })).toBeEnabled()
+    await footer.getByRole('button', { name: 'Opus', exact: true }).click()
+    await page.getByRole('menu', { name: 'Model', exact: true }).getByRole('menuitem', { name: 'Sonnet', exact: true }).click()
+    await expect.poll(() => sent.filter(e => e.type === 'set_session_settings').length).toBe(1)
+    expect(sent.find(e => e.type === 'set_session_settings')?.payload).toEqual({ session_id: 'claude-session', model: 'sonnet' })
+    await expect(footer.getByRole('button', { name: 'Sonnet', exact: true })).toBeEnabled()
+    // Hold the sheet read so the baseline also receives incoming settings through a real request.
+    holdNextRead = true
+    await page.locator('.conversation__overflow-trigger').click()
+    await page.getByRole('menuitem', { name: 'Run configuration', exact: true }).click()
+    await expect.poll(() => heldRead !== undefined).toBe(true)
+    const sheet = page.getByRole('dialog', { name: 'Run configuration', exact: true })
+    await expect(sheet.locator('.run-config__model-row').filter({ hasText: 'Sonnet' })).toContainText('Sonnet')
+    await expect(sheet.locator('.run-config__model-row').filter({ hasText: 'Sonnet' }).getByRole('img', { name: 'Current model', exact: true })).toBeVisible()
+    await expect(sheet.locator('.run-config__model-list')).not.toHaveAttribute('aria-busy', 'true')
+    await page.evaluate(({ id, row }) => {
+      (window as unknown as { openAgentSwitch: (id: string, row: WireModelOption) => void }).openAgentSwitch(id, row)
+    }, { id: SEEDED_ROW.id, row: models[2] })
+    await page.getByRole('dialog', { name: 'Switch to Codex?', exact: true }).getByRole('button', { name: 'Switch', exact: true }).click()
+    await expect.poll(() => sent.filter(e => e.type === 'switch_agent').length).toBe(1)
+    const reads = sent.filter(e => e.type === 'request_session_settings').length
+    incoming = true
+    daemon.pushFrame(frame('conversations', { conversations: [{ ...SEEDED_ROW, agent: 'codex' }] }))
+    daemon.pushFrame(settings(heldRead!.id))
+    await expect(footer.getByRole('button', { name: 'GPT-6 Luna', exact: true })).toBeEnabled()
+    await expect.poll(() => sent.filter(e => e.type === 'request_session_settings').length).toBe(reads + 1)
+    await expect(sheet.locator('.run-config__model-row').filter({ hasText: 'GPT-6 Luna' }).getByRole('img', { name: 'Current model', exact: true })).toBeVisible()
+    await expect(sheet.locator('.run-config__model-row').filter({ hasText: 'Sonnet' })).toHaveCount(0)
+    await expect(sheet.getByRole('button', { name: 'low', exact: true })).toBeVisible()
+    await expect(sheet.getByRole('button', { name: 'high', exact: true })).toHaveCount(0)
+    await page.setViewportSize({ width: 1280, height: 800 })
+    await capturePairedApp(app, page, '/tmp/builder-1845/incoming-settings-1280.png')
+    await sheet.getByRole('button', { name: 'Close', exact: true }).click()
+    await expect(sheet).toHaveCount(0)
+    await expect(footer.getByRole('button', { name: 'GPT-6 Luna', exact: true })).toBeEnabled()
+    await capturePairedApp(app, page, '/tmp/builder-1845/incoming-footer-1280.png')
+    await page.setViewportSize({ width: 800, height: 600 })
+    await capturePairedApp(app, page, '/tmp/builder-1845/incoming-footer-800.png')
   } finally { await server.close() }
 })

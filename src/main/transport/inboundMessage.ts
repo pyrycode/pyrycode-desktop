@@ -872,8 +872,8 @@ export type InboundDaemonMessage =
   | { kind: 'rate-limited'; rateLimited: RateLimitedPayload }
   | { kind: 'context-usage'; contextUsage: ContextUsagePayload }
   | { kind: 'mcp-status'; mcpStatus: MCPStatusPayload }
-  | { kind: 'background-task-started'; backgroundTaskStarted: BackgroundTaskStartedPayload }
-  | { kind: 'background-task-updated'; backgroundTaskUpdated: BackgroundTaskUpdatedPayload }
+  | ({ kind: 'background-task-started'; backgroundTaskStarted: BackgroundTaskStartedPayload } & FrameTimestamp)
+  | ({ kind: 'background-task-updated'; backgroundTaskUpdated: BackgroundTaskUpdatedPayload } & FrameTimestamp)
   | { kind: 'background-task-roster'; backgroundTaskRoster: BackgroundTaskRosterPayload }
   | { kind: 'background-task-progress'; backgroundTaskProgress: BackgroundTaskProgressPayload }
   | ({ kind: 'unrecognized-message'; unrecognized: UnrecognizedMessagePayload } & FrameTimestamp)
@@ -1537,6 +1537,7 @@ function parseHistoryEntry(raw: unknown): HistoryEntry {
     throw new WireDecodeError('malformed history_page entry')
   }
   const id = requireNumber(raw, 'id')
+  if (!Number.isSafeInteger(id) || id < 0) throw new WireDecodeError('malformed history_page entry')
   const type = requireString(raw, 'type')
   const payload = requireRecord(raw, 'payload')
   const ts = requireString(raw, 'ts')
@@ -1646,6 +1647,8 @@ type DecodedModelRefusalEvent = {
  * facts — the contract their live arms already state.
  */
 export type DecodedHistoryEvent =
+  | { type: 'backgroundTaskStarted'; taskId: string; toolCallId: string; taskType: string; description: string }
+  | { type: 'backgroundTaskUpdated'; taskId: string; status: string }
   | DecodedModelRefusalEvent
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string; parentToolUseId?: string }
   | ({ type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string } & TurnEndMetrics)
@@ -1710,6 +1713,7 @@ export type DecodedHistoryEvent =
  * the other or from how many entries survived the decode.
  */
 export interface DecodedHistoryPage {
+  servedIds?: readonly number[]
   entries: readonly DecodedHistoryEntry[]
   cursor: string
   at_start: boolean
@@ -1732,8 +1736,7 @@ export interface DecodedHistoryPage {
  * object used as a map.
  *
  * `default: return null` is what AC3 rests on, and the types it silently covers are worth naming: the
- * ten this client DOES decode on the live lane and never draws in a thread (`background_task_started` /
- * `_updated` / `_roster`, `model_announced`, `model_list`, `slash_command_list`, and — since #1312,
+ * ten this client DOES decode on the live lane and never draws in a thread (`background_task_roster`, `model_announced`, `model_list`, `slash_command_list`, and — since #1312,
  * #1318, #1454 and #1514 — `thinking_progress`, `rate_limited`, `context_usage` and `resetting`, whose
  * live-lane parsers each deliberately came with no
  * arm here), any type a later daemon invents — and `modal_shown` /
@@ -1750,6 +1753,15 @@ function decodeHistoryEvent(
   payload: Record<string, unknown>
 ): DecodedHistoryEvent | null {
   switch (type) {
+    case 'background_task_started': {
+      const p = parseBackgroundTaskStartedPayload(payload)
+      return { type: 'backgroundTaskStarted', taskId: p.task_id, toolCallId: p.tool_call_id,
+        taskType: p.task_type, description: p.description }
+    }
+    case 'background_task_updated': {
+      const p = parseBackgroundTaskUpdatedPayload(payload)
+      return { type: 'backgroundTaskUpdated', taskId: p.task_id, status: p.status }
+    }
     case 'assistant_delta': {
       const p = parseAssistantDeltaPayload(payload)
       return { type: 'assistantDelta', turnId: p.turn_id, seq: p.seq, text: p.text, parentToolUseId: p.parent_tool_use_id }
@@ -1904,7 +1916,7 @@ function decodeHistoryPage(page: HistoryPagePayload): { page: DecodedHistoryPage
     }
     entries.push({ id: entry.id, ts: entry.ts, event })
   }
-  return { page: { entries, cursor: page.cursor, at_start: page.at_start }, skipped }
+  return { page: { entries, servedIds: page.entries.map(entry => entry.id), cursor: page.cursor, at_start: page.at_start }, skipped }
 }
 
 /**
@@ -2291,9 +2303,8 @@ function parseBackgroundTaskProgressPayload(payload: unknown): BackgroundTaskPro
 /**
  * Narrow one opaque roster row into a BackgroundTask (#566). Takes parseQueuedItem's POSTURE — one bad
  * element throws the WHOLE payload closed (never a partial roster), an empty parent array is valid, the
- * result is a FRESH literal — and pointedly NOT parseBackgroundTaskStartedPayload's SHAPE: this row has
- * no `tool_call_id` and no `patch`, which the scalar frames carry because their LINES do, so a narrower
- * cloned from that one would require `tool_call_id` and fail-close every valid roster.
+ * result is a fresh named-field literal. Daemon #2753 adds optional `tool_call_id`: missing is valid,
+ * a supplied value must be a string (including empty), and strings are preserved exactly.
  *
  * Three required strings plus `truncated_fields` through the same requireStringArrayOrNull the two scalar
  * frames use (whose docstring names this ticket; there is deliberately no second narrower and no variant
@@ -2306,9 +2317,8 @@ function parseBackgroundTaskProgressPayload(payload: unknown): BackgroundTaskPro
  * the daemon bounds each string at construction and the frame-level MAX_PLAINTEXT_BYTES guard in
  * parseInboundMessage covers the oversized case.
  *
- * Returns a fresh four-field literal, so unknown server-added keys — pointedly including the scalar
- * frames' `tool_call_id` / `patch`, which this row must never have — are tolerated (forward-compat) but
- * NOT copied through, which also makes it prototype-pollution-safe. That matters more here than on a
+ * Unknown server-added keys, including scalar patches, are tolerated (forward-compat) but
+ * not copied through, which also makes it prototype-pollution-safe. That matters more here than on a
  * scalar frame, because the attacker controls the NUMBER of records offered to this narrower, not just
  * their content. Its message names the failure CATEGORY only — never a value and never the row INDEX:
  * `description` is a literal command line, the ids are correlating identifiers, and an index would be a
@@ -2322,7 +2332,8 @@ function parseBackgroundTask(payload: unknown): BackgroundTask {
   const task_type = requireString(payload, 'task_type')
   const description = requireString(payload, 'description')
   const truncated_fields = requireStringArrayOrNull(payload, 'truncated_fields')
-  return { task_id, task_type, description, truncated_fields }
+  const toolId = 'tool_call_id' in payload ? { tool_call_id: requireString(payload, 'tool_call_id') } : {}
+  return { task_id, task_type, description, truncated_fields, ...toolId }
 }
 
 /**
@@ -4538,7 +4549,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'background-task-started', backgroundTaskStarted }
+      return { kind: 'background-task-started', backgroundTaskStarted, ts: envelope.ts }
     }
     case 'background_task_updated': {
       // Narrow BEFORE logging so a malformed frame (an omitted `patch` or `truncated_fields` key, a
@@ -4553,7 +4564,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'background-task-updated', backgroundTaskUpdated }
+      return { kind: 'background-task-updated', backgroundTaskUpdated, ts: envelope.ts }
     }
     case 'background_task_roster': {
       // Narrow BEFORE logging so a malformed frame (a `tasks: null`, an omitted `dropped_tasks`, one bad

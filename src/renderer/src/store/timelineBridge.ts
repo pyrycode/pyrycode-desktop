@@ -115,6 +115,9 @@ export function translateTimelineEvent(
   now?: () => number
 ): ThreadEvent | null {
   switch (event.type) {
+    case 'messageDelivery':
+      return { type: event.type, messageId: event.messageId, status: event.status,
+        serverId: 'serverId' in event && typeof event.serverId === 'string' ? event.serverId : null }
     case 'banner':
       return event.conversationId === '' ? null : {
         type: 'banner', level: event.level, text: event.text,
@@ -617,6 +620,8 @@ export function translateTimelineEvent(
  */
 export function timelineTargetFor(event: DaemonEvent): string | null {
   switch (event.type) {
+    case 'messageDelivery':
+      return event.conversationId
     case 'messageReceived':
       return event.message.role === 'user' && event.message.conversation_id !== ''
         ? event.message.conversation_id : null
@@ -835,7 +840,10 @@ export function useTimelineBridge(getOpenConversationId: () => string | null): v
       subscribeTimeline(
         window.pyry.onDaemonEvent,
         (event, conversationId, joinKey) => {
-          timelineStore.getState().dispatch(event)
+          if (event.type !== 'messageDelivery' || (conversationId === getOpenConversationId() &&
+              (event.serverId === null || conversationTimelineStore.getState().timelines.get(conversationId ?? '')?.serverId === event.serverId))) {
+            timelineStore.getState().dispatch(event)
+          }
           const target = timelineWriteTarget(event, conversationId, getOpenConversationId)
           if (target !== null) {
             // #1225 — the join key rides the SAME write as the fold it describes, so the store can

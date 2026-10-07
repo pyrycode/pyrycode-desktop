@@ -102,6 +102,43 @@ Retention, send windows and row identity in the [conversation timeline](conversa
   statistics/cursor use source indices, and React keys plus all tool/ancestor/run expansion
   lookups use those retained identities. Unit and mounted restoration regressions cover
   both live-first and prepend-first updates with connected Agent/Read/run nodes.
+- **Stable identity is not delivery chronology.** A queued echo received after a
+  background Agent finishes keeps its original `rowKeys` identity and item, but its
+  first receipt reserves a new placement value from `nextRowKey` and advances that
+  allocator. `rowArrivalOrder` holds the override keyed by stable identity. Using the
+  original key as delivery order would put that delivered message above the finished
+  Agent even though its receipt arrived afterward. Duplicate receipts are same-state
+  no-ops and reserve nothing further; subsequent ordinary arrivals use the advanced
+  allocator. React, expansion and marker navigation still use identity. `Timeline`
+  passes `rowArrivalOrder.get(key) ?? key` to `groupToolRows` after queue folding;
+  unmatched queued rows use `Infinity` for placement, without minting a stored row.
+  The reducer's outer retention pass carries the sidecar across content branches that
+  rebuild state literals. History prepends preserve it; row drop removes that key's
+  override, and reset, holder clear or eviction discards it with the timeline.
+- **History keys do not make old rows live finish anchors.** Prepends allocate fresh
+  keys whose values can exceed a previously captured terminal boundary. Projection
+  excludes the `prependedRows` prefix and relocated groups when looking for the first
+  ordinary row at or beyond that boundary. Launch markers outside the history prefix
+  remain eligible anchors, so late confirmation cannot move a newer launch above an
+  established finish. A launch or descendants loaded later from tool-use history can
+  attach to retained task evidence without changing received-start or terminal order.
+  The app-lifetime task binding captures the addressed conversation's `nextRowKey`
+  synchronously on the terminal event, including while another conversation is visible;
+  render-time capture would settle it at the wrong arrival position. See
+  [roster evidence](background-task-roster-store-internals.md#retained-agent-timeline-evidence)
+  and [background Agent presentation](conversation-shell-tool-row-header-groups.md#started-background-agents).
+  Historical finishes instead resolve stable ordinary-row identities in array order,
+  including surviving echo rows and reserved evidence-only page tails. Numeric keys
+  do not establish history chronology. See
+  [page boundary mapping](conversation-timeline-store-internals.md#background-agent-history-placement).
+- **Saved timelines have no background-task frames.** `readSavedTimeline` snapshots
+  retain the unchanged format and existing placement; neither task lifecycle evidence
+  nor `rowArrivalOrder` is persisted. A saved Agent/result alone cannot reconstruct a
+  live-tail row or its terminal boundary. Connect rosters now supply provisional
+  rows through a memory-only display projection; synthetic items never enter saved
+  history. Daemon pages now reconstruct finished Agents from started/updated placement
+  evidence; saved snapshots alone cannot. Durable history admission/persistence and
+  automatic newest-page requests remain with #1814/#1815.
 - **`prependHistoryFor` is not idempotent, by design** ([#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)).
   Applying the same page twice prepends its non-`userText` rows twice — only `userText` rows are
   suppressed, by the AC4 echo dedup. Unreachable today; see the

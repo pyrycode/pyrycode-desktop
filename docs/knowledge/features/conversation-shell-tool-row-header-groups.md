@@ -87,7 +87,8 @@ was frozen 2026-08-26, and this section is #854's only home.
 `groupToolRows.ts` projects the conversation's stored arrival order into display order;
 it does not reorder timeline state. Only calls named exactly `Agent` or `Task` can own
 tool and assistant-text children through `parentToolUseId`. Owners come from loaded
-rows in this conversation, including retained completed calls, rather than current
+rows in this conversation, including retained completed calls, or the provisional
+Agent projection described below. Ordinary ownership does not require current
 roster membership. Roots and mixed text/tool siblings retain their relative arrival
 order, including interleaved parallel agents. Each attributed reply appears once
 under its owner, using the existing assistant bubble and meta row at child indentation;
@@ -103,20 +104,106 @@ current tokens). Deeper descendants retain their full ancestry for visibility an
 
 New groups start collapsed. `hasChildren` controls disclosure independently of the
 distinct descendant tool count: a pending Agent/Task with only text still has a
-chevron and a “0 tools · running” count. Assistant text never adds to the count.
+chevron and a “running · 0 tools” count. Assistant text never adds to the count.
 Headers retain the call description and count distinct descendant tool-use ids,
-excluding the parent. `running` remains visible while the parent or any descendant
-tool has neither a result nor a denial. Both readings update while
+excluding the parent. For ordinary groups, `running` remains visible while the parent
+or any descendant tool has neither a result nor a denial. Both readings update while
 collapsed. Expanding a pending group reveals children without drawing an empty result
 body; nested groups keep their own collapse state. Text is hidden while its owner
-is collapsed, visible when expanded, and hidden again on collapse. Marker and
-live-row placement remain assigned to #1780/#1781; attribution reuses the existing
-group presentation independently of that work.
+is collapsed, visible when expanded, and hidden again on collapse.
+
+### Started background agents
+
+A connect roster's exact `local_agent` task with a usable launch id immediately
+supplies one provisional full Agent row at the bottom, before either a start frame
+or launch history. Placement prefers the latest nonempty roster id, falling back to
+a known usable started id; neither means no new provisional row. The existing Agent
+header uses the held description and “running · 0 tools” treatment, without a launch
+marker until a real call loads. See
+[retained lifecycle evidence](background-task-roster-store-internals.md#retained-agent-timeline-evidence)
+for qualification and ownership.
+
+`withProvisionalAgents` adds synthetic display items after queue folding, never to
+stored timeline state or saved history. A later live or historical call named exactly
+`Agent` with the matching id replaces synthesis, attaching its marker and children
+to the same full row without duplication. Any loaded matching non-Agent suppresses
+provisional Agent presentation and retains ordinary rendering. Foreground calls,
+`Task`, other task types and unlisted/unconfirmed starts keep their existing behavior.
+Ids compare exactly without trimming or coercion within the conversation and owning
+host; they remain inert equality hints, never authority, DOM attributes or selectors.
+
+The launch position becomes a one-line “Agent started, still working” marker with
+the Agent description and “Go to agent ↓”. The whole marker is a native button:
+pointer activation or Enter/Space scrolls the destination Agent's full row into view,
+without expanding it or any enclosing collapsed tool run. This effect runs
+after the parent's scroll-pin layout pass so explicit navigation wins. The description
+is escaped plain text, bounded to 4096 characters and ellipsized; the action keeps its
+width. Refs and row keys use retained client-owned identities, never daemon ids as DOM
+attributes or selectors.
+
+While running, full Agent groups follow all ordinary rows, including user and queued
+messages, in established evidence order. Already-received start order stays authoritative;
+new connect-only entries append in initial roster order. Later starts/confirmation,
+roster refresh or older launch history never reshuffle established rows.
+Descendants and attributed assistant text
+move with their group; text adds no tools. The background lifecycle controls the
+header's distinct descendant count and running treatment independently of “Async agent
+launched” resolving the parent or gaps between child calls. A childless Agent shows
+“running · 0 tools”; background treatment removes launch-pending dimming and elapsed
+timing. Markers and background roots break folded tool runs, while visible live rows
+reuse the existing joined borders.
+
+The first received update whose status is exactly `completed`, `failed` or `stopped`
+settles the full group at that update's chronological position, before later ordinary
+arrivals. Equal boundaries follow terminal arrival order, rather than start order.
+The launch marker reads “Agent finished” with a green dot and retains navigation;
+the full header shows the tool count without “running”. Roster omission cannot finish
+an Agent, and repeats cannot move or revive an established finish. Placement survives
+roster removal before the update, inactive-conversation delivery and late launch/child
+history. Launch markers remain chronological anchors: confirming a newer Agent must
+not move its marker above an already settled group. See
+[placement and history limits](conversation-timeline-store-limits.md#edge-cases-and-limitations).
+
+Retained row identity preserves expansion through provisional-to-loaded attachment,
+relocation, prepends and late children. A pinned thread follows live-row growth;
+a scrolled-up thread holds the reader's position until explicit navigation.
+`readSavedTimeline` contains no task frames and keeps its existing saved format and
+placement. A saved Agent/result alone cannot recover this lifecycle.
+
+Daemon pages reconstruct finished rows when a valid historical start names exactly
+`local_agent`, has a nonempty tool-call id matching a loaded call named exactly
+`Agent`, and joins an exact `completed`, `failed` or `stopped` update. Current roster
+membership is unnecessary. Finish, start, launch and children can load on separate
+newest-first pages; unmatched evidence stays retained without creating historical
+running/provisional rows. Foreground, other-type, empty-id and matching non-Agent
+calls keep ordinary placement. Existing connect-roster provisional rows can still
+attach their late launches, retaining established start order and roster fallback.
+
+The full historical group settles at its first retained terminal entry, above later
+ordinary rows; tied anchors follow chronological finish-entry order. Its launch
+marker reads “Agent finished” and uses the retained historical start description,
+escaped and bounded to 4096 characters through the existing marker. Older launch/child
+pages reuse the same row/marker and client-owned identity, without moving an established
+finish or losing expansion/navigation. History overlapping live evidence keeps one
+row and marker; replay never revives finished evidence or changes roster/panel/pill
+membership or live turn state. A historical start/launch followed by the first live
+terminal also qualifies without roster membership, retaining the live finish under
+later historical replay. See [retained qualification](background-task-roster-store-internals.md#retained-agent-timeline-evidence)
+and [ordinary-row/echo anchors and host/reset boundaries](conversation-timeline-store-internals.md#background-agent-history-placement).
+
+Durable history admission/persistence and automatic newest-page requests remain
+with #1814/#1815; memory-only lifecycle joins from daemon pages do not change saved
+snapshots.
 
 ### Expansion identity
 
-`Timeline` controls expansion for **every** tool row, keyed by the retained client-owned
-numeric identity at its source item index. Queue projection can change display indices;
+`Timeline` controls expansion for **every** tool row. Ordinary rows use retained client-owned
+numeric identity at their source item index. For retained Agent evidence, `agentKeys`
+remembers the first observed UI key: an existing ordinary key if already loaded,
+otherwise `agent-${identity}` from its client-owned numeric identity. Late launch
+attachment reuses that key, keeping the wrapper mounted and expansion intact.
+Store resets never recycle these identities: a fresh provisional row must not inherit
+an old mounted Timeline's expansion. Queue projection can change display indices;
 ancestor and run lookups must resolve through `FoldedRow.itemIndex` too. The fallback for
 callers without retained keys is `firstRowKey + itemIndex`. Separate leaf and group state would close an expanded
 leaf when history gives it its first child. Tool and attributed-text wrappers stay
@@ -178,6 +265,81 @@ stack assertion in `e2e/tool-row-toggle.spec.ts`: unchanged inner ToolRow markup
 not prevent the wrapper regression. Fake transport proves this client behavior; no
 additional live-Claude acceptance gate is needed.
 
+Background lifecycle units in `backgroundAgentTimeline.test.ts` and
+`groupToolRows.test.ts` cover roster provenance, retained first finish/order, exact
+qualification, projection and queued receipt chronology. Static Timeline coverage
+checks escaped marker content and a zero-child running row; it cannot exercise
+navigation or scrolling. The dispatcher gate at
+`a85d004b2144461c7fb65716e469797f471ebf11` on 2026-10-07 executed 327 fake-transport tests:
+327 passed, 0 failed, 4 skipped. Its named
+“started background agents follow the tail, navigate markers, and settle on inactive
+delivery” test in `e2e/tool-groups.spec.ts` is present and passed, covering pointer and
+Enter/Space navigation, expansion, pinned/held scrolling, inactive delivery, late
+confirmation, equal-boundary finishes and composer-driven queued settlement with
+mounted identity retained. The
+[verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1843#issuecomment-6032197466)
+confirms that evidence; no live-Claude acceptance was required.
+
+Connect-roster coverage adds parser cases for missing/empty/exact ids and malformed
+non-strings, actual-store provenance/fallback/reset checks, and projection/static
+render checks for provisional descriptions, exact joins, matching non-Agent suppression,
+late children and retained finish order. Static renders cannot prove DOM continuity.
+
+For reviewed head `1887ed4a8de85e0cc02f3b6ddee5ab1fa93582bb`, the
+[verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1847#issuecomment-6032797140)
+records a focused `e2e/tool-groups.spec.ts` run: 4 executed, 4 passed, 0 failed,
+0 skipped. All four named tests in that spec were present and passed:
+
+- “interleaved subagents group, update while collapsed, and retain expansion through history”
+- “visible tool rows keep joined borders across collapsed descendants”
+- “started background agents follow the tail, navigate markers, and settle on inactive delivery”
+- “connect roster Agents appear before history and keep identity through live and historical launches”
+
+The connect test covers pre-history rows, non-Agent suppression, live/history launches,
+same mounted row/expansion, late children, pointer/Enter/Space marker navigation,
+roster removal and inactive-chat finish without duplication. The existing lifecycle
+test retains pinned growth, held scrolled-up position and equal-boundary terminal
+ordering. Separately, the dispatcher full fake-transport gate on 2026-10-07 at the
+same head recorded 328 executed, 328 passed, 0 failed and 4 skipped; the focused
+counted run supplies the named-test evidence above. Live Claude was not run or required.
+
+The same verdict records comparison with
+[Figma background Agent states](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG/Pyrycode-Client?node-id=789-10437)
+for running and finished captures at 1280×800 and 800×600. Typography, joined borders,
+counts, chevrons and retained placement matched the reused treatment, with no in-scope
+deviation. Builder captures were `two-provisional-{1280,800}.png` and
+`finished-{1280,800}.png` under `/tmp/builder-1840`; verifier copies/hashes were recorded
+in `/tmp/verifier-1847/capture-manifest.json`. These scratch paths are not durable
+artifacts; the linked verdict records the reviewed evidence.
+
+Finished-history coverage in `finishedAgentHistory.test.ts` includes separate-page
+start/finish/launch joins, late children, tied anchors, echo mapping, evidence-only
+tails and live/history overlap. The history-start → live-terminal → terminal-replay
+regressions exercise all three exact terminal statuses and assert unchanged live
+membership/turn state and finish identity; testing only live → history misses that
+qualification transition.
+
+For reviewed head `eefeb6ffb20ec8aeba135e7b8aa4aeb931557e1a`, the
+[verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1848#issuecomment-6033846146)
+records 9,297 unit tests executed/passed, 0 failed and 3 skipped, including all
+14 tests in `finishedAgentHistory.test.ts` present and passed. Its browser evidence
+records 5 `tool-groups.spec.ts` tests executed/passed, 0 failed and 0 skipped,
+including the named “finished agents reconstruct across pages, attach late children,
+navigate and preserve the reader” scenario and the four existing scenarios listed
+above. The new scenario serves finish, start, launch and child on separate pages;
+it checks unique rows/markers, retained DOM nodes/expansion, later-row chronology,
+pointer/Enter/Space navigation and a held reader anchor after prepend. The initial
+full browser gate recorded 329 executed, 328 passed, 1 failed and 4 skipped; its
+unrelated offline-conversation-actions failure passed the dispatcher rerun
+(1 executed/passed, 0 failed, 0 skipped). No live-Claude run was required or performed.
+
+The [initial visual verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1848#issuecomment-6033526700)
+records comparison with Figma section `789:10437` at 1280×800 and 800×600, covering
+finished chronology, green marker, description and Go to agent with no additional
+in-scope visual finding. The qualification repair did not change presentation;
+the final verdict retains that comparison. Scratch captures under `/tmp/builder-1781`
+are not durable artifacts; the verdicts record the evidence.
+
 [`e2e/assistant-parent-text.spec.ts`](../../../e2e/assistant-parent-text.spec.ts)
 streams deltas before the owner has a result, then checks text-only and mixed groups,
 single occurrence, arrival order, tool-only counts, collapse/expand/collapse and
@@ -196,7 +358,11 @@ records the reviewed visual evidence.
 Source: [subagent tool groups design](../../specs/architecture/1239-subagent-tool-groups.md)
 and [reviewed implementation](https://github.com/pyrycode/pyrycode-desktop/pull/1328);
 [assistant parent attribution design](../../specs/architecture/1789-assistant-parent-attribution.md)
-and [implementation](https://github.com/pyrycode/pyrycode-desktop/pull/1791).
+and [implementation](https://github.com/pyrycode/pyrycode-desktop/pull/1791);
+[provisional live Agent design](../../specs/architecture/1840-provisional-live-agent-rows.md)
+and [implementation](https://github.com/pyrycode/pyrycode-desktop/pull/1847);
+[finished Agent history design](../../specs/architecture/1781-finished-agent-history.md)
+and [implementation](https://github.com/pyrycode/pyrycode-desktop/pull/1848).
 
 
 ## Adjacent tool runs

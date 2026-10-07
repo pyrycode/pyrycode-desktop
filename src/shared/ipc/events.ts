@@ -113,6 +113,8 @@ export type ModelRefusalEvent = {
  * daemon); an empty map and `''` are different facts and are never collapsed into it.
  */
 export type HistoryTimelineEvent =
+  | { type: 'backgroundTaskStarted'; taskId: string; toolCallId: string; taskType: string; description: string }
+  | { type: 'backgroundTaskUpdated'; taskId: string; status: string }
   | ModelRefusalEvent
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string; parentToolUseId?: string }
   | ({ type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string } & TurnEndMetrics)
@@ -302,6 +304,7 @@ export type RelayLinkStatus = 'connected' | 'offline' | 'daemon-absent'
  * `DaemonEventTimestamp` for why the field is added by intersection rather than per arm.
  */
 type BaseDaemonEvent =
+  | { type: 'messageDelivery'; conversationId: string; messageId: string; status: 'waiting' | 'not-sent' | 'written' }
   | { type: 'replySuggestion'; conversationId: string; sessionId: string; revision: number; suggestedReply: string | null }
   | { type: 'hostSystemPromptReceived'; requestId: string; operation: 'read' | 'write'; systemPrompt: string; defaultSystemPrompt: string }
   | { type: 'hostSystemPromptFailed'; requestId: string; operation: 'read' | 'write' }
@@ -1492,6 +1495,8 @@ type BaseDaemonEvent =
   // authorization is pairing, enforced at the Noise handshake.
   | {
       type: 'historyPageReceived'
+      /** Complete validated envelope IDs, including undrawn payloads. Absent means unknown provenance. */
+      servedIds?: readonly number[]
       conversationId: string
       entries: readonly HistoryTimelineEntry[]
       cursor: string

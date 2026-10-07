@@ -1,6 +1,7 @@
 // User-demand history pages: typed events prepend rows and retain successful coverage.
 // Requests are driven by thread input; failures settle without starting a retry.
 import { useEffect } from 'react'
+import { backgroundTaskRosterStore, type HistoryAgentPlacement } from './backgroundTaskRosterStore'
 import { connectedConversationHostNow } from '../screens/conversation/conversationActionAvailability'
 import type { RendererCommand } from '@shared/ipc/commands'
 import type { DaemonEvent, HistoryRequestFailure, HistoryTimelineEntry } from '@shared/ipc/events'
@@ -181,11 +182,19 @@ export function withoutLiveEntries(
  */
 export function reduceHistoryPage(
   entries: readonly HistoryTimelineEntry[],
-  liveKeys?: ReadonlySet<string>
+  liveKeys?: ReadonlySet<string>,
+  collectPlacement?: (placement: HistoryAgentPlacement) => void,
+  suppressOrdinary = false
 ): readonly ThreadItem[] {
   let state = initialTimelineState
-  const drawable = liveKeys === undefined ? entries : withoutLiveEntries(entries, liveKeys)
-  for (const entry of [...drawable].reverse()) {
+  const drawable = suppressOrdinary ? [] : liveKeys === undefined ? entries : withoutLiveEntries(entries, liveKeys)
+  const admitted = new Set(drawable)
+  for (const entry of [...entries].reverse()) {
+    if (entry.event.type === 'backgroundTaskStarted' || entry.event.type === 'backgroundTaskUpdated') {
+      collectPlacement?.({ event: entry.event, before: state.items.length })
+      continue
+    }
+    if (!admitted.has(entry)) continue
     const event = translateTimelineEvent(entry.event)
     if (event) state = reduceTimeline(state, event)
   }
@@ -229,23 +238,28 @@ export function subscribeHistoryPage(
     conversationId: string,
     items: readonly ThreadItem[],
     cursor: string,
-    atStart: boolean
+    atStart: boolean,
+    placements?: readonly HistoryAgentPlacement[],
+    servedIds?: readonly number[]
   ) => void,
   settleFailure: (
     conversationId: string,
     reason: HistoryRequestFailure,
     retryable: boolean
   ) => void,
-  getLiveKeys?: (conversationId: string) => ReadonlySet<string>
+  getLiveKeys?: (conversationId: string) => ReadonlySet<string>,
+  getServedIds?: (conversationId: string) => ReadonlySet<number>
 ): () => void {
   return onDaemonEvent((event) => {
     if (event.type === 'historyPageReceived') {
-      applyPage(
-        event.conversationId,
-        reduceHistoryPage(event.entries, getLiveKeys?.(event.conversationId)),
-        event.cursor,
-        event.atStart
-      )
+      const placements: HistoryAgentPlacement[] = []
+      const covered = getServedIds?.(event.conversationId)
+      const repeated = event.servedIds !== undefined && event.servedIds.length > 0 &&
+        covered !== undefined && event.servedIds.every(id => covered.has(id))
+      const items = reduceHistoryPage(event.entries, getLiveKeys?.(event.conversationId), placement => placements.push(placement), repeated)
+      if (event.servedIds !== undefined) applyPage(event.conversationId, items, event.cursor, event.atStart, placements, event.servedIds)
+      else if (placements.length === 0) applyPage(event.conversationId, items, event.cursor, event.atStart)
+      else applyPage(event.conversationId, items, event.cursor, event.atStart, placements)
       return
     }
     if (event.type === 'historyRequestFailed') {
@@ -328,9 +342,13 @@ export function useHistoryPageBridge(): void {
     () =>
       subscribeHistoryPage(
         window.pyry.onDaemonEvent,
-        (conversationId, items, cursor, atStart) => {
-          conversationTimelineStore.getState().prependHistoryFor(conversationId, items)
-          conversationTimelineStore.getState().recordHistoryPage(conversationId, cursor, atStart)
+        (conversationId, items, cursor, atStart, placements = [], servedIds) => {
+          const keys = conversationTimelineStore.getState().prependHistoryFor(conversationId, items, placements.length > 0)
+          backgroundTaskRosterStore.getState().recordHistoryPlacements(conversationId, placements.flatMap(placement => {
+            const before = keys[placement.before]
+            return before === undefined ? [] : [{ ...placement, before }]
+          }))
+          conversationTimelineStore.getState().recordHistoryPage(conversationId, cursor, atStart, servedIds)
         },
         (conversationId, reason, retryable) => {
           conversationTimelineStore
@@ -342,7 +360,12 @@ export function useHistoryPageBridge(): void {
         // number of chat switches, and a captured reading would join every later page against whatever
         // the store held when this effect ran.
         (conversationId) =>
-          selectLiveJoinKeysFor(conversationId)(conversationTimelineStore.getState())
+          selectLiveJoinKeysFor(conversationId)(conversationTimelineStore.getState()),
+        conversationId => {
+          const host = window.pyry.chatHistoryReceipt()?.serverId
+          const held = conversationTimelineStore.getState().timelines.get(conversationId)
+          return new Set(typeof host === 'string' && held?.serverId === host ? held.served?.ids : [])
+        }
       ),
     []
   )

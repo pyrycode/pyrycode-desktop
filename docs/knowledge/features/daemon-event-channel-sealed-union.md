@@ -61,6 +61,15 @@ See [stopped-turn metadata](daemon-event-channel.md#stopped-turn-metadata) for t
 absence, byte-bound and display-only contract. Live `turnEnd` also carries the
 existing optional `daemonTs` envelope stamp for the history/live join.
 
+`HistoryTimelineEvent` also has placement-only `backgroundTaskStarted`
+(`taskId`, `toolCallId`, `taskType`, `description`) and `backgroundTaskUpdated`
+(`taskId`, `status`) members. They carry no patch, summary, roster or turn authority;
+the enclosing correlated page owns routing. Live started/updated members retain their
+live fields and optional `daemonTs` envelope stamp for bounded overlap joins.
+No IPC channel or privileged capability is added. See
+[lifecycle decoding](request-history-send.md#background-agent-placement-events) and
+[placement collection](conversation-timeline-store-internals.md#background-agent-history-placement).
+
 ## 2. Per-member history
 
 Every member's own rationale — what it carries, what it drops, its trust tier, which bridge(s) consume
@@ -73,4 +82,3 @@ Also there: the two rules that govern the whole union rather than one member —
 `SessionAction` stay separately declared per layer, and that a member reuses its wire payload type
 verbatim wherever one exists (`connected.ack` is `HelloAckPayload`, `conversationsReceived.conversations`
 is a `readonly ConversationSummary[]`, and so on) rather than redeclaring or drifting it.
-

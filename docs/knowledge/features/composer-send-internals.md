@@ -4,7 +4,8 @@ Part of [Composer send](composer-send.md).
 
 ## How it works
 
-Two production changes plus a controlled container.
+The submit helper publishes the echo, then sends through the bridge; the controlled
+container clears its draft only when that bridge call returns successfully.
 
 ### 1. The pure submit helper — `composerSend.ts`
 
@@ -13,6 +14,8 @@ Framework-free and React-free, co-located with the screen and mirroring `pairing
 ```ts
 // src/renderer/src/screens/conversation/composerSend.ts — RENDERER ONLY
 export interface ComposerSendDeps {
+  serverId?: string   // attribution of main routing refusal; outside the wire payload
+  diagnose?: (record: MessageLifecycleDiagnostic) => void
   sendCommand: (command: RendererCommand) => void
   dispatch: (event: ThreadEvent) => void
   dispatchFor: (conversationId: string, event: ThreadEvent) => void   // #756
@@ -66,38 +69,48 @@ message and needs no dedup key. #1213 puts the id back on the echo (`ThreadEvent
 an unrelated purpose — **correlation** with the queued row the daemon draws when it parks this message
 mid-turn (`QueuedItem.message_id`, pyrycode#2092) — so a later cancel
 ([dequeue message envelope](dequeue-message-envelope.md)'s `dropQueuedMessage`) can find this exact echo
-again. It is recorded even when the send threw, unlike `attachments` below: that field is a claim about
-what the daemon was handed, so a frame that never went must claim nothing, while the id is this window's
-own name for its own message and would need to survive a retry regardless. See [Thread timeline §
+again. It also correlates local delivery status. Both the ID and attachments survive a bridge
+exception on the failed echo; its Not sent label makes the outcome explicit without claiming
+daemon delivery. See [Thread timeline §
 Types](thread-timeline-internals.md#types) for the full field-pair contract.
 
 `submitMessage` contract:
 
-1. Trim `text`. If empty (whitespace-only) → return `false`, **no effects**.
-2. Mint `message_id` via `deps.newMessageId()` **once**; reuse it for both the wire payload and the store echo (and, since #1213, the echo's own `messageId` field — the same one mint, two uses).
-3. Build `SendMessagePayload { conversation_id: MILESTONE_CONVERSATION_ID, message_id, text: trimmed }` (**no `role`** — that field is `MessagePayload`-only).
-4. **Guarded send (AC4):** `try { deps.sendCommand(sendMessageCommand(payload)) } catch { console.error(...) }` — a bridge failure is swallowed, never propagated.
-5. Dispatch `{ type: 'messageSent', message: { conversation_id, message_id, role: 'user', text: trimmed } }` — the optimistic echo, a wire `MessagePayload` carrying the **same `message_id`** as step 3.
-6. Return `true` (the container clears the input on `true`).
+1. Trim `text`. Whitespace-only input or a null conversation ID returns `false` with no effects, including no attachment take or clock read.
+2. Mint `message_id` once and take pending attachments once. Build the payload with the selected conversation, trimmed text and any attachment IDs.
+3. Publish one `userText` event with the same ID, original timestamp and attachments to both the active timeline and `dispatchFor(conversationId, echo)` before calling the bridge. This ordering lets synchronous delivery status find the echo in both stores.
+4. Call `deps.sendCommand(sendMessageCommand(payload, deps.serverId))`. A successful return yields `true`, so the container clears only the selected draft. This means bridge acceptance, not socket write or daemon acknowledgement.
+5. On a synchronous bridge exception, swallow the exception, roll back the attachment take and dispatch `messageDelivery{messageId,status:'not-sent'}` to both stores. Return `false` so the draft and pending attachments remain available for resubmission. The existing echo keeps its text and attachments and shows Not sent; no ordinary sent echo is added. Diagnostics use fixed categories and never log the caught object.
 
-The echo (step 5) and the clear happen **regardless** of the send outcome in step 4 — "optimistic" means show-immediately, and this milestone has no send-failure UI surface.
+### 2. Local delivery status and receipt settlement
 
-`MILESTONE_CONVERSATION_ID = 'default'` is the single active conversation for this milestone — the one place a future conversation-selection ticket replaces. There is no pre-existing conversation id in the renderer (`HelloAckPayload` carries `server_id`/`conn_id`, not a conversation), so a stable constant is the correct source; the daemon treats `conversation_id` as opaque and echoes back whatever it is sent.
+`userText` creates durable content plus a `localEchoes` identity sidecar. Delivery
+presentation stays in that sidecar (`delivery?: 'waiting' | 'not-sent'`, `held?: true`),
+preserving message object identity and the saved-history row contract. Main's typed
+`messageDelivery` event carries conversation/message IDs and `waiting | not-sent | written`,
+with its host stamp; there is no payload text, raw error, key or frame byte.
 
-### 2. The store action — `messageSent`
+Waiting shows “Waiting for connection” and participates in `foldQueuedRows`' pending
+placement without inventing a daemon `queued_msg_id` or showing queue controls.
+Not sent preserves the failed message. Written clears only the transport label:
+a socket write is not daemon acknowledgement, and main never retries a written
+message merely because its receipt has not arrived. The main-memory hold and
+unchanged-pairing Reconnect rules live in [connection lifecycle](daemon-connection-lifecycle.md#disconnected-composer-message-delivery);
+holds end on pairing replacement/removal, disposal or app shutdown and do not survive restart.
 
-A small additive arm on the sealed `SessionAction` union in the [session store](session-store.md):
+`timelineTargetFor` routes delivery events to their own conversation. The mounted
+bridge updates the active flat store only for the open conversation and matching
+retained host; `dispatchFor` updates an existing host-owned slice even when inactive.
+A host mismatch or missing slice is a no-op, rather than replacing another host's
+timeline. The reducer also requires an unsettled local echo with the same message ID
+and no daemon queue ID; late statuses cannot overwrite queue admission or settlement.
 
-```ts
-| { type: 'messageSent'; message: MessagePayload }   // a local optimistic echo
-```
-
-```ts
-case 'messageSent':
-  return { status: state.status, messages: appendUnique(state.messages, [action.message]) }
-```
-
-A **distinct name** from `messageReceived` documents intent (a local echo, not a daemon delivery) even though the reducer body is identical — the append routes through the same `appendUnique` (dedupe by `message_id`, added in #27), so the daemon's later echo of the same id drops. `messageSent` is dispatched **only** by the composer; the [daemon-event bridge](daemon-event-bridge.md) produces a subset of `SessionAction` from wire events and needs no change.
+A matching queue snapshot clears delivery status and binds the existing echo to the
+daemon's real queue ID. A user receipt clears status and settles that same row through
+the [queue correlation rules](thread-timeline-internals.md#queued-own-echo-settlement),
+retaining original text, timestamp and attachments and placing it before its reply.
+A locally held echo uses delivery placement even if no daemon queue ID was observed.
+Duplicate/replayed receipts neither duplicate nor move a settled row.
 
 ### 3. The controlled composer — `ConversationScreen.tsx`
 
@@ -123,8 +136,9 @@ A **distinct name** from `messageReceived` documents intent (a local echo, not a
 - **Since [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678), that button is `ComposerSendButton`, not a bare `<button>`.** `Composer` also takes a required `phase: TurnPhase` prop from the container and derives `isRunning={isTurnRunning(phase)}` on every render; while a turn is running the control swaps to a stop affordance in place, reusing the same `.composer__send` chrome and the same `aria-label="Send"` string only in the idle branch. `onClick={handleSubmit}`/`disabled={!canSend}` still gate the send branch exactly as above — `isRunning` and `canSend` are independent, so the send-gate logic on this page is unchanged by the swap. See [Interrupt envelope § The render affordance](interrupt-envelope.md#the-render-affordance-307-merged-into-the-send-button-by-678) for the stop variant's own contract.
 - `handleSubmit` calls `sendText(text)` and clears only the selected draft when it returns `true`,
   then emits the content-free `composer-draft-cleared` diagnostic. This is local submit success,
-  without a daemon acknowledgement, including the existing caught bridge-error path that still
-  posts an optimistic echo. Unavailable-host and whitespace-only rejection leave the draft intact
+  without a daemon acknowledgement. A caught bridge exception returns false, marks the echo
+  Not sent and preserves draft and pending attachments. Unavailable-host and whitespace-only
+  rejection leave the draft intact
   through subsequent switches. Actions-menu commands call `sendText` directly and leave typed text
   alone. Bridge dependencies are built inside `sendText`, at interaction time, so server rendering
   never dereferences `window.pyry` through this send path.
@@ -160,7 +174,10 @@ history persistence.
 
 ### 4. Connection-status gate — `composerAvailability` ([#31](../codebase/31.md))
 
-The send control is gated on the live connection status: while the session is not `connected`, sending is disabled, instead of silently swallowing a keystroke that goes nowhere. This is a **UX affordance, not a safety net** — the deterministic no-throw safety on a disconnected send already lives in [#65](../codebase/65.md)'s `daemonConnection.send()` and #66's guarded `sendCommand`; no second guard is added.
+The send control is gated on the live connection status: while the session is not
+`connected`, sending is disabled. Accepted submissions that encounter a main-process
+disconnect or handshake gap use the [bounded transport hold](daemon-connection-lifecycle.md#disconnected-composer-message-delivery)
+and visible delivery status; the offline Send gate is unchanged.
 
 The decision lives in `composerSend.ts` as a pure, React-free predicate — a *total* mapping over the store's `ConnectionStatus` (from [session store](session-store.md)):
 
@@ -369,69 +386,33 @@ splitting the take into a peek/consume pair, which would reopen the exact double
 the take, rather than as a second optional dep, means a caller cannot hold one without the other and
 cannot restore into the wrong holder — the closure captures its own holder.
 
-`submitMessage`'s shape, current as of #1055:
+The take remains below both early `false` returns and above payload construction.
+Whitespace-only input or a null conversation takes nothing. One normalized `named`
+value feeds the echo's attachments and the payload's `attachment_ids`, preserving
+pending-set order. Empty or unwired means `undefined`; JSON encoding omits
+`attachment_ids` entirely, never sending `null` or `[]` for a message with none.
 
-```ts
-const message_id = deps.newMessageId()
-const take = deps.takeAttachments?.()
-const named = take !== undefined && take.attachments.length > 0 ? take.attachments : undefined
+The echo is now published to both stores before the bridge call, with `messageId`,
+`createdAt` and `attachments: named`. A bridge exception calls `take?.rollback()`,
+marks that echo Not sent and returns `false`. Its attachment presentation survives,
+while the pending set and draft are restored for resubmission. A failed echo records
+what the operator attempted, rather than claiming those files reached the daemon.
+Dropping attachments from it would lose the failed message's original presentation.
+A bridge call that returns successfully consumes the take even if main subsequently
+holds or rejects delivery; that outcome updates the same echo through typed status.
 
-const payload: SendMessagePayload = {
-  conversation_id: conversationId,
-  message_id,
-  text: trimmed,
-  attachment_ids: named?.map((attachment) => attachment.attachmentId)
-}
-
-let sent = true
-try {
-  deps.sendCommand(sendMessageCommand(payload))
-} catch (error) {
-  console.error('composer send failed', error)
-  sent = false
-  take?.rollback()
-}
-
-const echo: ThreadEvent = {
-  type: 'userText',
-  text: trimmed,
-  createdAt: deps.now?.(),
-  attachments: sent ? named : undefined
-}
-```
-
-**What survives from the pre-#1055 ordering, verbatim: the take is still read exactly once, and still
-below both of `submitMessage`'s early `false` returns.** A whitespace-only submit and a submit with no
-active conversation each return `false` before `deps.takeAttachments?.()` runs, so neither takes
-anything — the operator's attached file survives untouched for the next send. **What no longer survives:
-"the echo and its attachments show regardless of the wire outcome."** That was true before #1055 because
-attachments were display-only; now that their ids are the very thing the frame names, a throw means the
-frame named nothing, so the echo must record nothing too — recording them while also rolling back would
-duplicate them on the retry. The echo itself still posts on a throw (`sent` only gates `attachments`, not
-the event), and `now`'s "optimistic means show-immediately" still holds for the text.
-
-**One `named` value feeds both the frame and the echo — that is what makes the second acceptance
-criterion structural rather than conventional.** It is normalised by one rule (empty or unwired ⇒
-`undefined`, the same `taken !== undefined && taken.length > 0` test as before #1055) and gated by one
-boolean (`sent`), so the frame and the echo cannot disagree on any path, including the throwing one.
-`SendMessagePayload.attachment_ids` is assigned unconditionally from `named?.map(...)` — the `createdAt`
-idiom this module already runs — so `JSON.stringify` drops the key entirely when `named` is `undefined`;
-a message sent with nothing pending carries **no `attachment_ids` key at all**, never `null` or `[]`. See
-[`SendMessagePayload`](../wire/types.ts) and [command channel](command-channel.md) for the wire type and
-the `isAttachmentIdList` boundary guard that widened alongside it.
-
-Wired at the one production call site, `ConversationScreen.tsx`'s `Composer.sendText`, beside `now:
-Date.now`: `takeAttachments: attach.takePendingAttachments`. `sendText` has two callers — the composer's
-own submit and `ComposerActionsMenu`'s picked slash command — and both reach this read, which is correct:
-a picked command is a message that was sent, so it records and consumes the pending set exactly as a typed
-one does. Like `now`, the wiring is **not compile-enforced** (the field is optional); `composerSend.test.ts`
-pins it with its own spec — `takeAttachments` is asserted uncalled for a whitespace-only or null-conversation
-submit, called exactly once on a real send, its ids named on the frame in the pending set's order, and a
-throwing `sendCommand` both calling `rollback` and leaving the echo without attachments.
+The production call site, `ConversationScreen.tsx`'s `Composer.sendText`, wires
+`takeAttachments: attach.takePendingAttachments`, `now: Date.now` and the retained
+host ID. Both typed submissions and picked Actions-menu commands reach this helper.
+`composerSend.test.ts` checks no take on either early rejection, one take on a real
+submission, ordered IDs on the command, and a throwing bridge that rolls back,
+retains echo attachments and returns false. `localMessageDelivery.test.ts` exercises
+synchronous status reporting after both echo writes and inactive-host isolation.
+See [delivery verification](daemon-connection-lifecycle.md#delivery-verification) for
+recorded mounted fake-daemon evidence; no new real-Claude acceptance is required.
 
 **No canonical-shape check on the ids here, by deliberate omission.** Upstream (`pyrycode#2038`) mandates
 and enforces the lowercase-UUIDv4 check on the *receiver*; this client's own posture for the identical
 value class — `RequestAttachmentPayload` — is *documented, not validated*, and the ids this composer
 names were minted by this process's own `randomUUID()` in the first place, never read off the daemon. See
 the architecture spec's Security review for the full argument.
-

@@ -31,6 +31,7 @@ type ThreadItem =
   | { kind: 'compactionBoundary'; failed: boolean; manual: boolean; preTokens?: number | null; postTokens?: number | null }
 
 type ThreadEvent =
+  | { type: 'messageDelivery'; messageId: string; serverId?: string | null; status: 'waiting' | 'not-sent' | 'written' }
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string; parentToolUseId?: string; createdAt?: number }
   | { type: 'toolUse'; turnId: string; toolUseId: string; parentToolUseId?: string; name: string; inputSummary: string; input?: Readonly<Record<string, string>> }
   | { type: 'toolDenied'; turnId: string; toolUseId: string; denial: ToolDenial }
@@ -77,7 +78,8 @@ with `pendingCompaction` identifying the row awaiting metadata. See
 **`localSendPending` ([#650](../codebase/650.md)) is a fifth such
 scalar** — set by local `userText` (the composer's own accept signal, no separate event);
 live and history receipts carry `received: true` and preserve either pending value. It is cleared
-only by the daemon's own turn-activity edge; its full rationale, the working-indicator consumer, and
+by daemon turn activity, and also by an admitted local waiting/not-sent delivery update;
+its full rationale, the working-indicator consumer, and
 what a `dropUserText` removal (below) deliberately leaves it as live in [Conversation shell §
 Thinking / working indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967-splits-the-local-send-window-into-sending-and-waiting-for-claude-since-1725),
 not restated here.
@@ -252,7 +254,7 @@ unbound local record by nonempty message id. A settled unbound echo must not sha
 colliding entry. Ordinary settlement moves the original item and key after the observed
 predecessor boundary (`afterKey`), or to the delivery point when no boundary is known.
 The first matching `turnEnd` captures that boundary; later turns cannot overwrite it.
-Idle sends retain immediate placement. `sentNow: true` instead uses the stream delivery
+Idle sends that never waited locally retain immediate placement. `sentNow: true` instead uses the stream delivery
 point inside the running turn. Removal never implies Send now. Queue ids name entries,
 not turns: Codex commit-at-write and no-echo idle fallback do not supply ordinary Claude's
 echo-before-answer guarantee, so late receipts use the boundary already observed.
@@ -264,7 +266,7 @@ advancing released entries instead inserts older echoes into a subsequent reply.
 Settlement preserves text, original local time, attachments and row identity, and returns
 before content/chrome reduction so it cannot split, finalize or reset the next reply.
 Later receipts and snapshots cannot move a settled row. Metadata-free confirmation of an
-unbound echo marks it settled without moving it; repeats retain legacy no-op
+unbound echo that never waited for transport marks it settled without moving it; repeats retain legacy no-op
 identity, and later snapshots cannot claim it. Admitted foreign receipt queue ids are
 tracked separately for idempotence when a bound local entry shares their message id.
 
@@ -273,6 +275,29 @@ delete a received/history row through an id collision. Reset/holder eviction cle
 facts. Reducer coverage lives in `queuedEchoSettlement.test.ts`; mounted encrypted-stream
 coverage in `e2e/queued-own-settlement.spec.ts` includes both snapshot/receipt orders,
 mixed forced/ordinary delivery, continuing output and restored row identity.
+
+### Local transport delivery
+
+`localEchoes` also holds `delivery?: 'waiting' | 'not-sent'` and sticky `held?: true`.
+Keep these facts in the sidecar: changing `ThreadItem` to carry presentation state
+would change message object identity and the durable saved-history row contract.
+`messageDelivery` is handled before the content fold and finds an unsettled local
+record by message ID, verifies its row is `userText`, and refuses to overwrite a
+record already bound to a daemon queue ID. Missing, foreign and settled identities
+are exact-state no-ops. Waiting marks `held` and clears `localSendPending`; Not sent
+also clears that scalar, without changing text, attachments, row keys or timestamps.
+Written clears the label and preserves the pending scalar, without acknowledging receipt.
+
+`foldQueuedRows` includes waiting echoes in pending placement without inventing queue
+IDs or Drop controls. Queue association clears delivery; a user receipt also clears
+it and settles the original row. A previously held echo takes the normal delivery
+placement path even with a metadata-free receipt and no queue ID, so it can appear
+before its reply rather than remain pinned below later content. Settled duplicate
+receipts cannot move it again. Host and inactive-conversation isolation belongs to
+the [composer delivery bridge](composer-send-internals.md#2-local-delivery-status-and-receipt-settlement).
+`localMessageDelivery.test.ts` covers these sidecar transitions and original metadata;
+[mounted delivery evidence](daemon-connection-lifecycle.md#delivery-verification)
+checks decoded fake-daemon frames and visible waiting/failure/settlement behavior.
 
 **`TurnEndMetrics` ([#1565](https://github.com/pyrycode/pyrycode-desktop/issues/1565)) is a
 sixth field-pair widen, on `turnBoundary`/`turnEnd` only** — six optional numbers
@@ -351,7 +376,8 @@ there can still accompany clearing `latestTurnEnd`. If that reading is unchanged
 the wrapper returns the content fold's exact state reference, preserving legacy no-op
 identity on reconnect.
 
-Before that fold, owned receipts and drops use the [settlement rules](#queued-own-echo-settlement).
+Before that fold, delivery updates use the [local transport rules](#local-transport-delivery),
+and owned receipts and drops use the [settlement rules](#queued-own-echo-settlement).
 Other received user events with a held nonempty message id retain legacy exact-state
 deduplication, except metadata distinguishing a different bound queue entry admits a
 separate receipt. A held history row is not enriched by a later matching receipt.

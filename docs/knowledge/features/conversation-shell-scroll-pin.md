@@ -122,7 +122,7 @@ more cards. Its edit case scrolls the option into view, verifies the reader is s
 tolerance, then makes a real label click. A synthetic click on an offscreen label measures a different
 thing: it focuses the visually hidden radio, whose containing block is now the positioned thread,
 and Chromium scrolls it into view. The arrival and bottom-growth assertions remain separate from
-that visible-edit proof. See [verification evidence](development-verification.md#inline-question-verification).
+that visible-edit proof. See [verification evidence](development-verification-test-tiers.md#inline-question-verification).
 
 **Open observer-retention limitation:** the observer adds current children but does not unobserve
 removed children while the same pane remains mounted. Resolving/dismissing a batch therefore leaves

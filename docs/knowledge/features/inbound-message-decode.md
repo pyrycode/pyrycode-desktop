@@ -125,6 +125,36 @@ and [version-1 persistence](chat-history.md#snapshot-contract).
 The parent is a conversation-local display hint, never authority, a DOM attribute,
 log content or a path. Tool-use/result decoding retains its existing contract.
 
+### Optional roster launch ids
+
+`BackgroundTask.tool_call_id?: string` matches [daemon #2753](https://github.com/pyrycode/pyrycode/issues/2753)
+additively under [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md). Older rows
+omit it and remain valid both on the wire and as typed inputs; narrow fixtures need
+no migration. `parseBackgroundTask` checks field presence before `requireString`:
+missing stays omitted, empty is preserved but means unknown to placement, and every
+nonempty string survives exactly, including whitespace. A supplied non-string,
+including null, throws `WireDecodeError` and rejects the entire roster rather than
+partially publishing tasks. Making the id required would reject old valid rows;
+treating null as absence would accept malformed declared data.
+
+The parser builds a fresh named-field literal, retaining the optional id and dropping
+unknown extras such as scalar patches. Existing malformed-frame handling and
+content-free diagnostics apply; neither ids nor descriptions are logged. IPC and
+`translateBackgroundTaskRoster` already pass parsed rows through. Ids are inert
+conversation/owning-host equality hints, never DOM attributes, selectors or authority.
+Descriptions remain untrusted escaped React text, bounded to 4096 characters with
+ellipsis by the [Agent presentation](conversation-shell-tool-row-header-groups.md#started-background-agents).
+Availability and metadata provenance are separate concerns in the
+[roster store](background-task-roster-store-internals.md#retained-agent-timeline-evidence).
+
+`inboundMessage.test.ts` covers old missing-id rows, empty/exact strings, supplied
+non-string rejection and unknown-key filtering. The roster id is a live placement
+hint; [background Agent history](request-history-send.md#background-agent-placement-events)
+separately decodes started/updated frames with the existing live payload parsers.
+History IPC carries placement fields only, skips malformed payloads individually and
+continues excluding roster/progress/modal/question frames. Live lifecycle envelope
+timestamps reach the bounded overlap join. The saved timeline format is unchanged.
+
 ### Optional permission context
 
 `parseModalShownPayload` preserves the seven required `ModalShownPayload` fields

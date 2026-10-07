@@ -1,5 +1,5 @@
 import { agentSwitchStore, type AgentSwitchStatus } from '../../store/agentSwitchStore'
-import { useReplySuggestionStore, selectReplySuggestion } from '../../store/replySuggestionStore'
+import { useReplySuggestionStore, selectReplySuggestion, visibleReplySuggestion } from '../../store/replySuggestionStore'
 import { useSessionFactsStore, selectSessionFactsFor } from '../../store/sessionFactsStore'
 import { McpServersSection, boundMcpText, requestMcpStatus } from './McpServersSection'
 import { mcpStatusStore, selectUnacknowledgedMcpFailureFor, useMcpStatusStore } from '../../store/mcpStatusStore'
@@ -58,6 +58,7 @@ import {
 import { useReportedContextStore, selectReportedContextFor } from '../../store/reportedContextStore'
 import { contextTokenSource } from './contextTokenSource'
 import {
+  type BackgroundAgentTimeline,
   useBackgroundTaskRosterStore,
   selectLiveTaskCountFor
 } from '../../store/backgroundTaskRosterStore'
@@ -85,6 +86,7 @@ import {
   shouldShowBanner,
   CONNECTION_BANNER_COPY,
   COMPOSER_ERROR_CHIP_COPY,
+  COMPOSER_MESSAGE_DELIVERY_COPY,
   COMPOSER_ERROR_CHIP_PREFIX_COPY,
   COMPOSER_REPAIR_BUTTON_COPY
 } from './composerSend'
@@ -137,7 +139,7 @@ import {
 import { dropQueuedMessage } from './dropQueuedMessage'
 import { sendQueuedNow } from './sendQueuedNow'
 import { foldQueuedRows, type QueuedRowHandle } from './foldQueuedRows'
-import { groupToolRows } from './groupToolRows'
+import { groupToolRows, withProvisionalAgents } from './groupToolRows'
 import { foldToolRuns, type ToolRun } from './foldToolRuns'
 import { appendMessageQuote, copyMessageText } from './copyMessageText'
 import { formatMessageTime } from './messageTime'
@@ -310,6 +312,8 @@ export function ConversationScreen({
   const offline = useSessionStore(s => selectedHost !== null && s.statuses.get(selectedHost)?.type !== 'connected')
   const heldSlice = useConversationTimelineStore(s => openConversationId === null ? undefined : s.timelines.get(openConversationId))
   const ownSlice = heldSlice?.serverId === selectedHost ? heldSlice : undefined
+  const backgroundAgents = useBackgroundTaskRosterStore(s => openConversationId === null || ownSlice === undefined
+    ? undefined : s.agentTimeline.get(openConversationId))
   const openTimeline = selectedHost !== null && ownSlice === undefined ? null : heldTimeline
   const localStatus = ownSlice?.localRead ?? (ownSlice === undefined ? 'loading' : 'loaded')
   const coverage = ownSlice?.coverage ?? (ownSlice?.history?.status === 'loaded'
@@ -564,8 +568,10 @@ export function ConversationScreen({
         key={openConversationId}
         items={items}
         rowKeys={thread.rowKeys}
+        rowArrivalOrder={thread.rowArrivalOrder}
         localEchoes={thread.localEchoes}
         foldTools={collapseToolUses}
+        backgroundAgents={backgroundAgents}
         onReply={replyToMessage}
         scrollPin={scrollPin}
         trailing={(pendingBatch || hasPermissionSurface) && <QuestionHistorySlot conversationId={openConversationId} />}
@@ -1181,7 +1187,9 @@ export function SavedTimelineNotice({ status }: {
 
 export function Timeline({
   items,
+  backgroundAgents,
   rowKeys,
+  rowArrivalOrder,
   localEchoes,
   foldTools = false,
   scrollPin,
@@ -1199,7 +1207,9 @@ export function Timeline({
 }: {
   trailing?: ReactNode
   items: readonly ThreadItem[]
+  backgroundAgents?: ReadonlyMap<string, BackgroundAgentTimeline>
   rowKeys?: TimelineState['rowKeys']
+  rowArrivalOrder?: TimelineState['rowArrivalOrder']
   localEchoes?: TimelineState['localEchoes']
   /** Presentation only; absent or false retains ordinary tool rows. */
   foldTools?: boolean
@@ -1225,14 +1235,43 @@ export function Timeline({
   agent?: WireAgent
   onReply?: (role: 'user' | 'assistant', text: string) => void
 }): JSX.Element {
-  const rows = foldQueuedRows(items, queued ?? EMPTY_QUEUED, localEchoes, rowKeys)
+  const ordinaryRows = foldQueuedRows(items, queued ?? EMPTY_QUEUED, localEchoes, rowKeys)
+  const projectedItems = withProvisionalAgents(ordinaryRows.map(row => row.item), backgroundAgents)
+  const rows = [...ordinaryRows, ...projectedItems.slice(ordinaryRows.length).map(item => ({ item, itemIndex: -1, queued: null }))]
+  const provisionalIndices = new Set(rows.map((_, index) => index).slice(ordinaryRows.length))
   // Stats use source item indices; projection may move waiting echoes.
   const turnStats = turnStatsByItemIndex(items)
-  const [expandedTools, setExpandedTools] = useState<ReadonlySet<number>>(() => new Set())
-  const [expandedRuns, setExpandedRuns] = useState<ReadonlySet<number>>(() => new Set())
-  const projection = groupToolRows(rows.map((row) => row.item))
-  const rowKeyAt = (index: number) => rowKeys?.[rows[index]?.itemIndex ?? index] ??
-    firstRowKey + (rows[index]?.itemIndex ?? index)
+  const [expandedTools, setExpandedTools] = useState<ReadonlySet<number | string>>(() => new Set())
+  const [expandedRuns, setExpandedRuns] = useState<ReadonlySet<number | string>>(() => new Set())
+  const agentNodes = useRef(new Map<number | string, HTMLDivElement>())
+  const agentKeys = useRef(new Map<number, number | string>())
+  const [revealAgent, setRevealAgent] = useState<{ key: number | string } | null>(null)
+  useEffect(() => {
+    if (revealAgent === null) return
+    agentNodes.current.get(revealAgent.key)?.scrollIntoView({ block: 'center' })
+    setRevealAgent(null)
+  }, [revealAgent])
+  const projection = groupToolRows(rows.map((row) => row.item), backgroundAgents,
+    rows.map(row => {
+      const key = rowKeys?.[row.itemIndex] ?? firstRowKey + row.itemIndex
+      return row.itemIndex === -1 ? Infinity : rowArrivalOrder?.get(key) ?? key
+    }), -firstRowKey, provisionalIndices,
+    rows.map(row => rowKeys?.[row.itemIndex] ?? firstRowKey + row.itemIndex))
+  const identities = new Map<string, number>()
+  for (const entry of backgroundAgents?.values() ?? []) {
+    if (entry.confirmed && entry.identity !== undefined && !identities.has(entry.toolCallId)) identities.set(entry.toolCallId, entry.identity)
+  }
+  const rowKeyAt = (index: number): number | string => {
+    const row = rows[index]
+    const ordinaryKey = rowKeys?.[row?.itemIndex ?? index] ?? firstRowKey + (row?.itemIndex ?? index)
+    const identity = row?.item.kind === 'toolCall' && row.item.name === 'Agent' ? identities.get(row.item.toolUseId) : undefined
+    if (identity === undefined) return ordinaryKey
+    const previous = agentKeys.current.get(identity)
+    if (previous !== undefined) return previous
+    const key = provisionalIndices.has(index) ? `agent-${identity}` : ordinaryKey
+    agentKeys.current.set(identity, key)
+    return key
+  }
   const drawn = projection.filter((group) => {
     const item = rows[group.index]?.item
     return !(foldTools && item?.kind === 'banner' && item.level === 'info') &&
@@ -1244,6 +1283,7 @@ export function Timeline({
   const runIsExpanded = (run: ToolRun) => run.members.some((index) => expandedRuns.has(rowKeyAt(index)))
   const expandedRunStarts = new Set(runs.filter(runIsExpanded).map((run) => run.index))
   const hiddenRows = new Set(projection.filter((group) => {
+    if (group.marker) return false
     const run = runByMember.get(group.index)
     return group.ancestors.some((index) => {
       const ancestorRun = runByMember.get(index)
@@ -1252,15 +1292,15 @@ export function Timeline({
     }) || (run !== undefined && !expandedRunStarts.has(run.index))
   }).map((group) => group.index))
   // Hidden descendants stay mounted; undrawn rows are skipped when joining tool rows.
-  const visible = drawn.filter((group) => !hiddenRows.has(group.index))
+  const visible = drawn.filter((group) => group.marker || !hiddenRows.has(group.index))
   const joins = new Map(visible.map((group, index) => {
     const previous = visible[index - 1]
     const next = visible[index + 1]
     const above = previous?.depth === group.depth ? rows[previous.index]?.item : undefined
     const below = next?.depth === group.depth ? rows[next.index]?.item : undefined
     return [group.index, [
-      (above?.kind === 'toolCall' || runByStart.has(group.index)) && 'tool-group-row--joined-above',
-      below?.kind === 'toolCall' && 'tool-group-row--joined-below'
+      (!previous?.marker && above?.kind === 'toolCall' || runByStart.has(group.index)) && 'tool-group-row--joined-above',
+      !next?.marker && below?.kind === 'toolCall' && 'tool-group-row--joined-below'
     ].filter(Boolean).join(' ')]
   }))
   return (
@@ -1272,11 +1312,26 @@ export function Timeline({
         const row = rows[group.index]
         if (!row) return null
         const key = rowKeyAt(group.index)
-        const hidden = hiddenRows.has(group.index)
+        const hidden = !group.marker && hiddenRows.has(group.index)
+        if (group.marker && row.item.kind === 'toolCall') {
+          const launchId = row.item.toolUseId
+          const historicalDescription = [...(backgroundAgents?.values() ?? [])]
+            .find(entry => entry.historyOnly && entry.toolCallId === launchId)?.description
+          return (
+            <button key={`agent-marker${key}`} type="button" className="agent-start-marker"
+              onClick={() => setRevealAgent({ key })}>
+              <span className={`conversation-status-dot ${group.running ? 'agent-start-marker__running' : 'agent-start-marker__finished'}`} aria-hidden="true" />
+              <span className="agent-start-marker__state">{group.running ? 'Agent started, still working' : 'Agent finished'}</span>
+              <span aria-hidden="true">·</span>
+              <span className="agent-start-marker__description">{(historicalDescription ?? toolHeadlineRuns(row.item).subject ?? '').slice(0, 4096)}</span>
+              <span className="agent-start-marker__action">Go to agent ↓</span>
+            </button>
+          )
+        }
         if (row.item.kind !== 'toolCall') {
           const rowKey = row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`
           const content = <TimelineRow key={rowKey}
-            item={row.item} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(row.itemIndex)}
+            item={row.item} delivery={localEchoes?.find(e => e.rowKey === rowKeys?.[row.itemIndex])?.delivery} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(row.itemIndex)}
             midTurnInput={midTurnInput} onSendQueuedNow={onSendQueuedNow}
             onOpenMarkdownPath={onOpenMarkdownPath} agent={agent}
             onReply={onReply}
@@ -1292,9 +1347,10 @@ export function Timeline({
         const content = (
           <ToolRow
             item={row.item}
-            group={group.hasChildren ? {
+            group={group.hasChildren || group.background ? {
               count: group.count,
-              running: !saved && group.running
+              background: group.background,
+              running: group.background ? group.running : !saved && group.running
             } : undefined}
             expansion={{
               expanded: expandedTools.has(key),
@@ -1321,7 +1377,8 @@ export function Timeline({
               return next
             })} />
           </div>,
-          <div key={row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
+          <div key={provisionalIndices.has(group.index) || row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
+            ref={node => { if (node) agentNodes.current.set(key, node); else agentNodes.current.delete(key) }}
             className={`tool-group-row tool-group-row--depth-${group.depth} ${joins.get(group.index) ?? ''}`} hidden={hidden}>
             {content}
           </div>
@@ -1623,6 +1680,7 @@ function TimelineRow({
   item,
   inProgress,
   queued = null,
+  delivery,
   onDropQueued,
   midTurnInput = false,
   onSendQueuedNow,
@@ -1634,6 +1692,7 @@ function TimelineRow({
   item: ThreadItem
   inProgress: boolean
   queued?: QueuedRowHandle | null
+  delivery?: 'waiting' | 'not-sent'
   onDropQueued?: (queuedMsgId: number, messageId: string | undefined) => void
   /** #1726: Timeline's two Send now props, passed through; read only by the queued `userText` arm. */
   midTurnInput?: boolean
@@ -1778,7 +1837,10 @@ function TimelineRow({
             )}
             {/* #969: the same row, right-aligned by its own modifier (the drawing's `justify-end` on
                 132:4435). Queued messages have no delivery meta row. */}
-            {!queued && <BubbleMeta side="user" createdAt={item.createdAt} />}
+            {delivery !== undefined && <div className="bubble__meta bubble__meta--user">
+              <span className={delivery === 'not-sent' ? 'composer-status__error' : 'bubble__delivery--waiting'}>{COMPOSER_MESSAGE_DELIVERY_COPY[delivery]}</span>
+            </div>}
+            {!queued && delivery === undefined && <BubbleMeta side="user" createdAt={item.createdAt} />}
           </div>
         </div>
       )
@@ -2093,16 +2155,16 @@ export function ToolRow({
 }: {
   item: Extract<ThreadItem, { kind: 'toolCall' }>
   defaultExpanded?: boolean
-  group?: { count: number; running: boolean }
+  group?: { count: number; running: boolean; background?: boolean }
   expansion?: { expanded: boolean; onToggle: () => void }
 }): JSX.Element {
   const { result, denial } = item
-  const elapsed = result === null && denial === undefined ? item.elapsedSeconds : undefined
+  const elapsed = !group?.background && result === null && denial === undefined ? item.elapsedSeconds : undefined
   const expandable = group !== undefined || result !== null || denial !== undefined
   const [localExpanded, setExpanded] = useState(defaultExpanded)
   const expanded = expansion?.expanded ?? localExpanded
   const rowClass =
-    denial !== undefined
+    group?.background ? 'tool-row tool-row--resolved' : denial !== undefined
       ? 'tool-row tool-row--resolved tool-row--denied'
       : result
         ? `tool-row tool-row--resolved${result.isError ? ' tool-row--error' : ''}`
@@ -2190,7 +2252,7 @@ export function ToolRow({
               children, so not rendering the element IS AC2 — no modifier class, no pending variant.
               #854's "the whole group, not just the chevron" argument one level down again. */}
           {group && (
-            <span className="tool-row__count">{group.count} {group.count === 1 ? 'tool' : 'tools'}{group.running ? ' · running' : ''}</span>
+            <span className="tool-row__count">{group.running ? 'running · ' : ''}{group.count} {group.count === 1 ? 'tool' : 'tools'}</span>
           )}
           {!group && result && result.resultDetail !== undefined && result.resultDetail !== '' && (
             <span className="tool-row__count">{result.resultDetail}</span>
@@ -3971,8 +4033,9 @@ function Composer({
 }): JSX.Element {
   // Selected coordinates survive metadata refreshes; only transient UI belongs to the keyed pane.
   const suggestion = useReplySuggestionStore(s => selectReplySuggestion(s, serverId, conversationId))
-  const acceptedSuggestionEnd = useRef<number | null>(null)
+  const spendSuggestion = useReplySuggestionStore(s => s.spend)
   const text = useComposerDraftStore(s => selectDraft(s, serverId, conversationId))
+  const shownSuggestion = visibleReplySuggestion(text, suggestion)
   const setDraft = useComposerDraftStore(s => s.setDraft)
   const setText = (value: string): void => {
     if (serverId !== null && conversationId !== null) setDraft(serverId, conversationId, value)
@@ -4028,37 +4091,32 @@ function Composer({
     // this function: that would move the dereference into the render path, where `window.pyry` does not
     // exist under renderToStaticMarkup, and every container smoke test would throw.
     const sent = submitMessage(value, activeConversationId, {
+      serverId,
       diagnose: window.pyry.sendDiagnostic,
       sendCommand: window.pyry.sendCommand,
       dispatch,
       dispatchFor: (conversationId, event) => {
         if (event.type === 'userText') dispatchLocalEcho(serverId, conversationId, event)
+        else if (event.type === 'messageDelivery') conversationTimelineStore.getState().dispatchFor(conversationId, { ...event, serverId })
       },
       newMessageId: () => crypto.randomUUID(),
       // #1013: the echo's clock. Referenced, not called — `submitMessage` reads it once, past both of its
-      // `false` returns, so a refused submit never stamps. `Date.now` rather than a store value because
+      // early guards, so an empty or unowned submit never stamps. `Date.now` rather than a store value because
       // the moment being recorded IS now: this line is inside the send handler, not the render path.
       now: Date.now,
       // #1039: the files this message is being sent with — the uploads that have completed since the last
       // send. Referenced, not called, exactly like the clock above, and for a sharper reason: this take is
       // DESTRUCTIVE (the hook clears its pending set in the same act), so calling it here would consume the
       // operator's attachments on a submit `submitMessage` is about to refuse. That helper reads it once,
-      // below both of its `false` returns, which is what makes "cleared by a send that actually happened,
-      // and only by one" a property of the code rather than of this line.
+      // below its early guards. A bridge exception rolls the take back for resubmission.
       //
       // Both of `sendText`'s callers reach this — the composer's own submit and ComposerActionsMenu's
       // picked command — and that is correct: a slash command is a message that was sent, so it records
       // and consumes what is pending exactly as a typed one does.
       takeAttachments: attach.takePendingAttachments
     })
-    // #602: `sent === true` is exactly "a message entered the timeline", which is why the notify sits HERE
-    // and not at the top of this function or just past the `!canSend` gate. Both of submitMessage's `false`
-    // returns (composerSend.ts:56-57 — whitespace-only, null conversation id) are above its echo dispatch,
-    // and the gate above returns before submitMessage is called at all, so a submit that sends nothing never
-    // reaches this line: it leaves the scroll position as the operator's own scrolling set it and leaves NO
-    // armed pin behind, so the next unrelated arriving item still cannot yank a scrolled-up operator. A send
-    // whose bridge call throws is caught (composerSend.ts:69-72), still posts the echo and still returns
-    // `true`, so it follows — correctly, because the timeline did move.
+    // Follow the thread only when the bridge accepts the submission. A bridge exception returns false:
+    // its echo remains Not sent, the draft and pending attachments survive, and no follow pin is armed.
     if (sent) onMessageSent()
     return sent
   }
@@ -4124,13 +4182,6 @@ function Composer({
     attach.pasteImage()
   }
 
-  useThreadLayoutEffect(() => {
-    const end = acceptedSuggestionEnd.current
-    if (end === null) return
-    acceptedSuggestionEnd.current = null
-    typeAhead.inputRef.current?.setSelectionRange(end, end)
-  }, [text, typeAhead.inputRef])
-
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
     // #940: the open type-ahead sees the keystroke FIRST, and reports whether it consumed it. That one
     // line is the whole of "Enter completes, it does not send": on a consumed key the composer returns
@@ -4138,10 +4189,12 @@ function Composer({
     // meets a closed panel, is not consumed, and sends exactly as a typed message does.
     if (typeAhead.handleKeyDown(event)) return
     if (event.key === 'Tab' && !event.shiftKey && !event.ctrlKey && !event.altKey &&
-        !event.metaKey && !event.nativeEvent.isComposing && text === '' && suggestion !== null) {
+        !event.metaKey && !event.nativeEvent.isComposing && shownSuggestion !== null) {
+      // Tab sends the visible suggestion through the one send path Enter uses, then spends it.
       event.preventDefault()
-      acceptedSuggestionEnd.current = suggestion.length
-      setText(suggestion)
+      if (sendText(shownSuggestion) && serverId !== null && conversationId !== null) {
+        spendSuggestion(serverId, conversationId)
+      }
       return
     }
     // ONE record, TWO questions (#1072). `isComposing` is on the DOM event, not React's synthetic one, so
@@ -4217,8 +4270,8 @@ function Composer({
             onto a button that then unmounts, so the completion hands focus back to the box. */}
         <textarea
           ref={typeAhead.inputRef}
-          className="composer__input"
-          placeholder={text === '' && suggestion !== null ? suggestion : 'Message…'}
+          className={shownSuggestion === null ? 'composer__input' : 'composer__input composer__input--suggestion'}
+          placeholder={shownSuggestion ?? 'Message…'}
           rows={1}
           value={text}
           onChange={(e) => setText(e.target.value)}

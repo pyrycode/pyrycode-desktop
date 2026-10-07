@@ -25,21 +25,25 @@ either source held verbatim:
   earlier, unlisted start, since claude's roster line is its own statement of the background set and a
   row it never lists is not in it.
 - A `backgroundTaskStarted` frame **upgrades a task its conversation's roster has already listed**,
-  carrying in a `toolCallId` and a fuller, higher-cap `description` that no roster row can report. A
+  carrying authoritative metadata and a fuller, higher-cap `description`. A
   start for a task no roster has listed does not reach either surface — since #1563 it waits, unseen, in
   a separate hold (`unlistedStarts`, see [Internals](background-task-roster-store-internals.md)) until a
-  roster either lists it or speaks for the conversation without it. Once a task is started-sourced, a later roster naming the same `taskId` leaves
-  its held record untouched rather than overwriting it — the daemon's own roster-cap comment states the
+  roster either lists it or speaks for the conversation without it. Once a task is started-sourced, a later roster naming the same `taskId` keeps
+  its description, type and cut report — the daemon's own roster-cap comment states the
   roster label is the same text under a tighter cap and that the authoritative full copy already crossed
   the wire on the started frame, so refreshing from the row would throw the better copy away permanently
-  (the started frame never repeats). A task the app only ever learns about from a roster has
-  `toolCallId: null` — never a placeholder, since `''` is a real, colliding `tool_call_id` value the wire
-  can send.
+  (a later start is not guaranteed). Started provenance is recorded even when that
+  frame's id is empty. Placement is independent: prefer the latest nonempty roster
+  `tool_call_id`, falling back to a known nonempty started id. Without a start,
+  description/type/cut reports refresh on every roster, even when it supplies an id;
+  treating id availability as provenance would freeze stale roster metadata.
 - A `backgroundTaskUpdated` frame **records the latest patch onto an already-held task** — never opens
   one. `patch` (opaque text, held verbatim) and its own cut report are latest-wins, one nested record
   ([#577](../codebase/577.md)): `null` means no update has ever matched the task, `{ patch: '', … }` is a
   recorded value meaning "claude sent no change", and the two never substitute for each other. An update
-  naming an unknown conversation or an unknown `taskId` is silently ignored. Unlike the started frame's
+  naming an unknown conversation or an unknown `taskId` leaves display records unchanged;
+  existing [Agent timeline evidence](background-task-roster-store-internals.md#retained-agent-timeline-evidence)
+  can still capture its first terminal position after roster removal. Unlike the started frame's
   fields, a patch **survives** a roster replacement of its task regardless of provenance — no roster row
   can report a patch, so a later roster's row still refreshes the task's label/type/own cut report while
   leaving the recorded patch alone. Since #1560 the same frame also carries `status` (an open string,
@@ -58,8 +62,9 @@ either source held verbatim:
   never on arrival order, checking the listed task first and then the unlisted hold. Latest wins, one
   record per task (`HeldBackgroundTask.progress`), and it rides across a later roster or started rebuild
   the same way `latestUpdate`/`status`/`summary` already do, since neither a roster row nor a started
-  frame can report it. A report for a task held in neither place is silently dropped, the same
-  `Object.is`-provable miss `setUpdatedTask` already has: a report never opens a task. It is **not** a
+  frame can report it. A report for a task held in neither place is silently dropped,
+  a same-state no-op as for an update with no matching display or timeline evidence: a report
+  never opens a task. It is **not** a
   finish signal — it never touches `finishedTasks` or a roster's `droppedTasks` — and its three counters
   (`totalTokens`, `toolUses`, `durationMs`) are claude's cumulative readings, held exactly as received,
   never summed or diffed and not guaranteed monotonic; the frame is rate-bounded, so a gap between reports
@@ -71,6 +76,16 @@ either source held verbatim:
 Deliberately **not** a [session store](session-store.md) or [timeline store](conversation-timeline-store.md)
 facet: like `queue_state`, this family is daemon *state* (SSOT pyrycode #720), not part of claude's turn
 stream, so it gets its own store rather than folding into `reduceTimeline`.
+
+For the [Agent timeline](conversation-shell-tool-row-header-groups.md#started-background-agents),
+a roster-confirmed exact `local_agent` with a usable placement id supplies one
+provisional bottom row immediately, without a start or loaded launch. Retained
+evidence order preserves already-received starts; newly discovered roster agents
+append in roster order. Refreshes and later starts never reinsert established entries.
+The first exact terminal update holds receipt position even after membership removal
+or inactive-chat delivery. Genuine qualification comes from roster types, independently
+of started-sourced display types; neither a foreground start nor an empty id alone
+creates a provisional row. The evidence's lifetime is separate from the panel and pill.
 
 The same store owns renderer-only `pendingStops`, keyed by conversation and then task id, for the
 [separate Stop task button](conversation-shell-background-tasks.md#stop-task). Claiming a wait disables
@@ -96,8 +111,9 @@ the burst's order — the daemon walks its registry in insertion order, not a co
 reported one is simply *absent* from the burst, stays dropped, and reads `null` — "nothing has been
 reported", never "nothing is alive" ("No background-task report yet"). The `backgroundTaskStarted`/
 `backgroundTaskUpdated` scalars are **not** in the reconcile set, so a task the app had upgraded to
-started-sourced comes back roster-sourced after a reconnect, without its `toolCallId` or fuller label — a
-real narrowing, pinned by a store test rather than merely stated. What makes the drop safe rather than
+started-sourced comes back roster-sourced after a reconnect, without its started provenance
+or fuller label. The reconciled row can now supply its own optional launch id; old rows
+without it still have no placement hint. What makes the drop safe rather than
 destructive is that the clear and the reconciled burst ride one listener in arrival order — proved
 end-to-end through the real transport, not merely argued from the two call sites' code, by
 `e2e/background-task-reconnect.spec.ts`.

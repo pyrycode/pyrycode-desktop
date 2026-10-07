@@ -800,7 +800,11 @@ app.whenReady().then(() => {
       // stay the per-case one-liners they were.
       case 'sendMessage': {
         const connection = router.route(command.payload.conversation_id)
-        if (connection === null) messageLifecycle.drop(command.payload.message_id, command.payload.conversation_id, 'route-refused')
+        if (connection === null) {
+          messageLifecycle.drop(command.payload.message_id, command.payload.conversation_id, 'route-refused')
+          emitDaemonEvent(bindServerOrigin(live.sink, command.serverId ?? null), { type: 'messageDelivery', messageId: command.payload.message_id,
+            conversationId: command.payload.conversation_id, status: 'not-sent' })
+        }
         else connection.send(command.payload)
         return
       }

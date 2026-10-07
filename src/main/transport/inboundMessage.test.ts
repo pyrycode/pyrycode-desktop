@@ -4803,7 +4803,7 @@ describe('parseInboundMessage — background_task_started recognition (#564, add
   it('narrows a full frame into { kind: background-task-started } carrying all six fields', () => {
     // Every fixture field is distinct and non-empty (AC1), so a swap or a drop fails this assertion.
     expect(parseInboundMessage(encodeBackgroundTaskStarted(BACKGROUND_TASK_STARTED))).toEqual({
-      kind: 'background-task-started',
+      kind: 'background-task-started', ts: FIXED_TS,
       backgroundTaskStarted: BACKGROUND_TASK_STARTED
     })
   })
@@ -4811,7 +4811,7 @@ describe('parseInboundMessage — background_task_started recognition (#564, add
   it('preserves truncated_fields null as "nothing was cut", never collapsing it to [] (AC2)', () => {
     const nothingCut = { ...BACKGROUND_TASK_STARTED, truncated_fields: null }
     const decoded = parseInboundMessage(encodeBackgroundTaskStarted(nothingCut))
-    expect(decoded).toEqual({ kind: 'background-task-started', backgroundTaskStarted: nothingCut })
+    expect(decoded).toEqual({ kind: 'background-task-started', ts: FIXED_TS, backgroundTaskStarted: nothingCut })
     // Pinned explicitly: null is a VALUE distinct from the empty list, never a truthiness question.
     expect(
       (decoded as { backgroundTaskStarted: { truncated_fields: unknown } }).backgroundTaskStarted
@@ -4822,7 +4822,7 @@ describe('parseInboundMessage — background_task_started recognition (#564, add
   it('decodes an EMPTY truncated_fields list — valid, and distinct from null (AC2)', () => {
     const emptyList = { ...BACKGROUND_TASK_STARTED, truncated_fields: [] }
     const decoded = parseInboundMessage(encodeBackgroundTaskStarted(emptyList))
-    expect(decoded).toEqual({ kind: 'background-task-started', backgroundTaskStarted: emptyList })
+    expect(decoded).toEqual({ kind: 'background-task-started', ts: FIXED_TS, backgroundTaskStarted: emptyList })
     expect(
       (decoded as { backgroundTaskStarted: { truncated_fields: unknown } }).backgroundTaskStarted
         .truncated_fields
@@ -4832,7 +4832,7 @@ describe('parseInboundMessage — background_task_started recognition (#564, add
   it('round-trips a multi-element truncated_fields list in wire order', () => {
     const twoCut = { ...BACKGROUND_TASK_STARTED, truncated_fields: ['description', 'task_type'] }
     expect(parseInboundMessage(encodeBackgroundTaskStarted(twoCut))).toEqual({
-      kind: 'background-task-started',
+      kind: 'background-task-started', ts: FIXED_TS,
       backgroundTaskStarted: twoCut
     })
   })
@@ -4840,7 +4840,7 @@ describe('parseInboundMessage — background_task_started recognition (#564, add
   it('decodes an empty-string task_type — the checks are on the TYPE, never truthiness', () => {
     const emptyType = { ...BACKGROUND_TASK_STARTED, task_type: '' }
     expect(parseInboundMessage(encodeBackgroundTaskStarted(emptyType))).toEqual({
-      kind: 'background-task-started',
+      kind: 'background-task-started', ts: FIXED_TS,
       backgroundTaskStarted: emptyType
     })
   })
@@ -4848,7 +4848,7 @@ describe('parseInboundMessage — background_task_started recognition (#564, add
   it('does NOT narrow task_type to a closed set — an unobserved kind decodes (no client-side enum)', () => {
     const otherKind = { ...BACKGROUND_TASK_STARTED, task_type: 'some_future_kind' }
     expect(parseInboundMessage(encodeBackgroundTaskStarted(otherKind))).toEqual({
-      kind: 'background-task-started',
+      kind: 'background-task-started', ts: FIXED_TS,
       backgroundTaskStarted: otherKind
     })
   })
@@ -4857,7 +4857,7 @@ describe('parseInboundMessage — background_task_started recognition (#564, add
     // `turn_id` is the pointed extra: this frame must never have one, and it must not ride through.
     const withExtras = { ...BACKGROUND_TASK_STARTED, turn_id: 'turn-1', extra: 'ignore-me' }
     expect(parseInboundMessage(encodeBackgroundTaskStarted(withExtras))).toEqual({
-      kind: 'background-task-started',
+      kind: 'background-task-started', ts: FIXED_TS,
       backgroundTaskStarted: BACKGROUND_TASK_STARTED
     })
   })
@@ -4989,7 +4989,7 @@ describe('parseInboundMessage — background_task_updated recognition (#565, add
   it('narrows a full frame into { kind: background-task-updated } carrying all six fields (AC1)', () => {
     // Every fixture field is distinct and non-empty, so a swap or a drop fails this assertion.
     expect(parseInboundMessage(encodeBackgroundTaskUpdated(BACKGROUND_TASK_UPDATED))).toEqual({
-      kind: 'background-task-updated',
+      kind: 'background-task-updated', ts: FIXED_TS,
       backgroundTaskUpdated: BACKGROUND_TASK_UPDATED
     })
   })
@@ -5012,7 +5012,7 @@ describe('parseInboundMessage — background_task_updated recognition (#565, add
     // silently break a valid frame.
     const noChange = { ...BACKGROUND_TASK_UPDATED, patch: '' }
     const decoded = parseInboundMessage(encodeBackgroundTaskUpdated(noChange))
-    expect(decoded).toEqual({ kind: 'background-task-updated', backgroundTaskUpdated: noChange })
+    expect(decoded).toEqual({ kind: 'background-task-updated', ts: FIXED_TS, backgroundTaskUpdated: noChange })
     expect(
       (decoded as { backgroundTaskUpdated: { patch: unknown } }).backgroundTaskUpdated.patch
     ).toBe('')
@@ -5021,7 +5021,7 @@ describe('parseInboundMessage — background_task_updated recognition (#565, add
   it('preserves truncated_fields null as "nothing was cut", never collapsing it to [] (AC3)', () => {
     const nothingCut = { ...BACKGROUND_TASK_UPDATED, truncated_fields: null }
     const decoded = parseInboundMessage(encodeBackgroundTaskUpdated(nothingCut))
-    expect(decoded).toEqual({ kind: 'background-task-updated', backgroundTaskUpdated: nothingCut })
+    expect(decoded).toEqual({ kind: 'background-task-updated', ts: FIXED_TS, backgroundTaskUpdated: nothingCut })
     // Pinned explicitly: null is a VALUE distinct from the empty list, never a truthiness question.
     expect(
       (decoded as { backgroundTaskUpdated: { truncated_fields: unknown } }).backgroundTaskUpdated
@@ -5032,7 +5032,7 @@ describe('parseInboundMessage — background_task_updated recognition (#565, add
   it('decodes an EMPTY truncated_fields list — valid, and distinct from null (AC3)', () => {
     const emptyList = { ...BACKGROUND_TASK_UPDATED, truncated_fields: [] }
     const decoded = parseInboundMessage(encodeBackgroundTaskUpdated(emptyList))
-    expect(decoded).toEqual({ kind: 'background-task-updated', backgroundTaskUpdated: emptyList })
+    expect(decoded).toEqual({ kind: 'background-task-updated', ts: FIXED_TS, backgroundTaskUpdated: emptyList })
     expect(
       (decoded as { backgroundTaskUpdated: { truncated_fields: unknown } }).backgroundTaskUpdated
         .truncated_fields
@@ -5047,7 +5047,7 @@ describe('parseInboundMessage — background_task_updated recognition (#565, add
       truncated_fields: ['task_id', 'patch', 'status', 'summary']
     }
     expect(parseInboundMessage(encodeBackgroundTaskUpdated(bothCut))).toEqual({
-      kind: 'background-task-updated',
+      kind: 'background-task-updated', ts: FIXED_TS,
       backgroundTaskUpdated: bothCut
     })
   })
@@ -5055,7 +5055,7 @@ describe('parseInboundMessage — background_task_updated recognition (#565, add
   it('does NOT narrow the truncated_fields elements to a closed set (no client-side allowlist)', () => {
     const futureName = { ...BACKGROUND_TASK_UPDATED, truncated_fields: ['some_future_field'] }
     expect(parseInboundMessage(encodeBackgroundTaskUpdated(futureName))).toEqual({
-      kind: 'background-task-updated',
+      kind: 'background-task-updated', ts: FIXED_TS,
       backgroundTaskUpdated: futureName
     })
   })
@@ -5071,7 +5071,7 @@ describe('parseInboundMessage — background_task_updated recognition (#565, add
       turn_id: 'turn-1'
     }
     expect(parseInboundMessage(encodeBackgroundTaskUpdated(withExtras))).toEqual({
-      kind: 'background-task-updated',
+      kind: 'background-task-updated', ts: FIXED_TS,
       backgroundTaskUpdated: BACKGROUND_TASK_UPDATED
     })
   })
@@ -5279,10 +5279,8 @@ describe('parseInboundMessage — background_task_roster recognition (#566, addi
     })
   })
 
-  it('drops unknown server keys at the ROW level, keeping exactly the four known fields (AC4)', () => {
-    // The pointed extras are the SCALAR siblings' fields, which a roster row must never have and must
-    // not ride through — the regression test for a row narrower wrongly cloned from
-    // parseBackgroundTaskStartedPayload.
+  it('keeps the additive roster tool id while dropping unknown row keys', () => {
+    // The daemon now supplies the optional id; scalar patches still do not ride through.
     const withRowExtras = {
       ...BACKGROUND_TASK_ROSTER,
       tasks: [
@@ -5297,7 +5295,7 @@ describe('parseInboundMessage — background_task_roster recognition (#566, addi
       kind: 'background-task-roster',
       backgroundTaskRoster: {
         ...BACKGROUND_TASK_ROSTER,
-        tasks: [BACKGROUND_TASK_ROSTER.tasks[0]]
+        tasks: [{ ...BACKGROUND_TASK_ROSTER.tasks[0], tool_call_id: 'toolu_01XYZ' }]
       }
     })
   })
@@ -5305,6 +5303,18 @@ describe('parseInboundMessage — background_task_roster recognition (#566, addi
   it('still returns null for a well-formed envelope of another unmodeled type (no widening)', () => {
     const bytes = encodeEnvelope({ id: 1, type: 'ack', ts: FIXED_TS, payload: {} })
     expect(parseInboundMessage(bytes)).toBeNull()
+  })
+})
+
+describe('connect roster tool-call id', () => {
+  it.each(['', ' id ', '__proto__'])('preserves exact string %j', tool_call_id => {
+    const result = parseInboundMessage(encodeBackgroundTaskRoster({ ...BACKGROUND_TASK_ROSTER,
+      tasks: [{ ...BACKGROUND_TASK_ROSTER.tasks[0], tool_call_id }] }))
+    expect(result).toMatchObject({ backgroundTaskRoster: { tasks: [{ tool_call_id }] } })
+  })
+  it.each([null, 42, false, {}, []])('rejects a supplied non-string %j', tool_call_id => {
+    expect(() => parseInboundMessage(encodeBackgroundTaskRoster({ ...BACKGROUND_TASK_ROSTER,
+      tasks: [{ ...BACKGROUND_TASK_ROSTER.tasks[0], tool_call_id }] }))).toThrow(WireDecodeError)
   })
 })
 
@@ -10468,6 +10478,7 @@ const DECODED_ENTRY: DecodedHistoryEntry = {
 
 /** What HISTORY_PAGE decodes to (#1227) — `cursor`/`at_start` still exactly as served. */
 const DECODED_PAGE: DecodedHistoryPage = {
+  servedIds: [HISTORY_ENTRY.id],
   entries: [DECODED_ENTRY],
   cursor: HISTORY_PAGE.cursor,
   at_start: false
@@ -10515,7 +10526,7 @@ describe('parseInboundMessage — history_page recognition (#1222, additive)', (
     const terminal: HistoryPagePayload = { entries: [], cursor: '', at_start: true }
     expect(parseInboundMessage(encodeHistoryPage(terminal))).toEqual({
       kind: 'history-page',
-      historyPage: { entries: [], cursor: '', at_start: true }
+      historyPage: { entries: [], servedIds: [], cursor: '', at_start: true }
     })
   })
 
@@ -10525,7 +10536,7 @@ describe('parseInboundMessage — history_page recognition (#1222, additive)', (
     const terminal: HistoryPagePayload = { entries: [HISTORY_ENTRY], cursor: '', at_start: true }
     expect(parseInboundMessage(encodeHistoryPage(terminal))).toEqual({
       kind: 'history-page',
-      historyPage: { entries: [DECODED_ENTRY], cursor: '', at_start: true }
+      historyPage: { entries: [DECODED_ENTRY], servedIds: [412], cursor: '', at_start: true }
     })
   })
 
@@ -10542,7 +10553,7 @@ describe('parseInboundMessage — history_page recognition (#1222, additive)', (
     }
     expect(parseInboundMessage(encodeHistoryPage(exotic))).toEqual({
       kind: 'history-page',
-      historyPage: { entries: [], cursor: 'c', at_start: false }
+      historyPage: { entries: [], servedIds: [412], cursor: 'c', at_start: false }
     })
   })
 
@@ -10560,7 +10571,7 @@ describe('parseInboundMessage — history_page recognition (#1222, additive)', (
     }
     expect(parseInboundMessage(encodeHistoryPage(nested))).toEqual({
       kind: 'history-page',
-      historyPage: { entries: [], cursor: 'c', at_start: false }
+      historyPage: { entries: [], servedIds: [412, 411], cursor: 'c', at_start: false }
     })
   })
 
@@ -10816,8 +10827,6 @@ describe('parseInboundMessage — history entry payload decode (#1227)', () => {
   // joined them at #1312, `rate_limited` at #1318, `context_usage` at #1454, `resetting` at #1514,
   // `mcp_status` at #1489 and `attachment_offered` at #1619, each given a live-lane parser and deliberately no arm here; the last is a type it has never seen.
   it.each([
-    'background_task_started',
-    'background_task_updated',
     'background_task_roster',
     'background_task_progress',
     'model_announced',
@@ -10998,7 +11007,7 @@ describe('parseInboundMessage — history entry payload decode (#1227)', () => {
     }
     expect(parseInboundMessage(encodeHistoryPage(page))).toEqual({
       kind: 'history-page',
-      historyPage: { entries: [], cursor: 'still-usable', at_start: false }
+      historyPage: { entries: [], servedIds: [1, 1], cursor: 'still-usable', at_start: false }
     })
   })
 
@@ -12152,5 +12161,50 @@ describe('received daemon read IDs', () => {
     const parsed = parseInboundMessage(encodeEnvelope({ id: 1, type: 'conversation_updated', ts: FIXED_TS,
       in_reply_to, payload: { ...CONV_NAMED, read_up_to: 0 } }))
     expect(parsed).toMatchObject({ kind: 'conversation-updated', conversationUpdated: { read_up_to: 0 } })
+  })
+})
+
+
+describe('history background lifecycle placement', () => {
+  it('decodes only started placement and updated status, with live timestamps retained', () => {
+    const [started, updated] = decodedEntries([
+      historyEntry('background_task_started', BACKGROUND_TASK_STARTED),
+      historyEntry('background_task_updated', BACKGROUND_TASK_UPDATED_TERMINAL)
+    ])
+    expect(started.event).toEqual({ type: 'backgroundTaskStarted', taskId: BACKGROUND_TASK_STARTED.task_id,
+      toolCallId: BACKGROUND_TASK_STARTED.tool_call_id, taskType: BACKGROUND_TASK_STARTED.task_type,
+      description: BACKGROUND_TASK_STARTED.description })
+    expect(updated.event).toEqual({ type: 'backgroundTaskUpdated', taskId: BACKGROUND_TASK_UPDATED_TERMINAL.task_id, status: 'completed' })
+    expect(JSON.stringify([started, updated])).not.toContain('patch')
+    expect(JSON.stringify([started, updated])).not.toContain('summary')
+    expect(parseInboundMessage(encodeBackgroundTaskStarted(BACKGROUND_TASK_STARTED))).toMatchObject({ ts: FIXED_TS })
+    expect(parseInboundMessage(encodeBackgroundTaskUpdated(BACKGROUND_TASK_UPDATED))).toMatchObject({ ts: FIXED_TS })
+  })
+
+  it.each([
+    ['background_task_started', { ...BACKGROUND_TASK_STARTED, tool_call_id: 7 }],
+    ['background_task_started', { ...BACKGROUND_TASK_STARTED, task_id: null }],
+    ['background_task_updated', { ...BACKGROUND_TASK_UPDATED, status: false }],
+    ['background_task_updated', { ...BACKGROUND_TASK_UPDATED, patch: null }]
+  ])('skips malformed %s without losing a valid sibling', (type, payload) => {
+    expect(decodedEntries([historyEntry(type, payload), historyEntry('background_task_updated', BACKGROUND_TASK_UPDATED)]))
+      .toHaveLength(1)
+  })
+})
+
+describe('complete served history evidence', () => {
+  it('retains valid envelope IDs for unsupported and malformed payloads, including zero and safe maximum', () => {
+    const result = parseInboundMessage(encodeHistoryPage({ entries: [
+      historyEntry('future', {}, 0), historyEntry('assistant_delta', {}, Number.MAX_SAFE_INTEGER)
+    ], cursor: 'opaque', at_start: false }))
+    expect(result).toMatchObject({ kind: 'history-page', historyPage: {
+      entries: [], servedIds: [0, Number.MAX_SAFE_INTEGER], cursor: 'opaque', at_start: false
+    } })
+    expect(parseInboundMessage(encodeHistoryPage({ entries: [], cursor: '', at_start: true })))
+      .toMatchObject({ historyPage: { servedIds: [] } })
+  })
+  it.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1])('rejects invalid durable ID %s before admitting any entry', id => {
+    expect(() => parseInboundMessage(encodeHistoryPage({ ...HISTORY_PAGE,
+      entries: [HISTORY_ENTRY, historyEntry('future', {}, id)] }))).toThrow()
   })
 })

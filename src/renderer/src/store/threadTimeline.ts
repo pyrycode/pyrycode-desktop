@@ -206,6 +206,7 @@ export type ThreadItem =
  * snake_case wire events into these. Field names mirror the wire so that bridge is a thin rename.
  */
 export type ThreadEvent =
+  | { type: 'messageDelivery'; messageId: string; serverId?: string | null; status: 'waiting' | 'not-sent' | 'written' }
   | { type: 'modelRefusal'; refusal: ModelRefusalEvent; live: boolean }
   | { type: 'banner'; level: string; text: string; stopsTurn: boolean; truncated: boolean }
   | { type: 'refusalWriteStarted'; offer: NonNullable<TimelineState['refusalOffer']>; changeId: string }
@@ -419,6 +420,9 @@ export interface LocalSendPending {
 export interface TimelineState {
   /** Client-owned identities; keys survive receipt settlement and history prepends. */
   rowKeys?: readonly number[]
+  /** Receipt placement overrides keyed by stable identity, never saved. */
+  rowArrivalOrder?: ReadonlyMap<number, number>
+  /** Shared monotonic allocator for row identities and receipt placement. */
   nextRowKey?: number
   receivedQueueIds?: readonly number[]
   localEchoes?: readonly {
@@ -430,6 +434,8 @@ export interface TimelineState {
     afterKey?: number
     released?: true
     settled?: true
+    held?: true
+    delivery?: 'waiting' | 'not-sent'
   }[]
   /** Transient daemon failure; code is only compared to renderer-owned copy constants. */
   sessionError?: { code: string }
@@ -604,6 +610,16 @@ function fillResult(
 export function reduceTimeline(state: TimelineState, event: ThreadEvent): TimelineState {
   const keys = state.rowKeys ?? state.items.map((_, index) => index)
   const echoes = state.localEchoes ?? []
+  if (event.type === 'messageDelivery') {
+    const own = echoes.find(e => e.messageId === event.messageId && !e.settled)
+    if (own === undefined) return state
+    const index = keys.indexOf(own.rowKey)
+    const item = state.items[index]
+    if (item?.kind !== 'userText' || own.queuedMsgId !== undefined) return state
+    const delivery = event.status === 'written' ? undefined : event.status
+    return { ...state, localSendPending: event.status === 'written' ? state.localSendPending : null,
+      localEchoes: echoes.map(e => e === own ? { ...e, delivery, held: event.status === 'waiting' ? true : e.held } : e) }
+  }
   if (event.type === 'userText' && event.received === true) {
     if (event.queuedMsgId !== undefined && state.receivedQueueIds?.includes(event.queuedMsgId)) return state
     const own = event.queuedMsgId === undefined
@@ -613,8 +629,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
           !!event.messageId && e.messageId === event.messageId)
     if (own !== undefined) {
       if (own.settled) return state
-      if (own.queuedMsgId === undefined && event.queuedMsgId === undefined) {
-        return { ...state, localEchoes: echoes.map(e => e === own ? { ...e, settled: true } : e) }
+      if (own.queuedMsgId === undefined && event.queuedMsgId === undefined && !own.held) {
+        return { ...state, localEchoes: echoes.map(e => e === own ? { ...e, settled: true, delivery: undefined } : e) }
       }
       const index = keys.indexOf(own.rowKey)
       const item = state.items[index]
@@ -631,8 +647,11 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       } else if (!own.waiting && event.sentNow !== true) insertion = index
       items.splice(insertion, 0, item)
       rowKeys.splice(insertion, 0, own.rowKey)
-      return { ...state, items, rowKeys, localEchoes: echoes.map(e => e === own ? {
-        ...e, queuedMsgId: e.queuedMsgId ?? event.queuedMsgId, settled: true
+      const arrival = state.nextRowKey ?? state.items.length
+      const rowArrivalOrder = new Map(state.rowArrivalOrder)
+      rowArrivalOrder.set(own.rowKey, arrival)
+      return { ...state, items, rowKeys, rowArrivalOrder, nextRowKey: arrival + 1, localEchoes: echoes.map(e => e === own ? {
+        ...e, queuedMsgId: e.queuedMsgId ?? event.queuedMsgId, settled: true, delivery: undefined
       } : own.waiting && own.afterKey !== undefined && e.waiting && !e.settled && !e.released &&
           e.afterKey === own.afterKey ? { ...e, afterKey: undefined, waitTurnId: undefined } : e) }
     }
@@ -642,8 +661,10 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       (event.queuedMsgId === undefined || e.queuedMsgId === event.queuedMsgId))
     if (own === undefined) return state
     const index = keys.indexOf(own.rowKey)
+    const rowArrivalOrder = state.rowArrivalOrder === undefined ? undefined : new Map(state.rowArrivalOrder)
+    rowArrivalOrder?.delete(own.rowKey)
     return { ...state, items: state.items.filter((_, i) => i !== index),
-      rowKeys: keys.filter((_, i) => i !== index), localEchoes: echoes.filter(e => e !== own) }
+      rowKeys: keys.filter((_, i) => i !== index), rowArrivalOrder, localEchoes: echoes.filter(e => e !== own) }
   }
   // Reject a held receipt before content or chrome sidecars can change anything.
   if (event.type === 'userText' && event.received === true &&
@@ -673,6 +694,7 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         ? { ...e, afterKey } : e)
     }
     next = { ...next, rowKeys, nextRowKey, localEchoes }
+    if (state.rowArrivalOrder !== undefined) next = { ...next, rowArrivalOrder: state.rowArrivalOrder }
     const receivedQueueIds = event.type === 'userText' && event.received === true && event.queuedMsgId !== undefined
       ? [...(state.receivedQueueIds ?? []), event.queuedMsgId] : state.receivedQueueIds
     if (receivedQueueIds !== undefined) next = { ...next, receivedQueueIds }
@@ -742,6 +764,7 @@ function reduceRefusalOffer(
 
 function reduceTimelineContent(state: TimelineState, event: ThreadEvent): TimelineState {
   switch (event.type) {
+    case 'messageDelivery': return state
     case 'sessionError':
       // A daemon failure ends stale turn feedback without changing content or queue state.
       return { ...state, phase: 'idle', localSendPending: null, stalled: false,
@@ -1314,7 +1337,7 @@ export function markLocalSendQueued(state: TimelineState, queued: readonly Queue
     if (entry) claimed.add(entry.queued_msg_id)
     if (e.queuedMsgId === undefined && entry && !e.settled) {
       changed = true
-      return { ...e, queuedMsgId: entry.queued_msg_id }
+      return { ...e, queuedMsgId: entry.queued_msg_id, delivery: undefined }
     }
     if (e.queuedMsgId !== undefined && !entry && !e.released) {
       changed = true

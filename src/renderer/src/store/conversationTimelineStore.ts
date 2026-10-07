@@ -75,7 +75,7 @@
 // `defaultWorkspaceStore` and `pushNotificationPrefStore` do use `localStorage`, so the pattern is in
 // the repo to copy — but that would write conversation CONTENT to renderer-side web storage, surviving
 // the pairing boundary #757 exists to enforce.
-import { parseChatHistorySnapshot, type ChatHistorySnapshot } from '@shared/chatHistory'
+import { MAX_CHAT_HISTORY_ITEMS, parseChatHistorySnapshot, type ChatHistorySnapshot } from '@shared/chatHistory'
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
 import type { HistoryRequestFailure } from '@shared/ipc/events'
@@ -158,6 +158,7 @@ export interface ConversationSlice {
   history: HistoryRequestState | null
   /** Last successful page coverage, independent of transient request status. */
   coverage?: SavedTimeline['coverage']
+  served?: SavedTimeline['served']
   /**
    * How many rows a served history page has ever PREPENDED onto `timeline.items` for this conversation
    * (#1260) — a monotonically rising count, never reset while the slice lives.
@@ -325,9 +326,10 @@ export type ConversationTimelineStore = ConversationTimelineState & {
   dispatchLocalEcho: (serverId: string, conversationId: string, event: Extract<ThreadEvent, { type: 'userText' }>) => void
   dispatchFor: (conversationId: string, event: ThreadEvent, joinKey?: string) => void
   markLocalSendQueued: (conversationId: string, queued: readonly QueuedItem[]) => void
-  prependHistoryFor: (conversationId: string, items: readonly ThreadItem[]) => void
+  prependHistoryFor: (conversationId: string, items: readonly ThreadItem[], retainBoundary?: boolean) => readonly number[]
+  recordPlacementJoin: (conversationId: string, joinKey: string | undefined) => void
   markHistoryRequested: (conversationId: string, serverId?: string) => void
-  recordHistoryPage: (conversationId: string, cursor: string, atStart: boolean) => void
+  recordHistoryPage: (conversationId: string, cursor: string, atStart: boolean, servedIds?: readonly number[]) => void
   recordHistoryFailure: (
     conversationId: string,
     reason: HistoryRequestFailure,
@@ -604,10 +606,10 @@ export function createConversationTimelineStore(
               fail()
               return
             }
-            settle(current => ({ ...emptySlice, serverId, localRead: 'loaded', coverage: snapshot.coverage, restored: { serverId, coverage: snapshot.coverage },
+            settle(current => ({ ...emptySlice, serverId, localRead: 'loaded', coverage: snapshot.coverage, served: snapshot.served, restored: { serverId, coverage: snapshot.coverage },
               timeline: { ...current.timeline, items: snapshot.items,
-                rowKeys: snapshot.items.map((_, index) => index - snapshot.prependedRows),
-                nextRowKey: snapshot.items.length - snapshot.prependedRows },
+                rowKeys: snapshot.rowIdentity?.rowKeys ?? snapshot.items.map((_, index) => index - snapshot.prependedRows),
+                nextRowKey: snapshot.rowIdentity?.nextRowKey ?? snapshot.items.length - snapshot.prependedRows },
               prependedRows: snapshot.prependedRows }))
           } catch { fail() }
         },
@@ -633,6 +635,12 @@ export function createConversationTimelineStore(
       }),
     dispatchFor: (conversationId, event, joinKey) =>
       set((s) => {
+        if (event.type === 'messageDelivery') {
+          const slice = s.timelines.get(conversationId)
+          if (slice === undefined || (typeof event.serverId === 'string' && slice.serverId !== event.serverId)) return s
+          const timeline = reduceTimeline(slice.timeline, event)
+          return timeline === slice.timeline ? s : { timelines: new Map(s.timelines).set(conversationId, { ...slice, timeline }) }
+        }
         // This client-owned clear has no receipt host and cannot invalidate a saved-history read.
         if (event.type === 'sessionErrorCleared') {
           const slice = s.timelines.get(conversationId)
@@ -722,42 +730,48 @@ export function createConversationTimelineStore(
     // #1222's correlation settles each request once — and the general answer needs the entry-level join
     // key #1225 owns, so a guard built here would be that join built early and wrong. #1224's walk must
     // not re-apply a page.
-    prependHistoryFor: (conversationId, items) =>
+    recordPlacementJoin: (conversationId, joinKey) => set(s => {
+      if (joinKey === undefined) return s
+      const held = receivedSlice(s.timelines.get(conversationId)) ?? emptySlice
+      const liveKeys = withJoinKey(held.liveKeys, joinKey)
+      if (liveKeys === held.liveKeys) return s
+      const slice = { ...held, liveKeys, serverId: receiptHost() ?? held.serverId }
+      return { timelines: s.timelines.has(conversationId)
+        ? new Map(s.timelines).set(conversationId, slice)
+        : withNewSliceAtHead(s.timelines, conversationId, slice) }
+    }),
+    prependHistoryFor: (conversationId, items, retainBoundary = false) => {
+      let boundaries: readonly number[] = []
       set((s) => {
-        if (items.length === 0) return s
         const held = receivedSlice(s.timelines.get(conversationId))
+        const oldItems = held?.timeline.items ?? []
+        const oldKeys = held?.timeline.rowKeys ?? oldItems.map((_, i) => i)
+        const base = held?.timeline.nextRowKey ?? oldItems.length
+        const fresh = withoutHeldEchoes(items, oldItems)
+        const freshKeys = fresh.map((_, i) => base + (retainBoundary ? 1 : 0) + i)
+        const keysByItem = new Map(fresh.map((item, i) => [item, freshKeys[i]]))
+        boundaries = [...items.map(item => {
+          const key = keysByItem.get(item)
+          if (key !== undefined) return key
+          const echo = oldItems.findIndex(old => old.kind === 'userText' && item.kind === 'userText' && old.messageId === item.messageId)
+          return oldKeys[echo] ?? base
+        }), oldKeys[0] ?? base]
+        if (fresh.length === 0 && !retainBoundary) return s
+        const timeline = { ...(held?.timeline ?? initialTimelineState), items: [...fresh, ...oldItems],
+          rowKeys: [...freshKeys, ...oldKeys], nextRowKey: base + fresh.length + (retainBoundary ? 1 : 0) }
         if (held === undefined) {
-          return {
-            timelines: withNewSliceAtHead(s.timelines, conversationId, {
-              timeline: { ...initialTimelineState, items },
-              serverId: receiptHost() ?? undefined,
-              history: null,
-              // A page drew these rows, the live lane did not, so there is no live key to seed: the
-              // join's whole premise is that a key names something the operator has ALREADY seen.
-              liveKeys: NO_LIVE_KEYS,
-              // A create-at-head prepend lands on nothing, so these rows are the conversation's first
-              // and their keys count from zero exactly as an appended row's would. Counting them here
-              // would offset a list they are the whole of.
-              prependedRows: 0
-            })
-          }
+          if (items.length === 0 && !retainBoundary) return s
+          return { timelines: withNewSliceAtHead(s.timelines, conversationId, {
+            timeline: retainBoundary ? timeline : { ...initialTimelineState, items },
+            serverId: receiptHost() ?? undefined, history: null, liveKeys: NO_LIVE_KEYS,
+            prependedRows: retainBoundary ? fresh.length : 0
+          }) }
         }
-        const fresh = withoutHeldEchoes(items, held.timeline.items)
-        if (fresh.length === 0) return s
-        const next = new Map(s.timelines)
-        next.set(conversationId, {
-          ...held,
-          timeline: { ...held.timeline, items: [...fresh, ...held.timeline.items],
-            rowKeys: [...fresh.map((_, i) => (held.timeline.nextRowKey ?? held.timeline.items.length) + i),
-              ...(held.timeline.rowKeys ?? held.timeline.items.map((_, i) => i))],
-            nextRowKey: (held.timeline.nextRowKey ?? held.timeline.items.length) + fresh.length },
-          // `fresh.length`, NOT `items.length`: rows dropped by `withoutHeldEchoes` never entered the
-          // list, so counting the ask rather than the insertion would shift every drawn row's key by the
-          // number of echoes the page happened to duplicate.
-          prependedRows: held.prependedRows + fresh.length
-        })
-        return { timelines: next }
-      }),
+        return { timelines: new Map(s.timelines).set(conversationId, { ...held, timeline,
+          prependedRows: held.prependedRows + fresh.length }) }
+      })
+      return boundaries
+    },
     // Requests preserve same-host rows and coverage without changing holder order.
     // A different host starts with an empty slice; its cursor cannot come from the old host.
     markHistoryRequested: (conversationId, serverId) =>
@@ -772,8 +786,34 @@ export function createConversationTimelineStore(
         return { timelines }
       }),
     // Only a successful page advances coverage, even when it contains no drawable rows.
-    recordHistoryPage: (conversationId, cursor, atStart) =>
-      set((s) => withHistory(s, conversationId, { status: 'loaded', cursor, atStart })),
+    recordHistoryPage: (conversationId, cursor, atStart, servedIds) =>
+      set(s => {
+        if (servedIds === undefined) return withHistory(s, conversationId, { status: 'loaded', cursor, atStart })
+        const held = receivedSlice(s.timelines.get(conversationId)) ?? emptySlice
+        const pageIds = [...new Set(servedIds)].sort((a, b) => a - b)
+        const receipt = { ids: pageIds, cursor, atStart }
+        // Preserve the latest exact cursor even when an identical older receipt is repeated.
+        const candidates = [...(held.served?.receipts ?? []).filter(r =>
+          r.cursor !== cursor || r.atStart !== atStart || r.ids.length !== pageIds.length ||
+          r.ids.some((id, index) => id !== pageIds[index])), receipt]
+        let totalIds = candidates.reduce((total, r) => total + r.ids.length, 0)
+        let first = 0
+        // Expire whole receipts, including their exclusive coverage, before publishing to the writer.
+        while (candidates.length - first > MAX_CHAT_HISTORY_ITEMS || totalIds > MAX_CHAT_HISTORY_ITEMS) {
+          totalIds -= candidates[first].ids.length
+          first++
+        }
+        const receipts = candidates.slice(first)
+        const ids = [...new Set(receipts.flatMap(r => r.ids))].sort((a, b) => a - b)
+        const highestId = ids[ids.length - 1]
+        const slice: ConversationSlice = { ...held, serverId: receiptHost() ?? held.serverId,
+          served: receipts.length === 0 ? undefined : { ids, receipts, ...(highestId === undefined ? {} : { highestId }) },
+          history: { status: 'loaded', cursor, atStart },
+          coverage: { status: 'received', cursor, atStart }, localRead: undefined }
+        return { timelines: s.timelines.has(conversationId)
+          ? new Map(s.timelines).set(conversationId, slice)
+          : withNewSliceAtHead(s.timelines, conversationId, slice) }
+      }),
     // Settle without retrying; the next qualifying user input decides whether to ask.
     recordHistoryFailure: (conversationId, reason, retryable) =>
       set((s) => withHistory(s, conversationId, { status: 'failed', reason, retryable }, receiptHost() ?? undefined)),

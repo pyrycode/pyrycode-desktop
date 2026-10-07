@@ -1,6 +1,7 @@
 import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { capturePairedApp } from './fixtures/capturePairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
-import type { EnvelopeType } from '../src/shared/wire/types'
+import type { EnvelopeType, SendMessagePayload } from '../src/shared/wire/types'
 
 const ts = '2026-09-11T12:00:00Z'
 const payload = (id: string, parent?: string, name = 'Agent') => ({
@@ -8,6 +9,128 @@ const payload = (id: string, parent?: string, name = 'Agent') => ({
   parent_tool_use_id: parent, name, input_summary: id
 })
 const frame = (type: EnvelopeType, value: unknown) => encodeEnvelope({ id: 1, type, ts, payload: value })
+
+test('finished agents reconstruct across pages, attach late children, navigate and preserve the reader', async ({ launchPairedApp }) => {
+  let request: number | undefined
+  const { app, page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
+    const envelope = decodeEnvelope(bytes)
+    if (envelope.type === 'request_history') { request = envelope.id; return [] }
+    return [seedConversationsFrame()]
+  } })
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const thread = page.locator('.conversation__thread')
+  const marker = page.locator('.agent-start-marker')
+  const row = page.locator('.tool-row:not(.tool-run__row)').filter({
+    has: page.locator('.tool-row__summary', { hasText: /^historical-agent$/ })
+  })
+  const child = page.locator('.tool-row__summary', { hasText: /^historical-child$/ })
+  const user = (id: number) => ({ id, ts: `history-${id}`, type: 'message', payload: {
+    conversation_id: SEEDED_ROW.id, message_id: `history-${id}`, role: 'user', text: `history user ${id}`
+  } })
+  const ask = async () => {
+    request = undefined
+    await thread.focus()
+    await thread.evaluate(element => { element.scrollTop = 0 })
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    await page.keyboard.press('Home')
+    await expect.poll(() => request).toBeDefined()
+  }
+  const reply = (entries: unknown[], cursor: string) => daemon.pushFrame(encodeEnvelope({
+    id: 2, type: 'history_page', ts, in_reply_to: request,
+    payload: { entries, cursor, at_start: cursor === '' }
+  }))
+  await ask()
+  reply([user(50), user(49), {
+    id: 48, ts: 'finish', type: 'background_task_updated', payload: {
+      conversation_id: SEEDED_ROW.id, task_id: 'history-task', status: 'completed', patch: '', summary: '', truncated_fields: null
+    }
+  }, ...Array.from({ length: 28 }, (_, i) => user(47 - i))], 'starts')
+  await expect(thread.locator('.message-row--user')).toHaveCount(30)
+  await ask()
+  reply([{ id: 19, ts: 'start', type: 'background_task_started', payload: {
+    conversation_id: SEEDED_ROW.id, task_id: 'history-task', tool_call_id: 'historical-agent',
+    task_type: 'local_agent', description: 'historical-agent', truncated_fields: null
+  } }], 'launch')
+  await expect(marker).toHaveCount(0)
+  await expect(row).toHaveCount(0)
+  await ask()
+  const anchor = thread.locator('.message-row--user').filter({ hasText: 'history user 20' })
+  const node = await anchor.elementHandle()
+  const before = await anchor.boundingBox()
+  reply([{ id: 18, ts: 'launch', type: 'tool_use', payload: payload('historical-agent') }], 'children')
+  await expect(marker).toContainText('Agent finished')
+  await expect(row).toHaveCount(1)
+  await expect.poll(async () => (await anchor.boundingBox())?.y).toBeCloseTo(before?.y ?? 0, 0)
+  expect(await node?.evaluate(element => element.isConnected)).toBe(true)
+  await marker.click()
+  await expect(row).toBeInViewport()
+  await expect(row.locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'false')
+  const agentNode = await row.locator('..').elementHandle()
+  const after = thread.locator('.message-row--user').filter({ hasText: 'history user 49' })
+  const afterNode = await after.elementHandle()
+  expect(await row.evaluate((a, b) => Boolean(b && a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING), afterNode)).toBe(true)
+  await ask()
+  reply([{ id: 17, ts: 'child', type: 'tool_use', payload: payload('historical-child', 'historical-agent', 'Read') }], '')
+  await expect(child).toBeHidden()
+  await row.locator('.tool-row__chip').click()
+  await expect(child).toBeVisible()
+  expect(await agentNode?.evaluate(element => element.isConnected)).toBe(true)
+  await expect(marker).toHaveCount(1)
+  await expect(row).toHaveCount(1)
+  for (const key of ['Enter', 'Space']) {
+    await marker.focus()
+    await page.keyboard.press(key)
+    await expect(row).toBeInViewport()
+    await expect(row.locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'true')
+    await expect(child).toBeVisible()
+  }
+  for (const width of [1280, 800]) {
+    await page.setViewportSize({ width, height: width === 1280 ? 800 : 600 })
+    await marker.click()
+    await app.evaluate(async ({ BrowserWindow }) => {
+      await BrowserWindow.getAllWindows()[0].capturePage(undefined, { stayHidden: true, stayAwake: true })
+    })
+    await capturePairedApp(app, page, `/tmp/builder-1781/finished-${width}.png`)
+    await thread.evaluate(element => { element.scrollTop = 0 })
+    await capturePairedApp(app, page, `/tmp/builder-1781/marker-${width}.png`)
+  }
+})
+
+test('Go to agent scrolls the block into view without expanding it or its children', async ({ launchPairedApp }) => {
+  const { page, daemon } = await launchPairedApp()
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const thread = page.locator('.conversation__thread')
+  const row = (id: string) => page.locator('.tool-row:not(.tool-run__row)').filter({
+    has: page.locator('.tool-row__summary', { hasText: new RegExp(`^${id}$`) })
+  })
+  const use = (id: string, parent?: string, name = 'Agent') => daemon.pushFrame(frame('tool_use', payload(id, parent, name)))
+  const start = (id: string) => daemon.pushFrame(frame('background_task_started', {
+    conversation_id: SEEDED_ROW.id, task_id: `task-${id}`, tool_call_id: id,
+    task_type: 'local_agent', description: id, truncated_fields: null
+  }))
+  const roster = (ids: string[]) => daemon.pushFrame(frame('background_task_roster', {
+    conversation_id: SEEDED_ROW.id, dropped_tasks: 0,
+    tasks: ids.map(id => ({ task_id: `task-${id}`, task_type: 'local_agent', description: id, truncated_fields: null }))
+  }))
+  use('solo-agent')
+  use('solo-child', 'solo-agent', 'Read')
+  start('solo-agent')
+  roster(['solo-agent'])
+  const marker = page.locator('.agent-start-marker')
+  await expect(marker).toContainText('Agent started, still working')
+  await expect(row('solo-agent').locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'false')
+  await expect(row('solo-child')).toBeHidden()
+  for (let i = 0; i < 40; i++) daemon.pushFrame(frame('message', {
+    conversation_id: SEEDED_ROW.id, message_id: `filler-${i}`, role: 'user', text: `filler ${i}`
+  }))
+  await thread.focus()
+  await page.keyboard.press('Home')
+  await expect.poll(() => thread.evaluate((el) => el.scrollTop)).toBe(0)
+  await marker.click()
+  await expect(row('solo-agent')).toBeInViewport()
+  await expect(row('solo-agent').locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'false')
+  await expect(row('solo-child')).toBeHidden()
+})
 
 test('interleaved subagents group, update while collapsed, and retain expansion through history', async ({ launchPairedApp }) => {
   let historyRequest: number | undefined
@@ -35,14 +158,14 @@ test('interleaved subagents group, update while collapsed, and retain expansion 
   await page.locator('.tool-run button').click()
   const a = row('agent-a')
   const b = row('agent-b')
-  await expect(a.locator('.tool-row__count')).toHaveText('1 tool · running')
+  await expect(a.locator('.tool-row__count')).toHaveText('running · 1 tool')
   await expect(row('child-a')).toBeHidden()
   await a.locator('.tool-row__chip').click()
   await expect(row('child-a')).toBeVisible()
   await expect(row('child-a').locator('..')).toHaveCSS('margin-inline-start', '16px')
   use('inner', 'agent-a', 'Task')
   use('deep', 'inner', 'Bash')
-  await expect(a.locator('.tool-row__count')).toHaveText('3 tools · running')
+  await expect(a.locator('.tool-row__count')).toHaveText('running · 3 tools')
   await expect(row('inner')).toBeVisible()
   await expect(row('deep')).toBeHidden()
   await row('inner').locator('.tool-row__chip').click()
@@ -78,7 +201,7 @@ test('interleaved subagents group, update while collapsed, and retain expansion 
       { id: 10, type: 'tool_use', ts: '2026-09-10T12:00:10Z', payload: payload('historical-agent') }
     ] }
   }))
-  await expect(row('historical-agent').locator('.tool-row__count')).toHaveText('2 tools · running')
+  await expect(row('historical-agent').locator('.tool-row__count')).toHaveText('running · 2 tools')
   await expect(row('orphan')).toBeHidden()
   await row('historical-agent').locator('.tool-row__chip').click()
   await expect(row('orphan').locator('.tool-row__result')).toBeVisible()
@@ -166,4 +289,292 @@ test('visible tool rows keep joined borders across collapsed descendants', async
   await expectStacks([['a', 'b'], ['b1'], ['c']])
   await row('b').locator('.tool-row__chip').click()
   await expectStacks([['a', 'b', 'c']])
+})
+
+// Synthetic lifecycle inputs; no daemon ids are exposed in DOM attributes.
+test('started background agents follow the tail, navigate markers, and settle on inactive delivery', async ({ launchPairedApp }) => {
+  const quiet = { ...SEEDED_ROW, id: 'quiet-agent-chat', name: 'Quiet agent room' }
+  let sentMessageId: string | undefined
+  const { page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
+    const envelope = decodeEnvelope(bytes)
+    if (envelope.type === 'send_message') {
+      sentMessageId = (envelope.payload as SendMessagePayload).message_id
+      return []
+    }
+    if (envelope.type === 'request_history') return []
+    return [seedConversationsFrame()]
+  } })
+  await page.setViewportSize({ width: 1280, height: 800 })
+  daemon.pushFrame(frame('conversations', { conversations: [SEEDED_ROW, quiet] }))
+  const thread = page.locator('.conversation__thread')
+  const row = (id: string) => page.locator('.tool-row:not(.tool-run__row)').filter({
+    has: page.locator('.tool-row__summary', { hasText: new RegExp(`^${id}$`) })
+  })
+  const marker = (id: string) => page.locator('.agent-start-marker').filter({ hasText: id })
+  const use = (id: string, parent?: string, name = 'Agent') => daemon.pushFrame(frame('tool_use', payload(id, parent, name)))
+  const resolve = (id: string) => daemon.pushFrame(frame('tool_result', {
+    ...payload(id), is_error: false, result_summary: 'Async agent launched'
+  }))
+  const start = (id: string) => daemon.pushFrame(frame('background_task_started', {
+    conversation_id: SEEDED_ROW.id, task_id: `task-${id}`, tool_call_id: id,
+    task_type: 'local_agent', description: id, truncated_fields: null
+  }))
+  const roster = (ids: string[]) => daemon.pushFrame(frame('background_task_roster', {
+    conversation_id: SEEDED_ROW.id, dropped_tasks: 0,
+    tasks: ids.map(id => ({ task_id: `task-${id}`, task_type: 'local_agent', description: id, truncated_fields: null }))
+  }))
+  const user = (text: string) => daemon.pushFrame(frame('message', {
+    message_id: text, conversation_id: SEEDED_ROW.id, role: 'user', text
+  }))
+  const terminal = (id: string) => daemon.pushFrame(frame('background_task_updated', {
+    conversation_id: SEEDED_ROW.id, task_id: `task-${id}`, status: 'completed', patch: '', summary: '', truncated_fields: null
+  }))
+  const isBefore = async (earlier: ReturnType<typeof row>, later: ReturnType<typeof row>) => {
+    const first = await earlier.elementHandle()
+    const second = await later.elementHandle()
+    return first && second ? first.evaluate((a, b) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING), second) : false
+  }
+  use('agent-live-a')
+  use('agent-live-b')
+  use('child-live-a', 'agent-live-a', 'Read')
+  await page.locator('.tool-run button').click()
+  await row('agent-live-a').locator('.tool-row__chip').click()
+  resolve('child-live-a')
+  await row('child-live-a').locator('.tool-row__chip').click()
+  resolve('agent-live-a')
+  resolve('agent-live-b')
+  await page.locator('.tool-run button').click()
+  start('agent-live-a')
+  start('agent-live-b')
+  roster(['agent-live-b'])
+  roster(['agent-live-b', 'agent-live-a'])
+  await expect(marker('agent-live-a')).toContainText('Agent started, still working')
+  await expect(row('child-live-a').locator('.tool-row__result')).toBeVisible()
+  user('ordinary after launches')
+  await expect(thread).toContainText('ordinary after launches')
+  daemon.pushFrame(frame('queue_state', { conversation_id: SEEDED_ROW.id, queued: [
+    { queued_msg_id: 87, text: 'queued after launches', message_id: 'queued-agent', ts }
+  ] }))
+  await expect(thread).toContainText('queued after launches')
+  await expect(row('agent-live-a').locator('.tool-row__count')).toHaveText('running · 1 tool')
+  await expect(row('agent-live-b').locator('.tool-row__count')).toHaveText('running · 0 tools')
+  expect(await isBefore(row('agent-live-a'), row('agent-live-b'))).toBeTruthy()
+  await row('agent-live-a').locator('.tool-row__chip').click()
+  await page.screenshot({ path: '/tmp/builder-1839/two-running.png' })
+  await row('agent-live-a').locator('.tool-row__chip').click()
+  await row('agent-live-a').locator('.tool-row__chip').click()
+  await marker('agent-live-a').click()
+  await expect(row('agent-live-a')).toBeInViewport()
+  await expect(row('agent-live-a').locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'false')
+  await expect(row('child-live-a')).toBeHidden()
+  await row('agent-live-a').locator('.tool-row__chip').click()
+  await expect(row('child-live-a').locator('.tool-row__result')).toBeVisible()
+  for (const key of ['Enter', 'Space']) {
+    await marker('agent-live-a').focus()
+    await page.keyboard.press(key)
+    await expect(row('agent-live-a')).toBeInViewport()
+    await expect(row('child-live-a').locator('.tool-row__result')).toBeVisible()
+  }
+  // Growth follows only while pinned, and preserves the reader's held offset.
+  await thread.focus()
+  await page.keyboard.press('End')
+  for (let i = 0; i < 20; i++) user(`scroll filler ${i}`)
+  await expect.poll(() => thread.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(4)
+  use('pinned-child', 'agent-live-a', 'Read')
+  await expect(row('pinned-child')).toBeVisible()
+  await expect.poll(() => thread.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(4)
+  await thread.focus()
+  await page.keyboard.press('Home')
+  await expect.poll(() => thread.evaluate(el => el.scrollTop)).toBe(0)
+  use('late-child', 'agent-live-a', 'Read')
+  await expect(row('late-child')).toBeVisible()
+  expect(await thread.evaluate(el => el.scrollTop)).toBe(0)
+  await marker('agent-live-a').click()
+  await expect(row('agent-live-a')).toBeInViewport()
+  await expect(row('agent-live-a').locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'true')
+  await page.screenshot({ path: '/tmp/builder-1839/running.png' })
+  roster([])
+  await page.locator('.channel-list__row').filter({ hasText: 'Quiet agent room' }).locator('.channel-list__row-open').click()
+  terminal('agent-live-a')
+  user('ordinary after finish')
+  await page.locator('.channel-list__row').filter({ hasText: SEEDED_ROW.name ?? '' }).locator('.channel-list__row-open').click()
+  await expect(marker('agent-live-a')).toContainText('Agent finished')
+  await expect(row('agent-live-a').locator('.tool-row__count')).toHaveText('3 tools')
+  await marker('agent-live-a').click()
+  await expect(row('agent-live-a')).toBeInViewport()
+  await expect(row('child-live-a')).toBeHidden()
+  await row('agent-live-a').locator('.tool-row__chip').click()
+  await expect(row('child-live-a')).toBeVisible()
+  const after = thread.locator('.message-row--user').filter({ hasText: 'ordinary after finish' })
+  expect(await isBefore(row('agent-live-a'), after)).toBeTruthy()
+  expect(await isBefore(after, row('agent-live-b'))).toBeTruthy()
+  terminal('agent-live-a')
+  start('agent-live-a')
+  await expect(marker('agent-live-a')).toContainText('Agent finished')
+  await page.screenshot({ path: '/tmp/builder-1839/finished.png' })
+  await thread.focus()
+  await page.keyboard.press('Home')
+  await expect(marker('agent-live-a')).toBeInViewport()
+  await expect(marker('agent-live-a').locator('.conversation-status-dot')).toHaveCSS('background-color', 'rgb(47, 192, 56)')
+  await page.screenshot({ path: '/tmp/builder-1839/finished-marker.png' })
+
+  use('agent-live-c')
+  resolve('agent-live-c')
+  start('agent-live-c')
+  user('ordinary after late launch')
+  await expect(thread).toContainText('ordinary after late launch')
+  expect(await isBefore(row('agent-live-a'), row('agent-live-c'))).toBeTruthy()
+  roster(['agent-live-c'])
+  await expect(marker('agent-live-c')).toBeVisible()
+  expect(await isBefore(row('agent-live-a'), marker('agent-live-c'))).toBeTruthy()
+  // B started earlier; C finishes first with no ordinary arrival between terminal frames.
+  terminal('agent-live-c')
+  terminal('agent-live-b')
+  user('ordinary after both finishes')
+  await expect(marker('agent-live-b')).toContainText('Agent finished')
+  await expect(marker('agent-live-c')).toContainText('Agent finished')
+  const afterBoth = thread.locator('.message-row--user').filter({ hasText: 'ordinary after both finishes' })
+  await expect(afterBoth).toBeVisible()
+  expect(await isBefore(row('agent-live-c'), row('agent-live-b'))).toBeTruthy()
+  expect(await isBefore(row('agent-live-b'), afterBoth)).toBeTruthy()
+  terminal('agent-live-c')
+  start('agent-live-b')
+  roster(['agent-live-b', 'agent-live-c'])
+  await expect(marker('agent-live-b')).toContainText('Agent finished')
+  expect(await isBefore(row('agent-live-c'), row('agent-live-b'))).toBeTruthy()
+
+  // A queued echo keeps its identity when delivered after the Agent's finish.
+  use('agent-live-d')
+  resolve('agent-live-d')
+  start('agent-live-d')
+  roster(['agent-live-d'])
+  const composer = page.getByPlaceholder('Message…')
+  await composer.fill('Own queued message after finish')
+  await composer.press('Enter')
+  await expect.poll(() => sentMessageId).toBeDefined()
+  daemon.pushFrame(frame('queue_state', { conversation_id: SEEDED_ROW.id, queued: [
+    { queued_msg_id: 88, text: 'Own queued message after finish', message_id: sentMessageId, ts }
+  ] }))
+  const own = thread.locator('.message-row', { hasText: 'Own queued message after finish' })
+  await expect(own).toHaveClass(/message-row--queued/)
+  const ownNode = await own.elementHandle()
+  terminal('agent-live-d')
+  await expect(marker('agent-live-d')).toContainText('Agent finished')
+  const delivery = { conversation_id: SEEDED_ROW.id, message_id: sentMessageId, queued_msg_id: 88,
+    role: 'user', text: 'Receipt preserves own copy', sent_now: true }
+  daemon.pushFrame(frame('message', delivery))
+  daemon.pushFrame(frame('queue_state', { conversation_id: SEEDED_ROW.id, queued: [] }))
+  await expect(own).not.toHaveClass(/message-row--queued/)
+  expect(await ownNode?.evaluate(node => node.isConnected)).toBe(true)
+  expect(await isBefore(row('agent-live-d'), own)).toBeTruthy()
+  daemon.pushFrame(frame('message', delivery))
+  user('ordinary after queued delivery')
+  await expect(thread).toContainText('ordinary after queued delivery')
+  await expect(own).toHaveCount(1)
+  expect(await isBefore(row('agent-live-d'), own)).toBeTruthy()
+  await page.screenshot({ path: '/tmp/builder-1839/queued-after-finish.png' })
+})
+
+
+test('connect roster Agents appear before history and keep identity through live and historical launches', async ({ launchPairedApp }) => {
+  const quiet = { ...SEEDED_ROW, id: 'connect-quiet', name: 'Connect quiet room' }
+  let historyRequest: number | undefined
+  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
+    const envelope = decodeEnvelope(bytes)
+    if (envelope.type === 'request_history') { historyRequest = envelope.id; return [] }
+    return [seedConversationsFrame()]
+  } })
+  await page.setViewportSize({ width: 1280, height: 800 })
+  daemon.pushFrame(frame('conversations', { conversations: [SEEDED_ROW, quiet] }))
+  const thread = page.locator('.conversation__thread')
+  const row = (id: string) => page.locator('.tool-row:not(.tool-run__row)').filter({
+    has: page.locator('.tool-row__summary', { hasText: new RegExp(`^${id}$`) })
+  })
+  const marker = (id: string) => page.locator('.agent-start-marker').filter({ hasText: id })
+  const roster = (ids: string[]) => daemon.pushFrame(frame('background_task_roster', {
+    conversation_id: SEEDED_ROW.id, dropped_tasks: 0, tasks: ids.map(id => ({
+      task_id: `task-${id}`, tool_call_id: id, task_type: 'local_agent', description: id, truncated_fields: null
+    }))
+  }))
+  const use = (id: string, parent?: string, name = 'Agent') => daemon.pushFrame(frame('tool_use', payload(id, parent, name)))
+  const user = (text: string) => daemon.pushFrame(frame('message', {
+    message_id: text, conversation_id: SEEDED_ROW.id, role: 'user', text
+  }))
+  const terminal = () => daemon.pushFrame(frame('background_task_updated', {
+    conversation_id: SEEDED_ROW.id, task_id: 'task-connect-b', status: 'completed', patch: '', summary: '', truncated_fields: null
+  }))
+  const capture = async (name: string) => {
+    await app.evaluate(async ({ BrowserWindow }) => {
+      await BrowserWindow.getAllWindows()[0].capturePage(undefined, { stayHidden: true, stayAwake: true })
+    })
+    await capturePairedApp(app, page, `/tmp/builder-1840/${name}.png`)
+  }
+  roster(['connect-a', 'connect-b', 'matching-read'])
+  use('matching-read', undefined, 'Read')
+  await expect(row('connect-a').locator('.tool-row__count')).toHaveText('running · 0 tools')
+  await expect(row('connect-b').locator('.tool-row__count')).toHaveText('running · 0 tools')
+  await expect(row('matching-read').locator('.tool-row__name')).toHaveText('Read')
+  await expect(page.locator('.agent-start-marker')).toHaveCount(0)
+  await expect(page.locator('.tool-row__summary:visible')).toHaveText(['matching-read', 'connect-a', 'connect-b'])
+  const aNode = await row('connect-a').locator('..').elementHandle()
+  await row('connect-a').locator('.tool-row__chip').click()
+  roster(['connect-b', 'connect-a'])
+  daemon.pushFrame(frame('background_task_started', {
+    conversation_id: SEEDED_ROW.id, task_id: 'task-connect-b', tool_call_id: '',
+    task_type: 'local_agent', description: 'connect-b', truncated_fields: null
+  }))
+  use('connect-child', 'connect-a', 'Read')
+  await expect(row('connect-child')).toBeVisible()
+  await row('connect-a').locator('.tool-row__chip').click()
+  user('ordinary during connect')
+  await capture('two-provisional-1280')
+  await page.setViewportSize({ width: 800, height: 600 })
+  await capture('two-provisional-800')
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await row('connect-a').locator('.tool-row__chip').click()
+  use('connect-a')
+  await expect(marker('connect-a')).toBeVisible()
+  expect(await aNode?.evaluate(node => node.isConnected)).toBe(true)
+  await expect(row('connect-a')).toHaveCount(1)
+  await expect(row('connect-child')).toBeVisible()
+  await expect(row('connect-a').locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'true')
+  user('ordinary before connect finish')
+  roster([])
+  await page.locator('.channel-list__row').filter({ hasText: quiet.name }).locator('.channel-list__row-open').click()
+  terminal()
+  user('ordinary after connect finish')
+  await page.locator('.channel-list__row').filter({ hasText: SEEDED_ROW.name ?? '' }).locator('.channel-list__row-open').click()
+  await expect(row('connect-b').locator('.tool-row__count')).toHaveText('0 tools')
+  await thread.focus()
+  await page.keyboard.press('Home')
+  await expect.poll(() => historyRequest).toBeDefined()
+  daemon.pushFrame(encodeEnvelope({ id: 2, type: 'history_page', ts, in_reply_to: historyRequest,
+    payload: { cursor: '', at_start: true, entries: [
+      { id: 12, type: 'tool_use', ts, payload: payload('history-connect-child', 'connect-b', 'Read') },
+      { id: 11, type: 'tool_use', ts, payload: payload('connect-b') }
+    ] }
+  }))
+  await expect(marker('connect-b')).toContainText('Agent finished')
+  await expect(row('connect-b')).toHaveCount(1)
+  const after = thread.locator('.message-row--user').filter({ hasText: 'ordinary after connect finish' })
+  const afterNode = await after.elementHandle()
+  expect(await row('connect-b').evaluate((a, b) => Boolean(b && a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING), afterNode)).toBe(true)
+  await row('connect-b').locator('.tool-row__chip').click()
+  await expect(row('history-connect-child')).toBeVisible()
+  for (const key of ['Enter', 'Space']) {
+    await marker('connect-b').focus()
+    await page.keyboard.press(key)
+    await expect(row('connect-b')).toBeInViewport()
+    await expect(row('connect-b').locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'true')
+    await expect(row('history-connect-child')).toBeVisible()
+  }
+  await marker('connect-b').click()
+  await expect(row('history-connect-child')).toBeVisible()
+  terminal()
+  roster(['connect-b', 'connect-a'])
+  await expect(marker('connect-b')).toContainText('Agent finished')
+  await expect(row('connect-b')).toHaveCount(1)
+  await capture('finished-1280')
+  await page.setViewportSize({ width: 800, height: 600 })
+  await capture('finished-800')
 })

@@ -704,6 +704,7 @@ describe('subscribeBackgroundTaskRoster', () => {
       expect(heldTask(store, 'c1', 't1')).toEqual({
         taskId: 't1',
         toolCallId: 'tc-1',
+        startedToolCallId: 'tc-1',
         taskType: 'local_bash',
         description: fullDescription,
         truncatedFields: null,

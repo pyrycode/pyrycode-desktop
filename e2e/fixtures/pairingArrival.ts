@@ -1,4 +1,5 @@
 import { expect, type Page } from '@playwright/test'
+import { observeWelcomeClick } from './welcomeDiagnostics'
 
 // The shared unpaired-launch pairing-arrival step (#661). Ten e2e sites — the fake-stack fixture
 // (launchPairedApp) and nine `real-*` specs — each ran the SAME six lines after an unpaired launch:
@@ -15,7 +16,7 @@ import { expect, type Page } from '@playwright/test'
 // for shared e2e modules that are not themselves fixtures.
 //
 // INVARIANTS
-//  1. Import ONLY `@playwright/test`. Never import from `launchPairedApp.ts` or `realDaemon.ts`: both
+//  1. Import only Playwright and plain helpers. Never import from `launchPairedApp.ts` or `realDaemon.ts`: both
 //     call `base.extend(...)` at module scope and export their own `test`, so importing either here
 //     would drag a second fixture extension into specs that must keep using the other one. That
 //     constraint is why this third home exists; it also rules out reusing either `encodePairingPayload`
@@ -60,7 +61,7 @@ export async function pairFromUnpairedLaunch(
   // role the pasteBox visibility wait below used to play. `exact` matches this file's idiom and keeps
   // the locator correct if a second button ever joins the screen; `.welcome__pair` is the fallback if
   // the CTA copy churns.
-  await page.getByRole('button', { name: 'I already have pyrycode', exact: true }).click()
+  await observeWelcomeClick(page, () => page.getByRole('button', { name: 'I already have pyrycode', exact: true }).click())
 
   await drivePairingForm(page, payload, label)
 }

@@ -46,11 +46,17 @@ export type RunSettingsWriteEvent =
   | { type: 'settingsRejected'; changeId: string }    // from sessionSettingsRejected (#269)
   | { type: 'reconnected' }                           // from the connected wire edge ([#539](../codebase/539.md))
   | { type: 'conversationSwitched' }                  // from activateConversation/exitActiveConversation (#1167)
+  | { type: 'agentSwitched' }                         // authoritative active owning-pane switch success
 
 export interface RunSettingsWriteState {
   pending: ReadonlyMap<string, SettingsChange>   // changeId → requested change
   confirmed: { model?: string; effort?: string; yolo?: boolean; permissionMode?: string }  // sparse client-confirmed overrides
   error: SettingsChange['field'] | null          // last-rejected field, or null
+}
+
+export type RunSettingsWriteStore = RunSettingsWriteState & {
+  agentGeneration: number   // initialized to zero; increments on every agentSwitched dispatch
+  dispatch: (event: RunSettingsWriteEvent) => void
 }
 
 createRunSettingsWriteStore(init?)   // vanilla createStore — one isolated instance per test (DI seam)
@@ -60,18 +66,18 @@ useRunSettingsWriteStore(selector)   // React binding: useStore(runSettingsWrite
 
 An **adjacent, dedicated store** — not a `runConfigStore` facet — for the same two reasons as
 [`sessionIdStore`](session-id-store.md) (#259): (a) its inbound subscription must be **App-level
-always-listening** (a confirm/reject reply can arrive after the sheet closes, whereas `runConfigStore`'s
-subscriber is sheet-scoped); (b) its state (pending changes + client-confirmed overrides + last error) is
+always-listening** (a confirm/reject reply can arrive after the sheet closes; the snapshot feed is now
+app-lifetime too); (b) its state (pending changes + client-confirmed overrides + last error) is
 orthogonal to the snapshot's `{model, effort, yolo, permissionMode, usedTokens, windowTokens}` shape. Unlike
 `sessionIdStore`'s named setters, this is a **reducer** (`dispatch` over the sealed event union) because
-every one of its five transitions reads prior state: three (dispatch / confirm / reject) are
-**correlated** — a confirm or reject is a no-op without a matching pending record — and the other two,
-`reconnected` ([#539](../codebase/539.md)) and `conversationSwitched` (#1167), are uncorrelated (no
+every one of its six transitions reads prior state: three (dispatch / confirm / reject) are
+**correlated** — a confirm or reject is a no-op without a matching pending record — and the other three,
+`reconnected` ([#539](../codebase/539.md)), `conversationSwitched` (#1167) and `agentSwitched`, are uncorrelated (no
 `changeId`) but still prior-state-reading, since each clears only when something is held. `sessionIdStore`'s
 set and clear ([#529](../codebase/529.md)) — and `runConfigStore`'s, since #1167 — are independent
 whole-value writes that read nothing. The contrast is the coupling, not the count.
 
-### The reducer (five arms, each pinned by a named test)
+### The reducer
 
 - **`changeDispatched`** — `pending.set(changeId, change)`; clears `error` (a fresh attempt supersedes
   the last rejection). `confirmed` untouched — the optimistic value shows only through the pending
@@ -119,11 +125,17 @@ whole-value writes that read nothing. The contrast is the coupling, not the coun
     real value, so presence *is* "held"). Load-bearing for the same reason `reconnected`'s is: #257's
     container selects the whole raw write state, so without it a switch between two chats that never
     wrote anything would re-render the sheet.
+- **`agentSwitched`** — shares `conversationSwitched`'s full reset of `pending`, `confirmed` and
+  `error` for all four settings fields. The factory also increments `agentGeneration` on every
+  dispatch, including when the reducer's overlay state was already empty. This guarantees a
+  notification to private confirmation bookkeeping even when there is no visible write to clear.
+  The generation belongs to `RunSettingsWriteStore`, outside the overlay-only `RunSettingsWriteState`.
 
 There is no explicit "roll back" mutation: **clearing the pending marker *is* the rollback**, because the
 explicit-choice view falls through to the confirmed override or the snapshot base — `reconnected` and
-`conversationSwitched` are two more callers of that doctrine, not a new mechanism. A no-match (or
-already-clear) arm returns the same state object, so zustand skips the notify.
+the two switch events use the same mechanism. Unmatched replies and already-clear reconnect or
+conversation-switch events preserve the state reference. `agentSwitched` always notifies through its
+generation increment.
 
 ### The effective-view derivation
 
@@ -251,7 +263,7 @@ apply](composer-effort-menu.md#the-default-apply-1169)). This section is that fo
 confirmedEffortLevel(pending: ReadonlyMap<string, SettingsChange>, event: RunSettingsWriteEvent): string | null
 // non-null only for a settingsConfirmed whose changeId matches a pending 'effort' record with a
 // non-empty value. Everything else — a model/yolo/permissionMode confirm, a rejection, an unmatched
-// changeId, reconnected, conversationSwitched — is null.
+// changeId, reconnected, conversationSwitched, agentSwitched — is null.
 
 foldWriteEvent(deps: FoldWriteEventDeps, event: RunSettingsWriteEvent): void
 // deps = { getPending, dispatch, rememberEffort, rememberModel?, refresh?, log? }
@@ -372,6 +384,39 @@ clearing only `runConfigStore` would leave a confirmed override standing over th
 snapshot, and clearing only this store would leave the previous chat's raw snapshot displayed until a
 reply arrived.
 
+### Settings lifetime on agent switch
+
+The [agent-switch success callback](switch-agent-request.md#renderer-outcomes-and-lifetime)
+dispatches `agentSwitched` only when a stamped owning-host target-agent row establishes a pending
+attempt's success and the current pane and open binding still match its host and conversation.
+It then requests fresh settings immediately, without reopening the sheet. Clearing only the snapshot
+would leave a confirmed outgoing model overlay masking the incoming reading; clearing only public
+writes would leave private permission acknowledgements and polling alive.
+
+`subscribeConfirmedRunConfig` observes the generation synchronously, cancels permission/YOLO
+confirmation polling and correlations, clears the outgoing snapshot and resets the outgoing
+replacement-session guard before the request. See [permission confirmation](run-config-store.md#permission-mode-1020).
+Agent ownership never comes from the raw model value: even equal values across Claude and Codex end
+the outgoing lifetime. Arbitrary same-agent snapshots retain confirmed choices, and owning-host
+reconnect still clears only pending writes in this store.
+
+Late outgoing confirms/rejections find no public pending record, so they cannot restore overrides or
+errors. `foldWriteEvent` reads that same map before settlement, so those replies cannot remember
+model/effort preferences either. The cleared private map prevents old permission/YOLO replies from
+restarting polling or displacing incoming readings. Existing remembered preferences are not erased;
+new writes with fresh correlations settle normally.
+
+Opening, cancellation, refusal and abandonment do not dispatch this edge. Progress, session
+transition alone, unchanged-agent lists, another conversation's outcome and foreign or unstamped
+events cannot invalidate the write state. Success after navigation can settle the retained attempt
+but cannot clear the successor pane's writes, including equal conversation IDs on different hosts.
+
+`agentSettingsLifecycle.test.ts` composes the real list, switch, write and confirmation subscriptions.
+It covers both directions and equal raw models, pending/confirmed/error invalidation across model,
+effort, permission mode and YOLO, late settlement and preference isolation, new writes, navigation,
+empty-overlay generation notification and a prior outgoing replacement guard. Mounted proof and
+counted results are recorded in [verification guidance](development-verification.md#agent-switch-settings-verification).
+
 ## Edge cases and limitations
 
 - **A change stranded by a reconnect no longer strands forever** ([#539](../codebase/539.md)) — the
@@ -393,13 +438,14 @@ reply arrived.
   then A's confirm (when it eventually arrives) overwrites it with A's — the *later*-confirmed value
   wins, which can be the *earlier*-dispatched one. Benign under the single-client, sequential-daemon-reply
   model this app runs under (code review NIT on [#256](../codebase/256.md), non-blocking, no AC violated).
-- **`error` persists until the next `changeDispatched`.** A `settingsConfirmed` leaves `error` untouched,
+- **`error` persists until a new dispatch or lifetime clear.** `changeDispatched`, `conversationSwitched`
+  and `agentSwitched` clear it. A `settingsConfirmed` leaves `error` untouched,
   so a stale rejection error can briefly outlive a later, unrelated success — #257 does not clear it on
   its own signal either; the AC only requires a retry (which does dispatch) to clear it.
-- **No reset when a fresh snapshot arrives for the same chat.** Confirmed explicit-choice overrides
+- **No reset from an ordinary fresh snapshot for the same agent.** Confirmed explicit-choice overrides
   remain available to the sheet and recall policy. They never override the footer's applied effort,
-  which may differ from the saved choice. A conversation switch clears the entire write state;
-  see § Scoped to the open chat since #1167 above.
+  which may differ from the saved choice. A conversation switch or authoritative active-agent switch
+  clears the entire overlay state; a snapshot alone establishes neither lifetime edge.
 
 ## Related
 

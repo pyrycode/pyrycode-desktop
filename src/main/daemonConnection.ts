@@ -21,6 +21,8 @@
 // failure surfaces as a non-connected DaemonEvent; nothing throws out of the module.
 import type { MessageLifecycle } from './messageLifecycle'
 import { notifySend } from './transport/sendObservation'
+import type { SendOutcome } from './transport/sendObservation'
+import { isRendererCommand } from '../shared/ipc/commands'
 import { randomUUID } from 'node:crypto'
 import { createNoiseRelayDriver } from './transport/noiseRelayDriver'
 import type {
@@ -804,6 +806,63 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   let stopped = false
   let driver: NoiseRelayDriver | null = null
   let authenticated = false
+  let deliveryFailed = false
+  let drainingMessages = false
+  const heldMessages: { payload: SendMessagePayload; size: number; observe?: (outcome: SendOutcome) => void }[] = []
+  let heldMessageBytes = 0
+
+  function delivery(payload: SendMessagePayload, status: 'waiting' | 'not-sent' | 'written'): void {
+    emitDaemonEvent(sink, { type: 'messageDelivery', conversationId: payload.conversation_id,
+      messageId: payload.message_id, status })
+  }
+
+  function failHeldMessages(release = false): void {
+    for (const entry of heldMessages) delivery(entry.payload, 'not-sent')
+    if (release) {
+      for (const entry of heldMessages) notifySend(entry.observe, { type: 'dropped', reason: 'send-refused' })
+      heldMessages.length = 0
+      heldMessageBytes = 0
+    }
+  }
+
+  function drainMessages(): void {
+    if (drainingMessages || !authenticated || driver === null || stopped) return
+    drainingMessages = true
+    try {
+      while (authenticated && driver !== null && !stopped && heldMessages.length > 0) {
+        const entry = heldMessages[0]
+        if (entry === undefined) break
+        let refused = false
+        let observed = false
+        const observe = (outcome: SendOutcome): void => {
+          if (observed) return
+          observed = true
+          if (outcome.type === 'dropped' && outcome.reason === 'send-refused') {
+            refused = true
+            authenticated = false
+            delivery(entry.payload, 'waiting')
+          } else {
+            notifySend(entry.observe, outcome)
+            delivery(entry.payload, outcome.type === 'sent' ? 'written' : 'not-sent')
+          }
+        }
+        try {
+          const bytes = buildSendMessage({ id: nextEnvelopeId++, ts: now(), payload: entry.payload })
+          driver.sendMessage(bytes, observe)
+        } catch {
+          observe({ type: 'dropped', reason: 'send-failed' })
+        }
+        if (refused) break
+        if (heldMessages[0] === entry) {
+          heldMessages.shift()
+          heldMessageBytes -= entry.size
+        }
+        // No synchronous observation means the Noise rekey buffer now owns this send.
+      }
+    } finally {
+      drainingMessages = false
+    }
+  }
   // Monotonic connection fence, mirroring the driver's own generation idiom
   // (noiseRelayDriver.ts:100-118) one layer up. `dial()` bumps it before tearing down the old
   // driver, so a superseded driver's events — including the terminal{1000,'stopped'} that stopping
@@ -1056,6 +1115,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   function emitFailed(code: string, message = messageFor(code), minClientVersion?: string): void {
     abandonHostPrompts()
     authenticated = false
+    deliveryFailed = true
+    failHeldMessages()
     pendingSwitchAgents.clear()
     if (pairingRejected) {
       code = 'pairing-rejected'
@@ -1195,7 +1256,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         }
         pairingRejected = false
         authenticated = true
+        deliveryFailed = false
         emitDaemonEvent(sink, { type: 'connected', ack })
+        drainMessages()
         // The load-bearing "Noise handshake finished" signal — event name only, never the ack bytes.
         // Distinct from #127's relay-open (the WS socket opening, which precedes the handshake).
         deps.diagnosticLog?.event({ event: 'daemon-connected' })
@@ -1676,6 +1739,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               type: 'historyPageReceived',
               conversationId,
               entries: inbound.historyPage.entries,
+              servedIds: inbound.historyPage.servedIds,
               cursor: inbound.historyPage.cursor,
               atStart: inbound.historyPage.at_start
             })
@@ -2137,6 +2201,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // emit.
             emitDaemonEvent(sink, {
               type: 'backgroundTaskStarted',
+              daemonTs: inbound.ts,
               conversationId: inbound.backgroundTaskStarted.conversation_id,
               taskId: inbound.backgroundTaskStarted.task_id,
               toolCallId: inbound.backgroundTaskStarted.tool_call_id,
@@ -2170,6 +2235,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // round-trip test guards this emit.
             emitDaemonEvent(sink, {
               type: 'backgroundTaskUpdated',
+              daemonTs: inbound.ts,
               conversationId: inbound.backgroundTaskUpdated.conversation_id,
               taskId: inbound.backgroundTaskUpdated.task_id,
               patch: inbound.backgroundTaskUpdated.patch,
@@ -2928,6 +2994,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     const record = await pairedServer.load()
     if (stopped || gen !== generation) return null
     if (record === null) {
+      failHeldMessages(true)
       replayPairing = null
       replayCursor = undefined
       return null
@@ -2940,6 +3007,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       replayPairing.relay !== record.relay || replayPairing.token !== record.token ||
       replayPairing.server_static_pubkey !== record.server_static_pubkey
     ) {
+      if (replayPairing !== null) failHeldMessages(true)
       replayCursor = undefined
       replayPairing = {
         server: record.server, relay: record.relay, token: record.token,
@@ -3046,16 +3114,23 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     const observe = deps.messageLifecycle?.sending(
       payload.message_id, payload.conversation_id, deps.serverId
     )
-    if (driver === null) {
-      notifySend(observe, { type: 'dropped', reason: 'send-refused' })
-      return
-    }
     try {
+      if (!isRendererCommand({ type: 'sendMessage', payload })) throw new Error('Invalid message')
       const bytes = buildSendMessage({ id: nextEnvelopeId, ts: now(), payload })
-      nextEnvelopeId += 1
-      driver.sendMessage(bytes, observe)
+      if (stopped || heldMessages.length >= 128 || heldMessageBytes + bytes.byteLength > 1024 * 1024) {
+        notifySend(observe, { type: 'dropped', reason: 'send-refused' })
+        delivery(payload, 'not-sent')
+        return
+      }
+      const copy = { conversation_id: payload.conversation_id, message_id: payload.message_id,
+        text: payload.text, attachment_ids: payload.attachment_ids?.slice() }
+      heldMessages.push({ payload: copy, size: bytes.byteLength, observe })
+      heldMessageBytes += bytes.byteLength
+      if (!authenticated || drainingMessages) delivery(copy, deliveryFailed ? 'not-sent' : 'waiting')
+      drainMessages()
     } catch {
       notifySend(observe, { type: 'dropped', reason: 'send-failed' })
+      delivery(payload, 'not-sent')
     }
   }
 
@@ -4212,6 +4287,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   function dial(): void {
     abandonHostPrompts()
     authenticated = false
+    deliveryFailed = false
+    for (const entry of heldMessages) delivery(entry.payload, 'waiting')
     const gen = ++generation
     // Tear down a live driver before dialing the next, so two sockets never stack and only the
     // fresh server is dialed (AC3). Its stop-terminal carries the OLD gen, so the onEvent wrapper
@@ -4302,6 +4379,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       if (stopped) return
       stopped = true
       authenticated = false
+      failHeldMessages(true)
       pendingSwitchAgents.clear()
       abandonHostPrompts()
       // Idempotent driver teardown. If the bootstrap has not yet constructed the driver, the

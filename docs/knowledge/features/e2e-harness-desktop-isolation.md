@@ -174,6 +174,47 @@ documentation-stage run. Acceptance is fake transport and needs no live Claude.
 Required app typechecks passed; auxiliary strict e2e typechecking remained red
 on the unchanged shared launch environment type mismatch, and is not claimed green.
 
+### Recorded host-pill acceptance
+
+The unchanged `sidebar-host-row-control-name-pill.spec.ts` test, `Edit host keeps
+its pointer name pill without a host Add workspace control`, did not reproduce
+after the merged protection (`2f2cca62`, PR #1836). The
+[diagnosis and retained failure logs](https://github.com/pyrycode/pyrycode-desktop/issues/1823#issuecomment-6037020215)
+record null `after` pill boxes for #1761 (`e0b178ce89`) and #1660 (`9f8601f1bb`),
+and a null `before` box for #1818 (`5d1b88adaa`), followed by same-tree passes.
+Those logs contain no pointer-event capture proving historical causation.
+The controlled native-pointer mechanism above is confirmed; attributing these
+host occurrences to it remains inferred, even after green repetition runs.
+
+The [host-pill verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1857#issuecomment-6037254010)
+inspected JSON and matching logs for revision
+`1d8d34e65be97d5c3baccb6d656be92948ffcf81`, containing main `44d28c65034c`
+and #1836. All three acceptance runs used Linux x86_64, Electron 33.4.11,
+shared Xvfb `:99`, shown default 1100×800 windows with native-pointer protection
+and explicit `--retries=0`. The named host test was present, executed and passed
+in both repetition runs and once in the full run.
+
+| Run | Workers | Executed / passed / failed / skipped | Retained result |
+| --- | --- | --- | --- |
+| Named host test, 20 repetitions | 1 | 20 / 20 / 0 / 0 | `/tmp/builder-1823/named-one.json` |
+| Named host test, 20 repetitions | 3 | 20 / 20 / 0 / 0 | `/tmp/builder-1823/named-three.json` |
+| Full default fake-transport suite | 3 | 335 / 335 / 0 / 4 | `/tmp/builder-1823/full-default.json` |
+
+Matching `.log` files and `*-results/` artifact directories are retained in
+`/tmp/builder-1823/`. The full run also executed/passed the independent-cover
+regression once. Its four skips are existing macOS-only badge and window-reopen
+checks; there were no unrelated failures. The dispatcher verifier gate on
+`339423caac720ca3ac4391d956ab7b04f244fe90` independently recorded 335 executed,
+335 passed, zero failed and four skipped, with the named host test present and
+passed. Its source, launch fixture and product presentation were unchanged.
+
+This is an evidence-only resolution: retain the
+[host-pill contract](channel-list-control-name-pill.md#host-edit-pill-verification)
+without another observation or fixture correction. These passes do not diagnose
+the separate Welcome stall assigned to #1842 below. The results record in the
+[plan](../../specs/architecture/1823-host-pill-reliability.md#revisions) changes no
+tested code; no live-Claude acceptance applies.
+
 ### Separate Welcome readiness boundary
 
 The [maintainer's rescope](https://github.com/pyrycode/pyrycode-desktop/issues/1813#issuecomment-6030925132)
@@ -193,5 +234,32 @@ executed/passed 100 launches, 0 failed, 0 skipped, three workers, retries zero
 (`observed-launches-after-build.json` in that directory); none reproduced the
 stall or triggered its delayed observer. The earlier `observed-launches.json`
 overlapped rebuilding `out/` and is invalid evidence. Green launches cannot
-diagnose the original failure; #1842 needs renderer responsiveness, frame/timer
-progress and native window state from a failing launch before teardown.
+diagnose the original failure.
+
+Default-tier `launchPairedApp` now registers page-specific Welcome diagnostics
+around its initial `pairFromUnpairedLaunch(page, payload, label?)` drive. The
+shared helper wraps the ordinary click without changing its contract or callers;
+unregistered pages, including the real tier, click directly. A click pending for
+five seconds or rejecting earlier starts one capture, before teardown. Fast
+success performs no diagnostic renderer/native probes, attachment or extra wait.
+The observer ends at click settlement; pairing and confirmation are not sampled.
+The 30-second actionability timeout, retries, real input, native-pointer protection
+and normal flow remain unchanged.
+
+The fixed `welcome-stall` JSON attachment correlates with launch-fate through a
+one-based launch ordinal captured at `watch` registration, before concurrent
+launch setup can change the count. Native visibility/minimization/focus/bounds
+are read independently of renderer response. Renderer readings contain Welcome
+presence/enabled/bounds and frame/timer progress over a recorded interval.
+Probes share a two-second capture budget, with a 750ms sampling target and
+explicit unavailable outcomes; only validated primitives and fixed labels enter
+the report. See [capture and cleanup ownership](e2e-harness-launch-fate.md#welcome-stall-diagnostics)
+and [revision-separated acceptance](e2e-harness-launch-fate.md#recorded-welcome-diagnostic-acceptance).
+
+No natural Welcome stall was captured while validating this instrumentation.
+Controlled nonresponse and advancing-timer/zero-frame faults prove capture only,
+without requiring actual OS minimization. The historical cause remains unknown.
+When the first natural failure arrives, retain its attachments and file a
+follow-up that distinguishes observations from hypotheses, establishes a
+confirmed cause with a check separating alternatives, then fixes that boundary
+with a regression. The separate hover diagnosis supplies no Welcome cause.

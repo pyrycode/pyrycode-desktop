@@ -58,6 +58,72 @@ confirms both tests below were present, executed and passed in that run (scoped 
 - `remote marks clear mounted attention before refresh and survive stale lists and local opening`
 - `two hosts sharing an ID retain independent read state, dots and badge contribution`
 
+### Agent-switch settings verification
+
+The mounted regression must settle an own-agent write before switching: optimistic model text alone
+does not prove a confirmed override exists. In
+[`agent-switch-confirmation.spec.ts`](../../../e2e/agent-switch-confirmation.spec.ts), wait for the
+Sonnet current-model marker and the sheet's model list to lose `aria-busy`, confirm through the existing
+switch dialog, then deliver the owning-host target-agent list and incoming settings. Require the extra
+settings request, incoming GPT-6 Luna footer and open-sheet marker, and low rather than high effort
+offerings. Reuse the spec's ticket-local opening fixture; no shared harness or downstream picker path
+is needed. Store/bridge isolation is covered separately by
+[`agentSettingsLifecycle.test.ts`](../../../src/renderer/src/store/agentSettingsLifecycle.test.ts).
+
+The [plan's baseline record](../../specs/architecture/1845-settings-agent-switch-lifecycle.md#revisions)
+on unmodified main `95ed3951e38df40550eae2680068a6bc0f417563` reports 2 executed,
+1 passed and 1 failed focused browser scenarios; the skipped count was not supplied.
+The new regression failed at the incoming GPT-6 Luna footer assertion while the footer retained
+`sonnet`, despite incoming Codex settings/offerings. Its recorded DOM evidence path is
+`/tmp/builder-1845/main-regression-error-context.md`.
+
+At reviewed head `c98d5c0c76a50ef80db2cd7a9c132faff3ce4887` on 2026-10-07,
+dispatcher gate 6 (`npx playwright test --reporter=json`) ran 336 tests: 335 passed,
+1 failed and 4 skipped. The
+[verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1860#issuecomment-6038815859)
+confirms both named scenarios were present, executed and passed (2 passed, 0 failed, 0 skipped):
+
+- `mounted agent switch dismissals, single dispatch, progress, refusal and authoritative success`
+- `confirmed own-agent settings yield to incoming footer and open sheet on authoritative switch`
+
+The unrelated chat-history failure passed its selected rerun: 1 executed, 1 passed,
+0 failed and 0 skipped. Unit evidence is aggregate only: 9,356 executed/passed,
+0 failed and 3 skipped; individual unit results are not enumerated. The PR also records the repaired
+focused browser run as 2 executed/passed, 0 failed and 0 skipped. No live-Claude run is required or
+claimed for this renderer lifecycle proof; separate live hand-over remains with #1662.
+
+The same verdict inspected synthetic captures attributed to that head: sheet
+`/tmp/builder-1845/incoming-settings-1280.png`, footer
+`/tmp/builder-1845/incoming-footer-1280.png` and minimum-width footer
+`/tmp/builder-1845/incoming-footer-800.png`. They show incoming GPT-6 Luna/low readings and Codex
+sheet offerings at 1280×800 and the footer at 800×600. These are recorded scratch paths, not committed
+assets. Presentation code is unchanged. The builder compared the footer with Figma `115:3683`;
+sheet node `20:100` was unavailable, and the verifier made no fresh Figma comparison.
+
+### Served-page persistence verification
+
+Parser/store regressions in `inboundMessage`, `historyPageBridge`, `chatHistory`,
+`chatHistoryWriter`, `chatHistoryStore` and `finishedAgentHistory` cover skipped ids,
+admission, strict metadata, protected restoration/allocation, host lifetimes and
+immutable finish evidence.
+
+The [final verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1852#issuecomment-6035527996)
+at `ea4d7d35` on 2026-10-07 records units: 9,329 executed/passed, 0 failed,
+3 skipped; no per-test unit counts supplied. Dispatcher gate 6
+(`npx playwright test --reporter=json`): 332 executed/passed, 0 failed, 4 skipped.
+It confirms these named browser cases were present, executed and passed:
+
+- `a correlated repeated served page contributes assistant and tool rows only once`
+- `receipt saturation still saves a repeated page and later live content across fresh relaunches`
+- `records received content, drains buffered quit, and reads locally after relaunch`
+
+Scoped counts: history-walk 3 executed/passed, 0 failed/skipped; recording
+8 executed/passed, 0 failed, 1 window-close platform skip. Assistant/tool counts defeat
+user-message-only suppression; asking from the updated cursor proves repeat
+settlement before absence checks. Cancelling an echo retains content/keys with
+advanced allocation; whole-snapshot equality would stop quit/relaunch proof early.
+This is fake transport; no live-Claude run was required or performed.
+
 ### Equal-id received history
 
 [`message-reply.spec.ts`](../../../e2e/message-reply.spec.ts) now verifies separate
@@ -219,18 +285,18 @@ in 30/30 cycles; neither observation is a replacement for counted suite evidence
 See [Desktop isolation](e2e-harness-desktop-isolation.md#desktop-isolation-default-tier-launches) for the
 distinction between this local observation and shared launch protection.
 
-The display's real pointer is separate from Playwright's injected pointer.
-A competing window over the real pointer can trigger native exit and clear
-`:hover`; moving the same window to a corner retains hover despite focus change.
-Shown default-tier launches now ignore native mouse events on current and later
-windows, preserving Playwright renderer hit tests and actionability. Regression
-interference must come from an independent input-enabled process: a same-app
-cover inherits the protection and can falsely pass a deletion mutation.
-Keep an unprotected mutation serial, because concurrent negative controls
-contend for the display's single pointer. See the
+Native pointer input is separate from Playwright input. A window over the pointer
+clears `:hover`; a corner window retains hover despite focus change.
+Shown default-tier launches ignore native mouse events on current/later windows,
+preserving renderer hit tests and actionability. Use an independent input-enabled
+process for interference: same-app covers inherit protection and can falsely pass
+a deletion mutation. Keep unprotected mutations serial to avoid pointer contention. See
 [controlled boundary and counted evidence](e2e-harness-desktop-isolation.md#native-display-pointer-protection).
-This hover diagnosis does not establish the cause of the unresolved
-[Welcome actionability stall](e2e-harness-desktop-isolation.md#separate-welcome-readiness-boundary).
+
+For a [Welcome stall](e2e-harness-desktop-isolation.md#separate-welcome-readiness-boundary),
+retain `welcome-stall` and launch-fate before teardown. Controlled faults, green
+reruns and the hover finding establish no Welcome cause. Check attachments through
+real `TestInfo`, not just sink doubles. See [capture ownership and evidence](e2e-harness-launch-fate.md#welcome-stall-diagnostics).
 
 A sticky offset is relative to the scrollport content box.
 Read the running window's boxes when a padded scroller is involved.
@@ -538,51 +604,8 @@ reproduction is claimed. See [diagnosis and deterministic fault coverage](e2e-ha
 
 ### Inline question verification
 
-The [final inline-question verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1783#issuecomment-6024030746)
-reviewed `98f3db3893fdbdb56fc4dc5fb46c106b4cf58c4d` on 2026-10-06. Its full fake-transport
-run executed 289 tests: 288 passed, 1 failed, 4 skipped. The unrelated sidebar name-pill tooltip
-failure passed its focused rerun (1 executed, 1 passed, 0 failed, 0 skipped). The verdict explicitly
-confirms all 14 scenarios across the following adapted groups were present, executed and passed:
-question picks/scrolling, Continue answers, Cancel refuses, offline-held responses and permission
-answer paths. Those scenarios had 0 failed and 0 skipped; the full-run failure is not hidden in that
-scoped result. Unit evidence records 8,850 executed/passed, 0 failed, 3 skipped.
-
-Static markup tests check all cards and positional native names, one gated response row, escaping,
-trailing-history placement and, at that revision, permission-only composer coverage (superseded by
-[inline permission placement](#inline-permission-verification)). Captured-callback tests drive
-real stores to reject stale replacements/redeliveries, duplicates, cleared drafts and navigated-away
-owners. Browser coverage retains native radio keyboard independence, multi-select/Other behavior,
-ordered trimmed answers, chat navigation, fresh replacement/shortened delivery, offline gates,
-permission hidden-input isolation and restoration of every card's drafts.
-
-Scroll assertions wait two animation frames after positioning so the scroll event has updated
-`following`. The edit case uses a visible option and a real label click while above the bottom;
-focusing an offscreen radio natively scrolls it into view and would confuse focus movement with
-content growth. See [scroll pin](conversation-shell-scroll-pin.md#inline-question-growth), including
-the open observer-retention finding carried forward from review.
-
-The same verifier compared freshly fetched
-[Figma 756:8626](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG/Pyrycode-Client?node-id=756-8626)
-with integrated synthetic captures produced by `question-picks.spec.ts`: 1280×1292 and 800×572 content
-viewports at `/tmp/verifier-1783/inline-desktop.png` and `/tmp/verifier-1783/inline-minimum.png`, with
-reference `/tmp/verifier-1783/figma.png` on the verifier host. Card stacking, theme styling, PyryMark
-headers, Other fields, centered actions and available composer matched. Fixture content, existing
-sidebar chrome, footer availability and translucent chrome differed with state/current main.
-Minimum-width history scrolled with the composer visible. These paths record reviewed scratch
-artifacts; they are not committed product assets or evidence of real-Claude continuation.
-
-The adapted live answer spec selects every inline card before Continue and still requires Claude's
-continuation to name its chosen label first. The Cancel spec refuses the whole surfaced batch and
-still requires continuation/quiescence plus absence of the gated file, while servicing subsequent
-permissions. Optimistic panel disappearance alone proves neither response reached Claude.
-The [latest live run](live-e2e-runbook.md#current-real-claude-gate-state) executed 25 tests: 25 passed,
-0 failed, 1 skipped. The [supplemental per-test evidence](https://github.com/pyrycode/pyrycode-desktop/issues/1729#issuecomment-6024286951)
-confirms both named scenarios were present, executed and passed on their first attempts: the answer
-case in 11.2 s and Cancel in 10.4 s, each with 1 executed, 1 passed, 0 failed and 0 skipped.
-Every test records daemon revision `0.37.0`. The configured gate used
-`npx playwright test --config playwright.real-claude.config.ts --reporter=json` rather than the
-issue's `npm run e2e:real:gate`; counted passes for both required scenarios satisfy its execution
-requirement. This proves continuation through the local test relay, not the production relay.
+Inline-question interaction, live continuation and reviewed captures are recorded in
+[the test-tier reference](development-verification-test-tiers.md#inline-question-verification).
 
 ## Live-test diagnosis
 

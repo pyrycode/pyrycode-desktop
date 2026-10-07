@@ -36,6 +36,7 @@ export function foldQueuedRows(
     if (echo.settled && echo.queuedMsgId === undefined) continue
     const index = rowKeys.indexOf(echo.rowKey)
     if (index === -1 || items[index]?.kind !== 'userText') continue
+    if (echo.delivery === 'waiting') pending.add(index)
     const entry = echo.queuedMsgId === undefined
       ? queued.find(q => q.message_id === echo.messageId && !claimed.has(q.queued_msg_id) &&
           !localEchoes.some(other => other.queuedMsgId === q.queued_msg_id))

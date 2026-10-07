@@ -16,7 +16,7 @@ record acceptance and cancellation requests in the main-owned lifecycle trail ad
 ## The three pieces
 
 1. **A pure envelope builder** — `buildSendMessage` in `src/main/transport/sendMessageEnvelope.ts` (new). A sibling to [hello exchange](hello-exchange.md)'s `buildClientHello`, mirroring its shape minus default injection.
-2. **A send entry point** — `send(payload)` added to `createDaemonConnection` ([daemon connection](daemon-connection.md)). Builds the envelope and hands the bytes to `driver.sendMessage` — inert (no throw, no crash) when disconnected, pre-handshake, or post-terminal.
+2. **A send entry point** — `send(payload)` added to `createDaemonConnection` ([daemon connection](daemon-connection.md)). Validates and admits copied payloads to a bounded main-memory FIFO, draining through `driver.sendMessage` only after authenticated handshake. Delivery outcomes update the existing echo.
 3. **The single `onCommand` registration** — at the composition root (`src/main/index.ts`), routing a `sendMessage` command to `connection.send`, unsubscribed on `will-quit`. Closes [#17](../codebase/17.md)'s deferred "single registration + teardown ownership" item.
 
 ## 1. The pure envelope builder
@@ -39,55 +39,35 @@ export function buildSendMessage(input: SendMessageInput): Uint8Array
 
 ## 2. The send entry point
 
-```ts
-// added to the DaemonConnection interface
-/** Encrypt a send_message envelope onto the live session. Idempotent no-op when not
- *  connected (no driver, pre-handshake, or post-terminal). NEVER throws (parity #490). */
-send(payload: SendMessagePayload): void
-```
+`send(payload: SendMessagePayload): void` validates and encodes before admitting a
+copied payload to the host connection's FIFO. Initial-connect and reconnect gaps
+retain accepted messages with `waiting` status. The cap is 128 messages and 1 MiB
+of encoded envelope bytes per host, in addition to `MAX_PLAINTEXT_BYTES` admission;
+incoming overflow fails visibly without evicting older messages.
 
-The closure binds a tracked composer submission to `deps.serverId`, obtains its
-optional observer, checks `driver === null`, then wraps building and sending in
-`try/catch`. `nextEnvelopeId` starts at **2** (the `hello` consumed id 1):
+A validated `hello_ack` drains in submission order. Synchronous `send-refused`
+keeps the head for the next handshake; other failures remove it and report
+`not-sent`. The draining guard reserves the head's capacity through handoff and
+appends reentrant submissions behind the remainder. Accepted rekey-buffered sends
+belong solely to `noiseSession`, and written messages are never automatically
+retried. `written` establishes a socket write, not daemon acknowledgement.
+The [connection lifecycle](daemon-connection-lifecycle.md#disconnected-composer-message-delivery)
+owns pairing comparison, terminal-failure recovery through unchanged-pairing
+Reconnect, permanent release and shutdown. Holds do not survive restart.
 
-```ts
-function send(payload: SendMessagePayload): void {
-  const observe = deps.messageLifecycle?.sending(
-    payload.message_id, payload.conversation_id, deps.serverId
-  )
-  if (driver === null) {
-    notifySend(observe, { type: 'dropped', reason: 'send-refused' })
-    return
-  }
-  try {
-    const bytes = buildSendMessage({ id: nextEnvelopeId, ts: now(), payload })
-    nextEnvelopeId += 1                      // advance only on a successful build
-    driver.sendMessage(bytes, observe)
-  } catch {
-    notifySend(observe, { type: 'dropped', reason: 'send-failed' })
-  }
-}
-```
-
-### Why the single `driver === null` guard suffices
-
-The load-bearing correctness argument: **the connection does not track handshake state itself** — the driver already drops pre-handshake/post-terminal sends inertly ([`noiseRelayDriver.ts:229`](noise-relay-driver.md), rooted in `NoiseSession.sendMessage`'s `if (state !== 'transport') return`). Every "not connected" state is covered without a `connected` flag:
-
-| State | `driver` | `driver.sendMessage` behaviour |
-|---|---|---|
-| before `start()` / mid-bootstrap / bootstrap-failed | `null` | guarded out by `if (driver === null) return` |
-| driver constructed, pre-handshake | non-null | inert — `session` null or not in `transport` state |
-| connected (transport) | non-null | seals + sends (happy path) |
-| after a fatal terminal | non-null | inert — `onTerminal` nulled `session` |
-| after `stop()` | non-null | inert — `stop()` drives terminal, nulling `session` |
-
-A `connected` flag adds no delivery capability. The optional observer classifies
-these refusals as `send-refused`; a nonthrowing call remains insufficient evidence
-that a frame was written.
+Delivery uses its own observer even when diagnostics has no eligible record.
+A null driver is now a reason to retain an accepted message, rather than silently
+drop it; the driver/session observer still determines whether a send was refused,
+failed, buffered for rekey or written. There is no generic control-request retry.
 
 ### The envelope-id counter
 
-`nextEnvelopeId` is a **module-local, single-writer counter**. `send` contains **no `await`**, so it runs to completion without interleaving — no check-then-act race. It advances **only on a successful build**, so a dropped over-cap send does not consume an id. Gaps are harmless: the daemon uses the envelope `id` for `in_reply_to` correlation, **not sequencing**. (It is a wire-protocol correlation id, **not a Noise nonce** — the Noise session owns its own per-direction nonce counter; no randomness is needed or used here.)
+`nextEnvelopeId` starts at 2 after hello's id 1, is shared with other outbound
+methods and resets on explicit dial. Admission encodes using the current ID
+without consuming it; drain rebuilds the envelope with the current clock and
+`nextEnvelopeId++`. An attempted drain can consume an ID even when refused or
+encoding fails. Envelope IDs correlate replies and are not sequence guarantees
+or Noise nonces; only the Noise session owns its per-direction nonce counters.
 
 ## 3. The single `onCommand` registration
 
@@ -102,6 +82,10 @@ const unregisterCommands = onCommand(ipcMain, (command) => {
       const connection = router.route(command.payload.conversation_id)
       if (connection === null) {
         messageLifecycle.drop(command.payload.message_id, command.payload.conversation_id, 'route-refused')
+        emitDaemonEvent(bindServerOrigin(live.sink, command.serverId ?? null), {
+          type: 'messageDelivery', conversationId: command.payload.conversation_id,
+          messageId: command.payload.message_id, status: 'not-sent'
+        })
       } else {
         connection.send(command.payload)
       }
@@ -112,7 +96,7 @@ const unregisterCommands = onCommand(ipcMain, (command) => {
 app.on('will-quit', () => unregisterCommands())
 ```
 
-- **Registered once**, at composition time, without a `did-finish-load` gate. An unavailable route or driver refuses delivery safely and diagnoses a tracked submission.
+- **Registered once**, at composition time, without a `did-finish-load` gate. An unavailable route reports Not sent and diagnoses a tracked submission; an unauthenticated connection retains admitted payloads.
 - **`onCommand` uses `ipcMain.on` (additive)**, so the single-call discipline at this **sole registration site** is what makes "registering twice does not double-dispatch" true.
 - **Symmetric teardown** — `will-quit` removes the exact listener, mirroring `unregisterPairing`.
 - The command is **already validated** by `isRendererCommand` at the boundary ([#17](../codebase/17.md)). Lifecycle logging separately requires a held, validated composer UUID; command validation alone does not admit an id to diagnostics.
@@ -122,17 +106,19 @@ app.on('will-quit', () => unregisterCommands())
 ```
 renderer composer (#66)
   → window.pyry.sendCommand({ type: 'sendMessage', payload })   // #17 preload bridge
-  → ipcRenderer.send(COMMAND_CHANNEL, cmd)
+  → preload isRendererCommand → ipcRenderer.send(COMMAND_CHANNEL, cmd)
   → ipcMain.on → onCommand listener → isRendererCommand (validate at untrusted boundary)
   → handler: router.route(conversation_id) → connection.send(command.payload)
+  → validate/encode → copied payload FIFO → authenticated drain
   → buildSendMessage({ id, ts, payload }) → driver.sendMessage(bytes, observe)
   → session.sendMessage (AEAD seal) → sendFrame → InnerFrameV2 noise_msg → relay → daemon
 ```
 
 ## Message lifecycle diagnostics
 
-The desktop sends immediately at idle and during a running turn; the daemon owns
-the turn queue. `createMessageLifecycle` in `src/main/messageLifecycle.ts` records
+With authenticated transport the desktop sends at idle and during a running turn;
+the daemon owns the turn queue. Local reconnect holding is separate from that queue.
+`createMessageLifecycle` in `src/main/messageLifecycle.ts` records
 four events through the existing [diagnostic log](diagnostic-log.md), one JSON line
 per observed transition. All records use the held local UUID as `messageId`:
 
@@ -156,7 +142,9 @@ buffer: waiting emits no sent event; flushing observes each item's own write aft
 the cipher swap. Overflow diagnoses only the incoming send. Failed rekey or an
 interrupted flush diagnoses abandoned entries; closing diagnoses retained entries
 as teardown. Splice-before-flush and generation fencing preserve existing ownership
-and ordering. Diagnostics add no delivery queue or crypto behavior.
+and ordering. Diagnostics do not own delivery or crypto behavior. The connection
+retains the optional
+observer across its local hold without reporting a transient refusal as a final drop.
 
 Cancellation emits `message-dropped` with `code: 'user-cancel-request'` once for a
 tracked id, including after acknowledgment. It reports the local request even if
@@ -177,10 +165,13 @@ strings never enter these records.
 
 | Failure | Layer | Result |
 |---|---|---|
-| Over-cap plaintext (huge `text`) | `encodeEnvelope` → `WireEncodeError` | Caught in `send`; id **not** consumed; tracked submission gets `send-failed`. |
-| Driver / wasm throw during a connected send | `driver.sendMessage` | Caught by the full-body `try/catch`; tracked submission gets `send-failed`. |
-| Command arrives disconnected / pre-handshake / post-terminal | `driver === null` guard **or** driver/session refusal | No write or throw; tracked submission gets `send-refused`. |
-| Malformed command from the renderer | `isRendererCommand` ([#17](../codebase/17.md)) | Dropped at the boundary before `send`; never reaches this layer. |
+| Invalid/over-cap message | Validation or `encodeEnvelope` admission | No FIFO entry; `not-sent`, with content-free failure observation. |
+| Incoming count/byte overflow or stopped connection | FIFO admission | Reject newest entry as `not-sent`; preserve older holds. |
+| No authenticated driver / synchronous send refusal | Connection hold / driver observer | Retain payload as `waiting` for a successful same-pairing handshake. |
+| Terminal connection failure | Connection lifecycle | Retain payload, mark `not-sent`; unchanged-pairing explicit Reconnect retries. |
+| Driver/encoding/write/rekey failure after handoff | Drain / send observer | `not-sent`; no automatic retry of that entry. |
+| Unroutable conversation | Trusted main router | Stamped `not-sent`; optional command host ID is attribution only. |
+| Malformed command | Preload and main `isRendererCommand` | Preload throws fixed `Invalid command`; main independently drops malformed IPC before dispatch. Composer bridge failure preserves draft/attachments and a failed echo. |
 
 The closed lifecycle discard codes are `bridge-failed`, `route-refused`,
 `send-refused`, `send-failed`, `write-failed`, `rekey-buffer-full`,
@@ -188,12 +179,17 @@ The closed lifecycle discard codes are `bridge-failed`, `route-refused`,
 frame-encoding or supervisor/socket-write failure uses `write-failed`; a refused
 or failed write never emits sent. Caught objects are discarded.
 
-These records diagnose a send without adding a per-message failure event to the
-renderer. The existing optimistic echo and delivery UI behavior are unchanged.
+Diagnostics and the typed `messageDelivery` event are independent. The latter carries
+only correlation IDs and a closed status to the [existing echo sidecar](composer-send-internals.md#2-local-delivery-status-and-receipt-settlement);
+no payload, key, raw bytes or caught error reaches it.
 
 ## The parity guard (mobile #490 / #31)
 
-Mobile's first real-device run crashed because a relay command started a call with no error handling and the uncaught throw killed the process. The desktop send path **must never throw out of the handler or the module**: a command arriving while disconnected, pre-handshake, or post-terminal is **dropped, never propagated as a crash**. The full-body `try/catch` (not just around the build) plus the `driver === null` guard are the deterministic no-throw guarantee. [#31](https://github.com/pyrycode/pyrycode-desktop/issues/31) is the broader sweep across all relay commands; #65 landed the guard for the one send path.
+Transport send failures must not escape the handler or crash the process. Admission
+and drain catch validation/encoding/driver exceptions and expose fixed delivery
+categories. Disconnected accepted messages wait locally; permanent failures remain
+visible on the echo. Preload's deliberate fixed-copy synchronous validation exception
+is handled by the composer, preserving its draft and attachment take.
 
 ## Security properties
 
@@ -212,5 +208,5 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 - [Daemon connection](daemon-connection.md) / [#62](../codebase/62.md) — hosts the `send` entry point alongside `start`/`stop`; owns the `driver` local, the `now` clock seam, and the classify-don't-forward discipline this inherits.
 - [Command channel](command-channel.md) / [#17](../codebase/17.md) — the `onCommand` seam + `isRendererCommand` boundary guard this registers against; #65 closes its deferred single-registration item.
 - [Hello exchange](hello-exchange.md) / [#10](../codebase/10.md) — `buildClientHello`, the pure builder `buildSendMessage` mirrors; both wrap a payload in an `Envelope` and `encodeEnvelope` to UTF-8 bytes.
-- [Noise relay driver](noise-relay-driver.md) / [#50](../codebase/50.md) — `driver.sendMessage(plaintext)`, the send target; its documented pre-handshake/post-terminal inertness is what lets the connection use a single `driver === null` guard.
+- [Noise relay driver](noise-relay-driver.md) / [#50](../codebase/50.md) — `driver.sendMessage(plaintext)`, the send target; its refusal/write observations determine when the connection retains or releases a payload.
 - [Wire codec](wire-codec.md) / [#5](../codebase/5.md) — `encodeEnvelope` (the `WireEncodeError` throw source) and the `Envelope` / `SendMessagePayload` / `MAX_PLAINTEXT_BYTES` types.

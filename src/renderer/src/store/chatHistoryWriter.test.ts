@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { createConversationListStore } from './conversationListStore'
 import { createConversationTimelineStore } from './conversationTimelineStore'
 import { createChatHistoryWriter } from './chatHistoryWriter'
+import { subscribeHistoryPage } from './historyPageBridge'
 import { beginChatHistoryRemoval } from './chatHistoryRemoval'
-import type { ChatHistoryRequest, ChatHistoryResult } from '@shared/chatHistory'
+import { parseChatHistorySnapshot, type ChatHistoryRequest, type ChatHistoryResult } from '@shared/chatHistory'
 import type { StampedDaemonEvent } from '@shared/ipc/events'
 import type { ConversationSummary } from '@shared/wire/types'
 
@@ -234,7 +235,7 @@ describe('chat history recording', () => {
         { kind: 'assistantText', text: 'partial', turnId: 'turn' },
         { kind: 'toolCall', toolUseId: 'tool', input: { path: '/' }, result: { resultDetail: 'detail' } }
       ] })
-    expect(Object.keys(snapshot).sort()).toEqual(['conversationId', 'coverage', 'items', 'kind', 'prependedRows', 'serverId', 'version'])
+    expect(Object.keys(snapshot).sort()).toEqual(['conversationId', 'coverage', 'items', 'kind', 'prependedRows', 'rowIdentity', 'serverId', 'version'])
     h.timelines.getState().markHistoryRequested('chat')
     h.receive('historyRequestFailed', () => h.timelines.getState().recordHistoryFailure('chat', 'history-unavailable', true))
     h.receive('stallDetected', () => h.timelines.getState().dispatchFor('chat', { type: 'stallDetected' }))
@@ -420,10 +421,10 @@ describe('chat history recording', () => {
     await h.writer.flush()
     expect(timelineRequests(h).map(r => [r.serverId, r.snapshot])).toEqual([
       ['a', { version: 1, kind: 'timeline', serverId: 'a', conversationId: 'chat', prependedRows: 0,
-        items: [{ kind: 'assistantText', turnId: 'turn', text: 'second a' },
+        rowIdentity: { rowKeys: [0, 1], nextRowKey: 2 }, items: [{ kind: 'assistantText', turnId: 'turn', text: 'second a' },
           { kind: 'turnBoundary', turnId: 'turn', stopReason: 'end_turn' }], coverage: { status: 'unknown' } }],
       ['b', { version: 1, kind: 'timeline', serverId: 'b', conversationId: 'chat', prependedRows: 0,
-        items: [{ kind: 'assistantText', turnId: 'turn', text: 'first b' },
+        rowIdentity: { rowKeys: [0, 1], nextRowKey: 2 }, items: [{ kind: 'assistantText', turnId: 'turn', text: 'first b' },
           { kind: 'turnBoundary', turnId: 'turn', stopReason: 'end_turn' }],
         coverage: { status: 'received', cursor: 'cursor-b', atStart: false } }]
     ])
@@ -481,4 +482,131 @@ describe('chat history recording', () => {
     expect(h.save).toHaveBeenCalledTimes(2)
     expect(h.log).toHaveBeenCalledWith({ event: 'history-writer-result', code: 'invalid-snapshot' })
   })
+})
+
+describe('served receipt persistence', () => {
+  it('keeps saving with unknown provenance when one receipt exceeds the entire metadata bound', async () => {
+    const h = harness()
+    h.delta('kept')
+    h.receive('historyPageReceived', () => h.timelines.getState().recordHistoryPage('chat', 'bounded', false, [7]))
+    h.receive('historyPageReceived', () => h.timelines.getState().recordHistoryPage('chat', 'oversized', false,
+      Array.from({ length: 100_001 }, (_, i) => i)))
+    expect(h.timelines.getState().timelines.get('chat')?.served).toBeUndefined()
+    h.receive('userText', () => h.timelines.getState().dispatchFor('chat', { type: 'userText', text: 'live' }))
+    await h.writer.stop()
+    const saved = timelineRequests(h).at(-1)!.snapshot
+    expect(saved.items).toMatchObject([{ text: 'kept' }, { text: 'live' }])
+    expect(saved.coverage).toEqual({ status: 'received', cursor: 'oversized', atStart: false })
+    expect(saved).not.toHaveProperty('served')
+    expect(h.log).not.toHaveBeenCalledWith({ event: 'history-writer-result', code: 'invalid-snapshot' })
+  })
+
+  it('bounds empty receipts and recomputes exact evidence when whole older receipts expire', async () => {
+    const h = harness()
+    const snapshot = { version: 1, kind: 'timeline', serverId: 'a', conversationId: 'chat', items: [],
+      prependedRows: 0, coverage: { status: 'received', cursor: 'old', atStart: false },
+      served: { ids: [7], highestId: 7, receipts: [
+        { ids: [7], cursor: 'old', atStart: false },
+        ...Array.from({ length: 99_999 }, () => ({ ids: [], cursor: '', atStart: false }))
+      ] } }
+    const parsed = parseChatHistorySnapshot(snapshot)
+    if (parsed.kind !== 'timeline') throw new Error('expected timeline')
+    h.timelines.getState().beginLocalTimelineRead('a', 'chat')!.complete(parsed)
+    h.receive('historyPageReceived', () => h.timelines.getState().recordHistoryPage('chat', 'new', false, [1]))
+    await h.writer.stop()
+    const saved = timelineRequests(h).at(-1)!.snapshot
+    expect(saved.served?.receipts).toHaveLength(100_000)
+    expect(saved.served?.receipts.at(-1)).toEqual({ ids: [1], cursor: 'new', atStart: false })
+    expect(saved.served?.ids).toEqual([1])
+    expect(saved.served?.highestId).toBe(1)
+    expect(saved.coverage).toEqual({ status: 'received', cursor: 'new', atStart: false })
+    expect(h.log).not.toHaveBeenCalledWith({ event: 'history-writer-result', code: 'invalid-snapshot' })
+  })
+
+  it('saves metadata-only and empty receipts, filters identities with durable rows and restores fresh allocations', async () => {
+    const h = harness()
+    h.list()
+    h.delta('kept')
+    h.receive('attachmentOffered', () => h.timelines.getState().dispatchFor('chat', {
+      type: 'attachmentOffered', attachment: { attachmentId: 'offer', filename: 'live-only' }
+    }))
+    h.receive('historyPageReceived', () => h.timelines.getState().recordHistoryPage('chat', 'one', false, [0, 5]))
+    await h.writer.flush()
+    const first = timelineRequests(h).at(-1)!.snapshot
+    expect(first.items).toHaveLength(1)
+    expect(first.rowIdentity?.rowKeys).toEqual([0])
+    expect(first.rowIdentity?.nextRowKey).toBe(2)
+    h.receive('historyPageReceived', () => h.timelines.getState().recordHistoryPage('chat', 'two', false, []))
+    await h.writer.flush()
+    const saved = timelineRequests(h).at(-1)!.snapshot
+    expect(saved.served).toEqual({ ids: [0, 5], highestId: 5, receipts: [
+      { ids: [0, 5], cursor: 'one', atStart: false }, { ids: [], cursor: 'two', atStart: false }
+    ] })
+    expect(saved.items).toEqual(first.items)
+    const fresh = createConversationTimelineStore(undefined, () => 'a')
+    fresh.getState().beginLocalTimelineRead('a', 'chat')!.complete(JSON.parse(JSON.stringify(saved)))
+    expect(fresh.getState().timelines.get('chat')?.timeline.rowKeys).toEqual([0])
+    expect(fresh.getState().timelines.get('chat')?.served).toEqual(saved.served)
+    let repeat: (event: StampedDaemonEvent) => void = () => {}
+    subscribeHistoryPage(on => { repeat = on; return () => {} }, (id, rows, cursor, atStart, _placements, ids) => {
+      fresh.getState().prependHistoryFor(id, rows)
+      fresh.getState().recordHistoryPage(id, cursor, atStart, ids)
+    }, () => {}, undefined, id => new Set(fresh.getState().timelines.get(id)?.served?.ids))
+    repeat({ type: 'historyPageReceived', serverId: 'a', conversationId: 'chat', cursor: 'repeat', atStart: false,
+      servedIds: [0, 5], entries: [{ id: 5, ts: 'old', event: { type: 'assistantDelta', turnId: 'turn', seq: 0, text: 'kept' } }] })
+    expect(fresh.getState().timelines.get('chat')?.timeline.items).toEqual(saved.items)
+    expect(fresh.getState().timelines.get('chat')?.timeline.nextRowKey).toBe(2)
+    fresh.getState().dispatchFor('chat', { type: 'userText', text: 'live' })
+    fresh.getState().prependHistoryFor('chat', [{ kind: 'assistantText', turnId: 'old', text: 'older' }], true)
+    const restored = fresh.getState().timelines.get('chat')!
+    expect(restored.timeline.items).toMatchObject([{ text: 'older' }, { text: 'kept' }, { text: 'live' }])
+    expect(new Set(restored.timeline.rowKeys).size).toBe(3)
+    expect(restored.timeline.rowKeys).toEqual([4, 0, 2])
+    expect(restored.timeline.nextRowKey).toBe(5)
+    await h.writer.stop()
+  })
+
+  it('removes provenance with the received host, unpair, conversation clear and holder eviction', async () => {
+    const h = harness()
+    const record = (host: string, ids: number[]) => h.receive('historyPageReceived', () =>
+      h.timelines.getState().recordHistoryPage('chat', 'c', false, ids), host)
+    record('a', [1])
+    record('b', [2])
+    expect(h.timelines.getState().timelines.get('chat')?.served?.ids).toEqual([2])
+    const settle = beginChatHistoryRemoval('b')
+    settle(true)
+    expect(h.timelines.getState().timelines.has('chat')).toBe(false)
+    record('a', [3])
+    h.timelines.getState().clearTimelineFor('chat')
+    record('a', [4])
+    expect(h.timelines.getState().timelines.get('chat')?.served?.ids).toEqual([4])
+    for (let i = 0; i < 10; i++) {
+      h.delta('other', `other-${i}`)
+      h.timelines.getState().markViewed(`other-${i}`)
+    }
+    expect(h.timelines.getState().timelines.has('chat')).toBe(false)
+    record('a', [])
+    expect(h.timelines.getState().timelines.get('chat')?.served).toEqual({ ids: [], receipts: [
+      { ids: [], cursor: 'c', atStart: false }
+    ] })
+    await h.writer.stop()
+  })
+})
+
+it('saves all-skipped coverage and narrow legacy pager advances without manufacturing served receipts', async () => {
+  const h = harness()
+  const page = (cursor: string, ids?: number[]) => h.receive('historyPageReceived', () =>
+    h.timelines.getState().recordHistoryPage('chat', cursor, false, ids))
+  page('skipped', [0, 9])
+  await h.writer.flush()
+  page('legacy')
+  await h.writer.flush()
+  expect(timelineRequests(h)).toHaveLength(2)
+  expect(timelineRequests(h)[1].snapshot).toMatchObject({ items: [],
+    coverage: { status: 'received', cursor: 'legacy', atStart: false },
+    served: { ids: [0, 9], highestId: 9, receipts: [{ ids: [0, 9], cursor: 'skipped', atStart: false }] }
+  })
+  page('empty', [])
+  await h.writer.stop()
+  expect(timelineRequests(h)[2].snapshot.served?.receipts.at(-1)).toEqual({ ids: [], cursor: 'empty', atStart: false })
 })

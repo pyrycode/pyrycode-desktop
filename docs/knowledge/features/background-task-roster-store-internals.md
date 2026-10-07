@@ -75,7 +75,15 @@ export interface BackgroundTaskProgressSnapshot {              // progress write
   durationMs: number
   truncatedFields: readonly string[] | null
 }
+export interface BackgroundAgentTimeline {
+  toolCallId: string             // first usable received local_agent start; exact join
+  confirmed: boolean             // roster-derived local_agent qualification, retained once true
+  finishBefore: number | null    // immutable first terminal placement boundary
+  finishOrder: number | null     // immutable conversation-local terminal ordinal
+}
 export interface BackgroundTaskRosterState {
+  agentTimeline: ReadonlyMap<string, ReadonlyMap<string, BackgroundAgentTimeline>> // received-start order, independent of membership
+  rosterAgentIds: ReadonlyMap<string, ReadonlySet<string>> // latest roster's exact local_agent ids, independent of display types
   rosters: ReadonlyMap<string, BackgroundTaskRosterEntry>          // key absent = no roster has arrived (#1563)
   unlistedStarts: ReadonlyMap<string, ReadonlyMap<string, HeldBackgroundTask>>   // conv -> taskId -> started-sourced hold no roster has listed yet (#1563); no surface reads it
   finishedTasks: ReadonlyMap<string, ReadonlySet<string>>          // conv -> taskId claude reported terminal; count + panel grouping
@@ -84,7 +92,7 @@ export interface BackgroundTaskRosterState {
 export type BackgroundTaskRosterStore = BackgroundTaskRosterState & {
   setRoster: (snapshot: BackgroundTaskRosterSnapshot) => void
   setStartedTask: (snapshot: BackgroundTaskStartedSnapshot) => void   // #576
-  setUpdatedTask: (snapshot: BackgroundTaskUpdatedSnapshot) => void   // #577; also files finishedTasks since #1561
+  setUpdatedTask: (snapshot: BackgroundTaskUpdatedSnapshot, finishBefore?: number) => void // also retains first terminal placement
   setTaskProgress: (snapshot: BackgroundTaskProgressSnapshot) => void   // #1640; never touches finishedTasks or droppedTasks
   resetRostersFor: (conversationIds: ReadonlySet<string>) => void   // connected edge, scoped (#1139)
   clearAllRosters: () => void                                       // pairing-boundary drop, nullary (#1139)
@@ -113,7 +121,8 @@ on `HeldBackgroundTask` itself. Mirrors `queueStore`'s DI-factory → singleton 
 and its `ReadonlyMap` copy-on-write idiom throughout: clone the outer map, clone the inner map, replace;
 never mutate `s.rosters`, an entry, or an entry's `tasks` in place — and, since #1563, never mutate
 `s.unlistedStarts` or one of its per-conversation inner maps in place either, a rule #1561 extends to
-`s.finishedTasks` and `s.pendingStops`; it is the same conversation-keyed-map shape one level further in, copy-on-write
+`s.finishedTasks` and `s.pendingStops`, and also applies to `s.agentTimeline` and
+`s.rosterAgentIds`; it is the same conversation-keyed-map shape one level further in, copy-on-write
 throughout. Also mirrors `queueStore`'s setter
 PAIR for the pairing-lifecycle problem ([#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138) /
 [#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139)): a scoped `…For` reset beside a
@@ -183,10 +192,11 @@ cut report**, joined on `conversationId` + `taskId` and never on arrival order �
 before the roster or started frame that first names its task, including while that task is still an
 unlisted hold. It checks the listed `tasks` first, then `unlistedStarts`, and writes the patch into
 whichever place holds the task — an update must not be lost just because its task's roster has not
-arrived yet. It is the only setter that can **miss**: an update naming an unknown conversation, or a
-`taskId` held in **neither** place, returns the state object **itself** unchanged — `Object.is`-provable,
-so "creates no partial entry" (AC2) needs no enumeration of what didn't appear. An update never opens a
-task and never creates a conversation entry, because a patch is a change report about something already
+arrived yet. An update naming an unknown conversation, or a `taskId` held in **neither** place,
+leaves display records unchanged. It returns the state object itself unless existing
+`agentTimeline` evidence captures its first terminal boundary; that evidence survives roster omission.
+An update never opens a task or creates a display conversation entry, because a patch
+is a change report about something already
 alive, not an announcement. On a hit, `latestUpdate` is replaced wholesale (latest-wins — never an
 accumulating list) and nothing else on the held record is touched: an update frame reports no
 `description`, `taskType`, `toolCallId`, or task-level `truncatedFields`. Both miss branches are silent,
@@ -194,10 +204,10 @@ deliberately — a "dropped an unmatched update" log line is exactly where patch
 file (the content-free diagnostics rule, #126). Since #1561, a HIT whose `status` is exactly `completed`,
 `failed` or `stopped` (`isTerminalTaskStatus`, an unexported exact-match helper against a hoisted
 `TERMINAL_TASK_STATUSES` set — never a narrowed union, since `status` is an open string by design) also
-records `taskId` into the conversation's `finishedTasks`. A miss records nothing, terminal or not: on
-claude 2.1.280 the emptier roster usually lands one line before the terminal update, so the miss is the
-*common* case and must stay the same silent no-op it already was, not a special case that needs its own
-branch.
+records `taskId` into the conversation's `finishedTasks`. A display-record miss cannot add
+finished panel/pill membership. On claude 2.1.280 the emptier roster usually lands one line
+before the terminal update, so timeline placement must retain its own finish evidence
+independently of this membership path.
 
 Since #1639, a HIT also writes `status` and `summary` onto the held record (both places a hit can land —
 the listed `tasks` map and an `unlistedStarts` hold — through one shared `outcome(prior)` helper so the two
@@ -231,9 +241,9 @@ patched too, and still refreshes from later roster rows exactly as an unpatched 
 
 `setTaskProgress` (#1640, new) records **one task's latest progress report**, joined on
 `conversationId` + `taskId` exactly like `setUpdatedTask` — the listed `tasks` map first, then
-`unlistedStarts` — and it is the second setter that can **miss**: a report naming a task held in
-neither place returns the state object **itself** unchanged, the same `Object.is`-provable silent
-no-op `setUpdatedTask` already has. On a hit it replaces `progress` wholesale (latest-wins, never a
+`unlistedStarts` — a report naming a task held in neither place returns the state object
+**itself** unchanged. Unlike a terminal update, a progress miss cannot capture timeline
+finish evidence. On a hit it replaces `progress` wholesale (latest-wins, never a
 history) and touches nothing else — not `latestUpdate`, `status`, `summary`, `droppedTasks`, or
 `finishedTasks`: a progress report is not a finish signal and carries no patch. The three counters
 (`totalTokens`, `toolUses`, `durationMs`) are written exactly as received, since the daemon's readings
@@ -257,6 +267,58 @@ nullable return type also forces #568 to branch, so the distinction can't be ign
 is deliberately no whole-map analogue of `queueStore`'s `selectBacklogs`: the reset here clears the map
 wholesale and nothing else reads the map, so shipping an unread read surface would repeat the exact
 dead-export `queueStore` already carries (see [queue store § Edge cases](queue-store.md)).
+
+### Retained Agent timeline evidence
+
+`agentTimeline` is a conversation/task Map for the
+[started background Agent projection](conversation-shell-tool-row-header-groups.md#started-background-agents).
+A first received start creates evidence only for exact `local_agent` with a nonempty
+`toolCallId`, matched without trimming or coercion. Map insertion order records received
+start order; repeated starts cannot replace that join, reorder it or erase a finish.
+Missing/empty ids and other start types supply no timeline join. Evidence can precede
+loaded launch history, but relocation also requires roster confirmation and a loaded
+call named exactly `Agent`; a roster alone creates no provisional row.
+
+`rosterAgentIds` holds each conversation's latest exact `local_agent` ids from roster
+rows. Only `setRoster` replaces it; start-time and later roster confirmation both use
+this set. `HeldBackgroundTask.taskType` cannot prove qualification: even an empty-id
+start can overwrite that display type. Trusting it would let a roster-listed
+`local_bash` task relocate an Agent without genuine local-agent confirmation. Omission
+removes eligibility for a new join, while an established `confirmed` flag stays true.
+
+Minimal unconfirmed evidence survives roster omission too, retaining received order
+for later confirmation; `unlistedStarts` display records still prune as before.
+Confirmed evidence outlives membership and can attach when tool-use history loads its
+launch or children. Neither evidence map extends panel/pill membership or counts.
+`finishedTasks` remains roster-pruned and cannot substitute for timeline evidence.
+
+`setUpdatedTask(snapshot, finishBefore?)` records the first exact `completed`, `failed`
+or `stopped` against existing start evidence, even before confirmation or after the
+display task was removed. It retains the boundary and a `finishOrder` one greater than
+the largest held terminal ordinal in that conversation. Projection uses that ordinal
+when boundaries are equal: if B finishes before A with no ordinary arrival between,
+B stays first even when A started earlier or B's launch loads later. Repeats, roster
+refresh and nonterminal updates cannot move or revive a finish; roster absence,
+unknown/empty statuses and progress never invent one. Updates without start evidence
+cannot reconstruct it.
+
+The existing app-mounted `BackgroundTaskRosterData` listener supplies the addressed
+retained timeline's `nextRowKey` synchronously, falling back to item count or zero;
+callers omitting the boundary use zero. This captures arrival position independently
+of the visible pane, including inactive-conversation updates, under the existing
+owning-host admission. See
+[receipt chronology and history-prefix exclusions](conversation-timeline-store-limits.md#edge-cases-and-limitations).
+The maps are memory-only. Scoped reconnect drops evidence and roster eligibility for
+the server's listed conversations; pairing clear drops both for every conversation.
+Other conversations retain their held evidence references. No new subscription,
+persistence or panel/pill lifetime is introduced.
+
+`backgroundAgentTimeline.test.ts` covers actual-store/projection qualification,
+empty-id display-type overwrite, omission, both clears, first terminal boundaries and
+equal-boundary order for all three terminal statuses. This provenance sequence must
+be tested through the store: projecting pre-confirmed fixtures alone cannot expose
+the wrong qualification source. See the tool-group documentation's
+[recorded fake-transport evidence](conversation-shell-tool-row-header-groups.md#verification).
 
 ### The pill's count, `selectLiveTaskCountFor` (#1561)
 
@@ -362,7 +424,7 @@ listed does not outlive its server's reconnect either — the two maps are filte
 conversation can be a member of one, the other, both, or neither), and both drops are copy-on-write.
 Since #1561 it filters `finishedTasks` the same third way, so a departed server's finished ids do not
 latch past its own reconnect either. It filters `pendingStops` independently by the same ids. When no
-held key **in any of the four maps** is listed — a first
+held roster, hold, finish, stop or Agent-evidence key is listed — a first
 connect, a reconnect of a server holding nothing here, or a map holding only conversations outside the id
 set — the state object is handed straight back, generalising the original `resetRosters`' `size === 0`
 short-circuit so zustand's `Object.is` fires and no listener wakes. A
@@ -374,8 +436,9 @@ whose list has not arrived), pinned by a test rather than left to drift wider la
 **pairing-boundary** drop) is nullary — the `clearAllBacklogs`/`clearAllConversations` shape — so no
 daemon-supplied conversation id or server origin can steer which command lines and patches survive a
 boundary the operator crossed deliberately. It returns `initialBackgroundTaskRosterState` by reference and
-carries the same short-circuit across all four maps: it returns
-`s` only when `rosters`, `unlistedStarts`, `finishedTasks` and `pendingStops` are all already empty, since a store holding
+carries the same short-circuit across membership and retained evidence: it returns
+`s` only when `rosters`, `unlistedStarts`, `finishedTasks`, `pendingStops` and `agentTimeline`
+are all already empty (`rosterAgentIds` shares roster lifetime), since a store holding
 only unlisted holds or only finished ids is not an empty store and the same `local_bash` command text they
 carry must not survive the boundary either — a departed pairing's finished task ids must not latch onto a
 later pairing's roster either. It is invoked only from
@@ -492,9 +555,11 @@ daemon → background_task_updated frame → parseBackgroundTaskUpdatedPayload �
    status — the family's only finish signal — into the snapshot below; #1639 carries summary too)
   → DAEMON_EVENT_CHANNEL → subscribeBackgroundTaskRoster listener (roster + started translators return null first)
     → translateBackgroundTaskUpdated → { conversationId, taskId, patch, status, summary, truncatedFields }   [#1561, #1639]
-    → backgroundTaskRosterStore.setUpdatedTask(snapshot)
+    → BackgroundTaskRosterData captures the addressed timeline's nextRowKey
+    → backgroundTaskRosterStore.setUpdatedTask(snapshot, finishBefore)
       [joins on conversationId + taskId, never on order; miss on unknown conversation OR unknown taskId
-       returns state unchanged, silently, terminal status or not; on a hit replaces latestUpdate wholesale,
+       leaves display records unchanged, silently; existing agentTimeline evidence can still retain
+       its first terminal boundary/order after removal; on a hit replaces latestUpdate wholesale,
        writes status/summary onto the held record for display (#1639), and, when status is exactly
        completed/failed/stopped, also files taskId into finishedTasks (#1561) — two independent reads of
        the same terminal check, one for the DRAWN tag, one for MEMBERSHIP]

@@ -2,6 +2,7 @@ import type { Locator, Page } from '@playwright/test'
 import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import { capturePairedApp } from './fixtures/capturePairedApp'
+import { configureComposerWindow } from './fixtures/composerWindowSetup'
 import { COMPOSER_OPTIONS_LABEL_INSET_PX, COMPOSER_OPTIONS_WINDOW_MARGIN_PX } from '../src/renderer/src/screens/conversation/composerOptionsPlacement'
 
 // Fake-stack UI e2e for the shared options panel's RIGHT-EDGE CLAMP (#847) — the measuring half of the
@@ -196,13 +197,17 @@ for (const size of [{ width: 1280, height: 800 }, { width: 800, height: 600 }]) 
       return []
     } })
     daemon.pushFrame(frame('model_list', { conversation_id: SEEDED_ROW.id, models, dropped_models: 0 }))
-    await app.evaluate(({ BrowserWindow }, dimensions) =>
-      BrowserWindow.getAllWindows()[0].setSize(dimensions.width, dimensions.height), size)
     const trigger = page.locator('.composer__model')
     const panel = page.getByRole('menu', { name: 'Model', exact: true })
     for (const zoom of [1, 1.25]) {
-      await app.evaluate(({ BrowserWindow }, factor) =>
-        BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(factor), zoom)
+      const [contentWidth, contentHeight] = await configureComposerWindow(app, size, zoom)
+      // Native acknowledgement precedes renderer reflow; confirm the real content viewport, then paint.
+      await expect.poll(async () => page.evaluate(({ width, height }) =>
+        Math.abs(window.innerWidth - width) <= 1 && Math.abs(window.innerHeight - height) <= 1,
+      { width: contentWidth / zoom, height: contentHeight / zoom }), { timeout: 5_000 }).toBe(true)
+      await page.evaluate(() => new Promise<void>(resolve => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      }))
       await trigger.click()
       await expect(panel).toBeVisible()
       const geometry = await panel.evaluate(node => {

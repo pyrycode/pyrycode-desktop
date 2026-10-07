@@ -167,4 +167,12 @@ describe('served provenance and row identity validation', () => {
     expect(() => parseChatHistorySnapshot({ ...value, items: [items[0], items[1]],
       rowIdentity: { rowKeys: [1, 1], nextRowKey: 8 } })).toThrow()
   })
+  it('rejects oversized declared receipt counts and aggregate IDs without repairing disk evidence', () => {
+    const ids = Array.from({ length: 200 }, (_, i) => i)
+    const receipt = { ids, cursor: 'opaque', atStart: false }
+    expect(() => parseChatHistorySnapshot({ ...value, served: { ids, highestId: 199,
+      receipts: Array.from({ length: 501 }, () => receipt) } })).toThrow()
+    expect(() => parseChatHistorySnapshot({ ...value, served: { ids: [],
+      receipts: Array.from({ length: 100_001 }, () => ({ ...receipt, ids: [] })) } })).toThrow()
+  })
 })

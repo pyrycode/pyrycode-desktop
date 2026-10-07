@@ -75,7 +75,7 @@
 // `defaultWorkspaceStore` and `pushNotificationPrefStore` do use `localStorage`, so the pattern is in
 // the repo to copy — but that would write conversation CONTENT to renderer-side web storage, surviving
 // the pairing boundary #757 exists to enforce.
-import { parseChatHistorySnapshot, type ChatHistorySnapshot } from '@shared/chatHistory'
+import { MAX_CHAT_HISTORY_ITEMS, parseChatHistorySnapshot, type ChatHistorySnapshot } from '@shared/chatHistory'
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
 import type { HistoryRequestFailure } from '@shared/ipc/events'
@@ -785,15 +785,23 @@ export function createConversationTimelineStore(
         if (servedIds === undefined) return withHistory(s, conversationId, { status: 'loaded', cursor, atStart })
         const held = receivedSlice(s.timelines.get(conversationId)) ?? emptySlice
         const pageIds = [...new Set(servedIds)].sort((a, b) => a - b)
-        const ids = [...new Set([...(held.served?.ids ?? []), ...pageIds])].sort((a, b) => a - b)
         const receipt = { ids: pageIds, cursor, atStart }
         // Preserve the latest exact cursor even when an identical older receipt is repeated.
-        const receipts = [...(held.served?.receipts ?? []).filter(r =>
+        const candidates = [...(held.served?.receipts ?? []).filter(r =>
           r.cursor !== cursor || r.atStart !== atStart || r.ids.length !== pageIds.length ||
           r.ids.some((id, index) => id !== pageIds[index])), receipt]
+        let totalIds = candidates.reduce((total, r) => total + r.ids.length, 0)
+        let first = 0
+        // Expire whole receipts, including their exclusive coverage, before publishing to the writer.
+        while (candidates.length - first > MAX_CHAT_HISTORY_ITEMS || totalIds > MAX_CHAT_HISTORY_ITEMS) {
+          totalIds -= candidates[first].ids.length
+          first++
+        }
+        const receipts = candidates.slice(first)
+        const ids = [...new Set(receipts.flatMap(r => r.ids))].sort((a, b) => a - b)
         const highestId = ids[ids.length - 1]
         const slice: ConversationSlice = { ...held, serverId: receiptHost() ?? held.serverId,
-          served: { ids, receipts, ...(highestId === undefined ? {} : { highestId }) },
+          served: receipts.length === 0 ? undefined : { ids, receipts, ...(highestId === undefined ? {} : { highestId }) },
           history: { status: 'loaded', cursor, atStart },
           coverage: { status: 'received', cursor, atStart }, localRead: undefined }
         return { timelines: s.timelines.has(conversationId)

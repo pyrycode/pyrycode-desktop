@@ -182,6 +182,52 @@ async function observeCommands(app: PairedApp) {
   return () => app.page.evaluate(() => (window as any).__savedCommands as object[])
 }
 
+test('receipt saturation still saves a repeated page and later live content across fresh relaunches', async ({ launchPairedApp }) => {
+  const ids = Array.from({ length: 200 }, (_, i) => i)
+  const receipts = Array.from({ length: 500 }, (_, i) => ({ ids, cursor: `page-${i}`, atStart: false }))
+  const entries = ids.map(id => ({ id, ts, type: id === 0 ? 'assistant_delta' : 'unsupported',
+    payload: { conversation_id: SEEDED_ROW.id, turn_id: 'retained', seq: 0, text: 'retained assistant' } }))
+  const first = await launchPairedApp({ buildReplyFrames: bytes => {
+    const env = decodeEnvelope(bytes)
+    if (env.type === 'list_conversations') return [seedConversationsFrame()]
+    if (env.type === 'request_history') return [frame('history_page', {
+      entries, cursor: 'repeat', at_start: false }, env.id)]
+    return []
+  } })
+  const serverId = first.servers[0].serverId
+  const snapshot = { version: 1 as const, kind: 'timeline' as const, serverId, conversationId: SEEDED_ROW.id,
+    items: [{ kind: 'assistantText' as const, turnId: 'retained', text: 'retained assistant' }], prependedRows: 0,
+    coverage: { status: 'received' as const, cursor: 'page-499', atStart: false },
+    served: { ids, highestId: 199, receipts }, rowIdentity: { rowKeys: [-8], nextRowKey: 42 } }
+  const read = (page: PairedApp['page']) => page.evaluate(({ serverId, conversationId }) =>
+    window.pyry.chatHistory({ operation: 'readTimeline', serverId, conversationId }),
+  { serverId, conversationId: SEEDED_ROW.id })
+  expect(await first.page.evaluate(snapshot => window.pyry.chatHistory({ operation: 'replaceTimeline',
+    serverId: snapshot.serverId, conversationId: snapshot.conversationId, snapshot }), snapshot)).toEqual({ status: 'ok' })
+  await first.app.close()
+  const second = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
+  await second.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await expect(second.page.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(1)
+  await expect(second.page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled({ timeout: 20_000 })
+  await second.page.locator('.conversation__thread').focus()
+  await second.page.keyboard.press('Home')
+  const expected = { ...snapshot, coverage: { status: 'received', cursor: 'repeat', atStart: false },
+    served: { ids, highestId: 199, receipts: [...receipts.slice(1), { ids, cursor: 'repeat', atStart: false }] } }
+  await expect.poll(() => read(second.page)).toEqual({ status: 'stored', snapshot: expected })
+  await expect(second.page.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(1)
+  await first.daemon.pushFrame(frame('message', { conversation_id: SEEDED_ROW.id,
+    message_id: 'later-live', role: 'user', text: 'later live content' }))
+  await expect.poll(async () => snapshotText(await read(second.page))).toBe('retained assistant|later live content')
+  const saved = await read(second.page)
+  expect(saved).toMatchObject({ status: 'stored', snapshot: {
+    served: expected.served, rowIdentity: { rowKeys: [-8, 42], nextRowKey: 43 } } })
+  await second.app.close()
+  const third = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
+  await third.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await expect(third.page.locator('.bubble')).toHaveCount(2)
+  expect(await read(third.page)).toEqual(saved)
+})
+
 test('records received content, drains buffered quit, and reads locally after relaunch', async ({ launchPairedApp }) => {
   let historyAsks = 0
   const queuedText = 'queued echo to cancel'
@@ -220,6 +266,9 @@ test('records received content, drains buffered quit, and reads locally after re
     conversation_id: SEEDED_ROW.id, turn_id: 'partial-turn', seq: 0, text: 'live partial' }))
   await expect.poll(async () => snapshotText(await read())).toContain('live partial')
   const saved = await read()
+  if (saved.status !== 'stored' || saved.snapshot.kind !== 'timeline' || saved.snapshot.rowIdentity === undefined) {
+    throw new Error('Missing saved row allocation evidence')
+  }
   expect(saved).toMatchObject({ status: 'stored', snapshot: { prependedRows: 15,
     coverage: { status: 'received', cursor: 'oldest-page', atStart: true } } })
   expect(snapshotText(saved)).toContain('composer echo saved')
@@ -234,7 +283,11 @@ test('records received content, drains buffered quit, and reads locally after re
   await expect.poll(() => dequeues).toBe(1)
   await daemon.pushFrame(frame('queue_state', { conversation_id: SEEDED_ROW.id, queued: [] }))
   await expect(page.locator('.conversation__thread')).not.toContainText(queuedText)
-  await expect.poll(read).toEqual(saved)
+  // Cancelling the echo removes its durable row, but the consumed identity stays reserved.
+  const afterDrop = { ...saved, snapshot: { ...saved.snapshot, rowIdentity: {
+    ...saved.snapshot.rowIdentity, nextRowKey: saved.snapshot.rowIdentity.nextRowKey + 1
+  } } }
+  await expect.poll(read).toEqual(afterDrop)
 
   // Freeze only renderer timers: the final received updates cannot reach their scheduled save.
   await page.clock.install({ time: new Date('2026-09-12T12:00:00Z') })
@@ -247,7 +300,7 @@ test('records received content, drains buffered quit, and reads locally after re
   expect(snapshotText(await read())).not.toContain('final buffered text')
   forwarder.closeClientLeg(4401)
   await expect.poll(() => page.getByRole('button', { name: 'Connection error - Reconnect', exact: true }).count()).toBe(1)
-  expect(await read()).toEqual(saved)
+  expect(await read()).toEqual(afterDrop)
   expect(await page.evaluate((serverId) => window.pyry.chatHistory({ operation: 'replaceList', serverId,
     snapshot: { version: 1, kind: 'list', serverId, conversations: [] } }), serverId)).toEqual({ status: 'ok' })
   expect(await page.evaluate(() => window.pyry.chatHistory({ operation: 'readList', serverId: 'unsaved-host' })))
@@ -280,7 +333,8 @@ test('records received content, drains buffered quit, and reads locally after re
   expect(snapshotText(reread)).toContain('loaded history 0')
   expect(snapshotText(reread)).toContain('composer echo saved')
   expect(reread).toMatchObject({ status: 'stored', snapshot: { prependedRows: 15,
-    coverage: { status: 'received', cursor: 'oldest-page', atStart: true } } })
+    coverage: { status: 'received', cursor: 'oldest-page', atStart: true },
+    rowIdentity: afterDrop.snapshot.rowIdentity, served: afterDrop.snapshot.served } })
   if (reread.status !== 'stored' || reread.snapshot.kind !== 'timeline') throw new Error('missing timeline')
   expect(reread.snapshot.items.some((i) => i.kind === 'turnBoundary')).toBe(false)
   expect(await second.page.evaluate((serverId) => window.pyry.chatHistory({ operation: 'readList', serverId }), serverId))

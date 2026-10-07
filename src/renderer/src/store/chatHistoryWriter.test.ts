@@ -4,7 +4,7 @@ import { createConversationTimelineStore } from './conversationTimelineStore'
 import { createChatHistoryWriter } from './chatHistoryWriter'
 import { subscribeHistoryPage } from './historyPageBridge'
 import { beginChatHistoryRemoval } from './chatHistoryRemoval'
-import type { ChatHistoryRequest, ChatHistoryResult } from '@shared/chatHistory'
+import { parseChatHistorySnapshot, type ChatHistoryRequest, type ChatHistoryResult } from '@shared/chatHistory'
 import type { StampedDaemonEvent } from '@shared/ipc/events'
 import type { ConversationSummary } from '@shared/wire/types'
 
@@ -485,6 +485,44 @@ describe('chat history recording', () => {
 })
 
 describe('served receipt persistence', () => {
+  it('keeps saving with unknown provenance when one receipt exceeds the entire metadata bound', async () => {
+    const h = harness()
+    h.delta('kept')
+    h.receive('historyPageReceived', () => h.timelines.getState().recordHistoryPage('chat', 'bounded', false, [7]))
+    h.receive('historyPageReceived', () => h.timelines.getState().recordHistoryPage('chat', 'oversized', false,
+      Array.from({ length: 100_001 }, (_, i) => i)))
+    expect(h.timelines.getState().timelines.get('chat')?.served).toBeUndefined()
+    h.receive('userText', () => h.timelines.getState().dispatchFor('chat', { type: 'userText', text: 'live' }))
+    await h.writer.stop()
+    const saved = timelineRequests(h).at(-1)!.snapshot
+    expect(saved.items).toMatchObject([{ text: 'kept' }, { text: 'live' }])
+    expect(saved.coverage).toEqual({ status: 'received', cursor: 'oversized', atStart: false })
+    expect(saved).not.toHaveProperty('served')
+    expect(h.log).not.toHaveBeenCalledWith({ event: 'history-writer-result', code: 'invalid-snapshot' })
+  })
+
+  it('bounds empty receipts and recomputes exact evidence when whole older receipts expire', async () => {
+    const h = harness()
+    const snapshot = { version: 1, kind: 'timeline', serverId: 'a', conversationId: 'chat', items: [],
+      prependedRows: 0, coverage: { status: 'received', cursor: 'old', atStart: false },
+      served: { ids: [7], highestId: 7, receipts: [
+        { ids: [7], cursor: 'old', atStart: false },
+        ...Array.from({ length: 99_999 }, () => ({ ids: [], cursor: '', atStart: false }))
+      ] } }
+    const parsed = parseChatHistorySnapshot(snapshot)
+    if (parsed.kind !== 'timeline') throw new Error('expected timeline')
+    h.timelines.getState().beginLocalTimelineRead('a', 'chat')!.complete(parsed)
+    h.receive('historyPageReceived', () => h.timelines.getState().recordHistoryPage('chat', 'new', false, [1]))
+    await h.writer.stop()
+    const saved = timelineRequests(h).at(-1)!.snapshot
+    expect(saved.served?.receipts).toHaveLength(100_000)
+    expect(saved.served?.receipts.at(-1)).toEqual({ ids: [1], cursor: 'new', atStart: false })
+    expect(saved.served?.ids).toEqual([1])
+    expect(saved.served?.highestId).toBe(1)
+    expect(saved.coverage).toEqual({ status: 'received', cursor: 'new', atStart: false })
+    expect(h.log).not.toHaveBeenCalledWith({ event: 'history-writer-result', code: 'invalid-snapshot' })
+  })
+
   it('saves metadata-only and empty receipts, filters identities with durable rows and restores fresh allocations', async () => {
     const h = harness()
     h.list()

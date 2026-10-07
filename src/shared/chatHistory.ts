@@ -4,6 +4,7 @@ import { MAX_SERVER_ID_LENGTH } from './ipc/unpair'
 
 export const CHAT_HISTORY_CHANNEL = 'pyry:chat-history'
 export const CHAT_HISTORY_FLUSH_CHANNEL = 'pyry:chat-history-flush'
+export const MAX_CHAT_HISTORY_ITEMS = 100_000
 
 /** Display records only: no running state, permissions, retry offers or attachment bodies. */
 export type DurableThreadItem =
@@ -103,7 +104,7 @@ function nullable<T>(v: unknown, parse: (v: unknown) => T): T | null {
   return v === null ? null : parse(v)
 }
 function array<T>(v: unknown, parse: (v: unknown) => T): T[] {
-  if (!Array.isArray(v) || v.length > 100_000) return invalid()
+  if (!Array.isArray(v) || v.length > MAX_CHAT_HISTORY_ITEMS) return invalid()
   return Array.from(v, parse)
 }
 function choice<T extends string>(v: unknown, choices: readonly T[]): T {
@@ -209,7 +210,7 @@ function servedHistory(value: unknown): ServedHistory {
     const r = record(value)
     const ids = orderedIds(r.ids)
     total += ids.length
-    if (total > 100_000) return invalid()
+    if (total > MAX_CHAT_HISTORY_ITEMS) return invalid()
     return { ids, cursor: string(r.cursor), atStart: bool(r.atStart) }
   })
   const union = [...new Set(receipts.flatMap(r => r.ids))].sort((a, b) => a - b)

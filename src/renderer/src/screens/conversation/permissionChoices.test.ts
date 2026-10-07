@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createPermissionChoices } from './permissionChoices'
+import { createPermissionConsent } from './permissionConsent'
 import { initialModalState, reduceModal, type ModalPrompt } from '../../store/modalPrompts'
 
 const prompt: ModalPrompt = { modalId: 'request', conversationId: 'chat', class: 'permission',
@@ -19,6 +20,40 @@ function fixture() {
   return { control, sendCommand, stop, change(next: Partial<typeof current>) { current = { ...current, ...next }; transition() } }
 }
 describe('permission choices', () => {
+  it('rejects captured host callbacks after ownership changes without prompt replacement', () => {
+    const f = fixture()
+    f.change({ serverId: 'other-host' })
+    f.control.activate(prompt, 'reject_once', 'host')
+    f.control.toggle(prompt, true, 'host')
+    f.control.cancel(prompt, 'host')
+    expect(f.sendCommand).not.toHaveBeenCalled()
+    expect(f.control.store.getState().opted).toBeNull()
+  })
+  it('retains checked grants across disposed panes but needs two fresh activations', () => {
+    let displayed = true
+    let notify = () => {}
+    const retained = createPermissionConsent(() => [{ prompt, serverId: 'host' }], () => () => {})
+    const sendCommand = vi.fn()
+    const pane = () => createPermissionChoices(() => ({ prompt: displayed ? prompt : undefined,
+      serverId: 'host', available: true }), fn => { notify = fn; return () => {} },
+      { sendCommand, dispatch: vi.fn() }, retained)
+    const first = pane(), stop = first.start()
+    first.toggle(prompt, true); first.activate(prompt, 'allow_once')
+    displayed = false; notify(); stop()
+    first.activate(prompt, 'allow_once'); first.toggle(prompt, false); first.cancel(prompt)
+    expect(sendCommand).not.toHaveBeenCalled()
+    displayed = true
+    const next = pane(), finish = next.start()
+    expect(next.checked(prompt)).toBe(true)
+    expect(next.store.getState().armedOptionId).toBeNull()
+    next.activate(prompt, 'allow_once')
+    expect(sendCommand).not.toHaveBeenCalled()
+    next.activate(prompt, 'allow_once')
+    expect(sendCommand).toHaveBeenCalledTimes(1)
+    expect(sendCommand.mock.calls[0][0].payload.always_allow).toBe(true)
+    expect(retained.get(prompt, 'host')).toBeNull()
+    finish(); retained.dispose()
+  })
   it('defaults send once without grants; non-default requires the same choice twice', () => {
     const f = fixture()
     f.control.toggle(prompt, true)

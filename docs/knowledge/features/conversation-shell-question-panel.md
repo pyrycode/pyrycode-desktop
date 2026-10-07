@@ -4,39 +4,39 @@ Part of [Conversation shell](conversation-shell.md), over the [question-batch mo
 store](question-batch-model.md). Since [#1729](../../specs/architecture/1729-inline-questions.md),
 clarification questions render together at the end of their owning conversation's scrollable history.
 This supersedes the composer replacement, header tabs and stepping introduced by #906/#915/#916.
-The [permission/trust panel](conversation-shell-permission-modal.md) keeps its separate input-area placement.
+The [permission/trust panel](conversation-shell-permission-modal.md) shares the trailing-history seam
+and takes precedence over the retained questionnaire.
 
 `useQuestionBridge()` mounts unconditionally in `App.tsx`, beside `useModalBridge`, for the app's
 lifetime. Requests for background conversations stay pending without navigating to them.
 
 ## Composer placement
 
-`ComposerSlot` mounts the permission panel through `Composer.beforeComposer` and sets
-`covered={hasPermission}`. A pending questionnaire alone leaves the message box and desktop footer
-available under their existing connection and turn gates. The status area remains a sibling of the
-covered composer. History and sidebar navigation remain available throughout either request type.
+`ComposerSlot` keeps the message box, attachments, status area and desktop footer visible during
+either request type, under their existing connection and turn gates. Permission never covers the
+composer. Reply actions focus its end caret immediately; permission dismissal and chat navigation
+do not replay that focus. History loading and sidebar navigation remain usable.
 
 `Timeline` accepts an optional `trailing: ReactNode` after its message and queued rows. The live
-screen supplies `QuestionHistorySlot` only for the open conversation's pending batch, including an
-empty or offline history. Pending-batch presence keeps that history mounted and suppresses the
-empty welcome. The questionnaire is a transient trailing node, never a timeline item, paginated
+screen supplies `QuestionHistorySlot` for an open-chat pending batch, permission/trust or owned
+rejection, including empty/offline history. Active-surface presence keeps history mounted and
+suppresses the empty welcome; an always-mounted empty trailing wrapper would suppress it too.
+The questionnaire is a transient trailing node, never a timeline item, paginated
 history entry or saved message. Offline saved messages can appear above it without saving its content.
 
-`QuestionHistorySlot({ conversationId })` selects that conversation's batch and permission presence.
-Its native `hidden` wrapper hides the questionnaire while current-chat permission/trust takes
-precedence. The composer independently stays mounted under its own `hidden` cover, so its local
-message draft survives temporary coverage; the questionnaire's picks and Other text remain in their
-memory-only store. Resolving the last permission restores all still-pending question cards and the
-composer with their retained drafts. Remote dismissal while hidden leaves no questionnaire to restore.
+`QuestionHistorySlot({ conversationId })` renders `PermissionModal` before the questionnaire's
+native `hidden` wrapper. Current-chat permission/trust hides only that wrapper; the pending full
+batch stays mounted with all picks and Other text in its memory-only store. Resolving the last
+permission restores every still-pending question card. Remote dismissal while hidden leaves no
+questionnaire to restore. The composer's typed draft and attachments stay available throughout.
 
 Native `hidden` removes controls from layout, keyboard focus and the accessibility tree;
 `aria-hidden` alone would leave invisible inputs keyboard-active. The question wrapper has no author
-`display` override. `.composer[hidden] { display: none }` is still required because the author's
-`.composer { display: flex }` otherwise overrides the user-agent hidden rule. Rejection feedback
-alone never sets coverage. Pane remounts on chat navigation still reset the composer's local draft;
-question picks survive that remount in `questionPicksStore`.
+`display` override. Rejection feedback alone never hides the questionnaire. Composer text survives
+chat navigation in its host/conversation-keyed draft store without leaking into the other chat;
+question picks survive pane remounts in `questionPicksStore`.
 
-The screen reads only pending-batch presence for empty-history placement. `QuestionHistorySlot`
+The screen reads pending-batch and permission/rejection presence for empty-history placement. `QuestionHistorySlot`
 reads the batch and permission state; `QuestionPanelSlot` alone subscribes to
 `selectBatchSelections(batch.questionBatchId)`. Other-field keystrokes therefore stay in the panel
 leaf rather than re-rendering the whole message history or composer. Store selectors compare results
@@ -117,7 +117,7 @@ send-failure logs contain only fixed event strings.
 ## Verification
 
 Static renderer tests cover all cards, independent group names, escaping, the gated action row,
-trailing history placement and permission-only composer coverage. `QuestionPanelSlot.test.tsx`
+trailing history placement, visible composer/footer and the hidden questionnaire. `QuestionPanelSlot.test.tsx`
 drives captured callbacks against real stores for replacement, duplicate response, redelivery,
 reconnect, permission precedence and navigation; it does not pretend to exercise browser focus.
 

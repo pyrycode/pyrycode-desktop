@@ -98,10 +98,10 @@ whole visual change:**
 
 | | queued | delivered |
 |---|---|---|
-| row class | `message-row message-row--user message-row--queued` (modifier **appended**, never prepended — `ConversationScreen.test.tsx` asserts the class run with `toContain`) | `message-row message-row--user` |
+| row class | `message-row message-row--user message-row--queued message-row--text` | `message-row message-row--user message-row--text` |
 | `data-thread-role` | `queued` | `user` |
-| drop control | `QueuedRowDrop`, a leading sibling of the bubble | none |
-| Send now control | `QueuedRowSendNow`, before Drop, only for explicit `midTurnInput: true` | none |
+| drop control | `QueuedRowDrop` (Cancel), in the leading actions column | none |
+| Send now control | `QueuedRowSendNow`, above Cancel, only for explicit `midTurnInput: true` | none |
 | `<BubbleMeta>` | **suppressed** | rendered |
 | attachments | rendered (message content, not chrome) | rendered |
 
@@ -114,10 +114,10 @@ no meta row, so its box is a different constant height" needed no edit because o
 [#969](conversation-shell-message-bubble.md#what-stays-untouched)'s desktop restyle for free — nothing
 there changed.
 
-**`QueuedRowDrop`** (module-private, moved off the deleted `QueuedBacklog`, markup byte-identical) is
-the drop/cancel affordance #296 shipped: an icon-only button, a leading sibling of the bubble (the row
-is right-aligned, so leading sits it at the inner edge), `aria-label="Drop queued message"`
-(`DROP_QUEUED_LABEL`, a client-owned constant) plus an inline `aria-hidden` SVG glyph. It rides a row
+**`QueuedRowDrop`** (module-private, moved off the deleted `QueuedBacklog`) is
+the drop/cancel affordance #296 shipped: an icon-only button in the actions column left of the bubble,
+`aria-label="Drop queued message"` (`DROP_QUEUED_LABEL`, a client-owned constant)
+plus an `aria-hidden` mask span. It is disabled without `onDropQueued`. It rides a row
 **only** while `queued !== null` — before #1214 "no delivered row can reach this button" was structural
 (only `QueuedBacklog` rendered it); it is now a condition, guarded one level up by
 `foldQueuedRows`' local-ownership join above, and asserted directly in the renderer spec
@@ -149,9 +149,9 @@ did.
 adds `midTurnInput` and `onSendQueuedNow` optional props to `Timeline` / `TimelineRow`.
 The [run-config selector](run-config-store.md#session-capability-flags-1655) requires
 the open conversation's latest `mid_turn_input: true`; false, omission or no
-capabilities object preserves the queued row's previous markup. `QueuedRowSendNow`
-is a native button named "Send queued message now", with the same action gate,
-connected-host click guard and disabled conditions as Drop. Both controls share
+capabilities object leaves only Cancel in the queued actions column. `QueuedRowSendNow`
+is a native button named "Send queued message now", disabled without `onSendQueuedNow`,
+with the same action gate and connected-host click guard as Drop. Both controls share
 hover and focus styling, and Tab can reach Send now.
 
 The injected-effects `sendQueuedNow.ts` helper sends one `sendQueuedNowCommand`
@@ -180,13 +180,27 @@ test-owned gate file and checks the marker in the held turn, no separate later
 turn and one delivered row. Its marker evidence accepts any assistant delta
 in that turn, rather than specifically the final response, as the verifier accepted.
 
-**CSS: the compositing group moved from the region to the row.** `.conversation__queued`'s `opacity:
-0.5` is now `.message-row--queued { opacity: 0.5 }` — the row is the smallest element containing both
-the bubble and `QueuedRowDrop`, which #296 made a *sibling* of the bubble, so a bubble-level opacity
-(the relocation #294 originally sketched) would leave the button at full brightness. Everything else
-the region contributed was redundant: `.conversation__thread` already declares the same `gap:
-var(--space-3)` / `padding: var(--space-2) var(--space-4)`, so merged rows keep the region's exact
-rhythm with no new rule.
+**Queued side actions (#1868).** The queued `userText` arm renders a direct
+`.message-actions.message-actions--queued` sibling before the bubble. Send now sits above Cancel;
+without the capability, Cancel alone is centred. The column stretches to the bubble's height and
+centres the stack vertically. It is 12px wide (`--space-3`), with a 12px bubble gap and
+`gap: calc(var(--space-3) + var(--space-1) / 4)` between glyphs: 13px, giving 25px top-edge spacing.
+Sent copy/reply keeps its separate 13px column and 12px glyph gap.
+
+Both glyph spans are 12×12px masks from local `queued-send-now.svg` and `queued-cancel.svg` assets.
+Send now matches the composer's normal circular send-chevron; Cancel is the close-modal X without
+its circle. They inherit `--color-inverse-primary` through `currentColor`, including on hover.
+The controls share copy/reply's CSS selectors: 4px vertical/8px horizontal padding with matching
+negative margins gives each a 28×20px target without changing row layout. Only the hovered control
+paints an isolated `::before` layer, inset 4px horizontally from the target, extending 4px beyond
+each glyph edge with `--color-state-hover` fill and `--radius-xs` corners. Keyboard focus keeps
+its 1px solid `--color-outline` outline; focus alone creates no hover layer.
+
+**Dim the bubble, not its ancestor.** `.message-row--queued > .bubble { opacity: 0.5 }`
+replaces the former row-level dimming, preserving the pending bubble, attachments and shadow at
+50% while the column, buttons and hover layers stay fully opaque. Setting a child to `opacity: 1`
+cannot undo an ancestor's opacity compositing group. The 50% value intentionally overrides Figma's
+60% sample. The row retains the shared centred 900px text cap, 40px left inset and wrapping rules.
 
 `items` still comes from `ConversationScreen`'s own `selectBacklogFor(openConversationId ?? '')` read
 ([queue store](queue-store.md), unchanged by this ticket) — #1214 kept the read exactly where
@@ -197,18 +211,38 @@ dep-free re-assert still runs on that render — only the reason changed, from "
 "the fold's input". See that section for what #1214 did to the pin's occupant inventory and to the
 `thread-scroll-pin.spec.ts` criterion that used to be pointed at this region.
 
-No Figma coverage for the queued row or its drop control — the same documented gap as
-[#148](../codebase/148.md)'s thread-chrome states: the mobile file draws only the populated, delivered
-thread (node 16-8/16-21), and node 102-4's desktop Message area has no queued/pending component either.
-\#1214 adds no visual of its own; the "waiting" treatment and the drop control both simply moved. See
-[#294 codebase notes](../codebase/294.md), [#296 codebase notes](../codebase/296.md) and the
-[#1214 architecture spec](../../specs/architecture/1214-fold-queued-backlog-into-thread.md) for full
-design, the security review (hostile-daemon capability bounded to display, §4/§5) and patterns
-established.
+The queued design now comes from [Figma Queued Message Actions](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=847-14138),
+integrated row `847:14149` and hover variants `847:14124` / `847:14133`; see the
+[#1868 plan](../../specs/architecture/1868-queued-message-actions.md). The earlier ad hoc
+icon-button treatment is superseded; callbacks and the two removal clocks above are unchanged.
 
-Send now also has no separate Figma frame. By the decision in
-[#1726](https://github.com/pyrycode/pyrycode-desktop/issues/1726), it follows the
-drop control's icon-button idiom beside Drop; Juhana may overrule this decision.
+### Queued-action testing
+
+`ConversationScreen.test.tsx` statically checks the shared column, glyph spans, control order,
+capability gate, disabled conditions and delivered-row exclusion. It cannot measure 12px glyphs,
+opacity or interaction. `e2e/queued-send-now.spec.ts` measures short and wrapping rows at 800px and
+1280px: column and glyph dimensions, centring, 25px glyph spacing, 12px bubble gap, containment,
+bubble-only dimming, unchanged tint/geometry, isolated hover paint and keyboard focus. Its existing
+frame case checks one `send_queued_now`, preserved queued controls and one row through delivery.
+`e2e/queued-backlog-interrupt.spec.ts` retains drop/optimistic-echo coverage;
+`e2e/message-side-actions.spec.ts` now expects a queued actions column and bubble-only opacity.
+
+**Seed the live timeline before the queue.** A fresh local-history pane hides queue snapshots.
+The geometry fixture first pushes a received `assistant_delta` and waits for its row before
+pushing `queue_state`; a queue-only seed would never exercise these controls.
+
+**Counted acceptance evidence (#1868).** Dispatcher browser gate 6 on
+`e1e9e4b736e8e5eef98e842c939e4470528e4eb7` executed 346 tests: 346 passed, 0 failed,
+4 skipped. The [verifier's verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1876#issuecomment-6045444570)
+confirms the named specs were present and passed: `queued-send-now.spec.ts` 2/2,
+`queued-backlog-interrupt.spec.ts` 1/1 and `message-side-actions.spec.ts` 2/2 (5 executed,
+5 passed, 0 failed, 0 skipped). This includes `queued actions keep Figma geometry, full opacity, isolated hover and keyboard focus at 800 and 1280`.
+The verifier reviewed ten unique integrated synthetic rest/hover/focus captures (twelve files,
+including duplicate resting captures) against the Figma nodes above, with no unresolved deviation.
+Windows were 800×800 and 1280×800; content viewports were 800×773 and 1280×773.
+Captures and a revision/hash manifest were retained under `/tmp/verifier-1876/`, with originals
+under `/tmp/builder-1868/`; these are scratch evidence, not durable repository artifacts.
+Live Claude was not run by the verifier and is not claimed as passed for this presentation change.
 
 ## Screen-snapshot action & display (#324, removed #618)
 

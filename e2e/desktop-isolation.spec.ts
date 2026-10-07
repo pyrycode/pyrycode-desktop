@@ -103,8 +103,8 @@ test('every default-tier Electron launch goes through the shared module', async 
 type PointerWindow = Window & { displayPointerExits: number }
 
 // An independent process retains display input, unlike windows created inside the protected app.
-// The unprotected arm proves that this cover really crosses the hovered window's display pointer.
-test('an independent input-enabled cover crosses an unprotected window but preserves isolated hover', async ({
+// Deleting initial-window protection must lose hover and record a native crossing (mutation check).
+test('an independent input-enabled cover preserves isolated hover', async ({
   launchPairedApp
 }) => {
   test.skip(!e2eShowsWindow(), 'a never-shown window receives no pointer from the display')
@@ -138,56 +138,42 @@ test('an independent input-enabled cover crosses an unprotected window but prese
     const coverPage = await coverApp.firstWindow()
     await expect(coverPage.locator('p')).toHaveText('independent cover')
 
-    for (const isolated of [true, false]) {
-      await app.evaluate(({ BrowserWindow, screen }, isolated) => {
-        const window = BrowserWindow.getAllWindows()[0]
-        const { x, y } = screen.getCursorScreenPoint()
-        const { width, height } = window.getBounds()
-        if (!isolated) window.setIgnoreMouseEvents(false)
-        window.setPosition(x + 200, y + 200)
-        window.setPosition(x - Math.floor(width / 2), y - Math.floor(height / 2))
-        window.setAlwaysOnTop(true, 'screen-saver')
-        window.moveTop()
-      }, isolated)
-      await control.hover()
-      await expect(pill).toBeVisible()
-      await page.evaluate(() => {
-        // This fixed counter observes native crossing events without recording rendered content.
-        (window as unknown as PointerWindow).displayPointerExits = 0
-        document.addEventListener('pointerout', () => {
-          (window as unknown as PointerWindow).displayPointerExits++
-        }, { once: true })
-      })
-      await coverApp.evaluate(({ BrowserWindow, screen }) => {
-        const window = BrowserWindow.getAllWindows()[0]
-        const { x, y } = screen.getCursorScreenPoint()
-        window.setPosition(x - 100, y - 100)
-        window.setIgnoreMouseEvents(false)
-        window.setAlwaysOnTop(true, 'screen-saver')
-        window.show()
-        window.moveTop()
-      })
-      await coverPage.evaluate(() => new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-      ))
-      if (isolated) {
-        await page.evaluate(() => new Promise<void>((resolve) =>
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-        ))
-        expect(await control.evaluate((el) => ({
-          hovered: el.matches(':hover'),
-          displayPointerExits: (window as unknown as PointerWindow).displayPointerExits
-        }))).toEqual({ hovered: true, displayPointerExits: 0 })
-        await expect(pill).toBeVisible()
-      } else {
-        await expect.poll(() => page.evaluate(() =>
-          (window as unknown as PointerWindow).displayPointerExits
-        )).toBeGreaterThan(0)
-        await expect.poll(() => control.evaluate((el) => el.matches(':hover'))).toBe(false)
-        await expect(pill).not.toBeVisible()
-      }
-      await coverApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].hide())
-    }
+    await app.evaluate(({ BrowserWindow, screen }) => {
+      const window = BrowserWindow.getAllWindows()[0]
+      const { x, y } = screen.getCursorScreenPoint()
+      const { width, height } = window.getBounds()
+      window.setPosition(x - Math.floor(width / 2), y - Math.floor(height / 2))
+      window.setAlwaysOnTop(true, 'screen-saver')
+      window.moveTop()
+    })
+    await control.hover()
+    await expect(pill).toBeVisible()
+    await page.evaluate(() => {
+      (window as unknown as PointerWindow).displayPointerExits = 0
+      document.addEventListener('pointerout', () => {
+        (window as unknown as PointerWindow).displayPointerExits++
+      }, { once: true })
+    })
+    await coverApp.evaluate(({ BrowserWindow, screen }) => {
+      const window = BrowserWindow.getAllWindows()[0]
+      const { x, y } = screen.getCursorScreenPoint()
+      window.setPosition(x - 100, y - 100)
+      window.setIgnoreMouseEvents(false)
+      window.setAlwaysOnTop(true, 'screen-saver')
+      window.show()
+      window.moveTop()
+    })
+    await coverPage.evaluate(() => new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    ))
+    await page.evaluate(() => new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    ))
+    expect(await control.evaluate((el) => ({
+      hovered: el.matches(':hover'),
+      displayPointerExits: (window as unknown as PointerWindow).displayPointerExits
+    }))).toEqual({ hovered: true, displayPointerExits: 0 })
+    await expect(pill).toBeVisible()
   } finally {
     try {
       await app.evaluate(({ BrowserWindow }) => {

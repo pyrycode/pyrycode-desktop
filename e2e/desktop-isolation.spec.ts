@@ -1,4 +1,7 @@
-import { readFile, readdir } from 'node:fs/promises'
+import { readFile, readdir, mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import type { ElectronApplication } from '@playwright/test'
+import { electron } from './fixtures/electronLaunch'
 import { join, relative } from 'node:path'
 import { test, expect } from './fixtures/launchPairedApp'
 import { e2eShowsWindow, expectDesktopIsolated, readDesktopIsolation } from './fixtures/desktopIsolation'
@@ -12,7 +15,7 @@ import { e2eShowsWindow, expectDesktopIsolated, readDesktopIsolation } from './f
 // THERE IS NO FAILS-ON-MAIN TEST FOR THE FLAKE ITSELF and this file does not pretend otherwise: it
 // reproduces about once per 77 tests, non-deterministically, and only under operator interference. What
 // is provable is that the isolation is applied and that the whole pairing drive completes under it, and
-// that is what these three tests hold down.
+// that is what the tests below hold down.
 //
 // The two tests split AC1's two consequences, because no single check can see both:
 //  - dropping the isolation → the in-app read-backs (here and in smoke.spec.ts, one per launch site);
@@ -71,6 +74,7 @@ test('every default-tier Electron launch goes through the shared module', async 
   // provable without a live daemon behind a live gate. It applies the same isolation itself (#1672).
   // This spec is excluded from its own scan because the needle appears in its own source, below.
   const ALLOWED = ['fixtures/desktopIsolation.ts', 'fixtures/realDaemon.ts']
+  // This spec's independent input-enabled cover intentionally bypasses launch isolation.
   const SELF = 'desktop-isolation.spec.ts'
   const LAUNCH_CALL = /electron\.launch\(/
 
@@ -94,4 +98,95 @@ test('every default-tier Electron launch goes through the shared module', async 
   }
 
   expect(launchSites.sort()).toEqual([...ALLOWED].sort())
+})
+
+type PointerWindow = Window & { displayPointerExits: number }
+
+// An independent process retains display input, unlike windows created inside the protected app.
+// Deleting initial-window protection must lose hover and record a native crossing (mutation check).
+test('an independent input-enabled cover preserves isolated hover', async ({
+  launchPairedApp
+}) => {
+  test.skip(!e2eShowsWindow(), 'a never-shown window receives no pointer from the display')
+  const { app, page } = await launchPairedApp()
+  const control = page
+    .locator('.channel-list__actions')
+    .getByRole('button', { name: 'Pair new host', exact: true })
+  const pill = control.locator('.channel-list__control-name')
+  const scratch = await mkdtemp(join(tmpdir(), 'pyry-independent-cover-'))
+  let coverApp: ElectronApplication | undefined
+  try {
+    const entry = join(scratch, 'cover.cjs')
+    await writeFile(entry, `
+      const { app, BrowserWindow, screen } = require('electron')
+      app.whenReady().then(() => {
+        const { x, y } = screen.getCursorScreenPoint()
+        const window = new BrowserWindow({
+          x: x - 100, y: y - 100, width: 200, height: 200, show: false,
+          webPreferences: { backgroundThrottling: false }
+        })
+        // Fixed content only; the driver waits for this navigation before mapping the cover.
+        void window.loadURL('data:text/html,<p>independent cover</p>')
+      })
+    `)
+    const env: Record<string, string> = {}
+    for (const [name, value] of Object.entries(process.env)) {
+      if (value !== undefined) env[name] = value
+    }
+    delete env.ELECTRON_RENDERER_URL
+    coverApp = await electron.launch({ args: [entry, `--user-data-dir=${join(scratch, 'profile')}`], env })
+    const coverPage = await coverApp.firstWindow()
+    await expect(coverPage.locator('p')).toHaveText('independent cover')
+
+    await app.evaluate(({ BrowserWindow, screen }) => {
+      const window = BrowserWindow.getAllWindows()[0]
+      const { x, y } = screen.getCursorScreenPoint()
+      const { width, height } = window.getBounds()
+      window.setPosition(x - Math.floor(width / 2), y - Math.floor(height / 2))
+      window.setAlwaysOnTop(true, 'screen-saver')
+      window.moveTop()
+    })
+    await control.hover()
+    await expect(pill).toBeVisible()
+    await page.evaluate(() => {
+      (window as unknown as PointerWindow).displayPointerExits = 0
+      document.addEventListener('pointerout', () => {
+        (window as unknown as PointerWindow).displayPointerExits++
+      }, { once: true })
+    })
+    await coverApp.evaluate(({ BrowserWindow, screen }) => {
+      const window = BrowserWindow.getAllWindows()[0]
+      const { x, y } = screen.getCursorScreenPoint()
+      window.setPosition(x - 100, y - 100)
+      window.setIgnoreMouseEvents(false)
+      window.setAlwaysOnTop(true, 'screen-saver')
+      window.show()
+      window.moveTop()
+    })
+    await coverPage.evaluate(() => new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    ))
+    await page.evaluate(() => new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    ))
+    expect(await control.evaluate((el) => ({
+      hovered: el.matches(':hover'),
+      displayPointerExits: (window as unknown as PointerWindow).displayPointerExits
+    }))).toEqual({ hovered: true, displayPointerExits: 0 })
+    await expect(pill).toBeVisible()
+  } finally {
+    try {
+      await app.evaluate(({ BrowserWindow }) => {
+        const window = BrowserWindow.getAllWindows()[0]
+        window.setIgnoreMouseEvents(true)
+        window.setAlwaysOnTop(false)
+      })
+    } finally {
+      try {
+        await coverApp?.close()
+      } finally {
+        await rm(scratch, { recursive: true, force: true })
+      }
+    }
+  }
 })

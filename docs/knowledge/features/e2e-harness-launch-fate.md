@@ -10,3 +10,20 @@ Launch liveness, exit reports and unconditional diagnostic attachments. See the 
 
 Suppression on a green run did not disappear, it moved to where it was always actually enforced: Playwright's terminal reporter (`reporter: 'list'`) prints an attachment's body only from `formatFailure`, reached only for a result that carries errors, so a passing test's attachment exists in its result but is never printed — the `text/plain` content type (name not underscore-prefixed, truncated at 300 chars) is what makes it inline-readable when it is. Measured, not assumed: a green run leaves one *empty* `test-results/` directory per test that actually attaches (`TestInfo.attach` calls `outputPath()`, which `mkdirSync`s it), and Playwright wipes `test-results/` at the start of every run, so this is per-run litter with no growth. `e2e/launch-fate.spec.ts` drives the real `testInfo` throughout rather than the `recordingSink` double it used to use — that double supplied a constant `status`, substituting exactly the seam that turned out to be broken, so every one of its assertions could pass while a real red carried nothing.
 
+### Initialization ownership
+
+`launchIsolatedApp` watches the acquired Electron app before shown-window
+[display-pointer initialization](e2e-harness-desktop-isolation.md#native-display-pointer-protection).
+Until that initialization returns successfully, the launch helper owns cleanup:
+callers cannot register teardown for a handle they have not received. On rejection
+it awaits `fate.closeWatched(app)` before propagating the original error unchanged.
+A rejecting close records only the fixed `app` teardown label and still preserves
+the initialization error. Neither error's text enters the diagnostic attachment.
+After successful return the caller owns ordinary teardown.
+
+[`desktopIsolation.test.ts`](../../../e2e/fixtures/desktopIsolation.test.ts) uses
+the existing launcher seam and real launch-fate log. Its deferred fake close keeps
+the child alive and the returned promise unsettled until close is released,
+proving ordering rather than merely counting calls. It also checks original-error
+identity, settled exit bookkeeping, success leaving the child running for its
+caller, and close-failure classification without private error contents.

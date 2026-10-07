@@ -216,7 +216,7 @@ a scratch built renderer made this assertion fail with `hoveredRows: 1`, a trans
 resting fill, and correct open fill/control opacities. Recovery from input interference
 must still detect a broken style. The replay recovered confirmed hover and exact fill
 in 30/30 cycles; neither observation is a replacement for counted suite evidence.
-See [Desktop isolation](e2e-harness.md#desktop-isolation-default-tier-launches) for the
+See [Desktop isolation](e2e-harness-desktop-isolation.md#desktop-isolation-default-tier-launches) for the
 distinction between this local observation and the separate shared harness work.
 
 A sticky offset is relative to the scrollport content box.
@@ -247,7 +247,7 @@ The composer long-model cases first confirm native outer size and zoom through
 both renderer dimensions against its returned content size divided by zoom with
 one-pixel tolerance and a five-second bound. Two animation frames elapse before
 opening the menu. A lost setter acknowledgement does not establish whether a change
-ran; use [guarded native setup recovery](e2e-harness.md#tolerating-a-transient-inspection-context-loss-on-reads)
+ran; use [guarded native setup recovery](e2e-harness-context-recovery.md#tolerating-a-transient-inspection-context-loss-on-reads)
 to inspect the effect, rather than passing setters to `readMainProcess` or blindly
 replaying them. Native confirmation alone does not prove renderer reflow.
 
@@ -521,7 +521,7 @@ in both full runs (3 executed/passed, 0 failed, 0 skipped). The skips were two
 app-badge cases, history close/reopen and window-reopen convergence on Linux;
 none counts as proof. Global retry/worker settings and menu assertions are
 unchanged. This is fake-transport evidence; no live Claude or upstream-trigger
-reproduction is claimed. See [diagnosis and deterministic fault coverage](e2e-harness.md#tolerating-a-transient-inspection-context-loss-on-reads).
+reproduction is claimed. See [diagnosis and deterministic fault coverage](e2e-harness-context-recovery.md#tolerating-a-transient-inspection-context-loss-on-reads).
 
 ### Inline question verification
 

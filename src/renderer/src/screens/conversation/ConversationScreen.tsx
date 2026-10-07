@@ -1,3 +1,4 @@
+import { agentSwitchStore, type AgentSwitchStatus } from '../../store/agentSwitchStore'
 import { useReplySuggestionStore, selectReplySuggestion } from '../../store/replySuggestionStore'
 import { useSessionFactsStore, selectSessionFactsFor } from '../../store/sessionFactsStore'
 import { McpServersSection, boundMcpText, requestMcpStatus } from './McpServersSection'
@@ -291,6 +292,12 @@ export function ConversationScreen({
     ? savedTimelineTarget.serverId
     : activeConversation !== null && 'serverId' in activeConversation &&
       typeof activeConversation.serverId === 'string' ? activeConversation.serverId : null
+  useEffect(() => {
+    const dispatch = agentSwitchStore.getState().dispatch
+    dispatch({ type: 'paneChanged', pane: selectedHost === null || openConversationId === null
+      ? null : { conversationId: openConversationId, serverId: selectedHost } })
+    return () => dispatch({ type: 'paneChanged', pane: null })
+  }, [selectedHost, openConversationId])
   const [replyFocusRequest, setReplyFocusRequest] = useState(0)
   const replyToMessage = (role: 'user' | 'assistant', text: string): void => {
     if (selectedHost === null || openConversationId === null) return
@@ -368,6 +375,10 @@ export function ConversationScreen({
     [selectedHost, openConversationId]
   )
   const openAgent = useConversationListStore(selectOpenAgent)
+  const switchStatus = useStore(agentSwitchStore, s => {
+    const status = openConversationId === null ? undefined : s.statuses.get(openConversationId)
+    return status?.serverId === selectedHost ? status : undefined
+  })
   // #1009: the open conversation's queued backlog, read HERE rather than one level down. #1009's own reason
   // was the scroll pin: the backlog was a REGION between the thread and the composer, so its appearance and
   // growth shrank `.conversation__thread`'s viewport, and the pin's re-assert below is a dep-free layout
@@ -664,7 +675,7 @@ export function ConversationScreen({
         replyFocusRequest={replyFocusRequest}
         statusArea={(sendText) => (
           <ComposerStatusArea
-            isRunning={isStatusIconTurning(phase, indicatorState)}
+            isRunning={switchStatus?.type === 'pending' || isStatusIconTurning(phase, indicatorState)}
             trailing={
               /* #1435: the slot's last reading is the open conversation's background-task count, and the
                  pill opens the SAME overlay the overflow menu's Background-tasks item does. #1634: the pill
@@ -685,6 +696,7 @@ export function ConversationScreen({
               resetting={resetting}
               thinkingTokens={thinkingTokens}
               agent={openAgent}
+              switchStatus={switchStatus}
             />
           </ComposerStatusArea>
         )}
@@ -2590,8 +2602,11 @@ function statusRowCopy(
   retry: ApiRetryStatus | null,
   thinkingTokens: number | null,
   resetting: ResettingStatus | null,
-  agent: WireAgent
+  agent: WireAgent,
+  switchStatus?: AgentSwitchStatus
 ): string {
+  if (switchStatus?.type === 'refused') return `The agent did not change.${switchStatus.retryable ? ' Try again.' : ''}`
+  if (switchStatus?.type === 'pending') return resettingLabel(resetting, agent, switchStatus)
   switch (state) {
     case 'resetting':
       return resettingLabel(resetting, agent)
@@ -2688,7 +2703,14 @@ function thinkingLabel(thinkingTokens: number | null): string {
 // ONE TEXT RUN, not constant-plus-span, for the reason stated on `ThinkingIndicator`: the row's label
 // ellipsizes as a unit and two runs draw two ellipses. The handoff outcome is therefore appended into
 // the string, exactly as the retry counter is one function down.
-function resettingLabel(resetting: ResettingStatus | null, agent: WireAgent): string {
+function resettingLabel(resetting: ResettingStatus | null, agent: WireAgent, pending?: Extract<AgentSwitchStatus, { type: 'pending' }>): string {
+  if (pending !== undefined) {
+    const target = pending.target === 'codex' ? 'Codex' : 'Claude'
+    const outgoing = pending.outgoing === 'codex' ? 'Codex' : 'Claude'
+    if (resetting?.phase === 'wrapping_up') return `Switching to ${target}: ${outgoing} is writing a hand-over note…`
+    if (resetting?.phase === 'restarting') return `Switching to ${target}: starting ${target}…`
+    return `Switching to ${target}…`
+  }
   if (resetting === null) return RESETTING_COPY
   switch (resetting.phase) {
     case 'wrapping_up':
@@ -2828,7 +2850,8 @@ export function ThinkingIndicator({
   resetting,
   thinkingTokens,
   toolElapsedSeconds,
-  agent = 'claude'
+  agent = 'claude',
+  switchStatus
 }: {
   state: WorkingIndicatorState | null
   toolName: string | null
@@ -2837,6 +2860,7 @@ export function ThinkingIndicator({
   // phase says. Optional where `resetting` is required, because absent MEANS Claude on the wire and in
   // `selectConversationAgentFor` alike, so the default is that contract rather than a guess.
   agent?: WireAgent
+  switchStatus?: AgentSwitchStatus
   // #1517: REQUIRED, on `toolName`'s and `retry`'s stated reasoning — an optional prop would let the
   // container silently omit it and nothing in this repo could catch that, since every container test
   // renders the idle store. Two closed-set tokens and no free string, so the type-level "this prop
@@ -2845,25 +2869,26 @@ export function ThinkingIndicator({
   thinkingTokens: number | null
   toolElapsedSeconds?: number
 }): JSX.Element | null {
-  if (state === null) return null
+  if (state === null && switchStatus === undefined) return null
   // The tool name belongs to the working/thinking state alone (#967, AC1). ONE const drives both the label
   // and the modifier below, so "the name is state 4's" lives in one expression rather than in two
   // conditions that have to agree — and it narrows `toolName` in place, so neither a `!` nor a cast is
   // needed to hand it to toolWorkingCopy.
   const toolLabel =
-    (state === 'thinking' || state === 'working') && toolName !== null ? toolWorkingCopy(toolName) : null
+    switchStatus === undefined && (state === 'thinking' || state === 'working') && toolName !== null ? toolWorkingCopy(toolName) : null
   // One element, three varying pieces — the toolCall row's `rowClass` idiom above, which likewise varies
   // only a className and keeps a single return. Writing any case as its own early return would duplicate
   // the markup, and a drifted copy is exactly what makes the five labels stop being byte-identical to each
   // other. The modifiers are mutually exclusive: `toolLabel` is null in every superseding state.
+  const styleState = switchStatus === undefined ? state : switchStatus.type === 'pending' ? 'resetting' : null
   const labelClass = `conversation__thinking composer-status__label${
     toolLabel !== null ? ' composer-status__label--tool' : ''
-  }${state === 'stalled' ? ' composer-status__label--stalled' : ''}${
-    state === 'resetting' ? ' composer-status__label--resetting' : ''
+  }${styleState === 'stalled' ? ' composer-status__label--stalled' : ''}${
+    styleState === 'resetting' ? ' composer-status__label--resetting' : ''
   }`
   const label = toolLabel !== null
     ? `${toolLabel}${toolElapsedSeconds === undefined ? '' : ` ${formatToolElapsed(toolElapsedSeconds)}`}`
-    : statusRowCopy(state, retry, thinkingTokens, resetting, agent)
+    : statusRowCopy(state ?? 'resetting', retry, thinkingTokens, resetting, agent, switchStatus)
   return <span className={labelClass}>{label}</span>
 }
 

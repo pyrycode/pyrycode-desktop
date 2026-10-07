@@ -68,3 +68,9 @@ None. Simpler shape considered: a pane-local dialog cannot retain pending outcom
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-07
+
+## Revisions
+
+2026-10-07: `PairedShell` retains active metadata when entering Settings/list, so active ID alone does not establish an open pane. `ConversationScreen` registers client-held pane coordinates on mount and clears them on cleanup through a `paneChanged` action; this closes an unconfirmed dialog and the singleton confirmation binding additionally requires those coordinates. Pending remains untouched. No shell/nav change.
+
+2026-10-07: `ComposerEffortMenu` → `selectDisplayedEffort` prefers the applied reading and preserves explicit null (no model effort parameter). The switch uses this existing selector rather than the saved-only settings projection, omitting null/undefined even when an older saved choice is supported. A singleton composition test first demonstrated stale saved effort dispatch, then verifies the actual command for applied and null readings.

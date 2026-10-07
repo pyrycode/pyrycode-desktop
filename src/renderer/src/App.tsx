@@ -1,3 +1,5 @@
+import { AgentSwitchData } from './store/AgentSwitchData'
+import { AgentSwitchDialog } from './screens/conversation/AgentSwitchDialog'
 import { appUpdateStore } from './store/appUpdateStore'
 import { useEffect, useState } from 'react'
 import { PairedShell } from './PairedShell'
@@ -316,6 +318,8 @@ function App(): JSX.Element {
   return (
     <>
       <ConversationListData />
+      <AgentSwitchData />
+      <AgentSwitchDialog />
       <SessionIdData />
       <ReplySuggestionData />
       <RunSettingsWriteData />

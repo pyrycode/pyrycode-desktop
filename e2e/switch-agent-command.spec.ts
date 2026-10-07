@@ -44,7 +44,15 @@ test('switchAgent reaches only the conversation owner with exact settings', asyn
 
   // A later valid send is a processing barrier for preceding unknown/malformed commands.
   await send({ conversation_id: 'unclaimed', agent: 'codex', model: '' })
-  await send({ conversation_id: SEEDED_ROW.id, agent: 'codex', model: '', effort: null })
+  const rejection = await page.evaluate(payload => {
+    try {
+      window.pyry.sendCommand({ type: 'switchAgent', payload })
+      return null
+    } catch (error) {
+      return error instanceof Error ? error.message : null
+    }
+  }, { conversation_id: SEEDED_ROW.id, agent: 'codex', model: '', effort: null })
+  expect(rejection).toBe('Invalid command')
   const barrier: SwitchAgentPayload = { conversation_id: SECOND_SEEDED_ROW.id, agent: 'codex', model: 'gpt-model' }
   await send(barrier)
   secondPayloads.push(barrier)

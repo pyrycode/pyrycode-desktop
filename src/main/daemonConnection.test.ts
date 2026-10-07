@@ -91,6 +91,116 @@ const RECORD: PairedServerRecord = {
 }
 const FIXED_TS = '2026-07-04T12:00:00.000Z'
 
+describe('disconnected composer delivery', () => {
+  const payload = (message_id = 'held'): SendMessagePayload => ({
+    conversation_id: 'conv', message_id, text: message_id, attachment_ids: ['file-id']
+  })
+  const statuses = (sink: ReturnType<typeof fakeSink>) => emitted(sink).filter(e => e.type === 'messageDelivery')
+
+  it('holds before bootstrap and handshake, drains in order and never resends written entries', async () => {
+    const { connection, sink, drivers } = build({ serverId: RECORD.server })
+    connection.start()
+    connection.send(payload('one'))
+    await vi.waitFor(() => expect(drivers).toHaveLength(1))
+    connection.send(payload('two'))
+    expect(drivers[0].sent).toHaveLength(0)
+    expect(statuses(sink)).toEqual(['one', 'two'].map(messageId => ({
+      type: 'messageDelivery', conversationId: 'conv', messageId, status: 'waiting'
+    })))
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    expect(drivers[0].sent.map(bytes => decodeEnvelope(bytes).payload)).toEqual([payload('one'), payload('two')])
+    drivers[0].observations.forEach(observe => observe({ type: 'sent', connectionId: 'socket' }))
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    expect(drivers[0].sent).toHaveLength(2)
+    expect(statuses(sink).slice(-2).map(e => e.status)).toEqual(['written', 'written'])
+  })
+
+  it('retains terminal failures for unchanged-pairing explicit reconnect', async () => {
+    const { connection, sink, drivers } = await reachConnected()
+    drivers[0].emit({ type: 'relay-link-down', code: 1006 })
+    connection.send(payload())
+    drivers[0].emit({ type: 'terminal', code: 4401, reason: 'fatal' })
+    expect(statuses(sink).at(-1)?.status).toBe('not-sent')
+    connection.reconnect()
+    await vi.waitFor(() => expect(drivers).toHaveLength(2))
+    drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    expect(drivers[1].sent.map(bytes => decodeEnvelope(bytes).payload)).toEqual([payload()])
+  })
+
+  it('keeps the never-written remainder ahead of reentrant sends across a second refusal', async () => {
+    const { connection, drivers, sink } = await reachConnected()
+    const driver = drivers[0]
+    driver.emit({ type: 'relay-link-down', code: 1006 })
+    connection.send(payload('one'))
+    connection.send(payload('two'))
+    const accepted: SendMessagePayload[] = []
+    let refuse = true
+    driver.handle.sendMessage = (bytes, observe) => {
+      const p = decodeEnvelope(bytes).payload as SendMessagePayload
+      if (p.message_id === 'two' && refuse) {
+        observe?.({ type: 'dropped', reason: 'send-refused' })
+        return
+      }
+      accepted.push(p)
+      if (p.message_id === 'one') connection.send(payload('three'))
+      observe?.({ type: 'sent', connectionId: 'socket' })
+    }
+    driver.emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    expect(accepted).toEqual([payload('one')])
+    expect(statuses(sink).filter(e => e.status === 'written').map(e => e.messageId)).toEqual(['one'])
+    await driver.config.loadDialConfig?.()
+    refuse = false
+    driver.emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    driver.emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    expect(accepted).toEqual([payload('one'), payload('two'), payload('three')])
+  })
+
+  it('enforces the aggregate byte cap and independent observers for deferred rekey sends', async () => {
+    const { connection, drivers, sink } = await reachConnected()
+    drivers[0].emit({ type: 'relay-link-down', code: 1006 })
+    for (let i = 0; i < 18; i++) connection.send({ ...payload(String(i)), text: 'x'.repeat(60000) })
+    expect(statuses(sink).filter(e => e.status === 'waiting')).toHaveLength(17)
+    expect(statuses(sink).at(-1)?.status).toBe('not-sent')
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    expect(drivers[0].sent).toHaveLength(17)
+    drivers[0].emit({ type: 'relay-link-down', code: 1006 })
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    expect(drivers[0].sent).toHaveLength(17)
+    drivers[0].observations[0]({ type: 'dropped', reason: 'rekey-abandoned' })
+    expect(statuses(sink).at(-1)).toMatchObject({ messageId: '0', status: 'not-sent' })
+  })
+
+  it.each(['replace', 'remove', 'dispose'])('releases old pairing holds: %s', async action => {
+    let record: PairedServerRecord | null = RECORD
+    const { connection, sink, drivers } = build({ load: async () => record })
+    connection.start()
+    await vi.waitFor(() => expect(drivers).toHaveLength(1))
+    connection.send(payload())
+    if (action === 'dispose') connection.stop()
+    else {
+      record = action === 'remove' ? null : { ...RECORD, token: 'replacement' }
+      connection.reconnect()
+      await vi.waitFor(() => expect(action === 'remove' ? emitted(sink).at(-1)?.type : drivers.length)
+        .toBe(action === 'remove' ? 'failed' : 2))
+      if (action === 'replace') drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    }
+    expect(statuses(sink).at(-1)?.status).toBe('not-sent')
+    expect(drivers.flatMap(d => d.sent)).toHaveLength(0)
+  })
+
+  it('rejects the newest overflow and oversized payload without evicting older holds', async () => {
+    const { connection, sink, drivers } = build()
+    connection.start()
+    await vi.waitFor(() => expect(drivers).toHaveLength(1))
+    for (let i = 0; i < 129; i++) connection.send(payload(String(i)))
+    connection.send({ ...payload('big'), text: 'x'.repeat(MAX_PLAINTEXT_BYTES) })
+    expect(statuses(sink).slice(-2).map(e => [e.messageId, e.status])).toEqual([['128', 'not-sent'], ['big', 'not-sent']])
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    expect(drivers[0].sent.map(b => (decodeEnvelope(b).payload as SendMessagePayload).message_id))
+      .toEqual(Array.from({ length: 128 }, (_, i) => String(i)))
+  })
+})
+
 /** A valid `hello_ack` the daemon would send back, encoded through the real codec. */
 function validHelloAck(): Uint8Array {
   return encodeEnvelope({
@@ -1490,7 +1600,7 @@ describe('createDaemonConnection — send (outbound send_message)', () => {
 
       for (const spy of spies) expect(spy).not.toHaveBeenCalled()
       // send emits no DaemonEvent, so no event carries the plaintext back to the renderer.
-      expect(sink.webContents.send.mock.calls.length).toBe(eventsBefore)
+      expect(emitted(sink).slice(eventsBefore)).toEqual([{ type: 'messageDelivery', conversationId: 'c1', messageId: 'm2', status: 'not-sent' }])
       expect(JSON.stringify(emitted(sink))).not.toContain(SECRET_TEXT)
     } finally {
       for (const spy of spies) spy.mockRestore()
@@ -13143,9 +13253,16 @@ describe('composer diagnostics through the daemon connection', () => {
     const lines: string[] = []
     const lifecycle = createMessageLifecycle(createDiagnosticLog({ sink: { write: line => lines.push(line) } }))
     const ctx = build({ messageLifecycle: lifecycle, throwOnSend: mode === 'driver-failure' })
-    if (mode !== 'unavailable') { ctx.connection.start(); await tick() }
+    if (mode !== 'unavailable') {
+      ctx.connection.start(); await tick()
+      ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    }
     lifecycle.queued(id, 'chat')
     ctx.connection.send({ message_id: id, conversation_id: 'chat', text: mode === 'encode-failure' ? 'SECRET'.repeat(20000) : 'SECRET' })
+    if (mode === 'unavailable') {
+      expect(lines.map(line => JSON.parse(line).event)).toEqual(['message-queued'])
+      ctx.connection.stop()
+    }
     expect(lines.map(line => JSON.parse(line).event)).toEqual(['message-queued', 'message-dropped'])
     expect(JSON.parse(lines[1]).code).toBe(mode === 'unavailable' ? 'send-refused' : 'send-failed')
     expect(lines.join()).not.toContain('SECRET')

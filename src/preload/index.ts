@@ -2,7 +2,7 @@ import { APP_UPDATE_STATE_CHANNEL, APP_UPDATE_ACTION_CHANNEL, projectAppUpdateSt
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import { CHAT_HISTORY_CHANNEL, CHAT_HISTORY_FLUSH_CHANNEL, type ChatHistoryRequest, type ChatHistoryResult } from '../shared/chatHistory'
 import { DAEMON_EVENT_CHANNEL, type StampedDaemonEvent } from '../shared/ipc/events'
-import { COMMAND_CHANNEL, type RendererCommand } from '../shared/ipc/commands'
+import { COMMAND_CHANNEL, isRendererCommand, type RendererCommand } from '../shared/ipc/commands'
 import { DIAGNOSTIC_CHANNEL, type RendererDiagnosticEvent, type MessageLifecycleDiagnostic } from '../shared/ipc/diagnostics'
 import {
   PAIRING_CHANNEL,
@@ -109,6 +109,7 @@ const api = {
    * the bridge — only this typed function does.
    */
   sendCommand: (command: RendererCommand): void => {
+    if (!isRendererCommand(command)) throw new Error('Invalid command')
     ipcRenderer.send(COMMAND_CHANNEL, command)
   },
 

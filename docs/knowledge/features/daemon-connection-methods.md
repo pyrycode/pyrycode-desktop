@@ -25,7 +25,7 @@ export interface DaemonConnection {
   start(): void      // idempotent; emits `connecting`, then sources inputs + constructs the driver
   stop(): void       // idempotent teardown: stop the driver; suppress the resulting terminal
   reconnect(): void  // #82: tear down any driver + dial fresh, re-sourcing the record; no-op once stopped
-  send(payload: SendMessagePayload): void  // #65: encrypt a send_message onto the live session
+  send(payload: SendMessagePayload): void  // admit a composer payload; drain after authenticated handshake
   requestDebugBundle(): void  // #115: encrypt a bare request_debug_bundle control frame onto the live session
   // requestSnapshot(payload) — #180, removed #620: encrypted a request_snapshot onto the live session
   requestConversations(): void  // #139: encrypt a bare list_conversations control frame onto the live session
@@ -38,20 +38,29 @@ export interface DaemonConnection {
   switchAgent(payload: SwitchAgentPayload): void  // authenticated owner only; one switch_agent, no retries
   createConversation(payload: CreateConversationPayload): void  // #241: encrypt a create_conversation onto the live session, fresh-literal net
   setSessionSettings(payload: SetSessionSettingsPayload, changeId: string): void  // #263: encrypt a set_session_settings onto the live session, omitempty presence contract owned by the builder; #261 added changeId + pending-map correlation
-  uploadAttachment(input: AttachmentChunkPlanInput): Promise<AttachmentTransferResult>  // #861: drive a planAttachmentChunks() result onto the live session and resolve on the one terminal; consumer-failing twin like requestDebugBundle, not send's silent no-op
+  uploadAttachment(input: AttachmentChunkPlanInput): Promise<AttachmentTransferResult>  // #861: drive a planAttachmentChunks() result onto the live session and resolve on the one terminal; consumer-failing twin like requestDebugBundle, rather than a composer payload hold
   requestAttachment(payload: RequestAttachmentPayload, consumer: AttachmentRetrievalConsumer): void  // #996: encrypt a request_attachment onto the live session and route the answering chunk stream / reject to consumer; consumer-failing twin, void not Promise (the consumer, not the return, carries the terminal)
 }
 
 export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnection
 ```
 
-**`send(payload)` was added in [#65](../codebase/65.md)** — the outbound send entry point. It builds a `send_message` envelope (via `buildSendMessage`, id counter continuing from 2 after the hello's id 1) and hands the bytes to `driver.sendMessage`. It is an **idempotent no-op** when not connected (no driver, pre-handshake, or post-terminal) and **never throws out of the module** (a single `driver === null` guard plus a full-body `try/catch`; parity mobile #490). See the [outbound send path](outbound-send-path.md) feature doc for the full contract — the id-counter model, the "why a single guard suffices" case analysis, and the composition-root `onCommand` registration that drives it.
+**`send(payload)`** validates and encodes before retaining a copied composer payload
+in a bounded per-host FIFO. It drains only after a validated authenticated handshake,
+retaining refused sends for same-pairing recovery and emitting client-owned delivery
+status for the existing echo. Written messages leave the FIFO permanently; socket
+write is not daemon acknowledgement. Terminal failures remain visible and retained
+for explicit Reconnect, while pairing replacement/removal and disposal release holds.
+See [connection lifecycle](daemon-connection-lifecycle.md#disconnected-composer-message-delivery)
+for bounds and lifetime, and [outbound send path](outbound-send-path.md) for routing,
+envelope IDs and independent diagnostics. The hold is specific to composer messages;
+control requests below do not inherit retries.
 
 **`requestDebugBundle()` was added in [#115](../codebase/115.md)** — a **structural twin of `send`** for the debug-bundle download's outbound "ask". It builds a **bare `request_debug_bundle` control envelope** (no payload struct, no `conversation_id`, no session selector — the bundle is daemon-global) via `buildRequestDebugBundle` and hands the bytes to `driver.sendMessage`. It **shares the same `nextEnvelopeId` counter** as `send` (no second counter — ids stay monotonic across interleaved calls), is an idempotent no-op when not connected, and never throws (parity #490). The renderer command that calls it is wired by the [debug-bundle orchestrator](debug-bundle-orchestrator.md) ([#169](../codebase/169.md), landed — the orchestrator half of #118's split; the IPC contract itself shipped in [#168](debug-bundle-request.md)). See the [debug-bundle request](debug-bundle-request.md) feature doc for the full contract, including why "no payload" is a present-but-empty `payload: {}` rather than an omission.
 
 **`uploadAttachment(input)` was added in [#861](https://github.com/pyrycode/pyrycode-desktop/issues/861)** — the third **consumer-failing
 twin**, alongside `requestDebugBundle`: the caller awaits a terminal, so a request made while disconnected
-resolves `{ ok: false, outcome: 'not-connected' }` rather than hanging like `send`'s silent no-op. It
+resolves `{ ok: false, outcome: 'not-connected' }` rather than joining the composer payload hold. It
 drives a `planAttachmentChunks()` result onto the live session chunk by chunk via a new
 [`AttachmentTransfer`](attachment-transfer.md) state machine, and correlates the daemon's two terminal
 answers with **two different keys** — the success reply by the payload's `attachment_id` (the only inbound
@@ -381,7 +390,7 @@ a dormant no-op arm. See [System prompt send](system-prompt-send.md) for the ful
 ## Modal answers and cancellation
 
 `answerModal(payload: Omit<ModalAnswerPayload, 'answer_token'>)` receives the
-[validated answer command](command-channel.md#modal-answer-validation). It builds
+[validated answer command](command-channel-internals.md#modal-answer-validation). It builds
 a fresh payload containing `modal_id`, `option_id`, a main-minted `answer_token`
 (`randomUUID()` through the `mintToken` seam), and `always_allow` only when that key
 is present. Both true and false reach `modal_answer` unchanged; omission stays

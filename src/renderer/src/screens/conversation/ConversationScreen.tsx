@@ -86,6 +86,7 @@ import {
   shouldShowBanner,
   CONNECTION_BANNER_COPY,
   COMPOSER_ERROR_CHIP_COPY,
+  COMPOSER_MESSAGE_DELIVERY_COPY,
   COMPOSER_ERROR_CHIP_PREFIX_COPY,
   COMPOSER_REPAIR_BUTTON_COPY
 } from './composerSend'
@@ -1330,7 +1331,7 @@ export function Timeline({
         if (row.item.kind !== 'toolCall') {
           const rowKey = row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`
           const content = <TimelineRow key={rowKey}
-            item={row.item} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(row.itemIndex)}
+            item={row.item} delivery={localEchoes?.find(e => e.rowKey === rowKeys?.[row.itemIndex])?.delivery} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(row.itemIndex)}
             midTurnInput={midTurnInput} onSendQueuedNow={onSendQueuedNow}
             onOpenMarkdownPath={onOpenMarkdownPath} agent={agent}
             onReply={onReply}
@@ -1679,6 +1680,7 @@ function TimelineRow({
   item,
   inProgress,
   queued = null,
+  delivery,
   onDropQueued,
   midTurnInput = false,
   onSendQueuedNow,
@@ -1690,6 +1692,7 @@ function TimelineRow({
   item: ThreadItem
   inProgress: boolean
   queued?: QueuedRowHandle | null
+  delivery?: 'waiting' | 'not-sent'
   onDropQueued?: (queuedMsgId: number, messageId: string | undefined) => void
   /** #1726: Timeline's two Send now props, passed through; read only by the queued `userText` arm. */
   midTurnInput?: boolean
@@ -1834,7 +1837,10 @@ function TimelineRow({
             )}
             {/* #969: the same row, right-aligned by its own modifier (the drawing's `justify-end` on
                 132:4435). Queued messages have no delivery meta row. */}
-            {!queued && <BubbleMeta side="user" createdAt={item.createdAt} />}
+            {delivery !== undefined && <div className="bubble__meta bubble__meta--user">
+              <span className={delivery === 'not-sent' ? 'composer-status__error' : 'bubble__delivery--waiting'}>{COMPOSER_MESSAGE_DELIVERY_COPY[delivery]}</span>
+            </div>}
+            {!queued && delivery === undefined && <BubbleMeta side="user" createdAt={item.createdAt} />}
           </div>
         </div>
       )
@@ -4085,37 +4091,32 @@ function Composer({
     // this function: that would move the dereference into the render path, where `window.pyry` does not
     // exist under renderToStaticMarkup, and every container smoke test would throw.
     const sent = submitMessage(value, activeConversationId, {
+      serverId,
       diagnose: window.pyry.sendDiagnostic,
       sendCommand: window.pyry.sendCommand,
       dispatch,
       dispatchFor: (conversationId, event) => {
         if (event.type === 'userText') dispatchLocalEcho(serverId, conversationId, event)
+        else if (event.type === 'messageDelivery') conversationTimelineStore.getState().dispatchFor(conversationId, { ...event, serverId })
       },
       newMessageId: () => crypto.randomUUID(),
       // #1013: the echo's clock. Referenced, not called — `submitMessage` reads it once, past both of its
-      // `false` returns, so a refused submit never stamps. `Date.now` rather than a store value because
+      // early guards, so an empty or unowned submit never stamps. `Date.now` rather than a store value because
       // the moment being recorded IS now: this line is inside the send handler, not the render path.
       now: Date.now,
       // #1039: the files this message is being sent with — the uploads that have completed since the last
       // send. Referenced, not called, exactly like the clock above, and for a sharper reason: this take is
       // DESTRUCTIVE (the hook clears its pending set in the same act), so calling it here would consume the
       // operator's attachments on a submit `submitMessage` is about to refuse. That helper reads it once,
-      // below both of its `false` returns, which is what makes "cleared by a send that actually happened,
-      // and only by one" a property of the code rather than of this line.
+      // below its early guards. A bridge exception rolls the take back for resubmission.
       //
       // Both of `sendText`'s callers reach this — the composer's own submit and ComposerActionsMenu's
       // picked command — and that is correct: a slash command is a message that was sent, so it records
       // and consumes what is pending exactly as a typed one does.
       takeAttachments: attach.takePendingAttachments
     })
-    // #602: `sent === true` is exactly "a message entered the timeline", which is why the notify sits HERE
-    // and not at the top of this function or just past the `!canSend` gate. Both of submitMessage's `false`
-    // returns (composerSend.ts:56-57 — whitespace-only, null conversation id) are above its echo dispatch,
-    // and the gate above returns before submitMessage is called at all, so a submit that sends nothing never
-    // reaches this line: it leaves the scroll position as the operator's own scrolling set it and leaves NO
-    // armed pin behind, so the next unrelated arriving item still cannot yank a scrolled-up operator. A send
-    // whose bridge call throws is caught (composerSend.ts:69-72), still posts the echo and still returns
-    // `true`, so it follows — correctly, because the timeline did move.
+    // Follow the thread only when the bridge accepts the submission. A bridge exception returns false:
+    // its echo remains Not sent, the draft and pending attachments survive, and no follow pin is armed.
     if (sent) onMessageSent()
     return sent
   }

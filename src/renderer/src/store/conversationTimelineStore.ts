@@ -635,6 +635,12 @@ export function createConversationTimelineStore(
       }),
     dispatchFor: (conversationId, event, joinKey) =>
       set((s) => {
+        if (event.type === 'messageDelivery') {
+          const slice = s.timelines.get(conversationId)
+          if (slice === undefined || (typeof event.serverId === 'string' && slice.serverId !== event.serverId)) return s
+          const timeline = reduceTimeline(slice.timeline, event)
+          return timeline === slice.timeline ? s : { timelines: new Map(s.timelines).set(conversationId, { ...slice, timeline }) }
+        }
         // This client-owned clear has no receipt host and cannot invalidate a saved-history read.
         if (event.type === 'sessionErrorCleared') {
           const slice = s.timelines.get(conversationId)

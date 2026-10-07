@@ -1,4 +1,13 @@
 import { describe, it, expect } from 'vitest'
+
+it('carries a bounded refusal owner outside the send wire payload', () => {
+  const payload = { conversation_id: 'conv', message_id: 'message', text: 'text' }
+  expect(sendMessageCommand(payload, 'host')).toEqual({ type: 'sendMessage', payload, serverId: 'host' })
+  expect(isRendererCommand(sendMessageCommand(payload, 'host'))).toBe(true)
+  for (const serverId of ['', 'x'.repeat(1025), null, 42]) {
+    expect(isRendererCommand({ type: 'sendMessage', payload, serverId })).toBe(false)
+  }
+})
 import {
   COMMAND_CHANNEL,
   isRendererCommand,

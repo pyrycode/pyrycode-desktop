@@ -136,16 +136,28 @@ Each section below keeps the heading it had here, so an existing `#anchor` still
 
 ## What it does
 
-Gives the background process **one typed function** to emit a sealed daemon-event to the window, and gives the renderer **one typed function** to subscribe to those events. Every event travels on a single IPC channel; the union carries only wire payload types, so no token, key, or raw byte can cross the bridge.
+Gives the background process **one typed function** to emit a sealed daemon-event to the window, and gives the renderer **one typed function** to subscribe to those events. Every event travels on a single IPC channel; the union carries validated payloads and client-owned result shapes, with no field for a token, key, or raw byte.
 
 Since #1068, every event carries `serverId: string | null` — the id of the paired server it came from,
 or `null` where no paired record was in hand when the emitter was bound. This rides beside the union
-(`StampedDaemonEvent = DaemonEvent & { serverId }`) rather than inside it, so the 42 arms below are
-unchanged; see [Emit and subscribe](daemon-event-channel-plumbing.md) for `bindServerOrigin` and the
+(`StampedDaemonEvent = DaemonEvent & { serverId }`) rather than inside each union
+arm; see [Emit and subscribe](daemon-event-channel-plumbing.md) for `bindServerOrigin` and the
 full design. The production registry binds each connection to its saved host.
 The [chat-history observer](chat-history.md#received-state-admission-and-ownership)
 captures this origin during synchronous store updates so buffered content cannot
 move to whichever host is active when its save runs.
+
+`switchAgentRejected` carries `{ conversationId: string, retryable: boolean }` for
+one refused [switch request](switch-agent-request.md). The conversation is copied
+from the main-owned pending envelope map populated by the client's send, never
+from the daemon error payload. `retryable` preserves a wire boolean; absent or
+mistyped values default to `false` at the emit site. A fresh literal excludes
+daemon message text, error code and request envelope ID. Existing origin stamping
+supplies `serverId` as usual. Correlation consumes the entry before emission, so
+each pending request emits at most once; an uncorrelated error emits no switch
+rejection. The four renderer translators currently return `null`; menu rollback
+and notification remain the follow-up consumer's work. See
+[correlation and lifetime](daemon-connection-correlation-requests.md#switch-agent-rejection-correlation).
 
 ## How it works
 

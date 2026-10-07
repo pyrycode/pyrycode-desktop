@@ -7418,3 +7418,23 @@ button.top-overlay-pill {
 }
 .agent-start-marker__running { background: var(--color-primary); }
 .agent-start-marker .agent-start-marker__finished { background: var(--color-success); }
+
+.agent-switch-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+}
+.agent-switch-overlay__scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--color-scrim);
+  opacity: 0.4;
+}
+.agent-switch__copy {
+  margin: 0;
+  text-align: center;
+}

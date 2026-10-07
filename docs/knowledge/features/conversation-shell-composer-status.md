@@ -20,6 +20,57 @@ desktop layout's own fixed-height status area above the message box (Figma `111:
 activity/thinking display, the turning `PyryMark` icon, the truncation chain that bounds a daemon tool
 name, and the retry/compacting/stall statuses folded into the label by #967.
 
+## Agent-switch progress
+
+`ConversationScreen` reads `agentSwitchStore.statuses` for the open conversation,
+matching the retained entry's owning `serverId` to the pane's selected host.
+`ThinkingIndicator` receives optional `switchStatus`; `statusRowCopy` gives it
+precedence over ordinary activity, including tool labels, and renders it even
+when the working state is null. Pending keeps the existing `PyryMark` turning.
+See [confirmation API and read surface](switch-agent-request.md#renderer-confirmation-and-read-surface)
+for opening, dispatch guards and [outcome lifetime](switch-agent-request.md#renderer-outcomes-and-lifetime).
+
+Switching copy uses client-owned Claude/Codex names for `target` and `outgoing`:
+
+| Held switch state / reset phase | Exact label |
+|---|---|
+| Pending, before a named phase or after reset's falling edge | `Switching to <target>…` |
+| Pending, `wrapping_up` | `Switching to <target>: <outgoing> is writing a hand-over note…` |
+| Pending, `restarting` | `Switching to <target>: starting <target>…` |
+| Refused, retryable | `The agent did not change. Try again.` |
+| Refused, nonretryable | `The agent did not change.` |
+
+Reset completion and session transition leave the switch pending until a fresh
+owning-host list actually shows the target agent. Switching never uses reset
+wording or a handoff-outcome suffix. Without `switchStatus`, ordinary reset output
+remains byte-identical: `Resetting…`, `Resetting: writing the handoff note…`, or
+`Resetting: restarting claude…` / `Resetting: restarting codex…`, with the existing
+` handoff note written` / ` handoff note skipped` restarting suffix where applicable.
+Retryability adds copy only; there is no retry button or automatic resend. Refusal
+does not imply wrap-up had no effects; another valid opening clears the old refusal.
+
+`AgentSwitchDialog.test.tsx` statically pins both directions, phase/refusal copy and
+escaped model text. Static renders execute neither effects nor handlers, so
+interaction proof is [the scoped fake-transport spec](../../../e2e/agent-switch-confirmation.spec.ts).
+Its scratch alternate renderer exposes only the production `openAgentSwitch` function;
+it mounts the real App and preload subscriptions without a production menu entry
+point or shared test hook. It exercises Switch twice in one task for single dispatch,
+Cancel, Escape and X, focus containment, progress/refusal/list frames, navigation
+with pending, authoritative completion and reverse-direction confirmation copy.
+The confirmed round trip supplies a positive processing barrier for dismissal
+zero-send assertions; an immediate empty command log alone would not prove them.
+
+Recorded dispatcher verifier gate 6 at `a52fb304f142c204eb64a36135ebe907def5c8bc`
+on 2026-10-07: `npx playwright test --reporter=json` executed 326 tests, 326 passed,
+0 failed and 4 skipped. The named test “mounted agent switch dismissals, single
+dispatch, progress, refusal and authoritative success” is present and passed;
+the [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1841#issuecomment-6031427330)
+confirms one execution without retry and all 29 focused unit/static tests passed.
+The same verdict records 9,240 unit tests executed/passed, 0 failed and 3 skipped.
+It also confirms Figma review of integrated captures at 1280×800 and constrained
+800×300. Model-menu entry points, optimistic model display/rollback and live
+hand-over acceptance remain #1662's scope; no live-Claude pass is claimed here.
+
 ## Composer error chip (#797)
 
 Split out to its own page: [Composer error chip](conversation-shell-composer-error-chip.md) — the row's

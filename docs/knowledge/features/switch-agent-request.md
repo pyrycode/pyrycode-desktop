@@ -3,6 +3,10 @@
 The desktop can send a v2 `switch_agent` request for one conversation through the
 existing [command channel](command-channel.md). The outbound path shipped in
 [#1659](../../specs/architecture/1659-switch-agent-request.md). It adds no UI trigger.
+The [confirmation API](#renderer-confirmation-and-read-surface) and retained progress
+shipped in [#1661](../../specs/architecture/1661-agent-switch-confirmation.md).
+Both model-menu entry points, optimistic model display/rollback and live hand-over
+acceptance remain [#1662](https://github.com/pyrycode/pyrycode-desktop/issues/1662)'s scope.
 The daemon requires `interactive` and `multi_agent`, both advertised by this client.
 The contract reference is the daemon's
 [switch_agent protocol](https://github.com/pyrycode/pyrycode/blob/77818fd23e1c18657663e066318eb1c03870ae77/docs/protocol-mobile.md#switch_agent).
@@ -95,12 +99,105 @@ in [#1660](../../specs/architecture/1660-switch-agent-rejection.md).
 The four exhaustive renderer translators, `translateDaemonEvent`,
 `translateModalEvent`, `translateQuestionEvent` and `translateTimelineEvent`,
 explicitly return `null` for `switchAgentRejected`. Adding a union member requires
-these no-op arms even before it has a consumer. Menu sending, confirmation,
-rollback and notification belong to
-[#1661](https://github.com/pyrycode/pyrycode-desktop/issues/1661).
+these no-op arms; `AgentSwitchData` separately consumes the typed outcome for the
+renderer confirmation/status path below. Model-menu opening and optimistic model
+display/rollback remain #1662's scope.
+
+## Renderer confirmation and read surface
+
+`src/renderer/src/store/agentSwitchStore.ts` exports
+`openAgentSwitch(conversationId: string, row: WireModelOption): void`. Opening requires
+a uniquely resolved, connected owning host, an actual conversation row, the active
+conversation and its mounted pane, and a picked agent different from the outgoing
+binding. An absent picked-row agent means Claude. Opening for an already-pending
+conversation does nothing; a valid new opening clears that conversation's old refusal.
+
+`agentSwitchStore` is the singleton read surface. Its `statuses: ReadonlyMap<string,
+AgentSwitchStatus>` is keyed by conversation ID. A `pending` entry retains
+`conversationId`, client-resolved `serverId`, `outgoing`, `target` and the copied picked
+`row`; a `refused` entry retains only `serverId` and `retryable`. Read through Zustand
+`useStore(agentSwitchStore, selector)` in a mounted consumer, or
+`agentSwitchStore.getState().statuses.get(conversationId)` for a current snapshot.
+Always match the entry's `serverId` to the consumer's owning host before using it,
+as `ConversationScreen` does. No entry means no held local attempt or refusal; it
+does not by itself prove success, since abandonment also removes entries.
+
+`AgentSwitchDialog`, mounted in `App`, composes the shared 640px `Modal`. Its title
+is “Switch to Codex?” or “Switch to Claude?”. The body adapts both directions:
+“This channel moves from Claude to GPT-6 Luna on Codex. Claude writes a hand-over
+note first, and Codex continues from it. The first reply after the switch costs
+more, and full-bypass mode turns off.” The model uses `composerModelRowLabel`:
+Codex's display name, or Claude's recognized family label with display-name fallback.
+Model text stays escaped in text content, outside attributes and diagnostics.
+Cancel, Escape and X close without sending. Focus starts on Cancel, Tab remains
+within the dialog, and dismissal restores the previous focus if still mounted.
+
+Switch rechecks the owning row, connection, open pane and unchanged outgoing
+binding at dispatch time. It records pending synchronously and closes the dialog
+before sending exactly one existing `switchAgent` command. Repeated confirmation
+cannot resend. Pane changes cancel an unconfirmed dialog. Active metadata alone
+is insufficient: `PairedShell` retains it during Settings/list navigation, so
+`ConversationScreen` registers pane coordinates on mount and clears them on cleanup.
+
+The payload sends the picked row's `value` verbatim as `model`, including `""` for
+the target-agent default. Effort is read again at confirmation through
+`selectDisplayedEffort(snapshot, writes)`, the composer's existing selection rule:
+pending effort writes override the reading; otherwise applied effort wins, with
+confirmed/saved fallback for undefined or empty applied readings. Explicit null
+preserves the absence of a model effort parameter rather than reviving a saved
+choice. Include effort only when it is a string present in the picked row's
+`effort_levels`; null, undefined and unsupported values omit the key. Reading the
+saved choice alone can dispatch stale effort. The switch state lives outside
+`runSettingsWriteStore`, whose writes model individual settings.
+
+## Renderer outcomes and lifetime
+
+`AgentSwitchData` mounts app-lifetime subscriptions through `subscribeAgentSwitchData`:
+typed daemon events plus active conversation, conversation list, session and server
+stores. Pending and refused readings survive pane navigation and process updates,
+including outcomes while the pane is unmounted. Subscriptions return cleanup handles;
+there is no persistence, timer or automatic resend.
+
+Retained entries reconcile against their recorded host's actual rows and connection.
+Opening and confirmation still require unique ownership across hosts. Reusing that
+unique-owner lookup for retained entries would erase pending/refused status when a
+foreign host lists the same conversation ID, then lose a later owning-host refusal.
+Unrelated hosts/conversations cannot settle an attempt. Owning-host disconnect or
+removal, or removal of its conversation row, abandons local status/dialog state
+without claiming success or refusal. Reconnect does not replay the request; the
+next authoritative list supplies the binding.
+
+Only a fresh `conversationsReceived` event with an actual target-agent row for the
+pending attempt's owning host and conversation clears pending as success. A present
+row with absent agent counts as Claude; the selector's missing-row Claude fallback
+is never success evidence. A missing row abandons instead. An unchanged-agent list,
+reset completion, session transition or metadata reconciliation cannot succeed.
+`ConversationListData` keeps the existing `conversationUpdated` refresh path; no
+correlated success acknowledgement is added. A published new binding also counts
+as success after a daemon post-commit cleanup error.
+
+A matching, main-stamped `switchAgentRejected` consumes only pending for that
+host/conversation and stores retryability with fixed
+[status copy](conversation-shell-composer-status.md#agent-switch-progress).
+Unmatched, unstamped and no-pending refusals are ignored. Refusal establishes that
+the agent did not change, but wrap-up may already have written handover or dropped
+backlog. A new attempt requires another opening and confirmation; there is no
+automatic retry or claim that wrap-up had no effects.
 
 ## Testing
 
+- `agentSwitchStore.test.ts` covers both directions, empty/verbatim model values,
+  supported/unsupported effort, synchronous pending, duplicate confirmation,
+  stale pane/connection/binding guards, list-only success, both refusal kinds and
+  lifecycle abandonment. Singleton effort cases distinguish applied readings and
+  explicit null from an older saved choice. Composed regressions join the production
+  singleton, `subscribeConversations` and `subscribeAgentSwitchData`: an injected
+  outcome-only test cannot expose reconciliation erasing status on foreign same-ID
+  lists. They retain pending/refused entries across those lists, accept the later
+  owning refusal and abandon only on owning disconnect/host removal/conversation removal.
+- `AgentSwitchDialog.test.tsx` pins escaped model content, both directions and exact
+  phase/refusal copy. Mounted interaction evidence is recorded with the
+  [composer status row](conversation-shell-composer-status.md#agent-switch-progress).
 - `switchAgentEnvelope.test.ts` compares actual encoded JSON bytes and decoded
   envelopes, covering both agents, verbatim settings, empty model, omitted,
   undefined and empty effort, and extra-key stripping.

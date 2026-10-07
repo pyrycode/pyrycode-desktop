@@ -169,9 +169,9 @@ it('bounds fragment retention before capture without retiring evidence on receip
   expect(slice.timeline.items.at(-1)).toMatchObject({ text: 'later' })
   expect(slice.display).toMatchObject([{ id: 1, lastId: 100_001, rowKey: slice.timeline.rowKeys![0] }])
   const fresh = harness()
-  fresh.store.getState().beginLocalTimelineRead('host', 'c')!.complete({ version: 1, kind: 'timeline', serverId: 'host', conversationId: 'c',
+  fresh.store.getState().beginLocalTimelineRead('host', 'c')!.complete(JSON.parse(JSON.stringify({ version: 1, kind: 'timeline', serverId: 'host', conversationId: 'c',
     items: slice.timeline.items, prependedRows: slice.prependedRows, coverage: slice.coverage,
-    display: slice.display, rowIdentity: { rowKeys: slice.timeline.rowKeys, nextRowKey: slice.timeline.nextRowKey } })
+    display: slice.display, rowIdentity: { rowKeys: slice.timeline.rowKeys, nextRowKey: slice.timeline.nextRowKey } })))
   fresh.page([text(100_000, 'x'), text(0, 'older ')])
   expect(fresh.held().timeline.items).toMatchObject([{ text: 'older first' + 'x'.repeat(100_000) }, { text: 'later' }])
 })

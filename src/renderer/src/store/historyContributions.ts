@@ -21,7 +21,16 @@ function contribution(entry: HistoryTimelineEntry, compaction?: ThreadItem): His
   return { ...fields, kind: 'row', item: durable }
 }
 
-/** Reconcile display evidence only; no held live-state reducer is invoked. */
+type Group = { item: ThreadItem; members: HistoryContribution[]; key?: number; index: number }
+
+/**
+ * Reconcile display evidence only; no held live-state reducer is invoked.
+ *
+ * Invariant: a row already in the held timeline survives with its key, its position relative to
+ * other held rows and its object. History may only merge content into it (an older text prefix, a
+ * missing tool result or denial); a contribution's saved item never rebuilds it, so live updates and
+ * live state referencing the row (pending compaction, echoes, arrival order, placements) stay attached.
+ */
 export function reconcileHistory(
   timeline: TimelineState,
   retained: readonly HistoryContribution[] | undefined,
@@ -31,16 +40,16 @@ export function reconcileHistory(
 ) {
   const oldItems = timeline.items
   const oldKeys = timeline.rowKeys ?? oldItems.map((_, index) => index)
+  const oldPosition = new Map(oldKeys.map((key, index) => [key, index]))
   let nextRowKey = timeline.nextRowKey ?? oldItems.length
   const reserved = nextRowKey
   const tailBoundary = oldKeys[0] ?? reserved
   if (reserveBoundary) nextRowKey++
-  const heldKeys = new Set(oldKeys)
-  const retainedRows = retained?.filter(d => d.rowKey === undefined || heldKeys.has(d.rowKey))
-  const known = new Map(retainedRows?.map(d => [d.id, { ...d }]))
+  const retainedRows = retained?.filter(d => d.rowKey === undefined || oldPosition.has(d.rowKey)) ?? []
+  const known = new Map(retainedRows.map(d => [d.id, { ...d }]))
   const sorted = [...entries].sort((a, b) => b.id - a.id)
   const admitted = new Set(withoutLiveEntries(sorted, liveKeys))
-  const ranges = (retainedRows ?? []).filter(d => d.lastId !== undefined)
+  const ranges = retainedRows.filter(d => d.lastId !== undefined)
   let scratch = initialTimelineState
   for (const entry of [...sorted].reverse()) {
     // Reconstruct original page edges before overlap filtering; never reduce held live state.
@@ -67,112 +76,71 @@ export function reconcileHistory(
     }
   }
   const contributions = [...known.values()].sort((a, b) => a.id - b.id)
-  const represented = new Set(retainedRows?.flatMap(d => d.kind === 'row' && d.rowKey !== undefined ? [d.rowKey] : []))
-  const groups: { item: DurableThreadItem; members: HistoryContribution[]; key?: number }[] = []
-  const groupsByKey = new Map<number, typeof groups[number]>()
-  const oldPosition = new Map(oldKeys.map((key, index) => [key, index]))
-  const previousTexts = new Map<number, string>()
-  for (const d of retainedRows ?? []) {
+  // Group contributions in durable order. A group binds at most one held row and never rebuilds it.
+  const represented = new Set(retainedRows.flatMap(d => d.kind === 'row' && d.rowKey !== undefined ? [d.rowKey] : []))
+  const accounted = new Map<number, string>()
+  for (const d of retainedRows) {
     if (d.kind === 'row' && d.item.kind === 'assistantText' && d.rowKey !== undefined) {
-      previousTexts.set(d.rowKey, (previousTexts.get(d.rowKey) ?? '') + d.item.text)
+      accounted.set(d.rowKey, (accounted.get(d.rowKey) ?? '') + d.item.text)
     }
   }
-  let previousRowKey: number | undefined
-  let canJoin = false
+  const groups: Group[] = []
+  const bound = new Map<number, Group>()
+  let anchor: number | undefined
+  let open = false
   for (const d of contributions) {
-    if (d.kind === 'suppressed' && d.rowKey !== undefined) {
-      const held = oldItems[oldPosition.get(d.rowKey) ?? -1]
-      if (held !== undefined && held.kind !== 'attachmentOffer') {
-        const existing = groupsByKey.get(d.rowKey)
-        if (existing !== undefined) existing.members.push(d)
-        else {
-          const tail = groups.at(-1)
-          const left = previousRowKey === undefined ? undefined : oldPosition.get(previousRowKey)
-          const right = oldPosition.get(d.rowKey)
-          const barrier = right !== undefined && oldKeys.slice(left === undefined ? 0 : left + 1, right).some(k => !represented.has(k))
-          if (canJoin && !barrier && tail?.item.kind === 'assistantText' && held.kind === 'assistantText' &&
-            tail.item.turnId === held.turnId && tail.item.parentToolUseId === held.parentToolUseId) {
-            // The held suffix is added once below, after the reconstructed history prefix.
-            tail.members.push(d)
-            tail.key = d.rowKey
-            groupsByKey.set(d.rowKey, tail)
-          } else {
-            const group = { item: held, members: [d], key: d.rowKey }
-            groups.push(group); groupsByKey.set(d.rowKey, group)
-          }
-        }
-      }
-      previousRowKey = d.rowKey
-      canJoin = false
+    if (d.kind === 'patch') continue
+    const position = d.rowKey === undefined ? undefined : oldPosition.get(d.rowKey)
+    const held = position === undefined ? undefined : oldItems[position]
+    if (d.kind === 'suppressed' && (held === undefined || held.kind === 'attachmentOffer')) {
+      // A live row whose held position is unknown still separates text unless it was only a patch.
+      if (!/^tool(Result|Denied) /.test(d.joinKey ?? '')) open = false
       continue
     }
-    if (d.kind !== 'row') continue
-    const item = d.item
+    const item = held ?? (d.kind === 'row' ? d.item : undefined)
+    if (item === undefined) continue
+    const existing = d.rowKey === undefined ? undefined : bound.get(d.rowKey)
     const tail = groups.at(-1)
-    const left = previousRowKey === undefined ? undefined : oldPosition.get(previousRowKey)
-    const right = d.rowKey === undefined ? undefined : oldPosition.get(d.rowKey)
-    const barrier = left !== undefined && right !== undefined && oldKeys.slice(left + 1, right).some(k => !represented.has(k))
-    if (canJoin && !barrier && tail?.item.kind === 'assistantText' && item.kind === 'assistantText' &&
-      tail.item.turnId === item.turnId && tail.item.parentToolUseId === item.parentToolUseId) {
-      tail.item = { ...tail.item, text: tail.item.text + item.text }
+    const separated = position !== undefined &&
+      oldKeys.slice(anchor === undefined ? 0 : anchor + 1, position).some(key => !represented.has(key))
+    if (existing !== undefined) existing.members.push(d)
+    else if (open && !separated && tail !== undefined && tail.item.kind === 'assistantText' && item.kind === 'assistantText' &&
+      tail.item.turnId === item.turnId && tail.item.parentToolUseId === item.parentToolUseId &&
+      (d.rowKey === undefined || tail.key === undefined || tail.key === d.rowKey)) {
+      if (d.kind === 'row' && d.item.kind === 'assistantText' && tail.key === undefined) {
+        tail.item = { ...tail.item, text: tail.item.text + d.item.text }
+      }
       tail.members.push(d)
       tail.key ??= d.rowKey
-    } else groups.push({ item, members: [d], key: d.rowKey })
-    const group = groups.at(-1)
-    if (group?.key !== undefined) groupsByKey.set(group.key, group)
-    previousRowKey = d.rowKey ?? previousRowKey
-    canJoin = true
+    } else groups.push({ item, members: [d], key: d.rowKey, index: groups.length })
+    const group = existing ?? groups.at(-1)!
+    if (group.key !== undefined) bound.set(group.key, group)
+    if (position !== undefined) anchor = position
+    open = d.kind === 'row' && (existing === undefined || existing === tail)
   }
-  const used = new Set<number>()
-  for (const group of groups) {
-    if (group.item.kind === 'userText' && group.item.messageId) {
-      const messageId = group.item.messageId
-      const echo = oldItems.findIndex(item => item.kind === 'userText' && item.messageId === messageId)
-      const held = oldItems[echo]
-      if (held?.kind === 'userText') { group.key = oldKeys[echo]; group.item = held }
-    }
-    const heldIndex = group.key === undefined ? -1 : oldPosition.get(group.key) ?? -1
-    const held = oldItems[heldIndex]
-    if (group.members.some(d => d.kind === 'row') && group.item.kind === 'assistantText' && held?.kind === 'assistantText') {
-      const previousText = group.key === undefined ? '' : previousTexts.get(group.key) ?? ''
-      if (held.text.startsWith(previousText)) group.item = { ...group.item,
-        text: group.item.text + held.text.slice(previousText.length), createdAt: held.createdAt }
-    }
-    if (group.item.kind === 'toolCall' && held?.kind === 'toolCall') group.item = { ...group.item,
-      result: held.result, denial: held.denial, elapsedSeconds: held.elapsedSeconds }
-    if (group.key === undefined || used.has(group.key)) group.key = nextRowKey++
-    used.add(group.key)
-    for (const d of group.members) d.rowKey = group.key
-  }
+  // Held rows keep their order; new groups enter before the first later bound row, older ones on top.
+  // Every group key here is a held key, so an unbound group is exactly a new row.
   const items: ThreadItem[] = []
   const keys: number[] = []
-  const groupPositions = new Map(groups.map((g, index) => [g.key, index]))
-  let groupIndex = 0
-  for (let index = 0; index < oldItems.length; index++) {
-    const key = oldKeys[index]
-    const target = groupPositions.get(key) ?? -1
-    if (target !== -1) {
-      while (groupIndex <= target) {
-        const group = groups[groupIndex++]
-        if (group.key !== undefined) { items.push(group.item); keys.push(group.key) }
-      }
-    } else if (!represented.has(key)) {
-      // New older rows precede the unknown/live suffix; known boundaries keep interior rows in place.
-      if (groupIndex === 0) {
-        const firstHeld = groups.findIndex(g => g.key !== undefined && oldPosition.has(g.key))
-        const before = firstHeld === -1 ? groups.length : firstHeld
-        while (groupIndex < before) {
-          const group = groups[groupIndex++]
-          if (group.key !== undefined) { items.push(group.item); keys.push(group.key) }
-        }
-      }
-      items.push(oldItems[index]); keys.push(key)
+  const unbound = groups.filter(group => group.key === undefined)
+  let entered = 0
+  const enter = (limit: number) => {
+    while (entered < unbound.length && unbound[entered].index < limit) {
+      const group = unbound[entered++]
+      group.key = nextRowKey++
+      items.push(group.item); keys.push(group.key)
     }
   }
-  while (groupIndex < groups.length) {
-    const group = groups[groupIndex++]
-    if (group.key !== undefined) { items.push(group.item); keys.push(group.key) }
-  }
+  enter(groups.find(group => group.key !== undefined)?.index ?? Infinity)
+  oldItems.forEach((held, index) => {
+    const group = bound.get(oldKeys[index])
+    if (group !== undefined) enter(group.index)
+    items.push(group === undefined ? held : merged(held, group, accounted.get(oldKeys[index]) ?? ''))
+    keys.push(oldKeys[index])
+  })
+  enter(Infinity)
+  for (const group of groups) for (const d of group.members) d.rowKey = group.key
+
   const calls = new Map<string, number>()
   const denialCalls = new Map<string, Map<string, number>>()
   items.forEach((item, index) => {
@@ -189,9 +157,13 @@ export function reconcileHistory(
     const item = items[index]
     if (item?.kind !== 'toolCall') continue
     d.rowKey = keys[index]
-    items[index] = { ...item, result: item.result ?? d.result ?? null, denial: item.denial ?? d.denial,
-      parentToolUseId: item.parentToolUseId ?? d.parentToolUseId,
-      elapsedSeconds: d.result || d.denial ? undefined : item.elapsedSeconds }
+    // A patch only fills what the held call lacks; an already-complete call keeps its object.
+    const result = item.result ?? d.result ?? null
+    const denial = item.denial ?? d.denial
+    const parentToolUseId = item.parentToolUseId ?? d.parentToolUseId
+    if (result !== item.result || denial !== item.denial || parentToolUseId !== item.parentToolUseId) {
+      items[index] = { ...item, result, denial, parentToolUseId, elapsedSeconds: d.result || d.denial ? undefined : item.elapsedSeconds }
+    }
   }
   // Retire whole represented groups only for the explicit capacity limit, never receipt expiry.
   let display = contributions
@@ -207,6 +179,7 @@ export function reconcileHistory(
     }
     display = compacted
   }
+  const positions = new Map(keys.map((key, index) => [key, index]))
   if (display.length > MAX_CHAT_HISTORY_ITEMS) {
     const retired = new Set<number>()
     let remaining = display.length
@@ -215,16 +188,14 @@ export function reconcileHistory(
     for (const d of display) {
       if (remaining <= MAX_CHAT_HISTORY_ITEMS) break
       if (d.rowKey === undefined || retired.has(d.rowKey)) continue
-      const item = items[keys.indexOf(d.rowKey)]
+      const item = items[positions.get(d.rowKey) ?? -1]
       if (item?.kind === 'toolCall' && item.result === null && item.denial === undefined) continue
       retired.add(d.rowKey)
       remaining -= counts.get(d.rowKey) ?? 0
     }
     display = display.filter(d => d.rowKey === undefined || !retired.has(d.rowKey)).slice(-MAX_CHAT_HISTORY_ITEMS)
   }
-  const sameItems = items.length === oldItems.length && items.every((item, index) => JSON.stringify(item) === JSON.stringify(oldItems[index]))
   const rowContributions = contributions.filter(d => d.kind !== 'patch' && d.rowKey !== undefined)
-  const positions = new Map(keys.map((key, index) => [key, index]))
   let boundaryIndex = 0
   const boundaries = [...entries].sort((a, b) => a.id - b.id).map(entry => {
     while (boundaryIndex < rowContributions.length && rowContributions[boundaryIndex].id < entry.id) boundaryIndex++
@@ -235,6 +206,18 @@ export function reconcileHistory(
     return position === -1 ? tailBoundary : keys[position + 1] ?? reserved
   })
   boundaries.push(tailBoundary)
-  return { timeline: { ...timeline, items: sameItems ? oldItems : items, rowKeys: keys, nextRowKey }, display,
-    boundaries, inserted: keys.filter(key => !oldPosition.has(key)).length }
+  const same = items.length === oldItems.length && items.every((item, index) => item === oldItems[index])
+  const next: TimelineState = { ...timeline, items: same ? oldItems : items, rowKeys: keys, nextRowKey }
+  // Live state that references a row object follows the row's key.
+  const pendingIndex = timeline.pendingCompaction === undefined ? -1 : oldItems.indexOf(timeline.pendingCompaction)
+  const pending = pendingIndex === -1 ? undefined : next.items[positions.get(oldKeys[pendingIndex]) ?? -1]
+  if (pending?.kind === 'compactionBoundary') next.pendingCompaction = pending
+  return { timeline: next, display, boundaries, inserted: keys.filter(key => !oldPosition.has(key)).length }
+}
+
+function merged(held: ThreadItem, group: Group, accounted: string): ThreadItem {
+  if (held.kind !== 'assistantText' || !held.text.startsWith(accounted)) return held
+  const history = group.members.map(d => d.kind === 'row' && d.item.kind === 'assistantText' ? d.item.text : '').join('')
+  const text = history + held.text.slice(accounted.length)
+  return text === held.text ? held : { ...held, text }
 }

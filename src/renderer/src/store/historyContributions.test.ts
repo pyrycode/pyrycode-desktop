@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { createConversationTimelineStore } from './conversationTimelineStore'
+import { createConversationTimelineStore, type ConversationSlice } from './conversationTimelineStore'
+import type { ThreadEvent } from './threadTimeline'
 import type { HistoryTimelineEntry } from '@shared/ipc/events'
 import { parseChatHistorySnapshot } from '@shared/chatHistory'
 import { reduceHistoryPage } from './historyPageBridge'
@@ -24,6 +25,9 @@ function harness() {
 const denial = (id: number, turnId = 't', toolUseId = 'tool'): HistoryTimelineEntry => ({ id, ts: `ts-${id}`,
   event: { type: 'toolDenied', turnId, toolUseId, toolName: 'Read', decisionReasonType: 'rule',
     decisionReason: 'denied', message: 'denied', truncatedFields: null, droppedFields: null } })
+const failedEnd = { type: 'turnEnd', turnId: 't', stopReason: 'error', isError: true,
+  outcome: 'failed', errorCategory: 'provider' } as const
+const failedEntry: HistoryTimelineEntry = { id: 2, ts: 'ts-2', event: failedEnd }
 function snapshotFor(h: ReturnType<typeof harness>) {
   const slice = h.held()
   return { version: 1, kind: 'timeline', serverId: 'host', conversationId: 'c',
@@ -35,239 +39,283 @@ function restore(h: ReturnType<typeof harness>) {
   fresh.store.getState().beginLocalTimelineRead('host', 'c')!.complete(JSON.parse(JSON.stringify(snapshotFor(h))))
   return fresh
 }
+/**
+ * #1851's seam: history reconciliation meets the retained live timeline. Invariant under test: a row
+ * already held keeps its key, position, object and attached live state; history only merges content
+ * into it, and a live event matching retained display keeps the rows while applying its live effects.
+ * Each case runs as-is and with a validated fresh restoration at its 'restore' step.
+ */
+type Step = { page: HistoryTimelineEntry[] } | { live: ThreadEvent; key?: string } | { echo: string; text?: string }
+  | { mark: string } | 'restore'
+type Run = { h: ReturnType<typeof harness>; marks: Map<string, ConversationSlice>; restored: boolean }
 
-it.each([false, true])('clears a live stall without replaying retained assistant text, restored=%s', restored => {
-  const original = harness()
-  original.page([text(1, 'once')])
-  const h = restored ? restore(original) : original
-  h.store.getState().dispatchFor('c', { type: 'stallDetected' })
-  const before = h.held().timeline
-  const display = h.held().display
-  h.store.getState().dispatchFor('c', {
-    type: 'assistantDelta', turnId: 't', seq: 1, text: 'once'
-  }, 'assistantDelta ts-1')
-  expect(h.held().timeline.stalled).toBe(false)
-  expect(h.held().timeline.items).toBe(before.items)
-  expect(h.held().timeline.rowKeys).toEqual(before.rowKeys)
-  expect(h.held().timeline.nextRowKey).toBe(before.nextRowKey)
-  expect(h.held().display).toBe(display)
-  h.page([text(1, 'once'), text(0, 'older ')])
-  expect(h.held().timeline.items).toMatchObject([{ text: 'older once' }])
-  expect(h.held().timeline.rowKeys).toEqual(before.rowKeys)
-})
+const message = (id: number, messageId = 'm'): HistoryTimelineEntry => ({ id, ts: `ts-${id}`,
+  event: { type: 'messageReceived', message: { message_id: messageId, role: 'user', text: 'operator' } } })
+const compacting = (id: number, active: boolean, report: { compactResult?: string; compactError?: string } = {}): HistoryTimelineEntry =>
+  ({ id, ts: `ts-${id}`, event: { type: 'compacting', active, ...report } })
+/** The same daemon event arriving live, with the join key the live lane records unless `keyed` is false. */
+function live(entry: HistoryTimelineEntry, keyed = true): Step {
+  const event = translateTimelineEvent(entry.event)
+  if (event === null) throw new Error('Expected a display event')
+  return { live: event, key: keyed ? `${entry.event.type} ${entry.ts}` : undefined }
+}
+const on = (event: ThreadEvent): Step => ({ live: event })
+const completion: ThreadEvent = { type: 'compactionBoundary', trigger: 'manual', preTokens: 100, postTokens: 20 }
+const completed = { kind: 'compactionBoundary', failed: false, manual: true, preTokens: 100, postTokens: 20 }
+const retainedFalling: Step[] = [{ page: [compacting(2, false), compacting(1, true)] }, 'restore',
+  on({ type: 'compacting', active: true }), { mark: 'rising' }, live(compacting(2, false)), { mark: 'falling' }]
+const texts = (h: ReturnType<typeof harness>) => h.held().timeline.items.map(item => 'text' in item ? item.text : item.kind)
+const unchanged = (before: ConversationSlice, after: ConversationSlice) => {
+  expect(after.timeline.items).toBe(before.timeline.items)
+  expect(after.timeline.rowKeys).toEqual(before.timeline.rowKeys)
+  expect(after.timeline.nextRowKey).toBe(before.timeline.nextRowKey)
+}
 
-const failedEnd = { type: 'turnEnd', turnId: 't', stopReason: 'error', isError: true,
-  outcome: 'failed', errorCategory: 'provider' } as const
-const failedEntry: HistoryTimelineEntry = { id: 2, ts: 'ts-2', event: failedEnd }
+const seam: { name: string; steps: Step[]; check: (run: Run) => void }[] = [
+  // Verifier round 1: suppressed operator chronology, page-local compaction, denial correlation.
+  { name: 'an operator row stays a chronological barrier and keeps its key',
+    steps: [{ echo: 'm' }, { mark: 'echo' }, { page: [text(3, 'after'), message(2), text(1, 'before')] }, 'restore',
+      { page: [text(3, 'after'), message(2), text(1, 'before'), text(0, 'older ')] }],
+    check: ({ h, marks }) => {
+      expect(texts(h)).toEqual(['older before', 'operator', 'after'])
+      expect(h.held().timeline.rowKeys![1]).toBe(marks.get('echo')!.timeline.rowKeys![0])
+    } },
+  ...[{ compactResult: 'success' }, { compactResult: 'failed' }, { compactError: 'private error' }].map(report => {
+    const entries = [text(4, 'after'), compacting(3, false, report), compacting(2, true), text(1, 'before')]
+    return { name: `a page-local compaction ${JSON.stringify(report)} separates text and leaves live compacting alone`,
+      steps: [on({ type: 'compacting', active: true }), on({ type: 'turnState', state: 'responding' }), { page: entries },
+        { mark: 'paged' }, 'restore', { page: [...entries, text(0, 'older ')] }] satisfies Step[],
+      check: ({ h, marks, restored }: Run) => {
+        const paged = marks.get('paged')!.timeline
+        expect(paged.items).toEqual(reduceHistoryPage(entries))
+        expect(paged).toMatchObject({ compacting: true, phase: 'responding' })
+        expect(h.held().timeline.items).toMatchObject([{ text: 'older before' },
+          { kind: 'compactionBoundary', failed: report.compactResult !== 'success' }, { text: 'after' }])
+        expect(h.held().timeline.rowKeys).toEqual(paged.rowKeys)
+        expect(h.held().timeline.compacting).toBe(!restored)
+        expect(JSON.stringify(snapshotFor(h))).not.toContain('private error')
+      } }
+  }),
+  { name: 'an orphan denial attaches only to the call of its own turn',
+    steps: [{ page: [denial(3, 'other')] }, 'restore', { page: [call(2, 'other'), call(1)] }],
+    check: ({ h }) => {
+      expect(h.held().timeline.items[0]).not.toHaveProperty('denial', expect.anything())
+      expect(h.held().timeline.items[1]).toMatchObject({ turnId: 'other', denial: { message: 'denied' } })
+    } },
+  ...[['other', 'tool'], ['', 'tool'], ['t', ''], ['', '']].map(([turnId, toolUseId]) => ({
+    name: `a denial with identities ${JSON.stringify([turnId, toolUseId])} never attaches to turn t's call`,
+    steps: [{ page: [denial(2, turnId, toolUseId), call(1)] }, 'restore', { page: [denial(2, turnId, toolUseId), call(1)] }] satisfies Step[],
+    check: ({ h }: Run) => expect(h.held().timeline.items[0]).not.toHaveProperty('denial', expect.anything()) })),
+  // Verifier round 2: suppressed assistant fragments join, while tools, parents and operators separate.
+  { name: 'older text joins a suppressed live assistant row once, on its key',
+    steps: [live(text(2, 'world')), { mark: 'live' }, { page: [text(2, 'world')] }, 'restore', { page: [text(1, 'hello ')] },
+      { page: [text(2, 'world'), text(1, 'hello ')] }, { page: [text(1, 'hello '), text(0, 'say ')] }],
+    check: ({ h, marks }) => {
+      expect(texts(h)).toEqual(['say hello world'])
+      expect(h.held().timeline.rowKeys).toEqual(marks.get('live')!.timeline.rowKeys)
+    } },
+  { name: 'several suppressed fragments and an unkeyed live suffix join without duplication',
+    steps: [{ page: [text(1, 'hello ')] }, { mark: 'paged' }, live(text(2, 'world')), live(text(3, '!')),
+      { page: [text(3, '!'), text(2, 'world'), text(1, 'hello ')] }, live(text(4, ' live'), false), 'restore',
+      { page: [text(3, '!'), text(2, 'world'), text(1, 'hello '), text(0, 'say ')] }],
+    check: ({ h, marks }) => {
+      expect(texts(h)).toEqual(['say hello world! live'])
+      expect(h.held().timeline.rowKeys).toEqual(marks.get('paged')!.timeline.rowKeys)
+    } },
+  { name: 'a suppressed live tool and a different assistant parent stay text barriers',
+    steps: [live(call(2)), { page: [call(2)] }, live(text(4, 'child', 'tool')), { page: [text(4, 'child', 'tool')] }, { mark: 'live' },
+      { page: [text(4, 'child', 'tool'), text(3, 'after'), call(2), text(1, 'before')] }, { mark: 'paged' }, 'restore',
+      { page: [text(0, 'older ')] }],
+    check: ({ h, marks }) => {
+      expect(h.held().timeline.items).toMatchObject([{ text: 'older before' }, { kind: 'toolCall' }, { text: 'after' },
+        { text: 'child', parentToolUseId: 'tool' }])
+      expect(h.held().timeline.rowKeys).toEqual(marks.get('paged')!.timeline.rowKeys)
+      expect([1, 3].map(index => h.held().timeline.rowKeys![index])).toEqual(marks.get('live')!.timeline.rowKeys)
+    } },
+  { name: 'an unrepresented held operator separates older text from a suppressed assistant',
+    steps: [{ echo: 'm' }, live(text(2, 'world')), { mark: 'live' }, { page: [text(2, 'world')] }, 'restore', { page: [text(1, 'hello ')] }],
+    check: ({ h, marks }) => {
+      expect(texts(h)).toEqual(['hello ', 'operator', 'world'])
+      expect(h.held().timeline.rowKeys!.slice(1)).toEqual(marks.get('live')!.timeline.rowKeys)
+    } },
+  // Verifier round 3: retained display arriving live applies its live effects without redrawing.
+  { name: 'a retained assistant fragment arriving live clears a stall',
+    steps: [{ page: [text(1, 'once')] }, 'restore', on({ type: 'stallDetected' }), { mark: 'stalled' }, live(text(1, 'once')),
+      { mark: 'cleared' }, { page: [text(1, 'once'), text(0, 'older ')] }],
+    check: ({ h, marks }) => {
+      const [stalled, cleared] = [marks.get('stalled')!, marks.get('cleared')!]
+      expect([stalled.timeline.stalled, cleared.timeline.stalled]).toEqual([true, false])
+      unchanged(stalled, cleared)
+      expect(cleared.display).toBe(stalled.display)
+      expect(cleared.liveKeys).toBe(stalled.liveKeys)
+      expect(texts(h)).toEqual(['older once'])
+      expect(h.held().timeline.rowKeys).toEqual(stalled.timeline.rowKeys)
+    } },
+  { name: 'a retained tool call and result arriving live clear stalls',
+    steps: [{ page: [result(2), call(1)] }, 'restore', on({ type: 'stallDetected' }), { mark: 'a' }, live(call(1)), { mark: 'b' },
+      on({ type: 'stallDetected' }), { mark: 'c' }, live(result(2)), { mark: 'd' }],
+    check: ({ marks }) => {
+      for (const [before, after] of [['a', 'b'], ['c', 'd']]) {
+        expect([marks.get(before)!.timeline.stalled, marks.get(after)!.timeline.stalled]).toEqual([true, false])
+        unchanged(marks.get(before)!, marks.get(after)!)
+      }
+    } },
+  { name: 'a retained failed finish arriving live clears thinking and reports the failure',
+    steps: [{ page: [failedEntry] }, 'restore', { mark: 'paged' }, on({ type: 'turnState', state: 'thinking' }),
+      on({ type: 'thinkingProgress', estimatedTokens: 123 }), { mark: 'thinking' }, { live: failedEnd, key: 'turnEnd ts-2' }],
+    check: ({ h, marks }) => {
+      expect(marks.get('paged')!.timeline.latestTurnEnd).toBeUndefined()
+      expect(marks.get('thinking')!.timeline.thinkingTokens).toBe(123)
+      expect(h.held().timeline).toMatchObject({ thinkingTokens: null, latestTurnEnd: failedEnd, phase: 'thinking' })
+      unchanged(marks.get('thinking')!, h.held())
+    } },
+  { name: 'a waiting operator echo settles behind a retained finish arriving live',
+    steps: [{ page: [failedEntry, text(1, 'reply')] }, 'restore', on({ type: 'turnState', state: 'responding' }),
+      { echo: 'm', text: 'queued' }, on({ type: 'assistantDelta', turnId: 'later', seq: 1, text: 'later' }), { mark: 'waiting' },
+      { live: failedEnd, key: 'turnEnd ts-2' }, { mark: 'finished' },
+      on({ type: 'userText', received: true, text: 'queued', messageId: 'm', queuedMsgId: 9 })],
+    check: ({ h, marks }) => {
+      const [waiting, finished] = [marks.get('waiting')!.timeline, marks.get('finished')!.timeline]
+      const boundaryKey = waiting.rowKeys![1]
+      const echoKey = waiting.localEchoes![0].rowKey
+      expect(finished.localEchoes).toMatchObject([{ waiting: true, afterKey: boundaryKey }])
+      expect(finished.localSendPending).toBe(waiting.localSendPending)
+      unchanged(marks.get('waiting')!, marks.get('finished')!)
+      expect(texts(h)).toEqual(['reply', 'turnBoundary', 'queued', 'later'])
+      expect(h.held().timeline.rowKeys![2]).toBe(echoKey)
+      expect(h.held().timeline.localEchoes).toMatchObject([{ settled: true, queuedMsgId: 9, afterKey: boundaryKey }])
+      expect(h.held().timeline.rowArrivalOrder?.get(echoKey)).toBe(finished.nextRowKey)
+    } },
+  { name: 'a retained compaction falling edge arriving live owns the completion',
+    steps: [...retainedFalling, on(completion)],
+    check: ({ h, marks }) => {
+      const [rising, falling] = [marks.get('rising')!, marks.get('falling')!]
+      expect(falling.timeline.compacting).toBe(false)
+      expect(falling.timeline.pendingCompaction).toBe(rising.timeline.items[0])
+      unchanged(rising, falling)
+      expect(h.held().timeline.items).toEqual([completed])
+      expect(h.held().timeline.rowKeys).toEqual(rising.timeline.rowKeys)
+    } },
+  // Verifier round 4: reconciliation keeps a held boundary's live details and pending association.
+  { name: 'a completed retained compaction keeps its live details through a later page',
+    steps: [...retainedFalling, on(completion), { mark: 'completed' }, { page: [text(0, 'older')] }],
+    check: ({ h, marks }) => {
+      const before = marks.get('completed')!.timeline
+      expect(h.held().timeline.items).toMatchObject([{ text: 'older' }, completed])
+      expect(h.held().timeline.items[1]).toBe(before.items[0])
+      expect(h.held().timeline.rowKeys![1]).toBe(before.rowKeys![0])
+    } },
+  { name: 'a pending retained compaction keeps its completion association through a later page',
+    steps: [...retainedFalling, { page: [text(0, 'older')] }, { mark: 'paged' }, on(completion)],
+    check: ({ h, marks }) => {
+      const paged = marks.get('paged')!.timeline
+      expect(paged.pendingCompaction).toBe(paged.items[1])
+      expect(h.held().timeline.items).toEqual([expect.objectContaining({ text: 'older' }), completed])
+      expect(h.held().timeline.rowKeys).toEqual(paged.rowKeys)
+      expect(paged.rowKeys![1]).toBe(marks.get('falling')!.timeline.rowKeys![0])
+    } },
+  { name: 'a completed compaction restored from storage keeps its details through a later page',
+    steps: [{ page: [compacting(2, false), compacting(1, true)] }, on({ type: 'compacting', active: true }),
+      live(compacting(2, false)), on(completion), { mark: 'completed' }, 'restore', { page: [text(0, 'older')] }],
+    check: ({ h, marks }) => {
+      expect(h.held().timeline.items).toMatchObject([{ text: 'older' }, completed])
+      expect(h.held().timeline.rowKeys![1]).toBe(marks.get('completed')!.timeline.rowKeys![0])
+    } },
+  // Neighbours: live state established first must survive a later page untouched.
+  { name: 'phase, pending send, echo, thinking, stall, retry and compacting survive a later page',
+    steps: [{ page: [text(2, 'history')] }, 'restore', on({ type: 'turnState', state: 'responding' }),
+      on({ type: 'userText', text: 'pending', messageId: 'pending' }), on({ type: 'thinkingProgress', estimatedTokens: 42 }),
+      on({ type: 'stallDetected' }), on({ type: 'apiRetry', active: true, current: 1, total: 3 }),
+      on({ type: 'compacting', active: true }), { mark: 'live' }, { page: [text(1, 'older ')] }],
+    check: ({ h, marks }) => {
+      const { items: _items, rowKeys: _keys, ...state } = h.held().timeline
+      const { items: _before, rowKeys: _beforeKeys, ...before } = marks.get('live')!.timeline
+      expect(state).toEqual(before)
+      expect(state).toMatchObject({ phase: 'responding', thinkingTokens: 42, stalled: true, compacting: true })
+      expect(texts(h)).toEqual(['older history', 'pending'])
+    } },
+  { name: 'live failed-turn feedback survives a later page',
+    steps: [{ page: [text(1, 'history')] }, 'restore', on(failedEnd), { mark: 'failed' }, { page: [text(1, 'history'), text(0, 'older ')] }],
+    check: ({ h, marks }) => {
+      expect(h.held().timeline.latestTurnEnd).toBe(marks.get('failed')!.timeline.latestTurnEnd)
+      expect(h.held().timeline.latestTurnEnd).toEqual(failedEnd)
+      expect(h.held().timeline.items[1]).toBe(marks.get('failed')!.timeline.items[1])
+    } },
+  { name: 'a held delivery receipt and pending send survive the operator join',
+    steps: [{ page: [text(1, 'history')] }, 'restore', { echo: 'm' }, on({ type: 'messageDelivery', messageId: 'm', status: 'waiting' }),
+      { mark: 'held' }, { page: [message(2), text(1, 'history')] }],
+    check: ({ h, marks }) => {
+      const held = marks.get('held')!
+      expect(held.timeline.localEchoes).toMatchObject([{ held: true, delivery: 'waiting' }])
+      expect(h.held().timeline.localEchoes).toEqual(held.timeline.localEchoes)
+      expect(h.held().timeline.localSendPending).toBe(held.timeline.localSendPending)
+      unchanged(held, h.held())
+    } },
+  { name: 'a waiting echo keeps its finish association through a later page and settles behind it',
+    steps: [{ page: [text(1, 'history')] }, 'restore', on({ type: 'turnState', state: 'responding' }), { echo: 'm', text: 'queued' },
+      on({ type: 'assistantDelta', turnId: 't', seq: 3, text: 'later' }), on({ type: 'turnEnd', turnId: 't', stopReason: 'end_turn' }),
+      { mark: 'finished' }, { page: [text(1, 'history'), text(0, 'older ')] },
+      on({ type: 'userText', received: true, text: 'queued', messageId: 'm', queuedMsgId: 9 })],
+    check: ({ h, marks }) => {
+      const finished = marks.get('finished')!.timeline
+      expect(finished.localEchoes).toMatchObject([{ waiting: true, afterKey: finished.rowKeys!.at(-1) }])
+      expect(texts(h)).toEqual(['older history', 'later', 'turnBoundary', 'queued'])
+      expect(h.held().timeline.rowKeys!.slice(1)).toEqual([2, 3, 1].map(index => finished.rowKeys![index]))
+      expect(h.held().timeline.localEchoes).toMatchObject([{ settled: true, afterKey: finished.rowKeys!.at(-1) }])
+    } },
+  { name: 'a live-only compaction keeps its pending association and completed details through later pages',
+    steps: [{ page: [text(2, 'history')] }, 'restore', on({ type: 'compacting', active: true }), on({ type: 'compacting', active: false }),
+      { page: [text(1, 'older ')] }, { mark: 'paged' }, on(completion), { mark: 'completed' }, { page: [text(0, 'oldest ')] }],
+    check: ({ h, marks }) => {
+      const paged = marks.get('paged')!.timeline
+      expect(paged.pendingCompaction).toBe(paged.items[1])
+      expect(h.held().timeline.items).toEqual([expect.objectContaining({ text: 'oldest older history' }), completed])
+      expect(h.held().timeline.items[1]).toBe(marks.get('completed')!.timeline.items[1])
+      expect(h.held().timeline.rowKeys).toEqual(paged.rowKeys)
+    } },
+  { name: 'held tool calls keep their object, live progress and live result through later pages',
+    steps: [{ page: [call(1, 'first')] }, 'restore', on({ type: 'toolProgress', turnId: 'first', toolUseId: 'tool', elapsedSeconds: 5 }),
+      live({ ...call(2), event: { ...call(2).event, toolUseId: 'second' } as HistoryTimelineEntry['event'] }), { mark: 'running' },
+      { page: [{ ...call(2), event: { ...call(2).event, toolUseId: 'second' } as HistoryTimelineEntry['event'] }, call(1, 'first')] },
+      on({ type: 'toolResult', turnId: 't', toolUseId: 'second', isError: false, resultSummary: 'live' }), { mark: 'done' },
+      { page: [text(0, 'older')] }],
+    check: ({ h, marks }) => {
+      const running = marks.get('running')!.timeline
+      expect(running.items[0]).toMatchObject({ elapsedSeconds: 5 })
+      expect(h.held().timeline.items.slice(1)).toEqual(marks.get('done')!.timeline.items)
+      expect(h.held().timeline.items[1]).toBe(running.items[0])
+      expect(h.held().timeline.items[2]).toBe(marks.get('done')!.timeline.items[1])
+      expect(h.held().timeline.items[2]).toMatchObject({ result: { resultSummary: 'live' } })
+      expect(h.held().timeline.rowKeys!.slice(1)).toEqual(running.rowKeys)
+    } }
+]
 
-it.each([false, true])('records live failure and clears thinking without replaying a retained boundary, restored=%s', restored => {
-  const original = harness()
-  original.page([failedEntry])
-  const h = restored ? restore(original) : original
-  expect(h.held().timeline.latestTurnEnd).toBeUndefined()
-  h.store.getState().dispatchFor('c', { type: 'turnState', state: 'thinking' })
-  h.store.getState().dispatchFor('c', { type: 'thinkingProgress', estimatedTokens: 123 })
-  const before = h.held().timeline
-  h.store.getState().dispatchFor('c', failedEnd, 'turnEnd ts-2')
-  expect(h.held().timeline.thinkingTokens).toBeNull()
-  expect(h.held().timeline.latestTurnEnd).toEqual(failedEnd)
-  expect(h.held().timeline.phase).toBe('thinking')
-  expect(h.held().timeline.items).toBe(before.items)
-  expect(h.held().timeline.rowKeys).toEqual(before.rowKeys)
-  expect(h.held().timeline.nextRowKey).toBe(before.nextRowKey)
-})
-
-it.each([false, true])('settles a waiting local echo at the retained live finish boundary, restored=%s', restored => {
-  const original = harness()
-  original.page([failedEntry, text(1, 'reply')])
-  const h = restored ? restore(original) : original
-  const boundaryKey = h.held().timeline.rowKeys![1]
-  h.store.getState().dispatchFor('c', { type: 'turnState', state: 'responding' })
-  h.store.getState().dispatchLocalEcho('host', 'c', { type: 'userText', text: 'queued', messageId: 'm' })
-  h.store.getState().dispatchFor('c', { type: 'assistantDelta', turnId: 'later', seq: 1, text: 'later' })
-  const before = h.held().timeline
-  const echoKey = before.localEchoes![0].rowKey
-  h.store.getState().dispatchFor('c', failedEnd, 'turnEnd ts-2')
-  expect(h.held().timeline.localEchoes).toMatchObject([{ waiting: true, afterKey: boundaryKey }])
-  expect(h.held().timeline.localSendPending).toBe(before.localSendPending)
-  expect(h.held().timeline.items).toBe(before.items)
-  expect(h.held().timeline.rowKeys).toEqual(before.rowKeys)
-  expect(h.held().timeline.nextRowKey).toBe(before.nextRowKey)
-  h.store.getState().dispatchFor('c', {
-    type: 'userText', received: true, text: 'queued', messageId: 'm', queuedMsgId: 9
+describe('retained rows keep identity and live state across reconciliation', () => {
+  it.each(seam.flatMap(c => [false, true].map(restored => ({ ...c, restored }))))('$name, restored=$restored', ({ steps, check, restored }) => {
+    let h = harness()
+    const marks = new Map<string, ConversationSlice>()
+    const pages: HistoryTimelineEntry[][] = []
+    for (const step of steps) {
+      if (step === 'restore') { if (restored) h = restore(h) }
+      else if ('page' in step) { h.page(step.page); pages.push(step.page) }
+      else if ('live' in step) h.store.getState().dispatchFor('c', step.live, step.key)
+      else if ('echo' in step) h.store.getState().dispatchLocalEcho('host', 'c', { type: 'userText', text: step.text ?? 'operator', messageId: step.echo })
+      else marks.set(step.mark, h.held())
+    }
+    check({ h, marks, restored })
+    // Every page seen again changes nothing, live state included.
+    const settled = h.held()
+    for (const page of pages) h.page(page)
+    expect(h.held().timeline.items).toBe(settled.timeline.items)
+    expect(h.held().timeline).toEqual(settled.timeline)
+    expect(h.held().timeline.pendingCompaction).toBe(settled.timeline.pendingCompaction)
+    expect(h.held().display).toEqual(settled.display)
+    // The held rows survive a validated protected round trip with their keys.
+    const fresh = restore(h)
+    expect(fresh.held().localRead).toBe('loaded')
+    expect(fresh.held().timeline.items).toEqual(h.held().timeline.items)
+    expect(fresh.held().timeline.rowKeys).toEqual(h.held().timeline.rowKeys)
   })
-  expect(h.held().timeline.items).toMatchObject([
-    { text: 'reply' }, { kind: 'turnBoundary' }, { text: 'queued' }, { text: 'later' }
-  ])
-  expect(h.held().timeline.rowKeys![2]).toBe(echoKey)
-  expect(h.held().timeline.localEchoes).toMatchObject([{ settled: true, queuedMsgId: 9, afterKey: boundaryKey }])
-  expect(h.held().timeline.rowArrivalOrder?.get(echoKey)).toBe(before.nextRowKey)
-})
-
-it.each([false, true])('clears stalls on retained live tool calls and results without changing rows, restored=%s', restored => {
-  const original = harness()
-  original.page([result(2), call(1)])
-  const h = restored ? restore(original) : original
-  for (const entry of [call(1), result(2)]) {
-    h.store.getState().dispatchFor('c', { type: 'stallDetected' })
-    const before = h.held().timeline
-    const event = translateTimelineEvent(entry.event)
-    if (event === null) throw new Error('Expected a display event')
-    h.store.getState().dispatchFor('c', event, `${entry.event.type} ${entry.ts}`)
-    expect(h.held().timeline.stalled).toBe(false)
-    expect(h.held().timeline.items).toBe(before.items)
-    expect(h.held().timeline.rowKeys).toEqual(before.rowKeys)
-    expect(h.held().timeline.nextRowKey).toBe(before.nextRowKey)
-  }
-})
-
-it.each([false, true])('associates a live compaction completion with its retained boundary, restored=%s', restored => {
-  const original = harness()
-  original.page([
-    { id: 2, ts: 'ts-2', event: { type: 'compacting', active: false } },
-    { id: 1, ts: 'ts-1', event: { type: 'compacting', active: true } }
-  ])
-  const h = restored ? restore(original) : original
-  h.store.getState().dispatchFor('c', { type: 'compacting', active: true })
-  const before = h.held().timeline
-  h.store.getState().dispatchFor('c', { type: 'compacting', active: false }, 'compacting ts-2')
-  expect(h.held().timeline.compacting).toBe(false)
-  expect(h.held().timeline.pendingCompaction).toBe(before.items[0])
-  expect(h.held().timeline.items).toBe(before.items)
-  h.store.getState().dispatchFor('c', {
-    type: 'compactionBoundary', trigger: 'manual', preTokens: 100, postTokens: 20
-  })
-  expect(h.held().timeline.items).toMatchObject([{ kind: 'compactionBoundary', manual: true, preTokens: 100, postTokens: 20 }])
-  expect(h.held().timeline.rowKeys).toEqual(before.rowKeys)
-  expect(h.held().timeline.nextRowKey).toBe(before.nextRowKey)
-})
-
-it.each([false, true])('joins older text to a suppressed live assistant once, restored=%s', restored => {
-  const original = harness()
-  original.store.getState().dispatchFor('c', { type: 'assistantDelta', turnId: 't', seq: 2, text: 'world' }, 'assistantDelta ts-2')
-  const key = original.held().timeline.rowKeys![0]
-  original.page([text(2, 'world')])
-  const h = restored ? restore(original) : original
-  h.page([text(1, 'hello ')])
-  expect(h.held().timeline.items).toMatchObject([{ text: 'hello world' }])
-  expect(h.held().timeline.rowKeys).toEqual([key])
-  h.page([text(2, 'world'), text(1, 'hello ')])
-  h.page([text(1, 'hello '), text(0, 'say ')])
-  expect(h.held().timeline.items).toMatchObject([{ text: 'say hello world' }])
-  expect(h.held().timeline.rowKeys).toEqual([key])
-  expect(restore(h).held().timeline.items).toEqual(h.held().timeline.items)
-})
-
-it('joins multiple suppressed fragments and a live suffix without duplicating held text', () => {
-  const h = harness()
-  h.page([text(1, 'hello ')])
-  const key = h.held().timeline.rowKeys![0]
-  for (const [id, value] of [[2, 'world'], [3, '!']] as const) {
-    h.store.getState().dispatchFor('c', { type: 'assistantDelta', turnId: 't', seq: id, text: value }, `assistantDelta ts-${id}`)
-  }
-  h.page([text(3, '!'), text(2, 'world'), text(1, 'hello ')])
-  h.store.getState().dispatchFor('c', { type: 'assistantDelta', turnId: 't', seq: 4, text: ' live' })
-  const fresh = restore(h)
-  fresh.page([text(3, '!'), text(2, 'world'), text(1, 'hello '), text(0, 'say ')])
-  expect(fresh.held().timeline.items).toMatchObject([{ text: 'say hello world! live' }])
-  expect(fresh.held().timeline.rowKeys).toEqual([key])
-})
-
-it('keeps a suppressed live tool and different assistant parent as text barriers', () => {
-  const h = harness()
-  h.store.getState().dispatchFor('c', { type: 'toolUse', turnId: 't', toolUseId: 'tool', name: 'Read', inputSummary: 'input' }, 'toolUse ts-2')
-  h.page([call(2)])
-  h.store.getState().dispatchFor('c', { type: 'assistantDelta', turnId: 't', seq: 4, text: 'child', parentToolUseId: 'tool' }, 'assistantDelta ts-4')
-  h.page([text(4, 'child', 'tool')])
-  const keys = h.held().timeline.rowKeys!
-  h.page([text(4, 'child', 'tool'), text(3, 'after'), call(2), text(1, 'before')])
-  expect(h.held().timeline.items).toMatchObject([
-    { text: 'before' }, { kind: 'toolCall' }, { text: 'after' }, { text: 'child', parentToolUseId: 'tool' }
-  ])
-  expect(h.held().timeline.rowKeys![1]).toBe(keys[0])
-  expect(h.held().timeline.rowKeys![3]).toBe(keys[1])
-  const fresh = restore(h)
-  fresh.page([text(0, 'older ')])
-  expect(fresh.held().timeline.items).toMatchObject([
-    { text: 'older before' }, { kind: 'toolCall' }, { text: 'after' }, { text: 'child' }
-  ])
-  expect(fresh.held().timeline.rowKeys).toEqual(h.held().timeline.rowKeys)
-})
-
-it.each([false, true])('keeps an unrepresented held operator between older text and a suppressed assistant, restored=%s', restored => {
-  const original = harness()
-  original.store.getState().dispatchLocalEcho('host', 'c', { type: 'userText', text: 'operator', messageId: 'm' })
-  original.store.getState().dispatchFor('c', { type: 'assistantDelta', turnId: 't', seq: 2, text: 'world' }, 'assistantDelta ts-2')
-  const keys = original.held().timeline.rowKeys!
-  original.page([text(2, 'world')])
-  const h = restored ? restore(original) : original
-  h.page([text(1, 'hello ')])
-  expect(h.held().timeline.items).toMatchObject([{ text: 'hello ' }, { text: 'operator' }, { text: 'world' }])
-  expect(h.held().timeline.rowKeys!.slice(1)).toEqual(keys)
-})
-
-it('uses suppressed operator rows as chronological barriers and anchors after fresh restoration', () => {
-  const h = harness()
-  h.store.getState().dispatchLocalEcho('host', 'c', { type: 'userText', messageId: 'm', text: 'operator' })
-  const operatorKey = h.held().timeline.rowKeys![0]
-  const message: HistoryTimelineEntry = { id: 2, ts: 'operator', event: {
-    type: 'messageReceived', message: { message_id: 'm', role: 'user', text: 'operator' } } }
-  h.page([text(3, 'after'), message, text(1, 'before')])
-  expect(h.held().timeline.items).toMatchObject([{ text: 'before' }, { text: 'operator' }, { text: 'after' }])
-  expect(h.held().timeline.rowKeys![1]).toBe(operatorKey)
-  const fresh = restore(h)
-  fresh.page([text(3, 'after'), message, text(1, 'before'), text(0, 'older ')])
-  expect(fresh.held().timeline.items).toMatchObject([{ text: 'older before' }, { text: 'operator' }, { text: 'after' }])
-  expect(fresh.held().timeline.rowKeys).toEqual(h.held().timeline.rowKeys)
-})
-
-it.each([
-  { compactResult: 'success', failed: false }, { compactResult: 'failed', failed: true },
-  { compactError: 'private error', failed: true }
-])('reconstructs and restores a compaction completion separating text: %j', report => {
-  const h = harness()
-  h.store.getState().dispatchFor('c', { type: 'compacting', active: true })
-  h.store.getState().dispatchFor('c', { type: 'turnState', state: 'responding' })
-  const entries: HistoryTimelineEntry[] = [text(4, 'after'), { id: 3, ts: 'end', event: {
-    type: 'compacting', active: false, compactResult: report.compactResult, compactError: report.compactError } },
-  { id: 2, ts: 'start', event: { type: 'compacting', active: true } }, text(1, 'before')]
-  h.page(entries)
-  expect(h.held().timeline.items).toEqual(reduceHistoryPage(entries))
-  expect(h.held().timeline.items).toMatchObject([
-    { text: 'before' }, { kind: 'compactionBoundary', failed: report.failed }, { text: 'after' }
-  ])
-  expect(h.held().timeline).toMatchObject({ compacting: true, phase: 'responding' })
-  const fresh = restore(h)
-  fresh.page([...entries, text(0, 'older ')])
-  expect(fresh.held().timeline.items).toMatchObject([
-    { text: 'older before' }, { kind: 'compactionBoundary', failed: report.failed }, { text: 'after' }
-  ])
-  expect(fresh.held().timeline.rowKeys).toEqual(h.held().timeline.rowKeys)
-  expect(fresh.held().timeline.compacting).toBe(false)
-  expect(JSON.stringify(snapshotFor(fresh))).not.toContain('private error')
-})
-
-it.each([['other', 'tool'], ['', 'tool'], ['t', ''], ['', '']])(
-  'does not attach a denial with turn/tool identities %j/%j', (turnId, toolUseId) => {
-    const h = harness()
-    h.page([denial(2, turnId, toolUseId), call(1)])
-    expect(h.held().timeline.items[0]).toMatchObject({ kind: 'toolCall' })
-    expect(h.held().timeline.items[0]).not.toHaveProperty('denial', expect.anything())
-    expect(() => parseChatHistorySnapshot(snapshotFor(h))).not.toThrow()
-  })
-
-it('retains orphan denial correlation through fresh restoration with equal tool IDs', () => {
-  const h = harness()
-  h.page([denial(3, 'other')])
-  const fresh = restore(h)
-  fresh.page([call(2, 'other'), call(1)])
-  expect(fresh.held().timeline.items[0]).not.toHaveProperty('denial', expect.anything())
-  expect(fresh.held().timeline.items[1]).toMatchObject({ turnId: 'other', denial: { message: 'denied' } })
-  expect(() => parseChatHistorySnapshot(snapshotFor(fresh))).not.toThrow()
-  const restored = restore(fresh)
-  restored.page([denial(3, 'other')])
-  expect(restored.held().timeline.items).toEqual(fresh.held().timeline.items)
-  expect(restored.held().timeline.rowKeys).toEqual(fresh.held().timeline.rowKeys)
 })
 
 it('rejects saved denial patches with missing, empty or inconsistent correlation identities', () => {

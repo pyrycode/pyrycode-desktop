@@ -63,6 +63,8 @@ Sizing: one deliverable; forecast at most 800 written lines including deletions,
 
 Security follow-up: bound inline probing to 64 candidate parses as well as 32 accepted completion passes. Otherwise a long punctuation-only paragraph could trigger a parse for every unpaired marker within one pass. Exhaustion retains uncompleted original syntax. Accepted closers are also checked against text/code-content positions so re-pairing cannot expose an earlier synthetic delimiter.
 
+2026-10-07 rework, verifier findings 1–2: `pendingTable` matches the parser's table offset after both quote prefixes and indentation, preserves that prefix in virtual delimiter lines, and reads a partial delimiter's own prefix. `pendingMarkdown` inserts heading closers at the last inline child's parser position, before original closing hashes and whitespace. Both changes remain insertion-only; raw-source settlement and the renderer security boundary are unchanged. Static expected-display regressions cover indentation, nested quotes, partial/completed delimiters, heading hashes/whitespace and literal hash punctuation; fake transport covers both settlement triggers. No in-flight branch touches these helpers or the focused browser spec.
+
 ## Documentation handoff
 
 Pending for documentation stage:

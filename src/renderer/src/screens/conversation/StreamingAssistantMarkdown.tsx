@@ -61,19 +61,20 @@ function pendingTable(source: string): { text: string; start: number; end: numbe
   const header = lines[headerIndex]
   if (header === undefined || !header.includes('|')) return null
   const headerStart = lines.slice(0, headerIndex).join('\n').length + (headerIndex ? 1 : 0)
-  const quote = /^(?: {0,3}> ?)+/.exec(header)?.[0] ?? ''
+  const prefix = /^(?: {0,3}> ?)*[ \t]*/.exec(header)?.[0] ?? ''
+  const tableOffset = headerStart + prefix.length
   if (descendants(parseMarkdown(source)).some(node => node.type === 'table'
-    && node.position?.start.offset === headerStart + quote.length)) return null
+    && node.position?.start.offset === tableOffset)) return null
   const insertion = source.trimEnd().length
-  const existing = delimiter ? last.slice(quote.length) : ''
+  const existing = delimiter ? last.replace(/^(?: {0,3}> ?)*[ \t]*/, '') : ''
   const lastCell = existing.split('|').at(-1)?.trim() ?? ''
   const completion = lastCell === '' ? '---' : lastCell.includes('-') ? '' : '-'
   for (let cells = 1; cells <= header.split('|').length; cells++) {
     const suffix = delimiter
       ? completion + ' | ---'.repeat(cells - 1)
-      : '\n' + quote + '---' + ' | ---'.repeat(cells - 1)
+      : '\n' + prefix + '---' + ' | ---'.repeat(cells - 1)
     const text = source.slice(0, insertion) + suffix + source.slice(insertion)
-    const table = descendants(parseMarkdown(text)).find(node => node.type === 'table' && node.position?.start.offset === headerStart + quote.length)
+    const table = descendants(parseMarkdown(text)).find(node => node.type === 'table' && node.position?.start.offset === tableOffset)
     if (table?.position) return { text, start: table.position.start.offset ?? headerStart, end: table.position.end.offset ?? text.length }
   }
   return null
@@ -92,7 +93,10 @@ export function pendingMarkdown(source: string): { text: string; allowElement: A
     const leaf = nodes.filter(node => node.type === 'paragraph' || node.type === 'heading').at(-1)
     if (!leaf?.position || (leaf.position.end.offset ?? 0) < text.trimEnd().length) break
     const texts = descendants(leaf).filter(node => node.type === 'text')
-    const at = text.trimEnd().length
+    // Heading children end before closing hashes; completing inside that span keeps them syntax.
+    const at = leaf.type === 'heading'
+      ? leaf.children.at(-1)?.position?.end.offset ?? text.trimEnd().length
+      : text.trimEnd().length
     const candidates = texts.flatMap(node => {
       const start = node.position?.start.offset ?? 0
       const end = node.position?.end.offset ?? start

@@ -12,6 +12,48 @@ const settled = (turn = 'progressive') => frame('turn_end', {
   conversation_id: SEEDED_ROW.id, turn_id: turn, stop_reason: 'end_turn'
 })
 
+test('indented pending headers and heading closers preserve streaming presentation', async ({ launchPairedApp }) => {
+  const { page, daemon, app } = await launchPairedApp({})
+  const bubble = page.locator('[data-thread-role="assistant"]').last()
+  const markdown = bubble.locator('.bubble__markdown')
+  for (const [index, prefix] of ['  ', '>   '].entries()) {
+    const turn = `indented-header-${index}`
+    daemon.pushFrame(delta(prefix + '| A | B |\n', turn))
+    await expect(markdown).toHaveText('A B')
+    daemon.pushFrame(delta((prefix.includes('>') ? '> ' : '') + '---', turn))
+    await expect(markdown).toHaveText('A B')
+    await expect(markdown.locator('table, h2')).toHaveCount(0)
+    if (prefix.includes('>')) await expect(markdown.locator('blockquote')).toHaveText('A B')
+    daemon.pushFrame(delta(' | ---', turn))
+    await expect(markdown.locator('table')).toHaveCount(1)
+    daemon.pushFrame(settled(turn))
+    await expect(bubble.locator('.bubble__cursor')).toHaveCount(0)
+  }
+  for (const [index, inline] of ['**bold', '`code'].entries()) {
+    const turn = `heading-closer-${index}`
+    const content = inline.slice(index === 0 ? 2 : 1)
+    daemon.pushFrame(delta('# ' + inline + ' #', turn))
+    await expect(markdown.locator('h1')).toHaveText(content)
+    daemon.pushFrame(delta('##  \t\n', turn))
+    await expect(markdown.locator('h1')).toHaveText(content)
+    await expect(markdown.locator('strong, code')).toHaveCount(0)
+    if (index === 0) {
+      for (const width of [1280, 800]) {
+        await app.evaluate(({ BrowserWindow }, value) => BrowserWindow.getAllWindows()[0].setSize(value, 800), width)
+        await page.screenshot({ path: `/tmp/builder-1751/rework-heading-${width}.png`, animations: 'disabled' })
+      }
+      daemon.pushFrame(settled(turn))
+    } else {
+      daemon.pushFrame(frame('tool_use', {
+        conversation_id: SEEDED_ROW.id, turn_id: turn, tool_use_id: 'heading-tool-1751',
+        name: 'Read', input_summary: 'synthetic.ts'
+      }))
+    }
+    await expect(markdown.locator('h1')).toHaveText(inline)
+    await expect(bubble.locator('.bubble__cursor')).toHaveCount(0)
+  }
+})
+
 test('progressive presentation, parser/render reuse and raw-source settlement', async ({ launchPairedApp }) => {
   const { page, daemon, app } = await launchPairedApp({})
   const bubble = page.locator('[data-thread-role="assistant"]').last()

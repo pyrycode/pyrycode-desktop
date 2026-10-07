@@ -71,7 +71,20 @@ describe('pending presentation', () => {
     ['| A | B |\n', 'A B'], ['| A | B |\n---', 'A B'], ['| A | B |\n:', 'A B'],
     ['| A | B |\n|', 'A B'], ['| A | B |\n| :', 'A B'], ['| `A|B` |', '`A B`'],
     ['> | A | B |', '<blockquote>A B</blockquote>'],
+    ...[' ', '  ', '   ', '>   ', '> >   '].flatMap(prefix =>
+      ['\n', '\n' + (prefix.includes('>') ? prefix : '') + '---', '\n' + prefix + ':'].map(suffix => [
+        prefix + '| A | B |' + suffix,
+        prefix.includes('> >') ? '<blockquote><blockquote>A B</blockquote></blockquote>'
+          : prefix.includes('>') ? '<blockquote>A B</blockquote>' : 'A B'
+      ])),
     ['> **bold', '<blockquote><p>bold</p></blockquote>'], ['# **bold', '<h1>bold</h1>'],
+    ...['**bold', '`code'].flatMap(inline => [' #', ' ###  \t\n'].flatMap(closing => [
+      ['# ' + inline + closing, '<h1>' + inline.replace(/^[*`]+/, '') + '</h1>'],
+      ['> # ' + inline + closing, '<blockquote><h1>' + inline.replace(/^[*`]+/, '') + '</h1></blockquote>']
+    ])),
+    ['# **bold** #', '<h1><strong>bold</strong></h1>'],
+    ['# **bold \\#', '<h1>bold #</h1>'], ['# `code #x', '<h1>code #x</h1>'],
+    ['# **foo `bar #', '<h1>foo bar</h1>'],
     ['left | right\n\nnext', '<p>left | right</p><p>next</p>']
   ])('presents %j as %j', (source, expected) => {
     const pending = pendingMarkdown(source)
@@ -83,10 +96,10 @@ describe('pending presentation', () => {
     expect(index).toBe(source.length)
   })
   it('renders a completed table and preserves code while a closer grows', () => {
-    for (const source of ['| A | B |\n--- | ---', '```js\na\n', '```js\na\n`', '```js\na\n``', '```js\na\n```x']) {
+    for (const source of ['| A | B |\n--- | ---', '  | A | B |\n--- | ---', '>   | A | B |\n> --- | ---', '```js\na\n', '```js\na\n`', '```js\na\n``', '```js\na\n```x']) {
       const pending = pendingMarkdown(source)
       const markup = renderToStaticMarkup(<AssistantMarkdown text={pending.text} allowElement={pending.allowElement} />)
-      expect(markup).toContain(source.startsWith('|') ? '<table>' : 'code-block__body')
+      expect(markup).toContain(source.includes('|') ? '<table>' : 'code-block__body')
       if (source.endsWith('```x')) expect(markup).toContain('```x')
     }
   })
@@ -97,5 +110,13 @@ describe('pending presentation', () => {
       expect(markup).not.toMatch(/<script|<img|<a\b|markdown-link/)
     }
     expect(render('**bold')).toBe('<p>**bold</p>')
+  })
+  it('retains raw heading syntax at settlement and leaves indented code alone', () => {
+    expect(render('# **bold #  \t\n')).toBe('<h1>**bold</h1>')
+    expect(render('# `code ###  \t\n')).toBe('<h1>`code</h1>')
+    const source = '    | A | B |\n'
+    const pending = pendingMarkdown(source)
+    expect(pending.text).toBe(source)
+    expect(renderToStaticMarkup(<AssistantMarkdown text={pending.text} allowElement={pending.allowElement} />)).toBe(render(source))
   })
 })

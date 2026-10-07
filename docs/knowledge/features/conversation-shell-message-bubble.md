@@ -143,13 +143,13 @@ and retains inverse-primary ink in every pointer state.
 `.bubble__copy` is a `<button type="button">` holding a bare inline `<svg fill="currentColor"
 aria-hidden="true">` with the single Font Awesome `copy-solid-full` path (the drawing's `clipPath` is a
 full-bleed 11×12 rect and is dropped as the no-op it is). It inherits `--color-inverse-primary` from
-`.message-actions` through `currentColor`, staying visible with the same ink and transparent background
-at rest, on hover and while pressed. `:focus-visible` draws `outline: 1px solid var(--color-outline)`;
+`.message-actions` through `currentColor`, retaining the same ink in every pointer state. The background
+is transparent at rest; hover adds the layer below. `:focus-visible` draws `outline: 1px solid var(--color-outline)`;
 the accessible name remains `Copy message`. There is no confirmation after a copy.
 
 **Reply sits below copy (#1779).** It is a native `<button type="button">` named `Reply to message`,
 reachable with Tab and activated by Enter, Space or pointer. Its `bubble__copy bubble__reply` classes
-reuse copy's constant pointer appearance and visible keyboard outline. The supplied
+reuse copy's hover layer and visible keyboard outline. The supplied
 `reply-solid-full.svg` draws a 13×12px mask on the aria-hidden `.bubble__reply-icon` span, tinted through
 `currentColor` with `--color-inverse-primary` (#32628d). Both controls are always visible.
 
@@ -158,6 +158,16 @@ reuse copy's constant pointer appearance and visible keyboard outline. The suppl
 gives copy a **27×20px** target around its 11×12px glyph and reply a **29×20px** target around its
 13×12px glyph. The `--space-3` gap is 12px between glyph margin boxes and leaves 4px between the
 targets. Restoring the old 28px target height would make them overlap.
+
+**Hover paints around the glyph, not the full target (#1864).** `.bubble__copy` uses
+`position: relative; isolation: isolate`; only the hovered button generates `::before`, with
+`position: absolute; inset: 0 var(--space-1)`, `--color-state-hover` fill and `--radius-xs` (6px)
+corners. The existing 4px vertical/8px horizontal padding means this inset reaches exactly 4px
+past each glyph: a 19×20px copy layer or 21×20px reply layer. Painting the whole target would
+extend 8px horizontally. `z-index: -1` keeps the layer behind the glyph within the isolated
+button; `pointer-events: none` leaves activation alone. Padding, margins, borders and sizes
+stay fixed. Keyboard focus retains its 1px solid `--color-outline` outline and `--radius-full`
+button radius; focus alone generates no layer, and leaving hover removes it.
 
 Module-local `MessageActions({ text, role, onReply })` in `ConversationScreen.tsx` is a **direct sibling
 of the bubble**: after assistant bubbles (actions on the right), before delivered user bubbles (actions
@@ -518,6 +528,19 @@ It also copies a streaming partial reply through the OS clipboard, verifies queu
 and drop activation without actions/meta, and guards standalone-offer sizing. Static tests establish
 the image-button markup; the row's `:focus-within` rule applies to image buttons too.
 
+**Side-actions hover** (same spec): both message roles at 800px and 1280px, token fill,
+6px corners and measured 4px glyph-relative bounds for each action. It checks no sibling
+layer, identical row/bubble/actions/button/glyph boxes during hover and after leaving,
+then real Tab transitions with the existing outline style, width, colour and button radius
+and no layer. Static renders cannot establish these paint or interaction claims.
+
+**Hover acceptance evidence (#1864).** Dispatcher gate 6 at `39c71b161b924eaf8af079028390b3523d36bf62`
+executed 340 tests: 340 passed, 0 failed, 4 skipped. The [verifier's counted review](https://github.com/pyrycode/pyrycode-desktop/pull/1870#issuecomment-6044032161)
+confirms both side-actions scenarios were present and passed (2 executed, 2 passed, 0 failed,
+0 skipped), including `copy and reply hover layers surround only the pointed glyph without changing layout or keyboard focus`.
+It also confirms all eight assistant-row copy/reply hover/focus captures at 800×800 and
+1280×800 matched Figma 840:16132. Live Claude was not required or run for this CSS change.
+
 **Recorded acceptance evidence (#1778).** The dispatcher browser gate on `10d57f51` executed 287
 tests: 287 passed, 0 failed, 4 skipped. The [verifier's counted runtime review](https://github.com/pyrycode/pyrycode-desktop/pull/1799#issuecomment-6008316736)
 confirms that the named `message-copy`, `user-whitespace`, `assistant-whitespace`, `thread-shadow`
@@ -545,6 +568,7 @@ alongside the sections that describe what each spec proves.
 
 ## Related
 
+- [#1864 architecture spec](../../specs/architecture/1864-message-actions-hover.md) — hover paint geometry and focus preservation.
 - [#1779 architecture spec](../../specs/architecture/1779-message-reply.md) — reply wiring, permission
   coverage and the SVG/CSP revision; [composer send](composer-send-internals.md#3-the-controlled-composer--conversationscreentsx)
   owns quote assembly and retained drafts.

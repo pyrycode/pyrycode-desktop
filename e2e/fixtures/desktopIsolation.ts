@@ -130,7 +130,40 @@ export async function launchIsolatedApp(options: {
     env: withWindowPresentation(options.env)
   })
   options.fate.watch(app)
-  return app
+  try {
+    if (e2eShowsWindow()) await ignoreDisplayPointer(app)
+    return app
+  } catch (error) {
+    // Until initialization returns, the caller cannot register its app teardown.
+    try {
+      await options.fate.closeWatched(app)
+    } catch {
+      options.fate.recordTeardownFailure('app')
+    }
+    throw error
+  }
+}
+
+/**
+ * #1813. A SHOWN window also takes the display's own pointer, which is not Playwright's: Playwright
+ * drives a CDP-injected pointer, while the display's pointer stays wherever the server put it (the middle
+ * of the screen under Xvfb, where every worker's centred window covers it). When another launch maps or
+ * closes a window over that spot, X sends this one a crossing event, Chromium turns a LeaveNotify into a
+ * mouse exit, and the document drops `:hover` while the CDP pointer still sits on the hovered control.
+ * Nothing re-hovers it, so the spec's next pill or tooltip read fails. More workers and a loaded machine
+ * only widen the window for a collision; they are not the cause.
+ *
+ * `setIgnoreMouseEvents` takes the window out of the display's pointer input and leaves CDP input
+ * untouched, so every hover, click and focus a spec drives still goes through the real renderer hit
+ * test. Applied to the windows that exist now and, from the same main-process tick,
+ * to every later one, so no window slips between the two. Only shown windows need it: a never-shown
+ * window receives no pointer from the display at all.
+ */
+async function ignoreDisplayPointer(app: ElectronApplication): Promise<void> {
+  await app.evaluate(({ app: electronApp, BrowserWindow }) => {
+    for (const window of BrowserWindow.getAllWindows()) window.setIgnoreMouseEvents(true)
+    electronApp.on('browser-window-created', (_event, window) => window.setIgnoreMouseEvents(true))
+  })
 }
 
 /**

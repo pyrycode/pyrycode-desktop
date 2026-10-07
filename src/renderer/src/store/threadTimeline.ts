@@ -630,6 +630,15 @@ function fillResult(
  * true; it is the narrower reading — "the chrome scalars are all daemon-sourced" — that no longer is.
  */
 export function reduceTimeline(state: TimelineState, event: ThreadEvent): TimelineState {
+  return reduceTimelineEvent(state, event)
+}
+
+/** Keep known display while reducing live feedback and associations against its surviving row. */
+export function reduceRetainedTimelineEvent(state: TimelineState, event: ThreadEvent, rowKey: number): TimelineState {
+  return reduceTimelineEvent(state, event, rowKey)
+}
+
+function reduceTimelineEvent(state: TimelineState, event: ThreadEvent, retainedRowKey?: number): TimelineState {
   const keys = state.rowKeys ?? state.items.map((_, index) => index)
   const echoes = state.localEchoes ?? []
   if (event.type === 'messageDelivery') {
@@ -697,6 +706,12 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
     return state
   }
   let next = reduceTimelineContent(state, event)
+  if (retainedRowKey !== undefined && next.items !== state.items) {
+    const retained = state.items[keys.indexOf(retainedRowKey)]
+    next = { ...next, items: state.items }
+    if (next.pendingCompaction !== undefined && next.pendingCompaction !== state.pendingCompaction &&
+        retained?.kind === 'compactionBoundary') next = { ...next, pendingCompaction: retained }
+  }
   if (event.type !== 'reset' && next !== state) {
     let nextRowKey = state.nextRowKey ?? state.items.length
     const rowKeys = next.items.map((_, index) => keys[index] ?? nextRowKey++)
@@ -710,7 +725,7 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         waiting: state.phase !== 'idle' || running }]
     }
     if (event.type === 'turnEnd') {
-      const afterKey = rowKeys[rowKeys.length - 1]
+      const afterKey = retainedRowKey ?? rowKeys[rowKeys.length - 1]
       localEchoes = echoes.map(e => e.waiting && !e.settled && e.afterKey === undefined &&
           (e.waitTurnId === undefined || e.waitTurnId === event.turnId)
         ? { ...e, afterKey } : e)

@@ -610,3 +610,28 @@ it('saves all-skipped coverage and narrow legacy pager advances without manufact
   await h.writer.stop()
   expect(timelineRequests(h)[2].snapshot.served?.receipts.at(-1)).toEqual({ ids: [], cursor: 'empty', atStart: false })
 })
+
+it('saves orphan-only display changes and restores protected contribution joins in fresh instances', async () => {
+  const h = harness()
+  h.list()
+  const result = { id: 3, ts: 'result', event: { type: 'toolResult' as const, turnId: 't', toolUseId: 'tool',
+    isError: false, resultSummary: 'completed' } }
+  h.receive('historyPageReceived', () => {
+    h.timelines.getState().prependHistoryFor('chat', [], false, [result])
+    h.timelines.getState().recordHistoryPage('chat', 'opaque', false, [3, 4])
+  })
+  await h.writer.flush()
+  const saved = timelineRequests(h).at(-1)!.snapshot
+  expect(saved.items).toEqual([])
+  expect(saved.display).toMatchObject([{ id: 3, kind: 'patch', result: { resultSummary: 'completed' } }])
+  expect(saved.served?.ids).toEqual([3, 4])
+  const fresh = createConversationTimelineStore(undefined, () => 'a')
+  fresh.getState().beginLocalTimelineRead('a', 'chat')!.complete(JSON.parse(JSON.stringify(saved)))
+  fresh.getState().prependHistoryFor('chat', [], false, [{ id: 2, ts: 'call', event: {
+    type: 'toolUse', turnId: 't', toolUseId: 'tool', name: 'Read', inputSummary: 'input' } }])
+  expect(fresh.getState().timelines.get('chat')?.timeline.items).toMatchObject([
+    { kind: 'toolCall', result: { resultSummary: 'completed' } }
+  ])
+  expect(h.log.mock.calls.flat().map(value => JSON.stringify(value)).join('')).not.toContain('completed')
+  await h.writer.stop()
+})

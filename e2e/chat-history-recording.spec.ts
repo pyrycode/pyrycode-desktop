@@ -198,6 +198,8 @@ test('receipt saturation still saves a repeated page and later live content acro
   const snapshot = { version: 1 as const, kind: 'timeline' as const, serverId, conversationId: SEEDED_ROW.id,
     items: [{ kind: 'assistantText' as const, turnId: 'retained', text: 'retained assistant' }], prependedRows: 0,
     coverage: { status: 'received' as const, cursor: 'page-499', atStart: false },
+    display: [{ id: 0, kind: 'row' as const, rowKey: -8, joinKey: `assistantDelta ${ts}`,
+      item: { kind: 'assistantText' as const, turnId: 'retained', text: 'retained assistant' } }],
     served: { ids, highestId: 199, receipts }, rowIdentity: { rowKeys: [-8], nextRowKey: 42 } }
   const read = (page: PairedApp['page']) => page.evaluate(({ serverId, conversationId }) =>
     window.pyry.chatHistory({ operation: 'readTimeline', serverId, conversationId }),
@@ -617,4 +619,82 @@ test('saved coverage survives offline restart, reconnect, live receipts and conn
   await third.page.keyboard.press('ArrowUp')
   await expect.poll(() => count(third.app)).toBe(1)
   expect(cursors).toEqual(['', 'saved-cursor', 'advanced-cursor'])
+})
+
+test('protected restoration joins partial pages while retaining an expanded tool and content anchor', async ({ launchPairedApp }) => {
+  let request: number | undefined
+  let asks = 0
+  const history = (id: number, type: string, payload: Record<string, unknown>) => ({ id, type, ts: `join-${id}`,
+    payload: { conversation_id: SEEDED_ROW.id, turn_id: 'join', ...payload } })
+  const delta = (id: number, text: string) => history(id, 'assistant_delta', { seq: id, text })
+  const tool = (id: number, tool_use_id: string) => history(id, 'tool_use', { tool_use_id, name: 'Read', input_summary: tool_use_id })
+  const result = (id: number, tool_use_id: string) => history(id, 'tool_result', { tool_use_id, is_error: false, result_summary: `result ${tool_use_id}` })
+  const firstEntries = [delta(20, 'newer text'), tool(30, 'survivor'), result(31, 'survivor'),
+    entry(40), tool(50, 'pending'), result(61, 'orphan'), ...Array.from({ length: 30 }, (_, i) => entry(100 + i))].reverse()
+  const first = await launchPairedApp({ buildReplyFrames: bytes => {
+    const env = decodeEnvelope(bytes)
+    if (env.type === 'list_conversations') return [seedConversationsFrame()]
+    if (env.type !== 'request_history') return []
+    asks++
+    if (env.payload.cursor === '') return [frame('history_page', { entries: firstEntries, cursor: 'older', at_start: false }, env.id)]
+    request = env.id
+    return []
+  } })
+  const serverId = first.servers[0].serverId
+  const read = (page: PairedApp['page']) => page.evaluate(({ serverId, conversationId }) =>
+    window.pyry.chatHistory({ operation: 'readTimeline', serverId, conversationId }), { serverId, conversationId: SEEDED_ROW.id })
+  await first.page.locator('.conversation__thread').focus()
+  await first.page.keyboard.press('Home')
+  await expect.poll(async () => {
+    const saved = await read(first.page)
+    return saved.status === 'stored' && saved.snapshot.kind === 'timeline' ? saved.snapshot.display?.length : 0
+  }).toBe(36)
+  await first.app.close()
+  const second = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
+  await second.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  const thread = second.page.locator('.conversation__thread')
+  await expect(thread).toContainText('newer text')
+  expect(asks).toBe(1)
+  await expect(second.page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled({ timeout: 20_000 })
+  const survivor = thread.locator('.tool-row:not(.tool-run__row)').filter({ has: second.page.locator('.tool-row__summary', { hasText: /^survivor$/ }) })
+  await survivor.locator('.tool-row__chip').click()
+  await expect(survivor.locator('.tool-row__result')).toHaveText('result survivor')
+  const toolNode = await survivor.elementHandle()
+  await thread.focus()
+  await second.page.keyboard.press('Home')
+  await expect.poll(() => request).toBeDefined()
+  const anchor = thread.locator('.message-row--user').filter({ hasText: 'loaded history 105' })
+  await anchor.evaluate(element => {
+    const thread = element.closest('.conversation__thread')
+    if (thread) thread.scrollTop += element.getBoundingClientRect().top - thread.getBoundingClientRect().top - 250
+  })
+  await second.page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  const anchorNode = await anchor.elementHandle()
+  const before = (await anchor.boundingBox())!.y
+  expect(await thread.evaluate(el => el.scrollTop)).toBeGreaterThan(0)
+  const joinedEntries = [result(61, 'orphan'), tool(60, 'orphan'), result(51, 'pending'), result(31, 'survivor'),
+    tool(30, 'survivor'), delta(20, 'newer text'), delta(10, 'older ')]
+  await first.daemon.pushFrame(frame('history_page', { entries: joinedEntries, cursor: 'repeat', at_start: false }, request))
+  await expect(thread.locator('.bubble[data-thread-role="assistant"]')).toHaveText('older newer text')
+  await expect(survivor.locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'true')
+  await expect(survivor.locator('.tool-row__result')).toHaveText('result survivor')
+  expect(await toolNode!.evaluate(el => el.isConnected)).toBe(true)
+  expect(await anchorNode!.evaluate(el => el.isConnected)).toBe(true)
+  await expect.poll(async () => (await anchor.boundingBox())!.y).toBeCloseTo(before, 0)
+  await expect.poll(async () => {
+    const saved = await read(second.page)
+    return saved.status === 'stored' && saved.snapshot.kind === 'timeline'
+      ? saved.snapshot.items.filter(item => item.kind === 'toolCall' && item.result !== null).length : 0
+  }).toBe(3)
+  expect(asks).toBe(2)
+  request = undefined
+  await thread.focus()
+  await second.page.keyboard.press('Home')
+  await expect.poll(() => request).toBeDefined()
+  await first.daemon.pushFrame(frame('history_page', { entries: joinedEntries, cursor: '', at_start: true }, request))
+  await expect.poll(async () => {
+    const saved = await read(second.page)
+    return saved.status === 'stored' && saved.snapshot.kind === 'timeline' ? saved.snapshot.coverage : null
+  }).toEqual({ status: 'received', cursor: '', atStart: true })
+  await expect(thread.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(1)
 })

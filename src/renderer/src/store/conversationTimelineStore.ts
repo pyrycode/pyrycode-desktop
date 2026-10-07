@@ -78,10 +78,12 @@
 import { MAX_CHAT_HISTORY_ITEMS, parseChatHistorySnapshot, type ChatHistorySnapshot } from '@shared/chatHistory'
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
-import type { HistoryRequestFailure } from '@shared/ipc/events'
+import { reconcileHistory } from './historyContributions'
+import type { HistoryTimelineEntry, HistoryRequestFailure } from '@shared/ipc/events'
 import type { QueuedItem } from '@shared/wire/types'
 import {
   reduceTimeline,
+  reduceRetainedTimelineEvent,
   markLocalSendQueued,
   initialTimelineState,
   type TimelineState,
@@ -159,6 +161,7 @@ export interface ConversationSlice {
   /** Last successful page coverage, independent of transient request status. */
   coverage?: SavedTimeline['coverage']
   served?: SavedTimeline['served']
+  display?: SavedTimeline['display']
   /**
    * How many rows a served history page has ever PREPENDED onto `timeline.items` for this conversation
    * (#1260) — a monotonically rising count, never reset while the slice lives.
@@ -326,7 +329,7 @@ export type ConversationTimelineStore = ConversationTimelineState & {
   dispatchLocalEcho: (serverId: string, conversationId: string, event: Extract<ThreadEvent, { type: 'userText' }>) => void
   dispatchFor: (conversationId: string, event: ThreadEvent, joinKey?: string) => void
   markLocalSendQueued: (conversationId: string, queued: readonly QueuedItem[]) => void
-  prependHistoryFor: (conversationId: string, items: readonly ThreadItem[], retainBoundary?: boolean) => readonly number[]
+  prependHistoryFor: (conversationId: string, items: readonly ThreadItem[], retainBoundary?: boolean, entries?: readonly HistoryTimelineEntry[]) => readonly number[]
   recordPlacementJoin: (conversationId: string, joinKey: string | undefined) => void
   markHistoryRequested: (conversationId: string, serverId?: string) => void
   recordHistoryPage: (conversationId: string, cursor: string, atStart: boolean, servedIds?: readonly number[]) => void
@@ -606,7 +609,7 @@ export function createConversationTimelineStore(
               fail()
               return
             }
-            settle(current => ({ ...emptySlice, serverId, localRead: 'loaded', coverage: snapshot.coverage, served: snapshot.served, restored: { serverId, coverage: snapshot.coverage },
+            settle(current => ({ ...emptySlice, serverId, localRead: 'loaded', coverage: snapshot.coverage, served: snapshot.served, display: snapshot.display, restored: { serverId, coverage: snapshot.coverage },
               timeline: { ...current.timeline, items: snapshot.items,
                 rowKeys: snapshot.rowIdentity?.rowKeys ?? snapshot.items.map((_, index) => index - snapshot.prependedRows),
                 nextRowKey: snapshot.rowIdentity?.nextRowKey ?? snapshot.items.length - snapshot.prependedRows },
@@ -680,7 +683,14 @@ export function createConversationTimelineStore(
             })
           }
         }
-        const folded = reduceTimeline(held.timeline, event)
+        let retainedRowKey: number | undefined
+        if (joinKey !== undefined) {
+          const matches = held.display?.filter(d => d.joinKey === joinKey) ?? []
+          if (matches.length === 1 && matches[0].rowKey !== undefined &&
+            held.timeline.rowKeys?.includes(matches[0].rowKey)) retainedRowKey = matches[0].rowKey
+        }
+        const folded = retainedRowKey === undefined ? reduceTimeline(held.timeline, event)
+          : reduceRetainedTimelineEvent(held.timeline, event, retainedRowKey)
         // #1225 — the same-reference short-circuit ALSO declines to record the join key, and that
         // ordering is the guard rather than a side effect: a fold that changed nothing drew nothing, so
         // a key minted here could suppress a served page's copy of a row neither lane ever showed.
@@ -689,7 +699,8 @@ export function createConversationTimelineStore(
         next.set(conversationId, {
           ...held,
           timeline: folded,
-          liveKeys: withJoinKey(held.liveKeys, joinKey)
+          // Feedback from already-retained display does not establish a new live contribution.
+          liveKeys: retainedRowKey === undefined ? withJoinKey(held.liveKeys, joinKey) : held.liveKeys
         })
         return { timelines: next }
       }),
@@ -740,10 +751,19 @@ export function createConversationTimelineStore(
         ? new Map(s.timelines).set(conversationId, slice)
         : withNewSliceAtHead(s.timelines, conversationId, slice) }
     }),
-    prependHistoryFor: (conversationId, items, retainBoundary = false) => {
+    prependHistoryFor: (conversationId, items, retainBoundary = false, entries) => {
       let boundaries: readonly number[] = []
       set((s) => {
         const held = receivedSlice(s.timelines.get(conversationId))
+        if (entries !== undefined) {
+          const base = held ?? emptySlice
+          const joined = reconcileHistory(base.timeline, base.display, entries, base.liveKeys, retainBoundary)
+          boundaries = joined.boundaries
+          const slice = { ...base, serverId: receiptHost() ?? base.serverId, timeline: joined.timeline,
+            display: joined.display, prependedRows: base.prependedRows + joined.inserted }
+          return { timelines: held === undefined ? withNewSliceAtHead(s.timelines, conversationId, slice)
+            : new Map(s.timelines).set(conversationId, slice) }
+        }
         const oldItems = held?.timeline.items ?? []
         const oldKeys = held?.timeline.rowKeys ?? oldItems.map((_, i) => i)
         const base = held?.timeline.nextRowKey ?? oldItems.length

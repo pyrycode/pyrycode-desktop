@@ -50,11 +50,26 @@ export type ServedHistory = {
   receipts: readonly { ids: readonly number[]; cursor: string; atStart: boolean }[]
 }
 
+/** Allowlisted display operations; envelope coverage is independent. */
+export type HistoryContribution = {
+  id: number
+  lastId?: number
+  joinKey?: string
+  rowKey?: number
+} & (
+  | { kind: 'row'; item: DurableThreadItem }
+  | { kind: 'patch'; toolUseId: string; turnId?: string; parentToolUseId?: string;
+      result?: Extract<DurableThreadItem, { kind: 'toolCall' }>['result'];
+      denial?: Extract<DurableThreadItem, { kind: 'toolCall' }>['denial'] }
+  | { kind: 'suppressed' }
+)
+
 export type ChatHistorySnapshot = { version: 1; serverId: string } & (
   | { kind: 'list'; conversations: ConversationSummary[] }
   | {
       kind: 'timeline'; conversationId: string; items: DurableThreadItem[]; prependedRows: number
       served?: ServedHistory
+      display?: readonly HistoryContribution[]
       rowIdentity?: { rowKeys: readonly number[]; nextRowKey: number }
       coverage: { status: 'unknown' } | { status: 'received'; cursor: string; atStart: boolean }
     }
@@ -269,9 +284,69 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
       nextRowKey > Number.MAX_SAFE_INTEGER - 100_001 || rowKeys.some(key => key >= nextRowKey)) return invalid()
     return { rowKeys, nextRowKey }
   })
+  const display = optional(v.display, value => {
+    const keys = new Map(rowIdentity?.rowKeys.map((key, index) => [key, items[index]]))
+    const contributions = array(value, value => {
+      const d = record(value)
+      const fields = { id: readId(d.id), lastId: optional(d.lastId, readId), rowKey: optional(d.rowKey, signedSafe),
+        joinKey: optional(d.joinKey, value => {
+          const key = string(value)
+          const separator = key.indexOf(' ')
+          const type = key.slice(0, separator)
+          return separator > 0 && key.length - separator - 1 > 0 && key.length - separator - 1 <= 64 &&
+            ['assistantDelta', 'toolUse', 'toolResult', 'toolDenied', 'turnEnd', 'sessionTransition',
+              'unrecognizedMessage', 'apiRetry', 'compacting', 'modelRefusalFallback', 'modelRefusalNoFallback'].includes(type)
+            ? key : invalid()
+        }) }
+      const held = fields.rowKey === undefined ? undefined : keys.get(fields.rowKey)
+      if (fields.rowKey !== undefined && held === undefined) return invalid()
+      const kind = choice(d.kind, ['row', 'patch', 'suppressed'])
+      if (fields.lastId !== undefined && (fields.lastId < fields.id || kind !== 'row' || d.joinKey !== undefined)) return invalid()
+      const source = fields.joinKey?.split(' ', 1)[0]
+      if (kind === 'suppressed') {
+        if (held !== undefined && !((source === 'assistantDelta' && held.kind === 'assistantText') ||
+          (source === 'toolUse' && held.kind === 'toolCall') || (source === 'turnEnd' && held.kind === 'turnBoundary') ||
+          (source === undefined && held.kind === 'userText'))) return invalid()
+        return { ...fields, kind }
+      }
+      if (kind === 'row') {
+        const item = threadItem(d.item)
+        if (fields.lastId !== undefined && item.kind !== 'assistantText') return invalid()
+        if (source !== undefined && !((source === 'assistantDelta' && item.kind === 'assistantText') ||
+          (source === 'toolUse' && item.kind === 'toolCall') || (source === 'turnEnd' && item.kind === 'turnBoundary') ||
+          (source === 'sessionTransition' && item.kind === 'sessionBoundary') ||
+          (source === 'unrecognizedMessage' && item.kind === 'unrecognizedMessage') ||
+          (source === 'apiRetry' && item.kind === 'banner') ||
+          (source === 'compacting' && item.kind === 'compactionBoundary') ||
+          (['modelRefusalFallback', 'modelRefusalNoFallback'].includes(source) && item.kind === 'modelRefusal'))) return invalid()
+        if (held === undefined || held.kind !== item.kind ||
+          ('turnId' in item && (!('turnId' in held) || item.turnId !== held.turnId)) ||
+          (item.kind === 'toolCall' && (held.kind !== 'toolCall' || item.toolUseId !== held.toolUseId)) ||
+          (item.kind === 'assistantText' && (held.kind !== 'assistantText' || item.parentToolUseId !== held.parentToolUseId)) ||
+          (item.kind === 'userText' && (held.kind !== 'userText' || item.messageId !== held.messageId))) return invalid()
+        return { ...fields, kind, item }
+      }
+      if (source !== undefined && source !== 'toolResult' && source !== 'toolDenied') return invalid()
+      const toolUseId = id(d.toolUseId)
+      const parsed = threadItem({ kind: 'toolCall', turnId: '', toolUseId, name: '', inputSummary: '',
+        result: d.result === undefined ? null : d.result, denial: d.denial })
+      const turnId = parsed.kind === 'toolCall' && parsed.denial !== undefined ? id(d.turnId) : undefined
+      if (parsed.kind !== 'toolCall' || (parsed.result === null && parsed.denial === undefined) ||
+        (source !== undefined && source !== (parsed.denial === undefined ? 'toolResult' : 'toolDenied')) ||
+        (parsed.denial !== undefined && (turnId === '' || toolUseId === '' || d.result !== undefined ||
+          (held !== undefined && (held.kind !== 'toolCall' || held.turnId !== turnId)))) ||
+        (held !== undefined && (held.kind !== 'toolCall' || held.toolUseId !== toolUseId))) return invalid()
+      return { ...fields, kind, toolUseId, ...(turnId === undefined ? {} : { turnId }), parentToolUseId: optional(d.parentToolUseId, id),
+        ...(d.result === undefined ? {} : { result: parsed.result }),
+        ...(parsed.denial === undefined ? {} : { denial: parsed.denial }) }
+    })
+    if (contributions.some((d, index) => index > 0 && d.id <= (contributions[index - 1].lastId ?? contributions[index - 1].id))) return invalid()
+    return contributions
+  })
   return {
     version: 1, kind: 'timeline', serverId, conversationId: id(v.conversationId),
     items, prependedRows, coverage,
+    ...(display === undefined ? {} : { display }),
     ...(served === undefined ? {} : { served }), ...(rowIdentity === undefined ? {} : { rowIdentity })
   }
 }

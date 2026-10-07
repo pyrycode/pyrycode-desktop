@@ -533,6 +533,11 @@ function assertNever(event: never): never {
   throw new Error(`Unhandled thread event: ${JSON.stringify(event)}`)
 }
 
+/** Concurrent subagent calls do not close the main reply, whether pending or completed. */
+export function isSubagentToolCall(item: ThreadItem | undefined): boolean {
+  return item?.kind === 'toolCall' && !!item.parentToolUseId
+}
+
 /**
  * #1872: where a main thread delta lands. The newest row once any trailing subagent tool calls are
  * skipped, or -1 when there is none. A subagent tool call is a `toolCall` with a non-empty
@@ -544,8 +549,7 @@ function assertNever(event: never): never {
 export function openBubbleIndex(items: readonly ThreadItem[]): number {
   let index = items.length - 1
   while (index >= 0) {
-    const item = items[index]
-    if (item === undefined || item.kind !== 'toolCall' || !item.parentToolUseId) break
+    if (!isSubagentToolCall(items[index])) break
     index--
   }
   return index

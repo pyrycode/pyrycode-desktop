@@ -132,9 +132,13 @@ Live and history `assistant_delta` share
 as `parentToolUseId`, which forwards it onto `ThreadEvent.assistantDelta` and then
 `ThreadItem.assistantText`, without consulting the current agent roster.
 
-The reducer coalesces only adjacent assistant deltas with equal turn **and** parent,
-keeping the first stamp. Main-thread text and two helpers sharing a turn must not
-merge into one bubble. Stored rows remain in arrival order; loaded Agent/Task calls,
+The reducer coalesces assistant deltas with equal turn **and** parent, keeping the
+first stamp. Attributed text requires adjacency; main-thread text can join across
+nonempty-parent tool calls, including completed calls. History contribution
+admission keeps that reply joinable when live overlap suppresses a call, while
+preserving held row positions and keys; see [history joins](conversation-timeline-store-internals.md#the-page-half--the-join).
+Main-thread text and two helpers sharing a turn must not merge into one bubble.
+Stored rows remain in arrival order; loaded Agent/Task calls,
 including completed calls, own matching text in the
 [display projection](conversation-shell-tool-row-header-groups.md#subagent-tool-groups).
 An absent owner or a matching ordinary tool leaves the reply top-level. Prepending

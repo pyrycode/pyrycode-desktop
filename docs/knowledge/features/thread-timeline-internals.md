@@ -449,6 +449,11 @@ index of the newest row once trailing subagent tool calls (a `toolCall` with a n
 `parentToolUseId`) are skipped, or -1. `appendDelta` coalesces main thread text into it, and the
 conversation shell keeps the streaming cursor on it when it is a main thread `assistantText`.
 
+The exported `isSubagentToolCall(item)` predicate defines this lookback: a `toolCall`
+with a nonempty parent qualifies whether pending or completed. History contribution
+admission shares it so a suppressed call keeps the same main-reply grouping as a
+retained call; see [history joins](conversation-timeline-store-internals.md#the-page-half--the-join).
+
 ### Internal helpers (unexported)
 
 - `appendDelta(items, turnId, text, createdAt, parentToolUseId)` — the open-item coalesce for

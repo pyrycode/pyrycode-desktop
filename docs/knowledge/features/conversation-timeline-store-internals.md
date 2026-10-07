@@ -246,49 +246,46 @@ abandonment without a server reply cannot leave the renderer permanently pending
 
 ## The history/live join (#1225)
 
-For ordinary non-user events present both in a served page and in what the live stream
-already drew for that conversation, the conservative join uses **(`type`, `ts`)** — never the entry's `id`
-(the durable on-disk log id; the live lane has no such field), never `event_id` (the in-memory replay
-ring's, per-process and reset by a restart), never `turn_id` + `seq` (only turn-scoped payloads carry a
-`turn_id`, and `session_transition` — the one type the log is the sole retention for — carries none), and
-never text. The daemon mints one timestamp per logical event above the per-connection fan-out and hands
-that same value to the log entry and to every outbound envelope, which is what makes the pair a real key
-rather than a heuristic.
+History has two independent kinds of evidence: `served` receipts describe which
+validated envelopes were received, while `display` contributions describe retained
+content and its chronological boundaries. Durable `HistoryEntry.id` orders history
+across pages and daemon restarts; it is neither a message id nor replay-ring
+`event_id`. The live lane has no durable entry id, so its conservative overlap join
+still uses (`type`, `ts`) and operator rows join by nonempty message id, never text.
+The daemon supplies the same timestamp to the log and live fan-out.
 
-**A dedup on entirely remote-supplied input is a suppression primitive**, so the
-live-overlap filter fails open on anything it cannot resolve, retaining rows.
-Malformed envelopes or declared saved metadata instead reject admission.
+Unresolvable or ambiguous live comparisons fail open. Malformed envelopes and
+malformed declared saved metadata reject admission instead. The
+[snapshot contract](chat-history.md#retained-display-contributions) defines the
+allowlisted contribution operations, strict references, bounds and legacy unknown
+provenance.
 
 ### Repeated served pages and receipt lifetime
 
-Complete `servedIds` separately admit page-to-page repeats. Main validates every
-envelope id, including unsupported/skipped payloads, before emitting a correlated
-page. `subscribeHistoryPage` reads held coverage synchronously before recording
-the new receipt. The mounted getter requires the main-stamped supplying host to
-equal the held slice's `serverId`; another host's equal conversation id contributes
-no coverage. A nonempty fully covered page suppresses all ordinary rows; any unseen
-id or absent metadata follows the existing live join. Empty/all-skipped pages still
-record exact ids, cursor and `atStart`, with no change to live phase, pending sends,
-permission or recovery state. Row counts and high-water alone cannot prove coverage.
+Main validates every envelope id, including unsupported/skipped payloads, before
+emitting the request-correlated page. Empty/all-skipped pages retain exact ids,
+opaque cursor and `atStart` without implying an empty conversation. Row counts
+and high-water alone cannot prove coverage. `recordHistoryPage` deduplicates exact
+receipts and expires oldest whole receipts to bound both count and aggregate ids
+at 100,000, rebuilding exact coverage/highest id before writer capture. An oversized
+page clears served provenance while still settling the pager and allowing saves.
 
-`recordHistoryPage` keeps receipts with the slice, deduplicates exact repeats and
-expires oldest whole receipts to bound both count and aggregate ids at 100,000.
-It rebuilds coverage from surviving receipts before the writer can observe it.
-Evidence exclusive to expired receipts becomes unknown and cannot suppress a later
-repeat; expiration leaves display rows and allocation intact. One oversized page
-clears served provenance while still settling the pager and allowing later saves.
-The [snapshot contract](chat-history.md#served-provenance-and-page-suppression)
-defines strict disk validation and independent legacy pager advancement.
+The legacy row-only bridge can suppress a fully covered nonempty page. The mounted
+bridge passes typed entries to contribution admission even for such pages:
+retained `display`, rather than served coverage, decides whether an entry's content
+is known. Partial overlaps contribute only unseen retained operations. Expired
+receipts do not discard unfinished joins or represented display contributions;
+explicit capacity retirement leaves rows with unknown display provenance.
 
-Host replacement clears the old slice's rows and receipts; request replacement
-cannot borrow its cursor. Clearing a conversation, successful host unpair and
-holder eviction discard the held metadata structurally. Confirmed conversation
-deletion removes that host's protected snapshot, receipts included, and suppresses
-stale recapture even if rows remain held. Eviction alone preserves buffered saves
-and disk records; a fresh protected read can restore receipts and row identities.
-Disconnect/reconnect and same-server repair retain same-host evidence. None of
-these receipts establish entry-to-row contributions, partial-overlap filtering or
-split-reply assembly.
+Rows, receipts, display contributions and live join keys share owning-host
+admission. A main-stamped supplying host cannot borrow another host's equal
+conversation id, rows or cursor. Host replacement, conversation clearing,
+successful unpair and holder eviction discard the corresponding slice evidence.
+Confirmed deletion removes that host's protected snapshot and suppresses stale
+recapture. Eviction preserves buffered saves/disk records; a fresh protected read
+can restore display evidence and row identities. Disconnect/reconnect and same-host
+repair retain the same-host evidence. Saved-read request-owner checks still prevent
+stale restoration from overwriting newer receipt ownership.
 
 ### The key
 
@@ -303,20 +300,23 @@ export function liveJoinKeyFor(event: DaemonEvent): string | undefined
 ```
 
 One composer for the whole join. The separator is unambiguous because the TYPE half is a client-owned
-literal from a closed union and provably contains no NUL, so no hostile `ts` can spell a different
+literal from a closed union and contains no spaces, so no hostile `ts` can spell a different
 `(type, ts)` pair. An over-length `ts` yields no key rather than a truncated one — truncation would MERGE
 distinct timestamps onto one key, and a key matching more than it should is a suppressor, not a safer
 fallback.
 
 ### The live half — where the keys are held
 
-`ConversationSlice` (§ The opening ask above) gains a third field:
+`ConversationSlice` holds the bounded live comparison set beside durable evidence
+(the excerpt omits other slice fields):
 
 ```ts
 export interface ConversationSlice {
   timeline: TimelineState
   history: HistoryRequestState | null
   liveKeys: ReadonlySet<string>
+  served?: ServedHistory
+  display?: readonly HistoryContribution[]
 }
 export const MAX_LIVE_JOIN_KEYS = 512
 ```
@@ -374,82 +374,76 @@ decision is available one call earlier, at a seam plain spies reach.)
 
 ### The page half — the join
 
-```ts
-// historyPageBridge.ts
-export function withoutLiveEntries(
-  entries: readonly HistoryTimelineEntry[],
-  liveKeys: ReadonlySet<string>
-): readonly HistoryTimelineEntry[]
+`subscribeHistoryPage` retains its row-only API for legacy callers. The mounted
+bridge enables `retainContributions`, supplies original typed entries to
+`prependHistoryFor(conversationId, items, retainBoundary, entries)`, and obtains
+chronological entry boundaries from `reconcileHistory`. With entries present,
+reconciliation owns ordinary rows; independently folded `items` do not decide
+which contributions survive.
 
-export function reduceHistoryPage(
-  entries: readonly HistoryTimelineEntry[],
-  liveKeys?: ReadonlySet<string>,
-  collectPlacement?: (placement: HistoryAgentPlacement) => void,
-  suppressOrdinary?: boolean
-): readonly ThreadItem[]
-```
+The pure reconciler sorts entries by durable id, normalizes allowlisted row,
+patch and suppression operations, and ignores only ids already represented in
+retained contributions or compacted contiguous ranges. A result arriving before
+its call remains as an orphan patch across pages and protected restoration. Result
+patches fill a missing result; denial patches require matching nonempty turn/tool
+identity and fill a missing denial. Already-complete held calls keep their content.
 
-Unless `suppressOrdinary` is true for a fully covered page, `reduceHistoryPage` runs
-`withoutLiveEntries` before folding drawable ordinary events; absent `liveKeys`
-(the optional-trailing idiom again) suppresses nothing, which is both the pre-#1225 behaviour and the
-fail-open default. Dropping happens on the PAGE side, never the live side — AC3: the live row stays
-exactly where the live stream put it, and the page's copy — which `prependHistoryFor` would otherwise put
-at the HEAD, above rows that came before it — never becomes a row at all.
+**Held row invariant:** an existing row keeps its key, relative order among held
+rows, object and every attached live association. History can merge an older text
+prefix or a missing tool result/denial; it never rebuilds a held row from a saved
+contribution item. When content does not change, the exact object survives.
+A group binds at most one held row. Phase, pending sends, delivery receipts,
+waiting-echo finish associations, arrival order and placements remain attached;
+`pendingCompaction` follows the surviving row key if content merging changes the
+object. Rebuilding from saved display would erase completed compaction's manual
+trigger/token counts or orphan its pending completion.
 
-**The suppressed set is a contiguous RUN at the page's newest end, not a scatter — a verifier MUST FIX on
-the rework leg.** The first cut walked every entry independently: matching, unique-within-the-page, and
-resolvable meant drop, wherever it sat. That is wrong, because `reduceHistoryPage`'s fold is not
-entry-independent — `fillResult` writes a result into a `toolCall` row an earlier entry created, and a
-turn's deltas coalesce in the order they fold. Two content-losing failures followed, both reproduced as
-failing tests before the fix:
+Matching turn/parent assistant fragments assemble across page boundaries. Known
+suppressed assistant references can anchor an older prefix on the held key, while
+preserving live-only suffix text once. Operator rows, root tool rows, different
+parents, compaction boundaries and intervening unrepresented held rows separate
+text. A suppressed row with unknown held position also separates text unless it
+represents only a tool patch. Main-thread grouping reuses `openBubbleIndex` across
+ordinary retained subagent calls with nonempty parents. The remaining overlap
+where a live subagent call suppresses its history counterpart still splits the
+main reply; [#1875](https://github.com/pyrycode/pyrycode-desktop/issues/1875) owns
+that correction, including fresh-restoration variants.
 
-- **An orphaned result.** The live lane drew a `tool_use` and lost the `tool_result` across disconnect.
-  The served history page must still repair it when the result lies outside the bounded replay tail
-  (desktop now sends [`last_event_id`](daemon-connection-lifecycle.md#replay-cursor-lifetime)).
-  Dropping the page's `toolUse` while keeping its `toolResult` left `fillResult` with no row
-  to write into — the result was discarded, and the live row stayed pending forever.
-- **A turn read backwards.** The live lane drew a turn's older deltas but not its newer ones. Dropping the
-  older while keeping the newer folded the surviving text into a bubble `prependHistoryFor` places ABOVE
-  the live bubble holding the earlier half — `reduceHistoryPage` returned `'world'` where the turn read
-  `'hello world'`.
+New groups enter at chronological held boundaries without reordering any held
+rows. History following the last represented row enters immediately after the
+**maximum represented held position**, above unrepresented live/restored suffix
+rows. Group creation order and numeric key allocation are not chronology. For
+example: admit tool call ID 2, append an unrepresented live assistant, then admit
+the same call plus operator ID 4. The result is tool, operator, live assistant,
+both as admitted and after validated fresh restoration. Only new rows increase
+`prependedRows`; surviving keys preserve mounted tool expansion and reader anchors.
 
-Both are fail-**CLOSED** — content lost or corrupted — in exactly the reconnect scenario the served page
-exists to repair, the one direction this whole ticket refuses. The fix: walk `entries` from its newest end
-(the wire serves newest-first) and drop while an entry's key is defined, held, and unique among the page's
-own entries; **stop at the first entry that fails any of the three**, and keep it and everything older.
-Because the survivors are a chronological PREFIX of a newest-first page, no survivor can depend on an
-entry the filter dropped — the run rule closes both failures structurally rather than by special-casing
-either. **What it costs, stated rather than hidden:** an overlap shaped like a GAP — live drew something in
-the middle of the page but not the newest entry — now suppresses nothing, and those entries draw twice,
-exactly what they did before this ticket. The strongest available statement about this function: its
-output is either the joined page or the un-joined one, never a page with new content lost or reordered.
+`withoutLiveEntries` remains the conservative live-first comparison. It walks the
+page's newest-first suffix, suppressing only defined, held, unique (`type`, `ts`)
+keys, and stops at the first unresolved/ambiguous comparison. Operator
+`messageReceived` entries are kept and stepped over because their join belongs
+to message identity; broadening this exception to every unkeyed entry would let
+hostile timestamps suppress a dependency. With contributions, suppressed entries
+retain evidence and any unambiguous surviving row reference rather than vanishing
+from chronology. A held operator echo records a row-referencing suppression, so
+later pages cannot undo its live settlement.
 
-**A user `message` entry is kept and stepped over, never let end the run (#1437).** Live receipts now
-carry daemon time, but `liveJoinKeyFor` explicitly excludes `messageReceived` because user rows join
-by message id. Under the plain stop rule above, that entry would fail the "held" condition and
-end the run at once. A page whose newest entry is a user message is exactly what a short
-chat serves on an upward scroll near the top, so the whole conversation already on screen — the reply and
-its tool rows — survived the join and drew a second time at the head, unstamped, above the message it
-answers. The walk now special-cases the type, not "this entry could not be keyed": a `messageReceived`
-entry is kept without ending the run, and every other entry keeps the three-condition stop rule unchanged.
-Because a stepped-over message can sit ahead of older survivors, the survivors are no longer a plain
-suffix, so the result is built as an order-preserving **filter** rather than a `slice`. The safety argument
-still holds: the prefix (the stop entry and everything older) folds exactly as before, and the message rows
-from inside the run are chronologically newer, fold last, and are independent in both directions —
-`translateTimelineEvent` maps a message to a `userText` row that no `toolUse`/`toolResult`/`assistantDelta`/
-`turnEnd` arm of `reduceTimeline` reads, and `reduceHistoryPage` discards the scalars that arm does touch.
-The step-over is keyed on `event.type`, a client-owned discriminant, never on the daemon-supplied `ts` —
-keying it on "unkeyed" instead would let a hostile daemon walk an `assistantDelta` past its own stop
-condition and reproduce "a turn read backwards" on purpose. `withoutHeldEchoes` in `prependHistoryFor`
-owns the page's message-id join; the live reducer rejects receipts already held by the same nonempty
-identity. The walk learns nothing about ids, so an unheld message from any client still survives and draws.
+In the reverse history-before-live order, `dispatchFor` uses a unique retained
+display timestamp match with a surviving key for `reduceRetainedTimelineEvent`.
+It preserves displayed items/allocation while applying live feedback: stall and
+thinking clearing, failed-turn feedback, waiting-echo finish placement and
+compaction association. Dropping the entire live event would preserve content but
+lose those effects. Feedback-only reduction adds no new live comparison key;
+ambiguous retained matches and compacted fragments without timestamps remain
+conservative. The two-argument `reduceTimeline` API stays separate because an
+`Array.reduce` caller supplies its index as a third argument, not a retained key.
 
-`subscribeHistoryPage` gains a fourth, **optional trailing** parameter, `getLiveKeys?: (conversationId:
-string) => ReadonlySet<string>` — the same idiom a third time, deliberately not a third callback
-alongside `applyPage`/`settleFailure`. `useHistoryPageBridge` supplies it from a new
-`selectLiveJoinKeysFor(conversationId)` selector, read AFRESH per page rather than captured at subscribe
-time — the existing bridge idiom, since one app-lifetime subscription must see every conversation's
-current keys, not whichever were live when it mounted.
+Page-local scratch state reconstructs state-dependent compaction falling edges
+before overlap filtering. Only the resulting durable boundary is retained, never
+scratch phase, live compaction state or raw outcome text. The held live reducer is
+not run by history reconciliation. Protected restoration initializes transient
+state afresh; later page joins preserve whatever live state the fresh instance
+has since established.
 
 ### Background Agent history placement
 
@@ -458,21 +452,23 @@ events with `before`, the scratch ordinary-item count at that chronological entr
 It traverses the **original** newest-first page in reverse, collecting lifecycle
 events even when live overlap or full served coverage suppresses ordinary rows. Collecting
 only the filtered entries would lose the historical start needed to qualify held
-unconfirmed live evidence. Fully covered pages suppress ordinary events; other pages
-still use the safe suffix join above. Repeated lifecycle evidence must preserve the
-first qualified finish's established anchor and order, even when no rows are added;
+unconfirmed live evidence. The legacy row-only path suppresses ordinary events on
+fully covered pages. Contribution admission still inspects their original entries
+for missing display evidence. Repeated lifecycle evidence must preserve the first
+qualified finish's established anchor and order, even when no rows are added;
 scratch phase, stalls, retries, compaction and other turn state never enter the live slice.
 
-`subscribeHistoryPage` passes rows and placements together. `prependHistoryFor` returns
-a boundary key for each original folded row plus the page tail. Fresh rows get fresh
-client-owned keys; a deduplicated user echo maps to the surviving held row's key.
-The tail maps to the first held row, or a reserved allocator key when none exists.
-With lifecycle evidence, `retainBoundary` advances the allocator even on a rows-empty
-page and keeps that reservation out of later prepend allocations. Otherwise an older
-launch could take an unmatched finish's tail identity and pull the finish backward.
-Only inserted rows increase `prependedRows`; existing row keys and receipt-order
-overrides survive unchanged. The bridge maps collector offsets through these returned
-keys before calling `recordHistoryPlacements`.
+The mounted bridge collects lifecycle placements from original entries sorted by
+durable id before ordinary overlap suppression. `prependHistoryFor` returns a
+stable boundary key for each chronological entry plus the page tail, including
+suppressed row anchors. The reconciler maps entries monotonically through retained
+row contributions; repeated full scans would become quadratic at capacity.
+Legacy row-only callers keep their folded-row boundary mapping. Deduplicated
+operator echoes bind to the held key, and an unmatched tail can reserve a fresh
+allocator key. `retainBoundary` keeps that reservation out of later allocations,
+even when no ordinary rows are inserted. Otherwise an older launch could take an
+unmatched finish's tail identity and pull the finish backward. The bridge maps
+original-page placements through these boundaries before recording them.
 
 Historical `finishBefore` resolves against the row-key sequence in chronological
 array order; numeric prepend allocation order does not establish chronology. Live
@@ -508,11 +504,14 @@ the terminal and assert immutable evidence and roster/turn-state isolation. Brow
 interaction and reader-position evidence that static renderer units cannot produce.
 
 `readSavedTimeline` snapshots contain no task frames; Agent reconstruction remains
-memory-only from daemon pages. Protected snapshots now retain served receipts and
-client row keys/allocation, including reserved placement boundaries, through
+memory-only from daemon pages. Protected snapshots retain display contributions,
+served receipts and client row keys/allocation, including reserved placement boundaries, through
 [restoration](chat-history.md#protected-row-identities-and-saving). Persisting an
 allocator does not persist lifecycle or live state. Automatic newest-page requests
 remain with [#1815](https://github.com/pyrycode/pyrycode-desktop/issues/1815).
+Restoration and reconciliation add no request, gap marker or gap filling; existing
+reader-driven backward requests use the last successful opaque cursor. Gap policy
+remains with [#1816](https://github.com/pyrycode/pyrycode-desktop/issues/1816).
 
 ### Error handling — every row fails open
 
@@ -525,10 +524,11 @@ remain with [#1815](https://github.com/pyrycode/pyrycode-desktop/issues/1815).
 | Two page entries share one key | Neither suppressed (AC4). |
 | Live fold changed nothing, in either `dispatchFor` branch | No key recorded. |
 | Slice resolved from the screen, not the event's own attribution | No key recorded (the ⭐ guard). |
-| The overlap is a GAP rather than the page's newest run | The run stops there; the gap and everything older draw twice. |
+| The live overlap is a gap rather than the page's newest run | Live timestamp suppression stops; retained durable display evidence can still suppress known contributions. |
 | Newest run holds the operator's own `message` entry (#1437) | Kept, stepped over — it does not end the run; every other entry keeps the stop rule. |
 
-Every row draws a duplicate rather than dropping a message — a cosmetic fault, never a lost one.
+Unresolvable live comparisons retain content rather than guessing which event to drop.
+This comparison rule does not create display provenance for legacy rows.
 
 **Two fail-open rules can compose into the exact fault each one individually refuses (#1437).** The run
 rule refuses to cut a hole in a page, and the unkeyed `messageReceived` arm reserves message suppression
@@ -595,18 +595,15 @@ served history page ─(#1222 ask + transport decode, #1227 per-entry decode)→
    conversationId, entries: HistoryTimelineEntry[], servedIds?, cursor, atStart}
    → window.pyry.onDaemonEvent (SAME channel, a FIFTH independent listener — historyPageBridge.ts, not
                                  subscribeTimeline)
-   → subscribeHistoryPage → compare servedIds with same-host retained receipt coverage
-   → reduceHistoryPage(entries, getLiveKeys?.(conversationId), collectPlacement, repeated):
-        collect lifecycle from the original page even when ordinary rows are suppressed
-        fully covered nonempty page → no ordinary rows; otherwise:
-        withoutLiveEntries(entries, liveKeys)                 // #1225 — drops the page's newest RUN of
-        [...drawable].reverse()                              //   entries already drawn live; a GAP-shaped
-        .map(entry => translateTimelineEvent(entry.event))   //   overlap or an absent liveKeys drops nothing
-        .reduce(reduceTimeline, initialTimelineState)         // against a SCRATCH state, discarded
-        → .items                                              // only the rows survive the fold
-   → conversationTimelineStore.getState().prependHistoryFor(conversationId, items)        [draw, #1223]
-        → held slice spread with items: [...fresh, ...held.items]   // fresh = items minus held-echo dupes
-        → chrome (phase/stalled/apiRetry/compacting/localSendPending) carried by the spread, untouched
+   → subscribeHistoryPage → collect lifecycle from original chronological entries
+        compare served coverage for the legacy row-only fold
+        mounted path passes original typed entries even on a fully covered page
+   → prependHistoryFor(conversationId, items, retainBoundary, entries)
+        → reconcileHistory(held.timeline, held.display, entries, held.liveKeys, retainBoundary)
+        → admit unseen display contributions in durable-id order, merge held content,
+          insert new rows at held chronological boundaries, retain orphan patches
+        → return entry boundary keys for original-page lifecycle placement mapping
+        → spread held slice with timeline/display; held live state survives
    → conversationTimelineStore.getState().recordHistoryPage(conversationId, cursor, atStart, servedIds)
         → bound receipts, rebuild exact retained ids/highestId, settle successful coverage
    (#1223 — no reader wiring needed beyond the existing selectTimelineFor(conversationId): the keyed

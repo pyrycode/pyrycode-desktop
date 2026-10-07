@@ -68,6 +68,27 @@
   outline: 1px solid var(--color-outline);
 }
 
+.channel-list__pair,
+.channel-list__menu {
+  position: relative;
+}
+
+/* Paint glyphs above the layer without trapping the pairing button's fixed name pill. */
+.channel-list__pair-icon,
+.channel-list__menu-icon {
+  position: relative;
+}
+
+.channel-list__pair:hover::before,
+.channel-list__menu:hover::before {
+  content: '';
+  position: absolute;
+  inset: calc(-1 * var(--space-1));
+  pointer-events: none;
+  background: var(--color-state-hover);
+  border-radius: var(--radius-xs);
+}
+
 .channel-list__pair:hover .channel-list__control-name,
 .channel-list__pair:focus-visible .channel-list__control-name {
   display: block;
@@ -1360,6 +1381,39 @@
 
 .channel-list__chat-edit-icon {
   display: block;
+}
+
+/* The state layer follows the glyph, preserving the larger hit box and fixed name pill. */
+:is(.channel-list__host-edit, .channel-list__workspace-edit, .channel-list__rename,
+  .channel-list__chat-edit, .channel-list__host-add, .channel-list__workspace-create,
+  .channel-list__section-create, .channel-list__save):hover::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: var(--space-5);
+  height: var(--space-5);
+  background: var(--color-state-hover);
+  border-radius: var(--radius-xs);
+  pointer-events: none;
+}
+
+:is(.channel-list__host-edit, .channel-list__workspace-edit):hover::before {
+  width: calc(var(--space-5) + 2px);
+  height: calc(var(--space-5) + 2px);
+}
+
+:is(.channel-list__host-add, .channel-list__workspace-create,
+  .channel-list__section-create):hover::before {
+  width: var(--space-6);
+  height: var(--space-6);
+}
+
+:is(.channel-list__host-edit, .channel-list__workspace-edit, .channel-list__rename,
+  .channel-list__chat-edit, .channel-list__host-add, .channel-list__workspace-create,
+  .channel-list__section-create, .channel-list__save) > svg {
+  position: relative;
 }
 
 /* #1172 — THE NAME PILL both trailing controls show on hover or keyboard focus (Figma Pill 347:6617).

@@ -388,7 +388,7 @@ pins these joins, exact-reference rejection and both pending-send values.
 
 | event | effect |
 |---|---|
-| `assistantDelta` | tail-check coalesce: tail `assistantText` with equal `turnId` and `parentToolUseId` → replace with concatenated text, retaining attribution and the **tail's own** `createdAt` ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013), so a coalesced bubble stays dated by its first delta); otherwise append fresh, carrying the event's `createdAt` and parent. `seq` carried, not consulted — arrival order is authoritative. |
+| `assistantDelta` | open-item coalesce: open `assistantText` with equal `turnId` and `parentToolUseId` → replace with concatenated text in place, retaining attribution and the **open item's own** `createdAt` ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013), so a coalesced bubble stays dated by its first delta); otherwise append fresh, carrying the event's `createdAt` and parent. The open item is the tail for attributed text and `openBubbleIndex` for main thread text, which skips trailing subagent tool calls ([#1872](https://github.com/pyrycode/pyrycode-desktop/issues/1872)). `seq` carried, not consulted — arrival order is authoritative. |
 | `toolUse` | append a fresh `toolCall` with `result: null` |
 | `toolProgress` | replace `elapsedSeconds` on the exact pending turn/tool match; latest arrival wins, including zero and decreases. Unmatched, resolved, denied or identical readings return the same state. Every scalar and other item stays unchanged. See [live delivery](conversation-timeline-store.md#live-tool-progress). |
 | `toolDenied` | attach the first denial to the exact turn/tool match; empty keys, unmatched calls and duplicates return the same state reference. Clear `elapsedSeconds`; preserve the result and every scalar. |
@@ -444,16 +444,25 @@ pure selectors `selectItems`, `selectPhase`, `selectStalled`, `selectApiRetry`, 
 `latestTurnEnd` directly from the open conversation's held timeline. `markLocalSendQueued` (above) is a
 transform, not a selector — it is exported alongside these but takes a `queued` snapshot and returns a
 `TimelineState`, never read through `useTimelineStore`.
+`openBubbleIndex(items)` ([#1872](https://github.com/pyrycode/pyrycode-desktop/issues/1872)) is the
+index of the newest row once trailing subagent tool calls (a `toolCall` with a non-empty
+`parentToolUseId`) are skipped, or -1. `appendDelta` coalesces main thread text into it, and the
+conversation shell keeps the streaming cursor on it when it is a main thread `assistantText`.
 
 ### Internal helpers (unexported)
 
-- `appendDelta(items, turnId, text, createdAt, parentToolUseId)` — the tail-check coalesce for
+- `appendDelta(items, turnId, text, createdAt, parentToolUseId)` — the open-item coalesce for
   `assistantDelta`; always returns a new array (a delta is always a change). Both trailing
   parameters accept `undefined` but are required at its one private call site. Equal turn ids
   alone would merge main-thread and helper text, or two helpers sharing a turn. Coalescing
-  requires equal parents too; two parentless deltas still coalesce as before. Intervening
-  rows prevent growth even when turn and parent match. The grow branch reads
-  `tail.createdAt` (this function rebuilds the item as a fresh literal on every coalesced delta, so
+  requires equal parents too; two parentless deltas still coalesce as before. For attributed
+  text the open item is the tail, and any intervening row prevents growth. For main thread text
+  it is `openBubbleIndex(items)` (exported, below), so a background subagent's tool calls that
+  arrive mid sentence no longer split the reply mid word
+  ([#1872](https://github.com/pyrycode/pyrycode-desktop/issues/1872)); those rows stay where they
+  arrived and the bubble grows in place behind them. A main thread tool call, a turn boundary,
+  attributed subagent text or any other row still ends the bubble. The grow branch reads
+  the open item's `createdAt` (this function rebuilds the item as a fresh literal on every coalesced delta, so
   carrying the incoming stamp instead would silently re-date a bubble to its most recent fragment); only
   the fresh-append branch reads the incoming stamp.
 - `fillResult(items, toolUseId, result)` — the `toolResult` correlate-and-fill. Narrows via a

@@ -60,13 +60,17 @@ aria-hidden="true">` inside the in-progress bubble, rendered only on the tail it
 `item.kind === 'assistantText'` — derived from array position, never from `selectPhase` (which had no
 source at the time; [#214](../codebase/214.md) later wired one up, but this render still doesn't read
 it). CSS blink is guarded by `@media (prefers-reduced-motion: reduce)`.
+Since [#1872](https://github.com/pyrycode/pyrycode-desktop/issues/1872) the open main thread bubble,
+`openBubbleIndex(items)`, also keeps the cursor when a background subagent's tool calls trail it,
+because the reducer keeps growing that bubble behind them.
 The cursor follows the `.bubble__markdown` container as a sibling, before `BubbleMeta`,
 and disappears on settlement. Its placement follows rendered block layout rather than
 raw trailing newlines. Historically, #607's plain `pre-wrap` tail placed it in the
 source's text run; that newline-driven placement ended with progressive markdown.
 
 **React key = array index**, deliberately: the reducer's `appendDelta`/`fillResult` invariants
-guarantee the list is append-only with tail-mutation, never reordering or inserting mid-list, so index
+guarantee the list is append-only with in-place mutation (the open bubble, which since #1872 can sit
+behind trailing subagent tool calls), never reordering or inserting mid-list, so index
 identity is stable per logical item (`turnId` alone would collide once #205 lets a tool split one turn
 into two `assistantText` items; a text-bearing key would remount the growing bubble every delta).
 

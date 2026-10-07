@@ -805,3 +805,7 @@ describe('translateDaemonEvent — which server a status is filed under', () => 
     expect(Object.getPrototypeOf(statuses)).toBe(Map.prototype)
   })
 })
+
+it('ignores switchAgentRejected in the daemonEventBridge translator', () => {
+  expect(translateDaemonEvent({ type: 'switchAgentRejected', conversationId: 'conv-1', retryable: true })).toBeNull()
+})

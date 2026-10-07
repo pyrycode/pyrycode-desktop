@@ -1,8 +1,8 @@
 # Daemon connection — request/history/attachment correlation
 
 Split out of [Daemon connection correlation](daemon-connection-correlation.md) for size. Diagnostic
-logging, then the request-response correlation stores for conversation creation, attachment upload and
-retrieval, run-configuration reads, and conversation history — in the order they shipped.
+logging, then the request-response correlation stores for conversation creation, agent switching,
+attachment upload and retrieval, run-configuration reads, and conversation history.
 
 # Diagnostic logging ([#128](../codebase/128.md))
 
@@ -74,6 +74,45 @@ construction rather than by a fix (the stale-rejection-after-confirmation case, 
 concurrent-caller ambiguity while a create is genuinely in flight is accepted as structural, not tracked as
 an open item. See [Conversation create](conversation-create.md) for the full transport slice this
 correlation attaches to.
+
+# Switch-agent rejection correlation
+
+[`switchAgent`](switch-agent-request.md#owning-connection-and-failures) keeps a
+connection-local `pendingSwitchAgents: Map<number, string>` from sent envelope ID
+to client-supplied conversation ID. After encoding and advancing `nextEnvelopeId`,
+it sends once through a captured driver, then registers before diagnostics only
+if authentication is still live, that driver is still current and the captured
+generation is unchanged. Build/send throws register nothing. A normally returning
+send can already have synchronously reported failure or triggered teardown;
+without the post-send guard, registration would repopulate a map cleanup just
+emptied. That path logs only `switch-agent-failed` / `connection-lost`.
+
+The `daemon-error` correlation chain checks this map after pending conversation
+creates. A match on `inReplyTo` deletes the entry before emitting a fresh
+`{ type: 'switchAgentRejected', conversationId, retryable }` literal. Attribution
+comes from the map, never the error payload; retryability is the decoder's boolean
+or `false` when absent/mistyped. Diagnostics contain only `switch-agent-failed` /
+`server-rejected`, with no IDs, settings, error code or daemon message text.
+The matched frame returns before bundle failure or modal-FIFO handling, so a
+switch refusal cannot settle an unrelated consumer. Consuming the entry makes
+rejection exactly once per pending envelope; duplicate errors and missing/unknown
+correlations emit no switch rejection and follow existing error handling.
+Authentication and update-required errors retain connection-failure precedence
+and clear the map rather than emitting a switch rejection.
+
+Any decoded `conversation_updated` removes every entry mapped to that
+conversation, independent of `in_reply_to`. The ordinary `conversationUpdated`
+event still emits unconditionally; other conversations remain pending. Relay
+loss, `emitFailed` (including terminal/error failure), explicit dial/reconnect and
+stop clear all entries. This lifetime permits envelope IDs to reset on dial
+without inheriting a pending request from the previous session. There are no
+timers, automatic retries or replay on reconnect.
+
+Connection tests cover exact text-free IPC shapes for both retryability booleans,
+duplicate/unrelated errors, per-conversation cleanup and teardown. The synchronous
+send regressions exercise error, relay loss, terminal close, reconnect and stop
+without a throw, assert stale refusals emit nothing, and check fresh recovered
+sends still reject normally. See the [plan](../../specs/architecture/1660-switch-agent-rejection.md).
 
 # Attachment-upload correlation ([#861](https://github.com/pyrycode/pyrycode-desktop/issues/861))
 

@@ -1092,6 +1092,7 @@ type BaseDaemonEvent =
   // workspace dialog, so all four exhaustive bridges no-op it for now — the workspaceFolderRejected-was-a-
   // no-op precedent.
   | { type: 'conversationCreateRejected' }
+  | { type: 'switchAgentRejected'; conversationId: string; retryable: boolean }
   // The notification-click arm (#393). UNLIKE every other arm, this is the FIRST MAIN-LOCAL signal on
   // the channel: it is NOT derived from a validated wire envelope — it is emitted by the main-process
   // notification click handler (index.ts) when the user clicks a fired OS notification, so the

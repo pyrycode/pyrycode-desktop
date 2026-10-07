@@ -155,6 +155,7 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
     case 'workspaceFolderCreated':
     case 'workspaceFolderRejected':
     case 'conversationCreateRejected':
+    case 'switchAgentRejected':
     case 'workspaceRenameResult':
     case 'conversationMuteResult':
     case 'workspaceUpdated':

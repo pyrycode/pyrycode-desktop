@@ -156,6 +156,7 @@ test('confirmed own-agent settings yield to incoming footer and open sheet on au
     await footer.getByRole('button', { name: 'Opus', exact: true }).click()
     await page.getByRole('menu', { name: 'Model', exact: true }).getByRole('menuitem', { name: 'Sonnet', exact: true }).click()
     await expect.poll(() => sent.filter(e => e.type === 'set_session_settings').length).toBe(1)
+    expect(sent.find(e => e.type === 'set_session_settings')?.payload).toEqual({ session_id: 'claude-session', model: 'sonnet' })
     await expect(footer.getByRole('button', { name: 'Sonnet', exact: true })).toBeEnabled()
     // Hold the sheet read so the baseline also receives incoming settings through a real request.
     holdNextRead = true
@@ -165,6 +166,7 @@ test('confirmed own-agent settings yield to incoming footer and open sheet on au
     const sheet = page.getByRole('dialog', { name: 'Run configuration', exact: true })
     await expect(sheet.locator('.run-config__model-row').filter({ hasText: 'Sonnet' })).toContainText('Sonnet')
     await expect(sheet.locator('.run-config__model-row').filter({ hasText: 'Sonnet' }).getByRole('img', { name: 'Current model', exact: true })).toBeVisible()
+    await expect(sheet.locator('.run-config__model-list')).not.toHaveAttribute('aria-busy', 'true')
     await page.evaluate(({ id, row }) => {
       (window as unknown as { openAgentSwitch: (id: string, row: WireModelOption) => void }).openAgentSwitch(id, row)
     }, { id: SEEDED_ROW.id, row: models[2] })

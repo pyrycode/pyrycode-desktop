@@ -1537,6 +1537,7 @@ function parseHistoryEntry(raw: unknown): HistoryEntry {
     throw new WireDecodeError('malformed history_page entry')
   }
   const id = requireNumber(raw, 'id')
+  if (!Number.isSafeInteger(id) || id < 0) throw new WireDecodeError('malformed history_page entry')
   const type = requireString(raw, 'type')
   const payload = requireRecord(raw, 'payload')
   const ts = requireString(raw, 'ts')
@@ -1712,6 +1713,7 @@ export type DecodedHistoryEvent =
  * the other or from how many entries survived the decode.
  */
 export interface DecodedHistoryPage {
+  servedIds?: readonly number[]
   entries: readonly DecodedHistoryEntry[]
   cursor: string
   at_start: boolean
@@ -1914,7 +1916,7 @@ function decodeHistoryPage(page: HistoryPagePayload): { page: DecodedHistoryPage
     }
     entries.push({ id: entry.id, ts: entry.ts, event })
   }
-  return { page: { entries, cursor: page.cursor, at_start: page.at_start }, skipped }
+  return { page: { entries, servedIds: page.entries.map(entry => entry.id), cursor: page.cursor, at_start: page.at_start }, skipped }
 }
 
 /**

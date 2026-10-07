@@ -1739,6 +1739,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               type: 'historyPageReceived',
               conversationId,
               entries: inbound.historyPage.entries,
+              servedIds: inbound.historyPage.servedIds,
               cursor: inbound.historyPage.cursor,
               atStart: inbound.historyPage.at_start
             })

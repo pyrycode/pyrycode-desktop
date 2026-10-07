@@ -100,11 +100,11 @@ so rejecting invalid date strings here would prevent its last-use fallback and d
 valid saved list. Saved order remains unchanged; Archive sorts its own per-tab arrays.
 
 A timeline adds `conversationId`, ordered `items`, `prependedRows` and `coverage`.
-`prependedRows` is the nonnegative safe-integer index offset used to preserve
-[row keys across history prepends](conversation-timeline-store-limits.md#edge-cases-and-limitations).
+`prependedRows` is the nonnegative safe-integer count of inserted history rows,
+also used by the legacy [row-key fallback](conversation-timeline-store-limits.md#edge-cases-and-limitations).
 Coverage is either `{ status: 'unknown' }`, when no history page has been received,
 or `{ status: 'received', cursor: string, atStart: boolean }`. The cursor is the
-opaque oldest retained history cursor, and `atStart` records the server's report
+exact opaque cursor from the last successfully admitted page, and `atStart` records the server's report
 that history has reached its beginning. Empty cursor strings are valid. Successful
 coverage stays separate from later pending or failed requests; row count alone
 does not establish coverage or the beginning of history.
@@ -123,6 +123,75 @@ The holder retains successful `ConversationSlice.coverage` independently of tran
 updates rows before `recordHistoryPage` publishes successful coverage; only that
 loaded state advances durable coverage. A live-only timeline stays `unknown`,
 and a successfully received empty page still establishes coverage.
+
+### Served provenance and page suppression
+
+Version-1 timelines optionally retain `served: { ids, highestId?, receipts }`.
+`ids` is the sorted unique set of durable `HistoryEntry.id` values observed in
+retained receipts; each receipt has its own sorted unique `ids`, exact opaque
+`cursor` and boolean `atStart`. These are envelope ids, independent of message ids
+and replay-ring `event_id`. Main validates every envelope and nonnegative safe-integer
+id before payload decoding. Unsupported types and malformed/skipped payloads still
+contribute their valid envelope ids; a malformed envelope or invalid id rejects
+the whole page before any coverage advances. Only validated ids and typed drawable
+events cross IPC; raw envelopes and skipped payloads stay in main.
+
+Snapshot validation requires at least one receipt, `coverage.status: 'received'`,
+and exact equality between `served.ids` and the receipt union. `highestId` must be
+the maximum covered id, or absent when that union is empty. Holes remain unknown:
+neither the maximum, timestamps, drawable ids nor row counts prove coverage.
+An empty page retains an empty receipt, and an all-skipped page retains its ids;
+both settle successfully. An empty receipt does not prove an empty conversation.
+The pager's `coverage.cursor`/`atStart` may differ from the latest receipt: a narrow
+legacy event can advance successful paging without declaring served provenance.
+It preserves known receipts rather than manufacturing a new empty receipt.
+Older snapshots/events without `served` remain valid with unknown provenance.
+Declared malformed metadata rejects the snapshot; unknown fields are projected away.
+
+Runtime receipts form a bounded retention window: after moving an exact repeat
+(same ids, cursor and start flag) to the newest position, `recordHistoryPage`
+expires oldest whole receipts until both receipt count and aggregate receipt-id
+count are at most 100,000. It rebuilds exact coverage and its maximum from the
+survivors before writer capture. Exclusive evidence from expired receipts becomes
+unknown, so a later repeat may draw again. Display rows, row allocation and pager
+settlement are preserved. One page exceeding the entire id bound clears all served
+provenance while still allowing successful settlement and later content saves.
+Disk admission rejects oversized metadata rather than trimming it. Repeated spans
+with changed cursors can exhaust the aggregate bound even with few distinct ids
+and unchanged rows; bounding only unique coverage would eventually stop saving.
+
+For the supplying host/conversation, a nonempty page whose entire served-id set
+is already covered adds no ordinary rows, but still records its cursor/start and
+collects original-page lifecycle evidence. Any unseen id, or absent metadata,
+uses the existing reducer and conservative live timestamp/message-id joins.
+Receipts establish neither entry-to-display contributions nor partial-overlap
+filtering or split-reply assembly; those remain with
+[#1851](https://github.com/pyrycode/pyrycode-desktop/issues/1851).
+
+### Protected row identities and saving
+
+Optional `rowIdentity: { rowKeys, nextRowKey }` preserves client-owned allocation
+through protected saving and restoration. Keys are unique signed safe integers
+aligned one-to-one with durable `items`. The writer filters keys with the same
+durable-row predicate as rows, while retaining the allocator beyond omitted live-only
+rows and placement reservations. `nextRowKey` must exceed every retained key and
+leave headroom for 100,000 rows plus one placement reservation
+(`<= Number.MAX_SAFE_INTEGER - 100_001`). A safe integer alone is insufficient.
+Restoration installs supplied keys and allocator unchanged; retained receipts
+continue suppressing covered repeats after restart. Legacy snapshots use
+index-minus-`prependedRows` keys and the corresponding next-key fallback.
+Later appends/prepends allocate fresh identities without reordering retained rows.
+Cancelling an echo removes its row but leaves its identity consumed: unchanged
+durable content does not imply whole-snapshot equality or permit allocator rewind.
+
+The writer observes served changes even when row references are unchanged;
+receipt/cursor/start and allocator changes participate in canonical snapshot
+comparison and saving. Restoration itself still schedules no save and restores
+no live phase, pending send, permission or recovery state. Metadata inherits
+[received-host ownership and removal](#received-state-admission-and-ownership);
+content, ids and cursors never enter diagnostics.
+
+### Durable display rows
 
 `DurableThreadItem` retains the display fields of every current
 [`ThreadItem`](../../../src/renderer/src/store/threadTimeline.ts) variant except two live-only
@@ -327,7 +396,7 @@ refuse recording with `unknown-ownership`, preserving existing saved copies.
 
 Clean received host replacement requires an explicitly stamped previous host
 different from the receipt origin and a new slice stamp matching that origin.
-`receivedSlice` clears rows and coverage on this transition; the writer releases
+`receivedSlice` clears rows, coverage and served receipts on this transition; the writer releases
 the old observation and comparison metadata before admitting the new owner.
 Removing only the list-claim check would leave the old observation blocking this
 replacement. Previously captured snapshots stay detached and buffered by host,
@@ -399,8 +468,10 @@ The parsers reject oversized values without truncating them:
   most 100,000 entries. Numbers must be finite; `prependedRows` additionally must
   be a nonnegative safe integer.
 
-These limits govern individual admitted records. They impose no ten-chat disk
-cap, automatic eviction, total collection-size bound or history-download policy.
+These limits govern individual admitted records, including the aggregate receipt-id
+bound above. Receipt expiration does not evict durable display rows. There is no
+ten-chat disk cap, automatic snapshot eviction, total collection-size bound or
+history-download policy.
 
 ## Results and failure preservation
 

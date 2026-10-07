@@ -506,3 +506,26 @@ describe('subscribeHistoryPage — the live keys reach the join (#1225)', () => 
     )
   })
 })
+
+describe('complete served page admission', () => {
+  it('suppresses only fully covered nonempty pages and still collects original lifecycle evidence', () => {
+    let listener: (event: DaemonEvent) => void = () => {}
+    const apply = vi.fn()
+    subscribeHistoryPage(on => { listener = on; return () => {} }, apply, vi.fn(), undefined,
+      () => new Set([1, 2, 3]))
+    const entries = [entry(3, { type: 'backgroundTaskUpdated', taskId: 'a', status: 'completed' }),
+      entry(2, { type: 'assistantDelta', turnId: 't', seq: 0, text: 'once' })]
+    const page: DaemonEvent = { type: 'historyPageReceived', conversationId: 'c', entries,
+      cursor: 'repeat', atStart: false, servedIds: [1, 2, 3] }
+    listener(page)
+    expect(apply.mock.calls[0][1]).toEqual([])
+    expect(apply.mock.calls[0][4]).toMatchObject([{ event: { type: 'backgroundTaskUpdated' } }])
+    expect(apply.mock.calls[0][5]).toEqual([1, 2, 3])
+    listener({ ...page, servedIds: [1, 2, 3, 4] })
+    expect(apply.mock.calls[1][1]).toMatchObject([{ kind: 'assistantText', text: 'once' }])
+    listener({ ...page, servedIds: undefined })
+    expect(apply.mock.calls[2][1]).toHaveLength(1)
+    listener({ ...page, entries: [], servedIds: [] })
+    expect(apply.mock.calls[3][5]).toEqual([])
+  })
+})

@@ -166,7 +166,7 @@ export function createChatHistoryWriter(deps: {
         }
         continue
       }
-      if (!changed && slice.history === before?.history) continue
+      if (!changed && slice.history === before?.history && slice.served === before?.served) continue
       if (items.length === 0 && slice.history?.status !== 'loaded' && !droppedEcho) continue
       const claims = [...deps.lists.getState().byServer].filter(([, rows]) => rows.some((row) => row.id === id))
       // receivedSlice clears rows and coverage only when replacing an explicitly stamped host.
@@ -191,7 +191,13 @@ export function createChatHistoryWriter(deps: {
       if (owner === null) { report('unknown-ownership'); continue }
       if (echo) localEchoes.add(tail)
       capture({ version: 1, kind: 'timeline', serverId: owner, conversationId: id,
-        items: items.filter(isDurable), prependedRows: slice.prependedRows, coverage })
+        items: items.filter(isDurable), prependedRows: slice.prependedRows, coverage,
+        served: slice.served,
+        rowIdentity: {
+          rowKeys: (slice.timeline.rowKeys ?? items.map((_, index) => index - slice.prependedRows))
+            .filter((_, index) => isDurable(items[index])),
+          nextRowKey: slice.timeline.nextRowKey ?? items.length - slice.prependedRows
+        } })
     }
   })
   const offEvents = deps.subscribeEvents?.(event => {

@@ -1495,6 +1495,8 @@ type BaseDaemonEvent =
   // authorization is pairing, enforced at the Noise handshake.
   | {
       type: 'historyPageReceived'
+      /** Complete validated envelope IDs, including undrawn payloads. Absent means unknown provenance. */
+      servedIds?: readonly number[]
       conversationId: string
       entries: readonly HistoryTimelineEntry[]
       cursor: string

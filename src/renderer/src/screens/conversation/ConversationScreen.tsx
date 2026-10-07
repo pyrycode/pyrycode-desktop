@@ -1318,12 +1318,7 @@ export function Timeline({
             .find(entry => entry.historyOnly && entry.toolCallId === launchId)?.description
           return (
             <button key={`agent-marker${key}`} type="button" className="agent-start-marker"
-              onClick={() => {
-                setExpandedTools(previous => new Set(previous).add(key))
-                const run = runByMember.get(group.index)
-                if (run) setExpandedRuns(previous => new Set(previous).add(key))
-                setRevealAgent({ key })
-              }}>
+              onClick={() => setRevealAgent({ key })}>
               <span className={`conversation-status-dot ${group.running ? 'agent-start-marker__running' : 'agent-start-marker__finished'}`} aria-hidden="true" />
               <span className="agent-start-marker__state">{group.running ? 'Agent started, still working' : 'Agent finished'}</span>
               <span aria-hidden="true">·</span>
@@ -2256,7 +2251,7 @@ export function ToolRow({
               children, so not rendering the element IS AC2 — no modifier class, no pending variant.
               #854's "the whole group, not just the chevron" argument one level down again. */}
           {group && (
-            <span className="tool-row__count">{group.count} {group.count === 1 ? 'tool' : 'tools'}{group.running ? ' · running' : ''}</span>
+            <span className="tool-row__count">{group.running ? 'running · ' : ''}{group.count} {group.count === 1 ? 'tool' : 'tools'}</span>
           )}
           {!group && result && result.resultDetail !== undefined && result.resultDetail !== '' && (
             <span className="tool-row__count">{result.resultDetail}</span>

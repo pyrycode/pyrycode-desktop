@@ -27,8 +27,14 @@ describe('tool elapsed display', () => {
   it('shows progress on a pending group without losing its group count or toggle', () => {
     const row = renderToStaticMarkup(<ToolRow item={{ ...item, elapsedSeconds: 65 }} group={{ count: 2, running: true }} />)
     expect(row).toContain('1m 05s')
-    expect(row).toContain('2 tools · running')
+    expect(row).toContain('running · 2 tools')
     expect(row).toContain('<button')
+  })
+  it('puts the status word before the count, so the count stays last against the right-aligned edge', () => {
+    const running = renderToStaticMarkup(<ToolRow item={item} group={{ count: 16, running: true }} />)
+    expect(running).toContain('<span class="tool-row__count">running · 16 tools</span>')
+    const finished = renderToStaticMarkup(<ToolRow item={item} group={{ count: 16, running: false }} />)
+    expect(finished).toContain('<span class="tool-row__count">16 tools</span>')
   })
   it('hides a stale reading on a resolved or denied row', () => {
     for (const completion of [

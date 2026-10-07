@@ -19,36 +19,49 @@ function replies(captured: Envelope[], conversations = [SEEDED_ROW]) {
   }
 }
 
-test('mounted suggestions remain placeholder text and Tab accepts an editable draft without sending', async ({ launchPairedApp }) => {
+const placeholderColor = (input: import('@playwright/test').Locator) =>
+  input.evaluate(el => getComputedStyle(el, '::placeholder').color)
+
+test('a quieter suggestion hides while typing, returns when empty, and Tab sends it', async ({ launchPairedApp }) => {
   const captured: Envelope[] = []
-  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: replies(captured) })
+  const { page, daemon } = await launchPairedApp({ buildReplyFrames: replies(captured) })
   daemon.pushFrame(frame('conversations', { conversations: [SEEDED_ROW, other] }))
   const input = page.locator('textarea.composer__input')
+  const sent = () => captured.filter(e => e.type === 'send_message')
   const text = 'Continue with <escaped> & editable text 😀'
+  const ordinary = await placeholderColor(input)
   daemon.pushFrame(suggestion(1, text))
+  // 1: drawn in the outline token (#8c9199), one step quieter than the ordinary placeholder.
   await expect(input).toHaveAttribute('placeholder', text)
+  await expect(input).toHaveClass(/composer__input--suggestion/)
+  expect(await placeholderColor(input)).toBe('rgb(140, 145, 153)')
+  expect(ordinary).not.toBe('rgb(140, 145, 153)')
   await expect(input).toHaveValue('')
+  // 2: anything typed hides it. 3: clearing back to empty shows it again.
   await input.fill(' '); await expect(input).toHaveAttribute('placeholder', 'Message…')
+  await expect(input).not.toHaveClass(/composer__input--suggestion/)
+  await input.fill('a'); await expect(input).toHaveAttribute('placeholder', 'Message…')
   await input.fill(''); await expect(input).toHaveAttribute('placeholder', text)
   for (const key of ['Shift+Tab', 'Control+Tab', 'Alt+Tab', 'Meta+Tab']) {
     await input.focus(); await input.press(key); await expect(input).toHaveValue('')
   }
   await input.focus()
   await input.evaluate(el => el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true, isComposing: true })))
-  await expect(input).toHaveValue('')
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800))
-  await page.screenshot({ path: '/tmp/builder-1761/placeholder-1280.png', animations: 'disabled' })
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(800, 600))
-  await page.screenshot({ path: '/tmp/builder-1761/placeholder-800.png', animations: 'disabled' })
+  expect(sent()).toHaveLength(0)
+  // 4: Tab sends the suggestion as a normal message, then it is spent.
   await input.focus(); await input.press('Tab')
-  await expect(input).toHaveValue(text); await expect(input).toBeFocused()
-  expect(await input.evaluate((el: HTMLTextAreaElement) => [el.selectionStart, el.selectionEnd])).toEqual([text.length, text.length])
-  await input.press('End'); await input.press('!'); await expect(input).toHaveValue(text + '!')
-  daemon.pushFrame(suggestion(2, null)); await expect(input).toHaveValue(text + '!')
+  await expect.poll(() => sent().length).toBe(1)
+  expect((sent()[0].payload as { text: string }).text).toBe(text)
+  await expect(page.locator('[data-thread-role="user"]')).toHaveCount(1)
+  await expect(input).toHaveValue(''); await expect(input).toBeFocused()
+  await expect(input).toHaveAttribute('placeholder', 'Message…')
+  // With no visible suggestion, Tab keeps its normal focus traversal and sends nothing.
   await input.press('Tab'); await expect(input).not.toBeFocused()
-  await input.fill(''); await input.focus(); await input.press('Tab'); await expect(input).not.toBeFocused()
-  expect(captured.filter(e => e.type === 'send_message')).toHaveLength(0)
-  await expect(page.locator('[data-thread-role="user"]')).toHaveCount(0)
+  daemon.pushFrame(suggestion(2, 'Next reply'))
+  await expect(input).toHaveAttribute('placeholder', 'Next reply')
+  await input.fill('typed'); await input.focus(); await input.press('Tab')
+  await expect(input).not.toBeFocused(); await expect(input).toHaveValue('typed')
+  expect(sent()).toHaveLength(1)
   daemon.pushFrame(suggestion(3, 'Still valid'))
   await input.fill('/cos')
   daemon.pushFrame(frame('slash_command_list', { conversation_id: SEEDED_ROW.id, commands: [
@@ -57,7 +70,7 @@ test('mounted suggestions remain placeholder text and Tab accepts an editable dr
   await expect(page.getByRole('menuitem').filter({ hasText: 'cost' })).toBeVisible()
   await input.press('Tab'); await expect(input).toHaveValue('/cos')
   await input.focus(); await input.press('Enter'); await expect(input).toHaveValue('/cost')
-  expect(captured.filter(e => e.type === 'send_message')).toHaveLength(0)
+  expect(sent()).toHaveLength(1)
 })
 
 test('new revisions, activity and transitions clear only their suggestion and preserve drafts', async ({ launchPairedApp }) => {
@@ -82,9 +95,9 @@ test('new revisions, activity and transitions clear only their suggestion and pr
   await open(SEEDED_ROW.name); await expect(input).toHaveAttribute('placeholder', 'Message…')
   daemon.pushFrame(suggestion(14, 'Accepted'))
   await expect(input).toHaveAttribute('placeholder', 'Accepted')
-  await input.focus(); await input.press('Tab')
+  await input.fill('Accepted draft')
   daemon.pushFrame(transition('new'))
-  await expect(input).toHaveValue('Accepted')
+  await expect(input).toHaveValue('Accepted draft')
   await input.fill('')
   daemon.pushFrame(suggestion(50, 'Old session'))
   await expect(input).toHaveAttribute('placeholder', 'Message…')
@@ -140,11 +153,9 @@ test('reconciled old-session null does not pin an off-screen chat after a missed
   daemon.pushFrame(frame('turn_state', { conversation_id: other.id, state: 'idle' }))
   daemon.pushFrame(suggestion(12, 'Current session reply', other.id, 'current'))
   await expect(input).toHaveAttribute('placeholder', 'Current session reply')
-  await input.focus(); await input.press('Tab')
-  await expect(input).toHaveValue('Current session reply')
-  await expect(input).toBeFocused()
+  await input.fill('Current session draft')
   daemon.pushFrame(suggestion(13, null, other.id, 'current'))
   await open(SEEDED_ROW.name); await expect(input).toHaveAttribute('placeholder', 'Reconnect complete')
-  await open(other.name); await expect(input).toHaveValue('Current session reply')
+  await open(other.name); await expect(input).toHaveValue('Current session draft')
   await input.fill(''); await expect(input).toHaveAttribute('placeholder', 'Message…')
 })

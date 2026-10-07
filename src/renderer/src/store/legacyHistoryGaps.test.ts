@@ -134,17 +134,59 @@ it('ambiguous timestamps and duplicate message identities never prove a legacy j
   duplicate.receive([entry(1, 'm-1'), entry(2, 'm-1')], 'duplicate')
   expect(duplicate.held().gaps?.some(g => g.legacyRowKeys !== undefined)).toBe(true)
 })
-it('legacy tool identity overlap preserves the exact held row and key', () => {
+it.each(['ts', ''])('legacy tool identity overlap preserves the held row through validation and restoration, ts=%j', ts => {
   const h = harness()
   const tool = { kind: 'toolCall', turnId: 't', toolUseId: 'tool', name: 'Read', inputSummary: 'held', result: null } as const
   h.store.setState({ timelines: new Map([['c', { ...h.held(), timeline: { ...h.held().timeline,
     items: [tool], rowKeys: [0], nextRowKey: 1 } }]]) })
   h.newest([10]); h.demand()
-  h.receive([{ id: 1, ts: 'ts', event: { type: 'toolUse', turnId: 't', toolUseId: 'tool', name: 'Read', inputSummary: 'held' } }], 'joined')
+  h.receive([{ id: 1, ts, event: { type: 'toolUse', turnId: 't', toolUseId: 'tool', name: 'Read', inputSummary: 'held' } }], 'joined')
   expect(h.held().gaps?.some(g => g.legacyRowKeys !== undefined)).toBe(false)
   expect(h.held().timeline.items.filter(i => i.kind === 'toolCall')).toEqual([tool])
   expect(h.held().timeline.items[0]).toBe(tool)
   expect(h.held().timeline.rowKeys?.[0]).toBe(0)
+  const parsed = parseChatHistorySnapshot(JSON.parse(JSON.stringify(h.snapshot())))
+  if (parsed.kind !== 'timeline') throw new Error('Expected timeline')
+  const fresh = harness(false)
+  fresh.store.getState().beginLocalTimelineRead('host', 'c')!.complete(parsed)
+  expect(fresh.held().gaps?.some(g => g.legacyRowKeys !== undefined)).toBe(false)
+  expect(fresh.held().timeline.items).toEqual(h.held().timeline.items)
+  expect(fresh.held().timeline.rowKeys).toEqual(h.held().timeline.rowKeys)
+  expect(fresh.held().history).toBeNull()
+})
+it.each([false, true])('unresolved legacy recovery retains a live tool/result suffix, completed=%s', completed => {
+  const h = harness(); h.newest([10]); h.demand()
+  h.store.getState().dispatchFor('c', { type: 'toolUse', turnId: 'live', toolUseId: 'live-tool',
+    name: 'Read', inputSummary: 'live input' }, 'toolUse call-ts')
+  if (completed) h.store.getState().dispatchFor('c', { type: 'toolResult', turnId: 'live',
+    toolUseId: 'live-tool', isError: false, resultSummary: 'held result' }, 'toolResult result-ts')
+  const held = h.held().timeline, tool = held.items.at(-1)!, key = held.rowKeys!.at(-1)
+  const entries: HistoryTimelineEntry[] = [
+    { id: 12, ts: 'result-ts', event: { type: 'toolResult', turnId: 'live', toolUseId: 'live-tool',
+      isError: false, resultSummary: 'page result' } },
+    { id: 11, ts: 'call-ts', event: { type: 'toolUse', turnId: 'live', toolUseId: 'live-tool',
+      name: 'Read', inputSummary: 'live input' } }
+  ]
+  h.receive(completed ? entries : [entries[1]], 'walk')
+  if (!completed) {
+    h.demand()
+    h.receive([entries[0]], 'result')
+  }
+  expect(h.held().gaps?.some(g => g.legacyRowKeys !== undefined)).toBe(true)
+  expect(h.held().timeline.items.filter(i => i.kind === 'toolCall')).toHaveLength(1)
+  expect(h.held().timeline.rowKeys).toEqual(held.rowKeys)
+  expect(h.held().timeline.items.at(-1)).toMatchObject({ ...tool,
+    result: { resultSummary: completed ? 'held result' : 'page result' } })
+  if (completed) expect(h.held().timeline.items.at(-1)).toBe(tool)
+  expect(h.held().display?.find(d => d.id === 11)).toMatchObject({ kind: 'suppressed', rowKey: key })
+  if (!completed) expect(h.held().display?.find(d => d.id === 12)).toMatchObject({ kind: 'patch', rowKey: key })
+  const parsed = parseChatHistorySnapshot(JSON.parse(JSON.stringify(h.snapshot())))
+  if (parsed.kind !== 'timeline') throw new Error('Expected timeline')
+  const fresh = harness(false)
+  fresh.store.getState().beginLocalTimelineRead('host', 'c')!.complete(parsed)
+  fresh.receive(entries, 'repeat')
+  expect(fresh.held().timeline.items).toEqual(h.held().timeline.items)
+  expect(fresh.held().timeline.rowKeys).toEqual(held.rowKeys)
 })
 it('ordinary retryable failure blocks fresh gap demand and offline/pending gates remain shared', () => {
   const h = harness(); h.newest([10]); h.demand()

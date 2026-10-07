@@ -678,6 +678,46 @@ it('saves orphan-only display changes and restores protected contribution joins 
   await h.writer.stop()
 })
 
+it('saves resolved legacy tool evidence for validated fresh timeline restoration', async () => {
+  const h = harness()
+  h.list()
+  const legacy = parseChatHistorySnapshot({ version: 1, kind: 'timeline', serverId: 'a', conversationId: 'chat',
+    items: [{ kind: 'toolCall', turnId: 't', toolUseId: 'tool', name: 'Read', inputSummary: 'held input', result: null }],
+    prependedRows: 0, coverage: { status: 'received', cursor: 'oldest', atStart: true },
+    rowIdentity: { rowKeys: [7], nextRowKey: 8 } })
+  if (legacy.kind !== 'timeline') throw new Error('Expected timeline')
+  h.timelines.getState().beginLocalTimelineRead('a', 'chat')!.complete(legacy)
+  const heldTool = h.timelines.getState().timelines.get('chat')!.timeline.items[0]
+  h.timelines.getState().markHistoryRequested('chat', 'a', '', 'newest')
+  h.receive('historyPageReceived', () => {
+    h.timelines.getState().prependHistoryFor('chat', [], false, [{ id: 10, ts: 'newer', event: {
+      type: 'messageReceived', message: { role: 'user', message_id: 'newer', text: 'newer' } } }])
+    h.timelines.getState().recordHistoryPage('chat', 'newest', false, [10])
+  })
+  await h.writer.flush()
+  expect(timelineRequests(h).at(-1)!.snapshot.gaps).toEqual([{ legacyRowKeys: [7], newerId: 10, cursor: 'newest' }])
+  h.timelines.getState().markHistoryRequested('chat', 'a', 'newest', 'gap', 'legacy:7')
+  h.receive('historyPageReceived', () => {
+    h.timelines.getState().prependHistoryFor('chat', [], false, [{ id: 1, ts: '', event: {
+      type: 'toolUse', turnId: 't', toolUseId: 'tool', name: 'Read', inputSummary: 'served input' } }])
+    h.timelines.getState().recordHistoryPage('chat', 'joined', false, [1])
+  })
+  await h.writer.stop()
+  const saved = timelineRequests(h).at(-1)!.snapshot
+  expect(saved.gaps?.some(g => g.legacyRowKeys !== undefined)).toBe(false)
+  expect(h.timelines.getState().timelines.get('chat')!.timeline.items[0]).toBe(heldTool)
+  expect(saved.display).toMatchObject([{ id: 1, rowKey: 7 }, { id: 10 }])
+  expect(h.log).not.toHaveBeenCalledWith({ event: 'history-writer-result', code: 'invalid-snapshot' })
+  const parsed = parseChatHistorySnapshot(JSON.parse(JSON.stringify(saved)))
+  if (parsed.kind !== 'timeline') throw new Error('Expected timeline')
+  const fresh = createConversationTimelineStore()
+  fresh.getState().beginLocalTimelineRead('a', 'chat')!.complete(parsed)
+  expect(fresh.getState().timelines.get('chat')?.timeline.items).toEqual(saved.items)
+  expect(fresh.getState().timelines.get('chat')?.timeline.rowKeys).toEqual(saved.rowIdentity?.rowKeys)
+  expect(fresh.getState().timelines.get('chat')?.gaps).toEqual(saved.gaps)
+  expect(fresh.getState().timelines.get('chat')?.history).toBeNull()
+})
+
 it.each([false, true])('saves evidence-only cursor refusal under established ownership, restored=%s', async restored => {
   const h = harness(); h.list()
   h.receive('historyPageReceived', () => h.timelines.getState().recordHistoryPage('chat', 'oldest', true, [1]))

@@ -73,7 +73,9 @@ export function reconcileHistory(
           entries.filter(e => e.event.type === 'messageReceived' && e.event.message.message_id === messageId).length === 1) {
         overlapKeys.add(oldKeys[echoIndex])
       }
-    } else if (d.kind === 'row' && d.item.kind === 'toolCall' && legacyKeys.size > 0) {
+      continue
+    }
+    if (d.kind === 'row' && d.item.kind === 'toolCall' && legacyKeys.size > 0) {
       const call = d.item
       const matches = oldItems.flatMap((item, index) => item.kind === 'toolCall' &&
         item.turnId === call.turnId && item.toolUseId === call.toolUseId && legacyKeys.has(oldKeys[index]) ? [oldKeys[index]] : [])
@@ -81,9 +83,12 @@ export function reconcileHistory(
         e.event.turnId === call.turnId && e.event.toolUseId === call.toolUseId)
       if (matches.length === 1 && pageMatches.length === 1) {
         overlapKeys.add(matches[0])
-        known.set(entry.id, { id: d.id, kind: 'suppressed', rowKey: matches[0] })
-      } else known.set(entry.id, d)
-    } else if (admitted.has(entry)) known.set(entry.id, d)
+        // Retain validated call identity/source evidence even when its timestamp cannot join.
+        known.set(entry.id, { ...d, rowKey: matches[0] })
+        continue
+      }
+    }
+    if (admitted.has(entry)) known.set(entry.id, d)
     else {
       const matches = d.kind === 'row' ? oldItems.flatMap((item, index) => {
         const same = item.kind === 'toolCall' && d.item.kind === 'toolCall' && item.toolUseId === d.item.toolUseId ||

@@ -54,7 +54,15 @@ At the shell's 400px sidebar width, the toolbar follows Figma Top bar `115:3693`
   host immediately after the section divider have zero top margin. The divider retains
   28px margins above and below. Card bottom padding remains 20px.
 
-Both controls draw at rest in `--color-primary`, without a background or hover fill.
+Both controls draw at rest in `--color-primary`, without a background.
+On hover, `.channel-list__menu` and `.channel-list__pair` paint an absolute,
+pointer-transparent `::before` layer 4px beyond every edge of their 24px frames:
+`inset: calc(-1 * var(--space-1))` gives a 32×32px layer, filled with
+`--color-state-hover` (8% On Surface) and rounded by `--radius-xs` (6px).
+Padding, border, margin, control/glyph size and toolbar geometry stay fixed.
+Keyboard focus retains the existing 1px `--color-outline` outline; focus alone
+does not create the hover layer.
+
 The menu centers the thread menu's exact 6×24px ellipsis SVG in its 24px button. Its popup
 matches [Figma `756:9674`](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG/Pyrycode-Client?node-id=756-9674),
 popup `756:9837`: 160×60px, two 28px rows with 2px top/bottom padding, 6px corners,
@@ -90,6 +98,14 @@ were retired before the move. Keep `.channel-list` at `position: relative; z-ind
 it lifts content above the card wash without creating a stacking context that traps the
 fixed pills. A positioned pill must be reviewed against the full ancestor/sibling paint
 order, not just its button's box.
+
+The toolbar buttons and glyph spans use `position: relative` without isolation or a
+new z-index. The hover pseudo-element paints before the positioned glyph in source
+order. Adding `isolation: isolate` to Pair new host would trap its fixed name pill
+beneath the conversation chrome. Preserve this ancestor paint contract rather than
+copying the chat menu's isolated negative-z-index hover layer. The existing partial
+tooltip overlap with conversation chrome is unchanged; see the
+[hover visual evidence](conversation-shell-chrome.md#chrome-hover-evidence).
 
 The pill's ground is `--color-primary-container` and its ink is
 `--color-on-primary-container` (rgb(19, 74, 116) / rgb(207, 228, 255)). Figma's Pill export
@@ -142,6 +158,10 @@ The fake-transport browser specs cover the remaining behavior:
 - `paired-shell-card.spec.ts` targets the toolbar, hosts and rows for the card-wash check;
   `sidebar-offline-mutations.spec.ts` expects one pairing entry while host mutations are
   unavailable.
+- [`chrome-hover.spec.ts`](../../../e2e/chrome-hover.spec.ts): confirmed hover together
+  with token paint, 4px extents, 6px corners and pointer transparency at 1280×800 and
+  800×800; unchanged control/glyph/toolbar rectangles and existing keyboard outlines.
+  See [counted browser and visual evidence](conversation-shell-chrome.md#chrome-hover-evidence).
 
 No live-Claude behavior is needed to establish these renderer interactions.
 

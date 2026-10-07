@@ -151,8 +151,25 @@ prove these updates, geometry or dismissal; see [test boundaries](development-ve
 ## Theme
 
 Spacing, typography and shared roles use `theme/tokens.css`; see
-[ADR 0003](../decisions/0003-m3-theme-tokens-css-custom-properties.md). Translucent
-control treatment values are local custom properties on `.conversation`, shared by
+[ADR 0003](../decisions/0003-m3-theme-tokens-css-custom-properties.md).
+
+The shared M3 hover state layer is `--color-state-hover`, declared beside
+`--color-on-surface` in `:root` as
+`color-mix(in srgb, var(--color-on-surface) 8%, transparent)`. It resolves to On Surface
+RGB `(224, 226, 232)` at alpha `0.08` in the default scheme. Overriding On Surface on
+`:root` updates the layer's RGB while retaining that alpha; hardcoding the resolved
+colour would lose this dependency. The token is currently unused: adopting it across
+controls belongs to the four per-area follow-up tickets. Its declaration changes no
+existing hover treatment, layout or keyboard focus visuals; adoption must preserve
+geometry and keyboard focus styling. See the [hover token plan](../../specs/architecture/1862-shared-hover-state-token.md).
+
+A source-string assertion alone cannot prove `color-mix` resolution or theme override
+behavior. The [verifier's Chromium probe](https://github.com/pyrycode/pyrycode-desktop/pull/1867#issuecomment-6039679156)
+against the real stylesheet executed 2 cases: 2 passed, 0 failed, 0 skipped. Both the
+default colour and a root On Surface override to red passed, with red resolving to
+`color(srgb 1 0 0 / 0.08)`.
+
+Translucent control treatment values are local custom properties on `.conversation`, shared by
 the covered thread and its reader sibling:
 header `#09141D` → transparent, input transparent → `rgb(11 14 17 / 60%)` by 20% of
 its height, and backdrop samples of 10px, 8px, 5px and 2px blended by vertical masks.

@@ -26,6 +26,12 @@ and precedes Re-pair, using the existing Error treatment with no dismiss control
 the keyed timeline. `TopOverlay` compares its code to client literals; daemon codes
 and message text never enter displayed text, attributes or classes.
 
+Re-pair and pills with a dismiss X show an 8% On Surface hover layer over their
+existing fill, within 6px corners. Inert notices keep their resting paint; geometry
+and native keyboard outlines stay unchanged. See
+[Top overlay hover](conversation-shell-chrome.md#top-overlay-hover) for selectors
+and counted browser/visual evidence.
+
 | Session-error code | Fixed pill copy |
 | --- | --- |
 | `session.blocked` | Claude did not pick up your last message. It was not delivered. |

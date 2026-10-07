@@ -54,6 +54,16 @@ The panel opens immediately below the 24px button, aligned to its right edge
 The shared anchor owns the outside-click ref as well as positioning. Moving that ref
 onto the full row would make title clicks count as inside the menu.
 
+The bare `.conversation__overflow-trigger` paints a hover-only `::before` layer
+4px beyond its 24×24px frame (`--space-1`), yielding a 32×32px rectangle in
+`--color-state-hover` with `--radius-xs` (6px) corners. Absolute positioning and
+`pointer-events: none` preserve control/glyph/header geometry and hit targets.
+The button uses `position: relative; isolation: isolate` with the layer at
+`z-index: -1`, behind its glyph. Keyboard focus retains the existing 1px
+`--color-outline` outline and creates no hover layer by itself. The
+[sidebar toolbar](channel-list-section-header-pair-control.md#the-hoverfocus-name-pill-channelscsschannellisttsx-added-by-1304)
+uses positioned glyphs instead of isolation to preserve its fixed name pill's paint order.
+
 The menu lists Channel info, Run configuration and Background tasks in that order,
 with `currentId={null}` so no row has a selected-value highlight. Enter/Space opens
 with focus already on Channel info; Up/Down wrap, and Enter/Space activates the focused
@@ -148,6 +158,55 @@ List-reply refresh checks retain an unsent draft, distinguishing a title update 
 chat reactivation. Static renders prove the named/null/escaped text cases, but cannot
 prove these updates, geometry or dismissal; see [test boundaries](development-verification.md#what-each-test-tier-proves).
 
+## Top overlay hover
+
+Actionable `.top-overlay-pill` surfaces paint the same `--color-state-hover` layer
+inside their existing `--radius-xs` (6px) corners. A `linear-gradient` background
+image overlays the variant's background colour instead of replacing its fill:
+Default retains `--color-primary-container`; Error retains `--color-error-container`.
+No padding, border, margin or size changes occur, and native keyboard outlines on
+Re-pair and dismiss buttons remain unsuppressed.
+
+The selectors are `button.top-overlay-pill:hover` and
+`.top-overlay-pill:has(> .top-overlay-pill__dismiss):hover`. Re-pair is a full-pill
+button; usage warnings and permission-resolution notices acquire the layer across
+the pill while their X remains the dismiss action. Non-dismissible usage and
+session-error notices remain inert with their resting paint. Pointer exit removes
+the image; keyboard focus alone does not add it. See the
+[Top overlay occupants](conversation-shell.md#what-it-does) for state and dismissal.
+
+### Chrome hover evidence
+
+[`e2e/chrome-hover.spec.ts`](../../../e2e/chrome-hover.spec.ts) covers all three bare
+controls, a dismissible Default usage warning and the Error Re-pair button at
+1280×800 and 800×800. It observes confirmed `:hover` together with computed paint,
+checks bare-layer extents/radius/pointer transparency, compares control, glyph and
+toolbar/header rectangles, retains both pill fills and keyboard outlines, and
+excludes an inert usage notice. See [hover observation](development-verification.md#layout-and-input)
+for why a completed pointer move alone cannot establish the hovered state.
+
+The 2026-10-07 dispatcher browser gate at
+`66cf65c730e702a1e92b8a61cb6003c8452da750` recorded **344 executed, 344 passed,
+0 failed, 4 skipped**. The
+[verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1871#issuecomment-6045161790)
+confirms both `chrome hover preserves layout, pill fills and keyboard focus at 1280px`
+and `chrome hover preserves layout, pill fills and keyboard focus at 800px` were
+present, executed and passed (2 passed, 0 failed, 0 skipped in this spec).
+
+The same verdict compared integrated synthetic captures with fresh Figma references
+for [menu](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=840-16218),
+[add host](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=840-9403) and
+[pill](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=347-6618), confirming
+visible rounded layers and retained pill colours. Evidence, references, capture
+script and revision/hash manifest are retained under `/tmp/verifier-1871/`, with
+gate captures in `gate-captures/`. The builder's original captures are
+`/tmp/builder-1866/{conversation__overflow-trigger,channel-list__menu,channel-list__pair,warning,repair}-{1280,800}.png`,
+at revision `aac1ebda`. A separate verifier probe recorded 1 executed, 1 passed,
+0 failed and 0 skipped for bare-control hover/focus at both widths. Pair new host
+tooltip crops were pixel-identical with the pre-change toolbar CSS restored in the
+mounted page, establishing that its existing overlap was preserved. These are
+recorded verification results; no live-Claude acceptance is required.
+
 ## Theme
 
 Spacing, typography and shared roles use `theme/tokens.css`; see
@@ -158,10 +217,10 @@ The shared M3 hover state layer is `--color-state-hover`, declared beside
 `color-mix(in srgb, var(--color-on-surface) 8%, transparent)`. It resolves to On Surface
 RGB `(224, 226, 232)` at alpha `0.08` in the default scheme. Overriding On Surface on
 `:root` updates the layer's RGB while retaining that alpha; hardcoding the resolved
-colour would lose this dependency. The token is currently unused: adopting it across
-controls belongs to the four per-area follow-up tickets. Its declaration changes no
-existing hover treatment, layout or keyboard focus visuals; adoption must preserve
-geometry and keyboard focus styling. See the [hover token plan](../../specs/architecture/1862-shared-hover-state-token.md).
+colour would lose this dependency. It supplies the chrome and actionable-pill layers
+above, [composer footer hover](conversation-shell-composer-message-box.md) and sidebar
+row/action layers. Hover paint preserves geometry and keyboard focus styling.
+See the [hover token plan](../../specs/architecture/1862-shared-hover-state-token.md).
 
 A source-string assertion alone cannot prove `color-mix` resolution or theme override
 behavior. The [verifier's Chromium probe](https://github.com/pyrycode/pyrycode-desktop/pull/1867#issuecomment-6039679156)

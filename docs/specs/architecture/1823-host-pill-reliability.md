@@ -52,3 +52,28 @@ this plan and evidence; zero new exports or consumer migrations; three criteria.
 - After the final merge of main, run pre-verify and build. Retain JSON, logs and
   failure artifacts under `/tmp/builder-1823/`; record tested revision, Linux/Xvfb
   shown-window presentation, counts and paths on the ticket and PR.
+
+## Revisions
+
+2026-10-07: The planned evidence-only path is sufficient: the unchanged spec did
+not reproduce in any required check. No residual correction or contract change.
+Historical host attribution remains inferred; these passes do not prove its cause.
+
+All acceptance runs tested `1d8d34e65be97d5c3baccb6d656be92948ffcf81`, containing
+main `44d28c65034c` and #1836. Linux x86_64, Electron 33.4.11, shared Xvfb `:99`,
+shown default 1100×800 windows with native-pointer protection; retries disabled.
+Counts below are executed / passed / failed / skipped. Results are retained under
+`/tmp/builder-1823/`, with matching `.log` files and `*-results/` artifact folders.
+
+| Run | Workers | Counts | Result |
+| --- | --- | --- | --- |
+| Named host test, 20 repetitions | 1 | 20 / 20 / 0 / 0 | `named-one.json` |
+| Named host test, 20 repetitions | 3 | 20 / 20 / 0 / 0 | `named-three.json` |
+| Full default fake-transport gate | 3 | 335 / 335 / 0 / 4 | `full-default.json` |
+
+The full gate executed/passed the named host test and independent-cover regression
+once each. Its four skips are existing macOS-only badge and window-reopen checks;
+there are no unrelated failures. Pre-verify passed after the final main merge:
+9,343 unit tests passed, zero failed, three existing skips (`pre-verify.log`).
+The subsequent build and docs guard passed (`build.log`, `check-docs.log`).
+This results-only revision changes no tested source, test or launch fixture.

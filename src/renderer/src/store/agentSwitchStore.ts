@@ -9,6 +9,7 @@ import { runConfigStore } from './runConfigStore'
 import { runSettingsWriteStore } from './runSettingsWriteStore'
 import { selectDisplayedEffort } from '../screens/conversation/ComposerEffortMenu'
 import { serverIdForOpenConversation } from '../screens/conversation/unpairAction'
+import { requestRunConfigSnapshot } from '../screens/conversation/runConfigSnapshot'
 
 type Attempt = { conversationId: string; serverId: string; outgoing: WireAgent; target: WireAgent; row: WireModelOption }
 export type AgentSwitchStatus =
@@ -27,6 +28,7 @@ export function createAgentSwitchStore(deps: {
   binding: (conversationId: string, owningServerId?: string) => Binding | null
   send: (command: RendererCommand) => void
   log: (code: string) => void
+  onActiveSucceeded?: (conversationId: string) => void
 }) {
   return createStore<{
     pane: { conversationId: string; serverId: string } | null
@@ -101,6 +103,10 @@ export function createAgentSwitchStore(deps: {
               const row = e.conversations.find(r => r.id === id)
               if (row === undefined || (row.agent ?? 'claude') === pending.target) {
                 next.delete(id); deps.log(row === undefined ? 'abandoned' : 'succeeded')
+                const pane = get().pane
+                const binding = deps.binding(id, pending.serverId)
+                if (row !== undefined && pane?.conversationId === id && pane.serverId === pending.serverId &&
+                    binding?.open && binding.serverId === pending.serverId) deps.onActiveSucceeded?.(id)
               }
             }
           } else return
@@ -123,7 +129,11 @@ export const agentSwitchStore = createAgentSwitchStore({
       effort: selectDisplayedEffort(runConfigStore.getState().snapshot, runSettingsWriteStore.getState()) }
   },
   send: command => window.pyry.sendCommand(command),
-  log: code => window.pyry.sendDiagnostic({ event: 'agent-switch', code })
+  log: code => window.pyry.sendDiagnostic({ event: 'agent-switch', code }),
+  onActiveSucceeded: id => {
+    runSettingsWriteStore.getState().dispatch({ type: 'agentSwitched' })
+    requestRunConfigSnapshot(window.pyry.sendCommand, id)
+  }
 })
 
 /** Menu entry points are owned by the next ticket; this opening has no side effect until confirmed. */

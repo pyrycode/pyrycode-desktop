@@ -43,6 +43,15 @@ export function subscribeConfirmedRunConfig(deps: {
   })
   // Capture dispatch before either event subscriber removes the pending write.
   const offWrites = deps.writes.subscribe((next, previous) => {
+    if (next.agentGeneration !== previous.agentGeneration) {
+      stop(); pending.clear(); awaiting = false
+      context = deps.getContext()
+      expectedSession = null; resetting = false
+      // Authoritative success ends outgoing readings and polling, even with identical model values.
+      // A previous replacement guard describes the outgoing agent, not the fresh settings request.
+      deps.config.getState().clearSnapshot()
+      deps.log('invalidated')
+    }
     for (const [id, change] of next.pending) {
       if (previous.pending.has(id)) continue
       if (change.field === 'permissionMode') pending.set(id, change.value)

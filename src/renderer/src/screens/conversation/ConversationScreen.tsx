@@ -36,13 +36,14 @@ import { canRespondToPromptNow, usePromptResponseAvailability } from './promptRe
 import { useTimelineStore } from '../../store/timelineStore'
 import { useCollapseToolUsesPrefStore, selectCollapseToolUses } from '../../store/collapseToolUsesPrefStore'
 import {
+  type ConversationSlice, type HistoryRequestState,
   conversationTimelineStore,
   useConversationTimelineStore,
   selectPrependedRowsFor,
   selectTimelineFor,
   type ConversationTimelineState
 } from '../../store/conversationTimelineStore'
-import { historyAskDeps, requestOlderHistory } from '../../store/historyPageBridge'
+import { historyAskDeps, requestOlderHistory, requestGapHistory } from '../../store/historyPageBridge'
 import { historyRetryDeps, retryHistoryPage, selectHistoryFailure } from './historyRetry'
 import { useQueueStore, selectBacklogFor } from '../../store/queueStore'
 import {
@@ -568,6 +569,10 @@ export function ConversationScreen({
       {(!offline || items.length > 0 || visibleQueued.length > 0 || pendingBatch !== undefined || hasPermissionSurface) && <Timeline
         key={openConversationId}
         items={items}
+        gapState={ownSlice}
+        onRetryGap={failure => {
+          if (activeConversation !== null && selectedHost !== null) retryHistoryPage(historyRetryDeps, activeConversation, selectedHost, failure)
+        }}
         rowKeys={thread.rowKeys}
         rowArrivalOrder={thread.rowArrivalOrder}
         localEchoes={thread.localEchoes}
@@ -893,8 +898,11 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
     conversationId: string | null
   } | null>(null)
   const rememberTop = (el: HTMLDivElement): void => {
-    const row = el.firstElementChild
-    topAnchor.current = el.scrollTop === 0 && row !== null
+    const edge = Math.max(el.getBoundingClientRect().top,
+      paneRef.current?.querySelector('.conversation__top-chrome')?.getBoundingClientRect().bottom ?? 0)
+    const row = Array.from(el.children).find(child => !child.hasAttribute('data-history-gap') &&
+      child.getBoundingClientRect().bottom > edge) ?? null
+    topAnchor.current = row !== null
       ? { row, top: row.getBoundingClientRect().top - el.getBoundingClientRect().top,
           prependedRows, conversationId }
       : null
@@ -988,12 +996,12 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
     measureThreadChrome(pane)
 
     const anchor = topAnchor.current
-    if (el !== null && !following.current && el.scrollTop === 0 && anchor !== null &&
+    if (el !== null && !following.current && anchor !== null &&
         anchor.conversationId === conversationId && prependedRows > anchor.prependedRows &&
         anchor.row.parentElement === el) {
-      // Chromium suppresses anchoring at zero. Measure the surviving row, not scrollHeight:
+      // Preserve the surviving visible row at zero and during middle-of-thread gap insertion:
       // short threads include unused viewport space that is not part of the inserted content.
-      const offset = anchor.row.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.top
+      const offset = el.scrollTop + anchor.row.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.top
       const padding = Number.parseFloat(getComputedStyle(el).paddingBottom)
       const contentBottom = Array.from(el.children).reduce(
         (bottom, row) => Math.max(bottom, row.getBoundingClientRect().bottom),
@@ -1052,6 +1060,20 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
   const demandHistory = (el: HTMLDivElement): void => {
     // Measure before the input scrolls: crossing into the band needs a new input.
     if (connectedConversationHostNow(conversationId) === null) return
+    if (conversationId === null) return
+    const viewport = el.getBoundingClientRect()
+    const top = Math.max(viewport.top, paneRef.current?.querySelector('.conversation__top-chrome')?.getBoundingClientRect().bottom ?? viewport.top)
+    const bottom = Math.min(viewport.bottom, paneRef.current?.querySelector('.conversation__input-chrome')?.getBoundingClientRect().top ?? viewport.bottom)
+    const marker = Array.from(el.querySelectorAll<HTMLElement>('[data-history-gap]')).reverse().find(node => {
+      const rect = node.getBoundingClientRect()
+      return rect.height > 0 && rect.bottom > top && rect.top < bottom
+    })
+    if (marker !== undefined) {
+      following.current = false
+      rememberTop(el)
+      requestGapHistory(historyAskDeps, conversationId, Number(marker.dataset.historyGap))
+      return
+    }
     const nearTop = isNearTop({ scrollOffset: el.scrollTop,
       viewportHeight: el.clientHeight, contentHeight: el.scrollHeight })
     if (nearTop) following.current = false
@@ -1199,6 +1221,7 @@ export function Timeline({
   midTurnInput = false,
   onSendQueuedNow,
   firstRowKey = 0,
+  gapState, onRetryGap,
   olderSaved = false,
   saved = false,
   onOpenMarkdownPath,
@@ -1207,6 +1230,8 @@ export function Timeline({
   onReply
 }: {
   trailing?: ReactNode
+  gapState?: Pick<ConversationSlice, 'gaps' | 'display' | 'history'>
+  onRetryGap?: (failure: Extract<HistoryRequestState, { status: 'failed' }>) => void
   items: readonly ThreadItem[]
   backgroundAgents?: ReadonlyMap<string, BackgroundAgentTimeline>
   rowKeys?: TimelineState['rowKeys']
@@ -1306,88 +1331,129 @@ export function Timeline({
       !next?.marker && below?.kind === 'toolCall' && 'tool-group-row--joined-below'
     ].filter(Boolean).join(' ')]
   }))
+  const gapRows = new Map<number, ReactNode[]>()
+  const sourcePositions = new Map(rows.map((row, index) => [rowKeys?.[row.itemIndex] ?? firstRowKey + row.itemIndex, index]))
+  const displayed = (gapState?.display ?? []).flatMap(d => {
+    const index = d.rowKey === undefined ? undefined : sourcePositions.get(d.rowKey)
+    return index === undefined ? [] : [{ id: d.id, lastId: d.lastId ?? d.id, index }]
+  })
+  let lastPosition = -1
+  const earlierPositions = displayed.map(d => (lastPosition = Math.max(lastPosition, d.index)))
+  for (const gap of gapState?.gaps ?? []) {
+    // Binary search retained contributions; large IDs never size a walk or allocation.
+    let low = 0, high = displayed.length
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2)
+      if (displayed[middle].lastId < gap.newerId) low = middle + 1
+      else high = middle
+    }
+    let index = displayed[low]?.index
+    if (index === undefined) {
+      low = 0; high = displayed.length
+      while (low < high) {
+        const middle = Math.floor((low + high) / 2)
+        if (displayed[middle].id <= gap.olderId) low = middle + 1
+        else high = middle
+      }
+      index = low === 0 ? rows.length : earlierPositions[low - 1] + 1
+    }
+    const projected = projection.find(group => group.index === index && !group.marker)
+    if (projected && hiddenRows.has(index)) index = projected.ancestors.find(ancestor => !hiddenRows.has(ancestor)) ?? runByMember.get(index)?.index ?? index
+    const failure = gapState?.history?.status === 'failed' && gapState.history.gapId === gap.olderId ? gapState.history : null
+    const pending = gapState?.history?.status === 'requested' && gapState.history.gapId === gap.olderId
+    const marker = <div key={`gap-${gap.olderId}`} data-history-gap={gap.olderId}>
+      {failure !== null ? <ComposerHistoryFailure retryable={failure.retryable && onRetryGap !== undefined}
+        onRetry={() => onRetryGap?.(failure)} /> :
+        <p className="conversation__banner" role={pending ? 'status' : undefined}>
+          {pending ? 'Loading earlier messages…' : 'Load earlier messages'}
+        </p>}
+    </div>
+    gapRows.set(index, [...(gapRows.get(index) ?? []), marker])
+  }
+  const renderGroup = (group: (typeof projection)[number]): ReactNode => {
+    const row = rows[group.index]
+    if (!row) return null
+    const key = rowKeyAt(group.index)
+    const hidden = !group.marker && hiddenRows.has(group.index)
+    if (group.marker && row.item.kind === 'toolCall') {
+      const launchId = row.item.toolUseId
+      const historicalDescription = [...(backgroundAgents?.values() ?? [])]
+        .find(entry => entry.historyOnly && entry.toolCallId === launchId)?.description
+      return (
+        <button key={`agent-marker${key}`} type="button" className="agent-start-marker"
+          onClick={() => setRevealAgent({ key })}>
+          <span className={`conversation-status-dot ${group.running ? 'agent-start-marker__running' : 'agent-start-marker__finished'}`} aria-hidden="true" />
+          <span className="agent-start-marker__state">{group.running ? 'Agent started, still working' : 'Agent finished'}</span>
+          <span aria-hidden="true">·</span>
+          <span className="agent-start-marker__description">{(historicalDescription ?? toolHeadlineRuns(row.item).subject ?? '').slice(0, 4096)}</span>
+          <span className="agent-start-marker__action">Go to agent ↓</span>
+        </button>
+      )
+    }
+    if (row.item.kind !== 'toolCall') {
+      const rowKey = row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`
+      const content = <TimelineRow key={rowKey}
+        item={row.item} delivery={localEchoes?.find(e => e.rowKey === rowKeys?.[row.itemIndex])?.delivery} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(row.itemIndex)}
+        midTurnInput={midTurnInput} onSendQueuedNow={onSendQueuedNow}
+        onOpenMarkdownPath={onOpenMarkdownPath} agent={agent}
+        onReply={onReply}
+        inProgress={!saved && row.item.kind === 'assistantText' &&
+          (row.itemIndex === items.length - 1 || (row.itemIndex === openBubble && !row.item.parentToolUseId))} />
+      // Keep attributed text mounted through collapse and late-owner history regrouping.
+      if (row.item.kind === 'assistantText' && row.item.parentToolUseId) return (
+        <div key={rowKey} className={`tool-group-row tool-group-row--depth-${group.depth}`} hidden={hidden}>
+          {content}
+        </div>
+      )
+      return content
+    }
+    const content = (
+      <ToolRow
+        item={row.item}
+        group={group.hasChildren || group.background ? {
+          count: group.count,
+          background: group.background,
+          running: group.background ? group.running : !saved && group.running
+        } : undefined}
+        expansion={{
+          expanded: expandedTools.has(key),
+          onToggle: () => setExpandedTools((previous) => {
+            const next = new Set(previous)
+            if (next.has(key)) next.delete(key)
+            else next.add(key)
+            return next
+          })
+        }}
+      />
+    )
+    // Origin-relative identity survives history prepends and display regrouping. Keep hidden
+    // descendants mounted so their own result expansion survives an outer collapse.
+    const run = runByStart.get(group.index)
+    const expanded = expandedRunStarts.has(group.index)
+    return [
+      run && <div key={`run${key}`} className={`tool-group-row tool-run${expanded ? ' tool-group-row--joined-below' : ''}`}>
+        <ToolRunHeader run={run} expanded={expanded} onToggle={() => setExpandedRuns((previous) => {
+          const next = new Set(previous)
+          if (run.members.some((index) => previous.has(rowKeyAt(index)))) {
+            for (const index of run.members) next.delete(rowKeyAt(index))
+          } else next.add(key)
+          return next
+        })} />
+      </div>,
+      <div key={provisionalIndices.has(group.index) || row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
+        ref={node => { if (node) agentNodes.current.set(key, node); else agentNodes.current.delete(key) }}
+        className={`tool-group-row tool-group-row--depth-${group.depth} ${joins.get(group.index) ?? ''}`} hidden={hidden}>
+        {content}
+      </div>
+    ]
+  }
   return (
     <div className="conversation__thread" ref={scrollPin?.ref} onScroll={scrollPin?.onScroll}
       aria-label="Conversation history" tabIndex={0} onWheel={scrollPin?.onWheel} onKeyDown={scrollPin?.onKeyDown}>
       {rows.length === 0 && !trailing && <EmptyThread />}
       {olderSaved && <p className="conversation__banner">Older messages require a connection.</p>}
-      {projection.flatMap((group) => {
-        const row = rows[group.index]
-        if (!row) return null
-        const key = rowKeyAt(group.index)
-        const hidden = !group.marker && hiddenRows.has(group.index)
-        if (group.marker && row.item.kind === 'toolCall') {
-          const launchId = row.item.toolUseId
-          const historicalDescription = [...(backgroundAgents?.values() ?? [])]
-            .find(entry => entry.historyOnly && entry.toolCallId === launchId)?.description
-          return (
-            <button key={`agent-marker${key}`} type="button" className="agent-start-marker"
-              onClick={() => setRevealAgent({ key })}>
-              <span className={`conversation-status-dot ${group.running ? 'agent-start-marker__running' : 'agent-start-marker__finished'}`} aria-hidden="true" />
-              <span className="agent-start-marker__state">{group.running ? 'Agent started, still working' : 'Agent finished'}</span>
-              <span aria-hidden="true">·</span>
-              <span className="agent-start-marker__description">{(historicalDescription ?? toolHeadlineRuns(row.item).subject ?? '').slice(0, 4096)}</span>
-              <span className="agent-start-marker__action">Go to agent ↓</span>
-            </button>
-          )
-        }
-        if (row.item.kind !== 'toolCall') {
-          const rowKey = row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`
-          const content = <TimelineRow key={rowKey}
-            item={row.item} delivery={localEchoes?.find(e => e.rowKey === rowKeys?.[row.itemIndex])?.delivery} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(row.itemIndex)}
-            midTurnInput={midTurnInput} onSendQueuedNow={onSendQueuedNow}
-            onOpenMarkdownPath={onOpenMarkdownPath} agent={agent}
-            onReply={onReply}
-            inProgress={!saved && row.item.kind === 'assistantText' &&
-              (row.itemIndex === items.length - 1 || (row.itemIndex === openBubble && !row.item.parentToolUseId))} />
-          // Keep attributed text mounted through collapse and late-owner history regrouping.
-          if (row.item.kind === 'assistantText' && row.item.parentToolUseId) return (
-            <div key={rowKey} className={`tool-group-row tool-group-row--depth-${group.depth}`} hidden={hidden}>
-              {content}
-            </div>
-          )
-          return content
-        }
-        const content = (
-          <ToolRow
-            item={row.item}
-            group={group.hasChildren || group.background ? {
-              count: group.count,
-              background: group.background,
-              running: group.background ? group.running : !saved && group.running
-            } : undefined}
-            expansion={{
-              expanded: expandedTools.has(key),
-              onToggle: () => setExpandedTools((previous) => {
-                const next = new Set(previous)
-                if (next.has(key)) next.delete(key)
-                else next.add(key)
-                return next
-              })
-            }}
-          />
-        )
-        // Origin-relative identity survives history prepends and display regrouping. Keep hidden
-        // descendants mounted so their own result expansion survives an outer collapse.
-        const run = runByStart.get(group.index)
-        const expanded = expandedRunStarts.has(group.index)
-        return [
-          run && <div key={`run${key}`} className={`tool-group-row tool-run${expanded ? ' tool-group-row--joined-below' : ''}`}>
-            <ToolRunHeader run={run} expanded={expanded} onToggle={() => setExpandedRuns((previous) => {
-              const next = new Set(previous)
-              if (run.members.some((index) => previous.has(rowKeyAt(index)))) {
-                for (const index of run.members) next.delete(rowKeyAt(index))
-              } else next.add(key)
-              return next
-            })} />
-          </div>,
-          <div key={provisionalIndices.has(group.index) || row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
-            ref={node => { if (node) agentNodes.current.set(key, node); else agentNodes.current.delete(key) }}
-            className={`tool-group-row tool-group-row--depth-${group.depth} ${joins.get(group.index) ?? ''}`} hidden={hidden}>
-            {content}
-          </div>
-        ]
-      })}
+      {projection.flatMap(group => [!group.marker && gapRows.get(group.index), renderGroup(group)])}
+      {gapRows.get(rows.length)}
       {trailing}
     </div>
   )
@@ -4863,7 +4929,7 @@ function ComposerErrorSlotControl({
           stoppingBanner !== undefined ? <ComposerBannerReport report={stoppingBanner} agent={agent} /> : null
         )
       }
-      history={historyFailure === null ? null :
+      history={historyFailure === null || historyFailure.purpose === 'gap' ? null :
         <ComposerHistoryFailure retryable={historyFailure.retryable} onRetry={retryHistory} />}
       mcpFailure={mcpFailure === null ? null : <ComposerMcpFailure name={mcpFailure} onOpen={openMcpFailure} />}
       /* The count is checked HERE and not left to the view's own guard: `??` tests the element, not what

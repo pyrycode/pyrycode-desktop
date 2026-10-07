@@ -75,7 +75,7 @@
 // `defaultWorkspaceStore` and `pushNotificationPrefStore` do use `localStorage`, so the pattern is in
 // the repo to copy — but that would write conversation CONTENT to renderer-side web storage, surviving
 // the pairing boundary #757 exists to enforce.
-import { MAX_CHAT_HISTORY_ITEMS, parseChatHistorySnapshot, type ChatHistorySnapshot } from '@shared/chatHistory'
+import { MAX_CHAT_HISTORY_ITEMS, parseChatHistorySnapshot, type ChatHistorySnapshot, type HistoryGap } from '@shared/chatHistory'
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
 import { reconcileHistory } from './historyContributions'
@@ -129,9 +129,9 @@ export const MAX_RETAINED_TIMELINES = 10
  * so failure or interruption never resets the next cursor. Cursors remain opaque
  * payload values and never enter paths, URLs, React keys or diagnostics. */
 export type HistoryRequestState =
-  | { status: 'requested'; cursor?: string; purpose?: 'older' | 'newest' }
+  | { status: 'requested'; cursor?: string; purpose?: 'older' | 'newest' | 'gap'; gapId?: number }
   | { status: 'loaded'; cursor: string; atStart: boolean }
-  | { status: 'failed'; reason: HistoryRequestFailure; retryable: boolean; cursor?: string; purpose?: 'older' | 'newest' }
+  | { status: 'failed'; reason: HistoryRequestFailure; retryable: boolean; cursor?: string; purpose?: 'older' | 'newest' | 'gap'; gapId?: number }
 
 /**
  * What one key holds: the thread, and the state of the ask that backfilled it (#1259).
@@ -162,6 +162,7 @@ export interface ConversationSlice {
   coverage?: SavedTimeline['coverage']
   served?: SavedTimeline['served']
   display?: SavedTimeline['display']
+  gaps?: SavedTimeline['gaps']
   /**
    * How many rows a served history page has ever PREPENDED onto `timeline.items` for this conversation
    * (#1260) — a monotonically rising count, never reset while the slice lives.
@@ -331,7 +332,7 @@ export type ConversationTimelineStore = ConversationTimelineState & {
   markLocalSendQueued: (conversationId: string, queued: readonly QueuedItem[]) => void
   prependHistoryFor: (conversationId: string, items: readonly ThreadItem[], retainBoundary?: boolean, entries?: readonly HistoryTimelineEntry[]) => readonly number[]
   recordPlacementJoin: (conversationId: string, joinKey: string | undefined) => void
-  markHistoryRequested: (conversationId: string, serverId?: string, cursor?: string, purpose?: 'older' | 'newest') => void
+  markHistoryRequested: (conversationId: string, serverId?: string, cursor?: string, purpose?: 'older' | 'newest' | 'gap', gapId?: number) => void
   recordHistoryPage: (conversationId: string, cursor: string, atStart: boolean, servedIds?: readonly number[]) => void
   recordHistoryFailure: (
     conversationId: string,
@@ -500,7 +501,7 @@ function withHistory(
   const held = state.timelines.get(conversationId)
   if (held === undefined || (serverId !== undefined && held.serverId !== undefined && held.serverId !== serverId)) return state
   const newest = held.history?.status === 'requested' && held.history.purpose === 'newest'
-  const keepOldest = newest && held.coverage?.status === 'received'
+  const keepOldest = (newest || (held.history?.status === 'requested' && held.history.purpose === 'gap')) && held.coverage?.status === 'received'
   const coverage = history.status === 'loaded' && !keepOldest
     ? { status: 'received' as const, cursor: history.cursor, atStart: history.atStart } : held.coverage
   const preserveLocalRead = newest && (history.status === 'failed' || held.localRead === 'loaded')
@@ -614,7 +615,7 @@ export function createConversationTimelineStore(
               fail()
               return
             }
-            settle(current => ({ ...emptySlice, serverId, history: current.history, localRead: 'loaded', coverage: snapshot.coverage, served: snapshot.served, display: snapshot.display, restored: { serverId, coverage: snapshot.coverage },
+            settle(current => ({ ...emptySlice, serverId, history: current.history, localRead: 'loaded', coverage: snapshot.coverage, served: snapshot.served, display: snapshot.display, gaps: snapshot.gaps, restored: { serverId, coverage: snapshot.coverage },
               timeline: { ...current.timeline, items: snapshot.items,
                 rowKeys: snapshot.rowIdentity?.rowKeys ?? snapshot.items.map((_, index) => index - snapshot.prependedRows),
                 nextRowKey: snapshot.rowIdentity?.nextRowKey ?? snapshot.items.length - snapshot.prependedRows },
@@ -767,7 +768,10 @@ export function createConversationTimelineStore(
           current.history.purpose === 'newest' && current.localRead === 'loaded')
         if (entries !== undefined) {
           const base = held ?? emptySlice
-          const joined = reconcileHistory(base.timeline, base.display, entries, base.liveKeys, retainBoundary)
+          const high = base.served?.highestId
+          const disjointNewest = base.history?.status === 'requested' && base.history.purpose === 'newest' &&
+            high !== undefined && entries.length > 0 && entries.every(entry => entry.id > high)
+          const joined = reconcileHistory(base.timeline, base.display, entries, base.liveKeys, retainBoundary, disjointNewest)
           boundaries = joined.boundaries
           const slice = { ...base, serverId: receiptHost() ?? base.serverId, timeline: joined.timeline,
             display: joined.display, prependedRows: base.prependedRows + joined.inserted }
@@ -804,7 +808,7 @@ export function createConversationTimelineStore(
     },
     // Requests preserve same-host rows and coverage without changing holder order.
     // A different host starts with an empty slice; its cursor cannot come from the old host.
-    markHistoryRequested: (conversationId, serverId, cursor, purpose) =>
+    markHistoryRequested: (conversationId, serverId, cursor, purpose, gapId) =>
       set((s) => {
         const held = s.timelines.get(conversationId)
         if (held === undefined && serverId === undefined) return s
@@ -813,7 +817,7 @@ export function createConversationTimelineStore(
         const timelines = new Map(s.timelines)
         timelines.set(conversationId, { ...base, serverId: serverId ?? base.serverId,
           history: { status: 'requested', ...(cursor === undefined ? {} : { cursor }),
-            ...(purpose === undefined ? {} : { purpose }) },
+            ...(purpose === undefined ? {} : { purpose }), ...(gapId === undefined ? {} : { gapId }) },
           localRead: purpose === 'newest' && base.localRead === 'loaded' ? base.localRead : undefined })
         return { timelines }
       }),
@@ -823,6 +827,8 @@ export function createConversationTimelineStore(
         if (servedIds === undefined) return withHistory(s, conversationId, { status: 'loaded', cursor, atStart })
         const current = s.timelines.get(conversationId)
         const newest = current?.history?.status === 'requested' && current.history.purpose === 'newest'
+        const gapRequest = current?.history?.status === 'requested' && current.history.purpose === 'gap'
+          ? current.history.gapId : undefined
         const held = receivedSlice(current, newest && current?.localRead === 'loaded') ?? emptySlice
         const pageIds = [...new Set(servedIds)].sort((a, b) => a - b)
         const receipt = { ids: pageIds, cursor, atStart }
@@ -840,10 +846,13 @@ export function createConversationTimelineStore(
         const receipts = candidates.slice(first)
         const ids = [...new Set(receipts.flatMap(r => r.ids))].sort((a, b) => a - b)
         const highestId = ids[ids.length - 1]
+        const gaps = historyGaps(held.gaps,
+          [...new Set([...(held.served?.ids ?? []), ...pageIds])].sort((a, b) => a - b),
+          ids, pageIds, cursor, gapRequest)
         const slice: ConversationSlice = { ...held, serverId: receiptHost() ?? held.serverId,
           served: receipts.length === 0 ? undefined : { ids, receipts, ...(highestId === undefined ? {} : { highestId }) },
-          history: { status: 'loaded', cursor, atStart },
-          coverage: newest && held.coverage?.status === 'received'
+          gaps, history: { status: 'loaded', cursor, atStart },
+          coverage: (newest || gapRequest !== undefined) && held.coverage?.status === 'received'
             ? held.coverage : { status: 'received', cursor, atStart }, localRead: newest ? held.localRead : undefined }
         return { timelines: s.timelines.has(conversationId)
           ? new Map(s.timelines).set(conversationId, slice)
@@ -855,7 +864,8 @@ export function createConversationTimelineStore(
         const request = s.timelines.get(conversationId)?.history
         return withHistory(s, conversationId, { status: 'failed', reason, retryable,
           ...(request?.status === 'requested' && request.cursor !== undefined ? { cursor: request.cursor } : {}),
-          ...(request?.status === 'requested' && request.purpose !== undefined ? { purpose: request.purpose } : {})
+          ...(request?.status === 'requested' && request.purpose !== undefined ? { purpose: request.purpose } : {}),
+          ...(request?.status === 'requested' && request.gapId !== undefined ? { gapId: request.gapId } : {})
         }, receiptHost() ?? undefined)
       }),
     markViewed: (conversationId) =>
@@ -1007,3 +1017,40 @@ export const selectLiveJoinKeysFor =
   (conversationId: string) =>
   (s: ConversationTimelineState): ReadonlySet<string> =>
     s.timelines.get(conversationId)?.liveKeys ?? NO_LIVE_KEYS
+
+function historyGaps(held: readonly HistoryGap[] | undefined, ids: readonly number[],
+  retained: readonly number[], page: readonly number[], cursor: string, selected: number | undefined): readonly HistoryGap[] {
+  const positions = new Map(retained.map((id, index) => [id, index]))
+  const holes: HistoryGap[] = []
+  const unresolved = new Set<HistoryGap>()
+  let priorIndex = 0
+  for (let index = 1; index < ids.length; index++) {
+    if (ids[index] - ids[index - 1] <= 1) continue
+    const olderId = ids[index - 1], newerId = ids[index]
+    while (held?.[priorIndex] && held[priorIndex].newerId <= olderId) priorIndex++
+    const prior = held?.[priorIndex]
+    const previous = prior && prior.olderId <= olderId && prior.newerId >= newerId ? prior : undefined
+    if (previous) unresolved.add(previous)
+    const walking = selected !== undefined && previous?.olderId === selected
+    const canResume = page.length === 0 ? walking : page[0] === newerId || (walking && page[0] >= newerId)
+    const resume = canResume ? (previous?.cursor !== undefined && previous.olderId !== selected ? previous.cursor : cursor) : previous?.cursor
+    holes.push({ olderId, newerId, ...(resume === undefined ? {} : { cursor: resume }) })
+  }
+  for (const gap of held ?? []) {
+    if (unresolved.has(gap)) continue
+    const first = positions.get(gap.olderId), last = positions.get(gap.newerId)
+    // Receipt expiration is unknown coverage, never proof of a completed gap.
+    if (first !== undefined && last !== undefined && last - first === gap.newerId - gap.olderId) continue
+    holes.push({ ...gap, ...(gap.olderId === selected ? { cursor } : {}) })
+  }
+  const merged: HistoryGap[] = []
+  for (const gap of holes.sort((a, b) => a.olderId - b.olderId)) {
+    const prior = merged.at(-1)
+    if (prior && gap.olderId < prior.newerId) {
+      const resume = gap.newerId > prior.newerId ? gap.cursor : prior.cursor
+      merged[merged.length - 1] = { olderId: prior.olderId, newerId: Math.max(prior.newerId, gap.newerId),
+        ...(resume === undefined ? {} : { cursor: resume }) }
+    } else merged.push(gap)
+  }
+  return merged.slice(-MAX_CHAT_HISTORY_ITEMS)
+}

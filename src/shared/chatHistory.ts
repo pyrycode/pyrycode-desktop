@@ -44,6 +44,8 @@ export type DurableThreadItem =
   | { kind: 'modelRefusal'; refusal: ModelRefusalEvent }
 
 /** Exact served provenance; never entry-to-display contribution evidence. */
+export interface HistoryGap { olderId: number; newerId: number; cursor?: string }
+
 export type ServedHistory = {
   ids: readonly number[]
   highestId?: number
@@ -69,6 +71,7 @@ export type ChatHistorySnapshot = { version: 1; serverId: string } & (
   | {
       kind: 'timeline'; conversationId: string; items: DurableThreadItem[]; prependedRows: number
       served?: ServedHistory
+      gaps?: readonly HistoryGap[]
       display?: readonly HistoryContribution[]
       rowIdentity?: { rowKeys: readonly number[]; nextRowKey: number }
       coverage: { status: 'unknown' } | { status: 'received'; cursor: string; atStart: boolean }
@@ -271,6 +274,14 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
   if (!Number.isSafeInteger(prependedRows) || prependedRows < 0) return invalid()
   const items = array(v.items, threadItem)
   const served = optional(v.served, servedHistory)
+  const gaps = optional(v.gaps, value => array(value, value => {
+    const g = record(value)
+    const olderId = readId(g.olderId), newerId = readId(g.newerId)
+    if (newerId <= olderId || newerId - olderId <= 1) return invalid()
+    return { olderId, newerId, ...('cursor' in g ? { cursor: string(g.cursor) } : {}) }
+  }))
+  if (gaps !== undefined && (coverage.status !== 'received' ||
+      gaps.some((g, index) => index > 0 && g.olderId < gaps[index - 1].newerId))) return invalid()
   if (served !== undefined) {
     // Narrow legacy events can advance the pager without declaring served provenance.
     if (coverage.status !== 'received') return invalid()
@@ -346,7 +357,7 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
   return {
     version: 1, kind: 'timeline', serverId, conversationId: id(v.conversationId),
     items, prependedRows, coverage,
-    ...(display === undefined ? {} : { display }),
+    ...(display === undefined ? {} : { display }), ...(gaps === undefined ? {} : { gaps }),
     ...(served === undefined ? {} : { served }), ...(rowIdentity === undefined ? {} : { rowIdentity })
   }
 }

@@ -283,8 +283,8 @@ export function subscribeHistoryPage(
 /** Read current coverage only when a user asks; pending demand is discarded. */
 export interface HistoryAskDeps {
   sendCommand: (command: RendererCommand) => void
-  getHeld: (conversationId: string) => Pick<ConversationSlice, 'history' | 'coverage' | 'localRead'> | null
-  markRequested: (conversationId: string, cursor?: string, purpose?: 'older' | 'newest') => void
+  getHeld: (conversationId: string) => Pick<ConversationSlice, 'history' | 'coverage' | 'localRead' | 'gaps' | 'served'> | null
+  markRequested: (conversationId: string, cursor?: string, purpose?: 'older' | 'newest' | 'gap', gapId?: number) => void
   canRequest?: (conversationId: string) => boolean
 }
 
@@ -296,11 +296,11 @@ export interface HistoryAskDeps {
 export const HISTORY_PAGE_LIMIT = 200
 
 export function requestHistoryPage(deps: HistoryAskDeps, conversationId: string, cursor: string,
-  purpose: 'older' | 'newest'): void {
+  purpose: 'older' | 'newest' | 'gap', gapId?: number): void {
   if (deps.canRequest?.(conversationId) === false) return
   const held = deps.getHeld(conversationId)
   if (held?.localRead === 'loading' || held?.history?.status === 'requested') return
-  deps.markRequested(conversationId, cursor, purpose)
+  deps.markRequested(conversationId, cursor, purpose, gapId)
   deps.sendCommand({ type: 'requestHistory', payload: {
     conversation_id: conversationId, cursor, limit: HISTORY_PAGE_LIMIT
   } })
@@ -319,6 +319,17 @@ export function requestOlderHistory(
   requestHistoryPage(deps, conversationId, coverage?.status === 'received' ? coverage.cursor : '', 'older')
 }
 
+/** A visible marker chooses one backwards step, independent of oldest-end completion. */
+export function requestGapHistory(deps: HistoryAskDeps, conversationId: string, olderId: number): void {
+  const held = deps.getHeld(conversationId)
+  const gap = held?.gaps?.find(g => g.olderId === olderId)
+  if (gap === undefined || held?.history?.status === 'failed') return
+  const receipt = held?.served?.receipts.filter(r => r.ids[0] !== undefined && r.ids[0] >= gap.newerId)
+    .sort((a, b) => a.ids[0] - b.ids[0])[0]
+  const cursor = gap.cursor ?? receipt?.cursor
+  if (cursor !== undefined) requestHistoryPage(deps, conversationId, cursor, 'gap', olderId)
+}
+
 export const historyAskDeps: HistoryAskDeps = {
   sendCommand: (command) => window.pyry.sendCommand(command),
   canRequest: conversationId => activeConversationStore.getState().activeConversation?.id === conversationId &&
@@ -328,9 +339,9 @@ export const historyAskDeps: HistoryAskDeps = {
     const held = conversationTimelineStore.getState().timelines.get(conversationId)
     return held?.serverId !== undefined && held.serverId !== host ? null : held ?? null
   },
-  markRequested: (conversationId, cursor, purpose) => {
+  markRequested: (conversationId, cursor, purpose, gapId) => {
     const host = connectedConversationHostNow(conversationId)
-    if (host !== null) conversationTimelineStore.getState().markHistoryRequested(conversationId, host, cursor, purpose)
+    if (host !== null) conversationTimelineStore.getState().markHistoryRequested(conversationId, host, cursor, purpose, gapId)
   }
 }
 

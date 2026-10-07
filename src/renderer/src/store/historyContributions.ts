@@ -36,7 +36,8 @@ export function reconcileHistory(
   retained: readonly HistoryContribution[] | undefined,
   entries: readonly HistoryTimelineEntry[],
   liveKeys: ReadonlySet<string>,
-  reserveBoundary: boolean
+  reserveBoundary: boolean,
+  disjointNewest = false
 ) {
   const oldItems = timeline.items
   const oldKeys = timeline.rowKeys ?? oldItems.map((_, index) => index)
@@ -149,7 +150,8 @@ export function reconcileHistory(
       items.push(group.item); keys.push(group.key)
     }
   }
-  enter(groups.find(group => group.key !== undefined)?.index ?? Infinity)
+  const firstBound = groups.find(group => group.key !== undefined)
+  if (firstBound !== undefined || !disjointNewest) enter(firstBound?.index ?? Infinity)
   oldItems.forEach((held, index) => {
     const group = bound.get(oldKeys[index])
     if (group !== undefined) enter(group.index)

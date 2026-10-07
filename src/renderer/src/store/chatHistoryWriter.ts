@@ -166,7 +166,7 @@ export function createChatHistoryWriter(deps: {
         }
         continue
       }
-      if (!changed && slice.history === before?.history && slice.served === before?.served && slice.display === before?.display) continue
+      if (!changed && slice.history === before?.history && slice.served === before?.served && slice.display === before?.display && slice.gaps === before?.gaps) continue
       if (items.length === 0 && slice.history?.status !== 'loaded' && !droppedEcho) continue
       const claims = [...deps.lists.getState().byServer].filter(([, rows]) => rows.some((row) => row.id === id))
       // receivedSlice clears rows and coverage only when replacing an explicitly stamped host.
@@ -193,7 +193,7 @@ export function createChatHistoryWriter(deps: {
       const durableKeys = new Set((slice.timeline.rowKeys ?? []).filter((_, index) => isDurable(items[index])))
       capture({ version: 1, kind: 'timeline', serverId: owner, conversationId: id,
         items: items.filter(isDurable), prependedRows: slice.prependedRows, coverage,
-        served: slice.served,
+        served: slice.served, gaps: slice.gaps,
         display: slice.display?.filter(d => d.rowKey === undefined || durableKeys.has(d.rowKey)),
         rowIdentity: {
           rowKeys: (slice.timeline.rowKeys ?? items.map((_, index) => index - slice.prependedRows))

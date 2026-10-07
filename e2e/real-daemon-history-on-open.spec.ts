@@ -9,11 +9,12 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 // This acceptance uses real daemon storage and a fully exited, protected desktop profile.
 test.use({ spawnClaude: false, seedPromoted: true })
 
-test('a real daemon refreshes saved history with a channel post written while Electron is closed', async ({ relay, daemon }) => {
-  test.setTimeout(150_000)
+test('a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed', async ({ relay, daemon }) => {
+  test.setTimeout(240_000)
   const channel = `history-open-${Date.now()}`
   const baseline = `saved baseline ${Date.now()}`
   const marker = `closed desktop post ${Date.now()}`
+  const closedPosts = Array.from({ length: 205 }, (_, index) => `${marker} row ${String(index).padStart(3, '0')}`)
   const post = async (text: string): Promise<void> => {
     try {
       await promisify(execFile)(process.env.PYRY_BIN ?? 'pyry', ['channel',
@@ -61,20 +62,50 @@ test('a real daemon refreshes saved history with a channel post written while El
     const { app: reopened, page: fresh } = await initial.relaunch(async () => {
       await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true)
       // The unique post is created only after full process exit; it cannot be in the saved timeline.
-      await post(marker)
+      for (const text of closedPosts) await post(text)
     })
     await reopened.evaluate(({ ipcMain }) => {
-      const proof = { asks: 0 }
+      const proof = { asks: [] as string[] }
       ;(globalThis as any).__openingHistoryProof = proof
-      ipcMain.on('pyry:command', (_event, command) => { if (command.type === 'requestHistory') proof.asks++ })
+      ipcMain.on('pyry:command', (_event, command) => { if (command.type === 'requestHistory') proof.asks.push(command.payload.cursor) })
     })
     await expect(fresh.locator('.channel-list__row-open').filter({ hasText: channel })).toBeVisible({ timeout: 45_000 })
     await fresh.locator('.channel-list__row-open').filter({ hasText: channel }).click()
     const thread = fresh.locator('.conversation__thread')
-    await expect(thread.locator('.bubble').filter({ hasText: marker })).toHaveCount(1, { timeout: 20_000 })
+    await expect(thread).toContainText(closedPosts.at(-1)!, { timeout: 20_000 })
     await expect(thread).toContainText(baseline)
-    await expect.poll(() => reopened.evaluate(() => (globalThis as any).__openingHistoryProof.asks)).toBe(1)
-    await fresh.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
-    await expect(thread.locator('.bubble').filter({ hasText: marker })).toHaveCount(1)
+    const asks = () => reopened.evaluate(() => (globalThis as any).__openingHistoryProof.asks as string[])
+    await expect.poll(async () => (await asks()).length).toBe(1)
+    expect(await asks()).toEqual([''])
+    const gap = thread.locator('[data-history-gap]')
+    await expect(gap).toHaveCount(1)
+    const coverage = () => fresh.evaluate(async ({ serverId, conversationId }) => {
+      const result = await window.pyry.chatHistory({ operation: 'readTimeline', serverId, conversationId })
+      return result.status === 'stored' && result.snapshot.kind === 'timeline'
+        ? { ids: result.snapshot.served?.ids.length ?? 0, gaps: result.snapshot.gaps?.length ?? 0 } : null
+    }, { serverId: daemon.pairFields.server, conversationId })
+    await expect.poll(async () => (await coverage())?.gaps).toBe(1)
+    for (let step = 0; step < 10 && await gap.count() > 0; step++) {
+      const before = (await asks()).length
+      const ids = (await coverage())!.ids
+      await gap.evaluate(el => el.scrollIntoView({ block: 'center' }))
+      await fresh.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+      expect((await asks()).length).toBe(before)
+      await thread.focus()
+      await fresh.keyboard.press('ArrowUp')
+      await expect.poll(async () => (await asks()).length).toBe(before + 1)
+      await expect.poll(async () => (await coverage())?.ids).toBeGreaterThan(ids)
+      await expect(thread.getByText('Loading earlier messages…', { exact: true })).toHaveCount(0)
+      expect((await asks()).length).toBe(before + 1)
+    }
+    await expect(gap).toHaveCount(0)
+    const transcript = await thread.innerText()
+    let previous = transcript.indexOf(baseline)
+    for (const text of closedPosts) {
+      const position = transcript.indexOf(text)
+      expect(position).toBeGreaterThan(previous)
+      expect(transcript.indexOf(text, position + text.length)).toBe(-1)
+      previous = position
+    }
   })
 })

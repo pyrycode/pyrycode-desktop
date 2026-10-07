@@ -31,9 +31,10 @@ export function retryHistoryPage(
   if (deps.getOpen() !== open || deps.getConnectedHost(open.id) !== serverId) return
   const held = deps.getHeld(open.id)
   if (!failure.retryable || selectHistoryFailure(held, serverId) !== failure ||
-      held?.localRead === 'loading' || (failure.purpose !== 'newest' && held?.coverage?.status === 'received' && held.coverage.atStart)) return
+      held?.localRead === 'loading' || (failure.purpose !== 'newest' && failure.purpose !== 'gap' && held?.coverage?.status === 'received' && held.coverage.atStart)) return
+  if (failure.purpose === 'gap' && !held?.gaps?.some(g => g.olderId === failure.gapId)) return
   requestHistoryPage(deps, open.id, failure.cursor ?? (held?.coverage?.status === 'received' ? held.coverage.cursor : ''),
-    failure.purpose ?? 'older')
+    failure.purpose ?? 'older', failure.gapId)
   deps.logRequested()
 }
 

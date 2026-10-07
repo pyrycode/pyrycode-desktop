@@ -20,6 +20,7 @@
   --color-surface-container-highest: #32353a;
   --color-scrim: #000000;
   --color-on-surface: #e0e2e8;
+  --color-state-hover: color-mix(in srgb, var(--color-on-surface) 8%, transparent);
   --color-surface-variant: #42474e; /* Figma pairing verification highlight. */
   --color-on-surface-variant: #c2c7cf;
   --color-primary: #9dcbfc;

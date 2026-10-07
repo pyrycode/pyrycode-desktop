@@ -15,8 +15,8 @@ import type {
 // carries which rule (ConversationScreen.test.tsx); this one pins what the browser does with them.
 //
 // #609 MOVED THIS FILE'S SUBJECT, which is why it is reworked in place rather than joined by a sibling.
-// A settled reply now renders as markdown and a still-growing tail as plain text, so #607's `pre-wrap`
-// governs the TAIL only. The old AC2 assertion (`spaceRun.width > control.width`) was built so that equal
+// Historically #609 rendered settled replies as markdown and left the growing tail plain.
+// Progressive rendering now gives both branches markdown-owned whitespace. The old AC2 assertion (`spaceRun.width > control.width`) was built so that equal
 // widths IS the broken state; under markdown, equal widths is the CORRECT state, and the assertion below
 // is its deliberate inverse. A second spec would have duplicated ~120 lines of frame-builder harness and
 // left the invalidated assertions behind.
@@ -966,7 +966,7 @@ async function streamTheReplies(page: Page): Promise<void> {
   await expect(assistantBubbles.nth(CODE)).toHaveText(bubbleTextExactly(LONG_TOKEN_TEXT))
 }
 
-test('#607s plain-text rule governs the in-progress tail, and markdown owns the settled bubble', async ({
+test('markdown owns whitespace on the in-progress tail and settled bubble', async ({
   launchPairedApp
 }) => {
   const { page } = await launchPairedApp({ buildReplyFrames })
@@ -976,22 +976,13 @@ test('#607s plain-text rule governs the in-progress tail, and markdown owns the 
   const control = await readBubbleMetrics(page, CONTROL)
   const tail = await readBubbleMetrics(page, TAIL)
 
-  // The modifier still reaches the tail in the BUILT app — the class, the stylesheet and the cascade all
-  // line up. It fails under `normal` (no rule at all), under `pre-line` (which loses the space runs) and
-  // under `pre` (which stops wrapping) alike.
-  expect(tail.whiteSpace).toBe('pre-wrap')
-  // ...and no longer reaches a settled bubble, nor anything inside its container. This is the AC3
-  // by-construction half: whitespace is markdown's by the ABSENCE of a declaration, not by an override.
+  expect(tail.whiteSpace).toBe('normal')
   expect(control.whiteSpace).toBe('normal')
   expect(await readMarkdownWhiteSpace(page, CONTROL)).toBe('normal')
+  expect(await readMarkdownWhiteSpace(page, TAIL)).toBe('normal')
+  // Soft source breaks collapse inside one paragraph; the cursor follows the content on its own line.
+  expect(tail.height - control.height).toBeLessThanOrEqual(control.lineHeightPx + 1)
 
-  // The geometric half, so this is not purely a style assertion: the tail's newlines are VISIBLE breaks,
-  // standing its three lines more than one line box taller than the one-line settled control. Both are
-  // .bubble, so the padding cancels, and the cursor is inline and adds no height. Under a collapsing tail —
-  // whether by losing the rule or by markdown-rendering the tail, which would fold those soft breaks into
-  // one line — the two bubbles are the same height. This is the assertion that covers the whole path: a
-  // daemon-supplied newline through codec, store and render into layout.
-  expect(tail.height - control.height).toBeGreaterThan(control.lineHeightPx)
 })
 
 test('a settled reply takes its whitespace from markdown, not from the plain-text rule', async ({

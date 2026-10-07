@@ -4210,10 +4210,9 @@ function Composer({
           the outcome line answers the same way, and load-bearing here for a sharper reason: an element
           that mounted empty would move the message box down on every launch, in every spec, forever.
 
-          It is INSIDE the element that wears `hidden`, so a permission panel covers the tiles along
-          with the message box and the footer — nothing new to hide. And a conversation switch clears it
-          for free: PairedShellView keys the chat pane on the conversation id, so this composer is rebuilt
-          around a fresh holder. */}
+          Inline permission leaves these tiles, the message box and the footer visible. A conversation
+          switch clears pending attachments: PairedShellView keys the chat pane on the conversation id,
+          so this composer is rebuilt around a fresh holder. */}
       {/* #1264: each tile's remove control takes that tile back out of the pending set, so the next send
           does not name its id. Nothing crosses the wire — the hook writes its two holdings and stops. */}
       <ComposerAttachmentStrip attachments={attach.pending} onRemove={attach.removePending} />

@@ -65,6 +65,8 @@ None. Retention uses the reducer's existing continuous identity rather than comp
 
 2026-10-07: integrated comparison found inherited questionnaire padding inset the inline permission card from the message column. Clear that outer padding for permissions so the border and Cancel align with desktop history; keep the card's existing inner padding and tokens.
 
+2026-10-07: verifier finding 1 exposed obsolete permission-coverage expectations in `e2e/message-reply.spec.ts`. Migrate the existing interaction proof to visible composer/footer, immediate pointer and keyboard reply focus with end caret, no focus/caret replay after dismissal, and retained drafts without focus replay across chat switches. Production behavior and security contracts are unchanged; correct the attachment comment in `Composer` to describe its visible lifetime. In-flight #1751 edits `TimelineRow` in the same file; this local comment change is independent.
+
 ## Documentation handoff
 
 - Pending documentation stage: `docs/knowledge/features/conversation-shell-permission-modal.md` § Presentation and § Selection and confirmation — inline scrolling and navigation-retained checked grants with pane-local arming and continuous invalidation.

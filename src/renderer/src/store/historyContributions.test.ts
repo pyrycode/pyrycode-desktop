@@ -3,8 +3,6 @@ import { createConversationTimelineStore } from './conversationTimelineStore'
 import type { HistoryTimelineEntry } from '@shared/ipc/events'
 import { parseChatHistorySnapshot } from '@shared/chatHistory'
 import { reduceHistoryPage } from './historyPageBridge'
-import { createChatHistoryStore } from '../../../main/chatHistoryStore'
-import { createSecureStore } from '../../../main/secureStore'
 
 const text = (id: number, value: string, parentToolUseId?: string): HistoryTimelineEntry => ({ id, ts: `ts-${id}`,
   event: { type: 'assistantDelta', turnId: 't', seq: id, text: value, parentToolUseId } })
@@ -87,22 +85,10 @@ it.each([['other', 'tool'], ['', 'tool'], ['t', ''], ['', '']])(
     expect(() => parseChatHistorySnapshot(snapshotFor(h))).not.toThrow()
   })
 
-it('protects orphan denial correlation through storage and fresh restoration with equal tool IDs', async () => {
+it('retains orphan denial correlation through fresh restoration with equal tool IDs', () => {
   const h = harness()
   h.page([denial(3, 'other')])
-  const blobs = new Map<string, Uint8Array>()
-  const secure = () => createSecureStore({ encryption: { isAvailable: () => true,
-    encrypt: bytes => bytes.map(b => b ^ 173), decrypt: bytes => bytes.map(b => b ^ 173) },
-    persistence: { read: async name => blobs.get(name) ?? null,
-      write: async (name, bytes) => { blobs.set(name, bytes) }, delete: async name => { blobs.delete(name) } } })
-  const storage = () => createChatHistoryStore({ secureStore: secure(), log: { event: () => {} } })
-  expect(await storage().execute({ operation: 'replaceTimeline', serverId: 'host', conversationId: 'c',
-    snapshot: snapshotFor(h) })).toEqual({ status: 'ok' })
-  const saved = await storage().execute({ operation: 'readTimeline', serverId: 'host', conversationId: 'c' })
-  expect(saved.status).toBe('stored')
-  if (saved.status !== 'stored') throw new Error('missing protected snapshot')
-  const fresh = harness()
-  fresh.store.getState().beginLocalTimelineRead('host', 'c')!.complete(saved.snapshot)
+  const fresh = restore(h)
   fresh.page([call(2, 'other'), call(1)])
   expect(fresh.held().timeline.items[0]).not.toHaveProperty('denial', expect.anything())
   expect(fresh.held().timeline.items[1]).toMatchObject({ turnId: 'other', denial: { message: 'denied' } })

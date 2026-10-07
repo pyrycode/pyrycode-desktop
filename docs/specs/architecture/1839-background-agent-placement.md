@@ -71,3 +71,11 @@ Size: approximately 700 total written lines, one new exported evidence type, few
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-07
+
+## Revisions
+
+2026-10-07: Keep minimal unconfirmed start evidence through roster omission as well. The existing unlisted task records still prune unchanged, but discarding their start join/order would lose received order when a later roster confirms the task. Evidence contains only Map hints, confirmation and first finish boundary; it cannot extend panel/pill membership and both clears remove it.
+
+2026-10-07: History prepends receive fresh retained keys too, rather than negative keys. Pass the existing prepended-row count to the projection and exclude that prefix when locating a live terminal boundary; late history remains chronologically older even when its new key exceeds the boundary.
+
+2026-10-07: Marker navigation runs after commit in an effect, after the parent scroll-pin layout pass, so explicit navigation wins and static markup remains effect-free. Background group treatment lifts launch-pending dimming and suppresses its elapsed timer independently of the launch result.

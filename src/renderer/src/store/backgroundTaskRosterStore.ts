@@ -313,7 +313,15 @@ export interface BackgroundTaskProgressSnapshot {
  *  Every id in it is an id held in `rosters` or `unlistedStarts` of the same conversation: it is written
  *  only on an update that HITS, pruned to the rows of each roster, and dropped by both clears. Read by
  *  `selectLiveTaskCountFor` for the pill and `selectFinishedTasksFor` for the panel's groups (#1635). */
+export interface BackgroundAgentTimeline {
+  toolCallId: string
+  confirmed: boolean
+  /** First live terminal arrival: insert before this retained ordinary row key. */
+  finishBefore: number | null
+}
+
 export interface BackgroundTaskRosterState {
+  agentTimeline: ReadonlyMap<string, ReadonlyMap<string, BackgroundAgentTimeline>>
   rosters: ReadonlyMap<string, BackgroundTaskRosterEntry>
   unlistedStarts: ReadonlyMap<string, ReadonlyMap<string, HeldBackgroundTask>>
   finishedTasks: ReadonlyMap<string, ReadonlySet<string>>
@@ -328,7 +336,7 @@ export interface BackgroundTaskRosterState {
 export type BackgroundTaskRosterStore = BackgroundTaskRosterState & {
   setRoster: (snapshot: BackgroundTaskRosterSnapshot) => void
   setStartedTask: (snapshot: BackgroundTaskStartedSnapshot) => void
-  setUpdatedTask: (snapshot: BackgroundTaskUpdatedSnapshot) => void
+  setUpdatedTask: (snapshot: BackgroundTaskUpdatedSnapshot, finishBefore?: number) => void
   setTaskProgress: (snapshot: BackgroundTaskProgressSnapshot) => void
   resetRostersFor: (conversationIds: ReadonlySet<string>) => void
   clearAllRosters: () => void
@@ -337,6 +345,7 @@ export type BackgroundTaskRosterStore = BackgroundTaskRosterState & {
 }
 
 export const initialBackgroundTaskRosterState: BackgroundTaskRosterState = {
+  agentTimeline: new Map(),
   rosters: new Map(),
   unlistedStarts: new Map(),
   finishedTasks: new Map(),
@@ -565,6 +574,12 @@ export function createBackgroundTaskRosterStore(
     }),
     setRoster: (snapshot) =>
       set((s) => {
+        const evidence = new Map(s.agentTimeline.get(snapshot.conversationId))
+        for (const [id, entry] of evidence) {
+          const listed = snapshot.tasks.some(row => row.task_id === id && row.task_type === 'local_agent')
+          if (listed && !entry.confirmed) evidence.set(id, { ...entry, confirmed: true })
+        }
+        const agentTimeline = new Map(s.agentTimeline).set(snapshot.conversationId, evidence)
         const previous = s.rosters.get(snapshot.conversationId)?.tasks
         const holds = s.unlistedStarts.get(snapshot.conversationId)
         const tasks = new Map<string, HeldBackgroundTask>()
@@ -614,10 +629,10 @@ export function createBackgroundTaskRosterStore(
         // Every roster empties the conversation's holds: the listed ones moved in above, the rest were
         // foreground work no roster will ever name (#1563).
         const pendingStops = keepTaskStopWaits(s.pendingStops, snapshot.conversationId, id => tasks.has(id))
-        if (holds === undefined) return { rosters: next, finishedTasks, pendingStops }
+        if (holds === undefined) return { rosters: next, finishedTasks, pendingStops, agentTimeline }
         const unlistedStarts = new Map(s.unlistedStarts)
         unlistedStarts.delete(snapshot.conversationId)
-        return { rosters: next, unlistedStarts, finishedTasks, pendingStops }
+        return { rosters: next, unlistedStarts, finishedTasks, pendingStops, agentTimeline }
       }),
     setStartedTask: (snapshot) =>
       set((s) => {
@@ -625,6 +640,13 @@ export function createBackgroundTaskRosterStore(
         const listed = existing?.tasks.get(snapshot.taskId)
         const holds = s.unlistedStarts.get(snapshot.conversationId)
         const prior = listed ?? holds?.get(snapshot.taskId)
+        let agentTimeline = s.agentTimeline
+        const evidence = s.agentTimeline.get(snapshot.conversationId)
+        if (!evidence?.has(snapshot.taskId) && snapshot.taskType === 'local_agent' && snapshot.toolCallId.length > 0) {
+          agentTimeline = new Map(s.agentTimeline).set(snapshot.conversationId,
+            new Map(evidence).set(snapshot.taskId, { toolCallId: snapshot.toolCallId,
+              confirmed: listed?.taskType === 'local_agent', finishBefore: null }))
+        }
         const record: HeldBackgroundTask = {
           taskId: snapshot.taskId,
           toolCallId: snapshot.toolCallId,
@@ -645,20 +667,26 @@ export function createBackgroundTaskRosterStore(
           nextHolds.set(snapshot.taskId, record)
           const unlistedStarts = new Map(s.unlistedStarts)
           unlistedStarts.set(snapshot.conversationId, nextHolds)
-          return { unlistedStarts }
+          return { unlistedStarts, agentTimeline }
         }
         const tasks = new Map(existing.tasks)
         tasks.set(snapshot.taskId, record)
         const next = new Map(s.rosters)
         next.set(snapshot.conversationId, { tasks, droppedTasks: existing.droppedTasks })
-        return { rosters: next }
+        return { rosters: next, agentTimeline }
       }),
-    setUpdatedTask: (snapshot) =>
+    setUpdatedTask: (snapshot, finishBefore = 0) =>
       set((s) => {
         const existing = s.rosters.get(snapshot.conversationId)
         const held = existing?.tasks.get(snapshot.taskId)
         const latestUpdate = { patch: snapshot.patch, truncatedFields: snapshot.truncatedFields }
         const terminal = isTerminalTaskStatus(snapshot.status)
+        const evidence = s.agentTimeline.get(snapshot.conversationId)
+        const agent = evidence?.get(snapshot.taskId)
+        const agentTimeline = terminal && agent?.finishBefore === null
+          ? new Map(s.agentTimeline).set(snapshot.conversationId,
+              new Map(evidence).set(snapshot.taskId, { ...agent, finishBefore }))
+          : s.agentTimeline
         const pendingStops = terminal
           ? keepTaskStopWaits(s.pendingStops, snapshot.conversationId, id => id !== snapshot.taskId)
           : s.pendingStops
@@ -685,12 +713,12 @@ export function createBackgroundTaskRosterStore(
           // short-circuits and no listener churns: an update never OPENS a task and never creates a
           // conversation entry. Silently, too — a "dropped an unmatched update" log line would put
           // patch text in a file.
-          if (holds === undefined || pending === undefined) return s
+          if (holds === undefined || pending === undefined) return agentTimeline === s.agentTimeline ? s : { agentTimeline }
           const nextHolds = new Map(holds)
           nextHolds.set(snapshot.taskId, { ...pending, ...outcome(pending) })
           const unlistedStarts = new Map(s.unlistedStarts)
           unlistedStarts.set(snapshot.conversationId, nextHolds)
-          return { unlistedStarts, finishedTasks, pendingStops }
+          return { unlistedStarts, finishedTasks, pendingStops, agentTimeline }
         }
         const tasks = new Map(existing.tasks)
         // A spread is right here and not in the translators: this is a same-type held → held write
@@ -701,7 +729,7 @@ export function createBackgroundTaskRosterStore(
         const next = new Map(s.rosters)
         // `droppedTasks` PRESERVED: an update reports nothing about roster truncation.
         next.set(snapshot.conversationId, { tasks, droppedTasks: existing.droppedTasks })
-        return { rosters: next, finishedTasks, pendingStops }
+        return { rosters: next, finishedTasks, pendingStops, agentTimeline }
       }),
     // #1640: the same join as `setUpdatedTask` — the listed task first, else the unlisted hold — and the
     // same silent same-reference miss, so a report never opens a task. A hit replaces `progress` whole
@@ -737,11 +765,12 @@ export function createBackgroundTaskRosterStore(
       }),
     resetRostersFor: (conversationIds) =>
       set((s) => {
+        const doomedAgents = [...s.agentTimeline.keys()].filter(id => conversationIds.has(id))
         const doomed = [...s.rosters.keys()].filter((id) => conversationIds.has(id))
         const doomedHolds = [...s.unlistedStarts.keys()].filter((id) => conversationIds.has(id))
         const doomedFinished = [...s.finishedTasks.keys()].filter((id) => conversationIds.has(id))
         const doomedStops = [...s.pendingStops.keys()].filter(id => conversationIds.has(id))
-        if (doomed.length === 0 && doomedHolds.length === 0 && doomedFinished.length === 0 && doomedStops.length === 0) return s
+        if (doomedAgents.length === 0 && doomed.length === 0 && doomedHolds.length === 0 && doomedFinished.length === 0 && doomedStops.length === 0) return s
         const next = new Map(s.rosters)
         for (const id of doomed) next.delete(id)
         const unlistedStarts = new Map(s.unlistedStarts)
@@ -750,11 +779,13 @@ export function createBackgroundTaskRosterStore(
         for (const id of doomedFinished) finishedTasks.delete(id)
         const pendingStops = new Map(s.pendingStops)
         for (const id of doomedStops) pendingStops.delete(id)
-        return { rosters: next, unlistedStarts, finishedTasks, pendingStops }
+        const agentTimeline = new Map(s.agentTimeline)
+        for (const id of doomedAgents) agentTimeline.delete(id)
+        return { rosters: next, unlistedStarts, finishedTasks, pendingStops, agentTimeline }
       }),
     clearAllRosters: () =>
       set((s) =>
-        s.rosters.size === 0 && s.unlistedStarts.size === 0 && s.finishedTasks.size === 0 && s.pendingStops.size === 0
+        s.agentTimeline.size === 0 && s.rosters.size === 0 && s.unlistedStarts.size === 0 && s.finishedTasks.size === 0 && s.pendingStops.size === 0
           ? s
           : initialBackgroundTaskRosterState
       )

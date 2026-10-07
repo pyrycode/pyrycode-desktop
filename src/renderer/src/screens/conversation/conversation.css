@@ -7390,3 +7390,31 @@ button.top-overlay-pill {
 .composer-options-anchor--consume-outside > .composer-options {
   z-index: 1;
 }
+
+.agent-start-marker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-on-surface-variant);
+  font: inherit;
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  text-align: start;
+  cursor: pointer;
+  min-width: 0;
+}
+.agent-start-marker__state, .agent-start-marker__action { flex: 0 0 auto; white-space: nowrap; }
+.agent-start-marker__description { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-start-marker__action {
+  color: var(--color-primary);
+  font-size: var(--text-label-medium-size);
+  line-height: var(--text-label-medium-line);
+  font-weight: var(--text-label-medium-weight);
+  letter-spacing: var(--text-label-medium-tracking);
+}
+.agent-start-marker__running { background: var(--color-primary); }
+.agent-start-marker .agent-start-marker__finished { background: var(--color-success); }

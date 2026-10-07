@@ -1,6 +1,10 @@
+import type { BackgroundAgentTimeline } from '../../store/backgroundTaskRosterStore'
 import type { ThreadItem } from '../../store/threadTimeline'
 
 export interface GroupedToolRow {
+  marker?: boolean
+  background?: boolean
+  relocated?: boolean
   index: number
   depth: number
   ancestors: number[]
@@ -10,7 +14,12 @@ export interface GroupedToolRow {
 }
 
 /** Display projection only. Identifiers are equality hints local to this conversation. */
-export function groupToolRows(items: readonly ThreadItem[]): GroupedToolRow[] {
+export function groupToolRows(
+  items: readonly ThreadItem[],
+  evidence: ReadonlyMap<string, BackgroundAgentTimeline> = new Map(),
+  rowKeys: readonly number[] = items.map((_, index) => index),
+  historyCount = 0
+): GroupedToolRow[] {
   const owners = new Map<string, number>()
   items.forEach((item, index) => {
     if (item.kind === 'toolCall' && (item.name === 'Agent' || item.name === 'Task') && !owners.has(item.toolUseId)) {
@@ -73,5 +82,36 @@ export function groupToolRows(items: readonly ThreadItem[]): GroupedToolRow[] {
       ancestor.running ||= row.running
     }
   }
-  return rows
+  const agents = new Map<number, BackgroundAgentTimeline>()
+  for (const entry of evidence.values()) {
+    const index = owners.get(entry.toolCallId)
+    if (entry.confirmed && entry.toolCallId.length > 0 && index !== undefined &&
+        items[index]?.kind === 'toolCall' && items[index].name === 'Agent' && !agents.has(index)) agents.set(index, entry)
+  }
+  if (agents.size === 0) return rows
+  const groups = new Map<number, GroupedToolRow[]>()
+  const ordinary: GroupedToolRow[] = []
+  for (const row of rows) {
+    const owner = agents.has(row.index) ? row.index : [...row.ancestors].reverse().find(index => agents.has(index))
+    if (owner === undefined) ordinary.push(row)
+    else {
+      const entry = agents.get(owner)
+      if (!entry) continue
+      const ancestors = row.index === owner ? [] : row.ancestors.slice(row.ancestors.indexOf(owner))
+      const group = groups.get(owner) ?? []
+      group.push({ ...row, ancestors, depth: Math.min(ancestors.length, 2),
+        relocated: true, background: row.index === owner, running: row.index === owner ? entry.finishBefore === null : row.running })
+      groups.set(owner, group)
+      if (row.index === owner) ordinary.push({ ...row, marker: true, ancestors: [], depth: 0, running: entry.finishBefore === null, hasChildren: false })
+    }
+  }
+  const settled = [...agents].filter(([, entry]) => entry.finishBefore !== null)
+    .sort((a, b) => (a[1].finishBefore ?? 0) - (b[1].finishBefore ?? 0))
+  for (const [index, entry] of settled) {
+    const boundary = entry.finishBefore
+    const at = ordinary.findIndex(row => !row.marker && !row.relocated && row.index >= historyCount && boundary !== null && (rowKeys[row.index] ?? Infinity) >= boundary)
+    ordinary.splice(at === -1 ? ordinary.length : at, 0, ...(groups.get(index) ?? []))
+  }
+  for (const [index, entry] of agents) if (entry.finishBefore === null) ordinary.push(...(groups.get(index) ?? []))
+  return ordinary
 }

@@ -3,6 +3,7 @@ import { createConversationTimelineStore } from './conversationTimelineStore'
 import type { HistoryTimelineEntry } from '@shared/ipc/events'
 import { parseChatHistorySnapshot } from '@shared/chatHistory'
 import { reduceHistoryPage } from './historyPageBridge'
+import { translateTimelineEvent } from './timelineBridge'
 
 const text = (id: number, value: string, parentToolUseId?: string): HistoryTimelineEntry => ({ id, ts: `ts-${id}`,
   event: { type: 'assistantDelta', turnId: 't', seq: id, text: value, parentToolUseId } })
@@ -34,6 +35,112 @@ function restore(h: ReturnType<typeof harness>) {
   fresh.store.getState().beginLocalTimelineRead('host', 'c')!.complete(JSON.parse(JSON.stringify(snapshotFor(h))))
   return fresh
 }
+
+it.each([false, true])('clears a live stall without replaying retained assistant text, restored=%s', restored => {
+  const original = harness()
+  original.page([text(1, 'once')])
+  const h = restored ? restore(original) : original
+  h.store.getState().dispatchFor('c', { type: 'stallDetected' })
+  const before = h.held().timeline
+  const display = h.held().display
+  h.store.getState().dispatchFor('c', {
+    type: 'assistantDelta', turnId: 't', seq: 1, text: 'once'
+  }, 'assistantDelta ts-1')
+  expect(h.held().timeline.stalled).toBe(false)
+  expect(h.held().timeline.items).toBe(before.items)
+  expect(h.held().timeline.rowKeys).toEqual(before.rowKeys)
+  expect(h.held().timeline.nextRowKey).toBe(before.nextRowKey)
+  expect(h.held().display).toBe(display)
+  h.page([text(1, 'once'), text(0, 'older ')])
+  expect(h.held().timeline.items).toMatchObject([{ text: 'older once' }])
+  expect(h.held().timeline.rowKeys).toEqual(before.rowKeys)
+})
+
+const failedEnd = { type: 'turnEnd', turnId: 't', stopReason: 'error', isError: true,
+  outcome: 'failed', errorCategory: 'provider' } as const
+const failedEntry: HistoryTimelineEntry = { id: 2, ts: 'ts-2', event: failedEnd }
+
+it.each([false, true])('records live failure and clears thinking without replaying a retained boundary, restored=%s', restored => {
+  const original = harness()
+  original.page([failedEntry])
+  const h = restored ? restore(original) : original
+  expect(h.held().timeline.latestTurnEnd).toBeUndefined()
+  h.store.getState().dispatchFor('c', { type: 'turnState', state: 'thinking' })
+  h.store.getState().dispatchFor('c', { type: 'thinkingProgress', estimatedTokens: 123 })
+  const before = h.held().timeline
+  h.store.getState().dispatchFor('c', failedEnd, 'turnEnd ts-2')
+  expect(h.held().timeline.thinkingTokens).toBeNull()
+  expect(h.held().timeline.latestTurnEnd).toEqual(failedEnd)
+  expect(h.held().timeline.phase).toBe('thinking')
+  expect(h.held().timeline.items).toBe(before.items)
+  expect(h.held().timeline.rowKeys).toEqual(before.rowKeys)
+  expect(h.held().timeline.nextRowKey).toBe(before.nextRowKey)
+})
+
+it.each([false, true])('settles a waiting local echo at the retained live finish boundary, restored=%s', restored => {
+  const original = harness()
+  original.page([failedEntry, text(1, 'reply')])
+  const h = restored ? restore(original) : original
+  const boundaryKey = h.held().timeline.rowKeys![1]
+  h.store.getState().dispatchFor('c', { type: 'turnState', state: 'responding' })
+  h.store.getState().dispatchLocalEcho('host', 'c', { type: 'userText', text: 'queued', messageId: 'm' })
+  h.store.getState().dispatchFor('c', { type: 'assistantDelta', turnId: 'later', seq: 1, text: 'later' })
+  const before = h.held().timeline
+  const echoKey = before.localEchoes![0].rowKey
+  h.store.getState().dispatchFor('c', failedEnd, 'turnEnd ts-2')
+  expect(h.held().timeline.localEchoes).toMatchObject([{ waiting: true, afterKey: boundaryKey }])
+  expect(h.held().timeline.localSendPending).toBe(before.localSendPending)
+  expect(h.held().timeline.items).toBe(before.items)
+  expect(h.held().timeline.rowKeys).toEqual(before.rowKeys)
+  expect(h.held().timeline.nextRowKey).toBe(before.nextRowKey)
+  h.store.getState().dispatchFor('c', {
+    type: 'userText', received: true, text: 'queued', messageId: 'm', queuedMsgId: 9
+  })
+  expect(h.held().timeline.items).toMatchObject([
+    { text: 'reply' }, { kind: 'turnBoundary' }, { text: 'queued' }, { text: 'later' }
+  ])
+  expect(h.held().timeline.rowKeys![2]).toBe(echoKey)
+  expect(h.held().timeline.localEchoes).toMatchObject([{ settled: true, queuedMsgId: 9, afterKey: boundaryKey }])
+  expect(h.held().timeline.rowArrivalOrder?.get(echoKey)).toBe(before.nextRowKey)
+})
+
+it.each([false, true])('clears stalls on retained live tool calls and results without changing rows, restored=%s', restored => {
+  const original = harness()
+  original.page([result(2), call(1)])
+  const h = restored ? restore(original) : original
+  for (const entry of [call(1), result(2)]) {
+    h.store.getState().dispatchFor('c', { type: 'stallDetected' })
+    const before = h.held().timeline
+    const event = translateTimelineEvent(entry.event)
+    if (event === null) throw new Error('Expected a display event')
+    h.store.getState().dispatchFor('c', event, `${entry.event.type} ${entry.ts}`)
+    expect(h.held().timeline.stalled).toBe(false)
+    expect(h.held().timeline.items).toBe(before.items)
+    expect(h.held().timeline.rowKeys).toEqual(before.rowKeys)
+    expect(h.held().timeline.nextRowKey).toBe(before.nextRowKey)
+  }
+})
+
+it.each([false, true])('associates a live compaction completion with its retained boundary, restored=%s', restored => {
+  const original = harness()
+  original.page([
+    { id: 2, ts: 'ts-2', event: { type: 'compacting', active: false } },
+    { id: 1, ts: 'ts-1', event: { type: 'compacting', active: true } }
+  ])
+  const h = restored ? restore(original) : original
+  h.store.getState().dispatchFor('c', { type: 'compacting', active: true })
+  const before = h.held().timeline
+  h.store.getState().dispatchFor('c', { type: 'compacting', active: false }, 'compacting ts-2')
+  expect(h.held().timeline.compacting).toBe(false)
+  expect(h.held().timeline.pendingCompaction).toBe(before.items[0])
+  expect(h.held().timeline.items).toBe(before.items)
+  h.store.getState().dispatchFor('c', {
+    type: 'compactionBoundary', trigger: 'manual', preTokens: 100, postTokens: 20
+  })
+  expect(h.held().timeline.items).toMatchObject([{ kind: 'compactionBoundary', manual: true, preTokens: 100, postTokens: 20 }])
+  expect(h.held().timeline.rowKeys).toEqual(before.rowKeys)
+  expect(h.held().timeline.nextRowKey).toBe(before.nextRowKey)
+})
 
 it.each([false, true])('joins older text to a suppressed live assistant once, restored=%s', restored => {
   const original = harness()

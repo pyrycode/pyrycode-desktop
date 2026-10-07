@@ -83,6 +83,7 @@ import type { HistoryTimelineEntry, HistoryRequestFailure } from '@shared/ipc/ev
 import type { QueuedItem } from '@shared/wire/types'
 import {
   reduceTimeline,
+  reduceRetainedTimelineEvent,
   markLocalSendQueued,
   initialTimelineState,
   type TimelineState,
@@ -682,12 +683,14 @@ export function createConversationTimelineStore(
             })
           }
         }
+        let retainedRowKey: number | undefined
         if (joinKey !== undefined) {
           const matches = held.display?.filter(d => d.joinKey === joinKey) ?? []
           if (matches.length === 1 && matches[0].rowKey !== undefined &&
-            held.timeline.rowKeys?.includes(matches[0].rowKey)) return s
+            held.timeline.rowKeys?.includes(matches[0].rowKey)) retainedRowKey = matches[0].rowKey
         }
-        const folded = reduceTimeline(held.timeline, event)
+        const folded = retainedRowKey === undefined ? reduceTimeline(held.timeline, event)
+          : reduceRetainedTimelineEvent(held.timeline, event, retainedRowKey)
         // #1225 — the same-reference short-circuit ALSO declines to record the join key, and that
         // ordering is the guard rather than a side effect: a fold that changed nothing drew nothing, so
         // a key minted here could suppress a served page's copy of a row neither lane ever showed.
@@ -696,7 +699,8 @@ export function createConversationTimelineStore(
         next.set(conversationId, {
           ...held,
           timeline: folded,
-          liveKeys: withJoinKey(held.liveKeys, joinKey)
+          // Feedback from already-retained display does not establish a new live contribution.
+          liveKeys: retainedRowKey === undefined ? withJoinKey(held.liveKeys, joinKey) : held.liveKeys
         })
         return { timelines: next }
       }),

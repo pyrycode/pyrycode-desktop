@@ -45,7 +45,7 @@ marks `[0, 2]` after host A's push clears attention. The history writer captures
 replies, not read pushes themselves; a changed held row is no proof of a disk write. Wire/saved
 parser and store units cover zero, omission, invalid safe-integer admission, restoration and stale
 ordering; predicate, bridge, badge and static-row tests cover legacy fallback/stamping, precedence
-and exclusions. See [saved history](chat-history.md#testing) and [unread](conversation-unread.md).
+and exclusions. See [saved history](chat-history-testing.md) and [unread](conversation-unread.md).
 Desktop read-mark publication remains [#1826](https://github.com/pyrycode/pyrycode-desktop/issues/1826).
 
 Recorded evidence at `362f24a647561f7e6071b3a9904d6c3702205a8f` on 2026-10-07:
@@ -57,6 +57,28 @@ confirms both tests below were present, executed and passed in that run (scoped 
 
 - `remote marks clear mounted attention before refresh and survive stale lists and local opening`
 - `two hosts sharing an ID retain independent read state, dots and badge contribution`
+
+### Equal-id received history
+
+[`message-reply.spec.ts`](../../../e2e/message-reply.spec.ts) now verifies separate
+protected timelines for two hosts advertising the same conversation id, then
+reopens the first chat offline and quotes its own reply. Polling saved snapshots
+proves persistence; mounted text and isolated drafts alone cannot establish it.
+See [history test coverage](chat-history-testing.md#browser-persistence-and-lifecycle)
+and [received ownership](chat-history.md#received-state-admission-and-ownership).
+
+Recorded evidence on 2026-10-07 at `0b0bfe738aba668218d5e323201c6f719f03b269`:
+dispatcher verifier gate 6 (`npx playwright test --reporter=json`) ran 322 tests,
+322 passed, 0 failed and 4 skipped. The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1834#issuecomment-6029226851)
+confirms all five reply scenarios below were present, executed and passed in that
+run (scoped total: 5 executed, 5 passed, 0 failed, 0 skipped). No live-Claude run
+was required or performed for this fake-transport persistence acceptance.
+
+- `pointer and keyboard replies append current source, focus once, and send the edited quote intact`
+- `covered replies focus when permission clears once, and pending focus is discarded on chat switch`
+- `reply isolates equal conversation ids across hosts`
+- `reply appends and focuses in a reopened saved offline chat`
+- `received history is saved for equal ids on different hosts and replies reopen offline`
 
 ## Evidence that cannot pass too early
 

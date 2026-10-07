@@ -6,12 +6,12 @@ import { parseChatHistorySnapshot } from '@shared/chatHistory'
 import { reduceHistoryPage } from './historyPageBridge'
 import { translateTimelineEvent } from './timelineBridge'
 
-const text = (id: number, value: string, parentToolUseId?: string): HistoryTimelineEntry => ({ id, ts: `ts-${id}`,
-  event: { type: 'assistantDelta', turnId: 't', seq: id, text: value, parentToolUseId } })
+const text = (id: number, value: string, parentToolUseId?: string, turnId = 't'): HistoryTimelineEntry => ({ id, ts: `ts-${id}`,
+  event: { type: 'assistantDelta', turnId, seq: id, text: value, parentToolUseId } })
 const call = (id: number, turnId = 't'): HistoryTimelineEntry => ({ id, ts: `ts-${id}`,
   event: { type: 'toolUse', turnId, toolUseId: 'tool', name: 'Read', inputSummary: 'input' } })
-const subcall = (id: number): HistoryTimelineEntry => ({ id, ts: `ts-${id}`,
-  event: { type: 'toolUse', turnId: 't', toolUseId: 'tool', name: 'Read', inputSummary: 'input', parentToolUseId: 'agent' } })
+const subcall = (id: number, parentToolUseId = 'agent'): HistoryTimelineEntry => ({ id, ts: `ts-${id}`,
+  event: { type: 'toolUse', turnId: 't', toolUseId: 'tool', name: 'Read', inputSummary: 'input', parentToolUseId } })
 const result = (id: number): HistoryTimelineEntry => ({ id, ts: `ts-${id}`,
   event: { type: 'toolResult', turnId: 't', toolUseId: 'tool', isError: false, resultSummary: 'done' } })
 function harness() {
@@ -99,6 +99,14 @@ const seam: { name: string; steps: Step[]; check: (run: Run) => void }[] = [
       expect(texts(h)).toEqual(['toolCall', 'hello world'])
       expect(h.held().timeline.rowKeys).toEqual(marks.get('held')!.timeline.rowKeys)
       expect(h.held().timeline.items[0]).toBe(marks.get('held')!.timeline.items[0])
+    } },
+  { name: 'a subagent lookback uses the last held boundary before an unrepresented suffix',
+    steps: [{ page: [text(3, 'world'), subcall(2)] }, on({ type: 'assistantDelta', turnId: 'live', seq: 1, text: 'live suffix' }),
+      'restore', { mark: 'held' }, { page: [message(4), text(3, 'world'), subcall(2), text(1, 'hello ')] }],
+    check: ({ h, marks }) => {
+      expect(texts(h)).toEqual(['toolCall', 'hello world', 'operator', 'live suffix'])
+      expect([0, 1, 3].map(index => h.held().timeline.rowKeys![index])).toEqual(marks.get('held')!.timeline.rowKeys)
+      expect(h.held().timeline.items[3]).toBe(marks.get('held')!.timeline.items[2])
     } },
   // Verifier round 1: suppressed operator chronology, page-local compaction, denial correlation.
   { name: 'an operator row stays a chronological barrier and keeps its key',
@@ -387,10 +395,10 @@ it('a validated restored denial does not suppress a live result with the same ti
 describe('durable history contributions', () => {
   it.each([
     [text(4, 'after'), call(3), subcall(2), text(1, 'before')],
-    [text(4, 'after'), { ...subcall(3), event: { ...subcall(3).event, parentToolUseId: '' } }, subcall(2), text(1, 'before')],
+    [text(4, 'after'), subcall(3, ''), subcall(2), text(1, 'before')],
     [text(4, 'after'), text(3, 'child', 'agent'), subcall(2), text(1, 'before')],
     [text(4, 'after'), message(3), subcall(2), text(1, 'before')],
-    [text(4, 'after'), { ...text(3, 'other turn'), event: { ...text(3, 'other turn').event, turnId: 'other' } }, subcall(2), text(1, 'before')]
+    [text(4, 'after'), text(3, 'other turn', undefined, 'other'), subcall(2), text(1, 'before')]
   ] satisfies HistoryTimelineEntry[][])('preserves real row and parent barriers across subagent lookback: %j', (...entries) => {
     const h = harness()
     h.page(entries.slice(1))

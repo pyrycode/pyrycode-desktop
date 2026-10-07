@@ -138,7 +138,8 @@ export function reconcileHistory(
   const items: ThreadItem[] = []
   const keys: number[] = []
   const unbound = groups.filter(group => group.key === undefined)
-  const finalBoundIndex = groups.reduce((last, group) => group.key === undefined ? last : group.index, -1)
+  const finalBoundPosition = groups.reduce((last, group) => group.key === undefined ? last
+    : Math.max(last, oldPosition.get(group.key) ?? -1), -1)
   let entered = 0
   const enter = (limit: number) => {
     while (entered < unbound.length && unbound[entered].index < limit) {
@@ -154,7 +155,7 @@ export function reconcileHistory(
     items.push(group === undefined ? held : merged(held, group, accounted.get(oldKeys[index]) ?? ''))
     keys.push(oldKeys[index])
     // Trailing history belongs at this known boundary, before the unknown live/restored suffix.
-    if (group?.index === finalBoundIndex) enter(Infinity)
+    if (index === finalBoundPosition) enter(Infinity)
   })
   enter(Infinity)
   for (const group of groups) for (const d of group.members) d.rowKey = group.key

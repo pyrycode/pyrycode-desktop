@@ -297,9 +297,18 @@ export interface BackgroundTaskProgressSnapshot {
  *  Every id in it is an id held in `rosters` or `unlistedStarts` of the same conversation: it is written
  *  only on an update that HITS, pruned to the rows of each roster, and dropped by both clears. Read by
  *  `selectLiveTaskCountFor` for the pill and `selectFinishedTasksFor` for the panel's groups (#1635). */
+export interface HistoryAgentPlacement {
+  event: Extract<import('@shared/ipc/events').HistoryTimelineEvent, { type: 'backgroundTaskStarted' | 'backgroundTaskUpdated' }>
+  before: number
+}
+
 export interface BackgroundAgentTimeline {
   /** Client-owned identity and held text also survive roster removal. */
   identity?: number
+  /** Historical evidence cannot manufacture provisional rows. */
+  historyOnly?: boolean
+  historyStarted?: boolean
+  finishFromHistory?: boolean
   description?: string
   toolCallId: string
   confirmed: boolean
@@ -325,6 +334,7 @@ export interface BackgroundTaskRosterState {
  *  `connected` edge (#573's AC5, scoped by #1139), and drop EVERY conversation's at a pairing boundary
  *  (#1139), and claim/settle one stop wait (#1771). Named setters preserve the existing store contract. */
 export type BackgroundTaskRosterStore = BackgroundTaskRosterState & {
+  recordHistoryPlacements: (conversationId: string, placements: readonly HistoryAgentPlacement[]) => void
   setRoster: (snapshot: BackgroundTaskRosterSnapshot) => void
   setStartedTask: (snapshot: BackgroundTaskStartedSnapshot) => void
   setUpdatedTask: (snapshot: BackgroundTaskUpdatedSnapshot, finishBefore?: number) => void
@@ -546,17 +556,47 @@ export function createBackgroundTaskRosterStore(
   ): void {
     const previous = evidence.get(taskId)
     if (!previous && toolCallId.length === 0) return
-    const placementId = previous && (previous.finishBefore !== null || toolCallId.length === 0)
+    const placementId = previous && ((previous.finishBefore !== null && previous.toolCallId.length > 0) || toolCallId.length === 0)
       ? previous.toolCallId : toolCallId
     const qualified = previous?.confirmed === true || confirmed
-    if (previous?.toolCallId === placementId && previous.description === description && previous.confirmed === qualified) return
+    if (previous?.toolCallId === placementId && previous.description === description && previous.confirmed === qualified && (!confirmed || previous.historyOnly !== true)) return
     evidence.set(taskId, previous
-      ? { ...previous, toolCallId: placementId, description, confirmed: qualified }
+      ? { ...previous, toolCallId: placementId, description, confirmed: qualified, ...(confirmed && previous.historyOnly ? { historyOnly: false } : {}) }
       : { toolCallId, description, identity: nextAgentIdentity++, confirmed, finishBefore: null, finishOrder: null })
   }
 
   return createStore<BackgroundTaskRosterStore>((set, get) => ({
     ...init,
+    recordHistoryPlacements: (conversationId, placements) => set(s => {
+      if (placements.length === 0) return s
+      const evidence = new Map(s.agentTimeline.get(conversationId))
+      // Older pages precede already retained finishes; ties follow entry order within this page.
+      let order = [...evidence.values()].reduce((first, x) => Math.min(first, x.finishOrder ?? 0), 0) - placements.length
+      for (const { event, before } of placements) {
+        const prior = evidence.get(event.taskId)
+        if (event.type === 'backgroundTaskStarted') {
+          if (event.taskType !== 'local_agent' || event.toolCallId.length === 0) continue
+          if (prior && prior.historyOnly !== true) {
+            if (prior.toolCallId !== event.toolCallId) continue
+            evidence.set(event.taskId, { ...prior, historyStarted: true,
+              confirmed: prior.confirmed || prior.finishBefore !== null })
+            continue
+          }
+          const base = prior ?? { identity: nextAgentIdentity++, toolCallId: event.toolCallId,
+            confirmed: false, finishBefore: null, finishOrder: null, historyOnly: true }
+          evidence.set(event.taskId, { ...base, toolCallId: base.toolCallId || event.toolCallId,
+            description: base.description ?? event.description, historyStarted: true,
+            confirmed: base.finishBefore !== null })
+        } else {
+          if (!isTerminalTaskStatus(event.status) || prior?.finishBefore != null) continue
+          const base = prior ?? { identity: nextAgentIdentity++, toolCallId: '', confirmed: false,
+            finishBefore: null, finishOrder: null, historyOnly: true }
+          evidence.set(event.taskId, { ...base, finishBefore: before, finishOrder: order++,
+            finishFromHistory: true, confirmed: base.confirmed || base.historyStarted === true })
+        }
+      }
+      return { agentTimeline: new Map(s.agentTimeline).set(conversationId, evidence) }
+    }),
     // Claim before the caller sends. A stale render or repeated activation cannot send twice.
     beginTaskStop: (conversationId, taskId) => {
       const state = get()

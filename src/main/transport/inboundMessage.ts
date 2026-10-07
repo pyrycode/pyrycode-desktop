@@ -872,8 +872,8 @@ export type InboundDaemonMessage =
   | { kind: 'rate-limited'; rateLimited: RateLimitedPayload }
   | { kind: 'context-usage'; contextUsage: ContextUsagePayload }
   | { kind: 'mcp-status'; mcpStatus: MCPStatusPayload }
-  | { kind: 'background-task-started'; backgroundTaskStarted: BackgroundTaskStartedPayload }
-  | { kind: 'background-task-updated'; backgroundTaskUpdated: BackgroundTaskUpdatedPayload }
+  | ({ kind: 'background-task-started'; backgroundTaskStarted: BackgroundTaskStartedPayload } & FrameTimestamp)
+  | ({ kind: 'background-task-updated'; backgroundTaskUpdated: BackgroundTaskUpdatedPayload } & FrameTimestamp)
   | { kind: 'background-task-roster'; backgroundTaskRoster: BackgroundTaskRosterPayload }
   | { kind: 'background-task-progress'; backgroundTaskProgress: BackgroundTaskProgressPayload }
   | ({ kind: 'unrecognized-message'; unrecognized: UnrecognizedMessagePayload } & FrameTimestamp)
@@ -1646,6 +1646,8 @@ type DecodedModelRefusalEvent = {
  * facts — the contract their live arms already state.
  */
 export type DecodedHistoryEvent =
+  | { type: 'backgroundTaskStarted'; taskId: string; toolCallId: string; taskType: string; description: string }
+  | { type: 'backgroundTaskUpdated'; taskId: string; status: string }
   | DecodedModelRefusalEvent
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string; parentToolUseId?: string }
   | ({ type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string } & TurnEndMetrics)
@@ -1732,8 +1734,7 @@ export interface DecodedHistoryPage {
  * object used as a map.
  *
  * `default: return null` is what AC3 rests on, and the types it silently covers are worth naming: the
- * ten this client DOES decode on the live lane and never draws in a thread (`background_task_started` /
- * `_updated` / `_roster`, `model_announced`, `model_list`, `slash_command_list`, and — since #1312,
+ * ten this client DOES decode on the live lane and never draws in a thread (`background_task_roster`, `model_announced`, `model_list`, `slash_command_list`, and — since #1312,
  * #1318, #1454 and #1514 — `thinking_progress`, `rate_limited`, `context_usage` and `resetting`, whose
  * live-lane parsers each deliberately came with no
  * arm here), any type a later daemon invents — and `modal_shown` /
@@ -1750,6 +1751,15 @@ function decodeHistoryEvent(
   payload: Record<string, unknown>
 ): DecodedHistoryEvent | null {
   switch (type) {
+    case 'background_task_started': {
+      const p = parseBackgroundTaskStartedPayload(payload)
+      return { type: 'backgroundTaskStarted', taskId: p.task_id, toolCallId: p.tool_call_id,
+        taskType: p.task_type, description: p.description }
+    }
+    case 'background_task_updated': {
+      const p = parseBackgroundTaskUpdatedPayload(payload)
+      return { type: 'backgroundTaskUpdated', taskId: p.task_id, status: p.status }
+    }
     case 'assistant_delta': {
       const p = parseAssistantDeltaPayload(payload)
       return { type: 'assistantDelta', turnId: p.turn_id, seq: p.seq, text: p.text, parentToolUseId: p.parent_tool_use_id }
@@ -4537,7 +4547,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'background-task-started', backgroundTaskStarted }
+      return { kind: 'background-task-started', backgroundTaskStarted, ts: envelope.ts }
     }
     case 'background_task_updated': {
       // Narrow BEFORE logging so a malformed frame (an omitted `patch` or `truncated_fields` key, a
@@ -4552,7 +4562,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'background-task-updated', backgroundTaskUpdated }
+      return { kind: 'background-task-updated', backgroundTaskUpdated, ts: envelope.ts }
     }
     case 'background_task_roster': {
       // Narrow BEFORE logging so a malformed frame (a `tasks: null`, an omitted `dropped_tasks`, one bad

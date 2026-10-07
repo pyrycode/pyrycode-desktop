@@ -20,7 +20,7 @@ export function withProvisionalAgents(
   const loaded = new Set(items.flatMap(item => item.kind === 'toolCall' ? [item.toolUseId] : []))
   const provisional: ThreadItem[] = []
   for (const entry of evidence.values()) {
-    if (!entry.confirmed || entry.toolCallId.length === 0 || entry.description === undefined || loaded.has(entry.toolCallId)) continue
+    if (entry.historyOnly || !entry.confirmed || entry.toolCallId.length === 0 || entry.description === undefined || loaded.has(entry.toolCallId)) continue
     loaded.add(entry.toolCallId)
     provisional.push({ kind: 'toolCall', turnId: '', name: 'Agent', toolUseId: entry.toolCallId,
       inputSummary: entry.description.slice(0, 4096), result: null })
@@ -34,7 +34,8 @@ export function groupToolRows(
   evidence: ReadonlyMap<string, BackgroundAgentTimeline> = new Map(),
   rowArrivalOrder: readonly number[] = items.map((_, index) => index),
   historyCount = 0,
-  provisionalIndices: ReadonlySet<number> = new Set()
+  provisionalIndices: ReadonlySet<number> = new Set(),
+  rowIdentityOrder: readonly number[] = rowArrivalOrder
 ): GroupedToolRow[] {
   const owners = new Map<string, number>()
   items.forEach((item, index) => {
@@ -121,14 +122,21 @@ export function groupToolRows(
       if (row.index === owner && !provisionalIndices.has(row.index)) ordinary.push({ ...row, marker: true, ancestors: [], depth: 0, running: entry.finishBefore === null, hasChildren: false })
     }
   }
-  const settled = [...agents].filter(([, entry]) => entry.finishBefore !== null)
-    .sort((a, b) => (a[1].finishBefore ?? 0) - (b[1].finishBefore ?? 0) ||
-      (a[1].finishOrder ?? 0) - (b[1].finishOrder ?? 0))
-  for (const [index, entry] of settled) {
+  const anchorAt = (entry: BackgroundAgentTimeline): number => {
     const boundary = entry.finishBefore
-    const at = ordinary.findIndex(row => !row.relocated && row.index >= historyCount && boundary !== null && (rowArrivalOrder[row.index] ?? Infinity) >= boundary)
-    ordinary.splice(at === -1 ? ordinary.length : at, 0, ...(groups.get(index) ?? []))
+    if (boundary === null) return ordinary.length
+    if (entry.finishFromHistory) {
+      const target = rowIdentityOrder.indexOf(boundary)
+      const exact = target === -1 ? -1 : ordinary.findIndex(row => !row.relocated && row.index >= target)
+      if (exact !== -1) return exact
+    }
+    const at = ordinary.findIndex(row => !row.relocated && row.index >= historyCount &&
+      (rowArrivalOrder[row.index] ?? Infinity) >= boundary)
+    return at === -1 ? ordinary.length : at
   }
+  const settled = [...agents].filter(([, entry]) => entry.finishBefore !== null)
+    .sort((a, b) => anchorAt(a[1]) - anchorAt(b[1]) || (a[1].finishOrder ?? 0) - (b[1].finishOrder ?? 0))
+  for (const [index, entry] of settled) ordinary.splice(anchorAt(entry), 0, ...(groups.get(index) ?? []))
   for (const [index, entry] of agents) if (entry.finishBefore === null) ordinary.push(...(groups.get(index) ?? []))
   return ordinary
 }

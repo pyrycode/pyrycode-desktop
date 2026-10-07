@@ -2137,6 +2137,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // emit.
             emitDaemonEvent(sink, {
               type: 'backgroundTaskStarted',
+              daemonTs: inbound.ts,
               conversationId: inbound.backgroundTaskStarted.conversation_id,
               taskId: inbound.backgroundTaskStarted.task_id,
               toolCallId: inbound.backgroundTaskStarted.tool_call_id,
@@ -2170,6 +2171,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // round-trip test guards this emit.
             emitDaemonEvent(sink, {
               type: 'backgroundTaskUpdated',
+              daemonTs: inbound.ts,
               conversationId: inbound.backgroundTaskUpdated.conversation_id,
               taskId: inbound.backgroundTaskUpdated.task_id,
               patch: inbound.backgroundTaskUpdated.patch,

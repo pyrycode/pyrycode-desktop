@@ -3244,6 +3244,7 @@ describe('createDaemonConnection — background_task_started stream (#564)', () 
     expect(emitted(sink).slice(before)).toEqual([
       {
         type: 'backgroundTaskStarted',
+        daemonTs: FIXED_TS,
         conversationId: 'conv-1',
         taskId: 'task_01ABC',
         toolCallId: 'toolu_01XYZ',
@@ -3313,7 +3314,7 @@ describe('createDaemonConnection — background_task_started stream (#564)', () 
     expect(events[0].truncatedFields).toEqual(['description', 'task_type'])
   })
 
-  it('emits exactly the seven modeled properties, never a spread of the decoded payload', async () => {
+  it('emits exactly the modeled properties and envelope timestamp, never a spread of the decoded payload', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
@@ -3325,6 +3326,7 @@ describe('createDaemonConnection — background_task_started stream (#564)', () 
     const events = emitted(sink).slice(before)
     expect(Object.keys(events[0]).sort()).toEqual([
       'conversationId',
+      'daemonTs',
       'description',
       'taskId',
       'taskType',
@@ -3413,6 +3415,7 @@ describe('createDaemonConnection — background_task_updated stream (#565)', () 
     expect(emitted(sink).slice(before)).toEqual([
       {
         type: 'backgroundTaskUpdated',
+        daemonTs: FIXED_TS,
         conversationId: 'conv-1',
         taskId: 'task_01ABC',
         patch: '{"is_backgrounded":tr',
@@ -3432,6 +3435,7 @@ describe('createDaemonConnection — background_task_updated stream (#565)', () 
     expect(emitted(sink).slice(before)).toEqual([
       {
         type: 'backgroundTaskUpdated',
+        daemonTs: FIXED_TS,
         conversationId: 'conv-1',
         taskId: 'task_01ABC',
         patch: '',
@@ -3555,7 +3559,7 @@ describe('createDaemonConnection — background_task_updated stream (#565)', () 
     expect(events[0].truncatedFields).toEqual(['task_id', 'patch'])
   })
 
-  it('emits exactly the seven modeled properties, never a spread of the decoded payload', async () => {
+  it('emits exactly the modeled properties and envelope timestamp, never a spread of the decoded payload', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
@@ -3567,6 +3571,7 @@ describe('createDaemonConnection — background_task_updated stream (#565)', () 
     const events = emitted(sink).slice(before)
     expect(Object.keys(events[0]).sort()).toEqual([
       'conversationId',
+      'daemonTs',
       'patch',
       'status',
       'summary',
@@ -5014,7 +5019,7 @@ describe('createDaemonConnection — modal_shown stream (#201)', () => {
     expect(sink.webContents.send.mock.calls.length).toBe(before)
   })
 
-  it('emits exactly the seven modeled properties, never a spread of the decoded payload (#871)', async () => {
+  it('emits exactly the modeled properties and envelope timestamp, never a spread of the decoded payload (#871)', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 

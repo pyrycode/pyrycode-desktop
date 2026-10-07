@@ -66,3 +66,7 @@ None. Boundary keys are client identity; their numeric value does not establish 
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-07
+
+## Revisions
+
+2026-10-07: Lifecycle placement collection reads the original page even when the safe ordinary-event suffix join suppresses its live duplicates. This lets a historical start qualify held unconfirmed live evidence without losing the start to timestamp deduplication; an established live finish still wins. Historical anchors compare stable row identity separately from live receipt chronology, and reserve a tail key on evidence-only pages so older prepends cannot take that identity. Historical markers use the retained start description, bounded and escaped through the existing marker.

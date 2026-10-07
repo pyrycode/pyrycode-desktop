@@ -190,13 +190,15 @@ re-delivery builds a fresh prompt but retains these identities. This distinguish
 from identical text restored after an interruption, including multiple transitions batched by React.
 
 The [choice controller](conversation-shell-permission-modal.md#selection-and-confirmation) observes
-modal, active-conversation, conversation-list and session transitions synchronously. It clears arm
-and checked consent on request/choice/offer changes, navigation and unique-owner loss/change;
-scoped reconnect clearing and pairing reset also invalidate the held request. It rejects callbacks
-unless their exact displayed snapshot is still the first outstanding request in the active chat and
-its unique stamped host is connected. No other host supplies availability. Reads during construction
-and subscriptions are side-effect-free; diagnostics belong to actions. These pane drafts stay in
-memory and clear on navigation; inline placement and navigation-retained grants remain #1818's scope.
+modal, active-conversation, conversation-list and session transitions synchronously. Navigation clears
+pane-local arming. Checked consent is retained separately beside the consumer in renderer memory,
+with app-lifetime modal/ownership subscriptions observing closed panes. Request/choice/offer changes,
+unique-owner loss/change, scoped reconnect clearing and pairing reset discard it even if the old
+content/owner is restored before React paints. It rejects callbacks unless their exact displayed
+snapshot is still the first outstanding request in the active chat and the captured stamped host
+still uniquely owns that chat and is connected. No other host supplies availability. Reads during
+construction and subscriptions are side-effect-free; diagnostics belong to actions. Neither retained
+consent nor pane-local arming enters persistence or logs.
 
 ### Internal helpers (unexported)
 
@@ -357,7 +359,7 @@ counterweight the scoped edge now needs (see § Edge cases).
   flag, not on the wire and not in `PairedServerRecord` — the desktop cannot self-gate. The follow-up
   renders and answers regardless; an ungranted answer round-trips to an `error` envelope.
 - **Strangler Fig, not a migration.** `sessionStore` and `threadTimeline` are completely untouched.
-- **`conversationId` scopes both sidebar attention and the bottom permission panel**
+- **`conversationId` scopes both sidebar attention and the inline permission panel**
   ([#877](../codebase/877.md)/[#878](https://github.com/pyrycode/pyrycode-desktop/issues/878), both
   shipped) — the wire's outbound-scoping `conversation_id` (pyrycode#1065) reaches `ModalEvent` via the
   `DaemonEvent` arm ([#871](../codebase/871.md), decoded [#870](../codebase/870.md)), is copied by name
@@ -368,7 +370,8 @@ counterweight the scoped edge now needs (see § Edge cases).
   exploit and the array keeps the referential stability ADR 0009 chose it for. It does not change
   id-addressing: `modalId` remains the sole correlation key for *answering* a prompt — `modal_answer` /
   `modal_cancel` carry no `conversation_id`. The sidebar's status resolver uses the boolean for
-  [Input required](conversation-status.md), and `ComposerSlot` uses it for input coverage.
+  [Input required](conversation-status.md), and `QuestionHistorySlot` uses it to hide only the
+  retained questionnaire while permission waits.
   `PermissionModal` separately finds the oldest outstanding prompt for the non-null open conversation
   and filters rejection feedback through its retained owners.
 

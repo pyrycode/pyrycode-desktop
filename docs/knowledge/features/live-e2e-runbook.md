@@ -72,7 +72,29 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
-**Latest verified run: #1817, 2026-10-06 — 26 executed, 26 passed, 0 failed, 1 skipped.** The
+**Latest verified run: #1818, 2026-10-07 — 26 executed, 26 passed, 0 failed, 1 skipped.** The
+[dispatcher PASS comment](https://github.com/pyrycode/pyrycode-desktop/issues/1818#issuecomment-6029664454)
+records `feature/1818` at `5d1b88adaa`, integrated with main `59efab093c` in run
+`2026-10-07T02-23-21-880Z`. Its sole listed skip is
+`real claude picks up a saved channel system prompt at Reset session`, with no reason recorded.
+The [supplemental named result](https://github.com/pyrycode/pyrycode-desktop/issues/1818#issuecomment-6029885598)
+confirms `e2e/real-claude-permission-modal.spec.ts` →
+`real claude session checkbox grants repeated Bash use only in the current session`
+was present, executed and passed on its first attempt in this same run, in 37.2 s
+(1 executed, 1 passed, 0 failed, 0 skipped). Every test records `daemon-revision: 0.37.0`.
+
+The inline card retains the live spec's repeated Bash effect without renewed permission in the
+same session, then renewed permission before any effect in a distinct session in the same workspace.
+Card disappearance alone is insufficient. The configured gate installed/built then ran
+`npx playwright test --config playwright.real-claude.config.ts --reporter=json`, rather than the
+requested `npm run e2e:real:gate`. Counted execution and this named pass satisfy the execution
+requirement despite the command mismatch. The dispatcher removed `needs-real-claude` and advanced
+the ticket. Evidence comes from the linked comments; documentation did not read dispatcher logs or
+run live tests. See [inline permission verification](development-verification.md#inline-permission-verification)
+for fake interaction and visual evidence. The live results concern the local test relay, not the
+production relay.
+
+**Previous verified run: #1817, 2026-10-06 — 26 executed, 26 passed, 0 failed, 1 skipped.** The
 [dispatcher PASS comment](https://github.com/pyrycode/pyrycode-desktop/issues/1817#issuecomment-6025928858)
 records `feature/1817` at `1cec087404`, integrated with main `04e1cbd95b` in run
 `2026-10-06T21-33-26-050Z`. Its sole listed skip is

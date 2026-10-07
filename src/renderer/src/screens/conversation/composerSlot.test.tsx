@@ -92,7 +92,7 @@ describe('inline history and composer', () => {
     expect(html).not.toContain('hidden=""')
     expect(html.match(/class="composer__footer"/g)).toHaveLength(1)
   })
-  it('hides questionnaire and mounted composer while current-chat permission takes precedence', () => {
+  it('hides questionnaire while inline permission leaves composer and footer visible', () => {
     show(OPEN, [question('Waiting question')])
     permissionStore.getState().dispatch({ type: 'shown', conversationId: OPEN, modalId: 'permission',
       class: 'trust', title: 'Trust workspace', prompt: 'Explain trust',
@@ -100,8 +100,10 @@ describe('inline history and composer', () => {
     const html = render(OPEN)
     expect(html).toContain('Waiting question')
     expect(html).toContain('permission-panel')
-    expect(html.match(/hidden=""/g)).toHaveLength(2)
-    expect(html).toContain('class="composer" hidden=""')
+    expect(html.match(/hidden=""/g)).toHaveLength(1)
+    expect(html).not.toContain('class="composer" hidden=""')
+    expect(html.indexOf('permission-panel')).toBeLessThan(html.indexOf('class="composer"'))
+    expect(html).toContain('composer__footer')
     permissionStore.getState().dispatch({ type: 'reset' })
     expect(render(OPEN)).not.toContain('hidden=""')
   })

@@ -30,8 +30,8 @@ keeps its 97px clearance. Top overlay pills use header height plus their 12px ga
 the drawer uses both heights to leave controls usable.
 
 Measure before re-pinning and before zero-offset prepend compensation. Occupied
-height includes status, attachment previews, multiline draft growth/shrink, and
-permission/trust replacing the composer. Inline questionnaires grow inside history and do not add
+height includes status, attachment previews and multiline draft growth/shrink.
+Inline permission/trust cards and questionnaires grow inside history and do not add
 input-slot height. Temporary inline bottom padding
 belongs only to short-history compensation. `reassertPinnedToBottom` removes that
 inline property when following resumes, exposing the measured stylesheet clearance;
@@ -49,6 +49,22 @@ measurement rooted only in the scroller would place that pill inside the header.
 Current observation targets are added on renders; the observer disconnects on root changes and
 at teardown. Removed direct children are not unobserved; see the inline-batch limitation below.
 Heights and following remain DOM/ref-local rather than store state.
+
+`QuestionHistorySlot` is the stable observed direct child for inline permission and questionnaire
+content. It mounts only while an open-chat batch, permission or owned rejection exists, including
+empty/offline histories; an empty trailing element would suppress the normal welcome state.
+Permission's entire title/context/rules/choices and external Cancel scroll in this thread rather
+than a capped inner scrollport. Arming and leaf-only content growth change the wrapper's height:
+the observer follows that growth only when `following` is already true.
+
+Initial hinted Cancel focus uses `focus({ preventScroll: true })`. Without it, focusing the newly
+arrived offscreen card would move a scrolled-up reader despite the guarded pin. The fake-transport
+case `inline arrival and growth follow pinned readers while focus preserves held position` proves
+pinned arrival/arming and held-reader arrival, Cancel focus, content growth, composer drafting,
+visible-checkbox editing and visible-choice arming. It waits two animation frames after positioning
+to let the scroll event update `following`; offscreen controls are first deliberately scrolled into
+view so native focus movement is not confused with growth. See
+[counted inline evidence](development-verification.md#inline-permission-verification).
 
 Resize and Electron zoom can cause native anchoring to emit a scroll before resize
 observations arrive. The hook remembers the last observed `clientWidth` and
@@ -92,11 +108,13 @@ precondition after the viewport grew to fill the pane. See
 ## Inline question growth
 
 `Timeline.trailing` places `QuestionHistorySlot` after message rows, even with empty/offline history
-while a batch remains pending. Its wrapper is a direct child observed by `useThreadScrollPin`.
+while a batch, permission or owned rejection remains pending. Its shared wrapper is a direct child
+observed by `useThreadScrollPin`.
 Arrival, local card edits and same-request growth preserve the existing `following` ref: readers
 reviewing earlier messages stay where they are; readers following the bottom remain pinned as the
 wrapper grows. The batch is not a history row and contributes no pagination or saved-message data.
-Permission hiding can shrink that wrapper while retaining the draft, using the same guarded pin.
+Permission hides only the questionnaire inside that wrapper while adding its own inline card;
+both changes use the same guarded pin and preserve the questionnaire drafts.
 
 A scroll-position assertion can pass before the browser's scroll event updates `following`.
 `question-picks.spec.ts` waits two animation frames after positioning before delivering a batch or

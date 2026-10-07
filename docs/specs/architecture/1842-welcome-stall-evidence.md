@@ -33,3 +33,6 @@ Classify probe outcomes with fixed statuses: available, unavailable, failed, tim
 
 ## Open Questions
 None. Keep the report compact and attachment failures best-effort; no readiness wait, causal fix or documentation edits are required.
+
+## Revisions
+2026-10-07: Remember the launch-fate ordinal inside its `watch` registration, rather than reading the count at pairing arrival. Concurrent launch setup could otherwise change the count before pairing starts. The fixture regression closes the stalled page after capture, which also exits that launch; its fate correctly records not-running at teardown, while the second normal launch records running. Both must exit cleanly with no teardown failures.

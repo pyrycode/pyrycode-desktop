@@ -23,6 +23,7 @@ import {
   type TeardownStep
 } from './desktopIsolation'
 import { pairAnotherServerFromSettings, pairFromUnpairedLaunch } from './pairingArrival'
+import { withWelcomeDiagnostics } from './welcomeDiagnostics'
 import type {
   ConversationSummary,
   ConversationsPayload,
@@ -349,10 +350,18 @@ export const test = base.extend<PairedAppFixtures>({
       // (renderer-throttling switches + the third isPackaged-gated dev flag, which keeps the window
       // hidden) that this fixture's 48 spec files all need and none should re-derive. Everything above
       // stays here: the scenario's env and its per-run user-data dir are this fixture's business.
+      let launchIndex = 0
       const app = await launchIsolatedApp({
         args: ['.', `--user-data-dir=${userDataDir}`],
         env,
-        fate
+        fate: {
+          ...fate,
+          watch(app) {
+            fate.watch(app)
+            // Remember the fate ordinal at registration, even when launch setup overlaps.
+            launchIndex = fate.report().launches.length
+          }
+        }
       })
       // #1127: `fate.closeWatched` replaces `app.close()` and owns the one ordering that yields a
       // readable fate — liveness read before the close, exit code after it. It propagates a close
@@ -385,7 +394,8 @@ export const test = base.extend<PairedAppFixtures>({
       // `control.hostLabel` is undefined for every caller but #834's spec, and the arrival step's third
       // parameter is optional — so the default drive is byte-identical to what it was.
       if (control.skipPairing) return { page, app, daemon, forwarder, userDataDir, servers }
-      await pairFromUnpairedLaunch(page, pairingPayloadFor(first, DUMMY_TOKEN), control.hostLabel)
+      await withWelcomeDiagnostics(page, app, testInfo, launchIndex, () =>
+        pairFromUnpairedLaunch(page, pairingPayloadFor(first, DUMMY_TOKEN), control.hostLabel))
 
       // #140: the paired route enters at the ChannelList — drive the one real list→thread step by
       // clicking the seeded row. This is a REAL product-UI navigation (`.channel-list__row-open`,

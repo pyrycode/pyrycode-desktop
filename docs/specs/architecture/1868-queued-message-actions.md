@@ -4,7 +4,7 @@
 
 - `CLAUDE.md`, `docs/knowledge/INDEX.md`, `docs/knowledge/features/conversation-shell.md` and `conversation-shell-conversation-and-modals.md` → renderer conventions and the two separate queue/echo removal clocks; preserve those behaviours.
 - `docs/knowledge/features/development-verification.md` → static markup cannot prove layout or interaction; use the existing fake Electron fixture.
-- `src/renderer/src/screens/conversation/ConversationScreen.tsx` → `TimelineRow`, `QueuedRowSendNow`, `QueuedRowDrop`, `MessageActions` and `ComposerSendControl`: existing action gates, callbacks and glyph idioms.
+- `src/renderer/src/screens/conversation/ConversationScreen.tsx` → `TimelineRow`, `QueuedRowSendNow`, `QueuedRowDrop`, `MessageActions` and `ComposerSendButton`: existing action gates, callbacks and glyph idioms.
 - `src/renderer/src/screens/conversation/conversation.css` → `.message-actions`, `.bubble__copy` and `.message-row--queued`: shared column, hover paint and current row-level dimming.
 - `src/renderer/src/screens/conversation/ConversationScreen.test.tsx` → merged queued-row suite: static availability, order, disabled state and delivered-row exclusion.
 - `e2e/queued-send-now.spec.ts`, `e2e/queued-backlog-interrupt.spec.ts`, `e2e/message-side-actions.spec.ts` → frame/echo semantics and geometry regressions.

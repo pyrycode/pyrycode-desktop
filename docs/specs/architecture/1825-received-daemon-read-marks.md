@@ -78,3 +78,15 @@ None. The ID-keyed legacy stamp guard deliberately fails closed for a duplicate 
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-06
+
+## Documentation handoff
+
+Pending for the documentation stage, as requested by the verifier:
+
+- `docs/knowledge/features/conversation-unread.md` § How it works and § Edge cases and limitations: document daemon-backed comparison without a held timeline and replace the obsolete no-daemon-read-cursor claim.
+- `docs/knowledge/features/conversation-last-read-store.md` § How it works and § Configuration and usage: document complete-contract stamp suppression, the duplicate-ID guard, and retained legacy persistence and pairing/per-server clears.
+- `docs/knowledge/features/conversation-list-store.md` § How it works and § Edge cases and limitations: document optional safe-integer fields, zero versus omission, host-scoped read advances, monotonic list reconciliation and unknown-row behavior.
+- `docs/knowledge/features/chat-history.md` § Snapshot contract and § Testing: document admitted read fields, older saved-list restoration, and list-reply persistence versus read pushes that do not themselves write history.
+- `docs/knowledge/features/conversation-list-fetch.md` § The wire contract and `docs/knowledge/features/inbound-message-decode-payloads.md` § Conversations: document optional non-negative safe-integer summary/update fields and rejection without coercion.
+- `docs/knowledge/features/channel-list-status-dot.md` § The row's status dot and `docs/knowledge/features/app-badge.md` § The renderer half: document actual-row read state, host isolation and preserved status precedence/badge exclusions.
+- `docs/knowledge/features/development-verification.md` § What each test tier proves: record mounted fake-transport coverage, Linux badge-command observation and received-list snapshot persistence separately from immediate read pushes. Desktop read-mark publication remains #1826.

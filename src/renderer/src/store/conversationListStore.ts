@@ -77,6 +77,7 @@ export type ConversationListStore = ConversationListState & {
     conversations: readonly ConversationSummary[],
     serverId?: string | null
   ) => void
+  advanceReadMark: (serverId: string, conversationId: string, readUpTo: number) => void
   /**
    * The pairing-boundary drop (#1086, AC5) — NULLARY BY DESIGN, the `clearAllModelLists` /
    * `clearAllSlashCommandLists` property: a pairing ending invalidates every server's rows at once, so
@@ -91,7 +92,6 @@ export type ConversationListStore = ConversationListState & {
    * server's slot, the departed server's slot is never written again, and the union keeps rendering
    * its rows. That is the one regression keying introduces, and this is its fix.
    */
-  advanceReadMark: (serverId: string, conversationId: string, readUpTo: number) => void
   clearAllConversations: () => void
   /**
    * ONE SERVER's rows, dropped (#1196) — the keyed sibling of the clear above, and the other half of

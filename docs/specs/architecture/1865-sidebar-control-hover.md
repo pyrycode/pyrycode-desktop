@@ -19,3 +19,7 @@ Add an absolute, non-interactive `::before` on each of the eight named controls'
 ## Testing strategy
 
 Add a focused fake-transport Playwright regression beside the existing name-pill specs: actual row/control hover, layer colour/radius and glyph-relative geometry, unchanged row/button/SVG boxes, no layer on keyboard-only focus, unchanged outline and pointer-following pill. Exercise dormant CSS classes on equivalent existing glyph controls in the test only. Capture hovered controls at 1280×800 and 800×600 and compare with Figma. First run the regression against existing CSS and require failure on the missing layer. Then run the focused spec, pre-verify and build after the final main merge. No live-Claude test changes.
+
+## Revisions
+
+2026-10-07: The completion run also found branch #1866 overlapping in `channels.css`. Its toolbar-control hover rules affect separate selectors and a separate block; this row-control design remains independent and unchanged.

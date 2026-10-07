@@ -212,7 +212,7 @@ test('receipt saturation still saves a repeated page and later live content acro
   await expect(second.page.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(1)
   await expect(second.page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled({ timeout: 20_000 })
   await second.page.locator('.conversation__thread').focus()
-  const expected = { ...snapshot, coverage: snapshot.coverage,
+  const expected = { ...snapshot, coverage: snapshot.coverage, gaps: [],
     served: { ids, highestId: 199, receipts: [...receipts.slice(1), { ids, cursor: 'repeat', atStart: false }] } }
   await expect.poll(() => read(second.page)).toEqual({ status: 'stored', snapshot: expected })
   await expect(second.page.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(1)
@@ -524,7 +524,7 @@ test('saved coverage survives offline restart, reconnect, live receipts and conn
     if (env.type !== 'request_history') return []
     cursors.push(env.payload.cursor)
     return [frame('history_page', { entries: env.payload.cursor === '' ? [entry(1)] : [
-      { id: 99, type: 'assistant_delta', ts, payload: newPayload }, entry(0)],
+      { id: 2, type: 'assistant_delta', ts, payload: newPayload }, entry(0)],
     cursor: env.payload.cursor === '' ? 'saved-cursor' : 'advanced-cursor', at_start: false }, env.id)]
   } }, { onLaunched: observe })
   drop = () => first.forwarder.dropClientLeg()
@@ -624,8 +624,15 @@ test('protected restoration joins partial pages while retaining an expanded tool
   const delta = (id: number, text: string) => history(id, 'assistant_delta', { seq: id, text })
   const tool = (id: number, tool_use_id: string) => history(id, 'tool_use', { tool_use_id, name: 'Read', input_summary: tool_use_id })
   const result = (id: number, tool_use_id: string) => history(id, 'tool_result', { tool_use_id, is_error: false, result_summary: `result ${tool_use_id}` })
-  const firstEntries = [delta(20, 'newer text'), tool(30, 'survivor'), result(31, 'survivor'),
-    entry(40), tool(50, 'pending'), result(61, 'orphan'), ...Array.from({ length: 30 }, (_, i) => entry(100 + i))].reverse()
+  const covering = (entries: ReturnType<typeof history>[]) => {
+    const ids = new Set(entries.map(entry => entry.id))
+    const oldest = Math.min(...ids), newest = Math.max(...ids)
+    // Undrawable envelopes cover consecutive served IDs; gaps are not this join fixture's demand.
+    return [...entries, ...Array.from({ length: newest - oldest + 1 }, (_, i) => oldest + i)
+      .filter(id => !ids.has(id)).map(id => history(id, 'unsupported', {}))].sort((a, b) => b.id - a.id)
+  }
+  const firstEntries = covering([delta(20, 'newer text'), tool(30, 'survivor'), result(31, 'survivor'),
+    entry(40), tool(50, 'pending'), result(61, 'orphan'), ...Array.from({ length: 30 }, (_, i) => entry(100 + i))])
   const first = await launchPairedApp({ buildReplyFrames: bytes => {
     const env = decodeEnvelope(bytes)
     if (env.type === 'list_conversations') return [seedConversationsFrame()]
@@ -648,6 +655,7 @@ test('protected restoration joins partial pages while retaining an expanded tool
   const thread = second.page.locator('.conversation__thread')
   await expect(thread).toContainText('newer text')
   await expect.poll(() => asks).toBe(2)
+  await expect(thread.locator('[data-history-gap]')).toHaveCount(0)
   await expect(second.page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled({ timeout: 20_000 })
   const survivor = thread.locator('.tool-row:not(.tool-run__row)').filter({ has: second.page.locator('.tool-row__summary', { hasText: /^survivor$/ }) })
   await survivor.locator('.tool-row__chip').click()
@@ -665,8 +673,8 @@ test('protected restoration joins partial pages while retaining an expanded tool
   const anchorNode = await anchor.elementHandle()
   const before = (await anchor.boundingBox())!.y
   expect(await thread.evaluate(el => el.scrollTop)).toBeGreaterThan(0)
-  const joinedEntries = [result(61, 'orphan'), tool(60, 'orphan'), result(51, 'pending'), result(31, 'survivor'),
-    tool(30, 'survivor'), delta(20, 'newer text'), delta(10, 'older ')]
+  const joinedEntries = covering([result(61, 'orphan'), tool(60, 'orphan'), result(51, 'pending'), result(31, 'survivor'),
+    tool(30, 'survivor'), delta(20, 'newer text'), delta(10, 'older ')])
   await first.daemon.pushFrame(frame('history_page', { entries: joinedEntries, cursor: 'repeat', at_start: false }, request))
   await expect(thread.locator('.bubble[data-thread-role="assistant"]')).toHaveText('older newer text')
   await expect(survivor.locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'true')

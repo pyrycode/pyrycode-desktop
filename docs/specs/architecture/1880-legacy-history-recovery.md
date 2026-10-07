@@ -72,3 +72,9 @@ None.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-07
+
+## Revisions
+
+2026-10-07: Legacy identity overlap is reported explicitly by `reconcileHistory`; duplicate message IDs or timestamp joins cannot close the boundary. A unique held/page `(turnId, toolUseId)` call join retains the held call and supplies overlap evidence without requiring a saved timestamp. The legacy insertion seam receives the owning row keys and advances marker placement with the fresh walk's oldest served ID. Display-only restoration creates this boundary only before its first represented page, so later newest openings cannot recreate already-resolved legacy evidence. Acquisition is represented by purpose `gap-newest`, and its `atStart` never closes the legacy boundary.
+
+2026-10-07: Refusal mutation checks the supplying host before changing evidence. Invalidated cursors are omitted entirely; explicitly declared undefined cursors remain invalid under the shipped strict contract. Legacy row references must follow retained chronological row order. Final scope is about 600 inserted lines including plan, seven production files, one new exported helper and the existing eight integration seams; no sizing boundary exceeded.

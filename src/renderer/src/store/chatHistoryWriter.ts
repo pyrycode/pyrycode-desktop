@@ -158,7 +158,9 @@ export function createChatHistoryWriter(deps: {
         dropped.messageId !== '' && localEchoes.has(dropped) &&
         slice.history === before?.history && slice.prependedRows === before?.prependedRows &&
         items.every((item, index) => item === previousItems[index < droppedIndex ? index : index + 1])
-      if (receipt === null && !echo && !droppedEcho) {
+      const evidenceOnly = receipt === null && !changed && observations.get(id)?.owner === slice.serverId &&
+        typeof slice.serverId === 'string' && (slice.gaps !== before?.gaps || slice.newestCursor !== before?.newestCursor)
+      if (receipt === null && !echo && !droppedEcho && !evidenceOnly) {
         // A direct restoration is not a receipt. Its existing rows have no observed supplying host.
         if (changed && items.length > 0) {
           forgetComparison(id)
@@ -166,8 +168,8 @@ export function createChatHistoryWriter(deps: {
         }
         continue
       }
-      if (!changed && slice.history === before?.history && slice.served === before?.served && slice.display === before?.display && slice.gaps === before?.gaps) continue
-      if (items.length === 0 && slice.history?.status !== 'loaded' && !droppedEcho) continue
+      if (!changed && slice.history === before?.history && slice.served === before?.served && slice.display === before?.display && slice.gaps === before?.gaps && slice.newestCursor === before?.newestCursor) continue
+      if (items.length === 0 && slice.history?.status !== 'loaded' && !droppedEcho && !evidenceOnly) continue
       const claims = [...deps.lists.getState().byServer].filter(([, rows]) => rows.some((row) => row.id === id))
       // receivedSlice clears rows and coverage only when replacing an explicitly stamped host.
       // Stamping previously unowned content retains it and cannot release an unknown observation.
@@ -179,7 +181,7 @@ export function createChatHistoryWriter(deps: {
       }
       const held = observations.get(id)
       const supplied = receipt === null
-        ? (droppedEcho ? held?.owner : claims.length === 1 ? claims[0][0] : null) : receipt.serverId
+        ? ((droppedEcho || evidenceOnly) ? held?.owner : claims.length === 1 ? claims[0][0] : null) : receipt.serverId
       const owner = typeof supplied === 'string' &&
         (receipt !== null || claims.every(([host]) => host === supplied)) &&
         (held === undefined ? previousItems.length === 0 || replacedHost : held.owner === supplied) ? supplied : null
@@ -193,7 +195,7 @@ export function createChatHistoryWriter(deps: {
       const durableKeys = new Set((slice.timeline.rowKeys ?? []).filter((_, index) => isDurable(items[index])))
       capture({ version: 1, kind: 'timeline', serverId: owner, conversationId: id,
         items: items.filter(isDurable), prependedRows: slice.prependedRows, coverage,
-        served: slice.served, gaps: slice.gaps,
+        served: slice.served, gaps: slice.gaps, newestCursor: slice.newestCursor,
         display: slice.display?.filter(d => d.rowKey === undefined || durableKeys.has(d.rowKey)),
         rowIdentity: {
           rowKeys: (slice.timeline.rowKeys ?? items.map((_, index) => index - slice.prependedRows))

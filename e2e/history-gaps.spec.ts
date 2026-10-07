@@ -111,3 +111,105 @@ test('known gaps require fresh input, retain failure/resume, anchor and expansio
   await app.evaluate(() => {})
   expect(asks).toHaveLength(6)
 })
+
+test('legacy and refused gap evidence survives full Electron relaunch and needs fresh reader steps', async ({ launchPairedApp }) => {
+  const asks: Envelope[] = []
+  const first = await launchPairedApp({ buildReplyFrames: bytes => {
+    const env = decodeEnvelope(bytes)
+    if (env.type === 'list_conversations') return [seedConversationsFrame()]
+    if (env.type === 'request_history') asks.push(env)
+    return []
+  } })
+  await expect.poll(() => asks.length).toBe(1)
+  first.daemon.pushFrame(reply(asks[0], [1, 2, 3], 'held-end', true))
+  const serverId = first.servers[0].serverId
+  const read = (page: typeof first.page) => page.evaluate(async serverId => {
+    const saved = await window.pyry.chatHistory({ operation: 'readTimeline', serverId, conversationId: 'seed-conversation' })
+    return saved.status === 'stored' && saved.snapshot.kind === 'timeline' ? saved.snapshot : null
+  }, serverId)
+  await expect.poll(() => read(first.page)).not.toBeNull()
+  // Project an old protected display-only snapshot through the shipped validated IPC API.
+  const saved = (await read(first.page))!
+  await first.page.evaluate(async ({ saved, serverId }) => {
+    const { served: _served, display: _display, gaps: _gaps, newestCursor: _newest, ...legacy } = saved
+    await window.pyry.chatHistory({ operation: 'replaceTimeline', serverId, conversationId: legacy.conversationId, snapshot: legacy })
+  }, { saved, serverId })
+  await first.app.close()
+  const second = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
+  await second.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await expect.poll(() => asks.length).toBe(2)
+  first.daemon.pushFrame(reply(asks[1], newestIds, 'bad-origin'))
+  const thread = second.page.locator('.conversation__thread'), marker = thread.locator('[data-history-gap]')
+  await expect(marker).toHaveText('Load earlier messages')
+  expect(await thread.innerText()).toMatch(/Gap row 1[\s\S]*synthetic.txt[\s\S]*Load earlier messages[\s\S]*Gap row 8/)
+  const tool = thread.locator('.tool-row__chip--toggle').first()
+  await tool.click()
+  await expect(tool).toHaveAttribute('aria-expanded', 'true')
+  const step = async () => {
+    await marker.first().evaluate(el => el.scrollIntoView({ block: 'center' }))
+    await thread.focus(); await second.page.keyboard.press('ArrowUp')
+  }
+  await step(); await expect.poll(() => asks.length).toBe(3)
+  expect(asks[2].payload.cursor).toBe('bad-origin')
+  first.daemon.pushFrame(encodeEnvelope({ id: 91, type: 'error', ts, in_reply_to: asks[2].id,
+    payload: { code: 'history.invalid_cursor', message: 'synthetic refusal' } }))
+  await expect(marker).toHaveText('Could not load older messages')
+  await expect(marker.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0)
+  await expect.poll(async () => (await read(second.page))?.gaps?.[0].refusedCursors).toEqual(['bad-origin'])
+  await second.page.setViewportSize({ width: 800, height: 600 })
+  await marker.evaluate(el => el.scrollIntoView({ block: 'center' }))
+  await second.page.screenshot({ path: '/tmp/builder-1880/refused-800.png', animations: 'disabled' })
+  expect(asks).toHaveLength(3)
+  await step(); await expect.poll(() => asks.length).toBe(4)
+  expect(asks[3].payload.cursor).toBe('')
+  first.daemon.pushFrame(reply(asks[3], newestIds, 'bad-origin'))
+  await expect(marker).toHaveText('Load earlier messages')
+  await second.app.evaluate(() => {})
+  expect(asks).toHaveLength(4)
+  await expect(tool).toHaveAttribute('aria-expanded', 'true')
+  await second.app.close()
+  const third = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
+  await third.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await expect.poll(() => asks.length).toBe(5)
+  first.daemon.pushFrame(reply(asks[4], newestIds, 'bad-origin'))
+  const restoredThread = third.page.locator('.conversation__thread')
+  const restoredMarker = restoredThread.locator('[data-history-gap]')
+  await expect(restoredMarker).toHaveText('Load earlier messages')
+  expect((await read(third.page))?.gaps?.[0].refusedCursors).toEqual(['bad-origin'])
+  expect((await read(third.page))?.coverage).toEqual({ status: 'received', cursor: 'held-end', atStart: true })
+  const restoredTool = restoredThread.locator('.tool-row__chip--toggle').first()
+  await restoredTool.click()
+  const freshStep = async () => {
+    await restoredMarker.first().evaluate(el => el.scrollIntoView({ block: 'center' }))
+    await restoredThread.focus(); await third.page.keyboard.press('ArrowUp')
+  }
+  await freshStep(); await expect.poll(() => asks.length).toBe(6)
+  expect(asks[5].payload.cursor).toBe('')
+  first.daemon.pushFrame(reply(asks[5], newestIds, 'usable-origin'))
+  await expect(restoredMarker).toHaveText('Load earlier messages')
+  expect(asks).toHaveLength(6)
+  await third.page.setViewportSize({ width: 1280, height: 800 })
+  await restoredMarker.evaluate(el => el.scrollIntoView({ block: 'center' }))
+  await third.page.screenshot({ path: '/tmp/builder-1880/legacy-idle-1280.png', animations: 'disabled' })
+  await freshStep(); await expect.poll(() => asks.length).toBe(7)
+  expect(asks[6].payload.cursor).toBe('usable-origin')
+  const anchor = restoredThread.getByText('Gap row 8', { exact: true })
+  await restoredMarker.evaluate(node => {
+    const header = document.querySelector('.conversation__top-chrome')!.getBoundingClientRect().bottom
+    node.parentElement!.scrollTop += node.getBoundingClientRect().top - header - 4
+  })
+  await third.page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  const before = (await anchor.boundingBox())!.y
+  const frame = decodeEnvelope(reply(asks[6], [4, 5, 6, 7], 'walk'))
+  first.daemon.pushFrame(encodeEnvelope({ ...frame, payload: { ...frame.payload, at_start: false } }))
+  await expect(restoredMarker).toHaveText('Load earlier messages')
+  await expect(restoredTool).toHaveAttribute('aria-expanded', 'true')
+  await expect.poll(async () => Math.abs((await anchor.boundingBox())!.y - before)).toBeLessThan(2)
+  expect(await restoredThread.innerText()).toMatch(/Gap row 1[\s\S]*synthetic.txt[\s\S]*Gap row 4[\s\S]*Gap row 8/)
+  expect(asks).toHaveLength(7)
+  await freshStep(); await expect.poll(() => asks.length).toBe(8)
+  first.daemon.pushFrame(reply(asks[7], [1, 2, 3, 4], 'done', true))
+  await expect(restoredMarker).toHaveCount(0)
+  await expect(restoredTool).toHaveAttribute('aria-expanded', 'true')
+  await expect(restoredThread.getByText('Gap row 1', { exact: true })).toHaveCount(1)
+})

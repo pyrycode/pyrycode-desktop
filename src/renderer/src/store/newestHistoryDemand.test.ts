@@ -14,7 +14,7 @@ function harness() {
   const sendCommand = vi.fn()
   const deps = { sendCommand, canRequest: () => connected && target?.serverId === host,
     getHeld: (id: string) => store.getState().timelines.get(id) ?? null,
-    markRequested: (id: string, cursor?: string, purpose?: 'older' | 'newest' | 'gap') =>
+    markRequested: (id: string, cursor?: string, purpose?: 'older' | 'newest' | 'gap' | 'gap-newest') =>
       store.getState().markHistoryRequested(id, host, cursor, purpose) }
   const demand = createNewestHistoryDemand(deps)
   const sync = () => demand.sync(target, connected)

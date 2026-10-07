@@ -677,3 +677,46 @@ it('saves orphan-only display changes and restores protected contribution joins 
   expect(h.log.mock.calls.flat().map(value => JSON.stringify(value)).join('')).not.toContain('completed')
   await h.writer.stop()
 })
+
+it.each([false, true])('saves evidence-only cursor refusal under established ownership, restored=%s', async restored => {
+  const h = harness(); h.list()
+  h.receive('historyPageReceived', () => h.timelines.getState().recordHistoryPage('chat', 'oldest', true, [1]))
+  h.timelines.getState().markHistoryRequested('chat', 'a', '', 'newest')
+  h.receive('historyPageReceived', () => h.timelines.getState().recordHistoryPage('chat', 'newest', false, [4]))
+  await h.writer.flush()
+  if (restored) {
+    const saved = timelineRequests(h).at(-1)!.snapshot
+    h.timelines.getState().clearTimelineFor('chat')
+    h.timelines.getState().beginLocalTimelineRead('a', 'chat')!.complete(saved)
+  }
+  const before = timelineRequests(h).length
+  h.timelines.getState().markHistoryRequested('chat', 'a', 'newest', 'gap', 1)
+  // No receipt: a failure with unchanged display must still protect refusal evidence.
+  h.timelines.getState().recordHistoryFailure('chat', 'history-invalid-cursor', false)
+  await h.writer.flush()
+  expect(timelineRequests(h)).toHaveLength(before + 1)
+  const saved = timelineRequests(h).at(-1)!.snapshot
+  expect(saved.gaps).toEqual([{ olderId: 1, newerId: 4, refusedCursors: ['newest'] }])
+  expect(saved.newestCursor).toBe('newest')
+  expect(saved.coverage).toEqual({ status: 'received', cursor: 'oldest', atStart: true })
+  expect(saved).not.toHaveProperty('history')
+  const fresh = createConversationTimelineStore()
+  fresh.getState().beginLocalTimelineRead('a', 'chat')!.complete(saved)
+  expect(fresh.getState().timelines.get('chat')?.history).toBeNull()
+  expect(fresh.getState().timelines.get('chat')?.gaps).toEqual(saved.gaps)
+  await h.writer.stop()
+})
+
+it('evidence-only renderer changes cannot establish a received owner', async () => {
+  const h = harness(); h.list()
+  h.timelines.getState().prependHistoryFor('chat', [{ kind: 'userText', text: 'unowned' }])
+  const held = h.timelines.getState().timelines.get('chat')!
+  h.timelines.setState({ timelines: new Map([['chat', { ...held, serverId: 'a',
+    coverage: { status: 'received', cursor: 'oldest', atStart: true },
+    gaps: [{ olderId: 1, newerId: 4, cursor: 'bad' }] }]]) })
+  h.timelines.getState().markHistoryRequested('chat', 'a', 'bad', 'gap', 1)
+  h.timelines.getState().recordHistoryFailure('chat', 'history-invalid-cursor', false)
+  await h.writer.flush()
+  expect(timelineRequests(h)).toHaveLength(0)
+  await h.writer.stop()
+})

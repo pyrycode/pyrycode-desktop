@@ -29,3 +29,22 @@ it('shows loading only for the targeted gap and keeps other boundaries idle', ()
   expect(markup).toContain('Load earlier messages')
   expect(markup).toContain('role="status"')
 })
+
+it('places a legacy boundary at a contribution inside a joined bubble with client row targeting', () => {
+  const markup = renderToStaticMarkup(<Timeline items={items} rowKeys={[9]} gapState={{ ...base,
+    gaps: [{ legacyRowKeys: [9], newerId: 3, cursor: 'position' }] }} />)
+  expect(markup).toContain('data-history-gap="legacy:9"')
+  expect(markup.indexOf('Load earlier messages')).toBeLessThan(markup.indexOf('joined reply'))
+  expect(markup.match(/class="bubble /g)).toHaveLength(1)
+})
+it('refused legacy cursor keeps failure without Retry and acquisition shows status on its owned marker', () => {
+  const gaps = [{ legacyRowKeys: [9], newerId: 3, refusedCursors: ['bad'] }]
+  const failed = renderToStaticMarkup(<Timeline items={items} rowKeys={[9]} gapState={{ ...base, gaps,
+    history: { status: 'failed', purpose: 'gap', gapId: 'legacy:9', cursor: 'bad', reason: 'history-invalid-cursor', retryable: false } }} onRetryGap={() => {}} />)
+  expect(failed).toContain('Could not load older messages')
+  expect(failed).not.toContain('>Retry</button>')
+  const pending = renderToStaticMarkup(<Timeline items={items} rowKeys={[9]} gapState={{ ...base, gaps,
+    history: { status: 'requested', purpose: 'gap-newest', gapId: 'legacy:9', cursor: '' } }} />)
+  expect(pending).toContain('Loading earlier messages…')
+  expect(pending).toContain('role="status"')
+})

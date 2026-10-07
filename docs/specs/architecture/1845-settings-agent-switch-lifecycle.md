@@ -79,3 +79,9 @@ Sizing: about 550 written lines (70 production, 390 tests/helpers, 90 plan), zer
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-07
+
+## Revisions
+
+2026-10-07 — A test with an outgoing session that had previously reset exposed that retaining `expectedSession` at authoritative success rejects a fresh incoming-agent session indefinitely. The generation edge now resets that admission guard along with reset suppression, private correlations, polling and snapshot. Standalone reset/replacement admission remains unchanged and covered by the existing bridge tests. This supersedes the Design section's instruction to retain a prior replacement guard; the new contract starts fresh settings admission at the proven agent-lifetime edge.
+
+Baseline proof on main `95ed3951e38df40550eae2680068a6bc0f417563`, before production edits: the initial store regression ran 9 cases, 3 failed on retained outgoing pending/confirmed state; focused Playwright ran 2 cases, existing confirmation passed and the new mounted regression failed at the incoming GPT-6 Luna footer assertion. Its captured DOM showed incoming Codex offerings and settings while the footer still read `sonnet`; evidence: `/tmp/builder-1845/main-regression-error-context.md`. With the repair, both mounted cases passed. No live Claude test is required or claimed.

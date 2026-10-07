@@ -71,6 +71,24 @@ describe('reduceHistoryPage', () => {
     expect(reduceHistoryPage(page)).toEqual(expected)
   })
 
+  it('restores a reply interleaved with a subagent’s tool calls as one bubble (#1872)', () => {
+    // The persisted stream from the issue, served newest-first: main thread deltas with a background
+    // subagent's WebFetch calls landing between them.
+    const subagentFetch = (id: number, toolUseId: string): HistoryTimelineEntry => entry(id, {
+      type: 'toolUse', turnId: 't', toolUseId, parentToolUseId: 'agent', name: 'WebFetch', inputSummary: 'https://x'
+    })
+    const items = reduceHistoryPage([
+      entry(5, { type: 'assistantDelta', turnId: 't', seq: 38, text: 'act.' }),
+      subagentFetch(4, 'fetch-2'),
+      entry(3, { type: 'assistantDelta', turnId: 't', seq: 37, text: 'ekend sized project, or the f' }),
+      subagentFetch(2, 'fetch-1'),
+      entry(1, { type: 'assistantDelta', turnId: 't', seq: 35, text: 'That is a we' })
+    ])
+
+    expect(items.map((item) => item.kind)).toEqual(['assistantText', 'toolCall', 'toolCall'])
+    expect(items[0]).toMatchObject({ kind: 'assistantText', text: 'That is a weekend sized project, or the fact.' })
+  })
+
   it('draws a stored message with role user as a user row, and one with role assistant as no row', () => {
     expect(
       reduceHistoryPage([

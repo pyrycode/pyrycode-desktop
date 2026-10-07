@@ -534,14 +534,35 @@ function assertNever(event: never): never {
 }
 
 /**
- * Coalesce a streamed text delta: if the tail item is an `assistantText` for the same turn and parent,
- * return a new array whose tail is a copy with the concatenated text; otherwise append a fresh
- * `assistantText`. The tail-check naturally renders text → tool → text as three items while
- * collapsing consecutive deltas into one growing bubble. Always returns a new array (a delta is
- * always a change), matching `appendUnique`'s new-reference-on-change discipline.
+ * #1872: where a main thread delta lands. The newest row once any trailing subagent tool calls are
+ * skipped, or -1 when there is none. A subagent tool call is a `toolCall` with a non-empty
+ * `parentToolUseId`; a subagent runs concurrently with the main thread, so its calls arrive in the
+ * middle of the main thread's sentence and must not end that bubble. A main thread tool call, attributed
+ * subagent text or any other row stops the look back, so text, main thread tool, text still renders as
+ * three items. When the row found is a main thread `assistantText`, it is the open bubble.
+ */
+export function openBubbleIndex(items: readonly ThreadItem[]): number {
+  let index = items.length - 1
+  while (index >= 0) {
+    const item = items[index]
+    if (item === undefined || item.kind !== 'toolCall' || !item.parentToolUseId) break
+    index--
+  }
+  return index
+}
+
+/**
+ * Coalesce a streamed text delta: if the open item is an `assistantText` for the same turn and parent,
+ * return a new array with that item replaced by a copy holding the concatenated text; otherwise append
+ * a fresh `assistantText`. For attributed subagent text the open item is the tail. For main thread text
+ * it is `openBubbleIndex`, which looks back past a concurrently running subagent's tool calls (#1872),
+ * so those rows stay where they arrived and never cut the main reply mid word. The check renders
+ * text → tool → text as three items when the tool is the main thread's own, while collapsing consecutive
+ * deltas into one growing bubble. Always returns a new array (a delta is always a change), matching
+ * `appendUnique`'s new-reference-on-change discipline.
  *
  * #1013: `createdAt` names WHEN THE BUBBLE FIRST APPEARED, so the two branches read it from different
- * places and that asymmetry is the whole of the feature. The grow branch takes the TAIL's stamp — this
+ * places and that asymmetry is the whole of the feature. The grow branch takes the OPEN item's stamp — this
  * function rebuilds the item as a fresh literal on every coalesced delta, so carrying the incoming one
  * instead (or omitting it) would silently re-date a bubble to its most recent fragment. Only the
  * fresh-append branch uses the delta's own. Required parameter, not optional: this is module-private with
@@ -555,16 +576,17 @@ function appendDelta(
   createdAt: number | undefined,
   parentToolUseId: string | undefined
 ): readonly ThreadItem[] {
-  const tail = items[items.length - 1]
-  if (tail && tail.kind === 'assistantText' && tail.turnId === turnId && tail.parentToolUseId === parentToolUseId) {
+  const at = parentToolUseId ? items.length - 1 : openBubbleIndex(items)
+  const open = items[at]
+  if (open && open.kind === 'assistantText' && open.turnId === turnId && open.parentToolUseId === parentToolUseId) {
     const grown: ThreadItem = {
       kind: 'assistantText',
       turnId,
-      text: tail.text + text,
+      text: open.text + text,
       parentToolUseId,
-      createdAt: tail.createdAt
+      createdAt: open.createdAt
     }
-    return [...items.slice(0, -1), grown]
+    return [...items.slice(0, at), grown, ...items.slice(at + 1)]
   }
   return [...items, { kind: 'assistantText', turnId, text, createdAt, parentToolUseId }]
 }

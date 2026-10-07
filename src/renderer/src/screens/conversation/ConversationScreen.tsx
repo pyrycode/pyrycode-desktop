@@ -66,6 +66,7 @@ import { TopOverlay } from './TopOverlay'
 import { useUsagePillDismissalStore, usagePillDismissalStore } from '../../store/usagePillDismissalStore'
 import {
   initialTimelineState,
+  openBubbleIndex,
   type ThreadItem,
   type TimelineState,
   type TurnPhase,
@@ -1241,6 +1242,8 @@ export function Timeline({
   const provisionalIndices = new Set(rows.map((_, index) => index).slice(ordinaryRows.length))
   // Stats use source item indices; projection may move waiting echoes.
   const turnStats = turnStatsByItemIndex(items)
+  // #1872: the open main thread bubble streams even when a subagent's tool calls trail it.
+  const openBubble = openBubbleIndex(items)
   const [expandedTools, setExpandedTools] = useState<ReadonlySet<number | string>>(() => new Set())
   const [expandedRuns, setExpandedRuns] = useState<ReadonlySet<number | string>>(() => new Set())
   const agentNodes = useRef(new Map<number | string, HTMLDivElement>())
@@ -1335,7 +1338,8 @@ export function Timeline({
             midTurnInput={midTurnInput} onSendQueuedNow={onSendQueuedNow}
             onOpenMarkdownPath={onOpenMarkdownPath} agent={agent}
             onReply={onReply}
-            inProgress={!saved && row.itemIndex === items.length - 1 && row.item.kind === 'assistantText'} />
+            inProgress={!saved && row.item.kind === 'assistantText' &&
+              (row.itemIndex === items.length - 1 || (row.itemIndex === openBubble && !row.item.parentToolUseId))} />
           // Keep attributed text mounted through collapse and late-owner history regrouping.
           if (row.item.kind === 'assistantText' && row.item.parentToolUseId) return (
             <div key={rowKey} className={`tool-group-row tool-group-row--depth-${group.depth}`} hidden={hidden}>

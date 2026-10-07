@@ -386,6 +386,34 @@ describe('Timeline — the streamed assistant text', () => {
     expect(markup.indexOf(CURSOR)).toBeGreaterThan(markup.indexOf('after tool'))
   })
 
+  // #1872: a background subagent's rows trail the main thread bubble while it is still growing, so the
+  // open bubble keeps its cursor even though it is no longer the last item.
+  it('keeps the cursor on the open main thread bubble behind a trailing subagent tool call', () => {
+    const items: ThreadItem[] = [
+      { kind: 'assistantText', turnId: 't1', text: 'still writing' },
+      {
+        kind: 'toolCall',
+        turnId: 't1',
+        toolUseId: 'u2',
+        parentToolUseId: 'agent-1',
+        name: 'WebFetch',
+        inputSummary: 'https://example.com',
+        result: null
+      }
+    ]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    expect(markup.match(new RegExp(CURSOR, 'g'))?.length ?? 0).toBe(1)
+    expect(markup.indexOf(CURSOR)).toBeGreaterThan(markup.indexOf('still writing'))
+  })
+
+  it('gives no cursor to a bubble closed by a main thread tool call', () => {
+    const items: ThreadItem[] = [
+      { kind: 'assistantText', turnId: 't1', text: 'before tool' },
+      { kind: 'toolCall', turnId: 't1', toolUseId: 'u1', name: 'read_file', inputSummary: 'a.ts', result: null }
+    ]
+    expect(renderToStaticMarkup(<Timeline items={items} />)).not.toContain(CURSOR)
+  })
+
   // #230: the resolved tool row. When #121's reducer fills a toolCall's `result` in place (matched by
   // toolUseId, replacing the item at its own index), the row resolves where it sits — the pending
   // dimming lifts and `result.isError` selects a success vs error treatment. The className is the

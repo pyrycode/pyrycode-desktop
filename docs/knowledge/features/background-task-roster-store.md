@@ -6,6 +6,11 @@ daemon events in the family — the [daemon-event channel](daemon-event-channel.
 aggregate, `backgroundTaskStarted`, `backgroundTaskUpdated` and `backgroundTaskProgress` scalar arms — joining them per task
 so the panel (#581) and the composer's count pill (#1435) read one source of truth.
 
+Separate retained [Agent timeline evidence](background-task-roster-store-internals.md#retained-agent-timeline-evidence)
+lets connect rosters show live Agent rows before launch history arrives. It preserves
+client identity, held description and first-terminal placement across roster removal;
+it does not extend panel/pill membership. See [the timeline presentation](conversation-shell-tool-row-header-groups.md#started-background-agents).
+
 It also holds renderer-only pending Stop task pairs. The app listener settles them while the drawer is
 closed; see [pending stop waits](background-task-roster-store-internals.md#pending-stop-waits) and the
 [panel action](conversation-shell-background-tasks.md#stop-task).

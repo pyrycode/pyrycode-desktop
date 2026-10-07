@@ -69,6 +69,14 @@ None. Legacy-boundary and refused-cursor recovery remain explicitly outside this
 
 2026-10-07: Explicit edge-contract testing also covers sparse synthetic served pages: without a held served boundary first opening creates no gap, and a newest page containing the held high-water ID creates no new tail marker. Keep exact received IDs unchanged and preserve previously unresolved holes; no completeness is inferred from this marker-admission rule.
 
+2026-10-07 (verifier rework): `requestGapHistory` suppresses fresh demand only for the current failed gap, identified by purpose and older boundary; unrelated gap/newest/oldest failures do not block healthy gaps, regardless of retryability. Pending/read/host gates and captured Retry ownership remain shared. `Timeline` flattens both gap markers and tool render results into the same keyed sibling list, preserving DOM identity across insertion and Agent marker changes. Existing persistence/join/Retry fixtures now model consecutive served coverage (including undrawable envelopes) independently from command IDs and assert absence of unintended gaps; optional empty gap metadata is expected explicitly. Rework adds no exported declaration or state.
+
+## Documentation handoff
+
+- Pending documentation stage: `docs/knowledge/features/chat-history.md` § Snapshot contract / Served provenance and page suppression — optional protected gaps, strict validation, metadata-only progress, restoration and host/removal/eviction lifetimes; distinguish exact envelope coverage, display joins and unknown legacy provenance.
+- Pending documentation stage: `docs/knowledge/features/conversation-timeline-store-internals.md` § The opening ask / The history/live join — reader-driven markers, idle/loading/failure/Retry, shared newest/oldest/gap arbitration, opaque resume positions and independent oldest-end completion. Legacy/refused-cursor recovery remains #1880.
+- Pending documentation stage: `docs/knowledge/features/development-verification.md` § Served-page persistence verification and `docs/knowledge/features/live-e2e-runbook.md` § Current real-claude gate state — closed-Electron 205-post proof, fresh-step ordered recovery and counted dispatcher evidence when available.
+
 ## Security review
 
 **Verdict:** PASS

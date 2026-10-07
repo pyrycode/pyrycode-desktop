@@ -1452,7 +1452,12 @@ export function Timeline({
       aria-label="Conversation history" tabIndex={0} onWheel={scrollPin?.onWheel} onKeyDown={scrollPin?.onKeyDown}>
       {rows.length === 0 && !trailing && <EmptyThread />}
       {olderSaved && <p className="conversation__banner">Older messages require a connection.</p>}
-      {projection.flatMap(group => [!group.marker && gapRows.get(group.index), renderGroup(group)])}
+      {projection.flatMap(group => {
+        const content = renderGroup(group)
+        // Keep rows and markers in one keyed sibling list across prepends and Agent regrouping.
+        return [...(!group.marker ? gapRows.get(group.index) ?? [] : []),
+          ...(Array.isArray(content) ? content : [content])]
+      })}
       {gapRows.get(rows.length)}
       {trailing}
     </div>

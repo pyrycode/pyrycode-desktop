@@ -323,7 +323,7 @@ export function requestOlderHistory(
 export function requestGapHistory(deps: HistoryAskDeps, conversationId: string, olderId: number): void {
   const held = deps.getHeld(conversationId)
   const gap = held?.gaps?.find(g => g.olderId === olderId)
-  if (gap === undefined || held?.history?.status === 'failed') return
+  if (gap === undefined || (held?.history?.status === 'failed' && held.history.purpose === 'gap' && held.history.gapId === olderId)) return
   const receipt = held?.served?.receipts.filter(r => r.ids[0] !== undefined && r.ids[0] >= gap.newerId)
     .sort((a, b) => a.ids[0] - b.ids[0])[0]
   const cursor = gap.cursor ?? receipt?.cursor

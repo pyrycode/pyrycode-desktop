@@ -130,6 +130,26 @@ it('Retry targets only the current owned failed gap despite held atStart', () =>
   expect(h.deps.sendCommand).toHaveBeenCalledTimes(2)
 })
 
+it.each(['gap', 'newest', 'older'] as const)('a failed %s ask leaves an unrelated gap eligible, including nonretryable failures', purpose => {
+  for (const retryable of [true, false]) {
+    const h = harness(); h.page([1]); h.page([3], 'first', 'newest'); h.page([5], 'second', 'newest')
+    h.store.getState().markHistoryRequested('c', 'host', 'failed-position', purpose, purpose === 'gap' ? 3 : undefined)
+    h.store.getState().recordHistoryFailure('c', retryable ? 'history-unavailable' : 'history-invalid-cursor', retryable)
+    const failed = h.held().history
+    if (purpose === 'gap') {
+      requestGapHistory(h.deps, 'c', 3)
+      expect(h.deps.sendCommand).not.toHaveBeenCalled()
+      expect(h.held().history).toBe(failed)
+    }
+    requestGapHistory(h.deps, 'c', 1)
+    requestGapHistory(h.deps, 'c', 3)
+    expect(h.deps.sendCommand).toHaveBeenCalledTimes(1)
+    expect(h.deps.sendCommand).toHaveBeenCalledWith({ type: 'requestHistory', payload: {
+      conversation_id: 'c', cursor: 'first', limit: 200 } })
+    expect(h.held().history).toMatchObject({ status: 'requested', purpose: 'gap', gapId: 1 })
+  }
+})
+
 it('read/offline gates send nothing, replacement/removal/eviction discard in-memory evidence', () => {
   const h = harness(); h.page([1]); h.page([3], 'newer', 'newest')
   const saved = h.snapshot()

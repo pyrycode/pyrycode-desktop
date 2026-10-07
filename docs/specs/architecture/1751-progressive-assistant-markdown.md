@@ -57,6 +57,10 @@ None. Reviewed a simpler whole-reply-per-delta design; it cannot meet frozen par
 
 Sizing: one deliverable; forecast at most 800 written lines including deletions, plan and tests; at most five new exported surfaces, one consumer, five observable criteria, no I/O rejection branches. Analogue #1079 included a 406-line plan and dependency work; this plan and existing parser dependencies keep the present work smaller. Branch #1818 overlaps only unrelated permission/composer blocks; edits stay local.
 
+## Revisions
+
+2026-10-07: `remark-parse` already renders an unclosed fenced block as code after its opener ends and keeps an end-of-input closer growing into ` ```x ` in that block. No virtual fence insertion is needed; raw-source fence fixtures and browser deltas pin this behavior. Pending table cells retain parser-literal markers (the unescaped pipe inside backticks creates two cells), with whitespace between the unwrapped cells collapsing to spaces. V8 mounted function counters prove memo skips, and a scoped parser breakpoint proves subsequent inputs exclude frozen source, without production instrumentation.
+
 ## Documentation handoff
 
 Pending for documentation stage:

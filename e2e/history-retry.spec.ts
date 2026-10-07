@@ -3,9 +3,9 @@ import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { Envelope } from '../src/shared/wire/types'
 
 const ts = '2026-09-13T10:00:00.000Z'
-const pageReply = (ask: Envelope, text: string, cursor: string) => encodeEnvelope({
+const pageReply = (ask: Envelope, text: string, cursor: string, servedId: number) => encodeEnvelope({
   id: ask.id + 100, type: 'history_page', ts, in_reply_to: ask.id,
-  payload: { entries: [{ id: ask.id, type: 'message', ts,
+  payload: { entries: [{ id: servedId, type: 'message', ts,
     payload: { conversation_id: SEEDED_ROW.id, message_id: `history-${ask.id}`, role: 'user', text }
   }], cursor, at_start: false }
 })
@@ -29,7 +29,7 @@ test('history failure supports explicit same-page Retry and preserves pending ro
   await thread.focus()
   await page.keyboard.press('Home')
   await expect.poll(() => asks.length).toBe(1)
-  daemon.pushFrame(pageReply(asks[0], 'Retained history row', 'opaque/cursor=='))
+  daemon.pushFrame(pageReply(asks[0], 'Retained history row', 'opaque/cursor==', 3))
   await expect(thread.getByText('Retained history row', { exact: true })).toBeVisible()
   await page.keyboard.press('Home')
   await expect.poll(() => asks.length).toBe(2)
@@ -51,11 +51,12 @@ test('history failure supports explicit same-page Retry and preserves pending ro
   // The held response makes pending demand observable independently of renderer speed.
   await app.evaluate(() => {})
   expect(asks).toHaveLength(3)
-  daemon.pushFrame(pageReply(asks[2], 'Recovered older row', 'next-cursor'))
+  daemon.pushFrame(pageReply(asks[2], 'Recovered older row', 'next-cursor', 2))
   await expect(thread.getByText('Recovered older row', { exact: true })).toBeVisible()
   await expect(thread.getByText('Retained history row', { exact: true })).toBeVisible()
   await expect(failure).toHaveCount(0)
   await expect(thread.locator('.bubble')).toHaveCount(2)
+  await expect(thread.locator('[data-history-gap]')).toHaveCount(0)
   expect(asks).toHaveLength(3)
 
   await thread.focus()
@@ -74,7 +75,7 @@ test('history failure supports explicit same-page Retry and preserves pending ro
   await page.keyboard.press('Home')
   await expect.poll(() => asks.length).toBe(5)
   expect(asks[4].payload).toEqual(asks[3].payload)
-  daemon.pushFrame(pageReply(asks[4], 'Fresh demand recovered', 'last-cursor'))
+  daemon.pushFrame(pageReply(asks[4], 'Fresh demand recovered', 'last-cursor', 1))
   await expect(thread.getByText('Fresh demand recovered', { exact: true })).toBeVisible()
   await expect(failure).toHaveCount(0)
   expect(asks).toHaveLength(5)

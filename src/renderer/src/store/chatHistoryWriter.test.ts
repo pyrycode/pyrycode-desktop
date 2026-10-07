@@ -55,6 +55,29 @@ it('saves newest receipts with retained oldest-end coverage through protected re
 const timelineRequests = (h: ReturnType<typeof harness>) => h.save.mock.calls
   .map(([r]) => r).filter((r) => r.operation === 'replaceTimeline')
 
+it('saves metadata-only gap progress and restores it without pending or failure state', async () => {
+  const h = harness(); h.list()
+  h.receive('historyPageReceived', () => h.timelines.getState().recordHistoryPage('chat', 'oldest', true, [1]))
+  h.timelines.getState().markHistoryRequested('chat', 'a', '', 'newest')
+  h.receive('historyPageReceived', () => h.timelines.getState().recordHistoryPage('chat', 'newer', false, [5]))
+  await h.writer.flush()
+  const rows = h.timelines.getState().timelines.get('chat')!.timeline.items
+  h.timelines.getState().markHistoryRequested('chat', 'a', 'newer', 'gap', 1)
+  h.receive('historyPageReceived', () => h.timelines.getState().recordHistoryPage('chat', 'step', false, [4]))
+  await h.writer.flush()
+  const saved = timelineRequests(h).at(-1)!.snapshot
+  expect(h.timelines.getState().timelines.get('chat')!.timeline.items).toBe(rows)
+  expect(saved.gaps).toEqual([{ olderId: 1, newerId: 4, cursor: 'step' }])
+  expect(saved.coverage).toEqual({ status: 'received', cursor: 'oldest', atStart: true })
+  const parsed = parseChatHistorySnapshot(JSON.parse(JSON.stringify(saved)))
+  if (parsed.kind !== 'timeline') throw new Error('Expected timeline')
+  const fresh = createConversationTimelineStore()
+  fresh.getState().beginLocalTimelineRead('a', 'chat')!.complete(parsed)
+  expect(fresh.getState().timelines.get('chat')?.gaps).toEqual(saved.gaps)
+  expect(fresh.getState().timelines.get('chat')?.history).toBeNull()
+  await h.writer.stop()
+})
+
 describe('chat history recording', () => {
   it('captures confirmed coordinates without a held timeline, list entry or selection', async () => {
     const h = harness()

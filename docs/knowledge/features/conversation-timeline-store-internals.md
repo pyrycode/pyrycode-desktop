@@ -238,7 +238,7 @@ create a host-owned slice even with no drawable rows. Restoration seeds coverage
 and optional receipts through its explicit read handle.
 
 `requestHistoryPage` shares current ownership and local-read/pending exclusion across
-newest, older and Retry asks, using `HISTORY_PAGE_LIMIT` (200). Newest demand uses
+newest, older, gap and Retry asks, using `HISTORY_PAGE_LIMIT` (200). Newest demand uses
 `cursor: ''` regardless of held `atStart`; Retry uses captured cursor/purpose.
 `requestOlderHistory(deps, conversationId, nearTop)` additionally declines
 unaddressable ids, input outside the band, pending local reads/requests and received
@@ -256,9 +256,28 @@ checks run after receipt/writer settlement; connection loss is observed synchron
 
 `subscribeHistoryPage` owns both page and failure events independently of the live
 bridges. Pages are drawn before recording successful coverage. All failure reasons
-settle identically; neither `reason` nor `retryable` initiates or prevents a later
-qualifying connected user request. Main also settles interrupted correlations, so
+settle without automatic retry. A failed gap suppresses fresh demand only for its
+own older boundary; unrelated gap/newest/oldest failures cannot block healthy gaps,
+including nonretryable failures. Main also settles interrupted correlations, so
 abandonment without a server reply cannot leave the renderer permanently pending.
+
+Trusted upward wheel/trackpad input chooses the last chronological gap marker
+visible between the measured header/input overlays, ahead of oldest-end demand.
+ArrowUp/PageUp/Home additionally require focus on the thread itself. Without a
+visible marker, the existing oldest-end two-viewport band applies. Mounting,
+observers, arrival, resizing and programmatic scrolling send no page; offline input
+sends nothing. Each settled page needs fresh input, and pending input is discarded.
+
+`requestGapHistory` uses the gap's resume cursor or the nearest saved receipt whose
+oldest id is on its newer side. Cursors name opaque positions before a page's
+oldest entry, never ids; a cursor-less hole can require walking covered pages.
+Every selected page advances the walk, including empty/undrawable pages. Gap
+settlement preserves the independent oldest-end cursor/`atStart`; that completion
+cannot suppress gap demand or Retry. Failure keeps rows, boundary and resume
+evidence. Retry requires retryability, the same captured failure/open conversation,
+current connected host, a surviving owned gap and shared read/request eligibility.
+Unknown legacy boundaries and `history-invalid-cursor` repositioning remain with
+[#1880](https://github.com/pyrycode/pyrycode-desktop/issues/1880).
 
 ## The history/live join (#1225)
 
@@ -275,6 +294,21 @@ malformed declared saved metadata reject admission instead. The
 [snapshot contract](chat-history.md#retained-display-contributions) defines the
 allowlisted contribution operations, strict references, bounds and legacy unknown
 provenance.
+
+Known gaps derive from exact served ids held before admission, including skipped
+envelopes. Newest overlap containing the held high-water creates no tail marker;
+first opening and adjacency create none. Disjoint newest spans and older holes
+retain chronological boundaries independently of display joins. Receipt expiry
+leaves an unresolved boundary intact until surviving coverage connects it.
+
+`Timeline` places each marker before the first displayed contribution on its newer
+side, before the whole bubble when the boundary lies inside joined text. Hidden
+tool descendants map to their visible containing row. Idle copy is “Load earlier
+messages”; pending copy is “Loading earlier messages…” with status treatment;
+failure reuses “Could not load older messages” and the existing gated Retry. No
+envelope/message count is shown. Markers and tool render results share one flat
+keyed sibling list: nested tool arrays would remount held DOM despite stable keys,
+losing tool expansion and Agent identity across insertion/regrouping.
 
 ### Repeated served pages and receipt lifetime
 
@@ -437,7 +471,10 @@ joining behavior, and repeating the complete page preserves content, keys and
 row objects. See [production-admission regressions](development-verification-history.md#contribution-joins-and-held-row-regressions).
 
 New groups enter at chronological held boundaries without reordering any held
-rows. History following the last represented row enters immediately after the
+rows. Wholly unbound disjoint newest contributions use newer-side placement rather
+than the legacy prepend fallback, after represented saved rows and before
+unidentified/live suffix rows (the held tail when no represented row exists).
+History following the last represented row enters immediately after the
 **maximum represented held position**, above unrepresented live/restored suffix
 rows. Group creation order and numeric key allocation are not chronology. For
 example: admit tool call ID 2, append an unrepresented live assistant, then admit
@@ -536,9 +573,9 @@ served receipts and client row keys/allocation, including reserved placement bou
 [restoration](chat-history.md#protected-row-identities-and-saving). Persisting an
 allocator does not persist lifecycle or live state. Automatic newest-page requests
 remain with [#1815](https://github.com/pyrycode/pyrycode-desktop/issues/1815).
-Restoration and reconciliation add no request, gap marker or gap filling; existing
-reader-driven backward requests use the last successful opaque cursor. Gap policy
-remains with [#1816](https://github.com/pyrycode/pyrycode-desktop/issues/1816).
+Restoration and reconciliation create no download demand. Protected known-gap
+metadata restores markers and resume positions for fresh reader input; lifecycle
+Agent evidence itself establishes no served-id gap. See [the opening ask](#the-opening-ask-1259).
 
 ### Error handling — every row fails open
 
@@ -565,89 +602,5 @@ Worth re-checking the pair whenever a new fail-open rule joins this join, not ju
 
 ## Data flow
 
-```
-daemon frame ─(#199/#214/#217/#229/#315/#492/#495 transport, snake→camel, conversation_id dropped)→
-   DaemonEvent{assistantDelta|turnEnd|turnState|toolUse|toolResult|stallDetected|apiRetry|compacting}
-   → window.pyry.onDaemonEvent (preload channel)
-   → subscribeTimeline listener → translateTimelineEvent → ThreadEvent (or null → skip)
-   → timelineStore.dispatch → reduceTimeline → TimelineState
-   → selectItems / selectPhase / selectStalled / selectApiRetry / selectCompacting
-                                   (selectItems read by #203's Timeline view, now also carrying pending
-                                   toolCall items from #217 with results resolved by #229; selectPhase
-                                   read by #215's ThinkingIndicator view, narrowed by #493's and #496's
-                                   shouldShowThinking clauses; selectStalled read by #317's StallIndicator
-                                   view; selectApiRetry read by #493's ApiRetryIndicator view;
-                                   selectCompacting read by #496's CompactingIndicator view)
-
-fresh handshake ─(daemonConnection.ts:483, handshake-complete)→ DaemonEvent{connected, ack}
-   → window.pyry.onDaemonEvent → subscribeTimeline → translateTimelineEvent → { type: 'reconnected' }
-   → timelineStore.dispatch → reduceTimeline → phase/stalled/apiRetry/compacting/localSendPending cleared,
-                                                 items untouched
-   → timelineWriteTarget(event, null, getOpenConversationId) → the open conversation's id, or null if none
-   → if non-null: conversationTimelineStore.dispatchFor(id, event) → that slice's chrome reconciled the
-                                                 same way, its items untouched by reference (#785)
-   (#538 — a separate, connection-lifecycle path alongside the stream path above, not a stream arrival;
-    #785 gives it its first write into the keyed holder, addressed to the conversation on screen)
-
-session boundary ─(sessionTransition, #286)→ translateTimelineEvent → { type: 'sessionBoundary', ... }
-   → timelineStore.dispatch → reduceTimeline → a fresh sessionBoundary row tail-appended
-   → timelineTargetFor(event) → event.conversationId (since #1559 — the frame's own id, never the screen)
-   → conversationTimelineStore.dispatchFor(event.conversationId, event) → the same row tail-appended into
-                                                 THAT conversation's retained slice, whether or not it is
-                                                 open (#785 for the fan-out shape, #1559 for the key)
-   (#1559: the wire has carried this arm's conversation_id since #1192; before #1559 this function
-    returned null for it here and timelineWriteTarget filed the row into whichever chat was ON SCREEN —
-    reset chat A, switch to chat B while the wrap-up turn ran, and the divider drew in B, never in A)
-
-operator presses Enter ─(composerSend.ts, submitMessage, guard passed)→ optimistic echo
-   → timelineStore.dispatch({ type: 'userText', text }) → reduceTimeline →
-       localSendPending: { messageId: event.messageId ?? '', queued: false }   [#1725, was `true`]
-   → selectLocalSendPending (read by ConversationScreen's workingIndicatorStateWithLocalSend, composed
-                              on top of #215's shouldShowThinking/workingIndicatorState gate)
-   (#650 — renderer-sourced, no daemon frame, no bridge involvement; closed by the next turnState,
-    reconnected, or reset arm above, never by a fourth path of its own)
-   → a queue_state for this conversation listing that messageId later flips queued: true via
-     conversationTimelineStore.markLocalSendQueued — see Queue store § The data path and
-     Conversation timeline holder § How it works (#1725; sticky, and keyed-holder-only — it does not
-     reach the flat timelineStore above)
-
-trusted upward thread input near top, connected owner →
-   requestOlderHistory(historyAskDeps, conversationId, nearTop)
-   → pending local read/request or received atStart ? return
-     : requestHistoryPage → markHistoryRequested(id, host, cursor, 'older')
-       → sendCommand(requestHistory, cursor: last successful cursor or '', limit: 200)
-   // Scroll events and page settlement create no backwards demand.
-
-owned connected opening / owning-host connected edge →
-   createNewestHistoryDemand.sync(target, connected)
-   → loading read / pending request ? defer existing demand
-     : consume demand → requestHistoryPage(cursor: '', purpose: 'newest', limit: 200)
-   // Departure/disconnect cancels delayed demand; settlement never creates it.
-
-served history page ─(#1222 ask + transport decode, #1227 per-entry decode)→ DaemonEvent{historyPageReceived,
-   conversationId, entries: HistoryTimelineEntry[], servedIds?, cursor, atStart}
-   → window.pyry.onDaemonEvent (SAME channel, a FIFTH independent listener — historyPageBridge.ts, not
-                                 subscribeTimeline)
-   → subscribeHistoryPage → collect lifecycle from original chronological entries
-        compare served coverage for the legacy row-only fold
-        mounted path passes original typed entries even on a fully covered page
-   → prependHistoryFor(conversationId, items, retainBoundary, entries)
-        → reconcileHistory(held.timeline, held.display, entries, held.liveKeys, retainBoundary)
-        → admit unseen display contributions in durable-id order, merge held content,
-          insert new rows at held chronological boundaries, retain orphan patches
-        → return entry boundary keys for original-page lifecycle placement mapping
-        → spread held slice with timeline/display; held live state survives
-   → conversationTimelineStore.getState().recordHistoryPage(conversationId, cursor, atStart, servedIds)
-        → bound receipts, rebuild exact retained ids/highestId, retain oldest-end coverage on newest
-        → supersede loading saved-read owner; preserve settled saved presentation
-   (#1223 — no reader wiring needed beyond the existing selectTimelineFor(conversationId): the keyed
-    holder's read surface does not distinguish a live-appended row from a prepended one. Draw runs BEFORE
-    settle so a page for a since-evicted slice still finds a key to record against.)
-
-refused history ask ─(daemon-error tier's fourth member — see Request history send § Correlation)→
-   DaemonEvent{historyRequestFailed, conversationId, reason, retryable}
-   → window.pyry.onDaemonEvent → subscribeHistoryPage's settleFailure arm
-   → conversationTimelineStore.getState().recordHistoryFailure(conversationId, reason, retryable)   (#1259)
-   (all six `reason` members land here identically — nothing drawn, no banner, no timer, no re-ask;
-    captured cursor/purpose survives; explicit Retry requires retryable/current ownership)
-```
+See [the data-flow reference](conversation-timeline-store-data-flow.md) for live
+receipts, newest/oldest/gap requests and history admission.

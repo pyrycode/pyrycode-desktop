@@ -72,7 +72,33 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
-**Latest verified run: #1815, 2026-10-07 — 26 executed, 26 passed, 0 failed, 1 skipped.** The
+**Latest verified run: #1879, 2026-10-07 — 26 executed, 26 passed, 0 failed, 1 skipped.** The
+[dispatcher PASS comment](https://github.com/pyrycode/pyrycode-desktop/issues/1879#issuecomment-6048554295)
+records `feature/1879` at `609a8ba87db3`, integrated with main `bb34dbf6d3f7`, in
+run `2026-10-07T22-53-47-094Z`. The configured command installed/built then ran
+`npx playwright test --config playwright.real-claude.config.ts --reporter=json`;
+exit 0 in 4m 14s, no flaky tests. The sole skip is
+`real claude picks up a saved channel system prompt at Reset session`, with no
+reason recorded. The dispatcher removed `needs-real-claude` and advanced the ticket.
+
+The supplied per-test gate report confirms `real-daemon-history-on-open.spec.ts` →
+`a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed`
+was present, executed and passed on its first attempt in 6.2 s
+(1 executed, 1 passed, 0 failed, 0 skipped). It establishes a served saved baseline,
+fully exits Electron, writes 205 channel posts while closed and reopens the same
+protected profile. One newest ask exposes a gap; programmatic positioning creates
+no demand, and each fresh focused reader step asks once. Recovery removes the
+marker and displays all posts after the baseline in order without duplicates.
+
+This named proof uses `spawnClaude: false`, real daemon storage/transport and the
+local test relay. Suite annotations identify daemon `0.37.0` on 8 of 27 tests and
+`PYRY_BIN=/usr/local/bin/pyry`; the history test has no daemon-revision annotation.
+The counted report supplies named acceptance beyond a green exit or suite total.
+Documentation did not run tests or access dispatcher logs. See
+[known-gap verification](development-verification-history.md#known-gap-recovery-verification)
+for protected-restoration coverage and fixture traps.
+
+**Previous verified run: #1815, 2026-10-07 — 26 executed, 26 passed, 0 failed, 1 skipped.** The
 [dispatcher PASS comment](https://github.com/pyrycode/pyrycode-desktop/issues/1815#issuecomment-6047160427)
 records `feature/1815` at `b4eee350bb4d`, integrated with main `66ce9425cd88` in run
 `2026-10-07T21-21-05-639Z`. The configured command installed/built then ran

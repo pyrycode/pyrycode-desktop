@@ -13,7 +13,8 @@ timeline on demand whether its host is connected or unavailable. Restored rows r
 readable through reconnect and subsequent same-host receipts continue saving.
 Each actual connected opening and owning-host reconnect requests one newest page
 after owned read/request settlement. Offline opening waits for connection; opening
-never fills the missing range. Older pages require trusted upward thread input;
+never fills the missing range. Known gaps retain reader-driven markers and resume
+positions; older pages require trusted upward thread input;
 a retryable failed page has a Retry action. Explicit Forget/Unpair removes the host's saved content after credential removal.
 Confirmed conversation deletion removes that host/conversation's saved timeline
 and list entry.
@@ -23,64 +24,8 @@ retention is independent of the renderer holder's ten-conversation memory limit.
 
 ## API
 
-[`src/shared/chatHistory.ts`](../../../src/shared/chatHistory.ts) defines
-`ChatHistorySnapshot`, `DurableThreadItem`, `ChatHistoryRequest` and
-`ChatHistoryResult`, plus the pure `parseChatHistorySnapshot` and
-`parseChatHistoryRequest` validators. Shared code imports no renderer implementation.
-
-[`createChatHistoryStore({ secureStore, log })`](../../../src/main/chatHistoryStore.ts)
-returns `execute(request: unknown): Promise<ChatHistoryResult>`.
-[`createChatHistoryHandler({ store, pairedServers, log })`](../../../src/main/chatHistoryHandler.ts)
-returns an injected listener `(event: unknown, request: unknown)` with the same
-result. It validates and copies the request synchronously, then checks
-`pairedServers.loadById(serverId)` for existence before accessing chat storage.
-Saved hosts are eligible while disconnected or pairing-rejected; a live
-connection is never consulted.
-The store validates independently but has no pairing dependency, so saved-host
-authorization belongs to the handler. Pairing records are reduced to membership,
-never forwarded to the caller.
-
-[`src/main/index.ts`](../../../src/main/index.ts) registers one handler over one
-store for the app lifetime, sharing the existing secure store and paired-server
-store. Preload exposes `window.pyry.chatHistory(request): Promise<ChatHistoryResult>`
-on the fixed `pyry:chat-history` channel; `PyryApi` carries its type into the window.
-Reads and replacements need no handshake.
-
-The callable handler also exposes main-only `clearServer(serverId, clearCredentials)`.
-The composition root supplies it to the existing unpair handler: credential erasure
-and protected `removeServer` run in the same queue as history membership checks and
-storage operations. Earlier admitted work finishes before removal. Each history
-request captures a host generation at admission; a matched credential erase advances
-that generation before releasing the queue, even if history cleanup fails. Requests
-queued behind removal with the old generation return `unknown-host`, including after
-same-server re-pairing. Fresh requests still require saved-host membership. Calling
-renderer `removeServer` after erasing credentials cannot replace this coordination:
-it would fail membership validation.
-
-A credential erase that throws or matches no record leaves history and the generation
-untouched. After a matched erase, cleanup failure or a thrown cleanup error preserves
-the successful credential outcome, so label cleanup, connection teardown and the
-unpaired-state transition continue. `history-unpair-cleanup` records only static
-`ok` or `failed`; successful unpair alone does not establish successful history deletion.
-Successful cleanup removes the list and every timeline for that `server` identity,
-including omitted timelines, while preserving other hosts' equal conversation ids.
-
-Every request has `operation` and `serverId`. Additional fields are operation-specific:
-
-| Operation | Additional fields | Effect |
-| --- | --- | --- |
-| `readList` | None | Read the host's ordered list snapshot. |
-| `replaceList` | `snapshot` of kind `list` | Replace that list; timelines omitted from it remain saved. |
-| `readTimeline` | `conversationId` | Read the addressed timeline. |
-| `replaceTimeline` | `conversationId`, `snapshot` of kind `timeline` | Replace that timeline in full, preserving supplied row order. |
-| `removeConversation` | `conversationId` | Atomically remove its timeline and its entry from the host's saved list. |
-| `removeServer` | None | Remove every snapshot for that host, including timelines absent from its latest list. |
-
-Unknown request keys, malformed snapshots, a wrong snapshot kind, or mismatched
-snapshot/request coordinates produce `invalid-request` before any record access.
-Callers cannot supply a storage path or blob name. Snapshot schema extensions are
-discarded on projection rather than rejected; declared tool `input` remains a
-string-to-string map with its supplied keys.
+See [API and operations](chat-history-api.md) for the fixed IPC contract, saved-host
+authorization, removal ordering and supported operations.
 
 ## Snapshot contract
 
@@ -129,6 +74,36 @@ using the latter would lose the oldest paging end on restart. A live-only timeli
 and a successfully received empty page still establishes coverage.
 
 ### Served provenance and page suppression
+
+Optional protected `gaps: { olderId, newerId, cursor? }[]` records unresolved
+served-envelope boundaries separately from receipts and display contributions.
+Before newest admission, compare the page's complete served ids with the held
+high-water id: an overlap containing it creates no new tail marker; disjoint
+coverage with missing ids creates a boundary. First opening without held evidence
+and adjacency create none. Older nonconsecutive spans also qualify, and newest
+overlap preserves unresolved older holes. Valid skipped/undrawable ids cover their
+positions; timestamps, replay ids and filtered rows cannot establish a gap.
+
+Gap boundaries use nonnegative safe ids with at least one missing position between
+them. Parsing requires received paging coverage, sorted nonoverlapping boundaries,
+the existing 100,000-entry array bound and bounded string cursors, projecting only
+the three allowlisted fields. Empty cursor strings are valid. Invalid declared
+metadata rejects the whole snapshot. `gaps` may survive without `served`: receipt
+expiry loses evidence, never proves completion. Only complete surviving served
+coverage connecting the boundaries retires a gap; id magnitude does not size work.
+Legacy snapshots omit gaps and restore their rows without invented ids or holes.
+Unknown legacy-boundary recovery and refused-cursor repositioning remain with
+[#1880](https://github.com/pyrycode/pyrycode-desktop/issues/1880).
+
+Each selected backwards page advances its gap's opaque resume position even when
+covered, empty or undrawable. The writer observes cursor-only changes and includes
+gaps in canonical snapshot comparison; comparing rows alone would lose progress.
+Protected writes/fresh restoration retain boundaries, receipts/high-water and row
+identities alongside independent oldest-end coverage. Pending/failure state stays
+transient. Gaps inherit host ownership: replacement, host removal and conversation
+clearing discard slice evidence; confirmed deletion removes its protected record.
+Holder eviction drops memory evidence while detached saves and protected records
+remain available for an owned fresh read. See [reader demand and Retry](conversation-timeline-store-internals.md#the-opening-ask-1259).
 
 Version-1 timelines optionally retain `served: { ids, highestId?, receipts }`.
 `ids` is the sorted unique set of durable `HistoryEntry.id` values observed in
@@ -240,8 +215,8 @@ display evidence and row identities. Legacy display-only rows imply no entry ids
 completeness. Settled saved presentation survives newest pending/admission/failure;
 clearing it on demand would make a partial saved assistant appear to stream.
 
-The writer observes served and display changes even when row references are unchanged;
-contribution, receipt/cursor/start and allocator changes participate in canonical snapshot
+The writer observes served, display and gap changes even when row references are unchanged;
+contribution, receipt/cursor/start, gap-resume and allocator changes participate in canonical snapshot
 comparison and saving. Contribution row references are filtered to the same retained
 durable keys as snapshot items. Restoration itself still schedules no save and restores
 no live phase, pending send, permission or recovery state. Metadata inherits
@@ -328,7 +303,9 @@ shell eligibility checks run after admission/writer capture, while connection lo
 is observed synchronously so rapid connection edges survive.
 
 Backwards downloads require trusted upward wheel/trackpad input over the thread, or
-ArrowUp/PageUp/Home with the thread itself focused. The current offset must be
+ArrowUp/PageUp/Home with the thread itself focused. A visible known-gap marker
+between the measured header/input overlays takes priority, choosing the first
+boundary encountered from newer toward older rows. Without one, the current offset must be
 within the near-top band — two viewport heights, scaled by the thread's own measured
 height — before that input scrolls. Input outside
 the band only scrolls locally; entering the band needs another qualifying input.
@@ -341,24 +318,29 @@ backwards demand.
 uses `cursor: ''`, while received coverage uses the exact oldest-end cursor,
 including one restored from disk. Only `atStart: true` establishes completion;
 short, empty and all-undrawable pages do not. One request may be outstanding per
-host/conversation, shared by newest, older and Retry. Backwards demand during a
+host/conversation, shared by newest, older, gap and Retry. Backwards demand during a
 local read or pending request is discarded; lifecycle demand defers instead.
 Remaining in the band
 after a response also requires new input. There is no timer or automatic walk.
 
 Requests and failures retain same-host rows, prepend metadata and successful
-coverage. Pending/failed history retains the requested cursor and purpose (`older`
-or `newest`). Main clears outstanding history correlations before emitting classified
+coverage. Pending/failed history retains the requested cursor and purpose (`older`,
+`newest` or `gap`), plus a selected gap's older boundary. Main clears outstanding
+history correlations before emitting classified
 failure events on connection drop, terminal/error, pairing rejection or explicit
 redial, including when no server failure reply arrived. Unavailable/build/send
 failures also settle immediately. This releases pending state without retrying:
-new qualifying upward input while connected can ask again from the retained cursor
-even when the server's failure classification is nonretryable. The separate
+new qualifying upward input while connected can ask again for an oldest-end page
+even when its failure classification is nonretryable. A failed gap instead retains
+its marker/resume evidence and waits for explicit retry; unrelated gaps remain
+eligible regardless of failure purpose or retryability. The separate
 [composer Retry action](conversation-shell-composer-status.md#history-page-failure-and-retry)
 requires `retryable: true`, the displayed conversation and its connected owning host,
 and the same held failure at activation. It calls `requestHistoryPage` with the
 captured cursor/purpose and `limit: 200`; newest Retry resends `''` despite held
-`atStart`. Legacy failures fall back to backwards coverage. Pending state removes the failure affordance and rejects
+`atStart`. Gap Retry additionally requires that the captured failed gap still
+exists, and also bypasses oldest-end completion. Legacy failures fall back to
+backwards coverage. Pending state removes the failure affordance and rejects
 duplicate demand without changing rows or successful coverage. A partial history walk
 retains its oldest-end cursor through newest refreshes. Offline scrolling only exposes held
 content. Host-stamped requests cannot borrow another host's cursor, and stale

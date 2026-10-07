@@ -814,32 +814,7 @@ button.top-overlay-pill {
   display: inline;
 }
 
-/* #607 — the IN-PROGRESS assistant tail's whitespace treatment. .bubble declares no white-space, so the
-   initial `normal` collapsed every newline and every run of spaces into a single space and a
-   multi-paragraph reply arrived as one run-on block. pre-wrap is the one value the criteria leave:
-   `normal` loses the paragraph break, `pre-line` still collapses space runs and indentation, and `pre`
-   stops wrapping so a long unbroken token would widen the bubble past its measure. Not `break-spaces`
-   either — that pushes preserved spaces onto the next line instead of hanging them, which would let a run
-   of daemon-supplied spaces contribute to the box's width. Wrapping the long token is .bubble's existing
-   word-break: break-word (:298), not restated here.
-
-   Hung on its OWN modifier: .bubble would reach .bubble--user, and .bubble--daemon would reach the four
-   chrome affordances below (thinking / stall / api-retry / compacting). Each of those renders a
-   single-line client-owned constant today, so the rule would be visually inert there — but "inert
-   because we read the four literals" needs re-verifying every time a fifth is added, whereas a modifier
-   makes it structural.
-
-   #609 NARROWED THE SUBJECT AGAIN, by that same argument: ConversationScreen.tsx now emits this modifier
-   only while the reply is still growing. A settled reply renders through .bubble__markdown below, where
-   whitespace is markdown's to decide — and it is markdown's by ABSENCE of this declaration, not by an
-   override one level down, so a new element type inside that container cannot silently inherit pre-wrap.
-   The modifier's name reads as "the assistant text" but now means "the plain-text streaming tail"; the
-   rename would touch four files for no behavioural gain, so the meaning lives here instead. */
-.bubble--assistant-text {
-  white-space: pre-wrap;
-}
-
-/* #609 — the settled reply's markdown container (Figma 16:43): a flex column with an 8px gap between
+/* The streaming and settled markdown container (Figma 16:43): a flex column with an 8px gap between
    blocks. The bubble's own fill, padding and radius are already .bubble + .bubble--daemon — #969
    redrew all three from the desktop `Message` (20/16 padding, 6px on all four corners, the
    --color-on-primary-fixed fill), and none of that reaches this container — and its items-start +

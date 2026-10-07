@@ -97,6 +97,42 @@ opacity-on-focus set (asserted over both rows at once, per this file's no-`nth()
 and a click at the dot's own centre still moving `aria-current`. Rounded deltas are normalised against
 `-0` before any `toBe(0)` (the #868 rule).
 
+### Testing pointer observations
+
+The Chats-row regression uses local `expectPointerTreatment` observations: every
+polling attempt delivers real pointer input, then reads target `:hover`, hovered-row
+count, wrapper fills and both chevron/pen opacity sets together. Over the resting
+button and its trailing glyph, the exact fills are `rgb(19, 74, 116)` for the hovered
+row and `rgb(0, 51, 85)` for the open row. Parking at `(0, 0)` requires no hovered
+rows, a transparent resting fill and hidden controls. Keyboard focus and activation
+remain separate assertions.
+
+Native input from another shown Linux window can clear hover after `hover()` returns;
+polling the fill without re-delivering input would leave that state unrepaired.
+The [controlled observation and verifier review](https://github.com/pyrycode/pyrycode-desktop/pull/1835#issuecomment-6030115528)
+confirm unchanged row CSS, recovery after an outside-row pointer move, and failure
+with confirmed hover when the hover-background declaration is removed from a scratch
+built renderer. The synchronization therefore still catches a missing hover fill.
+See [Layout and input](development-verification.md#layout-and-input) for the method.
+
+Recorded acceptance for
+`a Chats row is the desktop 24px row: no time, body-small label, 6px corner, 4px pitch`
+on 2026-10-07, Linux x86_64 with shown Xvfb windows, three configured and actual
+workers, retries disabled:
+
+| Run / revision | Executed | Passed | Failed | Skipped | Named test |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Focused 20 repetitions, `188fd6b741c9a5bc242b7d1fda1f5b00700f0683` | 20 | 20 | 0 | 0 | All 20 present and passed, attempt 0 |
+| Full default fake-transport verifier gate 6, `d89188e849041c95d21987938915fd0f74db56cb` | 324 | 324 | 0 | 4 | 1 executed, 1 passed, 0 failed, 0 skipped, attempt 0 |
+
+The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1835#issuecomment-6030115528)
+confirms the named test in both reports and unchanged test, fixtures and row CSS
+between those revisions. The builder's earlier full run at `188fd6b7` executed 322:
+321 passed, 1 failed, 4 skipped; this test separately executed/passed once with
+0 failed/skipped, attempt 0. Its unrelated attachment-pill failure is tracked by
+[#1833](https://github.com/pyrycode/pyrycode-desktop/issues/1833). No live Claude run
+was required for this fake-transport regression.
+
 ### #1441: A Chats row now carries both controls, not one
 
 Juhana's 2026-09-14 desktop sidebar drawing reuses this same Channel row component in the Chats section,

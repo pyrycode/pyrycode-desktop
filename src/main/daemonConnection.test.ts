@@ -11392,6 +11392,7 @@ describe('createDaemonConnection — requestHistory (history page request/reply,
         type: 'historyPageReceived',
         conversationId: CONV,
         entries: [DECODED_ENTRY],
+        servedIds: [ENTRY.id],
         cursor: CURSOR,
         atStart: false
       }
@@ -11433,7 +11434,7 @@ describe('createDaemonConnection — requestHistory (history page request/reply,
     })
 
     expect(emitted(sink).filter((e) => e.type === 'historyPageReceived')).toEqual([
-      { type: 'historyPageReceived', conversationId: CONV, entries: [], cursor: CURSOR, atStart: false }
+      { type: 'historyPageReceived', conversationId: CONV, entries: [], servedIds: [1, 2], cursor: CURSOR, atStart: false }
     ])
   })
 
@@ -11480,6 +11481,7 @@ describe('createDaemonConnection — requestHistory (history page request/reply,
         type: 'historyPageReceived',
         conversationId: CONV,
         entries: [DECODED_ENTRY],
+        servedIds: [ENTRY.id],
         cursor: '',
         atStart: true
       }

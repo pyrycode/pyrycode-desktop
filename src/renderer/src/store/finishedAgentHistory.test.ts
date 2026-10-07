@@ -19,11 +19,14 @@ const launch = (id = 'a', parentToolUseId?: string, name = 'Agent') => entry(1, 
 function harness() {
   const agents = createBackgroundTaskRosterStore()
   const timelines = createConversationTimelineStore()
-  const page = (entries: HistoryTimelineEntry[]) => {
+  const page = (entries: HistoryTimelineEntry[], servedIds?: number[]) => {
     const placements: { event: Extract<HistoryTimelineEntry['event'], { type: 'backgroundTaskStarted' | 'backgroundTaskUpdated' }>; before: number }[] = []
-    const items = reduceHistoryPage(entries, timelines.getState().timelines.get('c')?.liveKeys, p => placements.push(p))
+    const covered = new Set(timelines.getState().timelines.get('c')?.served?.ids)
+    const repeated = servedIds !== undefined && servedIds.length > 0 && servedIds.every(id => covered.has(id))
+    const items = reduceHistoryPage(entries, timelines.getState().timelines.get('c')?.liveKeys, p => placements.push(p), repeated)
     const keys = timelines.getState().prependHistoryFor('c', items, placements.length > 0)
     agents.getState().recordHistoryPlacements('c', placements.map(p => ({ ...p, before: keys[p.before] })))
+    timelines.getState().recordHistoryPage('c', 'cursor', false, servedIds)
   }
   const state = () => timelines.getState().timelines.get('c')!
   const project = () => groupToolRows(state().timeline.items, agents.getState().agentTimeline.get('c'), state().timeline.rowKeys, state().prependedRows)
@@ -169,4 +172,20 @@ describe('finished Agent history', () => {
     h.agents.getState().resetRostersFor(new Set(['c']))
     expect(h.agents.getState().agentTimeline.size).toBe(0)
   })
+})
+
+it('fully covered lifecycle pages collect qualification without duplicating rows or moving the finish', () => {
+  const h = harness()
+  const entries = [user(5), finish(), start(), launch()]
+  h.page(entries, [1, 2, 4, 5])
+  const before = h.state().timeline
+  const evidence = h.agents.getState().agentTimeline.get('c')?.get('a')
+  h.timelines.getState().dispatchFor('c', { type: 'turnState', state: 'thinking' })
+  h.page(entries, [1, 2, 4, 5])
+  expect(h.state().timeline.items).toEqual(before.items)
+  expect(h.state().timeline.rowKeys).toEqual(before.rowKeys)
+  expect(h.state().timeline.phase).toBe('thinking')
+  expect(h.agents.getState().agentTimeline.get('c')?.get('a')).toEqual(evidence)
+  expect(h.project().filter(r => r.marker)).toHaveLength(1)
+  expect(h.agents.getState().rosters.size).toBe(0)
 })

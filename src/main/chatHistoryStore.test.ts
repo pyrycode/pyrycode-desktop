@@ -203,3 +203,21 @@ describe('protected chat history storage', () => {
     expect(await h.disk.read(name)).toEqual(before)
   })
 })
+
+it('retains exact served receipts and reserved client identities across fresh protected instances', async () => {
+  const h = await setup()
+  const snapshot = { ...timeline(), coverage: { status: 'received', cursor: 'opaque', atStart: false },
+    served: { ids: [0, 7], highestId: 7, receipts: [
+      { ids: [0, 7], cursor: 'first', atStart: false }, { ids: [], cursor: 'opaque', atStart: false }
+    ] }, rowIdentity: { rowKeys: [-8], nextRowKey: 42 } }
+  expect(await h.store.execute(replace(snapshot))).toEqual({ status: 'ok' })
+  const secureStore = createSecureStore({ encryption: h.encryption, persistence: h.disk })
+  const fresh = createChatHistoryStore({ secureStore, log: { event: () => {} } })
+  expect(await fresh.execute({ operation: 'readTimeline', serverId: 'a', conversationId: 'chat' }))
+    .toEqual({ status: 'stored', snapshot })
+  const invalid = { ...snapshot, served: { ...snapshot.served, highestId: 8 } }
+  expect(await fresh.execute(replace(invalid)))
+    .toEqual({ status: 'error', code: 'invalid-request' })
+  expect(h.lines.join('')).not.toContain('opaque')
+  expect(h.lines.join('')).not.toContain('private-content')
+})

@@ -10478,6 +10478,7 @@ const DECODED_ENTRY: DecodedHistoryEntry = {
 
 /** What HISTORY_PAGE decodes to (#1227) — `cursor`/`at_start` still exactly as served. */
 const DECODED_PAGE: DecodedHistoryPage = {
+  servedIds: [HISTORY_ENTRY.id],
   entries: [DECODED_ENTRY],
   cursor: HISTORY_PAGE.cursor,
   at_start: false
@@ -10525,7 +10526,7 @@ describe('parseInboundMessage — history_page recognition (#1222, additive)', (
     const terminal: HistoryPagePayload = { entries: [], cursor: '', at_start: true }
     expect(parseInboundMessage(encodeHistoryPage(terminal))).toEqual({
       kind: 'history-page',
-      historyPage: { entries: [], cursor: '', at_start: true }
+      historyPage: { entries: [], servedIds: [], cursor: '', at_start: true }
     })
   })
 
@@ -10535,7 +10536,7 @@ describe('parseInboundMessage — history_page recognition (#1222, additive)', (
     const terminal: HistoryPagePayload = { entries: [HISTORY_ENTRY], cursor: '', at_start: true }
     expect(parseInboundMessage(encodeHistoryPage(terminal))).toEqual({
       kind: 'history-page',
-      historyPage: { entries: [DECODED_ENTRY], cursor: '', at_start: true }
+      historyPage: { entries: [DECODED_ENTRY], servedIds: [412], cursor: '', at_start: true }
     })
   })
 
@@ -10552,7 +10553,7 @@ describe('parseInboundMessage — history_page recognition (#1222, additive)', (
     }
     expect(parseInboundMessage(encodeHistoryPage(exotic))).toEqual({
       kind: 'history-page',
-      historyPage: { entries: [], cursor: 'c', at_start: false }
+      historyPage: { entries: [], servedIds: [412], cursor: 'c', at_start: false }
     })
   })
 
@@ -10570,7 +10571,7 @@ describe('parseInboundMessage — history_page recognition (#1222, additive)', (
     }
     expect(parseInboundMessage(encodeHistoryPage(nested))).toEqual({
       kind: 'history-page',
-      historyPage: { entries: [], cursor: 'c', at_start: false }
+      historyPage: { entries: [], servedIds: [412, 411], cursor: 'c', at_start: false }
     })
   })
 
@@ -11006,7 +11007,7 @@ describe('parseInboundMessage — history entry payload decode (#1227)', () => {
     }
     expect(parseInboundMessage(encodeHistoryPage(page))).toEqual({
       kind: 'history-page',
-      historyPage: { entries: [], cursor: 'still-usable', at_start: false }
+      historyPage: { entries: [], servedIds: [1, 1], cursor: 'still-usable', at_start: false }
     })
   })
 
@@ -12188,5 +12189,22 @@ describe('history background lifecycle placement', () => {
   ])('skips malformed %s without losing a valid sibling', (type, payload) => {
     expect(decodedEntries([historyEntry(type, payload), historyEntry('background_task_updated', BACKGROUND_TASK_UPDATED)]))
       .toHaveLength(1)
+  })
+})
+
+describe('complete served history evidence', () => {
+  it('retains valid envelope IDs for unsupported and malformed payloads, including zero and safe maximum', () => {
+    const result = parseInboundMessage(encodeHistoryPage({ entries: [
+      historyEntry('future', {}, 0), historyEntry('assistant_delta', {}, Number.MAX_SAFE_INTEGER)
+    ], cursor: 'opaque', at_start: false }))
+    expect(result).toMatchObject({ kind: 'history-page', historyPage: {
+      entries: [], servedIds: [0, Number.MAX_SAFE_INTEGER], cursor: 'opaque', at_start: false
+    } })
+    expect(parseInboundMessage(encodeHistoryPage({ entries: [], cursor: '', at_start: true })))
+      .toMatchObject({ historyPage: { servedIds: [] } })
+  })
+  it.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1])('rejects invalid durable ID %s before admitting any entry', id => {
+    expect(() => parseInboundMessage(encodeHistoryPage({ ...HISTORY_PAGE,
+      entries: [HISTORY_ENTRY, historyEntry('future', {}, id)] }))).toThrow()
   })
 })

@@ -129,3 +129,42 @@ describe('saved received read IDs', () => {
     }
   })
 })
+
+describe('served provenance and row identity validation', () => {
+  const metadata = { ids: [0, 5], highestId: 5, receipts: [
+    { ids: [0, 5], cursor: 'first', atStart: false }, { ids: [], cursor: 'opaque', atStart: false }
+  ] }
+  const value = { ...timeline, items: [items[0]], served: metadata,
+    rowIdentity: { rowKeys: [-4], nextRowKey: 8 } }
+  it('detaches allowlisted metadata without inventing holes or empty-conversation evidence', () => {
+    const parsed = parseChatHistorySnapshot({ ...value, served: { ...metadata, phase: 'thinking' } })
+    expect(parsed).toEqual(value)
+    expect(parsed).not.toBe(value)
+    expect(parseChatHistorySnapshot(timeline)).not.toHaveProperty('served')
+  })
+  it.each([
+    { ids: [0, 5], highestId: 4, receipts: metadata.receipts },
+    { ids: [0, 1, 5], highestId: 5, receipts: metadata.receipts },
+    { ids: [-1], highestId: -1, receipts: metadata.receipts },
+    { ids: [0, 0, 5], highestId: 5, receipts: metadata.receipts },
+    { ids: [5, 0], highestId: 5, receipts: metadata.receipts },
+    { ...metadata, receipts: [{ ids: [0], cursor: 'opaque', atStart: false }] },
+    { ...metadata, receipts: [{ ids: [0, 5], cursor: 1, atStart: false }] },
+    { ...metadata, receipts: [{ ids: [0, 5], cursor: 'c', atStart: null }] },
+    { ...metadata, highestId: undefined },
+    null
+  ])('rejects inconsistent declared served evidence %#', served => {
+    expect(() => parseChatHistorySnapshot({ ...value, served })).toThrow()
+  })
+  it.each([
+    { rowKeys: [], nextRowKey: 8 }, { rowKeys: [1], nextRowKey: 1 },
+    { rowKeys: [1.5], nextRowKey: 8 }, { rowKeys: [1], nextRowKey: Number.MAX_SAFE_INTEGER },
+    { rowKeys: [1], nextRowKey: Number.MAX_SAFE_INTEGER - 1 }, null
+  ])('rejects invalid allocation evidence %#', rowIdentity => {
+    expect(() => parseChatHistorySnapshot({ ...value, rowIdentity })).toThrow()
+  })
+  it('rejects duplicate row references', () => {
+    expect(() => parseChatHistorySnapshot({ ...value, items: [items[0], items[1]],
+      rowIdentity: { rowKeys: [1, 1], nextRowKey: 8 } })).toThrow()
+  })
+})

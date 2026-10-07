@@ -362,3 +362,47 @@ test('an upward input asks from up to two viewport heights below the top and not
     limit: 200
   } satisfies RequestHistoryPayload)
 })
+
+test('a correlated repeated served page contributes assistant and tool rows only once', async ({ launchPairedApp }) => {
+  const captured: Envelope[] = []
+  const entries: HistoryPagePayload['entries'] = [
+    { id: 503, type: 'assistant_delta', ts: FIXED_TS, payload: {
+      conversation_id: SEEDED_ROW.id, turn_id: 'receipt-turn', seq: 0, text: 'Assistant receipt once'
+    } },
+    { id: 502, type: 'tool_result', ts: FIXED_TS, payload: {
+      conversation_id: SEEDED_ROW.id, turn_id: 'receipt-turn', tool_use_id: 'receipt-tool',
+      is_error: false, result_summary: 'Tool receipt once'
+    } },
+    { id: 501, type: 'tool_use', ts: FIXED_TS, payload: {
+      conversation_id: SEEDED_ROW.id, turn_id: 'receipt-turn', tool_use_id: 'receipt-tool',
+      name: 'Read', input_summary: 'receipt input'
+    } },
+    ...Array.from({ length: OPENING_ENTRIES }, (_, i) => storedMessageEntry(400 + i, openingText(i)))
+  ]
+  const { page } = await launchPairedApp({ buildReplyFrames: bytes => {
+    const env = decodeEnvelope(bytes)
+    captured.push(env)
+    if (env.type !== 'request_history') return [seedConversationsFrame()]
+    const cursor = (env.payload as RequestHistoryPayload).cursor
+    if (cursor === '') return [historyPageFrame(env.id, entries, 'repeat', false)]
+    if (cursor === 'repeat') return [historyPageFrame(env.id, entries, 'settled-repeat', false)]
+    if (cursor === 'settled-repeat') return [historyPageFrame(env.id, [], '', true)]
+    return []
+  } })
+  const thread = page.locator('.conversation__thread')
+  const assistant = thread.locator('.bubble[data-thread-role="assistant"]')
+  const tools = thread.locator('.tool-row:not(.tool-run__row)')
+  await scrollBack(page, 0)
+  await expect(assistant).toHaveCount(1)
+  await expect(assistant).toContainText('Assistant receipt once')
+  await expect(tools).toHaveCount(1)
+  await expect(tools).toContainText('receipt input')
+  await expect(tools).toHaveClass(/tool-row--resolved/)
+  await walkBackUntilAskFor(page, captured, 'repeat')
+  // Asking from the new cursor proves the repeated page has actually settled in the mounted store.
+  await walkBackUntilAskFor(page, captured, 'settled-repeat')
+  await expect(assistant).toHaveCount(1)
+  await expect(tools).toHaveCount(1)
+  await expect(thread.locator('.bubble[data-thread-role="user"]')).toHaveCount(OPENING_ENTRIES)
+  expect(historyAsks(captured).map(ask => ask.cursor)).toEqual(['', 'repeat', 'settled-repeat'])
+})

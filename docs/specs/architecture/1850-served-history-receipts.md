@@ -70,3 +70,9 @@ None. Exact sets are simpler than interval compression and never invent coverage
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-07
+
+## Revisions
+
+2026-10-07: Snapshot pager coverage may advance on a narrow legacy event without served metadata. Therefore cursor/start coverage remains independent of the receipt list's latest member; require received coverage when served evidence exists, but compare complete ID coverage against the receipt union/high-water, not the legacy pager cursor. This preserves known receipts without inventing an empty served page for an unknown legacy event.
+
+2026-10-07: Adversarial allocator regression exposed that a safe integer near the maximum cannot allocate even one lifecycle-bearing prepend. Snapshot rowIdentity now requires headroom for the existing 100,000-row collection bound plus one placement reservation. This closes the unsafe restored-allocation finding without changing live reducers.

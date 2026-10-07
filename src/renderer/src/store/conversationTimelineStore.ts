@@ -158,6 +158,7 @@ export interface ConversationSlice {
   history: HistoryRequestState | null
   /** Last successful page coverage, independent of transient request status. */
   coverage?: SavedTimeline['coverage']
+  served?: SavedTimeline['served']
   /**
    * How many rows a served history page has ever PREPENDED onto `timeline.items` for this conversation
    * (#1260) — a monotonically rising count, never reset while the slice lives.
@@ -328,7 +329,7 @@ export type ConversationTimelineStore = ConversationTimelineState & {
   prependHistoryFor: (conversationId: string, items: readonly ThreadItem[], retainBoundary?: boolean) => readonly number[]
   recordPlacementJoin: (conversationId: string, joinKey: string | undefined) => void
   markHistoryRequested: (conversationId: string, serverId?: string) => void
-  recordHistoryPage: (conversationId: string, cursor: string, atStart: boolean) => void
+  recordHistoryPage: (conversationId: string, cursor: string, atStart: boolean, servedIds?: readonly number[]) => void
   recordHistoryFailure: (
     conversationId: string,
     reason: HistoryRequestFailure,
@@ -605,10 +606,10 @@ export function createConversationTimelineStore(
               fail()
               return
             }
-            settle(current => ({ ...emptySlice, serverId, localRead: 'loaded', coverage: snapshot.coverage, restored: { serverId, coverage: snapshot.coverage },
+            settle(current => ({ ...emptySlice, serverId, localRead: 'loaded', coverage: snapshot.coverage, served: snapshot.served, restored: { serverId, coverage: snapshot.coverage },
               timeline: { ...current.timeline, items: snapshot.items,
-                rowKeys: snapshot.items.map((_, index) => index - snapshot.prependedRows),
-                nextRowKey: snapshot.items.length - snapshot.prependedRows },
+                rowKeys: snapshot.rowIdentity?.rowKeys ?? snapshot.items.map((_, index) => index - snapshot.prependedRows),
+                nextRowKey: snapshot.rowIdentity?.nextRowKey ?? snapshot.items.length - snapshot.prependedRows },
               prependedRows: snapshot.prependedRows }))
           } catch { fail() }
         },
@@ -779,8 +780,26 @@ export function createConversationTimelineStore(
         return { timelines }
       }),
     // Only a successful page advances coverage, even when it contains no drawable rows.
-    recordHistoryPage: (conversationId, cursor, atStart) =>
-      set((s) => withHistory(s, conversationId, { status: 'loaded', cursor, atStart })),
+    recordHistoryPage: (conversationId, cursor, atStart, servedIds) =>
+      set(s => {
+        if (servedIds === undefined) return withHistory(s, conversationId, { status: 'loaded', cursor, atStart })
+        const held = receivedSlice(s.timelines.get(conversationId)) ?? emptySlice
+        const pageIds = [...new Set(servedIds)].sort((a, b) => a - b)
+        const ids = [...new Set([...(held.served?.ids ?? []), ...pageIds])].sort((a, b) => a - b)
+        const receipt = { ids: pageIds, cursor, atStart }
+        // Preserve the latest exact cursor even when an identical older receipt is repeated.
+        const receipts = [...(held.served?.receipts ?? []).filter(r =>
+          r.cursor !== cursor || r.atStart !== atStart || r.ids.length !== pageIds.length ||
+          r.ids.some((id, index) => id !== pageIds[index])), receipt]
+        const highestId = ids[ids.length - 1]
+        const slice: ConversationSlice = { ...held, serverId: receiptHost() ?? held.serverId,
+          served: { ids, receipts, ...(highestId === undefined ? {} : { highestId }) },
+          history: { status: 'loaded', cursor, atStart },
+          coverage: { status: 'received', cursor, atStart }, localRead: undefined }
+        return { timelines: s.timelines.has(conversationId)
+          ? new Map(s.timelines).set(conversationId, slice)
+          : withNewSliceAtHead(s.timelines, conversationId, slice) }
+      }),
     // Settle without retrying; the next qualifying user input decides whether to ask.
     recordHistoryFailure: (conversationId, reason, retryable) =>
       set((s) => withHistory(s, conversationId, { status: 'failed', reason, retryable }, receiptHost() ?? undefined)),

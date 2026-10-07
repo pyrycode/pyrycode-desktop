@@ -42,10 +42,19 @@ export type DurableThreadItem =
   | { kind: 'banner'; level: string; text: string; stopsTurn: boolean; truncated: boolean }
   | { kind: 'modelRefusal'; refusal: ModelRefusalEvent }
 
+/** Exact served provenance; never entry-to-display contribution evidence. */
+export type ServedHistory = {
+  ids: readonly number[]
+  highestId?: number
+  receipts: readonly { ids: readonly number[]; cursor: string; atStart: boolean }[]
+}
+
 export type ChatHistorySnapshot = { version: 1; serverId: string } & (
   | { kind: 'list'; conversations: ConversationSummary[] }
   | {
       kind: 'timeline'; conversationId: string; items: DurableThreadItem[]; prependedRows: number
+      served?: ServedHistory
+      rowIdentity?: { rowKeys: readonly number[]; nextRowKey: number }
       coverage: { status: 'unknown' } | { status: 'received'; cursor: string; atStart: boolean }
     }
 )
@@ -187,6 +196,33 @@ function readId(value: unknown): number {
   return value
 }
 
+function orderedIds(value: unknown): number[] {
+  const ids = array(value, readId)
+  if (ids.some((id, index) => index > 0 && id <= ids[index - 1])) return invalid()
+  return ids
+}
+function servedHistory(value: unknown): ServedHistory {
+  const v = record(value)
+  const ids = orderedIds(v.ids)
+  let total = 0
+  const receipts = array(v.receipts, value => {
+    const r = record(value)
+    const ids = orderedIds(r.ids)
+    total += ids.length
+    if (total > 100_000) return invalid()
+    return { ids, cursor: string(r.cursor), atStart: bool(r.atStart) }
+  })
+  const union = [...new Set(receipts.flatMap(r => r.ids))].sort((a, b) => a - b)
+  const highestId = optional(v.highestId, readId)
+  if (receipts.length === 0 || ids.length !== union.length ||
+    ids.some((id, index) => id !== union[index]) || highestId !== ids[ids.length - 1]) return invalid()
+  return { ids, receipts, ...(highestId === undefined ? {} : { highestId }) }
+}
+function signedSafe(value: unknown): number {
+  const n = number(value)
+  return Number.isSafeInteger(n) ? n : invalid()
+}
+
 /** Parsers return detached, allowlisted data; callers contain the static validation failures. */
 export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
   const v = record(value)
@@ -217,9 +253,25 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
   const coverage = status === 'unknown' ? { status } : { status, cursor: string(c.cursor), atStart: bool(c.atStart) }
   const prependedRows = number(v.prependedRows)
   if (!Number.isSafeInteger(prependedRows) || prependedRows < 0) return invalid()
+  const items = array(v.items, threadItem)
+  const served = optional(v.served, servedHistory)
+  if (served !== undefined) {
+    // Narrow legacy events can advance the pager without declaring served provenance.
+    if (coverage.status !== 'received') return invalid()
+  }
+  const rowIdentity = optional(v.rowIdentity, value => {
+    const r = record(value)
+    const rowKeys = array(r.rowKeys, signedSafe)
+    const nextRowKey = signedSafe(r.nextRowKey)
+    if (rowKeys.length !== items.length || new Set(rowKeys).size !== rowKeys.length ||
+      // Leave room for a maximally bounded prepend and its reserved placement boundary.
+      nextRowKey > Number.MAX_SAFE_INTEGER - 100_001 || rowKeys.some(key => key >= nextRowKey)) return invalid()
+    return { rowKeys, nextRowKey }
+  })
   return {
     version: 1, kind: 'timeline', serverId, conversationId: id(v.conversationId),
-    items: array(v.items, threadItem), prependedRows, coverage
+    items, prependedRows, coverage,
+    ...(served === undefined ? {} : { served }), ...(rowIdentity === undefined ? {} : { rowIdentity })
   }
 }
 

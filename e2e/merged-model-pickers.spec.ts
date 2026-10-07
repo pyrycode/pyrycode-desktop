@@ -13,6 +13,76 @@ const frame = (type: EnvelopeType, payload: unknown, in_reply_to?: number) => en
 })
 
 for (const entry of ['footer', 'sheet'] as const) {
+  for (const outgoing of ['claude', 'codex'] as const) {
+    test(`${entry} switching a previously used ${outgoing} channel discards its outgoing announcement`, async ({ launchPairedApp }) => {
+      const sent: Envelope[] = []
+      let agent: WireAgent = outgoing
+      const source = outgoing === 'claude' ? claude : codex
+      const target = outgoing === 'claude' ? codex : claude
+      const targetAgent = target.agent ?? 'claude'
+      let model = source.value
+      const { page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
+        const e = decodeEnvelope(bytes); sent.push(e)
+        if (e.type === 'list_conversations') return [frame('conversations', { conversations: [{ ...SEEDED_ROW, agent }] })]
+        if (e.type === 'request_session_settings') return [frame('session_settings', {
+          session_id: 'session', model, effort: 'low', effective_effort: 'low', permission_mode: 'default',
+          yolo: false, used_tokens: 0, window_tokens: 200_000
+        }, e.id)]
+        return []
+      } })
+      daemon.pushFrame(frame('model_list', { conversation_id: SEEDED_ROW.id, models: rows, dropped_models: 0 }))
+      daemon.pushFrame(frame('model_announced', { conversation_id: SEEDED_ROW.id, model: source.resolved_model, truncated: false }))
+      const trigger = page.locator('.composer__model')
+      const sourceLabel = outgoing === 'claude' ? 'Sonnet' : codex.display_name
+      const targetLabel = targetAgent === 'claude' ? 'Sonnet' : codex.display_name
+      const sheet = page.locator('.status-sheet')
+      const openSheet = async () => {
+        if (await sheet.count()) return
+        await page.locator('.conversation__overflow-trigger').click()
+        await page.getByRole('menuitem', { name: 'Run configuration', exact: true }).click()
+      }
+      const closeSheet = async () => { if (await sheet.count()) await sheet.getByRole('button', { name: 'Close', exact: true }).click() }
+      const pickTarget = async () => {
+        if (entry === 'footer') {
+          await trigger.click()
+          await page.getByRole('menu', { name: 'Model', exact: true }).getByRole('menuitem', { name: targetLabel, exact: true }).click()
+        } else {
+          await openSheet()
+          await page.locator('.run-config__model-row').filter({ hasText: target.display_name }).click()
+        }
+      }
+      const dialog = page.getByRole('dialog', { name: `Switch to ${targetAgent === 'claude' ? 'Claude' : 'Codex'}?`, exact: true })
+      const switches = () => sent.filter(e => e.type === 'switch_agent')
+      await expect(trigger).toHaveText(sourceLabel)
+      await openSheet()
+      await expect(page.locator('.run-config__running-value')).toHaveText(outgoing === 'claude' ? source.resolved_model : source.display_name)
+      await closeSheet()
+      await pickTarget()
+      await expect(trigger).toHaveText(sourceLabel)
+      await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expect(trigger).toHaveText(sourceLabel)
+      await pickTarget()
+      await dialog.getByRole('button', { name: 'Switch', exact: true }).click()
+      await expect.poll(() => switches().length).toBe(1)
+      daemon.pushFrame(frame('error', { code: 'switch_agent.refused', message: 'refused', retryable: true }, switches()[0].id))
+      await expect(trigger).toHaveText(sourceLabel)
+      await pickTarget()
+      await dialog.getByRole('button', { name: 'Switch', exact: true }).click()
+      await expect.poll(() => switches().length).toBe(2)
+      expect(switches()[1].payload).toEqual({ conversation_id: SEEDED_ROW.id, agent: targetAgent, model: target.value, effort: 'low' })
+      agent = targetAgent; model = target.value
+      daemon.pushFrame(frame('conversations', { conversations: [{ ...SEEDED_ROW, agent }] }))
+      await expect(page.locator('.composer-status__label')).toHaveCount(0)
+      await closeSheet(); await openSheet()
+      await expect(trigger).toHaveText(targetLabel)
+      await expect(page.locator('.run-config__model-row').filter({ hasText: target.display_name }).getByRole('img', { name: 'Current model' })).toBeVisible()
+      await expect(page.locator('.run-config__effort-segment')).toHaveText(target.effort_levels)
+      expect(sent.filter(e => e.type === 'set_session_settings')).toHaveLength(0)
+    })
+  }
+}
+
+for (const entry of ['footer', 'sheet'] as const) {
   for (const priorOwnPick of [false, true]) {
     // https://github.com/pyrycode/pyrycode-desktop/issues/1845
     const run = priorOwnPick ? test.skip : test

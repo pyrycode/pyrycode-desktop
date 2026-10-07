@@ -130,12 +130,13 @@ export interface AnnouncedModelState {
   announced: ReadonlyMap<string, AnnouncedModel>
 }
 
-/** Store shape = state + the two mutation entry points. The mutations live here and NOT on
+/** Store shape = state + the mutation entry points. The mutations live here and NOT on
  *  `AnnouncedModelState`, so the selector — typed against the state-only interface — cannot see them
  *  and `initialAnnouncedModelState` stays assignable. */
 export type AnnouncedModelStore = AnnouncedModelState & {
   setAnnouncedModel: (snapshot: AnnouncedModelSnapshot) => void
   clearAnnouncedModel: () => void
+  clearAnnouncedModelFor: (conversationId: string) => void
 }
 
 export const initialAnnouncedModelState: AnnouncedModelState = { announced: new Map() }
@@ -210,7 +211,13 @@ export function createAnnouncedModelStore(
         })
         return { announced: next }
       }),
-    clearAnnouncedModel: () => set(initialAnnouncedModelState)
+    clearAnnouncedModel: () => set(initialAnnouncedModelState),
+    // An authoritative agent switch invalidates only this conversation's outgoing running model.
+    clearAnnouncedModelFor: (conversationId) => set((s) => {
+      const next = new Map(s.announced)
+      next.delete(conversationId)
+      return { announced: next }
+    })
   }))
 }
 
@@ -248,9 +255,8 @@ export function useAnnouncedModelStore<T>(selector: (s: AnnouncedModelStore) => 
  * stable reference, so no `EMPTY_*` module constant is needed. The nullable return also forces a
  * consumer to branch, so the distinction cannot be ignored accidentally.
  *
- * The exposed mutations are exactly `setAnnouncedModel` and `clearAnnouncedModel`; both are store-owned
- * and invoked only by wiring — the subscription for the first, `clearPairingScopedState` (its sole
- * caller) for the second — never two-way-bound from a component.
+ * Store-owned mutations are invoked by wiring: announcements by the bridge, whole-map clearing by
+ * pairing teardown, and per-conversation clearing by authoritative agent-switch success.
  */
 export const selectAnnouncedModelFor =
   (conversationId: string) =>

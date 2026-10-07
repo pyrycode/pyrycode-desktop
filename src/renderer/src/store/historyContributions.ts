@@ -1,7 +1,7 @@
 import { MAX_CHAT_HISTORY_ITEMS, type DurableThreadItem, type HistoryContribution } from '@shared/chatHistory'
 import type { HistoryTimelineEntry } from '@shared/ipc/events'
 import { joinKeyFor, translateTimelineEvent } from './timelineBridge'
-import { initialTimelineState, reduceTimeline, type ThreadItem, type TimelineState } from './threadTimeline'
+import { initialTimelineState, openBubbleIndex, reduceTimeline, type ThreadItem, type TimelineState } from './threadTimeline'
 import { withoutLiveEntries } from './historyPageBridge'
 
 function contribution(entry: HistoryTimelineEntry, compaction?: ThreadItem): HistoryContribution | undefined {
@@ -85,8 +85,10 @@ export function reconcileHistory(
     }
   }
   const groups: Group[] = []
+  const groupItems: ThreadItem[] = []
   const bound = new Map<number, Group>()
   let anchor: number | undefined
+  let barrierIndex = 0
   let open = false
   for (const d of contributions) {
     if (d.kind === 'patch') continue
@@ -94,35 +96,49 @@ export function reconcileHistory(
     const held = position === undefined ? undefined : oldItems[position]
     if (d.kind === 'suppressed' && (held === undefined || held.kind === 'attachmentOffer')) {
       // A live row whose held position is unknown still separates text unless it was only a patch.
-      if (!/^tool(Result|Denied) /.test(d.joinKey ?? '')) open = false
+      if (!/^tool(Result|Denied) /.test(d.joinKey ?? '')) {
+        open = false
+        barrierIndex = groups.length
+      }
       continue
     }
     const item = held ?? (d.kind === 'row' ? d.item : undefined)
     if (item === undefined) continue
     const existing = d.rowKey === undefined ? undefined : bound.get(d.rowKey)
-    const tail = groups.at(-1)
+    // Share the live/page reducer's main-reply lookback across concurrent subagent tool calls.
+    const candidate = groups[item.kind === 'assistantText' && !item.parentToolUseId
+      ? openBubbleIndex(groupItems) : groups.length - 1]
     const separated = position !== undefined &&
       oldKeys.slice(anchor === undefined ? 0 : anchor + 1, position).some(key => !represented.has(key))
-    if (existing !== undefined) existing.members.push(d)
-    else if (open && !separated && tail !== undefined && tail.item.kind === 'assistantText' && item.kind === 'assistantText' &&
-      tail.item.turnId === item.turnId && tail.item.parentToolUseId === item.parentToolUseId &&
-      (d.rowKey === undefined || tail.key === undefined || tail.key === d.rowKey)) {
-      if (d.kind === 'row' && d.item.kind === 'assistantText' && tail.key === undefined) {
-        tail.item = { ...tail.item, text: tail.item.text + d.item.text }
+    let group: Group
+    if (existing !== undefined) {
+      group = existing
+      group.members.push(d)
+    } else if (open && !separated && candidate !== undefined && candidate.index >= barrierIndex &&
+      candidate.item.kind === 'assistantText' && item.kind === 'assistantText' &&
+      candidate.item.turnId === item.turnId && candidate.item.parentToolUseId === item.parentToolUseId &&
+      (d.rowKey === undefined || candidate.key === undefined || candidate.key === d.rowKey)) {
+      group = candidate
+      if (d.kind === 'row' && d.item.kind === 'assistantText' && group.key === undefined) {
+        group.item = { ...candidate.item, text: candidate.item.text + d.item.text }
       }
-      tail.members.push(d)
-      tail.key ??= d.rowKey
-    } else groups.push({ item, members: [d], key: d.rowKey, index: groups.length })
-    const group = existing ?? groups.at(-1)!
+      group.members.push(d)
+      group.key ??= d.rowKey
+    } else {
+      group = { item, members: [d], key: d.rowKey, index: groups.length }
+      groups.push(group)
+    }
+    groupItems[group.index] = group.item
     if (group.key !== undefined) bound.set(group.key, group)
     if (position !== undefined) anchor = position
-    open = d.kind === 'row' && (existing === undefined || existing === tail)
+    open = d.kind === 'row' && (existing === undefined || existing === candidate)
   }
   // Held rows keep their order; new groups enter before the first later bound row, older ones on top.
   // Every group key here is a held key, so an unbound group is exactly a new row.
   const items: ThreadItem[] = []
   const keys: number[] = []
   const unbound = groups.filter(group => group.key === undefined)
+  const finalBoundIndex = groups.reduce((last, group) => group.key === undefined ? last : group.index, -1)
   let entered = 0
   const enter = (limit: number) => {
     while (entered < unbound.length && unbound[entered].index < limit) {
@@ -137,6 +153,8 @@ export function reconcileHistory(
     if (group !== undefined) enter(group.index)
     items.push(group === undefined ? held : merged(held, group, accounted.get(oldKeys[index]) ?? ''))
     keys.push(oldKeys[index])
+    // Trailing history belongs at this known boundary, before the unknown live/restored suffix.
+    if (group?.index === finalBoundIndex) enter(Infinity)
   })
   enter(Infinity)
   for (const group of groups) for (const d of group.members) d.rowKey = group.key

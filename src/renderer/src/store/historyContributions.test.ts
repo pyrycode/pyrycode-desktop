@@ -10,6 +10,8 @@ const text = (id: number, value: string, parentToolUseId?: string): HistoryTimel
   event: { type: 'assistantDelta', turnId: 't', seq: id, text: value, parentToolUseId } })
 const call = (id: number, turnId = 't'): HistoryTimelineEntry => ({ id, ts: `ts-${id}`,
   event: { type: 'toolUse', turnId, toolUseId: 'tool', name: 'Read', inputSummary: 'input' } })
+const subcall = (id: number): HistoryTimelineEntry => ({ id, ts: `ts-${id}`,
+  event: { type: 'toolUse', turnId: 't', toolUseId: 'tool', name: 'Read', inputSummary: 'input', parentToolUseId: 'agent' } })
 const result = (id: number): HistoryTimelineEntry => ({ id, ts: `ts-${id}`,
   event: { type: 'toolResult', turnId: 't', toolUseId: 'tool', isError: false, resultSummary: 'done' } })
 function harness() {
@@ -72,6 +74,32 @@ const unchanged = (before: ConversationSlice, after: ConversationSlice) => {
 }
 
 const seam: { name: string; steps: Step[]; check: (run: Run) => void }[] = [
+  { name: 'new history after the final bound tool precedes an unrepresented held suffix',
+    steps: [{ page: [call(2)] }, on({ type: 'assistantDelta', turnId: 'live', seq: 1, text: 'live suffix' }),
+      'restore', { mark: 'held' }, { page: [message(4), call(2)] }],
+    check: ({ h, marks }) => {
+      const held = marks.get('held')!.timeline
+      expect(texts(h)).toEqual(['toolCall', 'operator', 'live suffix'])
+      expect([0, 2].map(index => h.held().timeline.rowKeys![index])).toEqual(held.rowKeys)
+      expect(h.held().timeline.items[0]).toBe(held.items[0])
+      expect(h.held().timeline.items[2]).toBe(held.items[1])
+    } },
+  ...[false, true].map(split => ({ name: `main reply coalesces across subagent tools, split=${split}`,
+    steps: [{ page: split ? [subcall(2), text(1, 'hello ')] : [text(3, 'world'), subcall(2), text(1, 'hello ')] },
+      'restore', { mark: 'held' }, { page: [text(3, 'world'), subcall(2), text(1, 'hello ')] }] satisfies Step[],
+    check: ({ h, marks }: Run) => {
+      expect(h.held().timeline.items).toEqual(reduceHistoryPage([text(3, 'world'), subcall(2), text(1, 'hello ')]))
+      expect(h.held().timeline.rowKeys).toEqual(marks.get('held')!.timeline.rowKeys)
+      expect(h.held().timeline.items[1]).toBe(marks.get('held')!.timeline.items[1])
+    } })),
+  { name: 'older main text joins after a newer subagent page without reordering held rows',
+    steps: [{ page: [text(3, 'world'), subcall(2)] }, 'restore', { mark: 'held' },
+      { page: [subcall(2), text(1, 'hello ')] }],
+    check: ({ h, marks }) => {
+      expect(texts(h)).toEqual(['toolCall', 'hello world'])
+      expect(h.held().timeline.rowKeys).toEqual(marks.get('held')!.timeline.rowKeys)
+      expect(h.held().timeline.items[0]).toBe(marks.get('held')!.timeline.items[0])
+    } },
   // Verifier round 1: suppressed operator chronology, page-local compaction, denial correlation.
   { name: 'an operator row stays a chronological barrier and keeps its key',
     steps: [{ echo: 'm' }, { mark: 'echo' }, { page: [text(3, 'after'), message(2), text(1, 'before')] }, 'restore',
@@ -330,7 +358,51 @@ it('rejects saved denial patches with missing, empty or inconsistent correlation
   }
 })
 
+it.each(['toolResult', 'toolDenied'])('rejects a saved patch with the mismatched source %s', source => {
+  const h = harness()
+  h.page([source === 'toolResult' ? denial(2) : result(2), call(1)])
+  const display = h.held().display!.map(d => d.kind === 'patch' ? { ...d, joinKey: `${source} ts-2` } : d)
+  expect(() => parseChatHistorySnapshot({ ...snapshotFor(h), display })).toThrow()
+  const fresh = harness()
+  fresh.store.getState().beginLocalTimelineRead('host', 'c')!.complete(JSON.parse(JSON.stringify({ ...snapshotFor(h), display })))
+  expect(fresh.held().localRead).toBe('failed')
+  for (const entry of [call(1), result(2)]) {
+    fresh.store.getState().dispatchFor('c', translateTimelineEvent(entry.event)!, `${entry.event.type} ${entry.ts}`)
+  }
+  expect(fresh.held().timeline.items[0]).toMatchObject({ result: { resultSummary: 'done' } })
+})
+
+it('a validated restored denial does not suppress a live result with the same timestamp', () => {
+  const h = harness()
+  h.page([denial(2), call(1)])
+  const fresh = restore(h)
+  expect(fresh.held().localRead).toBe('loaded')
+  const key = fresh.held().timeline.rowKeys![0]
+  const event = translateTimelineEvent(result(2).event)!
+  fresh.store.getState().dispatchFor('c', event, 'toolResult ts-2')
+  expect(fresh.held().timeline.items[0]).toMatchObject({ result: { resultSummary: 'done' }, denial: { message: 'denied' } })
+  expect(fresh.held().timeline.rowKeys).toEqual([key])
+})
+
 describe('durable history contributions', () => {
+  it.each([
+    [text(4, 'after'), call(3), subcall(2), text(1, 'before')],
+    [text(4, 'after'), { ...subcall(3), event: { ...subcall(3).event, parentToolUseId: '' } }, subcall(2), text(1, 'before')],
+    [text(4, 'after'), text(3, 'child', 'agent'), subcall(2), text(1, 'before')],
+    [text(4, 'after'), message(3), subcall(2), text(1, 'before')],
+    [text(4, 'after'), { ...text(3, 'other turn'), event: { ...text(3, 'other turn').event, turnId: 'other' } }, subcall(2), text(1, 'before')]
+  ] satisfies HistoryTimelineEntry[][])('preserves real row and parent barriers across subagent lookback: %j', (...entries) => {
+    const h = harness()
+    h.page(entries.slice(1))
+    const fresh = restore(h)
+    fresh.page(entries)
+    expect(fresh.held().timeline.items).toEqual(reduceHistoryPage(entries))
+    const settled = fresh.held()
+    fresh.page(entries)
+    expect(fresh.held().timeline.items).toBe(settled.timeline.items)
+    expect(fresh.held().timeline.rowKeys).toEqual(settled.timeline.rowKeys)
+  })
+
   it('joins partial overlap in durable order and preserves the held text identity', () => {
     const h = harness()
     h.page([text(3, 'world'), text(2, ' ' )])

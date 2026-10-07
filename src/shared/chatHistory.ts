@@ -332,6 +332,7 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
         result: d.result === undefined ? null : d.result, denial: d.denial })
       const turnId = parsed.kind === 'toolCall' && parsed.denial !== undefined ? id(d.turnId) : undefined
       if (parsed.kind !== 'toolCall' || (parsed.result === null && parsed.denial === undefined) ||
+        (source !== undefined && source !== (parsed.denial === undefined ? 'toolResult' : 'toolDenied')) ||
         (parsed.denial !== undefined && (turnId === '' || toolUseId === '' || d.result !== undefined ||
           (held !== undefined && (held.kind !== 'toolCall' || held.turnId !== turnId)))) ||
         (held !== undefined && (held.kind !== 'toolCall' || held.toolUseId !== toolUseId))) return invalid()

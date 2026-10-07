@@ -73,6 +73,8 @@ None. Keep existing presentation, reader-driven requests, opaque cursor settleme
 
 2026-10-07 — Finding 4: retain the original 910-line forecast and build-in-place sizing decision for grandchild #1851. Applied `needs-human:sizing`; the issue handoff records the measurement and candidate admission/persistence versus unfinished-assembly seams. This rework adds no exported declaration or production consumer.
 
+2026-10-07 — Latest verifier finding 1: a suppressed assistant reference may anchor an adjacent reconstructed history prefix with the same turn/parent, retaining the held key. The existing held-suffix reconstruction adds its live text once; operator/tool rows and intervening held rows, including unrepresented held prefixes, remain barriers. Cover admission, validated fresh restoration, repeated/partial overlap, multiple suppressed fragments and live suffix preservation. No schema, live reducer, paging or host-lifetime change; the existing security review remains PASS because input validation, allowlists, bounds and sinks are unchanged.
+
 ## Documentation handoff
 
 - Pending documentation stage: `docs/knowledge/features/chat-history.md` § Snapshot contract — optional version-1 display contributions, validation/bounds, capacity retirement, orphan patches, protected restoration, legacy unknown provenance; served receipts never prove display retention.

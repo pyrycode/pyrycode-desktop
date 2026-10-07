@@ -35,6 +35,70 @@ function restore(h: ReturnType<typeof harness>) {
   return fresh
 }
 
+it.each([false, true])('joins older text to a suppressed live assistant once, restored=%s', restored => {
+  const original = harness()
+  original.store.getState().dispatchFor('c', { type: 'assistantDelta', turnId: 't', seq: 2, text: 'world' }, 'assistantDelta ts-2')
+  const key = original.held().timeline.rowKeys![0]
+  original.page([text(2, 'world')])
+  const h = restored ? restore(original) : original
+  h.page([text(1, 'hello ')])
+  expect(h.held().timeline.items).toMatchObject([{ text: 'hello world' }])
+  expect(h.held().timeline.rowKeys).toEqual([key])
+  h.page([text(2, 'world'), text(1, 'hello ')])
+  h.page([text(1, 'hello '), text(0, 'say ')])
+  expect(h.held().timeline.items).toMatchObject([{ text: 'say hello world' }])
+  expect(h.held().timeline.rowKeys).toEqual([key])
+  expect(restore(h).held().timeline.items).toEqual(h.held().timeline.items)
+})
+
+it('joins multiple suppressed fragments and a live suffix without duplicating held text', () => {
+  const h = harness()
+  h.page([text(1, 'hello ')])
+  const key = h.held().timeline.rowKeys![0]
+  for (const [id, value] of [[2, 'world'], [3, '!']] as const) {
+    h.store.getState().dispatchFor('c', { type: 'assistantDelta', turnId: 't', seq: id, text: value }, `assistantDelta ts-${id}`)
+  }
+  h.page([text(3, '!'), text(2, 'world'), text(1, 'hello ')])
+  h.store.getState().dispatchFor('c', { type: 'assistantDelta', turnId: 't', seq: 4, text: ' live' })
+  const fresh = restore(h)
+  fresh.page([text(3, '!'), text(2, 'world'), text(1, 'hello '), text(0, 'say ')])
+  expect(fresh.held().timeline.items).toMatchObject([{ text: 'say hello world! live' }])
+  expect(fresh.held().timeline.rowKeys).toEqual([key])
+})
+
+it('keeps a suppressed live tool and different assistant parent as text barriers', () => {
+  const h = harness()
+  h.store.getState().dispatchFor('c', { type: 'toolUse', turnId: 't', toolUseId: 'tool', name: 'Read', inputSummary: 'input' }, 'toolUse ts-2')
+  h.page([call(2)])
+  h.store.getState().dispatchFor('c', { type: 'assistantDelta', turnId: 't', seq: 4, text: 'child', parentToolUseId: 'tool' }, 'assistantDelta ts-4')
+  h.page([text(4, 'child', 'tool')])
+  const keys = h.held().timeline.rowKeys!
+  h.page([text(4, 'child', 'tool'), text(3, 'after'), call(2), text(1, 'before')])
+  expect(h.held().timeline.items).toMatchObject([
+    { text: 'before' }, { kind: 'toolCall' }, { text: 'after' }, { text: 'child', parentToolUseId: 'tool' }
+  ])
+  expect(h.held().timeline.rowKeys![1]).toBe(keys[0])
+  expect(h.held().timeline.rowKeys![3]).toBe(keys[1])
+  const fresh = restore(h)
+  fresh.page([text(0, 'older ')])
+  expect(fresh.held().timeline.items).toMatchObject([
+    { text: 'older before' }, { kind: 'toolCall' }, { text: 'after' }, { text: 'child' }
+  ])
+  expect(fresh.held().timeline.rowKeys).toEqual(h.held().timeline.rowKeys)
+})
+
+it.each([false, true])('keeps an unrepresented held operator between older text and a suppressed assistant, restored=%s', restored => {
+  const original = harness()
+  original.store.getState().dispatchLocalEcho('host', 'c', { type: 'userText', text: 'operator', messageId: 'm' })
+  original.store.getState().dispatchFor('c', { type: 'assistantDelta', turnId: 't', seq: 2, text: 'world' }, 'assistantDelta ts-2')
+  const keys = original.held().timeline.rowKeys!
+  original.page([text(2, 'world')])
+  const h = restored ? restore(original) : original
+  h.page([text(1, 'hello ')])
+  expect(h.held().timeline.items).toMatchObject([{ text: 'hello ' }, { text: 'operator' }, { text: 'world' }])
+  expect(h.held().timeline.rowKeys!.slice(1)).toEqual(keys)
+})
+
 it('uses suppressed operator rows as chronological barriers and anchors after fresh restoration', () => {
   const h = harness()
   h.store.getState().dispatchLocalEcho('host', 'c', { type: 'userText', messageId: 'm', text: 'operator' })

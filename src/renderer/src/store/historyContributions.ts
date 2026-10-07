@@ -86,8 +86,20 @@ export function reconcileHistory(
         const existing = groupsByKey.get(d.rowKey)
         if (existing !== undefined) existing.members.push(d)
         else {
-          const group = { item: held, members: [d], key: d.rowKey }
-          groups.push(group); groupsByKey.set(d.rowKey, group)
+          const tail = groups.at(-1)
+          const left = previousRowKey === undefined ? undefined : oldPosition.get(previousRowKey)
+          const right = oldPosition.get(d.rowKey)
+          const barrier = right !== undefined && oldKeys.slice(left === undefined ? 0 : left + 1, right).some(k => !represented.has(k))
+          if (canJoin && !barrier && tail?.item.kind === 'assistantText' && held.kind === 'assistantText' &&
+            tail.item.turnId === held.turnId && tail.item.parentToolUseId === held.parentToolUseId) {
+            // The held suffix is added once below, after the reconstructed history prefix.
+            tail.members.push(d)
+            tail.key = d.rowKey
+            groupsByKey.set(d.rowKey, tail)
+          } else {
+            const group = { item: held, members: [d], key: d.rowKey }
+            groups.push(group); groupsByKey.set(d.rowKey, group)
+          }
         }
       }
       previousRowKey = d.rowKey

@@ -19,6 +19,35 @@ The hover action is **Edit host**. Its pen and pointer-following name pill use f
 
 The trailing control space stays reserved at rest and on hover, so a long label does not reflow when the Edit pen appears. The controls are absolutely positioned: Edit has a 20px target at a 25px right inset on a non-failed row; on a failed row, Edit moves to a 52px right inset and Repair occupies its own 20px target at a 28px inset. Label and disclosure reservations clear these targets. Edit reveals through row hover or its own keyboard focus; its opacity changes without removing it from the tab order. There is no dot/control swap. [The hover spec](../../../e2e/host-row-hover-controls.spec.ts) drives pointer and keyboard activation; [the long-label spec](../../../e2e/host-label-sidebar.spec.ts) checks truncation and fixed geometry. [Failed-host clicks](../../../e2e/sidebar-offline-mutations.spec.ts) prove Edit and Repair remain separately usable: markup presence alone cannot detect overlapping hit boxes.
 
+The `failed-host local controls remain usable` regression in
+[`sidebar-offline-mutations.spec.ts`](../../../e2e/sidebar-offline-mutations.spec.ts)
+re-delivers real `host.hover()` on each default polling attempt and observes host
+`matches(':hover')` and exact Edit opacity `'1'` together. It repeats that observation
+before the screenshot. A passive opacity wait cannot restore hover cleared by
+another shown window; [desktop isolation evidence](e2e-harness-desktop-isolation.md#desktop-isolation-default-tier-launches)
+also proves the synchronized assertion rejects a broken hover style.
+Coverage retains identical host/label/Edit/Repair boxes before and after hover,
+28px row height, non-overlapping label/Edit/Repair targets, 52px/28px insets and
+absent host disclosure/status controls. Ordinary clicks still drive Edit → dialog →
+Cancel, section collapse/expand and Repair → pairing screen, with Pair new host
+presence and the failed-host screenshot checked between them.
+
+The [verified acceptance](https://github.com/pyrycode/pyrycode-desktop/pull/1837#issuecomment-6030650419)
+at `01000ff279ed8b0503b922197f1c0e223433019f` used Linux x86_64, shown Xvfb `:99`
+windows, three configured and actual workers, and zero retries. The exact named
+test is present and passed in both runs below, every result on attempt 0. The
+dispatcher gate report independently confirms the full-suite and named-test results.
+
+| Run | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Named test, 20 focused repetitions | 20 | 20 | 0 | 0 |
+| Named test in full default fake-transport gate | 1 | 1 | 0 | 0 |
+| Full default fake-transport gate | 324 | 324 | 0 | 4 |
+
+The four skips are existing platform-specific badge/window-close/reopen cases;
+the named regression has no skips. These results establish fake-transport hover
+and activation coverage; this regression requires no live Claude run.
+
 <a id="the-host-rows-connection-dots-channellisttsx-added-by-718"></a>
 
 <a id="connection-dots"></a>

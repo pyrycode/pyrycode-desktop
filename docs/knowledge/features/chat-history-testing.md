@@ -68,7 +68,7 @@ or ordering; the scenario withholds list refresh responses throughout deletion. 
 `__conversationRemovals` counter reads go through the shared `readMainProcess` helper, bounded at
 five seconds, so a transient loss of Electron's inspection context does not redden the scenario (see
 [E2E test harness § Tolerating a transient inspection-context loss on
-reads](e2e-harness.md#tolerating-a-transient-inspection-context-loss-on-reads)); the counting
+reads](e2e-harness-context-recovery.md#tolerating-a-transient-inspection-context-loss-on-reads)); the counting
 wrapper's own install stays a single un-retried call.
 
 ## Restoration

@@ -59,3 +59,10 @@ One deliverable, three observable acceptance criteria, approximately 140 written
 The unchanged three-worker baseline executed/passed 20 repetitions with zero failures/skips; this is not causal evidence. Replaying the observed outside-host pointer move with `page.mouse.move` made the legacy passive opacity wait fail for its unchanged 5000ms timeout and 14 zero-opacity reads (`/tmp/builder-1821/legacy-replay.json`). This distinguishes lost input from a styling defect and demonstrates why re-delivery is necessary.
 
 Removing only the host-hover opacity declaration from a scratch copy of the built renderer made the new synchronized assertion fail with `{ hovered: true, editOpacity: '0' }` (`/tmp/builder-1821/mutant.json`). Thus the assertion still detects incorrect styling under genuine hover. Production renderer styles and shared launch behavior remain unchanged. Historical failure/passing evidence remains in the four gate logs linked by the ticket refinement comment.
+
+2026-10-07 — Verifier finding 1 requires current-main ancestry and validation at the merged revision. The dispatcher merged main through `5f1c66e4`; this rework additionally merges main through `4bab8c2e` in `c4608f8f`. Both merged changes retain their complete implementation. The failed-host observation contract is unchanged. Repeat pre-verify, build, docs guard and the required focused/full default acceptance on the resulting revision.
+
+## Documentation handoff
+
+- Pending documentation stage: `docs/knowledge/features/e2e-harness.md`, “Desktop isolation (default-tier launches)” — extend the native-pointer guidance with the failed-host controlled observation, local real-hover synchronization and styling-sensitivity evidence recorded on #1821.
+- Pending documentation stage: `docs/knowledge/features/channel-list-host-row.md`, “The host row” — record that the failed-host regression observes actual hover and exact Edit opacity together while retaining geometry and ordinary Edit/Repair activation coverage.

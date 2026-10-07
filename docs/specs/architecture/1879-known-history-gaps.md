@@ -67,6 +67,8 @@ None. Legacy-boundary and refused-cursor recovery remain explicitly outside this
 
 2026-10-07: The existing nonzero-offset prepend regression caught unnecessary blank-space growth despite a stable reader row. Convert measured content bottom back to absolute scroll coordinates before checking whether short-thread padding is required. This preserves both visual position and the existing exact insertion/scroll-height invariant.
 
+2026-10-07: Explicit edge-contract testing also covers sparse synthetic served pages: without a held served boundary first opening creates no gap, and a newest page containing the held high-water ID creates no new tail marker. Keep exact received IDs unchanged and preserve previously unresolved holes; no completeness is inferred from this marker-admission rule.
+
 ## Security review
 
 **Verdict:** PASS

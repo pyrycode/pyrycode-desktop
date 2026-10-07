@@ -846,9 +846,13 @@ export function createConversationTimelineStore(
         const receipts = candidates.slice(first)
         const ids = [...new Set(receipts.flatMap(r => r.ids))].sort((a, b) => a - b)
         const highestId = ids[ids.length - 1]
-        const gaps = historyGaps(held.gaps,
+        const detected = historyGaps(held.gaps,
           [...new Set([...(held.served?.ids ?? []), ...pageIds])].sort((a, b) => a - b),
           ids, pageIds, cursor, gapRequest)
+        const high = held.served?.highestId
+        const overlapsHigh = newest && high !== undefined && pageIds.includes(high)
+        const gaps = (held.served?.ids.length || held.gaps?.length) ? detected.filter(gap =>
+          !overlapsHigh || gap.olderId !== high || held.gaps?.some(prior => prior.olderId === high)) : []
         const slice: ConversationSlice = { ...held, serverId: receiptHost() ?? held.serverId,
           served: receipts.length === 0 ? undefined : { ids, receipts, ...(highestId === undefined ? {} : { highestId }) },
           gaps, history: { status: 'loaded', cursor, atStart },

@@ -41,6 +41,15 @@ it.each([[1, 2], [3, 4], [2, 3]].map(ids => [ids]))('first opening, adjacency an
   expect(h.held().gaps ?? []).toEqual([])
 })
 
+it('first opening has no held boundary and newest high-water overlap creates no tail marker', () => {
+  const first = harness(); first.page([2, 4], 'opening', 'newest')
+  expect(first.held().gaps ?? []).toEqual([])
+  const overlap = harness(); overlap.page([1, 2])
+  overlap.page([2, 5, 6], 'overlap', 'newest')
+  expect(overlap.held().gaps ?? []).toEqual([])
+  expect(overlap.held().served?.ids).toEqual([1, 2, 5, 6])
+})
+
 it('walks a gap once per fresh ask despite held atStart and preserves older completion', () => {
   const h = harness()
   h.page([1, 2], 'oldest')

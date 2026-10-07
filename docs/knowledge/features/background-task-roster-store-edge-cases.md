@@ -22,11 +22,14 @@ qualify, and [Related](background-task-roster-store-related.md) for cross-refere
   `truncatedFields` names `task_id`; the panel hides its action. Update/progress cut lists describe their
   own reports and cannot substitute for this identity check. IDs stay in routing/state and the existing
   row key, never in logs or attributes; descriptions and patches remain escaped text children.
-- **No coercion or validation on either write path.** The store trusts #566's and #564's fail-closed
-  decode completely. The wire row → `HeldBackgroundTask` mapping inside `setRoster` is a straight,
-  named-field copy with no defaulting or derivation except `toolCallId: null` for a roster-sourced row —
-  the one value in the held shape not sourced from the wire, deliberately outside the identifier domain
-  so it cannot be mistaken for a real tool-call id.
+- **Decode owns type validation; the store owns availability and provenance.** Optional roster
+  `tool_call_id` is absent/empty when unknown; any supplied non-string, including null,
+  rejects the whole roster. Nonempty strings compare exactly, without trimming or coercion.
+  `setRoster` chooses a usable roster id before the started fallback, while
+  `startedToolCallId !== undefined` alone protects authoritative started metadata.
+  Using `toolCallId !== null` for provenance would freeze roster labels after their first id;
+  using truthiness for started provenance would let an empty-id start lose its fuller label.
+  See [the additive parser contract](inbound-message-decode.md#optional-roster-launch-ids).
 - **`description` and `patch` are both untrusted, model-influenced daemon-relayed text.** `description`
   for `taskType: local_bash` is the literal command line claude ran; `patch`'s keys may carry the same
   class of text under a more tempting, structured-looking shape (JSON-like, but not guaranteed parseable
@@ -45,8 +48,9 @@ qualify, and [Related](background-task-roster-store-related.md) for cross-refere
   stay apart — a conversation reconciled with an explicit empty roster reads observed-empty; one absent
   from the burst stays dropped and reads `null` from `selectRosterFor` until claude next emits a frame.
   `backgroundTaskStarted`/`backgroundTaskUpdated` are **not** in the reconcile set, so a started-sourced
-  task's `toolCallId` and fuller label do not survive a reconnect — it comes back roster-sourced, a real
-  narrowing pinned by a store test. Proved end-to-end through the real transport (not merely modeled) by
+  task's started id/provenance and fuller label do not survive a reconnect — it comes back
+  roster-sourced, possibly with a roster launch id. The original roster-repopulation path was
+  proved end-to-end through the real transport (not merely modeled) by
   `e2e/background-task-reconnect.spec.ts`.
 - **A roster held for a conversation in no server's list survives every scoped reset**
   ([#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139)) — the accepted consequence of

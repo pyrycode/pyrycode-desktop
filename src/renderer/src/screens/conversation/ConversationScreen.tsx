@@ -138,7 +138,7 @@ import {
 import { dropQueuedMessage } from './dropQueuedMessage'
 import { sendQueuedNow } from './sendQueuedNow'
 import { foldQueuedRows, type QueuedRowHandle } from './foldQueuedRows'
-import { groupToolRows } from './groupToolRows'
+import { groupToolRows, withProvisionalAgents } from './groupToolRows'
 import { foldToolRuns, type ToolRun } from './foldToolRuns'
 import { appendMessageQuote, copyMessageText } from './copyMessageText'
 import { formatMessageTime } from './messageTime'
@@ -1234,13 +1234,17 @@ export function Timeline({
   agent?: WireAgent
   onReply?: (role: 'user' | 'assistant', text: string) => void
 }): JSX.Element {
-  const rows = foldQueuedRows(items, queued ?? EMPTY_QUEUED, localEchoes, rowKeys)
+  const ordinaryRows = foldQueuedRows(items, queued ?? EMPTY_QUEUED, localEchoes, rowKeys)
+  const projectedItems = withProvisionalAgents(ordinaryRows.map(row => row.item), backgroundAgents)
+  const rows = [...ordinaryRows, ...projectedItems.slice(ordinaryRows.length).map(item => ({ item, itemIndex: -1, queued: null }))]
+  const provisionalIndices = new Set(rows.map((_, index) => index).slice(ordinaryRows.length))
   // Stats use source item indices; projection may move waiting echoes.
   const turnStats = turnStatsByItemIndex(items)
-  const [expandedTools, setExpandedTools] = useState<ReadonlySet<number>>(() => new Set())
-  const [expandedRuns, setExpandedRuns] = useState<ReadonlySet<number>>(() => new Set())
-  const agentNodes = useRef(new Map<number, HTMLDivElement>())
-  const [revealAgent, setRevealAgent] = useState<{ key: number } | null>(null)
+  const [expandedTools, setExpandedTools] = useState<ReadonlySet<number | string>>(() => new Set())
+  const [expandedRuns, setExpandedRuns] = useState<ReadonlySet<number | string>>(() => new Set())
+  const agentNodes = useRef(new Map<number | string, HTMLDivElement>())
+  const agentKeys = useRef(new Map<number, number | string>())
+  const [revealAgent, setRevealAgent] = useState<{ key: number | string } | null>(null)
   useEffect(() => {
     if (revealAgent === null) return
     agentNodes.current.get(revealAgent.key)?.scrollIntoView({ block: 'center' })
@@ -1250,9 +1254,22 @@ export function Timeline({
     rows.map(row => {
       const key = rowKeys?.[row.itemIndex] ?? firstRowKey + row.itemIndex
       return row.itemIndex === -1 ? Infinity : rowArrivalOrder?.get(key) ?? key
-    }), -firstRowKey)
-  const rowKeyAt = (index: number) => rowKeys?.[rows[index]?.itemIndex ?? index] ??
-    firstRowKey + (rows[index]?.itemIndex ?? index)
+    }), -firstRowKey, provisionalIndices)
+  const identities = new Map<string, number>()
+  for (const entry of backgroundAgents?.values() ?? []) {
+    if (entry.confirmed && entry.identity !== undefined && !identities.has(entry.toolCallId)) identities.set(entry.toolCallId, entry.identity)
+  }
+  const rowKeyAt = (index: number): number | string => {
+    const row = rows[index]
+    const ordinaryKey = rowKeys?.[row?.itemIndex ?? index] ?? firstRowKey + (row?.itemIndex ?? index)
+    const identity = row?.item.kind === 'toolCall' && row.item.name === 'Agent' ? identities.get(row.item.toolUseId) : undefined
+    if (identity === undefined) return ordinaryKey
+    const previous = agentKeys.current.get(identity)
+    if (previous !== undefined) return previous
+    const key = provisionalIndices.has(index) ? `agent-${identity}` : ordinaryKey
+    agentKeys.current.set(identity, key)
+    return key
+  }
   const drawn = projection.filter((group) => {
     const item = rows[group.index]?.item
     return !(foldTools && item?.kind === 'banner' && item.level === 'info') &&
@@ -1358,7 +1375,7 @@ export function Timeline({
               return next
             })} />
           </div>,
-          <div key={row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
+          <div key={provisionalIndices.has(group.index) || row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
             ref={node => { if (node) agentNodes.current.set(key, node); else agentNodes.current.delete(key) }}
             className={`tool-group-row tool-group-row--depth-${group.depth} ${joins.get(group.index) ?? ''}`} hidden={hidden}>
             {content}

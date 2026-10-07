@@ -130,8 +130,9 @@ Retention, send windows and row identity in the [conversation timeline](conversa
 - **Saved timelines have no background-task frames.** `readSavedTimeline` snapshots
   retain the unchanged format and existing placement; neither task lifecycle evidence
   nor `rowArrivalOrder` is persisted. A saved Agent/result alone cannot reconstruct a
-  live-tail row or its terminal boundary. Roster-only connect rows (#1840) and paged
-  background-task reconstruction (#1781) remain separate work.
+  live-tail row or its terminal boundary. Connect rosters now supply provisional
+  rows through a memory-only display projection; synthetic items never enter saved
+  history. Paged background-task reconstruction remains #1781.
 - **`prependHistoryFor` is not idempotent, by design** ([#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)).
   Applying the same page twice prepends its non-`userText` rows twice — only `userText` rows are
   suppressed, by the AC4 echo dedup. Unreachable today; see the

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { groupToolRows } from './groupToolRows'
+import { groupToolRows, withProvisionalAgents } from './groupToolRows'
 import type { ThreadItem } from '../../store/threadTimeline'
 import { initialTimelineState, markLocalSendQueued, reduceTimeline } from '../../store/threadTimeline'
 import { createBackgroundTaskRosterStore } from '../../store/backgroundTaskRosterStore'
@@ -97,4 +97,72 @@ it('keeps descendants with the nearest relocated Agent and does not trim ids', (
   const rows = groupToolRows([tool('a'), tool('b', 'Agent', 'a'), tool('child', 'Read', 'b')], tasks)
   expect(rows.filter(r => !r.marker).map(r => [r.index, r.ancestors])).toEqual([[0, []], [1, []], [2, [1]]])
   expect(groupToolRows([tool('a')], new Map([['a', { toolCallId: ' a', confirmed: true, finishBefore: null, finishOrder: null }]]))).toHaveLength(1)
+})
+
+const connectRoster = (store: ReturnType<typeof createBackgroundTaskRosterStore>, ids: string[]) =>
+  store.getState().setRoster({ conversationId: 'c', droppedTasks: 0, tasks: ids.map(id => ({
+    task_id: id, tool_call_id: id, task_type: 'local_agent', description: `roster ${id}`, truncated_fields: null
+  })) })
+
+it('renders roster-only Agent rows before launch with escaped held descriptions and no marker', () => {
+  const store = createBackgroundTaskRosterStore()
+  connectRoster(store, ['a', 'b'])
+  const markup = renderToStaticMarkup(createElement(Timeline, { items: [], backgroundAgents: store.getState().agentTimeline.get('c') }))
+  expect(markup.match(/tool-row__name/g)).toHaveLength(2)
+  expect(markup).toContain('roster a')
+  expect(markup).toContain('0 tools · running')
+  expect(markup).not.toContain('agent-start-marker')
+  expect(markup).not.toContain('Start a conversation')
+})
+
+it('retains provisional finishes before late launches and attaches exact Agent children once', () => {
+  const store = createBackgroundTaskRosterStore()
+  connectRoster(store, ['a', 'b'])
+  store.getState().setRoster({ conversationId: 'c', droppedTasks: 0, tasks: [] })
+  store.getState().setUpdatedTask({ conversationId: 'c', taskId: 'b', status: 'completed', patch: '', summary: '', truncatedFields: null }, 1)
+  store.getState().setUpdatedTask({ conversationId: 'c', taskId: 'a', status: 'failed', patch: '', summary: '', truncatedFields: null }, 1)
+  const items = [text('before'), text('after'), tool('a'), tool('child', 'Read', 'a')]
+  const markup = renderToStaticMarkup(createElement(Timeline, { items, backgroundAgents: store.getState().agentTimeline.get('c') }))
+  expect(markup.match(/tool-row__name/g)).toHaveLength(3)
+  expect(markup.match(/agent-start-marker__state/g)).toHaveLength(1)
+  expect(markup.indexOf('roster b')).toBeLessThan(markup.indexOf('tool-row__summary\">work'))
+  expect(markup.indexOf('tool-row__name')).toBeLessThan(markup.indexOf('>after<'))
+  expect(markup).not.toContain('· running')
+})
+
+it('joins provisional descendants in retained order and suppresses matching non-Agent calls exactly', () => {
+  const store = createBackgroundTaskRosterStore()
+  connectRoster(store, ['a', 'b'])
+  const original = [text('ordinary'), tool('child', 'Read', 'a')]
+  const project = (items: ThreadItem[]) => {
+    const prepared = withProvisionalAgents(items, store.getState().agentTimeline.get('c'))
+    const indices = new Set(prepared.map((_, index) => index).slice(items.length))
+    return groupToolRows(prepared, store.getState().agentTimeline.get('c'), undefined, 0, indices)
+      .filter(row => !row.marker).map(row => {
+        const item = prepared[row.index]
+        return [item?.kind === 'toolCall' ? item.toolUseId : 'ordinary', row.count]
+      })
+  }
+  expect(project(original)).toEqual([['ordinary', 0], ['a', 1], ['child', 0], ['b', 0]])
+  connectRoster(store, ['b', 'a'])
+  expect(project([tool('a'), ...original])).toEqual([['ordinary', 0], ['a', 1], ['child', 0], ['b', 0]])
+  for (const name of ['Read', 'Task', 'agent']) {
+    const items = [tool('a', name)]
+    const prepared = withProvisionalAgents(items, store.getState().agentTimeline.get('c'))
+    expect(prepared.filter(item => item.kind === 'toolCall' && item.toolUseId === 'a')).toEqual(items)
+  }
+  expect(withProvisionalAgents([tool(' a')], store.getState().agentTimeline.get('c'))).toHaveLength(3)
+  expect(original[1]).toEqual(tool('child', 'Read', 'a'))
+})
+
+it('bounds and escapes provisional descriptions without placing daemon ids in attributes', () => {
+  const store = createBackgroundTaskRosterStore()
+  store.getState().setRoster({ conversationId: 'c', droppedTasks: 0, tasks: [
+    { task_id: '__proto__', tool_call_id: 'untrusted-id', task_type: 'local_agent',
+      description: '<img src=x>' + 'z'.repeat(5000), truncated_fields: null }
+  ] })
+  const markup = renderToStaticMarkup(createElement(Timeline, { items: [], backgroundAgents: store.getState().agentTimeline.get('c') }))
+  expect(markup).toContain('&lt;img src=x&gt;')
+  expect(markup).not.toContain('untrusted-id')
+  expect(markup).not.toContain('z'.repeat(4097))
 })

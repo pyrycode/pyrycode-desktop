@@ -96,7 +96,7 @@ describe('background agent timeline evidence', () => {
     store.getState().setUpdatedTask(update('failed'), 9)
     store.getState().setStartedTask(start('a', 'replacement'))
     store.getState().setRoster(roster(['a']))
-    expect(store.getState().agentTimeline.get('c')?.get('a')).toEqual({ toolCallId: 'a', confirmed: true, finishBefore: 7, finishOrder: 1 })
+    expect(store.getState().agentTimeline.get('c')?.get('a')).toEqual({ toolCallId: 'a', description: 'work', identity: 0, confirmed: true, finishBefore: 7, finishOrder: 1 })
     expect(store.getState().rosters.get('c')?.tasks.size).toBe(1)
     store.getState().resetRostersFor(new Set(['other']))
     expect(store.getState().agentTimeline.size).toBe(1)

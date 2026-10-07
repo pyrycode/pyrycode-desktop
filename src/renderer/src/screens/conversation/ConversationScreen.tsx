@@ -1006,7 +1006,7 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
       const contentBottom = Array.from(el.children).reduce(
         (bottom, row) => Math.max(bottom, row.getBoundingClientRect().bottom),
         el.getBoundingClientRect().top
-      ) - el.getBoundingClientRect().top + padding
+      ) - el.getBoundingClientRect().top + padding + el.scrollTop
       const missingRoom = offset + el.clientHeight - contentBottom
       if (missingRoom > 0) {
         // Retain the short thread's blank space below its rows so the target is reachable.

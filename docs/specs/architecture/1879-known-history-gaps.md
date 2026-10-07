@@ -65,6 +65,8 @@ None. Legacy-boundary and refused-cursor recovery remain explicitly outside this
 
 2026-10-07: A bounded receipt window can expire the last independent evidence for a remembered boundary. Keep that boundary even when `served` is absent; parsing still requires received paging coverage and strictly validates sorted, nonoverlapping safe-ID boundaries and bounded cursors. Completion checks only the surviving receipt union. An unrelated newest page does not replace an existing gap walk; cursor-less older holes select the nearest saved newer position at demand time. The mounted proof uses a fresh renderer over the protected profile; the dispatcher live proof additionally fully exits Electron before creating 205 closed-process posts. No shared fixture changes.
 
+2026-10-07: The existing nonzero-offset prepend regression caught unnecessary blank-space growth despite a stable reader row. Convert measured content bottom back to absolute scroll coordinates before checking whether short-thread padding is required. This preserves both visual position and the existing exact insertion/scroll-height invariant.
+
 ## Security review
 
 **Verdict:** PASS

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RendererCommand } from '@shared/ipc/commands'
-import type { DaemonEvent } from '@shared/ipc/events'
+import type { DaemonEvent, StampedDaemonEvent } from '@shared/ipc/events'
 import type { WireAgent, WireModelOption } from '@shared/wire/types'
 import { agentSwitchStore, openAgentSwitch, createAgentSwitchStore } from './agentSwitchStore'
 
@@ -9,11 +9,72 @@ import { activeConversationStore } from './activeConversationStore'
 import { sessionStore } from './sessionStore'
 import { runConfigStore } from './runConfigStore'
 import { runSettingsWriteStore } from './runSettingsWriteStore'
+import { serverInfoStore } from './serverInfoStore'
+import { subscribeConversations } from './conversationListBridge'
+import { subscribeAgentSwitchData } from './AgentSwitchData'
 
 const row = (agent?: WireAgent, value = ''): WireModelOption => ({
   agent, value, display_name: '<Model>', resolved_model: 'resolved', effort_levels: ['high'],
   supports_auto_mode: false, truncated_fields: null
 })
+
+it.each(['disconnect', 'host removal', 'conversation removal'] as const)(
+  'the composed singleton isolates same-ID lists and abandons only on owning %s', teardown => {
+    const oldLists = conversationListStore.getState(), oldActive = activeConversationStore.getState()
+    const oldSession = sessionStore.getState(), oldServers = serverInfoStore.getState()
+    const oldSwitch = agentSwitchStore.getState(), send = vi.fn()
+    const listeners = new Set<(event: StampedDaemonEvent) => void>()
+    const onDaemonEvent = (listener: (event: StampedDaemonEvent) => void) => {
+      listeners.add(listener); return () => { listeners.delete(listener) }
+    }
+    const emit = (event: DaemonEvent, serverId = 'host-a') => {
+      for (const listener of listeners) listener({ ...event, serverId })
+    }
+    vi.stubGlobal('window', { pyry: { onDaemonEvent, sendCommand: send, sendDiagnostic: vi.fn() } })
+    const offs = [subscribeConversations(onDaemonEvent,
+      (rows, host) => conversationListStore.getState().setConversations(rows, host), () => {}),
+      subscribeAgentSwitchData()]
+    try {
+      for (const refused of [false, true]) {
+        conversationListStore.getState().clearAllConversations()
+        serverInfoStore.getState().setServers(['host-a', 'host-b'].map(serverId => ({ serverId, relayUrl: '' })))
+        for (const serverId of ['host-a', 'host-b']) sessionStore.getState().dispatch({ type: 'connected', serverId,
+          ack: { protocol_version: 'v2', server_id: serverId, conn_id: 'conn', capabilities: [] } })
+        emit(listed('claude'))
+        activeConversationStore.getState().setActiveConversation(listed('claude').conversations[0])
+        agentSwitchStore.getState().dispatch({ type: 'paneChanged', pane: { serverId: 'host-a', conversationId: 'chat-a' } })
+        openAgentSwitch('chat-a', row('codex'))
+        agentSwitchStore.getState().dispatch({ type: 'confirm' })
+        const pending = agentSwitchStore.getState().statuses.get('chat-a')
+        expect(pending?.type).toBe('pending')
+        emit(listed('codex'), 'host-b')
+        expect(agentSwitchStore.getState().statuses.get('chat-a')).toEqual(pending)
+        if (refused) emit({ type: 'switchAgentRejected', conversationId: 'chat-a', retryable: true })
+        const held = refused ? { type: 'refused', serverId: 'host-a', retryable: true } : pending
+        expect(agentSwitchStore.getState().statuses.get('chat-a')).toEqual(held)
+        emit(listed('claude'), 'host-b')
+        expect(agentSwitchStore.getState().statuses.get('chat-a')).toEqual(held)
+        const abandon = (serverId: string) => {
+          if (teardown === 'disconnect') sessionStore.getState().dispatch({ type: 'disconnected', serverId })
+          else if (teardown === 'host removal') serverInfoStore.getState().setServers(
+            serverInfoStore.getState().servers.filter(s => s.serverId !== serverId))
+          else emit({ type: 'conversationsReceived', conversations: [] }, serverId)
+        }
+        abandon('host-b')
+        expect(agentSwitchStore.getState().statuses.get('chat-a')).toEqual(held)
+        abandon('host-a')
+        expect(agentSwitchStore.getState().statuses.get('chat-a')).toBeUndefined()
+      }
+      expect(send).toHaveBeenCalledTimes(2)
+    } finally {
+      for (const off of offs) off()
+      expect(listeners.size).toBe(0)
+      conversationListStore.setState(oldLists); activeConversationStore.setState(oldActive)
+      sessionStore.setState(oldSession); serverInfoStore.setState(oldServers)
+      agentSwitchStore.setState(oldSwitch); vi.unstubAllGlobals()
+    }
+  }
+)
 function setup(agent: WireAgent = 'claude') {
   let binding = { serverId: 'host-a', agent, connected: true, open: true, effort: 'high' as string | null | undefined }
   let removed = false

@@ -24,7 +24,7 @@ type Binding = { serverId: string; agent: WireAgent; connected: boolean; open: b
 
 /** Pending belongs to the conversation, not the mounted pane. All writes use typed actions. */
 export function createAgentSwitchStore(deps: {
-  binding: (conversationId: string) => Binding | null
+  binding: (conversationId: string, owningServerId?: string) => Binding | null
   send: (command: RendererCommand) => void
   log: (code: string) => void
 }) {
@@ -74,7 +74,7 @@ export function createAgentSwitchStore(deps: {
         case 'reconcile': {
           const next = new Map(statuses)
           for (const [id, status] of statuses) {
-            const b = deps.binding(id)
+            const b = deps.binding(id, status.serverId)
             if (!b?.connected || b.serverId !== status.serverId) { next.delete(id); deps.log('abandoned') }
           }
           const nextDialog = dialog !== null && valid(dialog) === null ? null : dialog
@@ -112,9 +112,9 @@ export function createAgentSwitchStore(deps: {
 }
 
 export const agentSwitchStore = createAgentSwitchStore({
-  binding: id => {
+  binding: (id, owningServerId) => {
     const lists = conversationListStore.getState()
-    const serverId = serverIdForOpenConversation(selectConversations(lists), id)
+    const serverId = owningServerId ?? serverIdForOpenConversation(selectConversations(lists), id)
     if (serverId === null || !selectConversationsFor(serverId)(lists)?.some(row => row.id === id)) return null
     return { serverId, agent: selectConversationAgentFor(serverId, id)(lists),
       connected: sessionStore.getState().statuses.get(serverId)?.type === 'connected',

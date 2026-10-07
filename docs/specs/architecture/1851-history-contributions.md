@@ -50,6 +50,7 @@ None. Keep existing presentation, reader-driven requests, opaque cursor settleme
 **Verdict:** PASS
 
 - [Trust boundaries] Main `parseHistoryEntry`/`decodeHistoryEvent` remain the page boundary; `parseChatHistorySnapshot` validates and projects every declared display operation, safe ID and retained-row reference on IPC writes and protected reads. Malformed metadata rejects the snapshot.
+- [Trust boundaries, rework] MUST FIX in the original implementation — denial patches omitted turn correlation. Retain bounded, nonempty `turnId` and `toolUseId`, attach only to the matching call, and reject saved denial references whose retained call disagrees. The revised design addresses this association gap; the review verdict remains PASS for that contract.
 - [Tokens] No token/credential fields in display operations; existing safeStorage service remains the only persistence path.
 - [File/storage] Existing protected, atomic store writes and host membership checks remain authoritative. Contribution data never becomes a path or renderer web storage.
 - [Electron] No new channel, Node primitive, navigation or remote content. Typed display input stays in the renderer; transport and keys stay in main.
@@ -67,3 +68,13 @@ None. Keep existing presentation, reader-driven requests, opaque cursor settleme
 2026-10-07 — Capacity regression exposed a quadratic chronological-boundary scan; use a monotonic traversal over durable contributions. At capacity, compact consecutive text contributions for one surviving row into a validated inclusive `id`/`lastId` range before retiring groups. Only actually retained contiguous IDs may compact; no gaps or receipt-only evidence fill a range. Compaction drops timestamp comparisons to keep reverse suppression conservative, retains unfinished text and its row key, and restores the same join capability. Remaining over-capacity groups become unknown display provenance while their rows remain. Held user-message suppression uses a row-referencing suppressed contribution so later paging cannot undo #1853's live echo settlement. Live-only text suffixes remain on the held row during reconstruction.
 
 2026-10-07 — The existing walked-back scroll fixture assigned IDs `200+` to rows older than its opening ID `100`, which now correctly orders them after the opening row. Give its newest-first older page IDs `99` downward, preserving every content-anchor and growth assertion. This repairs fixture chronology to the durable-ID contract without changing scroll behavior.
+
+2026-10-07 — Verifier findings 1–3: row-referencing suppressed contributions become chronological barriers and anchors using the held row/key. Reconstruct compaction completions with chronological page-local scratch state before overlap admission, preserving the existing `reduceHistoryPage` falling-edge contract; persist only the resulting durable boundary, never scratch/live state or raw outcome strings. Denial patches retain nonempty turn/tool correlation, enforce it at attachment and validate saved references. Add admission, fresh-restoration and protected-storage regressions. No held live reducer or automatic paging changes.
+
+2026-10-07 — Finding 4: retain the original 910-line forecast and build-in-place sizing decision for grandchild #1851. Applied `needs-human:sizing`; the issue handoff records the measurement and candidate admission/persistence versus unfinished-assembly seams. This rework adds no exported declaration or production consumer.
+
+## Documentation handoff
+
+- Pending documentation stage: `docs/knowledge/features/chat-history.md` § Snapshot contract — optional version-1 display contributions, validation/bounds, capacity retirement, orphan patches, protected restoration, legacy unknown provenance; served receipts never prove display retention.
+- Pending documentation stage: `docs/knowledge/features/conversation-timeline-store-internals.md` § The history/live join — durable-ID reconciliation, surviving identities, adjacency/chronological barriers, both live/echo orders, lifecycle mapping and host/holder lifetimes; reader-driven paging and opaque cursors remain.
+- Pending documentation stage: `docs/knowledge/features/development-verification.md` § Served-page persistence verification — focused regressions and counted protected-relaunch evidence.

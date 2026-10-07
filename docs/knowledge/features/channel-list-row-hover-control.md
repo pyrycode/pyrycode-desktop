@@ -78,8 +78,10 @@ heuristic and would test the heuristic's mood rather than the rule.
 on-surface-variant. The Channels row (Rename) takes Font Awesome `pen-solid`. The Chats row
 (Save-as-channel) takes a bold chevron-up whose art is 12.12×7.2 — its `viewBox` starts at `y=-2.46`
 rather than the origin so the exported path centres in the 12px box without being re-based by hand; the
-Figma layer is named `circle-chevron-up-solid` but only the chevron is drawn, there is no circle. No
-hover circle and no background sit behind either glyph — the drawing draws neither.
+Figma layer is named `circle-chevron-up-solid` but only the chevron is drawn, there is no circle.
+The controls now paint a rounded rectangular state layer on their own hover;
+see [row control hover](channel-list.md#row-control-hover) for the glyph-relative
+clearance and unchanged focus, geometry and name-pill treatment.
 
 **A comment that names another module's class as its treatment precedent goes stale when that class is
 redrawn, and no identifier grep finds it.** `archive.css`'s `.archive__restore` comment and

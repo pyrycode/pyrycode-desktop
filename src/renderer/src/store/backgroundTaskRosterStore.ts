@@ -318,6 +318,8 @@ export interface BackgroundAgentTimeline {
   confirmed: boolean
   /** First live terminal arrival: insert before this retained ordinary row key. */
   finishBefore: number | null
+  /** Conversation-local first terminal arrival order, including when boundaries are equal. */
+  finishOrder: number | null
 }
 
 export interface BackgroundTaskRosterState {
@@ -645,7 +647,7 @@ export function createBackgroundTaskRosterStore(
         if (!evidence?.has(snapshot.taskId) && snapshot.taskType === 'local_agent' && snapshot.toolCallId.length > 0) {
           agentTimeline = new Map(s.agentTimeline).set(snapshot.conversationId,
             new Map(evidence).set(snapshot.taskId, { toolCallId: snapshot.toolCallId,
-              confirmed: listed?.taskType === 'local_agent', finishBefore: null }))
+              confirmed: listed?.taskType === 'local_agent', finishBefore: null, finishOrder: null }))
         }
         const record: HeldBackgroundTask = {
           taskId: snapshot.taskId,
@@ -685,7 +687,8 @@ export function createBackgroundTaskRosterStore(
         const agent = evidence?.get(snapshot.taskId)
         const agentTimeline = terminal && agent?.finishBefore === null
           ? new Map(s.agentTimeline).set(snapshot.conversationId,
-              new Map(evidence).set(snapshot.taskId, { ...agent, finishBefore }))
+              new Map(evidence).set(snapshot.taskId, { ...agent, finishBefore,
+                finishOrder: [...(evidence?.values() ?? [])].reduce((last, entry) => Math.max(last, entry.finishOrder ?? 0), 0) + 1 }))
           : s.agentTimeline
         const pendingStops = terminal
           ? keepTaskStopWaits(s.pendingStops, snapshot.conversationId, id => id !== snapshot.taskId)

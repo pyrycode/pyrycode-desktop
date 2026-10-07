@@ -7,7 +7,7 @@ it('renders escaped navigable launch marker and zero-child running row after new
   const markup = renderToStaticMarkup(createElement(Timeline, {
     items: [{ kind: 'toolCall', turnId: 't', toolUseId: 'a', name: 'Agent', inputSummary: '<img onerror=bad>',
       result: { isError: false, resultSummary: 'Async agent launched' } }, { kind: 'userText', text: 'newer message' }],
-    backgroundAgents: new Map([['task', { toolCallId: 'a', confirmed: true, finishBefore: null }]])
+    backgroundAgents: new Map([['task', { toolCallId: 'a', confirmed: true, finishBefore: null, finishOrder: null }]])
   }))
   expect(markup).toContain('Agent started, still working')
   expect(markup).toContain('Go to agent')

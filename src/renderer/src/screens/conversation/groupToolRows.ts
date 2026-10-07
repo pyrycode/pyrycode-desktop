@@ -106,7 +106,8 @@ export function groupToolRows(
     }
   }
   const settled = [...agents].filter(([, entry]) => entry.finishBefore !== null)
-    .sort((a, b) => (a[1].finishBefore ?? 0) - (b[1].finishBefore ?? 0))
+    .sort((a, b) => (a[1].finishBefore ?? 0) - (b[1].finishBefore ?? 0) ||
+      (a[1].finishOrder ?? 0) - (b[1].finishOrder ?? 0))
   for (const [index, entry] of settled) {
     const boundary = entry.finishBefore
     const at = ordinary.findIndex(row => !row.relocated && row.index >= historyCount && boundary !== null && (rowKeys[row.index] ?? Infinity) >= boundary)

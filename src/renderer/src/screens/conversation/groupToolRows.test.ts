@@ -6,7 +6,7 @@ const tool = (toolUseId: string, name = 'Agent', parentToolUseId?: string): Thre
 })
 const text = (text: string): ThreadItem => ({ kind: 'userText', text })
 const evidence = (finishBefore: number | null = null) => new Map([
-  ['task', { toolCallId: 'a', confirmed: true, finishBefore }]
+  ['task', { toolCallId: 'a', confirmed: true, finishBefore, finishOrder: finishBefore === null ? null : 1 }]
 ])
 
 it('projects a marker and moves the whole group below ordinary and queued rows', () => {
@@ -26,27 +26,40 @@ it('places the first finish by retained chronological keys even with prepends an
 it('keeps an established finish before a newer launch after late roster confirmation', () => {
   const items = [text('history'), tool('a'), tool('b'), text('after b')]
   const tasks = new Map([
-    ['a', { toolCallId: 'a', confirmed: true, finishBefore: 1 }],
-    ['b', { toolCallId: 'b', confirmed: false, finishBefore: null }]
+    ['a', { toolCallId: 'a', confirmed: true, finishBefore: 1, finishOrder: 1 }],
+    ['b', { toolCallId: 'b', confirmed: false, finishBefore: null, finishOrder: null }]
   ])
   const project = () => groupToolRows(items, tasks, [99, 0, 1, 2], 1)
     .map(row => [row.index, row.marker === true])
   expect(project()).toEqual([[0, false], [1, true], [1, false], [2, false], [3, false]])
-  tasks.set('b', { toolCallId: 'b', confirmed: true, finishBefore: null })
+  tasks.set('b', { toolCallId: 'b', confirmed: true, finishBefore: null, finishOrder: null })
   expect(project()).toEqual([[0, false], [1, true], [1, false], [2, true], [3, false], [2, false]])
 })
+it('orders equal finish boundaries by terminal arrival even when an earlier finish loads its launch late', () => {
+  const tasks = new Map([
+    ['a', { toolCallId: 'a', confirmed: true, finishBefore: 2, finishOrder: 2 }],
+    ['b', { toolCallId: 'b', confirmed: true, finishBefore: 2, finishOrder: 1 }]
+  ])
+  const items = [tool('a'), text('before'), text('after')]
+  expect(groupToolRows(items, tasks).map(row => [row.index, row.marker === true]))
+    .toEqual([[0, true], [1, false], [0, false], [2, false]])
+  const withHistory = [tool('b'), tool('b-child', 'Read', 'b'), ...items]
+  const rows = groupToolRows(withHistory, tasks, [9, 10, 0, 1, 2], 2)
+  expect(rows.map(row => [row.index, row.marker === true]))
+    .toEqual([[0, true], [2, true], [3, false], [0, false], [1, false], [2, false], [4, false]])
+})
 it('requires confirmed exact Agent calls and preserves received start order over launch order', () => {
-  const tasks = new Map([['b', { toolCallId: 'b', confirmed: true, finishBefore: null }],
-    ['a', { toolCallId: 'a', confirmed: true, finishBefore: null }]])
+  const tasks = new Map([['b', { toolCallId: 'b', confirmed: true, finishBefore: null, finishOrder: null }],
+    ['a', { toolCallId: 'a', confirmed: true, finishBefore: null, finishOrder: null }]])
   expect(groupToolRows([tool('a'), tool('b')], tasks).filter(r => !r.marker).map(r => r.index)).toEqual([1, 0])
   for (const name of ['Task', 'agent', 'Read']) expect(groupToolRows([tool('a', name)], evidence())).toHaveLength(1)
-  expect(groupToolRows([tool('a')], new Map([['a', { toolCallId: 'a', confirmed: false, finishBefore: null }]]))).toHaveLength(1)
+  expect(groupToolRows([tool('a')], new Map([['a', { toolCallId: 'a', confirmed: false, finishBefore: null, finishOrder: null }]]))).toHaveLength(1)
 })
 
 it('keeps descendants with the nearest relocated Agent and does not trim ids', () => {
-  const tasks = new Map([['a', { toolCallId: 'a', confirmed: true, finishBefore: null }],
-    ['b', { toolCallId: 'b', confirmed: true, finishBefore: null }]])
+  const tasks = new Map([['a', { toolCallId: 'a', confirmed: true, finishBefore: null, finishOrder: null }],
+    ['b', { toolCallId: 'b', confirmed: true, finishBefore: null, finishOrder: null }]])
   const rows = groupToolRows([tool('a'), tool('b', 'Agent', 'a'), tool('child', 'Read', 'b')], tasks)
   expect(rows.filter(r => !r.marker).map(r => [r.index, r.ancestors])).toEqual([[0, []], [1, []], [2, [1]]])
-  expect(groupToolRows([tool('a')], new Map([['a', { toolCallId: ' a', confirmed: true, finishBefore: null }]]))).toHaveLength(1)
+  expect(groupToolRows([tool('a')], new Map([['a', { toolCallId: ' a', confirmed: true, finishBefore: null, finishOrder: null }]]))).toHaveLength(1)
 })

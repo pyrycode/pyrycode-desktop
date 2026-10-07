@@ -5,6 +5,40 @@ on 2026-09-15 to stay under the size cap. Part of [Composer](conversation-shell-
 parent page for [the status row it fills](conversation-shell-composer-status-row.md) and the slot's
 other occupants.
 
+## Per-message delivery metadata
+
+Local echoes also use the shared fixed-copy treatment for transport delivery:
+`COMPOSER_MESSAGE_DELIVERY_COPY` in `composerSend.ts` maps `waiting` to “Waiting for
+connection” and `not-sent` to “Not sent”. `TimelineRow` reads the echo sidecar by
+stable row key and renders the label inside the existing user `bubble__meta` row.
+While a label is present it occupies the metadata slot normally used by the timestamp;
+the echo's original timestamp and attachments remain intact. These labels describe
+local transport state and do not claim daemon queue membership or acknowledgement.
+
+Waiting uses `.bubble__delivery--waiting`, scoped to
+`--color-on-primary-container` (#cfe4ff) on the user bubble's
+`--color-on-primary` (#003355) fill, retaining metadata typography and layout.
+Do not inherit the timestamp's `--color-inverse-primary` for always-visible delivery
+copy: that pairing yields only 2.04:1 contrast. The scoped token gives 10.09:1;
+the mounted regression asserts computed RGB colours and contrast of at least 4.5:1.
+Not sent uses `composer-status__error`, reusing the error chip's existing styling.
+Both labels are client-owned constants; caught errors and daemon text never supply
+their copy. Existing Reconnect and Re-pair controls remain the recovery affordances.
+
+A synchronous bridge exception leaves one Not sent echo with its text and
+attachments, returns false to preserve the draft, and rolls back pending attachments
+for resubmission. Host-stamped updates also reach inactive retained threads; a
+matching queue snapshot or user receipt clears local status and settles the existing
+row without changing its original metadata. Written clears the label but does not
+acknowledge daemon receipt. See [composer status and settlement](composer-send-internals.md#2-local-delivery-status-and-receipt-settlement)
+and [connection lifecycle](daemon-connection-lifecycle.md#disconnected-composer-message-delivery)
+for ownership, bounded in-memory holding and unchanged-pairing recovery.
+
+The [recorded fake-transport evidence](daemon-connection-lifecycle.md#delivery-verification)
+includes the automatic, explicit and terminal scenarios, readable waiting captures
+at 1280×800 and 800×800, and terminal Not sent treatment. No new real-Claude
+acceptance is required for these statuses.
+
 ## Composer error chip (#797)
 
 Fills the composer status row's `trailing` slot (Figma error frame `112:3529`) with a red pill reading
@@ -73,4 +107,3 @@ its relay dot, before asserting the healthy thread's error UI is absent.
 Code review PASS (architect self-review) — see the ticket's own security review for the trust-boundary and
 attribute-sink analysis; both concluded no findings, on the strength of the "never destructures
 `status.error`" structural guarantee above.
-

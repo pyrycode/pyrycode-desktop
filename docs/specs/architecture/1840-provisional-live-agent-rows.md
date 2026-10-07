@@ -78,3 +78,5 @@ Sizing recheck: one deliverable, approximately 650 total written lines (producti
 ## Revisions
 
 2026-10-07: Reset verification requires client identities to remain unique for the lifetime of the store factory, including across reconnect/pairing clears, so a mounted Timeline cannot inherit an old provisional expansion. An empty later id leaves already-retained evidence intact; it cannot discard a settled row after roster removal. Held placement readings and first-terminal boundaries remain independent.
+
+2026-10-07: The full unit gate exposed the existing `backgroundAgentTimeline.test.ts` invariant that repeated starts cannot replace a settled launch hint. Retain its placement id once terminal, and return unchanged evidence by reference when its id/description/qualification match. Empty repeated starts retain a known usable started id while still replacing authoritative metadata. Updated the bridge's additive held-record assertion in `backgroundTaskRosterBridge.test.ts`; neither bridge behavior nor membership changes.

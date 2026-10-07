@@ -1467,3 +1467,13 @@ it('retains a provisional terminal through empty repeated starts, then resets id
   roster()
   expect(store.getState().agentTimeline.get('c1')?.get('t1')?.identity).not.toBe(second)
 })
+
+it('keeps a known usable started id when a later empty start refreshes authoritative metadata', () => {
+  const store = createBackgroundTaskRosterStore()
+  store.getState().setStartedTask(started({ taskType: 'local_agent' }))
+  store.getState().setRoster({ conversationId: 'c1', droppedTasks: 0, tasks: [
+    { task_id: 't1', tool_call_id: '', task_type: 'local_agent', description: 'roster', truncated_fields: null }
+  ] })
+  store.getState().setStartedTask(started({ toolCallId: '', taskType: 'local_agent', description: 'new started metadata' }))
+  expect(heldTask(store, 'c1', 't1')).toMatchObject({ toolCallId: 'tc-1', startedToolCallId: 'tc-1', description: 'new started metadata' })
+})

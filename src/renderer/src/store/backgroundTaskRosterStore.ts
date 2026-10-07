@@ -546,8 +546,12 @@ export function createBackgroundTaskRosterStore(
   ): void {
     const previous = evidence.get(taskId)
     if (!previous && toolCallId.length === 0) return
+    const placementId = previous && (previous.finishBefore !== null || toolCallId.length === 0)
+      ? previous.toolCallId : toolCallId
+    const qualified = previous?.confirmed === true || confirmed
+    if (previous?.toolCallId === placementId && previous.description === description && previous.confirmed === qualified) return
     evidence.set(taskId, previous
-      ? { ...previous, toolCallId: toolCallId.length > 0 ? toolCallId : previous.toolCallId, description, confirmed: previous.confirmed || confirmed }
+      ? { ...previous, toolCallId: placementId, description, confirmed: qualified }
       : { toolCallId, description, identity: nextAgentIdentity++, confirmed, finishBefore: null, finishOrder: null })
   }
 
@@ -622,10 +626,12 @@ export function createBackgroundTaskRosterStore(
         const listed = existing?.tasks.get(snapshot.taskId)
         const holds = s.unlistedStarts.get(snapshot.conversationId)
         const prior = listed ?? holds?.get(snapshot.taskId)
+        const startedToolCallId = snapshot.toolCallId.length > 0 ? snapshot.toolCallId
+          : prior?.startedToolCallId ?? snapshot.toolCallId
         const record: HeldBackgroundTask = {
           taskId: snapshot.taskId,
-          toolCallId: prior?.rosterToolCallId ?? snapshot.toolCallId,
-          startedToolCallId: snapshot.toolCallId,
+          toolCallId: prior?.rosterToolCallId ?? startedToolCallId,
+          startedToolCallId,
           ...(prior?.rosterToolCallId === undefined ? {} : { rosterToolCallId: prior.rosterToolCallId }),
           taskType: snapshot.taskType,
           description: snapshot.description,

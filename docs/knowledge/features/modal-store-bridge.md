@@ -181,8 +181,10 @@ daemon frame ─(#201/#248 transport, snake→camel; `modal_shown`'s `conversati
 
 ## Choice and consent lifetime
 
-The app-wide store retains requests and feedback across chat navigation; permission arm/checked
-consent belong to the mounted pane and clear on navigation. The
+The app-wide store retains requests and feedback across chat navigation; permission arming belongs
+to the mounted pane and clears on navigation. Checked consent lives beside the permission consumer
+in app-lifetime renderer memory, observing this store and unique conversation ownership even while
+the pane is closed. The
 [choice controller](conversation-shell-permission-modal.md#selection-and-confirmation) subscribes
 synchronously to this store plus active conversation, conversation list and session stores, observing
 interrupted offers and ownership even when React paints only the restored state. The reducer's
@@ -191,9 +193,11 @@ include ordered option IDs/labels, supplied default, class, eligibility and orde
 
 Scoped reconnect removes the owning server's held request before re-delivery, discarding its draft;
 pairing reset discards all requests/drafts. Fresh answer, checkbox and Cancel handlers require the
-exact displayed request in the active chat and its unique stamped connected owner. Another connected
+exact displayed request in the active chat and the same stamped host captured by the callback,
+still uniquely owning that chat and connected. Another connected
 host is never a fallback. Construction/subscription reads perform no diagnostic IPC; action paths
-retain content-free diagnostics. Inline placement and navigation-retained grants remain #1818's scope.
+retain content-free diagnostics. Inline placement retains valid checked grants across navigation;
+request/offer/owner interruptions evict them synchronously before a restored render can revive them.
 The bridge, response envelopes and daemon remote-permission authority are unchanged.
 
 ## Permission resolution feedback

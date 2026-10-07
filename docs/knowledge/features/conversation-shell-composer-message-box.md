@@ -8,7 +8,7 @@ Part of [Composer](conversation-shell-composer.md); see that document for the st
 
 The message box itself, redrawn as the design's `Input large` (Figma `347:6635`) — chrome and glyph only,
 no behaviour change to sending, Enter handling, the send→stop switch (#678), the not-connected gate (#31),
-queueing, or permission-only composer coverage (see [inline question placement](conversation-shell-question-panel.md#composer-placement)). Closes the glyph/colour follow-up #678 deferred (see
+queueing, or prompt-response gates (see [inline prompt placement](conversation-shell-question-panel.md#composer-placement)). Closes the glyph/colour follow-up #678 deferred (see
 [Interrupt envelope § The render affordance](interrupt-envelope.md#the-render-affordance-307-merged-into-the-send-button-by-678)).
 
 **`.composer` paints no background since #1099.** The block had painted `--color-surface` since #1,
@@ -21,7 +21,7 @@ nothing) already sat on the card. Figma's `Input area` (347:5408) has no fill at
 behind it and the message box carry paint. The box's own ground below is 41% translucent and so takes its
 colour from what is behind it, which is why the box read wrong too although its rule matched the drawing.
 The shared `.question-panel` also dropped its paint in that change. Clarification batches now render
-in history rather than this slot; permission/trust retains the input-area panel.
+in history rather than this slot; permission/trust also uses the thread, leaving the composer visible.
 `e2e/paired-shell-card.spec.ts` pins `.composer` transparent beside `.channel-list` and `.conversation`;
 `e2e/question-answer-continue.spec.ts` now proves inline placement and available composer/footer. Reported by the operator on 2026-09-05, the same
 day #1058 merged, and fixed by hand on `main` rather than through the pipeline.
@@ -39,8 +39,9 @@ between the status row's bottom edge and the message box's top edge in every con
 own AC did not ask to move it, and zeroing it with the rest would have deleted a drawn value rather than
 converged on one. The shared `.question-panel` retains its own `--space-3` side padding for input-area
 consumers. The history questionnaire overrides it to zero under `.question-batch`, following its
-[inline design](conversation-shell-question-panel.md#all-question-presentation); that override does
-not change permission-panel insets.
+[inline design](conversation-shell-question-panel.md#all-question-presentation). Inline permissions
+separately clear outer padding under `.question-panel.permission-panel` so the card border and
+external Cancel align with the message column.
 
 **`.composer__row` *is* the box now**, not a bare flex row holding a filled textarea beside a filled send
 disc. It keeps its class — three shipped specs and #940's type-ahead anchor depend on it — and gains the

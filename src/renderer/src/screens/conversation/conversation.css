@@ -7390,3 +7390,23 @@ button.top-overlay-pill {
 .composer-options-anchor--consume-outside > .composer-options {
   z-index: 1;
 }
+
+.agent-switch-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+}
+.agent-switch-overlay__scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--color-scrim);
+  opacity: 0.4;
+}
+.agent-switch__copy {
+  margin: 0;
+  text-align: center;
+}

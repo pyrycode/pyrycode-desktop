@@ -61,3 +61,7 @@ None. Keep existing presentation, reader-driven requests, opaque cursor settleme
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-07
+
+## Revisions
+
+2026-10-07 — Capacity regression exposed a quadratic chronological-boundary scan; use a monotonic traversal over durable contributions. At capacity, compact consecutive text contributions for one surviving row into a validated inclusive `id`/`lastId` range before retiring groups. Only actually retained contiguous IDs may compact; no gaps or receipt-only evidence fill a range. Compaction drops timestamp comparisons to keep reverse suppression conservative, retains unfinished text and its row key, and restores the same join capability. Remaining over-capacity groups become unknown display provenance while their rows remain. Held user-message suppression uses a row-referencing suppressed contribution so later paging cannot undo #1853's live echo settlement. Live-only text suffixes remain on the held row during reconstruction.

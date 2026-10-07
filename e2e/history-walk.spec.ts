@@ -363,7 +363,7 @@ test('an upward input asks from up to two viewport heights below the top and not
   } satisfies RequestHistoryPayload)
 })
 
-test('a correlated repeated served page contributes assistant and tool rows only once', async ({ launchPairedApp }) => {
+test('partially overlapping and repeated served pages contribute assistant and tool rows once', async ({ launchPairedApp }) => {
   const captured: Envelope[] = []
   const entries: HistoryPagePayload['entries'] = [
     { id: 503, type: 'assistant_delta', ts: FIXED_TS, payload: {
@@ -385,8 +385,8 @@ test('a correlated repeated served page contributes assistant and tool rows only
     if (env.type !== 'request_history') return [seedConversationsFrame()]
     const cursor = (env.payload as RequestHistoryPayload).cursor
     if (cursor === '') return [historyPageFrame(env.id, entries, 'repeat', false)]
-    if (cursor === 'repeat') return [historyPageFrame(env.id, entries, 'settled-repeat', false)]
-    if (cursor === 'settled-repeat') return [historyPageFrame(env.id, [], '', true)]
+    if (cursor === 'repeat') return [historyPageFrame(env.id, [...entries.slice(0, 3), storedMessageEntry(399, 'older partial overlap')], 'settled-repeat', false)]
+    if (cursor === 'settled-repeat') return [historyPageFrame(env.id, entries, '', true)]
     return []
   } })
   const thread = page.locator('.conversation__thread')
@@ -403,6 +403,7 @@ test('a correlated repeated served page contributes assistant and tool rows only
   await walkBackUntilAskFor(page, captured, 'settled-repeat')
   await expect(assistant).toHaveCount(1)
   await expect(tools).toHaveCount(1)
-  await expect(thread.locator('.bubble[data-thread-role="user"]')).toHaveCount(OPENING_ENTRIES)
+  await expect(thread.locator('.bubble[data-thread-role="user"]')).toHaveCount(OPENING_ENTRIES + 1)
+  await expect(thread).toContainText('older partial overlap')
   expect(historyAsks(captured).map(ask => ask.cursor)).toEqual(['', 'repeat', 'settled-repeat'])
 })

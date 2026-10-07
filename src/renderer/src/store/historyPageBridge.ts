@@ -240,7 +240,8 @@ export function subscribeHistoryPage(
     cursor: string,
     atStart: boolean,
     placements?: readonly HistoryAgentPlacement[],
-    servedIds?: readonly number[]
+    servedIds?: readonly number[],
+    entries?: readonly HistoryTimelineEntry[]
   ) => void,
   settleFailure: (
     conversationId: string,
@@ -248,7 +249,8 @@ export function subscribeHistoryPage(
     retryable: boolean
   ) => void,
   getLiveKeys?: (conversationId: string) => ReadonlySet<string>,
-  getServedIds?: (conversationId: string) => ReadonlySet<number>
+  getServedIds?: (conversationId: string) => ReadonlySet<number>,
+  retainContributions = false
 ): () => void {
   return onDaemonEvent((event) => {
     if (event.type === 'historyPageReceived') {
@@ -257,7 +259,16 @@ export function subscribeHistoryPage(
       const repeated = event.servedIds !== undefined && event.servedIds.length > 0 &&
         covered !== undefined && event.servedIds.every(id => covered.has(id))
       const items = reduceHistoryPage(event.entries, getLiveKeys?.(event.conversationId), placement => placements.push(placement), repeated)
-      if (event.servedIds !== undefined) applyPage(event.conversationId, items, event.cursor, event.atStart, placements, event.servedIds)
+      if (retainContributions) {
+        const chronological = [...event.entries].sort((a, b) => a.id - b.id)
+        const originalPlacements: HistoryAgentPlacement[] = []
+        chronological.forEach((entry, before) => {
+          if (entry.event.type === 'backgroundTaskStarted' || entry.event.type === 'backgroundTaskUpdated') {
+            originalPlacements.push({ event: entry.event, before })
+          }
+        })
+        applyPage(event.conversationId, items, event.cursor, event.atStart, originalPlacements, event.servedIds, event.entries)
+      } else if (event.servedIds !== undefined) applyPage(event.conversationId, items, event.cursor, event.atStart, placements, event.servedIds)
       else if (placements.length === 0) applyPage(event.conversationId, items, event.cursor, event.atStart)
       else applyPage(event.conversationId, items, event.cursor, event.atStart, placements)
       return
@@ -342,8 +353,8 @@ export function useHistoryPageBridge(): void {
     () =>
       subscribeHistoryPage(
         window.pyry.onDaemonEvent,
-        (conversationId, items, cursor, atStart, placements = [], servedIds) => {
-          const keys = conversationTimelineStore.getState().prependHistoryFor(conversationId, items, placements.length > 0)
+        (conversationId, items, cursor, atStart, placements = [], servedIds, entries) => {
+          const keys = conversationTimelineStore.getState().prependHistoryFor(conversationId, items, placements.length > 0, entries)
           backgroundTaskRosterStore.getState().recordHistoryPlacements(conversationId, placements.flatMap(placement => {
             const before = keys[placement.before]
             return before === undefined ? [] : [{ ...placement, before }]
@@ -365,7 +376,8 @@ export function useHistoryPageBridge(): void {
           const host = window.pyry.chatHistoryReceipt()?.serverId
           const held = conversationTimelineStore.getState().timelines.get(conversationId)
           return new Set(typeof host === 'string' && held?.serverId === host ? held.served?.ids : [])
-        }
+        },
+        true
       ),
     []
   )

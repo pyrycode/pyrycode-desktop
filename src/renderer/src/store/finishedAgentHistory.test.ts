@@ -16,7 +16,7 @@ const launch = (id = 'a', parentToolUseId?: string, name = 'Agent') => entry(1, 
   type: 'toolUse', turnId: 'turn', toolUseId: id, parentToolUseId, name, inputSummary: id
 })
 
-function harness() {
+function harness(contributions = false) {
   const agents = createBackgroundTaskRosterStore()
   const timelines = createConversationTimelineStore()
   const page = (entries: HistoryTimelineEntry[], servedIds?: number[]) => {
@@ -24,7 +24,13 @@ function harness() {
     const covered = new Set(timelines.getState().timelines.get('c')?.served?.ids)
     const repeated = servedIds !== undefined && servedIds.length > 0 && servedIds.every(id => covered.has(id))
     const items = reduceHistoryPage(entries, timelines.getState().timelines.get('c')?.liveKeys, p => placements.push(p), repeated)
-    const keys = timelines.getState().prependHistoryFor('c', items, placements.length > 0)
+    if (contributions) {
+      placements.length = 0
+      ;[...entries].sort((a, b) => a.id - b.id).forEach((entry, before) => {
+        if (entry.event.type === 'backgroundTaskStarted' || entry.event.type === 'backgroundTaskUpdated') placements.push({ event: entry.event, before })
+      })
+    }
+    const keys = timelines.getState().prependHistoryFor('c', items, placements.length > 0, contributions ? entries : undefined)
     agents.getState().recordHistoryPlacements('c', placements.map(p => ({ ...p, before: keys[p.before] })))
     timelines.getState().recordHistoryPage('c', 'cursor', false, servedIds)
   }
@@ -187,5 +193,21 @@ it('fully covered lifecycle pages collect qualification without duplicating rows
   expect(h.state().timeline.phase).toBe('thinking')
   expect(h.agents.getState().agentTimeline.get('c')?.get('a')).toEqual(evidence)
   expect(h.project().filter(r => r.marker)).toHaveLength(1)
+  expect(h.agents.getState().rosters.size).toBe(0)
+})
+
+
+it('maps partial/repeated contribution placements through chronological surviving keys', () => {
+  const h = harness(true)
+  h.page([user(10), finish(), start(), launch()], [1, 2, 4, 10])
+  const finishBefore = h.agents.getState().agentTimeline.get('c')!.get('a')!.finishBefore
+  const heldKey = h.state().timeline.rowKeys![1]
+  expect(finishBefore).toBe(heldKey)
+  h.page([user(20), user(10), finish(), start(), launch()], [1, 2, 4, 10, 20])
+  h.page([user(0)], [0])
+  expect(h.state().timeline.items).toMatchObject([{ text: 'user0' }, { toolUseId: 'a' }, { text: 'user10' }, { text: 'user20' }])
+  expect(h.state().timeline.rowKeys![0]).toBeGreaterThan(heldKey)
+  expect(h.agents.getState().agentTimeline.get('c')!.get('a')!.finishBefore).toBe(finishBefore)
+  expect(h.project().map(row => [row.index, !!row.marker])).toEqual([[0, false], [1, true], [1, false], [2, false], [3, false]])
   expect(h.agents.getState().rosters.size).toBe(0)
 })

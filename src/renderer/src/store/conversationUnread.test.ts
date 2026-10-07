@@ -157,3 +157,18 @@ describe('isConversationUnread', () => {
     expect(unreadFor('')).toBe(false)
   })
 })
+
+describe('daemon unread authority', () => {
+  it('works without a timeline, retains zero, and ignores local read counts', () => {
+    expect(isConversationUnread(null, null, { read_up_to: 0, latest_entry_id: 1 })).toBe(true)
+    expect(isConversationUnread(null, null, { read_up_to: 0, latest_entry_id: 0 })).toBe(false)
+    expect(isConversationUnread(timelineWith(9), 9, { read_up_to: 2, latest_entry_id: 10 })).toBe(true)
+    expect(isConversationUnread(timelineWith(9), null, { read_up_to: 10, latest_entry_id: 10 })).toBe(false)
+  })
+  it('uses the existing fallback unless both fields exist', () => {
+    for (const row of [{}, { read_up_to: 0 }, { latest_entry_id: 10 }]) {
+      expect(isConversationUnread(null, null, row)).toBe(false)
+      expect(isConversationUnread(timelineWith(3), 2, row)).toBe(true)
+    }
+  })
+})

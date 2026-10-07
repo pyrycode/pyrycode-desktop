@@ -12132,3 +12132,25 @@ describe('assistant parent attribution in live and history decode', () => {
     expect(decodedEntries([historyEntry('assistant_delta', payload)])).toEqual([])
   })
 })
+
+describe('received daemon read IDs', () => {
+  it('preserves zero and omission in list rows', () => {
+    const parsed = parseInboundMessage(encodeConversations({ conversations: [
+      { ...CONV_NAMED, read_up_to: 0, latest_entry_id: 0 }, CONV_UNNAMED
+    ] }))
+    expect(parsed?.kind === 'conversations' && parsed.conversations[0]).toMatchObject({ read_up_to: 0, latest_entry_id: 0 })
+    expect(parsed?.kind === 'conversations' && parsed.conversations[1]).not.toHaveProperty('read_up_to')
+  })
+  it.each([null, -1, 0.5, '1', {}, Number.MAX_SAFE_INTEGER + 1])('rejects invalid present IDs %j', (value) => {
+    for (const key of ['read_up_to', 'latest_entry_id']) {
+      expect(() => parseInboundMessage(encodeConversations({ conversations: [{ ...CONV_NAMED, [key]: value }] }))).toThrow(WireDecodeError)
+    }
+    expect(() => parseInboundMessage(encodeEnvelope({ id: 1, type: 'conversation_updated', ts: FIXED_TS,
+      payload: { ...CONV_NAMED, read_up_to: value } }))).toThrow(WireDecodeError)
+  })
+  it.each([undefined, 7])('admits unsolicited/correlated update marks (%j)', (in_reply_to) => {
+    const parsed = parseInboundMessage(encodeEnvelope({ id: 1, type: 'conversation_updated', ts: FIXED_TS,
+      in_reply_to, payload: { ...CONV_NAMED, read_up_to: 0 } }))
+    expect(parsed).toMatchObject({ kind: 'conversation-updated', conversationUpdated: { read_up_to: 0 } })
+  })
+})

@@ -32,11 +32,12 @@ overlay — a red disc with a white count, `9+` above nine, cleared at zero.
 
 ## The renderer half: reusing the dot's own composition, not restating it
 
-`conversationStatusNow(id)` repeats the dot control's five-source read over `getState()` —
+`conversationStatusNow(row)` takes the actual row's `id`, `read_up_to` and `latest_entry_id`, and
+repeats the dot control's five-source read over `getState()` —
 `selectHasOutstandingFor`, `selectBatchFor`, `selectActivityFor`, `selectTimelineFor`, `selectLastReadFor`.
 The input-required fact is `selectHasOutstandingFor(id)(modalStore.getState()) ||
 selectBatchFor(id)(questionBatchStore.getState()) !== undefined`, fed into
-`resolveConversationStatus(…, isConversationUnread(…))` with the activity and unread facts. Keep this
+`resolveConversationStatus(…, isConversationUnread(timeline, lastRead, row))` with the activity and unread facts. Keep this
 composition aligned with the row control when adding an attention source.
 `attentionCountNow()` applies the same
 `!is_archived` filter the [Channel List view model](channel-list.md) applies to its active list,
@@ -45,7 +46,18 @@ over `selectConversations` (every paired server's rows in one array), then calls
 `countAttentionConversations(conversations, statusOf)` — which takes its list from the **caller**,
 not a fixed source, so the muted-channel filter is one more `.filter` at the call site, not a
 change to the counting rule itself. `countAttentionConversations` stays one rule over whatever rows
-it is handed; it does not know what "muted" or "archived" mean.
+it is handed; it passes each **row**, rather than only its ID, to `statusOf(row)` and does not know
+what "muted" or "archived" mean.
+
+Complete daemon rows count as new messages when `latest_entry_id > read_up_to`, including before
+any local timeline is loaded. Each host's row supplies its own read state: two hosts advertising
+the same ID can contribute twice, and reading one clears only its contribution. An ID-only status
+callback or first-match lookup would lose that isolation. Read advances notify the list subscription
+immediately, before refreshed metadata arrives; local opening cannot clear daemon unread.
+Incomplete rows keep the persisted local-count fallback. Input-required still outranks working,
+which outranks new messages; only input-required/new-messages count, and archived/muted rows remain
+excluded even with pending input. Linux browser coverage observes `setBadgeCount` delivery, not
+native OS badge rendering; see [verification evidence](development-verification.md#what-each-test-tier-proves).
 
 `subscribeAppBadge({ subscribe, count, sendCommand })` computes once on subscribe and again on every
 notification from the six source stores (`conversationListStore`, `modalStore`, `questionBatchStore`,

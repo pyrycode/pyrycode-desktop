@@ -351,3 +351,25 @@ describe('conversationLastReadBridge over real stores', () => {
     expect(selectLastReadFor('a')(lastRead.getState())).toBe(1)
   })
 })
+
+describe('daemon-backed local stamp guard', () => {
+  it('guards both explicit activation and timeline-driven stamps, then retains legacy behavior', () => {
+    const recordLastRead = vi.fn()
+    let daemonBacked = true
+    const deps: ConversationLastReadDeps = { getOpenConversationId: () => 'a',
+      getTimelineFor: () => sliceHolding(3), recordLastRead, isDaemonBacked: () => daemonBacked }
+    let emit = () => {}
+    const off = vi.fn()
+    const unsubscribe = subscribeConversationLastRead(listener => { emit = listener; return off }, deps)
+    stampLastReadFor(deps, 'a')
+    emit()
+    expect(recordLastRead).not.toHaveBeenCalled()
+    daemonBacked = false
+    stampLastReadFor(deps, 'a')
+    emit()
+    expect(recordLastRead).toHaveBeenCalledTimes(2)
+    expect(recordLastRead).toHaveBeenCalledWith('a', 3)
+    unsubscribe()
+    expect(off).toHaveBeenCalledOnce()
+  })
+})

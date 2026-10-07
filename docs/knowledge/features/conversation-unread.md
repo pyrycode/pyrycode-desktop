@@ -1,56 +1,59 @@
 # Conversation unread predicate
 
-The read boundary between [conversation timeline holder](conversation-timeline-holder.md) and
-[conversation last-read store](conversation-last-read-store.md): a conversation is unread when its held
-timeline holds more items than its last-read mark. One framework-free pure function, no store, no bridge,
-no IPC arm, no render — it renders nothing itself.
+The pure unread predicate uses the received daemon history IDs on a
+[conversation list row](conversation-list-store.md). Rows without both IDs retain the comparison
+between [held timeline](conversation-timeline-holder.md) item count and
+[local last-read mark](conversation-last-read-store.md). No store, bridge, IPC arm or render lives here.
 
 Introduced in [#778](https://github.com/pyrycode/pyrycode-desktop/pull/795), split from #677, unblocked
 by #777 (which stamps the open conversation's mark). [#676](https://github.com/pyrycode/pyrycode-desktop/issues/676)
-draws the green "New messages" dot from it and carries the Figma reference — still open, and owns the
-still-undecided question of where the two-store composition below lives.
+draws the green "New messages" dot from it and carries the Figma reference.
 
 [Conversation status resolver](conversation-status.md) (#799) is the first module to consume this
 predicate's *output* rather than its inputs: it takes the resulting `boolean` as a parameter and joins it
 with the activity store's four facts. It does not call `isConversationUnread` itself and never touches
-this file's two source stores — [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801) landed
+the source stores — [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801) landed
 that composition, in [`ChannelList.tsx`'s `ConversationStatusDotControl`](channel-list-status-dot.md#the-row-s-status-dot-channellist-tsx-added-by-801),
-per row, keyed by the row's own conversation id.
+per row. [App badge](app-badge.md) is the other production consumer; both pass the actual row's read
+state rather than looking up an arbitrary matching conversation ID from another host.
 
 ## What it does
 
-Takes the two source stores' selector outputs — a `TimelineState | null` and a `LastReadMark | null` — and
-answers one `boolean`. Both inputs already ship: [conversation timeline
-holder](conversation-timeline-holder.md)'s `selectTimelineFor(id)` and [conversation
-last-read store](conversation-last-read-store.md)'s `selectLastReadFor(id)`. Neither store changed; this
-ticket adds one new file that reads both selectors' outputs and nothing else.
+`isConversationUnread(timeline, lastRead, row?)` answers one boolean from a row's optional
+`read_up_to` / `latest_entry_id` and the nullable `selectTimelineFor(id)` / `selectLastReadFor(id)`
+outputs. `hasDaemonReadState(row)` tests whether both daemon fields are present, including zero.
 
 ## How it works
 
-- **Three branches, evaluated in this order — the order is the contract:**
+- **Daemon comparison comes first.** With both fields, unread means
+  `latest_entry_id > read_up_to`, even when no timeline or local mark is held. These are durable
+  per-conversation history entry IDs, independent of envelope IDs, replay event IDs and local item
+  counts. Equal IDs, including `0` / `0`, read as read. Wire and saved-list parsers admit only
+  non-negative safe integers; the presence predicate does not perform boundary validation.
+- **Incomplete or absent daemon contract uses three legacy branches, in this order:**
   1. `timeline === null` → **read**. Nothing is held for this conversation (never fed, or evicted at
      [conversation timeline holder](conversation-timeline-holder.md)'s ten-slice cap), so there is no
-     content this client can see, whatever mark it carries. This branch runs first because it is what
+     locally held content to compare, whatever local mark it carries. This branch runs first because it is what
      resolves the one state where the two absent-readings disagree: at launch no slices are held and no
      marks exist for conversations never opened, and a mark-first reading would light the entire sidebar
      on every start — the failure #776's persistence was built to prevent.
   2. `lastRead === null` → **unread**. A timeline is held and this client has no record of reading it, so a
      chat another client has driven is never invisible. Opening it clears the mark by the ordinary path
-     (`stampLastReadFor`); this module never writes.
+     (`stampLastReadFor`) for legacy rows; this module never writes.
   3. otherwise → `timeline.items.length > lastRead`. Strict `>` — an exact match reads as read.
 - **No `?? 0`, `?? initialTimelineState`, `||`, default parameter, or non-null assertion anywhere.** Both
   inputs stay nullable on purpose; each absent case is its own written-out branch. `items.length > (lastRead
   ?? 0)` typechecks identically and collapses branch 2 into branch 3 — the same collapse both source
   stores' headers ban at their own read sites.
-- **Hard import constraint, checkable by grep: both of this module's imports are `import type`, and it has
+- **Hard import constraint, checkable by grep: all of this module's imports are `import type`, and it has
   no value import at all.** `TimelineState` from `./threadTimeline`, `LastReadMark` from
-  `./conversationLastReadStore`. Dropping either `type` keyword is no type error and no failing test, but it
+  `./conversationLastReadStore`, plus `ConversationSummary` from `@shared/wire/types`. A value import of a store
   would construct `conversationLastReadStore`'s app-wide singleton and pull the `localStorage` port into
   this module's graph and into every test that imports the predicate. Written as `import type`, the module
   has zero runtime dependencies.
 - **The conversation id never enters this file.** The caller resolves an id to a slice and a mark through
   the two source stores' own `Map` lookups before calling in; the predicate takes only the two already-
-  resolved values. No `conversationId` parameter, no `Map` lookup here, and daemon message text is likewise
+  resolved values and row read fields. No `conversationId` parameter, no `Map` lookup here, and daemon message text is likewise
   unreachable — the only field read off `TimelineState` is `.items.length`, never an element.
 - **Reading two stores back to back is not a torn read.** No `await` sits between the two selector reads;
   zustand's vanilla `setState` reassigns state and only then calls its listeners, and the renderer is
@@ -60,7 +63,7 @@ ticket adds one new file that reads both selectors' outputs and nothing else.
 - **Log-free by construction**, matching both source stores — no `console.*` on any path. An absent input is
   a defined reading, not an error to report.
 
-### Two corners decided, not open
+### Two legacy corners decided, not open
 
 - **A present but empty slice with no mark reads as unread.** Falls out of branch 2 running ahead of branch
   3. It is reachable: `dispatchFor` creates a slice on an absent key unconditionally, including for arms
@@ -77,18 +80,25 @@ ticket adds one new file that reads both selectors' outputs and nothing else.
 
 ## Configuration and usage
 
-- File: `src/renderer/src/store/conversationUnread.ts`. One export:
-  `isConversationUnread(timeline: TimelineState | null, lastRead: LastReadMark | null): boolean`.
-- One consumer: [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801) (the #676 split's final
-  ticket) composes `useConversationTimelineStore(selectTimelineFor(id))` and
-  `useConversationLastReadStore(selectLastReadFor(id))` at its own render site
-  ([`ConversationStatusDotControl`](channel-list-status-dot.md#the-row-s-status-dot-channellist-tsx-added-by-801)) and
-  calls this predicate — a `useConversationUnread(id)` hook was considered and declined, since this repo's
-  vitest runtime has no DOM and a hook would ship an untestable surface.
+- File: `src/renderer/src/store/conversationUnread.ts`; exports `isConversationUnread` and
+  `hasDaemonReadState`. The optional row accepts only the two read fields through
+  `Pick<ConversationSummary, 'read_up_to' | 'latest_entry_id'>`.
+- [`ConversationStatusDotControl`](channel-list-status-dot.md) composes the row with its two keyed
+  store reads; [`conversationStatusNow(row)`](app-badge.md) performs the equivalent synchronous
+  composition for the badge. A `useConversationUnread(id)` hook was declined because static renderer
+  tests cannot execute it.
 
 ## Edge cases and limitations
 
-- **A forged large `localStorage` mark suppresses one conversation's dot — accepted, not fixed.** An
+- **Omission is unknown, never zero.** A row with only one daemon field retains the local fallback.
+  A complete row ignores local counts, so opening it or receiving timeline content cannot clear
+  daemon unread locally: both stamp paths are guarded. Desktop mark publication remains
+  [#1826](https://github.com/pyrycode/pyrycode-desktop/issues/1826).
+- **Read advances are host-scoped and monotonic while held.** The [list store](conversation-list-store.md)
+  advances existing rows before refresh replies; stale lists cannot undo the read. A later list with
+  a higher latest entry can make the row unread again. Timeline eviction does not affect a complete
+  row's comparison. Pending input and working still outrank unread in the [status resolver](conversation-status.md).
+- **A forged large `localStorage` mark suppresses a legacy conversation's dot — accepted, not fixed.** An
   attacker with write access to the renderer's `localStorage` can store a mark of, say,
   `Number.MAX_SAFE_INTEGER`; `decodeLastReadMarks` bounds the mark's *type*, not its magnitude, so branch 3
   reads that conversation as read for as long as the mark stands. Bounded and self-healing by mechanisms

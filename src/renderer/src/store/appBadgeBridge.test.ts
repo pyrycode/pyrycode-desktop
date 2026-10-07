@@ -42,7 +42,7 @@ describe('countAttentionConversations', () => {
       d: 'idle',
       e: 'new-messages'
     }
-    expect(countAttentionConversations(rows('a', 'b', 'c', 'd', 'e'), (id) => status[id])).toBe(3)
+    expect(countAttentionConversations(rows('a', 'b', 'c', 'd', 'e'), (row) => status[row.id])).toBe(3)
   })
 
   it('counts only the rows the caller passed', () => {
@@ -120,21 +120,21 @@ describe('conversationStatusNow', () => {
   })
 
   it('reads idle for a conversation nothing is held about', () => {
-    expect(conversationStatusNow('nobody')).toBe('idle')
+    expect(conversationStatusNow({ id: 'nobody' })).toBe('idle')
   })
 
   it('reads input-required for a conversation with an outstanding prompt', () => {
     modalStore.setState({ outstanding: [{ conversationId: 'asking' }] } as never)
-    expect(conversationStatusNow('asking')).toBe('input-required')
-    expect(conversationStatusNow('other')).toBe('idle')
+    expect(conversationStatusNow({ id: 'asking' })).toBe('input-required')
+    expect(conversationStatusNow({ id: 'other' })).toBe('idle')
   })
 
   it('reads input-required for a conversation with only a pending question batch, until it is dismissed (#1700)', () => {
     showBatch('asking')
-    expect(conversationStatusNow('asking')).toBe('input-required')
-    expect(conversationStatusNow('other')).toBe('idle')
+    expect(conversationStatusNow({ id: 'asking' })).toBe('input-required')
+    expect(conversationStatusNow({ id: 'other' })).toBe('idle')
     dismissBatch('asking')
-    expect(conversationStatusNow('asking')).toBe('idle')
+    expect(conversationStatusNow({ id: 'asking' })).toBe('idle')
   })
 
   it('reads working for a running turn, and new-messages for a held slice with no read mark', () => {
@@ -144,9 +144,9 @@ describe('conversationStatusNow', () => {
       timelines: new Map([['unread', { timeline: { items: [{}] } }], ['read', { timeline: { items: [{}] } }]])
     } as never)
     conversationLastReadStore.setState({ marks: new Map([['read', 1]]) } as never)
-    expect(conversationStatusNow('busy')).toBe('working')
-    expect(conversationStatusNow('unread')).toBe('new-messages')
-    expect(conversationStatusNow('read')).toBe('idle')
+    expect(conversationStatusNow({ id: 'busy' })).toBe('working')
+    expect(conversationStatusNow({ id: 'unread' })).toBe('new-messages')
+    expect(conversationStatusNow({ id: 'read' })).toBe('idle')
   })
 })
 
@@ -223,5 +223,32 @@ describe('attentionCountNow and subscribeToAttentionStores', () => {
     conversationLastReadStore.setState({ marks: new Map() } as never)
     questionBatchStore.setState({ outstanding: [] } as never)
     expect(listener).toHaveBeenCalledTimes(6)
+  })
+})
+
+describe('row-owned daemon attention', () => {
+  afterEach(() => {
+    conversationListStore.setState(conversationListStore.getInitialState(), true)
+    conversationActivityStore.setState(conversationActivityStore.getInitialState(), true)
+    modalStore.setState(modalStore.getInitialState(), true)
+    questionBatchStore.setState(questionBatchStore.getInitialState(), true)
+  })
+  it('counts colliding IDs independently and retains precedence and badge exclusions', () => {
+    const row = { id: 'same', name: null, cwd: '/w', is_promoted: false, is_archived: false,
+      last_message_ts: '', last_used_at: '', workspace_label: null, read_up_to: 0, latest_entry_id: 10 }
+    conversationListStore.getState().setConversations([row,
+      { ...row, id: 'archived', is_archived: true }, { ...row, id: 'muted', is_muted: true }], 'a')
+    conversationListStore.getState().setConversations([row], 'b')
+    expect(attentionCountNow()).toBe(2)
+    conversationListStore.getState().advanceReadMark('a', 'same', 10)
+    expect(attentionCountNow()).toBe(1)
+    expect(conversationStatusNow({ ...row, read_up_to: 10 })).toBe('idle')
+    expect(conversationStatusNow(row)).toBe('new-messages')
+    conversationActivityStore.getState().setTurnRunning('same', true)
+    expect(conversationStatusNow(row)).toBe('working')
+    expect(attentionCountNow()).toBe(0)
+    showBatch('same')
+    expect(conversationStatusNow(row)).toBe('input-required')
+    expect(attentionCountNow()).toBe(2)
   })
 })

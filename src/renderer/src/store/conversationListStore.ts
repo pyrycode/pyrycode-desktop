@@ -77,6 +77,7 @@ export type ConversationListStore = ConversationListState & {
     conversations: readonly ConversationSummary[],
     serverId?: string | null
   ) => void
+  advanceReadMark: (serverId: string, conversationId: string, readUpTo: number) => void
   /**
    * The pairing-boundary drop (#1086, AC5) — NULLARY BY DESIGN, the `clearAllModelLists` /
    * `clearAllSlashCommandLists` property: a pairing ending invalidates every server's rows at once, so
@@ -135,9 +136,16 @@ export const initialConversationListState: ConversationListState = {
  */
 function stampRows(
   rows: readonly ConversationSummary[],
-  serverId: ConversationListOrigin
+  serverId: ConversationListOrigin,
+  held: readonly ServerConversationSummary[] = []
 ): readonly ServerConversationSummary[] {
-  return rows.map((row) => ({ ...row, serverId }))
+  const known = new Map(held.map((row) => [row.id, row.read_up_to]))
+  return rows.map((row) => {
+    const read = known.get(row.id)
+    return { ...row, ...(read === undefined ? {} : {
+      read_up_to: row.read_up_to === undefined ? read : Math.max(read, row.read_up_to)
+    }), serverId }
+  })
 }
 
 /**
@@ -186,8 +194,8 @@ function flattenByServer(
 /**
  * DI-friendly, React-free store — one isolated instance per test.
  *
- * `setConversations` replaces ONE server's rows unconditionally (most recent list for that server wins
- * — no merge, no dedupe) and never coerces or validates them; every other server's slot comes back BY
+ * `setConversations` replaces ONE server's rows, preserving a known higher read mark for matching IDs.
+ * Metadata and latest-entry IDs come from the replacement list; no row is fabricated. It never coerces values; every other server's slot comes back BY
  * REFERENCE, so a component watching a different server sees `Object.is` true and does not re-render.
  * Copy-on-write throughout — `new Map(held)` then `set`, never a mutation of the map the store already
  * handed out. The map is read INSIDE the `set` updater rather than through `getState()` outside it, so
@@ -235,9 +243,22 @@ export function createConversationListStore(
           localListReads.delete(serverId)
         }
         const byServer = new Map(s.byServer)
-        byServer.set(serverId, stampRows(conversations, serverId))
+        byServer.set(serverId, stampRows(conversations, serverId, s.byServer.get(serverId)))
         return { conversations: flattenByServer(byServer), byServer, localListReads }
       }),
+    advanceReadMark: (serverId, conversationId, readUpTo) => {
+      if (typeof serverId !== 'string' || serverId.length === 0 ||
+          !Number.isSafeInteger(readUpTo) || readUpTo < 0) return
+      set((s) => {
+        const rows = s.byServer.get(serverId)
+        const row = rows?.find((row) => row.id === conversationId)
+        if (rows === undefined || row === undefined ||
+            (row.read_up_to !== undefined && readUpTo <= row.read_up_to)) return s
+        const byServer = new Map(s.byServer)
+        byServer.set(serverId, rows.map((held) => held === row ? { ...held, read_up_to: readUpTo } : held))
+        return { byServer, conversations: flattenByServer(byServer) }
+      })
+    },
     clearAllConversations: () => {
       pending.clear()
       set((s) => s.conversations === null && s.byServer.size === 0 && s.localListReads.size === 0

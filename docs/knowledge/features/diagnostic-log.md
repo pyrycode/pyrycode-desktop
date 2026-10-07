@@ -88,7 +88,7 @@ connection records, so it reaches the existing log/debug bundle. Lifecycle lines
 carry no conversation/host routing ids, message text, attachments, tokens, keys,
 raw payloads or caught error strings. Fresh literals contain only held ids and
 client-owned events/reasons. Logger and observer calls are guarded so faults cannot
-affect delivery. [Controlled and browser coverage](development-verification.md#message-lifecycle-diagnostics)
+affect delivery. [Controlled and browser coverage](development-verification-test-tiers.md#message-lifecycle-diagnostics)
 checks both the serializer boundary and production renderer wiring.
 
 ## The two sinks

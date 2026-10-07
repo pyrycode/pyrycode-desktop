@@ -10,6 +10,7 @@
 // the React-free injected data path, `useAppBadge` the thin glue mounted in PairedShell. Only a count
 // crosses to main, as the MAIN-LOCAL `setBadgeCount` command — never an id, a name or a host.
 import { useEffect } from 'react'
+import type { ConversationSummary } from '@shared/wire/types'
 import type { RendererCommand } from '@shared/ipc/commands'
 import { resolveConversationStatus, type ConversationStatus } from './conversationStatus'
 import { isConversationUnread } from './conversationUnread'
@@ -25,13 +26,13 @@ import { questionBatchStore, selectBatchFor } from './questionBatchStore'
  * filter — archived rows and muted ones (#1607) — so this stays one rule over whatever
  * rows it is handed.
  */
-export function countAttentionConversations(
-  conversations: readonly { id: string }[],
-  statusOf: (conversationId: string) => ConversationStatus
+export function countAttentionConversations<T extends { id: string }>(
+  conversations: readonly T[],
+  statusOf: (row: T) => ConversationStatus
 ): number {
   let count = 0
-  for (const { id } of conversations) {
-    const status = statusOf(id)
+  for (const row of conversations) {
+    const status = statusOf(row)
     if (status === 'input-required' || status === 'new-messages') count++
   }
   return count
@@ -43,14 +44,16 @@ export function countAttentionConversations(
  * hooks. Back-to-back synchronous reads, so not a torn read (conversationUnread.ts states why). A pending
  * question batch waits on the operator exactly as a prompt does (#1700), so either one is input-required.
  */
-export function conversationStatusNow(conversationId: string): ConversationStatus {
+export function conversationStatusNow(row: Pick<ConversationSummary, 'id' | 'read_up_to' | 'latest_entry_id'>): ConversationStatus {
+  const conversationId = row.id
   return resolveConversationStatus(
     selectHasOutstandingFor(conversationId)(modalStore.getState()) ||
       selectBatchFor(conversationId)(questionBatchStore.getState()) !== undefined,
     selectActivityFor(conversationId)(conversationActivityStore.getState()),
     isConversationUnread(
       selectTimelineFor(conversationId)(conversationTimelineStore.getState()),
-      selectLastReadFor(conversationId)(conversationLastReadStore.getState())
+      selectLastReadFor(conversationId)(conversationLastReadStore.getState()),
+      row
     )
   )
 }

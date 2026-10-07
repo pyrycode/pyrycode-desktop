@@ -21,6 +21,8 @@ export interface ConversationSummary {
   is_archived: boolean
   is_muted?: boolean
   agent?: WireAgent
+  read_up_to?: number          // non-negative safe integer; zero is present, omission unknown
+  latest_entry_id?: number     // durable history entry ID, not an envelope/replay ID
   cwd: string                  // untrusted display text — never resolved to a real fs path here
   last_message_ts: string      // RFC3339 — a TIMESTAMP, not preview text (no message text on this wire)
   last_used_at: string         // RFC3339
@@ -44,6 +46,15 @@ value type fails the whole list closed. Invalid timestamp strings remain valid w
 the [Archive screen](archive-screen.md#the-view-model-archiveviewmodelts) can select its last-use
 fallback. [Saved snapshots](chat-history.md#snapshot-contract) also retain strings/null but preserve
 absence on older rows. `is_muted` defaults to `false`; optional `agent` passes through `agentFromWire`.
+
+Optional `read_up_to` and `latest_entry_id` use `Number.isSafeInteger(value) && value >= 0`, with
+no coercion or rounding. Null, negative, fractional, nonnumeric and unsafe values fail the whole
+list decode; omission adds no key and never defaults to zero. `conversation_updated` replies and
+unsolicited pushes admit optional `read_up_to` by the same rule, but carry no `latest_entry_id`.
+These IDs identify durable per-conversation history entries. [Saved lists](chat-history.md#snapshot-contract)
+preserve admitted fields and accept older rows without them; [attention](conversation-unread.md)
+uses the daemon comparison only when both are known. Desktop publication remains
+[#1826](https://github.com/pyrycode/pyrycode-desktop/issues/1826).
 
 ## The eight pieces
 
@@ -126,7 +137,9 @@ function parseConversationSummary(payload: unknown): ConversationSummary {
     last_used_at: requireString(payload, 'last_used_at'),
     archived_at: payload.archived_at === undefined ? null : requireStringOrNull(payload, 'archived_at'),
     workspace_label: requireStringOrNull(payload, 'workspace_label'),
-    ...optionalAgent(payload)
+    ...optionalAgent(payload),
+    ...optionalReadId(payload, 'read_up_to'),
+    ...optionalReadId(payload, 'latest_entry_id')
   }
 }
 
@@ -219,6 +232,7 @@ daemon → conversations frame → onDriverEvent 'message' → parseInboundMessa
 | `payload` not an object / `conversations` missing or not an array | `parseConversationsPayload` | throws `WireDecodeError` |
 | A row missing a required field, or `name`/`is_promoted`/`is_archived` mistyped | `parseConversationSummary` | throws — one bad row fails the whole reply closed, never a partial value |
 | `name: null` on the wire | `requireStringOrNull` | decodes to `null` — a valid distinct value, never a failure, never `''` |
+| Invalid present read/latest ID | `optionalReadId` | throws static `WireDecodeError('malformed conversation read ID')`; no coerced or rounded ID reaches state |
 | Oversized plaintext | existing `MAX_PLAINTEXT_BYTES` guard | throws before parsing begins |
 
 ## Correlation is deliberately absent
@@ -227,8 +241,8 @@ Same posture as [screen snapshot fetch](screen-snapshot-fetch.md#correlation-is-
 no `in_reply_to` map. Any `conversations` reply that arrives — solicited or not — is decoded and
 emitted unconditionally; safe because only the authenticated daemon (inside the Noise session) can
 produce one. The [conversation list store](conversation-list-store.md) (#208) is the idempotent
-source of truth for what the UI shows (whole-list replace), so an unsolicited or replayed reply is
-harmless.
+source of truth for what the UI shows. Replacement keeps higher held read marks for matching rows
+in that host, so a delayed reply cannot undo a received read advance; other metadata still replaces.
 
 ## Out of scope
 

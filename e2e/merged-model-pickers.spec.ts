@@ -84,9 +84,7 @@ for (const entry of ['footer', 'sheet'] as const) {
 
 for (const entry of ['footer', 'sheet'] as const) {
   for (const priorOwnPick of [false, true]) {
-    // https://github.com/pyrycode/pyrycode-desktop/issues/1845
-    const run = priorOwnPick ? test.skip : test
-    run(`${priorOwnPick ? 'blocked on #1845 — prior confirmed settings mask incoming agent: ' : ''}${entry} model picks confirm both agent directions, suppress duplicates and reconcile outcomes`, async ({ launchPairedApp }) => {
+    test(`${priorOwnPick ? 'after a confirmed own-agent pick: ' : ''}${entry} model picks confirm both agent directions, suppress duplicates and reconcile outcomes`, async ({ launchPairedApp }) => {
       const sent: Envelope[] = []
       let agent: WireAgent = 'claude'
       let model = claude.value
@@ -137,6 +135,9 @@ for (const entry of ['footer', 'sheet'] as const) {
         await expect.poll(() => writes().length).toBe(1)
         expect(writes()[0].payload).toEqual({ session_id: 'session', model: claude.value })
         await expect(page.locator('.agent-switch-overlay')).toHaveCount(0)
+        await openSheet()
+        await expect(page.locator('.run-config__model-list')).not.toHaveAttribute('aria-busy', 'true')
+        await expect(modelRow(claude).getByRole('img', { name: 'Current model' })).toBeVisible()
       }
       await closeSheet()
       await pick(codex)
@@ -194,6 +195,8 @@ for (const entry of ['footer', 'sheet'] as const) {
       await expect.poll(() => writes().length).toBe(priorOwnPick ? 2 : 1)
       expect(writes()[priorOwnPick ? 1 : 0].payload).toEqual({ session_id: 'session', model: codex.value })
       await expect(dialog('Codex')).toHaveCount(0)
+      await openSheet()
+      await expect(page.locator('.run-config__model-list')).not.toHaveAttribute('aria-busy', 'true')
       await closeSheet()
       // Untagged Claude rows route the reverse direction through the same real entry point.
       await pick(claude)

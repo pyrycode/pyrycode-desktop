@@ -135,9 +135,13 @@ export function reconcileHistory(
     const group = groups[groupIndex++]
     if (group.key !== undefined) { items.push(group.item); keys.push(group.key) }
   }
+  const calls = new Map<string, number>()
+  items.forEach((item, index) => {
+    if (item.kind === 'toolCall' && !calls.has(item.toolUseId)) calls.set(item.toolUseId, index)
+  })
   for (const d of contributions) {
     if (d.kind !== 'patch') continue
-    const index = items.findIndex(item => item.kind === 'toolCall' && item.toolUseId === d.toolUseId)
+    const index = calls.get(d.toolUseId) ?? -1
     const item = items[index]
     if (item?.kind !== 'toolCall') continue
     d.rowKey = keys[index]

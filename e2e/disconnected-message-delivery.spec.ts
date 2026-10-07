@@ -1,24 +1,24 @@
-import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { test, expect, SEEDED_ROW, SECOND_SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { SendMessagePayload } from '../src/shared/wire/types'
 
 for (const mode of ['automatic', 'explicit', 'terminal'] as const) {
   test(`accepted disconnected messages drain and settle: ${mode}`, async ({ launchPairedApp }) => {
     const sends: SendMessagePayload[] = []
+    const otherSends: SendMessagePayload[] = []
     const { page, app, daemon, forwarder, servers } = await launchPairedApp({ buildReplyFrames: bytes => {
       const frame = decodeEnvelope(bytes)
       if (frame.type === 'list_conversations') return [seedConversationsFrame()]
       if (frame.type === 'send_message') sends.push(frame.payload as SendMessagePayload)
       return []
-    } })
-    app.process().stdout?.on('data', chunk => {
-      for (const line of String(chunk).split('\n')) {
-        if (line.startsWith('{')) {
-          try { const value = JSON.parse(line); if (value.event === 'daemon-failed') console.log('connection failure', value.code) } catch {}
-        }
-      }
-    })
+    } }, { secondServer: mode === 'terminal' ? { buildReplyFrames: bytes => {
+      const frame = decodeEnvelope(bytes)
+      if (frame.type === 'list_conversations') return [seedConversationsFrame(SECOND_SEEDED_ROW)]
+      if (frame.type === 'send_message') otherSends.push(frame.payload as SendMessagePayload)
+      return []
+    } } : undefined })
     await page.setViewportSize({ width: mode === 'terminal' ? 800 : 1280, height: 800 })
+    if (mode === 'terminal') await page.locator('.channel-list__row').filter({ hasText: SEEDED_ROW.name ?? '' }).locator('.channel-list__row-open').click()
     const push = (type: string, fields: Record<string, unknown>) => daemon.pushFrame(encodeEnvelope({
       id: 77, type, ts: '2026-10-07T12:00:00Z', payload: { conversation_id: SEEDED_ROW.id, ...fields }
     }))
@@ -73,8 +73,14 @@ for (const mode of ['automatic', 'explicit', 'terminal'] as const) {
     await expect(page.locator('.message-row--queued')).toHaveCount(0)
     expect(sends).toHaveLength(0)
     await page.screenshot({ path: `/tmp/builder-1853/waiting-${mode}.png` })
-    await app.evaluate(fail => (globalThis as any).__delivery1853.resume(fail), mode === 'terminal')
     if (mode === 'terminal') {
+      await page.locator('.channel-list__row').filter({ hasText: SECOND_SEEDED_ROW.name ?? '' }).locator('.channel-list__row-open').click()
+      await expect(page.getByText('Waiting for connection', { exact: true })).toHaveCount(0)
+      await composer.fill('Other host draft stays here')
+    }
+    await app.evaluate((_electron, fail) => (globalThis as any).__delivery1853.resume(fail), mode === 'terminal')
+    if (mode === 'terminal') {
+      await page.locator('.channel-list__row').filter({ hasText: SEEDED_ROW.name ?? '' }).locator('.channel-list__row-open').click()
       await expect(page.getByText('Not sent', { exact: true })).toHaveCount(2)
       await page.screenshot({ path: '/tmp/builder-1853/not-sent-800.png' })
       expect(sends).toHaveLength(0)
@@ -106,6 +112,7 @@ for (const mode of ['automatic', 'explicit', 'terminal'] as const) {
     await expect(page.getByText('receipt must preserve original text', { exact: true })).toHaveCount(0)
     await expect(page.getByText('Not sent', { exact: true })).toHaveCount(0)
     expect(sends).toEqual(accepted)
+    expect(otherSends).toHaveLength(0)
     } finally {
       await app.evaluate(() => (globalThis as any).__delivery1853.resume(false))
     }

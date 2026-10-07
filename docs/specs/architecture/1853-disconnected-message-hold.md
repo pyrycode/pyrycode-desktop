@@ -71,3 +71,5 @@ None. The cleaner shape is to reuse the existing send observer and echo/receipt 
 ## Revisions
 
 2026-10-07: Reserve the draining head's count/bytes until the driver accepts it, rather than removing it before handoff. The draining guard still appends reentrant submissions behind all existing entries, and a refusal leaves the head in place. This closes a reentrant overflow window while keeping the FIFO bounded. Delivery presentation lives in the existing `localEchoes` sidecar; it never changes message content or the durable row contract. Existing exhaustive session/modal/question bridges explicitly ignore the new delivery event.
+
+2026-10-07: Composer commands carry an optional validated host id outside the wire payload, used only to attribute routing refusals when no connection can stamp them. Transport routing still uses the trusted main index. Shared fixed-copy constants and `bubble__meta` typography supply the delivery labels, with the existing error chip inside the metadata row. Final scope remains below 800 written lines, with one new exported constant and optional consumer additions only.

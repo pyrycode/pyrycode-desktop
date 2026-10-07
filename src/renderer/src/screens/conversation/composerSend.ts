@@ -4,6 +4,8 @@
 // The React container (ConversationScreen's Composer) is thin glue over this.
 import type { MessageLifecycleDiagnostic } from '@shared/ipc/diagnostics'
 import { sendMessageCommand, type RendererCommand } from '@shared/ipc/commands'
+
+export const COMPOSER_MESSAGE_DELIVERY_COPY = { waiting: 'Waiting for connection', 'not-sent': 'Not sent' } as const
 import type { SendMessagePayload } from '@shared/wire/types'
 import type { ConnectionStatus } from '../../store/sessionStore'
 import type { MessageAttachment, ThreadEvent } from '../../store/threadTimeline'
@@ -75,6 +77,7 @@ export interface PendingAttachmentTake {
  * second optional dep that could silently go unwired, the failure mode `now` already documents.
  */
 export interface ComposerSendDeps {
+  serverId?: string
   diagnose?: (record: MessageLifecycleDiagnostic) => void
   sendCommand: (command: RendererCommand) => void
   dispatch: (event: ThreadEvent) => void
@@ -135,7 +138,7 @@ export function submitMessage(
   deps.dispatch(echo)
   deps.dispatchFor(conversationId, echo)
   try {
-    deps.sendCommand(sendMessageCommand(payload))
+    deps.sendCommand(sendMessageCommand(payload, deps.serverId))
     return true
   } catch {
     diagnose('message-bridge-failed')

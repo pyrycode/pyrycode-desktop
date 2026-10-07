@@ -348,7 +348,7 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
 export type RendererCommand =
   | { type: 'requestHostSystemPrompt'; serverId: string; requestId: string }
   | { type: 'setHostSystemPrompt'; serverId: string; requestId: string; payload: SetHostSystemPromptPayload }
-  | { type: 'sendMessage'; payload: SendMessagePayload }
+  | { type: 'sendMessage'; payload: SendMessagePayload; serverId?: string }
   | { type: 'requestDebugBundle'; serverId?: string }
   | { type: 'requestSessionSettings'; payload: RequestSessionSettingsPayload }
   | { type: 'requestModelList'; payload: RequestModelListPayload }
@@ -393,8 +393,8 @@ export type RendererCommand =
  * assembled SendMessagePayload in). The RendererCommand return type is the compile-time
  * guarantee AC4 requires: a member with an unmodelled `type` cannot type-check.
  */
-export function sendMessageCommand(fields: SendMessagePayload): RendererCommand {
-  return { type: 'sendMessage', payload: fields }
+export function sendMessageCommand(fields: SendMessagePayload, serverId?: string): RendererCommand {
+  return serverId === undefined ? { type: 'sendMessage', payload: fields } : { type: 'sendMessage', payload: fields, serverId }
 }
 
 /**
@@ -515,8 +515,11 @@ export function interruptCommand(fields: InterruptCommandPayload): RendererComma
 export function isRendererCommand(value: unknown): value is RendererCommand {
   if (typeof value !== 'object' || value === null || !('type' in value)) return false
   switch (value.type) {
-    case 'sendMessage':
-      return 'payload' in value && isSendMessagePayload(value.payload)
+    case 'sendMessage': {
+      const serverId = 'serverId' in value ? value.serverId : undefined
+      return (serverId === undefined || (typeof serverId === 'string' && serverId.length > 0 && serverId.length <= 1024)) &&
+        'payload' in value && isSendMessagePayload(value.payload)
+    }
     case 'requestDebugBundle':
       // Bare member: no payload to validate, so the optional server id (#1120) is the whole check.
       return hasValidServerId(value)

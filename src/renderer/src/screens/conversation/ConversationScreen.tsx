@@ -86,6 +86,7 @@ import {
   shouldShowBanner,
   CONNECTION_BANNER_COPY,
   COMPOSER_ERROR_CHIP_COPY,
+  COMPOSER_MESSAGE_DELIVERY_COPY,
   COMPOSER_ERROR_CHIP_PREFIX_COPY,
   COMPOSER_REPAIR_BUTTON_COPY
 } from './composerSend'
@@ -1812,9 +1813,6 @@ function TimelineRow({
           {!queued && <MessageActions text={item.text} role="user" onReply={onReply} />}
           <div className="bubble bubble--user" data-thread-role={queued ? 'queued' : 'user'}>
             {item.text}
-            {delivery !== undefined && <div className={delivery === 'not-sent' ? 'composer-status__error' : 'bubble-meta'}>
-              {delivery === 'waiting' ? 'Waiting for connection' : 'Not sent'}
-            </div>}
             {/* #815: the attachment rows, written between the text and the meta row — the slot BubbleMeta's
                 header reserved. The read is `=== undefined`, never `'attachments' in item`, which is always
                 true because the reducer assigns the field unconditionally. `[]` is unreachable from the
@@ -1839,7 +1837,10 @@ function TimelineRow({
             )}
             {/* #969: the same row, right-aligned by its own modifier (the drawing's `justify-end` on
                 132:4435). Queued messages have no delivery meta row. */}
-            {!queued && <BubbleMeta side="user" createdAt={item.createdAt} />}
+            {delivery !== undefined && <div className="bubble__meta bubble__meta--user">
+              <span className={delivery === 'not-sent' ? 'composer-status__error' : undefined}>{COMPOSER_MESSAGE_DELIVERY_COPY[delivery]}</span>
+            </div>}
+            {!queued && delivery === undefined && <BubbleMeta side="user" createdAt={item.createdAt} />}
           </div>
         </div>
       )
@@ -4089,6 +4090,7 @@ function Composer({
     // this function: that would move the dereference into the render path, where `window.pyry` does not
     // exist under renderToStaticMarkup, and every container smoke test would throw.
     const sent = submitMessage(value, activeConversationId, {
+      serverId,
       diagnose: window.pyry.sendDiagnostic,
       sendCommand: window.pyry.sendCommand,
       dispatch,

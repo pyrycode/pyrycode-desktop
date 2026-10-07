@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util'
+import type { Locator } from '@playwright/test'
 import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { Envelope, SendMessagePayload, SessionSettingsPayload } from '../src/shared/wire/types'
@@ -11,6 +12,127 @@ import type { Envelope, SendMessagePayload, SessionSettingsPayload } from '../sr
 const ROUNDTRIP_TIMEOUT_MS = 15_000
 const FIXED_TS = '2026-10-05T12:00:00.000Z'
 const QUEUED_TEXT = 'Send me now please'
+
+const queuedGeometry = (row: Locator) => row.evaluate(el => {
+  const bubble = el.querySelector('.bubble')!
+  const actions = el.querySelector('.message-actions--queued')!
+  const thread = el.parentElement!
+  const box = (node: Element) => {
+    const r = node.getBoundingClientRect()
+    return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right, bottom: r.bottom }
+  }
+  const glyphs = [...actions.querySelectorAll('button > span')].map(box)
+  const buttons = [...actions.querySelectorAll('button')].map(button => ({
+    ...box(button), opacity: getComputedStyle(button).opacity, color: getComputedStyle(button).color
+  }))
+  return { row: box(el), bubble: box(bubble), actions: box(actions), glyphs, buttons,
+    opacity: getComputedStyle(el).opacity, bubbleOpacity: getComputedStyle(bubble).opacity,
+    actionsOpacity: getComputedStyle(actions).opacity, tint: getComputedStyle(actions).color,
+    thread: box(thread), overflow: thread.scrollWidth - thread.clientWidth }
+})
+
+const hoverLayer = (button: Locator) => button.evaluate(el => {
+  const layer = getComputedStyle(el, '::before')
+  const probe = document.createElement('span')
+  probe.style.background = 'var(--color-state-hover)'
+  probe.style.color = 'var(--color-inverse-primary)'
+  el.append(probe)
+  const fill = getComputedStyle(probe).backgroundColor
+  const tint = getComputedStyle(probe).color
+  probe.remove()
+  return { content: layer.content, fill: layer.backgroundColor, expectedFill: fill, tint,
+    radius: layer.borderRadius, opacity: layer.opacity, top: parseFloat(layer.top),
+    bottom: parseFloat(layer.bottom), left: parseFloat(layer.left), right: parseFloat(layer.right) }
+})
+
+test('queued actions keep Figma geometry, full opacity, isolated hover and keyboard focus at 800 and 1280', async ({ launchPairedApp }) => {
+  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
+    const envelope = decodeEnvelope(bytes)
+    if (envelope.type === 'list_conversations') return [seedConversationsFrame()]
+    if (envelope.type === 'request_session_settings') return [sessionSettingsFrame(envelope.id)]
+    return []
+  } })
+  await expect(page.locator('.composer__context')).toHaveText('Context: 25%')
+  // Establish a received live timeline before supplying its queue; a local-history pane hides queues.
+  daemon.pushFrame(encodeEnvelope({ id: 1, type: 'assistant_delta', ts: FIXED_TS, payload: {
+    conversation_id: SEEDED_ROW.id, turn_id: 'geometry', seq: 0, text: 'Earlier reply'
+  } }))
+  await expect(page.locator('[data-thread-role="assistant"]')).toHaveCount(1)
+  daemon.pushFrame(encodeEnvelope({ id: 2, type: 'queue_state', ts: FIXED_TS, payload: {
+    conversation_id: SEEDED_ROW.id, queued: [
+      { queued_msg_id: 1, text: 'Hi', ts: FIXED_TS },
+      { queued_msg_id: 2, text: 'Wrapping queued message stays inside the thread. '.repeat(6) + 'x'.repeat(90), ts: FIXED_TS }
+    ]
+  } }))
+  const rows = page.locator('.message-row--queued')
+  await expect(rows).toHaveCount(2)
+  for (const width of [800, 1280]) {
+    await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 800), width)
+    await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width)
+    for (const index of [0, 1]) {
+      const row = rows.nth(index)
+      const send = row.getByRole('button', { name: 'Send queued message now' })
+      const cancel = row.getByRole('button', { name: 'Drop queued message' })
+      await row.scrollIntoViewIfNeeded()
+      await page.mouse.move(0, 0)
+      await page.getByPlaceholder('Message…').focus()
+      const before = await queuedGeometry(row)
+      expect(before.actions.width).toBe(12)
+      expect(before.actions.height).toBe(before.bubble.height)
+      expect(before.bubble.x - before.actions.right).toBeCloseTo(12, 5)
+      expect(before.glyphs[1].y - before.glyphs[0].y).toBeCloseTo(25, 5)
+      expect((before.glyphs[0].y + before.glyphs[1].bottom) / 2)
+        .toBeCloseTo(before.bubble.y + before.bubble.height / 2, 5)
+      expect(before.row.x).toBeGreaterThanOrEqual(before.thread.x)
+      expect(before.bubble.right).toBeLessThanOrEqual(before.thread.right)
+      expect(before.overflow).toBeLessThanOrEqual(1)
+      expect(before.bubbleOpacity).toBe('0.5')
+      expect(before.opacity).toBe('1')
+      expect(before.actionsOpacity).toBe('1')
+      if (index === 0) expect(before.bubble.height).toBe(52)
+      else expect(before.bubble.height).toBeGreaterThan(52)
+      await page.screenshot({ path: `/tmp/builder-1868/queued-rest-${width}-${index}.png` })
+      for (const [button, sibling, ordinal] of [[send, cancel, 0], [cancel, send, 1]] as const) {
+        const glyph = before.glyphs[ordinal]
+        const bounds = before.buttons[ordinal]
+        expect(glyph.width).toBe(12)
+        expect(glyph.height).toBe(12)
+        expect(bounds.opacity).toBe('1')
+        expect(bounds.color).toBe((await hoverLayer(button)).tint)
+        expect((await hoverLayer(button)).content).toBe('none')
+        await button.hover()
+        const hovered = await hoverLayer(button)
+        expect(hovered.content).toBe('""')
+        expect(hovered.fill).toBe(hovered.expectedFill)
+        expect(hovered.radius).toBe('6px')
+        expect(hovered.opacity).toBe('1')
+        expect(bounds.x + hovered.left).toBeCloseTo(glyph.x - 4, 5)
+        expect(bounds.y + hovered.top).toBeCloseTo(glyph.y - 4, 5)
+        expect(bounds.right - hovered.right).toBeCloseTo(glyph.right + 4, 5)
+        expect(bounds.bottom - hovered.bottom).toBeCloseTo(glyph.bottom + 4, 5)
+        expect((await hoverLayer(sibling)).content).toBe('none')
+        expect(await queuedGeometry(row)).toEqual(before)
+        if (index === 0) await row.screenshot({ path: `/tmp/builder-1868/queued-hover-${width}-${ordinal}.png` })
+        await page.mouse.move(0, 0)
+        expect((await hoverLayer(button)).content).toBe('none')
+      }
+      await cancel.focus()
+      await page.keyboard.press('Shift+Tab')
+      for (const [ordinal, button] of [send, cancel].entries()) {
+        await expect(button).toBeFocused()
+        const focus = await button.evaluate(el => {
+          const style = getComputedStyle(el)
+          return { visible: el.matches(':focus-visible'), outline: style.outlineStyle, width: style.outlineWidth }
+        })
+        expect(focus).toEqual({ visible: true, outline: 'solid', width: '1px' })
+        expect((await hoverLayer(button)).content).toBe('none')
+        expect(await queuedGeometry(row)).toEqual(before)
+        if (index === 0) await row.screenshot({ path: `/tmp/builder-1868/queued-focus-${width}-${ordinal}.png` })
+        await page.keyboard.press('Tab')
+      }
+    }
+  }
+})
 
 function sessionSettingsFrame(inReplyTo: number): Uint8Array {
   return encodeEnvelope({

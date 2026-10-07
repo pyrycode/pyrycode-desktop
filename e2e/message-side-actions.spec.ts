@@ -247,20 +247,24 @@ test('side copy, row cap and timestamp reveal preserve geometry at minimum and w
   } }))
   const queued = page.locator('.message-row--queued')
   await expect(queued).toBeVisible()
-  await expect(queued.locator('.message-actions, .bubble__meta')).toHaveCount(0)
+  await expect(queued.locator('.message-actions--queued')).toHaveCount(1)
+  await expect(queued.locator('.bubble__copy, .bubble__meta')).toHaveCount(0)
   const q = await queued.evaluate(el => {
     const b = el.querySelector('.bubble')!.getBoundingClientRect()
     const r = el.getBoundingClientRect()
-    const drop = el.querySelector('.queued-row__drop')!.getBoundingClientRect()
-    return { width: r.width, bubbleWidth: b.width, dropWidth: drop.width,
-      inset: getComputedStyle(el).paddingLeft, opacity: getComputedStyle(el).opacity,
-      gap: b.x - drop.right, centered: drop.y + drop.height / 2 - b.y - b.height / 2 }
+    const actions = el.querySelector('.message-actions--queued')!.getBoundingClientRect()
+    const drop = el.querySelector('.queued-row__drop-icon')!.getBoundingClientRect()
+    return { width: r.width, bubbleWidth: b.width, actionsWidth: actions.width,
+      inset: getComputedStyle(el).paddingLeft, opacity: getComputedStyle(el).opacity, bubbleOpacity: getComputedStyle(el.querySelector('.bubble')!).opacity,
+      gap: b.x - actions.right, centered: drop.y + drop.height / 2 - b.y - b.height / 2 }
   })
   expect(q.width).toBe(900)
-  expect(q.bubbleWidth).toBeCloseTo(900 - 40 - q.dropWidth, 0)
+  expect(q.bubbleWidth).toBeCloseTo(900 - 40 - q.actionsWidth - 12, 0)
   expect(q.inset).toBe('40px')
-  expect(q.opacity).toBe('0.5')
-  expect(q.gap).toBeCloseTo(0, 0)
+  expect(q.opacity).toBe('1')
+  expect(q.bubbleOpacity).toBe('0.5')
+  expect(q.actionsWidth).toBe(12)
+  expect(q.gap).toBeCloseTo(12, 0)
   expect(q.centered).toBeCloseTo(0, 0)
   await queued.getByRole('button', { name: 'Drop queued message' }).click()
   await expect.poll(() => dequeues).toBe(1)

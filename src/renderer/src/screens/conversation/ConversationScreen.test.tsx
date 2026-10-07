@@ -1735,7 +1735,7 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
     expect(markup).toContain('data-thread-role="queued"')
     expect(markup).not.toContain(META)
     expect(markup).not.toContain(COPY)
-    expect(markup).not.toContain('message-actions')
+    expect(markup).toContain('message-actions--queued')
     expect(markup).not.toContain('Reply to message')
     expect(markup).toContain('message-row--text')
     // …and the SAME item, once the daemon stops reporting it queued, draws the meta row it always did.
@@ -3820,6 +3820,16 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
   })
 
   // #1726: Send now rides a queued row only while the session reports mid_turn_input: true.
+  it('groups the queued 12px glyphs in a column before the bubble', () => {
+    const markup = renderToStaticMarkup(
+      <Timeline items={[]} queued={[item(1, 'waiting')]} midTurnInput />
+    )
+    expect(markup).toContain('<div class="message-actions message-actions--queued"><button')
+    expect(markup).toContain('<span class="queued-row__send-now-icon" aria-hidden="true"></span>')
+    expect(markup).toContain('<span class="queued-row__drop-icon" aria-hidden="true"></span>')
+    expect(markup).toMatch(/Drop queued message[^]*?<\/button><\/div><div class="bubble bubble--user"/)
+  })
+
   it('draws Send now before the drop control on each queued row when the session supports it (#1726)', () => {
     const markup = renderToStaticMarkup(
       <Timeline

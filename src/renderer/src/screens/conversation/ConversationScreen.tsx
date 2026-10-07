@@ -1562,9 +1562,7 @@ function BubbleAttachmentRow({ attachment }: { attachment: MessageAttachment }):
 // #1214 moved it up here with the control itself, off the deleted QueuedBacklog.
 const DROP_QUEUED_LABEL = 'Drop queued message'
 
-// #296, moved onto the timeline row by #1214: the drop / cancel affordance a queued row carries — an
-// icon-only button, a LEADING sibling of the bubble inside the right-aligned .message-row--user, so it
-// sits at the row's inner edge. Unchanged markup; only its home moved off the deleted region.
+// The queued action column leads the right-aligned bubble; Cancel always remains available.
 //
 // It rides a row ONLY while the daemon's last snapshot reported that message queued, which is what
 // `queued !== null` means. Before this ticket "no delivered row can reach this button" was structural
@@ -1587,25 +1585,15 @@ function QueuedRowDrop({
       disabled={!onDropQueued}
       onClick={() => onDropQueued?.(queued.queuedMsgId, queued.messageId)}
     >
-      <svg
-        className="queued-row__drop-icon"
-        viewBox="0 0 24 24"
-        width="18"
-        height="18"
-        fill="currentColor"
-        aria-hidden="true"
-      >
-        <path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-      </svg>
+      <span className="queued-row__drop-icon" aria-hidden="true" />
     </button>
   )
 }
 
 const SEND_QUEUED_NOW_LABEL = 'Send queued message now'
 
-// #1726: Send now on a queued row — the drop control's icon-button idiom by decision (the design file
-// draws no queued state), leading it so the drop keeps its place beside the bubble. Drawn only while
-// the session reports `mid_turn_input: true`; disabled under the drop control's own condition. The
+// Send now sits above Cancel only while the session reports `mid_turn_input: true`;
+// disabled under the drop control's own condition. The
 // click writes nothing: the row stays queued until the daemon's next `queue_state` omits it.
 function QueuedRowSendNow({
   queued,
@@ -1622,16 +1610,7 @@ function QueuedRowSendNow({
       disabled={!onSendQueuedNow}
       onClick={() => onSendQueuedNow?.(queued.queuedMsgId)}
     >
-      <svg
-        className="queued-row__send-now-icon"
-        viewBox="0 0 24 24"
-        width="18"
-        height="18"
-        fill="currentColor"
-        aria-hidden="true"
-      >
-        <path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z" />
-      </svg>
+      <span className="queued-row__send-now-icon" aria-hidden="true" />
     </button>
   )
 }
@@ -1812,8 +1791,12 @@ function TimelineRow({
               : 'message-row message-row--user message-row--text'
           }
         >
-          {queued && midTurnInput && <QueuedRowSendNow queued={queued} onSendQueuedNow={onSendQueuedNow} />}
-          {queued && <QueuedRowDrop queued={queued} onDropQueued={onDropQueued} />}
+          {queued && (
+            <div className="message-actions message-actions--queued">
+              {midTurnInput && <QueuedRowSendNow queued={queued} onSendQueuedNow={onSendQueuedNow} />}
+              <QueuedRowDrop queued={queued} onDropQueued={onDropQueued} />
+            </div>
+          )}
           {!queued && <MessageActions text={item.text} role="user" onReply={onReply} />}
           <div className="bubble bubble--user" data-thread-role={queued ? 'queued' : 'user'}>
             {item.text}
@@ -3307,9 +3290,8 @@ export function isStatusIconTurning(phase: TurnPhase, state: WorkingIndicatorSta
 // (foldQueuedRows → Timeline → TimelineRow's userText arm), so there is one row per message and the
 // "waiting" treatment is a modifier on that row rather than a container around a copy of it. Everything
 // this view owned survived the move: the queued thread role, the reused right-aligned user bubble, the
-// 50% dimming (now .message-row--queued, which is the smallest element containing both the bubble and the
-// drop button the region's opacity used to dim as one group) and the drop control itself (QueuedRowDrop,
-// above). `DROP_QUEUED_LABEL` moved with the control.
+// 50% bubble dimming and the drop control itself (QueuedRowDrop, above). The queued action column
+// now stays fully opaque beside that bubble. `DROP_QUEUED_LABEL` moved with the control.
 
 // A stable id tying the dialog's aria-labelledby to its title element.
 const STATUS_SHEET_TITLE_ID = 'status-sheet-title'

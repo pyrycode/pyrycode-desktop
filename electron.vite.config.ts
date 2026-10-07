@@ -21,7 +21,8 @@ export default defineConfig({
     build: {
       // The renderer CSP allows app-local images, but rejects inlined data URLs.
       assetsInlineLimit: (filePath) =>
-        filePath.endsWith('/src/renderer/src/assets/modal-close.svg') ? false : undefined
+        ['modal-close.svg', 'app-update.svg'].some(name =>
+          filePath.endsWith(`/src/renderer/src/assets/${name}`)) ? false : undefined
     },
     resolve: {
       alias: {

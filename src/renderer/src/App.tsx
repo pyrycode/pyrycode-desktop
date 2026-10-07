@@ -1,3 +1,4 @@
+import { appUpdateStore } from './store/appUpdateStore'
 import { useEffect, useState } from 'react'
 import { PairedShell } from './PairedShell'
 import { PairingScreen } from './screens/pairing/PairingScreen'
@@ -111,6 +112,7 @@ export function AppView(props: {
  * — one stable app-lifetime listener with no subscribe/unsubscribe churn as the route flips.
  */
 function App(): JSX.Element {
+  useEffect(() => window.pyry.onAppUpdate(state => appUpdateStore.setState(state, true)), [])
   useChatHistoryWriter()
   useDaemonEventBridge()
   // #203: the timeline bridge is useDaemonEventBridge's twin — a second independent subscriber on the

@@ -69,11 +69,30 @@ publishing. Conflicting draft or tag commits fail. An exact already published ve
 successfully without rebuilding or changing release state, even if local retry metadata is damaged.
 
 The public update feed is hosted in [GitHub Releases](https://github.com/pyrycode/pyrycode-desktop/releases).
-Both packaged architectures include `app-update.yml` pointing to that repo; runtime updater wiring
-and the Surface updater round-trip belong to [#1775](https://github.com/pyrycode/pyrycode-desktop/issues/1775).
+Both packaged architectures include `app-update.yml` pointing to that repo.
 For the first Surface install, download the unsigned NSIS `.exe` from the release and run it manually.
-Windows SmartScreen warns — click **More info**, then **Run anyway**. Until the runtime updater is
-wired, install a newer exe over the old one to replace program files while keeping user data.
+Windows SmartScreen warns — click **More info**, then **Run anyway**. Install the first updater-enabled
+release over the zip build; both use `%APPDATA%\Pyrycode Desktop`, retaining paired hosts.
+
+A packaged Windows build checks the feed once per launch and downloads a newer version silently.
+After verification, a pinned sidebar row shows **Update ready** and “Version X.Y.Z installs when
+you restart.” Invalid version text uses “An update installs when you restart.” **Restart now**
+drains chat history, installs silently and relaunches. **Later** hides the row for this process
+launch; the downloaded update still installs on ordinary quit. Download or verification failure
+shows **Update could not install**, “Pyrycode will try again next launch.” and **Dismiss**, which
+hides it until the next launch. Checking, downloading, up-to-date results and check/offline failures
+show nothing. Dev and non-Windows builds never construct the updater or show its row.
+
+The installer is unsigned. The feed's sha512 verifies download integrity, not publisher
+authenticity: anyone who can publish this repository's releases can ship code to the installed app.
+See [Windows self-update](docs/knowledge/features/windows-packaging.md#packaged-windows-self-update)
+for the IPC, shutdown and test boundaries.
+
+Before closing [#1775](https://github.com/pyrycode/pyrycode-desktop/issues/1775), Juhana must record
+the pending Surface acceptance: manually install release N, publish N+1 and update via Restart now,
+then publish N+2 and update via Later followed by ordinary quit. Record Settings versions, silent
+installation/relaunch and retained paired hosts. Neither fake-transport nor real-Claude gates
+establishes this Windows acceptance.
 
 Before closing [#1774](https://github.com/pyrycode/pyrycode-desktop/issues/1774), the operator must record
 a post-merge Wine build from main, inspect the installer/blockmap/feed, complete the first live

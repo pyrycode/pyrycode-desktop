@@ -179,6 +179,18 @@ test('failed-host local controls remain usable', async ({ launchPairedApp }, tes
   const edit = host.getByRole('button', { name: 'Edit host' })
   const repair = host.getByRole('button', { name: 'Repair host' })
   const label = host.locator('.channel-list__host-label')
+  // Another shown Linux window can clear hover after input delivery. Re-deliver real pointer
+  // input and observe hover and its styling together; a passive opacity wait cannot restore it.
+  const hoverHost = async (): Promise<void> => {
+    await expect.poll(async () => {
+      await host.hover()
+      return host.evaluate(el => {
+        const control = el.querySelector('.channel-list__host-edit')
+        if (!control) throw new Error('failed-host Edit control must exist')
+        return { hovered: el.matches(':hover'), editOpacity: getComputedStyle(control).opacity }
+      })
+    }).toEqual({ hovered: true, editOpacity: '1' })
+  }
   const boxes = async () => Promise.all([host, label, edit, repair].map(async locator => {
     const box = await locator.boundingBox()
     if (!box) throw new Error('failed-host controls must have layout boxes')
@@ -193,9 +205,8 @@ test('failed-host local controls remain usable', async ({ launchPairedApp }, tes
   expect(rowBox.x + rowBox.width - repairBox.x - repairBox.width).toBe(28)
   await expect(host.locator('.channel-list__host-disclosure')).toHaveCount(0)
   await expect(host.locator('.channel-list__host-status, .channel-list__host-dot')).toHaveCount(0)
-  await host.hover()
+  await hoverHost()
   expect(await boxes()).toEqual(before)
-  await expect(edit).toHaveCSS('opacity', '1')
   await expect(host.locator('.channel-list__host-status, .channel-list__host-dot')).toHaveCount(0)
   await host.getByRole('button', { name: 'Edit host' }).click()
   await expect(page.getByRole('dialog')).toHaveCount(1)
@@ -206,7 +217,7 @@ test('failed-host local controls remain usable', async ({ launchPairedApp }, tes
   await section.click()
   await expect(section).toHaveAttribute('aria-expanded', 'true')
   await expect(page.getByRole('button', { name: 'Pair new host' })).toHaveCount(1)
-  await host.hover()
+  await hoverHost()
   await page.screenshot({ path: testInfo.outputPath('host-failed.png'), animations: 'disabled' })
   await host.getByRole('button', { name: 'Repair host' }).click()
   await expect(page.getByText('Repair pairing: Server', { exact: true })).toBeVisible()

@@ -51,3 +51,11 @@ A failed input action or missing control fails the test normally. A real hover w
 ## Sizing
 
 One deliverable, three observable acceptance criteria, approximately 140 written lines including plan and test, zero exported types/components/stores, zero production consumer updates and zero application rejection branches. Both sketch and written plan fit every sizing boundary and the refiner estimate.
+
+## Revisions
+
+2026-10-07 — Both open questions resolved without changing the design. At baseline application revision `59efab093c13f2ed1bd5658ee836d14e57a04de5` on Linux x86_64, shown Xvfb `:99` windows, the 30-cycle native competitor observation lost actual host hover in six cycles. Cycle 7 recorded a pointer move from `(220,127)` on the host to `(550,373)` outside it, host hover false and Edit opacity zero. All four boxes remained identical at every observation. Two animation frames did not restore lost hover; ordinary host hover recovered true hover and opacity one in all 30 cycles. Scratch evidence: `/tmp/builder-1821/competition.json` and `/tmp/builder-1821/observations.json`.
+
+The unchanged three-worker baseline executed/passed 20 repetitions with zero failures/skips; this is not causal evidence. Replaying the observed outside-host pointer move with `page.mouse.move` made the legacy passive opacity wait fail for its unchanged 5000ms timeout and 14 zero-opacity reads (`/tmp/builder-1821/legacy-replay.json`). This distinguishes lost input from a styling defect and demonstrates why re-delivery is necessary.
+
+Removing only the host-hover opacity declaration from a scratch copy of the built renderer made the new synchronized assertion fail with `{ hovered: true, editOpacity: '0' }` (`/tmp/builder-1821/mutant.json`). Thus the assertion still detects incorrect styling under genuine hover. Production renderer styles and shared launch behavior remain unchanged. Historical failure/passing evidence remains in the four gate logs linked by the ticket refinement comment.

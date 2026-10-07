@@ -74,8 +74,9 @@ export function translateConversationsEvent(
  * unsolicited to everyone else — `conversation_updated` fans out on a CONVERSATION mutation, so a bare
  * workspace rename produces no such frame and the sidebar kept the old name until a reconnect).
  *
- * Deliberately a plain boolean, NOT a type guard that narrows to the payload — the event's `id` / `name` /
- * `cwd`, and `workspaceUpdated`'s `path` / `label`, are never consulted (AC3). On the workspace arm that is
+ * Deliberately a plain boolean, NOT a type guard that narrows to the payload. Read marks are patched
+ * separately from validated update fields; metadata still arrives through the refreshed list. The `name` /
+ * `cwd`, and `workspaceUpdated`'s `path` / `label`, are never consulted by this trigger. On the workspace arm that is
  * a SECURITY property and not only a shape preference: patching a row from the frame's `label` would put
  * untrusted daemon text on screen bypassing the `conversations` decode path, which is where the label the
  * sidebar renders is actually validated. We react to the OCCURRENCE of a change, then let the daemon's
@@ -166,14 +167,20 @@ export function subscribeConversations(
     conversations: readonly ConversationSummary[],
     serverId?: string | null
   ) => void,
-  refreshOnChange: (serverId: string) => void
+  refreshOnChange: (serverId: string) => void,
+  advanceReadMark?: (serverId: string, conversationId: string, readUpTo: number) => void
 ): () => void {
   return onDaemonEvent((event) => {
     const list = translateConversationsEvent(event)
     if (list !== null) setConversations(list, originOf(event))
     if (shouldRefreshList(event)) {
       const serverId = originOf(event)
-      if (typeof serverId === 'string' && serverId.length > 0) refreshOnChange(serverId)
+      if (typeof serverId === 'string' && serverId.length > 0) {
+        if (event.type === 'conversationUpdated' && event.conversation.read_up_to !== undefined) {
+          advanceReadMark?.(serverId, event.conversation.id, event.conversation.read_up_to)
+        }
+        refreshOnChange(serverId)
+      }
       else logListLifecycle('invalid-origin')
     }
   })
@@ -185,7 +192,8 @@ export function ConversationListData(): null {
     const offEvents = subscribeConversations(
       window.pyry.onDaemonEvent,
       (list, serverId) => conversationListStore.getState().setConversations(list, serverId),
-      (serverId) => requestConversationList(window.pyry.sendCommand, serverId)
+      (serverId) => requestConversationList(window.pyry.sendCommand, serverId),
+      (serverId, id, read) => conversationListStore.getState().advanceReadMark(serverId, id, read)
     )
     const offStatuses = subscribeConnectedConversationLists(sessionStore, window.pyry.sendCommand)
     return () => {

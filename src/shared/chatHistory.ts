@@ -182,6 +182,11 @@ function threadItem(value: unknown): DurableThreadItem {
   }
 }
 
+function readId(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) return invalid()
+  return value
+}
+
 /** Parsers return detached, allowlisted data; callers contain the static validation failures. */
 export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
   const v = record(value)
@@ -196,6 +201,8 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
         is_archived: bool(c.is_archived), cwd: string(c.cwd), last_message_ts: string(c.last_message_ts),
         last_used_at: string(c.last_used_at), workspace_label: nullable(c.workspace_label, string),
         is_muted: optional(c.is_muted, bool),
+        ...(c.read_up_to === undefined ? {} : { read_up_to: readId(c.read_up_to) }),
+        ...(c.latest_entry_id === undefined ? {} : { latest_entry_id: readId(c.latest_entry_id) }),
         ...(c.archived_at === undefined ? {} : { archived_at: nullable(c.archived_at, string) }),
         // An untagged row restores with no key at all, as before #1649.
         ...(c.agent === undefined ? {} : { agent: agentFromWire(string(c.agent)) })

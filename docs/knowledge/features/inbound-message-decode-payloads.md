@@ -98,12 +98,22 @@ decode half. A new `requireStringOrNull` helper sits beside `requireString`/`req
 `requireBoolean` for the row's `name` field — the codec's **first nullable** wire field: it admits a
 literal `null` as a valid value (a distinct "unnamed" conversation) while still failing closed on a
 missing/`undefined`/mistyped field, the same type-not-truthiness discipline `requireBoolean`
-established for `yolo`. `is_promoted`/`is_archived` reuse `requireBoolean` verbatim. Every row is
-required-present (no `omitempty`); one bad row in the `conversations` array fails the whole reply
+established for `yolo`. `is_promoted`/`is_archived` reuse `requireBoolean` verbatim. The eight core
+fields are required-present; one bad row in the `conversations` array fails the whole reply
 closed, mirroring `parseMessageChunkPayload`'s one-bad-element rule (an empty array is valid). Like
 `assistant_delta`/`turn_end`, the consumer arm carries the decoded array onward unminimised — but for
-a different reason: not because a field is the render payload, but because none of the seven fields
+a different reason: not because a field is the render payload, but because none of the allowlisted fields
 is a secret.
+
+`parseConversationSummary` admits optional `read_up_to` and `latest_entry_id`;
+`parseConversationUpdatedPayload` admits optional `read_up_to` for both correlated replies and
+unsolicited pushes. Updates carry no latest-entry ID. Each present value must be a number satisfying
+`Number.isSafeInteger(value) && value >= 0`; null, negative, fractional, nonnumeric and unsafe values
+throw the static `WireDecodeError('malformed conversation read ID')`. Admission never coerces or
+rounds IDs. Zero is retained, while omission adds no key, preserving legacy rows. One invalid list
+field rejects the whole reply. These are durable per-conversation history entry IDs, independent of
+envelope and replay IDs. See [the wire contract](conversation-list-fetch.md#the-wire-contract) and
+[host-scoped read reconciliation](conversation-list-store.md#received-read-state).
 
 ## Turn state
 
@@ -531,4 +541,3 @@ this kind (see [Daemon connection — correlation](daemon-connection-correlation
 absence. Full account — the six-code table, the `payload:null`-vs-no-`payload`-key split, the fake
 daemon's reject-answer counterpart, and a docblock-placement lesson from the first attempt — in
 [Daemon error outcome](daemon-error-outcome.md).
-

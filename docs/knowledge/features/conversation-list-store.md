@@ -20,9 +20,9 @@ precedents.
 
 Requests a fresh `conversations` list for each connected host on mount and on each host's transition
 to `connected`, always with an explicit `serverId`. Mutation events refresh only their emitting host.
-The arriving rows stay in a read-only store until the next list for that server arrives. Since #1086
-this is per-server, not whole-store: each `conversationsReceived` replaces only the slot of the server it was
-stamped with, no merge and no dedupe within a slot, and the flat read every consumer sees is a
+Received lists replace only their stamped host's rows, preserving higher known read marks for
+matching IDs. Received read updates advance existing rows immediately. There is no row union or
+deduplication within a slot, and the flat read every consumer sees is a
 **union across every server's slot**. Deliberately **not** a [session store](session-store.md) facet:
 a list update never touches connection/messages state and vice versa, so a list arrival re-renders
 only components selecting this slice.
@@ -50,6 +50,7 @@ export type ConversationListStore = ConversationListState & {
     cancel: () => void
   } | null
   setConversations: (conversations: readonly ConversationSummary[], serverId?: string | null) => void
+  advanceReadMark: (serverId: string, conversationId: string, readUpTo: number) => void
   clearAllConversations: () => void   // the pairing-boundary drop (#1086, AC5) — nullary
   clearConversationsFor: (serverId: string) => void   // the per-server drop (#1196), see below
 }
@@ -73,15 +74,40 @@ late success and failure after received data, clears or cancellation. Missing/em
 local success installs `[]`; failure leaves the slot absent. These local changes
 never authorize persistence or establish connection state. See
 [restoration admission](chat-history.md#received-state-admission-and-ownership).
-Rows are held **verbatim
-in wire snake_case** with exactly one client-owned property added beside them: no parallel camelCase
+Rows retain **wire snake_case** fields, with monotonic read-mark reconciliation and one client-owned
+property added beside them: no parallel camelCase
 renderer type, no per-field remap — unlike `runConfigSnapshot`'s `used_tokens → usedTokens`, this
 reuses `ConversationSummary` directly (`ServerConversationSummary extends` it) so the slice needs
-zero per-field transform and stays drift-free against the mobile wire contract, and `serverId` rides
+no naming transform and stays drift-free against the wire contract, and `serverId` rides
 beside the wire fields rather than folded into any of them. No derivations are baked in — no `kind`
 enum, no "unnamed" flag, no relative-time formatting: "discussion vs channel" derives from the raw
 `is_promoted` flag and "unnamed" is the literal `name === null`, both at #141's read boundary, not
 here.
+
+### Received read state
+
+Summaries admit optional `read_up_to` and `latest_entry_id`; updates admit only optional
+`read_up_to`. Wire and [saved-list parsers](chat-history.md#snapshot-contract) require non-negative
+safe integers without coercion. Zero is present data; omitted fields stay unknown. These are durable
+history entry IDs, independent of envelope/replay IDs and renderer timeline counts.
+
+`advanceReadMark(serverId, conversationId, readUpTo)` independently validates a nonempty string
+origin and a non-negative safe integer, then patches only an existing matching row in that host's
+slot. It preserves the held latest entry and every other field, recomputing the union in the same
+synchronous updater. Other host arrays retain their references, including when they advertise the
+same conversation ID. An unknown host/row, invalid value, or lower/equal known mark is a no-op;
+an unknown mark can become zero. No incomplete update fabricates a row or a latest entry.
+
+`setConversations` still replaces metadata, latest-entry IDs, ordering and membership from the
+incoming list. For each matching ID in that host only, its read mark is the maximum of the incoming
+and held numbers; an omitted incoming mark retains a known one. With neither known, no mark is
+invented. An omitted latest-entry ID stays omitted even if held previously; removed rows stay
+removed. Thus latest 10/read 2 → update read 10 → delayed latest 10/read 2 remains read, while a
+later latest 11/read 10 becomes unread. Monotonicity lasts only while the row is held; clears and
+removal retain their existing behavior.
+
+The [unread predicate](conversation-unread.md) uses both received fields before local counts, even
+without a timeline. [Read pushes do not themselves save history](chat-history.md#snapshot-contract).
 
 ### One slot per server, since #1086
 
@@ -130,12 +156,12 @@ exceptional slot happens to exist. **Within a server, wire order is preserved** 
 source of truth for ordering, so the stamp and the concatenation never re-sort rows; with one server
 the flat read is therefore exactly today's list, in today's order, plus the stamp.
 
-**The stamp must win over the row.** `setConversations` builds each stamped row as `{ ...row,
-serverId }` — spread first, stamp last. Written the other way round, a daemon that returned a
+**The stamp must win over the row.** `setConversations` spreads the row, reconciles its read mark,
+then writes `serverId` last. Written the other way round, a daemon that returned a
 `serverId` key on a conversation row would overwrite the client's stamp and file its rows under
 another server's slot — exactly the confusion the stamp exists to prevent. Today that is unreachable
 because `parseConversationSummary` (`src/main/transport/inboundMessage.ts`) is a closed
-reconstruction — seven named fields into a fresh literal, unknown keys never copied through — so the
+reconstruction of allowlisted fields into a fresh literal, unknown keys never copied through — so the
 decoder is the deterministic guarantee and the spread order is the free second fabric. Flagged
 SHOULD FIX in #1086's security review specifically so a later tidy-up does not reorder it.
 
@@ -290,19 +316,22 @@ subscribeConnectedConversationLists(store, sendCommand): () => void
 // Subscribe to sessionStore.statuses, then inspect its current snapshot.
 // Request each newly connected nonempty string identity; return the unsubscribe handle.
 
-subscribeConversations(onDaemonEvent, setConversations, refreshOnChange): () => void
+subscribeConversations(onDaemonEvent, setConversations, refreshOnChange, advanceReadMark?): () => void
 // onDaemonEvent(event => {
 //   const list = translateConversationsEvent(event); if (list !== null) setConversations(list, originOf(event))
 //   const serverId = originOf(event)
-//   if (shouldRefreshList(event) && typeof serverId === 'string' && serverId.length > 0)
+//   if (shouldRefreshList(event) && typeof serverId === 'string' && serverId.length > 0) {
+//     if (event.type === 'conversationUpdated' && event.conversation.read_up_to !== undefined)
+//       advanceReadMark?.(serverId, event.conversation.id, event.conversation.read_up_to)
 //     refreshOnChange(serverId)
+//   }
 // })
 // returns the off-handle (the subscribeRunConfig idiom)
 
 shouldRefreshList(event: DaemonEvent): boolean
 // event.type === 'conversationUpdated' || event.type === 'conversationDeleted' ||
 // event.type === 'conversationCreated' || event.type === 'workspaceUpdated' — a plain boolean, not a
-// type guard: the payload (id/name/cwd, and workspaceUpdated's path/label) is never consulted (#275,
+// type guard: this trigger never consults payload fields; read-mark patching is separate (#275,
 // widened #376, widened #515, widened #1288). Renamed from isConversationUpdated when #376 added the
 // second arm — one predicate answering "should this event re-request the list?", not N isX predicates
 // OR'd at the call site.
@@ -337,7 +366,11 @@ non-assignable.
 All four mutation arms pass only a nonempty string from that main-stamped origin to
 `refreshOnChange(serverId)`. Missing, null, non-string and empty origins cause no request; there is
 no payload-derived destination or unaddressed fallback, even with a single saved host. The mutation
-itself writes no rows: the authoritative list reply replaces only its origin's slot. Lifecycle
+does not patch metadata: the authoritative list reply replaces only its origin's slot. For correlated
+and unsolicited `conversationUpdated` alike, a present numeric read mark is patched **before**
+refresh, so dots and badge clear without waiting for the reply. Omitted marks leave held state
+unchanged; refresh still occurs. The optional fourth dependency keeps older injected callers valid;
+`ConversationListData` explicitly wires the production store patch. Lifecycle
 diagnostics use only the static `conversation-list` event and `requested` / `invalid-origin` codes.
 
 **A testing trap this ticket surfaced: `toEqual` ignores an `undefined`-valued property.** Every
@@ -396,6 +429,8 @@ last paired server forgotten
 daemon → conversation_updated / conversation_deleted / conversation_created / workspace_updated
   → typed event with main-stamped serverId → DAEMON_EVENT_CHANNEL → subscribeConversations
     → shouldRefreshList(event) → true; originOf(event) → nonempty string or skip request
+    → conversationUpdated with read_up_to → advanceReadMark(serverId, id, read_up_to)
+      → existing host row only; immediate dot/badge recomputation
     → refreshOnChange(serverId) → requestConversationList(window.pyry.sendCommand, serverId)
     → … re-enters the addressed request/reply flow above
     → authoritative reply replaces that host's rows, including creates, deletes and workspace labels
@@ -434,6 +469,10 @@ daemon → conversation_updated / conversation_deleted / conversation_created / 
 
 ## Edge cases and limitations
 
+- **Read state uses the row's own host.** A read advance cannot touch another host's equal ID.
+  Invalid/missing origins and unknown rows do not patch attention; a valid-origin mutation still
+  requests metadata refresh even if its row is unknown. Delayed lists cannot lower held read marks,
+  but omitted latest IDs return the row to the local fallback rather than fabricating zero.
 - **Connection requests are per host, since [#1363](https://github.com/pyrycode/pyrycode-desktop/issues/1363).**
   Mount requests every currently connected host. A newly connected host gets its own addressed
   request even while another remains connected; repeated connected notifications do not duplicate it.
@@ -490,7 +529,7 @@ daemon → conversation_updated / conversation_deleted / conversation_created / 
   event, so a future "just patch the row" shortcut reddens a gate instead of shipping quietly. Like
   the other three mutation arms, its re-list targets only the frame's main-stamped origin.
 - **No correlation, no request tracking.** Any `conversationsReceived` that arrives — solicited or
-  not — is written unconditionally into its stamped slot; safe because only the authenticated daemon
+  not — replaces its stamped slot with read-mark reconciliation; safe because only the authenticated daemon
   can produce one (see [conversation list fetch § Correlation is deliberately
   absent](conversation-list-fetch.md#correlation-is-deliberately-absent)).
 - **§ AC5 — cleared at the pairing boundary, since #1086, and this is the one regression keying

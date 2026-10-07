@@ -543,9 +543,13 @@ unpair resumes its buffered snapshots. Settlement cannot schedule a new timer af
 stop. Main defers normal window close and `before-quit` teardown
 until preload's `onChatHistoryFlush` callback has stopped the writer and sent a
 `flushed` acknowledgement over `pyry:chat-history-flush`. Main then awaits already
-submitted history operations before resuming close/quit. App quit stops the
-connection registry before draining; closing a window leaves the app able to
-open a fresh window and writer.
+submitted history operations before resuming close/quit. App quit and Windows
+Restart now share one `createQuitDrain` promise, stopping the connection registry
+before draining. Updater installation starts before its explicit app quit, so
+`before-quit` alone is too late. After a successful drain, window close guards
+pass; an installation failure exits with `autoInstallOnAppQuit` disabled, since
+the stopped registry cannot resume. See [updater shutdown](windows-packaging.md#history-drain-and-installation-failure).
+Closing only a window leaves the app able to open a fresh window and writer.
 
 Readiness registration avoids waiting on a window whose observer never mounted.
 Lifecycle messages must come from a window's main frame; flush acknowledgements

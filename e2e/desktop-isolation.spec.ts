@@ -74,6 +74,7 @@ test('every default-tier Electron launch goes through the shared module', async 
   // provable without a live daemon behind a live gate. It applies the same isolation itself (#1672).
   // This spec is excluded from its own scan because the needle appears in its own source, below.
   const ALLOWED = ['fixtures/desktopIsolation.ts', 'fixtures/realDaemon.ts']
+  // This spec's independent input-enabled cover intentionally bypasses launch isolation.
   const SELF = 'desktop-isolation.spec.ts'
   const LAUNCH_CALL = /electron\.launch\(/
 
@@ -128,7 +129,10 @@ test('an independent input-enabled cover crosses an unprotected window but prese
         void window.loadURL('data:text/html,<p>independent cover</p>')
       })
     `)
-    const env = { ...process.env }
+    const env: Record<string, string> = {}
+    for (const [name, value] of Object.entries(process.env)) {
+      if (value !== undefined) env[name] = value
+    }
     delete env.ELECTRON_RENDERER_URL
     coverApp = await electron.launch({ args: [entry, `--user-data-dir=${join(scratch, 'profile')}`], env })
     const coverPage = await coverApp.firstWindow()

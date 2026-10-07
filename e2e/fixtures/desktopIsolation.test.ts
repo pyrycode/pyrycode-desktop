@@ -76,7 +76,7 @@ describe('launchIsolatedApp acquisition ownership', () => {
     expect(fate.report().teardownFailures).toEqual(['app'])
     const attach = vi.fn<Parameters<typeof attachLaunchFate>[0]['attach']>(async () => {})
     await attachLaunchFate({ attach }, fate)
-    const body = attach.mock.calls[0][1].body!.toString()
+    const body = attach.mock.calls[0][1]!.body!.toString()
     expect(JSON.parse(body).teardownFailures).toEqual(['app'])
     expect(body).not.toContain('private')
   })

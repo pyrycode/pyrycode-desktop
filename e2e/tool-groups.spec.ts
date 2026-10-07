@@ -64,13 +64,15 @@ test('finished agents reconstruct across pages, attach late children, navigate a
   expect(await node?.evaluate(element => element.isConnected)).toBe(true)
   await marker.click()
   await expect(row).toBeInViewport()
-  await expect(row.locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'true')
+  await expect(row.locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'false')
   const agentNode = await row.locator('..').elementHandle()
   const after = thread.locator('.message-row--user').filter({ hasText: 'history user 49' })
   const afterNode = await after.elementHandle()
   expect(await row.evaluate((a, b) => Boolean(b && a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING), afterNode)).toBe(true)
   await ask()
   reply([{ id: 17, ts: 'child', type: 'tool_use', payload: payload('historical-child', 'historical-agent', 'Read') }], '')
+  await expect(child).toBeHidden()
+  await row.locator('.tool-row__chip').click()
   await expect(child).toBeVisible()
   expect(await agentNode?.evaluate(element => element.isConnected)).toBe(true)
   await expect(marker).toHaveCount(1)
@@ -79,6 +81,7 @@ test('finished agents reconstruct across pages, attach late children, navigate a
     await marker.focus()
     await page.keyboard.press(key)
     await expect(row).toBeInViewport()
+    await expect(row.locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'true')
     await expect(child).toBeVisible()
   }
   for (const width of [1280, 800]) {
@@ -91,6 +94,42 @@ test('finished agents reconstruct across pages, attach late children, navigate a
     await thread.evaluate(element => { element.scrollTop = 0 })
     await capturePairedApp(app, page, `/tmp/builder-1781/marker-${width}.png`)
   }
+})
+
+test('Go to agent scrolls the block into view without expanding it or its children', async ({ launchPairedApp }) => {
+  const { page, daemon } = await launchPairedApp()
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const thread = page.locator('.conversation__thread')
+  const row = (id: string) => page.locator('.tool-row:not(.tool-run__row)').filter({
+    has: page.locator('.tool-row__summary', { hasText: new RegExp(`^${id}$`) })
+  })
+  const use = (id: string, parent?: string, name = 'Agent') => daemon.pushFrame(frame('tool_use', payload(id, parent, name)))
+  const start = (id: string) => daemon.pushFrame(frame('background_task_started', {
+    conversation_id: SEEDED_ROW.id, task_id: `task-${id}`, tool_call_id: id,
+    task_type: 'local_agent', description: id, truncated_fields: null
+  }))
+  const roster = (ids: string[]) => daemon.pushFrame(frame('background_task_roster', {
+    conversation_id: SEEDED_ROW.id, dropped_tasks: 0,
+    tasks: ids.map(id => ({ task_id: `task-${id}`, task_type: 'local_agent', description: id, truncated_fields: null }))
+  }))
+  use('solo-agent')
+  use('solo-child', 'solo-agent', 'Read')
+  start('solo-agent')
+  roster(['solo-agent'])
+  const marker = page.locator('.agent-start-marker')
+  await expect(marker).toContainText('Agent started, still working')
+  await expect(row('solo-agent').locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'false')
+  await expect(row('solo-child')).toBeHidden()
+  for (let i = 0; i < 40; i++) daemon.pushFrame(frame('message', {
+    conversation_id: SEEDED_ROW.id, message_id: `filler-${i}`, role: 'user', text: `filler ${i}`
+  }))
+  await thread.focus()
+  await page.keyboard.press('Home')
+  await expect.poll(() => thread.evaluate((el) => el.scrollTop)).toBe(0)
+  await marker.click()
+  await expect(row('solo-agent')).toBeInViewport()
+  await expect(row('solo-agent').locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'false')
+  await expect(row('solo-child')).toBeHidden()
 })
 
 test('interleaved subagents group, update while collapsed, and retain expansion through history', async ({ launchPairedApp }) => {
@@ -119,14 +158,14 @@ test('interleaved subagents group, update while collapsed, and retain expansion 
   await page.locator('.tool-run button').click()
   const a = row('agent-a')
   const b = row('agent-b')
-  await expect(a.locator('.tool-row__count')).toHaveText('1 tool · running')
+  await expect(a.locator('.tool-row__count')).toHaveText('running · 1 tool')
   await expect(row('child-a')).toBeHidden()
   await a.locator('.tool-row__chip').click()
   await expect(row('child-a')).toBeVisible()
   await expect(row('child-a').locator('..')).toHaveCSS('margin-inline-start', '16px')
   use('inner', 'agent-a', 'Task')
   use('deep', 'inner', 'Bash')
-  await expect(a.locator('.tool-row__count')).toHaveText('3 tools · running')
+  await expect(a.locator('.tool-row__count')).toHaveText('running · 3 tools')
   await expect(row('inner')).toBeVisible()
   await expect(row('deep')).toBeHidden()
   await row('inner').locator('.tool-row__chip').click()
@@ -162,7 +201,7 @@ test('interleaved subagents group, update while collapsed, and retain expansion 
       { id: 10, type: 'tool_use', ts: '2026-09-10T12:00:10Z', payload: payload('historical-agent') }
     ] }
   }))
-  await expect(row('historical-agent').locator('.tool-row__count')).toHaveText('2 tools · running')
+  await expect(row('historical-agent').locator('.tool-row__count')).toHaveText('running · 2 tools')
   await expect(row('orphan')).toBeHidden()
   await row('historical-agent').locator('.tool-row__chip').click()
   await expect(row('orphan').locator('.tool-row__result')).toBeVisible()
@@ -317,19 +356,23 @@ test('started background agents follow the tail, navigate markers, and settle on
     { queued_msg_id: 87, text: 'queued after launches', message_id: 'queued-agent', ts }
   ] }))
   await expect(thread).toContainText('queued after launches')
-  await expect(row('agent-live-a').locator('.tool-row__count')).toHaveText('1 tool · running')
-  await expect(row('agent-live-b').locator('.tool-row__count')).toHaveText('0 tools · running')
+  await expect(row('agent-live-a').locator('.tool-row__count')).toHaveText('running · 1 tool')
+  await expect(row('agent-live-b').locator('.tool-row__count')).toHaveText('running · 0 tools')
   expect(await isBefore(row('agent-live-a'), row('agent-live-b'))).toBeTruthy()
   await row('agent-live-a').locator('.tool-row__chip').click()
   await page.screenshot({ path: '/tmp/builder-1839/two-running.png' })
   await row('agent-live-a').locator('.tool-row__chip').click()
   await row('agent-live-a').locator('.tool-row__chip').click()
   await marker('agent-live-a').click()
-  await expect(row('child-live-a')).toBeVisible()
+  await expect(row('agent-live-a')).toBeInViewport()
+  await expect(row('agent-live-a').locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'false')
+  await expect(row('child-live-a')).toBeHidden()
+  await row('agent-live-a').locator('.tool-row__chip').click()
+  await expect(row('child-live-a').locator('.tool-row__result')).toBeVisible()
   for (const key of ['Enter', 'Space']) {
-    await row('agent-live-a').locator('.tool-row__chip').click()
     await marker('agent-live-a').focus()
     await page.keyboard.press(key)
+    await expect(row('agent-live-a')).toBeInViewport()
     await expect(row('child-live-a').locator('.tool-row__result')).toBeVisible()
   }
   // Growth follows only while pinned, and preserves the reader's held offset.
@@ -348,6 +391,7 @@ test('started background agents follow the tail, navigate markers, and settle on
   expect(await thread.evaluate(el => el.scrollTop)).toBe(0)
   await marker('agent-live-a').click()
   await expect(row('agent-live-a')).toBeInViewport()
+  await expect(row('agent-live-a').locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'true')
   await page.screenshot({ path: '/tmp/builder-1839/running.png' })
   roster([])
   await page.locator('.channel-list__row').filter({ hasText: 'Quiet agent room' }).locator('.channel-list__row-open').click()
@@ -357,6 +401,9 @@ test('started background agents follow the tail, navigate markers, and settle on
   await expect(marker('agent-live-a')).toContainText('Agent finished')
   await expect(row('agent-live-a').locator('.tool-row__count')).toHaveText('3 tools')
   await marker('agent-live-a').click()
+  await expect(row('agent-live-a')).toBeInViewport()
+  await expect(row('child-live-a')).toBeHidden()
+  await row('agent-live-a').locator('.tool-row__chip').click()
   await expect(row('child-live-a')).toBeVisible()
   const after = thread.locator('.message-row--user').filter({ hasText: 'ordinary after finish' })
   expect(await isBefore(row('agent-live-a'), after)).toBeTruthy()
@@ -464,8 +511,8 @@ test('connect roster Agents appear before history and keep identity through live
   }
   roster(['connect-a', 'connect-b', 'matching-read'])
   use('matching-read', undefined, 'Read')
-  await expect(row('connect-a').locator('.tool-row__count')).toHaveText('0 tools · running')
-  await expect(row('connect-b').locator('.tool-row__count')).toHaveText('0 tools · running')
+  await expect(row('connect-a').locator('.tool-row__count')).toHaveText('running · 0 tools')
+  await expect(row('connect-b').locator('.tool-row__count')).toHaveText('running · 0 tools')
   await expect(row('matching-read').locator('.tool-row__name')).toHaveText('Read')
   await expect(page.locator('.agent-start-marker')).toHaveCount(0)
   await expect(page.locator('.tool-row__summary:visible')).toHaveText(['matching-read', 'connect-a', 'connect-b'])
@@ -512,12 +559,14 @@ test('connect roster Agents appear before history and keep identity through live
   const after = thread.locator('.message-row--user').filter({ hasText: 'ordinary after connect finish' })
   const afterNode = await after.elementHandle()
   expect(await row('connect-b').evaluate((a, b) => Boolean(b && a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING), afterNode)).toBe(true)
+  await row('connect-b').locator('.tool-row__chip').click()
+  await expect(row('history-connect-child')).toBeVisible()
   for (const key of ['Enter', 'Space']) {
     await marker('connect-b').focus()
     await page.keyboard.press(key)
-    await expect(row('history-connect-child')).toBeVisible()
     await expect(row('connect-b')).toBeInViewport()
-    await row('connect-b').locator('.tool-row__chip').click()
+    await expect(row('connect-b').locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'true')
+    await expect(row('history-connect-child')).toBeVisible()
   }
   await marker('connect-b').click()
   await expect(row('history-connect-child')).toBeVisible()

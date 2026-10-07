@@ -13,7 +13,7 @@ it('renders escaped navigable launch marker and zero-child running row after new
   expect(markup).toContain('Go to agent')
   expect(markup).toContain('&lt;img onerror=bad&gt;')
   expect(markup).not.toContain('data-tool')
-  expect(markup).toContain('0 tools · running')
+  expect(markup).toContain('running · 0 tools')
   expect(markup.indexOf('newer message')).toBeLessThan(markup.indexOf('tool-row__name'))
 })
 

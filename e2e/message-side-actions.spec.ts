@@ -14,7 +14,7 @@ const frames = (inbound: Uint8Array): Uint8Array[] => {
   if (envelope.type === 'dequeue_message') { dequeues++; return [] }
   if (envelope.type !== 'send_message') return [seedConversationsFrame()]
   const payload = envelope.payload as SendMessagePayload
-  const turnId = payload.text === SHORT ? 'short' : 'long'
+  const turnId = payload.message_id
   return [
     encodeEnvelope({ id: 20, type: 'assistant_delta', ts: TS, payload: {
       conversation_id: SEEDED_ROW.id, turn_id: turnId, seq: 0, text: payload.text
@@ -52,6 +52,57 @@ const dimensions = (bubble: Locator) => bubble.evaluate(el => {
   const b = el.getBoundingClientRect()
   const r = el.parentElement!.getBoundingClientRect()
   return [b.width, b.height, r.width, r.height]
+})
+
+test('copy and reply do not increase short or multi-line bubble heights or neighbour gaps', async ({ launchPairedApp }) => {
+  const { page, app } = await launchPairedApp({ buildReplyFrames: frames })
+  for (const [index, text] of [SHORT, LONG.slice(0, 240), SHORT].entries()) {
+    await page.getByPlaceholder('Message…').fill(text)
+    await page.getByRole('button', { name: 'Send' }).click()
+    await expect(page.locator('.bubble__markdown')).toHaveCount(index + 1)
+  }
+  for (const width of [800, 1280]) {
+    await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 1000), width)
+    await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width)
+    const measure = () => page.locator('.conversation__thread').evaluate(thread => {
+      const rows = [...thread.querySelectorAll('.message-row--text')]
+      return rows.map((row, index) => {
+        const bubble = row.querySelector('.bubble')!.getBoundingClientRect()
+        const rect = row.getBoundingClientRect()
+        const previous = rows[index - 1]?.querySelector('.bubble')?.getBoundingClientRect()
+        return { bubbleHeight: bubble.height, rowHeight: rect.height,
+          gap: previous ? bubble.top - previous.bottom : null }
+      })
+    })
+    const normal = await measure()
+    // Force the ticket's taller-than-bubble stack: normal glyphs currently fit inside the meta slot.
+    // This exercises intrinsic sizing independently of today's button dimensions.
+    await page.locator('.message-actions button').evaluateAll(buttons => {
+      buttons.forEach(button => button.style.minHeight = '60px')
+    })
+    const withActions = await measure()
+    await page.locator('.message-actions').evaluateAll(columns => {
+      columns.forEach(column => column.querySelectorAll('button').forEach(button => {
+        button.style.display = 'none'
+      }))
+    })
+    const withoutActions = await measure()
+    expect(withActions).toEqual(withoutActions)
+    expect(normal).toEqual(withoutActions)
+    expect(withActions).toHaveLength(6)
+    // The two roles each have a wrapped row between short rows; this guards the fixture.
+    expect(withActions[2].bubbleHeight).toBeGreaterThan(withActions[0].bubbleHeight)
+    expect(withActions[3].bubbleHeight).toBeGreaterThan(withActions[1].bubbleHeight)
+    for (const row of withActions) expect(row.rowHeight).toBe(row.bubbleHeight)
+    await page.locator('.message-actions button').evaluateAll(buttons => {
+      buttons.forEach(button => {
+        button.style.removeProperty('display')
+        button.style.removeProperty('min-height')
+      })
+    })
+    await page.locator('.bubble[data-thread-role="user"]').last().scrollIntoViewIfNeeded()
+    await page.screenshot({ path: `/tmp/builder-1896/messages-${width}.png`, animations: 'disabled' })
+  }
 })
 
 test('copy and reply hover layers surround only the pointed glyph without changing layout or keyboard focus', async ({ launchPairedApp }) => {

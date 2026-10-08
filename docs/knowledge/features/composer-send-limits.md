@@ -20,7 +20,7 @@ distinguishes that behavior from the history-persistence limitation tracked in #
   `copyMessageText.test.ts` pins both quote labels, literal multiline/embedded-quote text, draft
   separators, long sources and repeated append. `e2e/message-reply.spec.ts` covers activation,
   focus/caret, editing/send, host isolation and offline drafting; counted passes and the history skip
-  are recorded in [message-bubble testing](conversation-shell-message-bubble.md#testing).
+  are recorded in [message-bubble testing](conversation-shell-message-bubble-testing.md#testing).
 - **`auto-grow` on the textarea shipped in #1056** — `field-sizing: content` plus a `max-height` on `.composer__input`, no TSX change; the box grows a line at a time to a five-line ceiling, then scrolls. See [Composer message box § the auto-grow](conversation-shell-composer-message-box.md#the-box-grows-with-the-draft-to-a-five-line-ceiling-1056). *(The "single active conversation, `MILESTONE_CONVERSATION_ID`" limitation this bullet used to name was closed by #448, which added the `conversationId` parameter documented in [internals](composer-send-internals.md); the older narrative sections in [internals](composer-send-internals.md) still describe the pre-#448/#179 shape and are due a fuller pass — flagged here rather than silently left contradicting the current signature.)*
 - **A submit refused by `submitMessage`'s two early `false` returns reads no clock at all**
   ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013)) — `deps.now?.()` sits below both the

@@ -30,6 +30,17 @@ outputs. `hasDaemonReadState(row)` tests whether both daemon fields are present,
   per-conversation history entry IDs, independent of envelope IDs, replay event IDs and local item
   counts. Equal IDs, including `0` / `0`, read as read. Wire and saved-list parsers admit only
   non-negative safe integers; the presence predicate does not perform boundary validation.
+- **Live/replayed durable IDs restore attention before a list refresh.** The timeline bridge raises
+  the owning host's existing row `latest_entry_id` from validated `history_entry_id`, even while the
+  conversation is closed. Delayed lists cannot lower either known latest IDs or confirmed read marks.
+  Acknowledging displayed tail 10 with known latest 12 leaves `12 > 10` unread; receipt of a newer
+  unseen entry never becomes visibility proof. See [received read state](conversation-list-store.md#received-read-state).
+- **Publication and confirmation are separate.** The focused, uncovered committed newest-message
+  tail supplies a host-bound observation through the [read publisher](conversation-last-read-store.md#how-it-works).
+  Sending the command changes neither daemon read state nor this predicate's answer; a received
+  owning-host mark advances the comparison. Missing frame identity on a complete daemon row cannot
+  restore local read authority. Daemons without the received contract retain local count persistence,
+  stamps and pairing/per-server clears and receive no read command.
 - **Incomplete or absent daemon contract uses three legacy branches, in this order:**
   1. `timeline === null` → **read**. Nothing is held for this conversation (never fed, or evicted at
      [conversation timeline holder](conversation-timeline-holder.md)'s ten-slice cap), so there is no
@@ -92,12 +103,13 @@ outputs. `hasDaemonReadState(row)` tests whether both daemon fields are present,
 
 - **Omission is unknown, never zero.** A row with only one daemon field retains the local fallback.
   A complete row ignores local counts, so opening it or receiving timeline content cannot clear
-  daemon unread locally: both stamp paths are guarded. Desktop mark publication remains
-  [#1826](https://github.com/pyrycode/pyrycode-desktop/issues/1826).
+  daemon unread locally: both stamp paths are guarded. Desktop publication requires the
+  [committed visible-tail observation](conversation-last-read-store.md#how-it-works).
 - **Read advances are host-scoped and monotonic while held.** The [list store](conversation-list-store.md)
-  advances existing rows before refresh replies; stale lists cannot undo the read. A later list with
-  a higher latest entry can make the row unread again. Timeline eviction does not affect a complete
-  row's comparison. Pending input and working still outrank unread in the [status resolver](conversation-status.md).
+  advances existing read/latest IDs before refresh replies; stale lists cannot undo either. A later list
+  or live/replayed entry with a higher latest ID can make the row unread again. Timeline eviction does
+  not affect a complete row's comparison. Pending input and working still outrank unread in the
+  [status resolver](conversation-status.md).
 - **A forged large `localStorage` mark suppresses a legacy conversation's dot — accepted, not fixed.** An
   attacker with write access to the renderer's `localStorage` can store a mark of, say,
   `Number.MAX_SAFE_INTEGER`; `decodeLastReadMarks` bounds the mark's *type*, not its magnitude, so branch 3

@@ -217,7 +217,7 @@ filename, long context, a 500-character unbroken rule and 15 additional complete
 and Cancel reachability through thread scrolling, including the armed state. No answer may precede
 the second activation. The inline arrival/growth case checks pinned arrival and arming, held-reader
 Cancel focus and content growth, composer drafting, visible-checkbox edits and visible-choice arming.
-See [current inline evidence](development-verification.md#inline-permission-verification) for the
+See [current inline evidence](development-verification-test-tiers.md#inline-permission-verification) for the
 verifier's counted browser results and integrated Figma captures.
 
 The earlier [choice-controller verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1820#issuecomment-6025856890)
@@ -249,4 +249,4 @@ Before inline placement, all three named scenarios executed and passed in the di
 26 executed/passed, 0 failed, 1 skipped. See the
 [counted live evidence](live-e2e-runbook.md#current-real-claude-gate-state) for named results and
 the configured-command mismatch. Current inline acceptance and its remaining named-evidence gap
-are recorded in [inline permission verification](development-verification.md#inline-permission-verification).
+are recorded in [inline permission verification](development-verification-test-tiers.md#inline-permission-verification).

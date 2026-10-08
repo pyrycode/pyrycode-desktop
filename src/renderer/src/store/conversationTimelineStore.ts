@@ -75,7 +75,7 @@
 // `defaultWorkspaceStore` and `pushNotificationPrefStore` do use `localStorage`, so the pattern is in
 // the repo to copy — but that would write conversation CONTENT to renderer-side web storage, surviving
 // the pairing boundary #757 exists to enforce.
-import { MAX_CHAT_HISTORY_ITEMS, historyGapId, parseChatHistorySnapshot, type ChatHistorySnapshot, type HistoryGap } from '@shared/chatHistory'
+import { MAX_CHAT_HISTORY_ITEMS, historyGapId, parseChatHistorySnapshot, type ChatHistorySnapshot, type HistoryGap, type DurableThreadItem } from '@shared/chatHistory'
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
 import { reconcileHistory } from './historyContributions'
@@ -162,6 +162,7 @@ export interface ConversationSlice {
   coverage?: SavedTimeline['coverage']
   served?: SavedTimeline['served']
   display?: SavedTimeline['display']
+  displayStateId?: number
   gaps?: SavedTimeline['gaps']
   newestCursor?: string
   /**
@@ -329,7 +330,7 @@ export type ConversationTimelineStore = ConversationTimelineState & {
     cancel: () => void
   } | null
   dispatchLocalEcho: (serverId: string, conversationId: string, event: Extract<ThreadEvent, { type: 'userText' }>) => void
-  dispatchFor: (conversationId: string, event: ThreadEvent, joinKey?: string) => void
+  dispatchFor: (conversationId: string, event: ThreadEvent, joinKey?: string, historyEntryId?: number) => void
   markLocalSendQueued: (conversationId: string, queued: readonly QueuedItem[]) => void
   prependHistoryFor: (conversationId: string, items: readonly ThreadItem[], retainBoundary?: boolean, entries?: readonly HistoryTimelineEntry[]) => readonly number[]
   recordPlacementJoin: (conversationId: string, joinKey: string | undefined) => void
@@ -645,7 +646,7 @@ export function createConversationTimelineStore(
         timelines.set(conversationId, slice)
         return { timelines }
       }),
-    dispatchFor: (conversationId, event, joinKey) =>
+    dispatchFor: (conversationId, event, joinKey, historyEntryId) =>
       set((s) => {
         if (event.type === 'messageDelivery') {
           const slice = s.timelines.get(conversationId)
@@ -683,6 +684,7 @@ export function createConversationTimelineStore(
             timelines: withNewSliceAtHead(s.timelines, conversationId, {
               serverId: receiptHost() ?? undefined,
               timeline: created,
+              ...retainLiveDisplay(undefined, initialTimelineState, created, event, historyEntryId),
               history: null,
               prependedRows: 0,
               liveKeys: withJoinKey(
@@ -708,6 +710,7 @@ export function createConversationTimelineStore(
         next.set(conversationId, {
           ...held,
           timeline: folded,
+          ...retainLiveDisplay(held, held.timeline, folded, event, historyEntryId),
           // Feedback from already-retained display does not establish a new live contribution.
           liveKeys: retainedRowKey === undefined ? withJoinKey(held.liveKeys, joinKey) : held.liveKeys
         })
@@ -1096,4 +1099,33 @@ function historyGaps(held: readonly Extract<HistoryGap, { olderId: number }>[] |
     } else merged.push(gap)
   }
   return merged.slice(-MAX_CHAT_HISTORY_ITEMS)
+}
+
+function retainLiveDisplay(held: ConversationSlice | undefined, before: TimelineState, after: TimelineState, event: ThreadEvent, id: number | undefined): Pick<ConversationSlice, 'display' | 'displayStateId'> {
+  if (id === undefined || !Number.isSafeInteger(id) || id < 0 || before === after) return {}
+  const prior = new Map(before.rowKeys?.map((key, index) => [key, before.items[index]]))
+  const keys = after.rowKeys ?? after.items.map((_, index) => index)
+  const changed = after.items.flatMap((item, index) => item.kind !== 'attachmentOffer' && prior.get(keys[index]) !== item ? [keys[index]] : [])
+  const rowKey = changed.at(-1)
+  if (rowKey === undefined) return { displayStateId: Math.max(held?.displayStateId ?? id, id) }
+  const display = held?.display ?? []
+  if (display.some(d => d.id === id || d.lastId !== undefined && d.id <= id && id <= d.lastId)) return {}
+  let live: NonNullable<ConversationSlice['display']>[number]
+  if (event.type === 'toolResult') {
+    live = { kind: 'patch', id, rowKey, toolUseId: event.toolUseId, turnId: event.turnId,
+      parentToolUseId: event.parentToolUseId, result: { isError: event.isError,
+        resultSummary: event.resultSummary, resultDetail: event.resultDetail } }
+  } else if (event.type === 'toolDenied') {
+    if (event.turnId === '' || event.toolUseId === '') return {}
+    live = { kind: 'patch', id, rowKey, turnId: event.turnId, toolUseId: event.toolUseId, denial: event.denial }
+  } else {
+    // Retain each delta's own fragment, not the accumulated bubble; history can then fill a hole.
+    const source = reduceTimeline(initialTimelineState, event).items[0] ?? after.items[keys.indexOf(rowKey)]
+    if (source === undefined || source.kind === 'attachmentOffer') return {}
+    const item: DurableThreadItem = source.kind === 'turnBoundary'
+      ? { kind: source.kind, turnId: source.turnId, stopReason: source.stopReason, outcome: source.outcome,
+          isError: source.isError, terminalReason: source.terminalReason, errorCategory: source.errorCategory } : source
+    live = { kind: 'row', id, rowKey, item }
+  }
+  return { display: [...display, live].sort((a, b) => a.id - b.id).slice(-MAX_CHAT_HISTORY_ITEMS) }
 }

@@ -1972,6 +1972,7 @@ type BaseDaemonEvent =
  */
 interface DaemonEventTimestamp {
   daemonTs?: string
+  historyEntryId?: number
 }
 
 /** Distributes `DaemonEventTimestamp` over each arm of a union — `WithOrigin`'s mechanism below, and

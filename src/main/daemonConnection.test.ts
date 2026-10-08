@@ -12787,6 +12787,26 @@ describe('conversation mute write results (#1595)', () => {
   })
 })
 
+it('publishes an allowlisted durable read target and forwards direct replay identity', async () => {
+  const { connection, drivers, sink } = build({ serverId: 'a' })
+  connection.start(); await tick()
+  drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+  connection.markConversationRead?.({ conversation_id: 'conv-42', up_to: 0 })
+  expect(decodeEnvelope(drivers[0].sent[0])).toMatchObject({ type: 'mark_conversation_read', payload: { conversation_id: 'conv-42', up_to: 0 } })
+  drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 900, event_id: 700,
+    history_entry_id: 12, type: 'assistant_delta', ts: FIXED_TS,
+    payload: { conversation_id: 'conv-42', turn_id: 't', seq: 0, text: 'synthetic' } }) })
+  expect(emitted(sink).at(-1)).toMatchObject({ type: 'assistantDelta', historyEntryId: 12 })
+  connection.stop()
+  connection.markConversationRead?.({ conversation_id: 'conv-42', up_to: 2 })
+  expect(drivers[0].sent).toHaveLength(1)
+  const failed = build({ throwOnSend: true })
+  failed.connection.start(); await tick()
+  failed.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+  expect(() => failed.connection.markConversationRead?.({ conversation_id: 'conv-42', up_to: 2 })).not.toThrow()
+  failed.connection.stop()
+})
+
 /** The envelope ids of every `read_workspace_file` a driver has been handed, in send order. */
 function readWorkspaceFileEnvelopes(driver: FakeDriver): { id: number; payload: unknown }[] {
   return driver.sent

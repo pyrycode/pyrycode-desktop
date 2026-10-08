@@ -134,6 +134,12 @@ export function decodeEnvelope(bytes: Uint8Array): Envelope {
   const envelope: Envelope = { id, type, ts, payload: obj.payload }
   if (typeof obj.in_reply_to === 'number') envelope.in_reply_to = obj.in_reply_to
   if (typeof obj.event_id === 'number') envelope.event_id = obj.event_id
+  if ('history_entry_id' in obj) {
+    if (typeof obj.history_entry_id !== 'number' || !Number.isSafeInteger(obj.history_entry_id) || obj.history_entry_id < 0) {
+      throw new WireDecodeError('invalid durable history id')
+    }
+    envelope.history_entry_id = obj.history_entry_id
+  }
   return envelope
 }
 

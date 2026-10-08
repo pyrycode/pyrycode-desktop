@@ -83,7 +83,7 @@ export interface ConversationRouter<C> {
    * Takes `string | undefined` so `requestSessionSettings`' optional id needs no separate branch at
    * the call site: an absent id is not a known conversation, so it refuses on the ordinary path.
    */
-  route(conversationId: string | undefined): C | null
+  route(conversationId: string | undefined, observedHost?: string): C | null
 }
 
 /**
@@ -117,7 +117,8 @@ export function createConversationRouter<C>(deps: ConversationRouterDeps<C>): Co
   // hostile or confused daemon. `events.ts`'s ServerOrigin docblock already rules this for the server
   // id ("if a consumer indexes by it, THE INDEX IS A Map"); it holds identically for the conversation
   // id, which arrives on the same wire.
-  const index = new Map<string, string>()
+  // A null slot keeps surviving claims inside the index cap without an ordinary routing owner.
+  const index = new Map<string, string | null>()
   // Latched, so a daemon spraying rows past the cap produces ONE record rather than one per row. The
   // two other diagnostics below are either renderer-driven at one line per refused command (bounded by
   // the rotating sink) or gated on an actual change; this one is the only daemon-driven-per-row site.
@@ -136,6 +137,7 @@ export function createConversationRouter<C>(deps: ConversationRouterDeps<C>): Co
    * to claim another host's conversation (it would still need that host's unguessable UUIDv4), so it
    * leaves a trace in the bundle instead of none.
    */
+  const claims = new Map<string, Set<string>>()
   const learn = (conversationId: string, serverId: string): void => {
     if (conversationId.length === 0) return
     const held = index.get(conversationId)
@@ -148,7 +150,7 @@ export function createConversationRouter<C>(deps: ConversationRouterDeps<C>): Co
       return
     }
     index.set(conversationId, serverId)
-    if (held !== undefined) {
+    if (held !== undefined && held !== null) {
       diagnosticLog?.event({ event: 'conversation-reindexed', code: 'reassigned' })
     }
   }
@@ -158,8 +160,22 @@ export function createConversationRouter<C>(deps: ConversationRouterDeps<C>): Co
     const serverId = originOf(event)
     if (serverId === null) return
     if (event.type === 'conversationsReceived') {
-      for (const conversation of event.conversations) learn(conversation.id, serverId)
+      for (const [id, owners] of claims) {
+        owners.delete(serverId)
+        if (owners.size === 0) claims.delete(id)
+      }
+      for (const conversation of event.conversations) {
+        learn(conversation.id, serverId)
+        if (!index.has(conversation.id)) continue
+        const owners = claims.get(conversation.id) ?? new Set<string>()
+        owners.add(serverId); claims.set(conversation.id, owners)
+      }
       return
+    }
+    if (event.type === 'conversationDeleted') {
+      const owners = claims.get(event.id)
+      owners?.delete(serverId)
+      if (owners?.size === 0) claims.delete(event.id)
     }
     if (event.type === 'conversationCreated') learn(event.conversation.id, serverId)
   }
@@ -183,21 +199,38 @@ export function createConversationRouter<C>(deps: ConversationRouterDeps<C>): Co
         }
       }
     },
-    route(conversationId: string | undefined): C | null {
-      const serverId = conversationId === undefined ? undefined : index.get(conversationId)
+    route(conversationId: string | undefined, observedHost?: string): C | null {
+      let serverId = conversationId === undefined ? undefined : index.get(conversationId)
       // Both halves in one condition, so `conversationId` narrows to `string` below and the delete
       // needs no cast — an absent id and an unplaceable one are the same refusal either way.
       if (conversationId === undefined || serverId === undefined) {
         diagnosticLog?.event({ event: 'conversation-route-refused', code: 'unknown-conversation' })
         return null
       }
-      const connection = connectionFor(serverId)
+      if (observedHost !== undefined) {
+        const owners = [...(claims.get(conversationId) ?? [])].filter(host => connectionFor(host) !== null)
+        if (owners.length !== 1 || owners[0] !== observedHost) {
+          diagnosticLog?.event({ event: 'conversation-route-refused', code: 'observed-host-mismatch' })
+          return null
+        }
+        // Current claims can outlive the last-indexed host's list, deletion or pairing.
+        serverId = observedHost
+      }
+      const connection = serverId === null ? null : connectionFor(serverId)
       if (connection === null) {
         // The refusal above is the boundary; this deletion is hygiene, applied at the one moment the
         // stale mapping could ever have mattered. There is deliberately NO reconcile-driven sweep:
         // `registry.reconcile()` is asynchronous, so a prune called beside it would run before the
         // registry had dropped anything and be a no-op on exactly the unpair path it was written for.
-        index.delete(conversationId)
+        const owners = claims.get(conversationId)
+        if (serverId !== null) owners?.delete(serverId)
+        if (owners !== undefined && owners.size > 0) {
+          // Only a fresh event restores ordinary routing; surviving observed hosts still use claims.
+          index.set(conversationId, null)
+        } else {
+          index.delete(conversationId)
+          claims.delete(conversationId)
+        }
         diagnosticLog?.event({ event: 'conversation-route-refused', code: 'server-not-connected' })
         return null
       }

@@ -20,3 +20,7 @@ Give delivered `.message-actions` size containment so its contents cannot contri
 - Add browser geometry coverage beside the existing side-action tests: compare actual short and wrapped user/assistant bubble and row heights and neighbour gaps with and without action buttons, at minimum and wide window sizes.
 - Preserve existing centering, glyph gap, target separation, hover and focus checks; capture the delivered short and multi-line rows for Figma comparison.
 - Run the focused fake-transport spec, final pre-verify check (typecheck and full unit suite), and production build after merging current main. No live tests change.
+
+## Revisions
+
+2026-10-08: Normal delivered rows on current main already satisfy the geometry comparison because their 80px minimum bubble height exceeds the current action stack. The regression test additionally gives the existing buttons a test-only 60px minimum height to exercise the ticket's taller-than-bubble condition: before containment, short bubbles and rows grow from 80px to 116px. Compare that state, normal controls and hidden controls; restore normal sizing before captures. Wrapped rows must remain unchanged. No production dimensions or design contract change.

@@ -364,6 +364,11 @@ button.top-overlay-pill:hover,
   color: var(--color-inverse-primary);
 }
 
+/* The bubble sets row height; the centered copy/reply stack cannot enlarge it. */
+.message-actions:not(.message-actions--queued) {
+  contain: size;
+}
+
 .bubble__meta-time {
   visibility: hidden;
 }

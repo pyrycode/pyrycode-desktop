@@ -13,8 +13,22 @@ other edge cases and its links.
 
 [`useThreadScrollPin`](../../../src/renderer/src/screens/conversation/ConversationScreen.tsx)
 keeps a DOM-local `following` ref, initially true. Scroll/input handlers update it;
-a successful send re-arms it through `followBottom`. A dependency-free layout effect
-and a `ResizeObserver` call the same guarded `reassertPinnedToBottom` write. Neither
+a successful send re-arms it through `followBottom`. Trusted upward wheel input,
+including trackpad wheel events, and ArrowUp/PageUp/Home targeted at the thread itself
+release following synchronously when `scrollTop > 0`, before native scrolling starts.
+Waiting for `onScroll` would let a render or row-growth observation re-pin during the
+input-to-scroll interval and interrupt Chromium's animated movement. Untrusted input
+does not release intent; keys targeted at descendant controls retain their behavior.
+At zero, input leaves following unchanged unless connected history demand deliberately
+releases it; see [User demand and prepend position](#user-demand-and-prepend-position).
+
+The 4px bottom tolerance allows rounding while already following. A released reader
+resumes only on downward movement into that band, rather than merely being inside it:
+even a 1px upward wheel must remain released through subsequent streaming growth.
+The DOM-local `scrollOffset` ref snapshots the offset at upward input and refreshes on
+every scroll before the echo/resize guards, so those events cannot leave stale direction
+measurements. A dependency-free layout effect and a `ResizeObserver` call the same
+guarded `reassertPinnedToBottom` write. Both read intent without re-enabling it. Neither
 re-measures whether the operator was at the bottom after content has grown: that
 would mistake new content for reader movement. A submission that sends nothing does
 not resume following. Scrolling away again during a reply still wins.
@@ -77,7 +91,8 @@ observations arrive. The hook remembers the last observed `clientWidth` and
 `clientHeight`. While following, a scroll with changed dimensions leaves the decision
 to the pending observer rather than clearing the flag on layout movement. That
 observer refreshes dimensions after the guarded pin. At unchanged dimensions, reader
-scrolls still update following normally. This covers narrowing, widening and 100%/125%
+scrolls still release following outside the bottom band or resume it on downward
+movement into the band. This covers narrowing, widening and 100%/125%
 zoom without adding another follow state machine.
 
 `pinnedOffset` protects the pin's own scroll-event echo. It records the exact offset
@@ -110,6 +125,46 @@ late-image, queued-content and prepend checks. The late-image fixture needs enou
 rows to park more than a viewport away: its 24 synthetic replies preserve that
 precondition after the viewport grew to fill the pane. See
 [recorded browser and capture evidence](development-verification.md#layout-and-input).
+
+### Streaming input verification
+
+[`thread-scroll-pin.spec.ts`](../../../e2e/thread-scroll-pin.spec.ts) uses trusted
+`page.mouse.wheel` over an overflowing thread outside the history-demand band, with no
+gap markers. The main regression grows the last row intrinsically during wheel dispatch
+and streams successive fake-daemon deltas into one unfinished reply. IPC timing alone
+can miss the input race; the intrinsic growth exercises the row observer before the
+first native scroll step. A 500px upward gesture must move more than 450px. Two animation
+frames only flush queued scroll events; the held baseline instead requires 20 stable
+frames, then a positive rendered-height increase before checking the held offset.
+
+The cases `a 1px upward wheel holds released intent inside the bottom tolerance` and
+`a 4px upward wheel holds released intent inside the bottom tolerance` each require two
+positive streamed-height increases after motion settles. They then move downward from
+6px to 3px short of the bottom and prove following resumes on further growth. Merely
+asserting bottom geometry would miss the released intent inside the rounding band.
+The suite also covers thread-focused ArrowUp/PageUp/Home, descendant-control keys,
+untrusted input, offline no-range input, send resumption and existing prepend/image cases.
+
+Recorded browser evidence for [#1885](../../specs/architecture/1885-streaming-reader-scroll-intent.md),
+confirmed by the [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1890#issuecomment-6054076625):
+
+- Unmodified main hook at `5f75ddc3`: 20 executed, 18 passed, 2 failed, 0 skipped.
+  `upward wheel during streaming holds the reader after native motion settles` and
+  `thread-focused ArrowUp releases following during streaming` both failed. The wheel
+  started at 6488px; expected below 6038px, actual 6328px.
+- Pre-repair hook from `ba8f29a5`, with main merged at `5e4a1750`: 22 executed,
+  20 passed, 2 failed, 0 skipped. Both 1px/4px cases failed after positive streamed
+  growth: expected held offsets 6487px/6484px, actual 7076px for both.
+- Fixed focused run at `7d936932`: 22 executed, 22 passed, 0 failed, 0 skipped,
+  including the original wheel/ArrowUp regressions, both small-wheel cases and all
+  existing scroll-pin scenarios.
+- Dispatcher fake-transport gate at `7d936932` on 2026-10-08: 369 executed,
+  369 passed, 0 failed, 4 skipped. All 22 scroll-pin scenarios executed and passed
+  on their first attempt, including those named above. History-walk (3), history-gaps
+  (2), and resize/zoom controls (3) also executed and passed without skips.
+
+These runs exercised the built Electron app with fake-daemon streaming; physical
+trackpad gestures and live-Claude streaming were not exercised.
 
 ## Inline question growth
 
@@ -144,8 +199,10 @@ being used as live drafts, but does not release these DOM references.
 
 [`useThreadScrollPin`](../../../src/renderer/src/screens/conversation/ConversationScreen.tsx)
 separates local scroll measurement from download intent. `onScroll` updates bottom
-following only. Trusted upward wheel input or ArrowUp/PageUp/Home targeted at the
-thread itself checks host availability before the browser scrolls. A visible known
+following only; it never requests history. The shared `readUpward` input helper
+snapshots the offset and releases following when upward range exists, independently
+of host availability, then calls `demandHistory` before the browser scrolls.
+`demandHistory` requires a connected conversation host. A visible known
 gap between measured header/input overlays takes priority, selecting the first
 marker from newer toward older rows; otherwise `isNearTop` governs oldest-end demand.
 The band includes offsets from zero through `HISTORY_ASK_BAND_VIEWPORTS` (2) viewport
@@ -157,17 +214,24 @@ for first-page coverage, pending-read gates and retry policy.
 `Timeline` keeps its empty content inside the same focusable scroll region
 (`tabIndex={0}`, client-owned accessible label `Conversation history`). Returning
 `EmptyThread` before mounting that region makes first-page input unreachable.
-The browser's keyboard-focus indicator remains visible. Upward demand in the band
-releases bottom following even on a short thread; programmatic movement and a
-page's arrival cannot ask for another page.
+The browser's keyboard-focus indicator remains visible. At `scrollTop === 0`, ordinary
+upward input has no upward range and preserves following, including on an offline short
+thread whose rows later grow. Connected demand in the band or at a visible gap deliberately
+releases following even on a short thread, retaining the prepend anchor regardless of
+whether admission permits another request. Programmatic movement and a page's arrival
+cannot ask for another page. Descendant-control keys do not enter this demand path.
 
 Chromium suppresses native anchoring at exactly `scrollTop === 0`. Stable row keys
 and clearing bottom following alone therefore cannot preserve that reader's place.
-The pin remembers the first direct-child row and its viewport-relative top at zero,
-refreshing this local measurement after renders and scroll/input. When
-`prependedRows` increases for the same conversation while the reader remains at
-zero and is not following, a layout effect restores the surviving row's position
-before paint. Nonzero offsets retain native anchoring, avoiding double compensation.
+The pin remembers the first visible direct-child non-gap row and its viewport-relative
+top, refreshing this local measurement after renders, scrolls and connected demand.
+When `prependedRows` increases for the same conversation while not following, a layout
+effect restores the surviving row's position before paint. This covers zero-offset
+prepends and middle-of-thread gap insertion. At nonzero offsets, native anchoring remains
+enabled; if it already held the row, the measured displacement requires no extra movement.
+The synchronous intent release and direction check retain this compensation and its
+pin-write echo protection. Momentum flings can still leave a stale remembered anchor;
+the streaming-input fix does not change that separate limitation.
 
 A short thread may not have enough scroll range to reach the measured target.
 The pin adds only the measured bottom padding needed to retain its existing blank

@@ -1,0 +1,39 @@
+# Frame-coalesced timeline deltas
+
+## Files read
+- `src/renderer/src/store/timelineBridge.ts` → `subscribeTimeline`, `useTimelineBridge`: translation, arrival metadata and dual-store fan-out.
+- `src/renderer/src/store/timelineStore.ts` → `createTimelineStore`: flat reducer publication.
+- `src/renderer/src/store/conversationTimelineStore.ts` → `createConversationTimelineStore`, `dispatchFor`, `receivedSlice`, `retainLiveDisplay`: receipt-bound host ownership and per-event durable joins.
+- `src/renderer/src/store/threadTimeline.ts` → `reduceTimeline`: sequence and parent/subagent grouping remain unchanged.
+- `src/renderer/src/store/timelineBridge.test.ts` → synchronous subscription regressions.
+- `e2e/fixtures/launchPairedApp.ts` → fake daemon and mounted Electron fixture.
+- `docs/knowledge/features/conversation-timeline-store-data-flow.md` and `conversation-timeline-store-internals.md`: receipts exist only during delivery; individual contributions and held row identity must survive batching.
+- `CLAUDE.md`, `docs/knowledge/INDEX.md`, `docs/knowledge/features/development-verification.md`: renderer-only implementation, static unit-render limits and focused mounted verification.
+
+## Context
+Fast delta arrivals currently publish both timeline stores for each chunk. Delay only uninterrupted delta bursts to the next runnable animation frame, without changing presentation or reducer semantics. This is one timing deliverable, independent of the rendering/layout tickets. No ADR is needed.
+
+## Design
+Add a small renderer publication helper used inside both timeline factories. Its synchronous `batch(run)` stages existing mutation results and publishes once; staged reads see prior folds. A before-mutation subscription flushes accepted deltas before any ordinary store action, including history admission, local echo, queue removal and clears. Without a batch, setters retain Zustand's synchronous/no-op behavior. Existing action signatures remain compatible.
+
+`subscribeTimeline` accepts optional frame options: a scheduler with `request(callback): number` and `cancel(handle): void`, a batch runner, arrival-host getter and mutation-boundary subscription. Translate each delta immediately and retain its conversation, timestamp, sequence, parent, join key, durable entry id and host. Schedule only the first pending delta; subsequent arrivals never reschedule. Flush dispatches individual events through the existing actions inside one batch per store. Add an optional trailing receipt-host argument to `dispatchFor`, so deferred writes never consult an expired receipt. The pure reducer and live-display retention are unchanged.
+
+The mounted bridge explicitly supplies browser animation-frame scheduling, receipt capture and both stores' publication/boundary hooks. Existing subscribers without options remain synchronous, including their original unsubscribe handle. Non-delta events flush before translation/reconnect handling, even if they produce no timeline event.
+
+No overlapping in-flight feature branches touch the planned existing production files at planning time. Estimated total work: 600–700 lines including plan/tests; three new exported interfaces/functions, no required consumer migrations, five acceptance behaviors, no new error/reject branches. Within all sizing ceilings.
+
+## State + concurrency model
+The subscription owns one FIFO of translated delta deliveries and at most one scheduled callback. Flushing detaches the FIFO and cancels its handle before running folds, preventing recursive mutation-boundary flushing. Store batches synchronously stage state and publish at their end; no awaited work or new Zustand slice is introduced. Cleanup unsubscribes, settles accepted work once, cancels the frame and removes boundary listeners. Stale callbacks check subscription activity and cannot mutate after cleanup. Clear/reset/reconnect actions therefore occur after prior accepted deltas and cannot be undone by queued work.
+
+## Error handling
+No new I/O, wire parsing or failure modes. Existing typed boundary results and reducer admission rules remain intact. Scheduling uses the next runnable callback, without a timer deadline or debounce.
+
+## Testing strategy
+- Inject a deterministic frame scheduler and isolated stores; prove one publication per burst, first-frame delivery without postponement, exact equivalence to individual folds and parent/subagent grouping.
+- Prove arrival-time host, timestamp, conversation, sequence, joins and durable contributions survive deferred delivery, switching and interleaving; repeat history admission without duplicated text.
+- Exercise daemon boundaries (including ignored events, tools, terminal/stall/reconnect) and local history/echo/queue/clear mutations; assert earlier text is visible before their effects.
+- Cleanup settles once, cancels and ignores a manually invoked stale callback; synchronous existing specs remain unchanged.
+- A focused fake-transport Playwright case controls browser frame callbacks, observes actual daemon delivery and mounted React commits, and proves the production bridge withholds a controlled burst then commits it once on the first released callback. No live-Claude test or visual change.
+
+## Open Questions
+None. The simpler shape is publication transactions around existing folds rather than a second batch reducer or concatenated text.

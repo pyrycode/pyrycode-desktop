@@ -22,6 +22,9 @@ type Observation = { owner: string | null; coverage: TimelineSnapshot['coverage'
 export function createChatHistoryWriter(deps: {
   lists: Pick<StoreApi<ConversationListStore>, 'getState' | 'subscribe'>
   timelines: Pick<StoreApi<ConversationTimelineStore>, 'getState' | 'subscribe'>
+  subscribeTimelineWrites?: (listener: (state: ConversationTimelineStore, previous: ConversationTimelineStore,
+    origin?: string | null) => void) => () => void
+  flushTimeline?: () => void
   subscribeEvents?: (listener: (event: StampedDaemonEvent) => void) => () => void
   receipt: () => Receipt | null
   write: (request: ChatHistoryRequest) => Promise<ChatHistoryResult>
@@ -122,7 +125,8 @@ export function createChatHistoryWriter(deps: {
     if (conversations === undefined || conversations === previous.byServer.get(receipt.serverId)) return
     capture({ version: 1, kind: 'list', serverId: receipt.serverId, conversations: [...conversations] })
   })
-  const offTimelines = deps.timelines.subscribe((state, previous) => {
+  const offTimelines = (deps.subscribeTimelineWrites ?? deps.timelines.subscribe)((state: ConversationTimelineStore,
+    previous: ConversationTimelineStore, origin?: string | null) => {
     for (const id of previous.timelines.keys()) {
       if (!state.timelines.has(id)) {
         forgetComparison(id)
@@ -145,7 +149,8 @@ export function createChatHistoryWriter(deps: {
       const items = slice.timeline.items
       const previousItems = before?.timeline.items ?? []
       const changed = items !== previousItems
-      const receipt = deps.receipt()
+      // An explicit null is an accepted unstamped delivery, never a later receipt's authority.
+      const receipt = origin === undefined ? deps.receipt() : { type: 'assistantDelta', serverId: origin }
       const tail = items[items.length - 1]
       const echo = receipt === null && slice.timeline.localSendPending !== null && tail?.kind === 'userText' &&
         tail.messageId !== undefined && items.length === previousItems.length + 1 &&
@@ -260,6 +265,8 @@ export function createChatHistoryWriter(deps: {
   })
   deps.log({ event: 'history-writer-started' })
   return { flush, stop: () => {
+    // Window close can precede the next frame; capture accepted deliveries before detaching.
+    if (!stopped) deps.flushTimeline?.()
     stopped = true
     offLists(); offTimelines(); offRemoval(); offEvents?.()
     return Promise.all([...removals]).then(flush)
@@ -269,6 +276,8 @@ export function createChatHistoryWriter(deps: {
 export function useChatHistoryWriter(): void {
   useEffect(() => {
     const writer = createChatHistoryWriter({ lists: conversationListStore, timelines: conversationTimelineStore,
+      subscribeTimelineWrites: conversationTimelineStore.subscribeTimelineWrites,
+      flushTimeline: conversationTimelineStore.flushTimeline,
       subscribeEvents: window.pyry.onDaemonEvent,
       receipt: window.pyry.chatHistoryReceipt, write: window.pyry.chatHistory, log: window.pyry.sendDiagnostic,
       schedule: (run) => { const timer = setTimeout(run, 200); return () => clearTimeout(timer) } })

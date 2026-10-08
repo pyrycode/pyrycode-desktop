@@ -76,7 +76,7 @@
 // the repo to copy — but that would write conversation CONTENT to renderer-side web storage, surviving
 // the pairing boundary #757 exists to enforce.
 import { MAX_CHAT_HISTORY_ITEMS, historyGapId, parseChatHistorySnapshot, type ChatHistorySnapshot, type HistoryGap, type DurableThreadItem } from '@shared/chatHistory'
-import { createStore } from 'zustand/vanilla'
+import { createPublishedTimelineStore } from './timelinePublication'
 import { useStore } from 'zustand'
 import { reconcileHistory } from './historyContributions'
 import type { HistoryTimelineEntry, HistoryRequestFailure } from '@shared/ipc/events'
@@ -330,7 +330,7 @@ export type ConversationTimelineStore = ConversationTimelineState & {
     cancel: () => void
   } | null
   dispatchLocalEcho: (serverId: string, conversationId: string, event: Extract<ThreadEvent, { type: 'userText' }>) => void
-  dispatchFor: (conversationId: string, event: ThreadEvent, joinKey?: string, historyEntryId?: number) => void
+  dispatchFor: (conversationId: string, event: ThreadEvent, joinKey?: string, historyEntryId?: number, origin?: string | null) => void
   markLocalSendQueued: (conversationId: string, queued: readonly QueuedItem[]) => void
   prependHistoryFor: (conversationId: string, items: readonly ThreadItem[], retainBoundary?: boolean, entries?: readonly HistoryTimelineEntry[]) => readonly number[]
   recordPlacementJoin: (conversationId: string, joinKey: string | undefined) => void
@@ -564,16 +564,15 @@ export function createConversationTimelineStore(
   init: ConversationTimelineState = initialConversationTimelineState,
   receiptHost: () => string | null | undefined = () => undefined
 ) {
-  function receivedSlice(held: ConversationSlice | undefined, preserveLocalRead = false): ConversationSlice | undefined {
+  function receivedSlice(held: ConversationSlice | undefined, preserveLocalRead = false, origin = receiptHost()): ConversationSlice | undefined {
     if (held === undefined) return undefined
-    const origin = receiptHost()
     const base = typeof origin === 'string' && held.serverId !== undefined && held.serverId !== origin
       ? emptySlice : held
     return { ...base, serverId: typeof origin === 'string' ? origin : base.serverId,
       localRead: preserveLocalRead ? base.localRead : undefined,
       localReadOwner: preserveLocalRead ? base.localReadOwner : undefined }
   }
-  return createStore<ConversationTimelineStore>((set, get) => ({
+  return createPublishedTimelineStore<ConversationTimelineStore>((set, get) => ({
     ...init,
     // A confirmed creation is an observed empty live thread, not a pending saved-history read.
     initializeCreatedTimeline: (serverId, conversationId) => set(s => ({
@@ -646,7 +645,7 @@ export function createConversationTimelineStore(
         timelines.set(conversationId, slice)
         return { timelines }
       }),
-    dispatchFor: (conversationId, event, joinKey, historyEntryId) =>
+    dispatchFor: (conversationId, event, joinKey, historyEntryId, origin = receiptHost()) =>
       set((s) => {
         if (event.type === 'messageDelivery') {
           const slice = s.timelines.get(conversationId)
@@ -662,7 +661,7 @@ export function createConversationTimelineStore(
           timelines.set(conversationId, { ...slice, timeline: reduceTimeline(slice.timeline, event) })
           return { timelines }
         }
-        const held = receivedSlice(s.timelines.get(conversationId), event.type === 'sessionError')
+        const held = receivedSlice(s.timelines.get(conversationId), event.type === 'sessionError', origin)
         if (held === undefined) {
           // A live reading can only update a retained call; it cannot create or evict a slice.
           if (event.type === 'toolProgress') return s
@@ -682,7 +681,7 @@ export function createConversationTimelineStore(
           const created = reduceTimeline(initialTimelineState, event)
           return {
             timelines: withNewSliceAtHead(s.timelines, conversationId, {
-              serverId: receiptHost() ?? undefined,
+              serverId: origin ?? undefined,
               timeline: created,
               ...retainLiveDisplay(undefined, initialTimelineState, created, event, historyEntryId),
               history: null,
@@ -715,7 +714,7 @@ export function createConversationTimelineStore(
           liveKeys: retainedRowKey === undefined ? withJoinKey(held.liveKeys, joinKey) : held.liveKeys
         })
         return { timelines: next }
-      }),
+      }, origin),
     // #1725 — a queue snapshot can only advance a held slice's open send window. It never creates a
     // slice, and an unchanged fold returns the state object so no subscriber wakes.
     markLocalSendQueued: (conversationId, queued) =>

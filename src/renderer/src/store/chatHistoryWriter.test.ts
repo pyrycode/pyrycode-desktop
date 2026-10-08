@@ -20,6 +20,7 @@ function harness(write = async (_request: ChatHistoryRequest): Promise<ChatHisto
   let listener: (event: StampedDaemonEvent) => void = () => {}
   const offEvents = vi.fn(() => { listener = () => {} })
   const writer = createChatHistoryWriter({ lists, timelines, write: save, log,
+    subscribeTimelineWrites: timelines.subscribeTimelineWrites,
     subscribeEvents: onEvent => { listener = onEvent; return offEvents },
     receipt: () => receipt, schedule: (run) => { scheduled = run; return () => { scheduled = undefined } } })
   const receive = (type: string, action: () => void, serverId: string | null = 'a') => {

@@ -465,6 +465,16 @@ Read pushes patch held attention immediately but do not themselves write history
 reply captures the monotonic held mark. Timeline updates folded
 during daemon delivery use that receipt's origin, never the active host at save time.
 
+Frame-deferred deltas retain the original receipt host. The mounted writer uses
+`subscribeTimelineWrites` to capture each changed staged fold, including intermediate
+equal-id host replacements, while rendering receives one final batch publication.
+That final publication is excluded from the write observer. Explicit null means
+the arrival lacked host evidence; it cannot borrow a later boundary's receipt.
+Looking up the preload receipt at frame publication would refuse ordinary received
+text, and observing only the final state would lose replaced-host snapshots.
+Injected writers without this optional channel retain synchronous subscriptions.
+See [timeline publication](conversation-timeline-store-internals.md#the-store-srcrenderersrcstoretimelinestorets).
+
 Outside daemon delivery, these local edits qualify:
 
 - An appended `userText` echo with a message id and `localSendPending`, whose
@@ -645,7 +655,11 @@ work or background pruning is involved.
 
 ### Window close and app quit
 
-`writer.stop()` unsubscribes both stores, daemon events and host-removal notifications,
+The mounted `writer.stop()` first calls its injected `flushTimeline` while the
+per-fold observer remains attached, settling accepted deltas even when their frame
+has not run. Detaching first loses accepted text on window close. Repeated stops
+skip this settlement hook; injected writers without it keep their existing behavior.
+It then unsubscribes both stores, daemon events and host-removal notifications,
 waits for already-started host removals to settle, then cancels the timer and drains
 buffered and in-flight replacements and confirmed conversation removals in order.
 Deletion suppression remains active throughout the flush. Unsubscribing alone
@@ -676,3 +690,6 @@ collection. Flushing never adds a completion boundary to a partial answer.
 
 See [the testing reference](chat-history-testing.md) for writer admission,
 restoration, removal, protected persistence and durable-contract coverage.
+Close regressions hold the accepted tail's frame through shutdown and check both
+protected fragments and reopened content. When seeding a protected snapshot,
+wait for the opening page's buffered save first or it can overwrite the seed.

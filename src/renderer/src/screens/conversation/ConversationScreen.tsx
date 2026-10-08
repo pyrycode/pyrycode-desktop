@@ -889,6 +889,8 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
   const ref = useRef<HTMLDivElement>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const following = useRef(true)
+  // Direction distinguishes a reader returning to the bottom from a small upward move in its tolerance.
+  const scrollOffset = useRef(0)
   const viewport = useRef({ width: 0, height: 0 })
   // #1049's growth observer, and the node its observation set was last synced against. Constructed on first
   // use rather than here, so `ResizeObserver` is never referenced under vitest's `node` environment — where
@@ -1094,6 +1096,7 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
     // Release before native scrolling starts: a render or growth observation can otherwise
     // pin during the input-to-scroll-event interval and interrupt Chromium's animated movement.
     // No upward range means no movement intent, except for demandHistory's deliberate release.
+    scrollOffset.current = el.scrollTop
     if (el.scrollTop > 0) following.current = false
     demandHistory(el)
   }
@@ -1109,13 +1112,12 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
           ['ArrowUp', 'PageUp', 'Home'].includes(event.key)) readUpward(event.currentTarget)
       },
       ref,
-      // The metric mapping is the one thing this feature can get wrong with no type error and no unit test:
-      // scrollTop is the offset, clientHeight the viewport, scrollHeight the total content. Named fields are
-      // what make it correct by inspection. Read synchronously off `currentTarget` and assigned with no
-      // branch of its own — every case is a consequence of isAtBottom's single comparison. No useCallback:
+      // Following resumes only on downward movement into the bottom band. No useCallback:
       // Timeline is not memoized, so a stable identity buys nothing and React attaches this directly.
       onScroll: (event) => {
         const el = event.currentTarget
+        const movingDown = el.scrollTop > scrollOffset.current
+        scrollOffset.current = el.scrollTop
         rememberTop(el)
         // #1049: the pin's own write queues a scroll event, and that event is not the operator scrolling.
         // Cleared unconditionally so a record can never outlive one event, and matched on the EXACT offset
@@ -1138,7 +1140,8 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
           viewportHeight: el.clientHeight,
           contentHeight: el.scrollHeight
         }
-        following.current = isAtBottom(metrics)
+        // The tolerance allows rounding while following; it must not undo upward reader intent.
+        following.current = isAtBottom(metrics) && (following.current || movingDown)
         if (following.current && el.style.paddingBottom !== '') {
           reassertPinnedToBottom(el, following, pinnedOffset)
         }

@@ -460,6 +460,46 @@ test('upward wheel during streaming holds the reader after native motion settles
   await expectPinnedToBottom(page)
 })
 
+for (const delta of [1, AT_BOTTOM_TOLERANCE_PX]) {
+  test(`a ${delta}px upward wheel holds released intent inside the bottom tolerance`, async ({ launchPairedApp }) => {
+    const { page, daemon } = await launchPairedApp({ buildReplyFrames })
+    await primeOverflowingThread(page)
+    daemon.pushFrame(readerDeltaFrame(0, 160))
+    const thread = page.locator('.conversation__thread')
+    await expect(thread).toContainText('Reader stream 0')
+    await stableThreadOffset(page)
+    await expectPinnedToBottom(page)
+    const before = await readThreadMetrics(page)
+    expect(before.scrollTop).toBeGreaterThan(4 * before.clientHeight)
+    await expect(thread.locator('[data-history-gap]')).toHaveCount(0)
+    await thread.hover()
+    await page.mouse.wheel(0, -delta)
+    const held = await stableThreadOffset(page)
+    expect(before.scrollTop - held).toBeCloseTo(delta, 0)
+    // Movement stays in the rounding band, but the input already released following.
+    await expectPinnedToBottom(page)
+    for (let seq = 1; seq <= 2; seq++) {
+      const height = (await readThreadMetrics(page)).scrollHeight
+      daemon.pushFrame(readerDeltaFrame(seq, 20))
+      await expect(thread).toContainText(`Reader stream ${seq}`)
+      await expect.poll(async () => (await readThreadMetrics(page)).scrollHeight).toBeGreaterThan(height)
+      expect(await stableThreadOffset(page)).toBeCloseTo(held, 0)
+    }
+    // Downward movement into the tolerance still resumes following.
+    await thread.evaluate(el => { el.scrollTop = el.scrollHeight - el.clientHeight - 6 })
+    await stableThreadOffset(page)
+    await page.mouse.wheel(0, 3)
+    const resumed = await stableThreadOffset(page)
+    expect((await readThreadMetrics(page)).scrollHeight - before.clientHeight - resumed).toBeCloseTo(3, 0)
+    const height = (await readThreadMetrics(page)).scrollHeight
+    daemon.pushFrame(readerDeltaFrame(3, 20))
+    await expect(thread).toContainText('Reader stream 3')
+    await expect.poll(async () => (await readThreadMetrics(page)).scrollHeight).toBeGreaterThan(height)
+    await stableThreadOffset(page)
+    await expectPinnedToBottom(page)
+  })
+}
+
 for (const key of ['ArrowUp', 'PageUp', 'Home']) {
   test(`thread-focused ${key} releases following during streaming`, async ({ launchPairedApp }) => {
     const { page, daemon } = await launchPairedApp({ buildReplyFrames })

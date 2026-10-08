@@ -66,9 +66,32 @@ image grows. Row observation catches that content growth. The callback re-reads 
 refs, measures chrome even without a thread, and pins only a mounted, following
 thread. An empty offline chat can omit `Timeline` while notices and Re-pair remain;
 measurement rooted only in the scroller would place that pill inside the header.
-Current observation targets are added on renders; the observer disconnects on root changes and
-at teardown. Removed direct children are not unobserved; see the inline-batch limitation below.
-Heights and following remain DOM/ref-local rather than store state.
+Direct-child membership changes reconcile row targets: only new children are observed,
+and detached or replaced children are unobserved. Chrome targets reconcile separately
+as a constant-size set. Observation-root replacement disconnects both resize and
+mutation observers, clears row/chrome caches and the remembered anchor, and observes
+the new root; teardown releases the same references. Heights and following remain
+DOM/ref-local rather than store state.
+
+The hook caches direct-child document positions and an ordered array of positive-height,
+non-gap anchor candidates. Setup and actual direct-child membership changes enumerate
+and measure rows to rebuild that index. Scrolls and unchanged-membership renders instead
+binary-search candidate bottoms against the greater of thread top and measured header
+bottom, then remember the selected row's top relative to the thread. This takes logarithmic
+row geometry reads without copying or enumerating all children; no candidate means no
+anchor. Searching unfiltered rectangles would be incorrect: hidden rows report viewport-zero
+rectangles, breaking monotonic order, and long collapsed runs must not become anchors.
+
+A subtree `MutationObserver` distinguishes direct-child membership changes from mutations
+inside existing rows. Pending records are drained before lookup/layout synchronization,
+so committed collapse or expansion is reflected before resize delivery. Descendant text,
+child and `hidden`/`style`/`class`/`data-history-gap` attribute changes refresh only their
+containing direct child; resize entries refresh only delivered row targets, also covering image or stylesheet growth
+without mutations. Eligibility changes insert/remove candidates by cached document position;
+that array movement is permitted, while ordinary positive-height same-row growth neither
+rebuilds nor traverses the row set. Hidden rows and gap markers remain observed even though
+they are excluded from anchor lookup. Growth still measures chrome and uses the existing
+guarded bottom pin. See [bounded-work design](../../specs/architecture/1892-bounded-scroll-anchor.md).
 
 `QuestionHistorySlot` is the stable observed direct child for inline permission and questionnaire
 content. It mounts only while an open-chat batch, permission or owned rejection exists, including
@@ -166,6 +189,55 @@ confirmed by the [verifier verdict](https://github.com/pyrycode/pyrycode-desktop
 These runs exercised the built Electron app with fake-daemon streaming; physical
 trackpad gestures and live-Claude streaming were not exercised.
 
+### Bounded anchor and growth verification
+
+[`thread-scroll-work.spec.ts`](../../../e2e/thread-scroll-work.spec.ts) compares settled
+32/400-row fixtures during deep-history scrolling and repeated deltas that visibly grow
+one existing row. It asserts logarithmic geometry bounds, zero child enumeration and
+zero row re-observation during same-row growth, with held and following readers checked
+separately. Counting instrumentation stays in this spec: stack attribution isolates
+`rememberTop`/`syncRows`/`refreshRow` geometry and child access, the pane target identifies
+the pin's resize observer, and captured native geometry methods serve the test oracle.
+Read-observer work and oracle reads therefore do not inflate the hook counts. Positive
+rendered-height growth precedes the scroll assertions; setup costs are excluded.
+
+The second case checks gaps, long hidden and zero-height runs, immediate expansion before
+resize delivery, row addition/replacement/removal and hook teardown/remount. Its streamed
+arrival adds a new assistant row; unchanged-membership growth is proved by the first case.
+Observation-root replacement within a surviving hook was source-reviewed rather than
+separately exercised in the browser.
+
+Recorded evidence for [#1892](../../specs/architecture/1892-bounded-scroll-anchor.md#revisions):
+
+- The recorded pre-fix main renderer at `214d15625f51495c2e07772d320003dc1eec7588`
+  ran both named cases below: 2 executed, 0 passed, 2 failed, 0 skipped. Deep lookup
+  read 25/265 row rectangles on the 32/400-row fixtures (bounds 8/11); each delta
+  re-observed 34/402 direct children. The gap/hidden case read 87 rectangles and
+  failed zero-height anchor correctness. The baseline log is recorded at
+  `/tmp/builder-1892/baseline-final.txt`; renderer identity was checked by content hash.
+- Dispatcher verifier gate 6 (`npx playwright test --reporter=json`) on 2026-10-08
+  at `2e677c70d94547a5d2c32118c5efee970e97f1c9`: 371 executed, 371 passed,
+  0 failed, 4 skipped. The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1894#issuecomment-6054832982)
+  confirms both named cases were present, executed and passed:
+  `scroll lookup and same-row growth stay bounded on short and long threads` and
+  `gaps, long hidden runs and target changes preserve a valid anchor and clean observations`.
+  The hook-work attachment records 6/10 scroll geometry reads and maximum held-growth
+  reads of 8/12 for 32/400 rows, with zero same-row child enumeration/re-observation.
+
+The same verdict confirms all required specs present and passed in that gate:
+
+| Fake-transport spec | Executed / passed | Failed / skipped |
+| --- | --- | --- |
+| `thread-scroll-work.spec.ts` | 2 / 2 | 0 / 0 |
+| `thread-scroll-pin.spec.ts` | 22 / 22 | 0 / 0 |
+| `translucent-thread-controls.spec.ts` | 3 / 3 | 0 / 0 |
+
+The existing suites retain prepend position, small upward intent inside the bottom
+tolerance, send resumption, late-image, resize/zoom and composer-clearance coverage.
+These are bounded-operation and behavior proofs, not profiling evidence for overall
+scroll smoothness. Frame publication, read-observation setup and backdrop-filter paint
+cost are separate concerns. No live-Claude or visual comparison was required or performed.
+
 ## Inline question growth
 
 `Timeline.trailing` places `QuestionHistorySlot` after message rows, even with empty/offline history
@@ -185,15 +257,13 @@ thing: it focuses the visually hidden radio, whose containing block is now the p
 and Chromium scrolls it into view. The arrival and bottom-growth assertions remain separate from
 that visible-edit proof. See [verification evidence](development-verification-test-tiers.md#inline-question-verification).
 
-**Open observer-retention limitation:** the observer adds current children but does not unobserve
-removed children while the same pane remains mounted. Resolving/dismissing a batch therefore leaves
-its detached wrapper, including input values, retained by the observer until a root change or teardown;
-repeated batches accumulate such targets for the pane's lifetime. The
-[verifier finding](https://github.com/pyrycode/pyrycode-desktop/pull/1783#issuecomment-6024030746)
-reports no observed answer-routing or scrolling failure and treats this as nonblocking. A future
-hook change should unobserve removed children or rebuild the observation set; the old append-only
-assumption does not hold for transient questionnaires. Store clearing prevents those old values from
-being used as live drafts, but does not release these DOM references.
+Resolving/dismissing a batch removes its wrapper from the membership index and unobserves
+the detached target while the pane remains mounted. Replacement also releases the old target;
+root changes and teardown clear observers, caches and the anchor. This resolves the earlier
+[observer-retention finding](https://github.com/pyrycode/pyrycode-desktop/pull/1783#issuecomment-6024030746)
+through [membership reconciliation](#thread-scroll-pin). An append-only target set would retain
+transient questionnaire wrappers and their input values across repeated batches even after
+store drafts were cleared; store clearing alone cannot release observer-held DOM references.
 
 ## User demand and prepend position
 
@@ -223,12 +293,18 @@ cannot ask for another page. Descendant-control keys do not enter this demand pa
 
 Chromium suppresses native anchoring at exactly `scrollTop === 0`. Stable row keys
 and clearing bottom following alone therefore cannot preserve that reader's place.
-The pin remembers the first visible direct-child non-gap row and its viewport-relative
-top, refreshing this local measurement after renders, scrolls and connected demand.
+The pin remembers the first positive-height direct-child non-gap row whose bottom is
+below the usable top edge (the greater of thread top and measured header bottom), and
+its top relative to the thread. It refreshes this local measurement after renders,
+scrolls and connected demand through the [ordered candidate index](#thread-scroll-pin),
+draining pending mutations before binary lookup so collapsed rows cannot become anchors.
 When `prependedRows` increases for the same conversation while not following, a layout
 effect restores the surviving row's position before paint. This covers zero-offset
 prepends and middle-of-thread gap insertion. At nonzero offsets, native anchoring remains
 enabled; if it already held the row, the measured displacement requires no extra movement.
+Structural prepend compensation may still enumerate and measure all rows to calculate
+the content bottom and missing scroll range. That exceptional work is separate from
+scroll lookup and ordinary same-row streaming growth, whose membership stays unchanged.
 The synchronous intent release and direction check retain this compensation and its
 pin-write echo protection. Momentum flings can still leave a stale remembered anchor;
 the streaming-input fix does not change that separate limitation.

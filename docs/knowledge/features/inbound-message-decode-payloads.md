@@ -115,6 +115,28 @@ field rejects the whole reply. These are durable per-conversation history entry 
 envelope and replay IDs. See [the wire contract](conversation-list-fetch.md#the-wire-contract) and
 [host-scoped read reconciliation](conversation-list-store.md#received-read-state).
 
+## Durable frame identity
+
+`decodeEnvelope` admits optional envelope `history_entry_id` only when it is a non-negative safe
+integer, including zero. A present null, negative, fractional, nonnumeric or unsafe value rejects the
+frame with static `WireDecodeError('invalid durable history id')`; omission remains valid.
+`parseInboundMessage` copies this admitted field to typed `historyEntryId`, which main forwards and
+`subscribeTimeline` passes directly to timeline dispatch. Live and replay use the same path shipped
+by #1826; connection `id`, replay-ring `event_id` and timestamps never substitute for durable identity.
+Missing identity creates no new durable display contribution and starts no identity-recovery fetch.
+Admitted history has its own entry identity; see [read-target derivation](conversation-last-read-store.md#how-it-works).
+
+`readMarkAdmission.test.ts` keeps connection `90`, replay `700` and durable `0`/`12`/`MAX_SAFE_INTEGER`
+distinct, rejects malformed durable IDs and checks the exact host-bound read-command payload.
+`daemonConnection.test.ts` checks direct forwarding with connection `900`, replay `700` and durable
+`12`. Equal fixture IDs would hide a substitution across these boundaries. The
+[#1844 confirmation plan](../../specs/architecture/1844-replay-durable-read-target.md#confirmation-evidence)
+records the unit run containing admission and forwarding coverage: 9,587 executed/passed, 0 failed,
+3 skipped. The [verifier](https://github.com/pyrycode/pyrycode-desktop/pull/1884#issuecomment-6050590586)
+also confirms all six mounted `visible-tail-read.spec.ts` cases executed and passed, 0 failed/skipped,
+within the 357-executed/passed, 0-failed, 4-skipped fake-transport run. See
+[last-read testing](conversation-last-read-store.md#testing) for the independent history-demand proof.
+
 ## Turn state
 
 **Extended a sixth time by [#214](../codebase/214.md), additively.** `turn_state` → `{ kind:

@@ -35,6 +35,8 @@ Read both design contexts and screenshots. At rest the bubble hugs content; hove
 
 2026-10-08 (clearance follow-up): Chromium can reach the bottom before delivering the wheel callback, then shift away as hovered rows change height before the scroll callback. A trusted downward wheel measures the actual bottom position and resumes following there. A following reader's subsequent downward scroll retains intent and re-pins through the existing write if metadata moved the endpoint. Small movements within the tolerance are not snapped; upward input still releases synchronously. An immediate predictive pin was rejected because it interfered with small native movements. No additional state or async task. The repeated-reveal spec also wheels from history start through changing metadata to prove clearance at both widths.
 
+2026-10-08 (remaining protected-restoration finding 1): After restored tool expansion, collapsed metadata leaves the focused thread outside the pre-input history-demand band (1812px offset versus a 1466px band). In `protected restoration joins partial pages while retaining an expanded tool and content anchor`, settle pointer/focus geometry and park at half the measured `HISTORY_ASK_BAND_VIEWPORTS` band before Home. Assert positioning itself sends no request, and wait for native Home navigation to finish before parking the held content anchor. Keep every existing join, DOM identity, expansion, content-anchor, cursor settlement and request-count assertion. This is a test precondition repair; no production contract changes. No in-flight feature branch overlaps this spec.
+
 ## State transitions and identity reuse
 
 | Repeated event | Coverage |

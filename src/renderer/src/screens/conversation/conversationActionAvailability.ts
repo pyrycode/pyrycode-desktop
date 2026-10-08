@@ -4,8 +4,7 @@ import { serverIdForOpenConversation } from './unpairAction'
 import { activeConversationStore } from '../../store/activeConversationStore'
 
 export function useConversationActionAvailability(conversationId: string | null): boolean {
-  const rows = useConversationListStore(selectConversations)
-  const serverId = serverIdForOpenConversation(rows, conversationId)
+  const serverId = useConversationListStore(s => serverIdForOpenConversation(selectConversations(s), conversationId))
   return useSessionStore(s => serverId !== null && s.statuses.get(serverId)?.type === 'connected')
 }
 

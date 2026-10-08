@@ -3,6 +3,9 @@ import type { DaemonEvent } from '@shared/ipc/events'
 import { subscribeTimeline, translateTimelineEvent, timelineWriteTarget } from './timelineBridge'
 import { createTimelineStore } from './timelineStore'
 import { createConversationTimelineStore } from './conversationTimelineStore'
+import { createConversationListStore } from './conversationListStore'
+import { createChatHistoryWriter } from './chatHistoryWriter'
+import type { ChatHistoryRequest, ChatHistoryResult } from '@shared/chatHistory'
 
 function harness() {
   let listener: (event: DaemonEvent) => void = () => {}
@@ -52,8 +55,64 @@ function harness() {
   return { flat, keyed, delta, frame, callbacks, cancelled, stop, off,
     flatPublications, keyedPublications, emit: (event: DaemonEvent) => listener(event),
     open: (value: string | null) => { open = value },
+    receipt: () => host === undefined ? null : { type: 'assistantDelta', serverId: host },
     host: (value: string | undefined) => { host = value } }
 }
+
+function historyWriter(h: ReturnType<typeof harness>) {
+  const save = vi.fn(async (_request: ChatHistoryRequest): Promise<ChatHistoryResult> => ({ status: 'ok' }))
+  const writer = createChatHistoryWriter({ lists: createConversationListStore(), timelines: h.keyed,
+    subscribeTimelineWrites: h.keyed.subscribeTimelineWrites,
+    receipt: h.receipt, write: save, log: vi.fn(), schedule: () => () => {} })
+  const snapshots = () => save.mock.calls.map(([request]) => request)
+    .filter(request => request.operation === 'replaceTimeline').map(request => request.snapshot)
+  return { save, writer, snapshots }
+}
+
+it('saves a deferred burst after receipt expiry and restores all durable fragments', async () => {
+  const h = harness()
+  const w = historyWriter(h)
+  h.delta(0); h.delta(1)
+  h.host(undefined)
+  h.frame()
+  await w.writer.flush()
+  expect(w.snapshots()).toHaveLength(1)
+  const saved = w.snapshots()[0]
+  expect(saved).toMatchObject({ serverId: 'host-a', conversationId: 'a', items: [{ text: '01' }] })
+  expect(saved.display?.map(part => part.id)).toEqual([1, 2])
+  const restored = createConversationTimelineStore()
+  restored.getState().beginLocalTimelineRead('host-a', 'a')!.complete(saved)
+  expect(restored.getState().timelines.get('a')?.timeline.items[0]).toMatchObject({ text: '01' })
+  expect(h.keyedPublications).toHaveBeenCalledTimes(1)
+  h.stop(); await w.writer.stop()
+})
+
+it.each(['a', 'b'])('saves interleaved host receipts independently for conversation %s', async other => {
+  const h = harness()
+  const w = historyWriter(h)
+  h.delta(0, 'a')
+  h.host('host-b'); h.delta(1, other)
+  h.host(undefined); h.frame()
+  await w.writer.flush()
+  expect(w.snapshots()).toMatchObject([
+    { serverId: 'host-a', conversationId: 'a', items: [{ text: '0' }] },
+    { serverId: 'host-b', conversationId: other, items: [{ text: '1' }] }
+  ])
+  expect(h.keyedPublications).toHaveBeenCalledTimes(1)
+  h.stop(); await w.writer.stop()
+})
+
+it('a later boundary receipt cannot supply ownership to earlier deferred deltas', async () => {
+  const h = harness()
+  const w = historyWriter(h)
+  h.host(undefined); h.delta(0, 'unknown')
+  h.host('host-a'); h.delta(1, 'a')
+  h.host('host-b')
+  h.emit({ type: 'disconnected' })
+  await w.writer.flush()
+  expect(w.snapshots()).toMatchObject([{ serverId: 'host-a', conversationId: 'a', items: [{ text: '1' }] }])
+  h.stop(); await w.writer.stop()
+})
 
 it('delivers the first frame once without postponing, with each fold and sidecar intact', () => {
   const h = harness()

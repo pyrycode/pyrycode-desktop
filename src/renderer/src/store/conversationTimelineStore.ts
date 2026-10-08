@@ -714,7 +714,7 @@ export function createConversationTimelineStore(
           liveKeys: retainedRowKey === undefined ? withJoinKey(held.liveKeys, joinKey) : held.liveKeys
         })
         return { timelines: next }
-      }),
+      }, origin),
     // #1725 — a queue snapshot can only advance a held slice's open send window. It never creates a
     // slice, and an unchanged fold returns the state object so no subscriber wakes.
     markLocalSendQueued: (conversationId, queued) =>

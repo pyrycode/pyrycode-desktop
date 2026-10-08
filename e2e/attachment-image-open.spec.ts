@@ -249,6 +249,7 @@ test('the drawn thumbnail opens its picture in the OS viewer, by click and by ke
   // row sits --space-3 below the control's box, and the meta row --space-3 below that. A margin left
   // INSIDE the button would show up here as a picture whose box no longer starts where the control's
   // does, which assertion 3 above already covers, and as a doubled gap, which this one does.
+  await first.hover()
   const rowBox = (await first.locator('.bubble__file').boundingBox())!
   const metaBox = (await first.locator('.bubble__meta').boundingBox())!
   expect(rowBox.y - (controlBox.y + controlBox.height)).toBeCloseTo(RHYTHM_PX, 0)

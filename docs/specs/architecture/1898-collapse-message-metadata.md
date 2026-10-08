@@ -26,3 +26,7 @@ Read both design contexts and screenshots. At rest the bubble hugs content; hove
 - Fake-transport `turn-stats-hover.spec.ts`: time and stats reveal together from empty row space and keyboard focus; mouse leave retains focus reveal; removing both collapses the row and bubble again. User timestamps collapse too. Capture resting/revealed states at the normal viewport and 800px minimum.
 - Update existing geometry checks to reveal metadata before measuring it; change side-action invariants to require expansion during hover/focus and contraction afterward. Run all changed fake specs. No live specs change.
 - Final merge of main, pre-verify check and build.
+
+## Revisions
+
+2026-10-08: The 800px capture showed the full timestamp shrinking between date digits beside the unbroken stats text. Allow the details flex row to wrap whole items onto another line at constrained widths; preserve the existing timestamp and stats strings. The normal-width row remains on one line. Existing action-hover geometry checks now hold keyboard focus to reveal metadata before measuring, so they isolate action paint rather than asserting the superseded metadata reservation.

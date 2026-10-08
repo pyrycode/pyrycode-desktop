@@ -6,12 +6,7 @@ import type {
   TurnEndPayload
 } from '../src/shared/wire/types'
 
-// #1566 — a turn's tokens and time on hover of the meta row of its last assistant bubble. The unit tier
-// pins the format and which bubble carries the text; it cannot hover and has no stylesheet, so this
-// spec proves the two things only a running browser answers: the numbers are hidden and take no space
-// until the row is hovered, and a turn whose `turn_end` carries no numbers reveals nothing.
-//
-// SECRET HYGIENE (the sibling specs' rule): every literal is a non-secret display string.
+// Metadata has one row-level hover/focus reveal; hidden rows contribute no height or gap.
 
 const ROUND_TRIP_TIMEOUT_MS = 15_000
 const FIXED_TS = '2026-09-23T12:00:00.000Z'
@@ -64,7 +59,7 @@ const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
   ]
 }
 
-test("shows a turn's tokens and time only while its last assistant meta row is hovered", async ({
+test("reveals time and turn stats together on row hover or focus and collapses them at rest", async ({
   launchPairedApp
 }) => {
   const { page } = await launchPairedApp({ buildReplyFrames })
@@ -82,31 +77,62 @@ test("shows a turn's tokens and time only while its last assistant meta row is h
     timeout: ROUND_TRIP_TIMEOUT_MS
   })
 
-  // --- The turn that carries the numbers. Unhovered, the stats are in the DOM but drawn nowhere and
-  // the row keeps its size; hovered, they read exactly as the ticket's format. ---
-  const meta = assistantBubbles.nth(0).locator('.bubble__meta')
+  const bubble = assistantBubbles.nth(0)
+  const row = bubble.locator('..')
+  const meta = bubble.locator('.bubble__meta')
   const stats = meta.locator('.bubble__turn-stats')
-  await page.mouse.move(0, 0)
-  await expect(stats).toBeHidden()
-  const restingBox = await meta.boundingBox()
-  await meta.hover()
-  await expect(stats).toBeVisible()
-  await expect(stats).toHaveText(EXPECTED_STATS)
-  expect((await meta.boundingBox())?.height).toBe(restingBox?.height)
-  await page.mouse.move(0, 0)
-  await expect(stats).toBeHidden()
-  expect(await meta.boundingBox()).toEqual(restingBox)
+  const time = meta.locator('.bubble__meta-time')
+  for (const width of [1280, 800]) {
+    await page.setViewportSize({ width, height: 900 })
+    await bubble.scrollIntoViewIfNeeded()
+    await composer.focus()
+    await page.mouse.move(0, 0)
+    await expect(meta).toBeHidden()
+    expect(await meta.boundingBox()).toBeNull()
+    const restingBox = (await bubble.boundingBox())!
+    const contentHeight = await bubble.evaluate(el => {
+      const style = getComputedStyle(el)
+      return el.querySelector('.bubble__markdown')!.getBoundingClientRect().height +
+        parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
+    })
+    expect(restingBox.height).toBeCloseTo(contentHeight, 0)
+    await page.screenshot({ path: `/tmp/builder-1898/metadata-rest-${width}.png` })
+    // Hover empty row space, away from the bubble and metadata.
+    await row.hover({ position: { x: 2, y: 2 } })
+    await expect(time).toBeVisible()
+    await expect(stats).toBeVisible()
+    await expect(stats).toHaveText(EXPECTED_STATS)
+    expect((await bubble.boundingBox())!.height).toBeGreaterThan(restingBox.height)
+    await page.screenshot({ path: `/tmp/builder-1898/metadata-hover-${width}.png` })
+    await row.getByRole('button', { name: 'Copy message' }).focus()
+    await page.mouse.move(0, 0)
+    await expect(time).toBeVisible()
+    await expect(stats).toBeVisible()
+    await page.screenshot({ path: `/tmp/builder-1898/metadata-focus-${width}.png` })
+    // Removing focus while hovered keeps metadata visible; leaving both collapses it.
+    await row.hover({ position: { x: 2, y: 2 } })
+    await composer.focus()
+    await expect(stats).toBeVisible()
+    await page.mouse.move(0, 0)
+    await expect(meta).toBeHidden()
+    expect((await bubble.boundingBox())!.height).toBe(restingBox.height)
+  }
 
-  // --- The turn whose turn_end carried none: hovering reveals nothing. ---
-  const bareMeta = assistantBubbles.nth(1).locator('.bubble__meta')
-  // Timestamp visibility now changes on row hover; the meta's underlying text must stay unchanged.
-  const restingText = await bareMeta.textContent()
-  await expect(bareMeta.locator('.bubble__meta-time')).toBeHidden()
-  await bareMeta.hover()
-  await expect(bareMeta.locator('.bubble__turn-stats')).toHaveCount(0)
-  await expect(bareMeta.locator('.bubble__meta-time')).toBeVisible()
-  expect(await bareMeta.textContent()).toBe(restingText)
+  const user = page.locator('.bubble[data-thread-role="user"]').first()
+  await composer.focus()
+  await page.mouse.move(0, 0)
+  await expect(user.locator('.bubble__meta')).toBeHidden()
+  const userHeight = (await user.boundingBox())!.height
+  await user.locator('..').getByRole('button', { name: 'Reply to message' }).focus()
+  await expect(user.locator('.bubble__meta-time')).toBeVisible()
+  expect((await user.boundingBox())!.height).toBeGreaterThan(userHeight)
+  await composer.focus()
+  await expect(user.locator('.bubble__meta')).toBeHidden()
+  expect((await user.boundingBox())!.height).toBe(userHeight)
 
-  // --- User bubbles carry none either. ---
+  const bareBubble = assistantBubbles.nth(1)
+  await bareBubble.locator('..').hover({ position: { x: 2, y: 2 } })
+  await expect(bareBubble.locator('.bubble__turn-stats')).toHaveCount(0)
+  await expect(bareBubble.locator('.bubble__meta-time')).toBeVisible()
   await expect(page.locator('.bubble[data-thread-role="user"] .bubble__turn-stats')).toHaveCount(0)
 })

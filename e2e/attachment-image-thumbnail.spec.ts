@@ -271,6 +271,7 @@ test('an image attachment draws as its own bytes, sized live, with the file row 
   // --- 4. AC2: inside the bubble, below the text, above the meta row, --space-3 clear of each, at the
   // bubble's own horizontal padding, at --radius-xs. Only a real window can show that the margin actually
   // resolves through .bubble's padding box. ---
+  await first.hover()
   const firstBox = (await first.boundingBox())!
   const metaBox = (await first.locator('.bubble__meta').boundingBox())!
   const rowBox = (await first.locator('.bubble__file').boundingBox())!

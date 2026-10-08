@@ -244,7 +244,7 @@ const readStackMetrics = (bubble: Locator): Promise<StackMetrics> =>
       contentHeight:
         el.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom),
       metaHeight: meta.getBoundingClientRect().height,
-      metaMarginTop: parseFloat(metaStyle.marginTop),
+      metaMarginTop: metaStyle.display === 'none' ? 0 : parseFloat(metaStyle.marginTop),
       childWhiteSpaces: Array.from(el.children, (child) => getComputedStyle(child).whiteSpace)
     }
   })

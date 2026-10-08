@@ -1566,8 +1566,8 @@ const EMPTY_QUEUED: readonly QueuedItem[] = []
 // and "the control has an accessible name" is exactly the requirement that invites it.
 const COPY_MESSAGE_LABEL = 'Copy message'
 
-// Timestamp space remains reserved even without a stamp. Turn stats keep their independent
-// meta-row hover reveal; copy lives in MessageActions beside the bubble.
+// Time and stats share the row hover/focus reveal. Empty metadata contributes no space;
+// delivery status uses a separate row that remains readable at rest.
 function BubbleMeta({
   side,
   createdAt,
@@ -1576,12 +1576,13 @@ function BubbleMeta({
   side: 'user' | 'daemon'
   createdAt?: number
   turnStats?: string
-}): JSX.Element {
+}): JSX.Element | null {
+  if (createdAt === undefined && turnStats === undefined) return null
   return (
-    <div className={side === 'user' ? 'bubble__meta bubble__meta--user' : 'bubble__meta'}>
-      <span className="bubble__meta-time">
-        {createdAt === undefined ? null : formatMessageTime(createdAt)}
-      </span>
+    <div className={side === 'user' ? 'bubble__meta bubble__meta--user bubble__meta--details' : 'bubble__meta bubble__meta--details'}>
+      {createdAt !== undefined && <span className="bubble__meta-time">
+        {formatMessageTime(createdAt)}
+      </span>}
       {turnStats !== undefined && <span className="bubble__turn-stats">{turnStats}</span>}
     </div>
   )

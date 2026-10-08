@@ -11,17 +11,35 @@ Part of [Conversation timeline store](conversation-timeline-store.md); see that 
 ```ts
 export type TimelineStore = TimelineState & { dispatch: (event: ThreadEvent) => void }
 
-createTimelineStore(init?)   // vanilla createStore — one isolated instance per test (DI seam)
+createTimelineStore(init?)   // createPublishedTimelineStore — isolated instance per test
 timelineStore                 // app-wide singleton
 useTimelineStore(selector)    // narrow-slice React binding: useStore(timelineStore, selector)
 export { selectItems, selectPhase, selectStalled, selectApiRetry, selectCompacting, selectLocalSendPending } from './threadTimeline'   // re-exported, never redefined
 ```
 
-Mirrors `createSessionStore`'s DI-factory → singleton → hook → selectors structure (ADR 0004), but
-wraps a real reducer + `dispatch` — `set((s) => reduceTimeline(s, event))` — rather than
-`runConfigStore`'s single setter, because `ThreadEvent` is a real five-member union to reduce, not a
-"latest value wins" replace. No `observe?` param: the #134 diagnostics seam is session-only, and a
-speculative observer here would defend an unobserved need.
+Mirrors `createSessionStore`'s factory → singleton → hook → selectors structure
+(ADR 0004), with `dispatch` folding the pure `reduceTimeline`. Both timeline
+factories use `createPublishedTimelineStore` from `timelinePublication.ts`.
+Its synchronous `batchTimeline(run)` stages individual folds, lets subsequent
+actions read staged state and publishes once at the end; ordinary actions retain
+synchronous/no-op behavior. `onBeforeTimelineMutation` flushes pending deliveries
+before an unbatched action's injected read as well as its setter. Flushing only at
+the setter would let `beginLocalTimelineRead` replace a slice based on stale state.
+
+`subscribeTimelineWrites` observes each changed staged fold, carrying its explicit
+arrival host, and ordinary unbatched publications. It excludes the batch's final
+rendering publication. The mounted `createChatHistoryWriter` selects this channel;
+injected writers without it retain their ordinary subscription fallback. Observing
+only the final state loses intermediate equal-conversation-id host replacements;
+consulting the receipt then loses ownership because preload receipts last only
+through delivery. Explicit null cannot borrow a subsequent boundary's receipt.
+
+The writer's mounted `flushTimeline` hook settles accepted deliveries on the first
+`stop` while its per-fold observer is still attached. It then detaches observers,
+awaits pending removals and the existing storage drain, and resolves before preload
+acknowledges window-close shutdown. Repeated stops do not flush newly arriving
+work. Without the optional hook, injected writers keep their synchronous behavior.
+See [protected history](chat-history.md#protected-row-identities-and-saving).
 
 ## The translator + binding (`src/renderer/src/store/timelineBridge.ts`)
 
@@ -88,26 +106,30 @@ timelineWriteTarget(event: ThreadEvent, conversationId: string | null, getOpenCo
 // unreachable in production, and `default` gives it the same safe-drop `null` any other unattributed
 // owned arm gets.
 
-subscribeTimeline(onDaemonEvent, dispatch): () => void
-// onDaemonEvent(event => { const te = translateTimelineEvent(event); if (te) dispatch(te, timelineTargetFor(event)) })
-// dispatch: (event: ThreadEvent, conversationId: string | null) => void   — widened by ARITY (#756),
-// not a new parameter, so all 20+ existing call sites kept compiling and running unedited. Byte-identical
-// since #756 — #785's resolution lives one layer up, inside the injected `dispatch` callback.
-// returns the exact off handle (the subscribeRunConfig idiom) — pure, spy-testable, no React, no store
-// import, no fan-out of its own.
+subscribeTimeline(onDaemonEvent, dispatch, now?, onReconnect?, frames?): () => void
+// dispatch(event, conversationId, joinKey?, historyEntryId?, origin?)
+// Without frames: synchronous delivery and the original unsubscribe handle.
+// frames: scheduler { request, cancel }, batch(run), receiptHost(), beforeMutation(flush).
 
-useTimelineBridge(getOpenConversationId: () => string | null): void   // parameter added #785
-// useEffect(() => subscribeTimeline(window.pyry.onDaemonEvent, (e, conversationId) => {
-//   timelineStore.getState().dispatch(e)                                            // flat, unconditional, first
-//   const target = timelineWriteTarget(e, conversationId, getOpenConversationId)     // #785
-//   if (target !== null) conversationTimelineStore.getState().dispatchFor(target, e) // keyed, guarded on the RESOLVED target
-// }), [getOpenConversationId])
-// StrictMode double-mount (mount -> cleanup -> mount) nets exactly one live listener. Flat-first is not
-// cosmetic — it is what keeps the flat store's AC4 guarantee true even if the keyed write were to throw.
-// The dependency array names `getOpenConversationId` rather than staying `[]` (honest about the one new
-// dependency) — the caller (`App.tsx`) supplies a module-level constant, so this still nets one subscribe
-// for the app's lifetime; an inline arrow at the call site would resubscribe every render.
+useTimelineBridge(getOpenConversationId: () => string | null): void
+// Effect supplies Date.now, requestAnimationFrame/cancelAnimationFrame, receipt capture,
+// nested flat/keyed batchTimeline and both stores' mutation-boundary subscriptions.
+// Each delta writes flat first, then dispatchFor(target, event, joinKey, historyEntryId, origin).
+// getOpenConversationId is stable; StrictMode cleanup settles work and removes its listener.
 ```
+
+Production scheduling retains translated events individually, including arrival
+timestamps, sequence/parent identity, conversation, joins and durable ids. The
+FIFO schedules once on its first delta, flushes on the next runnable frame or
+before any non-delta event/action boundary, and never concatenates chunks before
+`dispatchFor`/`retainLiveDisplay`. Flush detaches work and invalidates canceled
+callback generations; cleanup settles once, then removes boundary hooks. See the
+[data flow](conversation-timeline-store-data-flow.md#data-flow) for ordering.
+
+Durable latest-entry/read-mark handling stays immediate. The screen's
+`useConversationActionAvailability` selects the derived host rather than the
+conversation list: unchanged availability must not redraw Timeline on each
+durable-id receipt before the timeline's frame publication.
 
 This is the deliberate mirror image of [`daemonEventBridge`](daemon-event-bridge.md): that bridge's
 `assertNever`-guarded switch returns `null` for these same six arms and owns the rest; this bridge
@@ -215,6 +237,35 @@ claude thought about private work, landed in an Error message on the spot. Addin
 keeps it out; folding a future arm into a bare `default` rather than a named case would reopen the same
 hole silently.
 
+### Frame scheduling verification
+
+`timelineFrames.test.ts` injects a deterministic scheduler to cover publication
+counts, first-frame delivery, per-event sidecars/grouping, interleaved hosts,
+history joins, ordering and stale callbacks. Writer cases restore detached durable
+fragments and stop with/without a saved prefix before releasing the frame.
+
+Controlled-clock browser tests must observe daemon delivery before releasing the
+next animation frame; waiting for rendered delta text while the clock is paused
+deadlocks. Keep the history writer's 200ms save buffered when testing removal.
+For close coverage, hold the frame throughout real BrowserWindow shutdown:
+releasing it first cannot detect loss of accepted deltas. Protected-snapshot
+seeding must follow the opening page's buffered save or shutdown can overwrite it.
+
+The mounted burst case counts rendered Timeline fibers from before twelve
+separate-task deliveries with increasing durable ids: zero commits before release,
+one on the first released callback. A root-only counter or a baseline taken after
+delivery would miss receipt-time thread redraws. Static server renders cannot
+prove scheduling or mounted commit counts.
+
+Recorded [verifier evidence](https://github.com/pyrycode/pyrycode-desktop/pull/1891#issuecomment-6055002490)
+at `38979936` (2026-10-08): gate 6 executed 371 Playwright tests, failed 0, skipped
+3. Each named test was present and passed: `the mounted bridge publishes a
+delta-only burst on its first frame with one React commit`; `remote and timeout
+resolutions use the Default pill, X and four seconds from display`; and `window
+close saves accepted deltas before their frame and reopening restores the full
+reply`. Close exercised Linux close/relaunch; native macOS close/activate remains
+unchecked. This acceptance requires fake transport; no live-Claude run was needed.
+
 ## The opening ask (#1259)
 
 `PairedShell` retains `createNewestHistoryDemand` across effect replay. Navigation
@@ -298,9 +349,9 @@ History has two independent kinds of evidence: `served` receipts describe which
 validated envelopes were received, while `display` contributions describe retained
 content and its chronological boundaries. Durable `HistoryEntry.id` orders history
 across pages and daemon restarts; it is neither a message id nor replay-ring
-`event_id`. The live lane has no durable entry id, so its conservative overlap join
-still uses (`type`, `ts`) and operator rows join by nonempty message id, never text.
-The daemon supplies the same timestamp to the log and live fan-out.
+`event_id`. Stamped live folds retain each durable entry id in display contributions.
+Legacy overlap still uses (`type`, `ts`); operator rows join by nonempty message id,
+never text. The daemon supplies the same timestamp to the log and live fan-out.
 
 Unresolvable or ambiguous live comparisons fail open. Malformed envelopes and
 malformed declared saved metadata reject admission instead. The
@@ -403,9 +454,9 @@ preserves insertion order) — oldest-first because the newest page overlaps the
 eviction should cost coverage on the entries least likely to still be in flight. `undefined` or an
 already-held key is a no-op, returning the same reference.
 
-`dispatchFor` gains an **optional trailing** third parameter, `joinKey?: string` — `subscribeTimeline`'s
-own #756/#1013 arity-widening idiom a third time: a required parameter cascades over every call site, an
-optional one over none. **The key is recorded only when the fold actually changed the timeline** — both
+`dispatchFor(id, event, joinKey?, historyEntryId?, origin?)` preserves synchronous
+callers while allowing deferred folds to supply captured host evidence.
+**The key is recorded only when the fold actually changed the timeline** — both
 of `dispatchFor`'s branches (the slice-exists update AND the slice-doesn't-exist create) compare their
 `reduceTimeline` result against what they started from before deciding to record. This is the load-bearing
 safety property: a live key exists only where the live lane actually changed what the operator sees, so an

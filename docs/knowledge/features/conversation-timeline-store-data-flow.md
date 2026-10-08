@@ -5,12 +5,49 @@ The diagram traces live delivery, reader demand and served-page admission.
 
 ## Data flow
 
+The mounted `useTimelineBridge` explicitly injects browser animation-frame
+scheduling into `subscribeTimeline`. Only `assistantDelta` deliveries wait: the
+first schedules the next runnable callback, and further arrivals join its FIFO
+without postponing it. That callback folds each event individually inside
+`batchTimeline` for both stores, publishing once per store for an uninterrupted
+delta burst. There is no millisecond deadline while the window is suspended.
+Without frame options, injected subscriptions and ordinary store actions remain
+synchronous; the subscription returns its original unsubscribe handle.
+
+Translation captures each delta's conversation, sequence, parent-tool identity,
+creation timestamp, live join key, durable history-entry id and receipt host during
+delivery. Deferred keyed writes pass that captured host to `dispatchFor`, including
+explicit null when no host was supplied. Neither a later receipt nor the selected
+host can supply ownership at flush time; switching the open conversation cannot
+redirect the queued text. Individual folds preserve grouping and history joins.
+
+Every non-delta daemon event flushes earlier deltas before translation or reconnect
+handling, even when the translator returns null. Both stores also flush before
+ordinary action reads and setters: tool/terminal/stall events, history admission,
+local echo, queue removal and reset/clear retain their order and immediate handling.
+These boundaries can add publications within the same frame. Flush detaches the
+FIFO and invalidates/cancels its callback before folding, so recursive boundaries
+and canceled callbacks cannot apply it again or settle a newer burst. Cleanup
+unsubscribes, settles accepted work once and removes boundary listeners; stale
+callbacks cannot mutate state after unsubscribe or restore cleared state.
+
+Rendering publication and received-state persistence use separate observations.
+The mounted history writer observes every staged fold with its captured host,
+rather than waiting for the final publication after the preload receipt expires.
+Window-close shutdown calls `flushTimeline` while that observer remains attached,
+then detaches and drains protected storage before preload acknowledges shutdown.
+See [store and binding internals](conversation-timeline-store-internals.md#the-store-srcrenderersrcstoretimelinestorets).
+
 ```
-daemon frame ─(#199/#214/#217/#229/#315/#492/#495 transport, snake→camel, conversation_id dropped)→
+daemon frame ─(#199/#214/#217/#229/#315/#492/#495 transport, snake→camel)→
    DaemonEvent{assistantDelta|turnEnd|turnState|toolUse|toolResult|stallDetected|apiRetry|compacting}
    → window.pyry.onDaemonEvent (preload channel)
-   → subscribeTimeline listener → translateTimelineEvent → ThreadEvent (or null → skip)
-   → timelineStore.dispatch → reduceTimeline → TimelineState
+   → subscribeTimeline listener → translateTimelineEvent + capture attribution/sidecars
+   → assistantDelta: FIFO until next animation frame or ordering boundary; other owned arms: immediate
+   → flat dispatch + keyed dispatchFor → individual reducer/display folds
+        → subscribeTimelineWrites: per-fold received-state capture for protected history
+        → batchTimeline: one rendering publication per store for the delta-only burst
+   → TimelineState / conversation-keyed slice
    → selectItems / selectPhase / selectStalled / selectApiRetry / selectCompacting
                                    (selectItems read by #203's Timeline view, now also carrying pending
                                    toolCall items from #217 with results resolved by #229; selectPhase

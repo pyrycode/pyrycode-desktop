@@ -50,6 +50,43 @@ it.each(['list replacement', 'deletion', 'pairing removal'])('routes the survivi
   expect(h.router.route('c', 'b')).toBeNull()
 })
 
+it('preserves the surviving read claim after ordinary routing cleans up an unpaired indexed host', () => {
+  const h = harness()
+  const a = h.connect('a')
+  h.connect('b')
+  emit(h.router, listEvent('a', 'c'))
+  emit(h.router, listEvent('b', 'c'))
+  h.disconnect('b')
+  expect(h.router.route('c')).toBeNull()
+  expect(h.router.route('c', 'a')).toBe(a)
+  expect(h.router.route('c', 'b')).toBeNull()
+  expect(h.router.route('c')).toBeNull()
+  expect(h.router.route('c', 'a')).toBe(a)
+  h.connect('b')
+  expect(h.router.route('c')).toBeNull()
+  expect(h.router.route('c', 'b')).toBeNull()
+  expect(h.router.route('c', 'a')).toBe(a)
+  emit(h.router, listEvent('a', 'c'))
+  expect(h.router.route('c')).toBe(a)
+})
+
+it('keeps surviving duplicate claims ambiguous after ordinary disconnected-index cleanup', () => {
+  const h = harness()
+  const a = h.connect('a')
+  h.connect('other')
+  h.connect('b')
+  emit(h.router, listEvent('a', 'c'))
+  emit(h.router, listEvent('other', 'c'))
+  emit(h.router, listEvent('b', 'c'))
+  h.disconnect('b')
+  expect(h.router.route('c')).toBeNull()
+  expect(h.router.route('c', 'a')).toBeNull()
+  expect(h.router.route('c', 'other')).toBeNull()
+  emit(h.router, listEvent('other'))
+  expect(h.router.route('c', 'a')).toBe(a)
+  expect(h.router.route('c', 'b')).toBeNull()
+})
+
 /** A stand-in connection. Identity is the whole contract — the router never calls a member. */
 interface FakeConnection {
   readonly server: string

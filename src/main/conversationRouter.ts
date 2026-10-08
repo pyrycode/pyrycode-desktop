@@ -117,7 +117,8 @@ export function createConversationRouter<C>(deps: ConversationRouterDeps<C>): Co
   // hostile or confused daemon. `events.ts`'s ServerOrigin docblock already rules this for the server
   // id ("if a consumer indexes by it, THE INDEX IS A Map"); it holds identically for the conversation
   // id, which arrives on the same wire.
-  const index = new Map<string, string>()
+  // A null slot keeps surviving claims inside the index cap without an ordinary routing owner.
+  const index = new Map<string, string | null>()
   // Latched, so a daemon spraying rows past the cap produces ONE record rather than one per row. The
   // two other diagnostics below are either renderer-driven at one line per refused command (bounded by
   // the rotating sink) or gated on an actual change; this one is the only daemon-driven-per-row site.
@@ -149,7 +150,7 @@ export function createConversationRouter<C>(deps: ConversationRouterDeps<C>): Co
       return
     }
     index.set(conversationId, serverId)
-    if (held !== undefined) {
+    if (held !== undefined && held !== null) {
       diagnosticLog?.event({ event: 'conversation-reindexed', code: 'reassigned' })
     }
   }
@@ -215,14 +216,21 @@ export function createConversationRouter<C>(deps: ConversationRouterDeps<C>): Co
         // Current claims can outlive the last-indexed host's list, deletion or pairing.
         serverId = observedHost
       }
-      const connection = connectionFor(serverId)
+      const connection = serverId === null ? null : connectionFor(serverId)
       if (connection === null) {
         // The refusal above is the boundary; this deletion is hygiene, applied at the one moment the
         // stale mapping could ever have mattered. There is deliberately NO reconcile-driven sweep:
         // `registry.reconcile()` is asynchronous, so a prune called beside it would run before the
         // registry had dropped anything and be a no-op on exactly the unpair path it was written for.
-        index.delete(conversationId)
-        claims.delete(conversationId)
+        const owners = claims.get(conversationId)
+        if (serverId !== null) owners?.delete(serverId)
+        if (owners !== undefined && owners.size > 0) {
+          // Only a fresh event restores ordinary routing; surviving observed hosts still use claims.
+          index.set(conversationId, null)
+        } else {
+          index.delete(conversationId)
+          claims.delete(conversationId)
+        }
         diagnosticLog?.event({ event: 'conversation-route-refused', code: 'server-not-connected' })
         return null
       }

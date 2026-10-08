@@ -246,8 +246,10 @@ permission hidden-input isolation and restoration of every card's drafts.
 Scroll assertions wait two animation frames after positioning so the scroll event has updated
 `following`. The edit case uses a visible option and a real label click while above the bottom;
 focusing an offscreen radio natively scrolls it into view and would confuse focus movement with
-content growth. See [scroll pin](conversation-shell-scroll-pin.md#inline-question-growth), including
-the open observer-retention finding carried forward from review.
+content growth. See [scroll pin](conversation-shell-scroll-pin.md#inline-question-growth) for
+membership-driven release of detached questionnaire wrappers, which resolves the earlier
+observer-retention finding, and [bounded hook-work evidence](conversation-shell-scroll-pin.md#bounded-anchor-and-growth-verification)
+for counts that exclude test-oracle geometry and read observation.
 
 The same verifier compared freshly fetched
 [Figma 756:8626](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG/Pyrycode-Client?node-id=756-8626)

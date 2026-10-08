@@ -580,6 +580,8 @@ export interface DaemonConnection {
    * optimistic local value. NOTHING RETRIES on any path. NEVER throws out of the module (parity #490).
    */
   setSystemPrompt(payload: SetSystemPromptPayload): void
+  /** Publish an observed durable tail; only a received daemon mark acknowledges it. Never throws. */
+  markConversationRead?(payload: { conversation_id: string; up_to: number }): void
   /**
    * Encrypt a `set_conversation_muted` envelope onto the live session — mutes or unmutes one
    * conversation's notifications on its host (#1595). Exactly one content-free conversationMuteResult
@@ -786,6 +788,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // one — is the only binding by that name in the factory, and the unbound sink can be reached only
   // by naming `deps.sink` again, which nothing below does.
   const sink = bindServerOrigin(deps.sink, deps.serverId)
+  const connectionSink = sink
   const now = deps.now ?? ((): string => new Date().toISOString())
   const createDriver = deps.createDriver ?? createNoiseRelayDriver
   // The main-side answer_token mint (#236). Default: crypto.randomUUID (Node CSPRNG). A DI seam like
@@ -1287,6 +1290,12 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
           return
         }
         if (inbound === null) return // AC5: a well-formed envelope of another type is ignored.
+        const historyEntryId = 'historyEntryId' in inbound ? inbound.historyEntryId : undefined
+        const sink: DaemonEventSink = {
+          isDestroyed: () => connectionSink.isDestroyed(),
+          webContents: { send: (channel, typed) => connectionSink.webContents.send(channel,
+            historyEntryId === undefined ? typed : { ...typed, historyEntryId }) }
+        }
         // Route on the narrowed kind. Messages forward their envelope time for receipt display; the three
         // debug-bundle kinds (#116) feed the armed reassembler (a no-op when none is in flight —
         // optional chaining, or the settled reassembler's own inert guard — preserving the prior
@@ -3827,6 +3836,18 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     emitDaemonEvent(sink, { type: 'conversationMuteResult', attemptId, outcome })
   }
 
+  function markConversationRead(payload: { conversation_id: string; up_to: number }): void {
+    if (driver === null || !authenticated || !Number.isSafeInteger(payload.up_to) || payload.up_to < 0) return
+    try {
+      const bytes = encodeEnvelope({ id: nextEnvelopeId++, type: 'mark_conversation_read', ts: now(),
+        payload: { conversation_id: payload.conversation_id, up_to: payload.up_to } })
+      driver.sendMessage(bytes)
+      deps.diagnosticLog?.event({ event: 'conversation-read-sent' })
+    } catch {
+      deps.diagnosticLog?.event({ event: 'conversation-read-failed', code: 'local-send' })
+    }
+  }
+
   function setConversationMuted(payload: SetConversationMutedPayload, attemptId: string): void {
     if (driver === null) {
       conversationMuteResult(attemptId, 'rejected')
@@ -4415,6 +4436,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     changeWorkspace,
     renameWorkspace,
     setSystemPrompt,
+    markConversationRead,
     setConversationMuted,
     setSessionSettings,
     answerModal,

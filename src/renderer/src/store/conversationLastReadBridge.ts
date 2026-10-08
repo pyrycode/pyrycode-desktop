@@ -1,3 +1,4 @@
+import { useReadPublication } from './conversationReadPublisher'
 // The renderer data path feeding the per-conversation last-read store (#777, split from #677): it keeps
 // ONE legacy invariant true — THE OPEN CONVERSATION'S LOCAL MARK EQUALS ITS OWN HELD ITEM COUNT — from two restore
 // points. `activateConversation` restores it when a conversation is opened; the store subscription below
@@ -209,6 +210,7 @@ export const conversationLastReadDeps: ConversationLastReadDeps = {
  * StrictMode double-mount runs mount → cleanup → mount and nets exactly one listener.
  */
 export function useConversationLastRead(): void {
+  useReadPublication()
   useEffect(
     () =>
       subscribeConversationLastRead(

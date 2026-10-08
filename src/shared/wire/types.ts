@@ -540,6 +540,8 @@ export interface Envelope {
   // here would invite a caller to write null, which JSON.stringify would serialize.
   in_reply_to?: number
   event_id?: number
+  /** Per-conversation durable history identity; never a connection or replay counter. */
+  history_entry_id?: number
 }
 
 export type WireRole = 'user' | 'assistant'

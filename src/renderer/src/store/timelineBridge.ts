@@ -1,3 +1,4 @@
+import { conversationListStore } from './conversationListStore'
 // The renderer translation half feeding the conversation-timeline store: it turns the two v2
 // interactive-stream daemon events (#199) into the matching `ThreadEvent`s (#121) and dispatches
 // them into the app-singleton `timelineStore` the render slice (#203) reads. `translateTimelineEvent`
@@ -758,7 +759,7 @@ export function timelineWriteTarget(
  */
 export function subscribeTimeline(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
-  dispatch: (event: ThreadEvent, conversationId: string | null, joinKey?: string) => void,
+  dispatch: (event: ThreadEvent, conversationId: string | null, joinKey?: string, historyEntryId?: number) => void,
   now?: () => number,
   onReconnect?: (serverId: string) => void
 ): () => void {
@@ -771,7 +772,11 @@ export function subscribeTimeline(
     // #1225 — the ARITY widens a third time, for #756's own arithmetic: a function of arity 2 is
     // assignable to a parameter typed at arity 3, so the twenty existing call sites keep compiling.
     const conversationId = timelineTargetFor(event)
-    dispatch(threadEvent, conversationId, joinKeyToRecord(event, conversationId))
+    if (conversationId !== null && 'serverId' in event && typeof event.serverId === 'string' && event.historyEntryId !== undefined) {
+      conversationListStore.getState().advanceLatestEntry(event.serverId, conversationId, event.historyEntryId)
+    }
+    if (event.historyEntryId === undefined) dispatch(threadEvent, conversationId, joinKeyToRecord(event, conversationId))
+    else dispatch(threadEvent, conversationId, joinKeyToRecord(event, conversationId), event.historyEntryId)
   })
 }
 
@@ -839,7 +844,7 @@ export function useTimelineBridge(getOpenConversationId: () => string | null): v
     () =>
       subscribeTimeline(
         window.pyry.onDaemonEvent,
-        (event, conversationId, joinKey) => {
+        (event, conversationId, joinKey, historyEntryId) => {
           if (event.type !== 'messageDelivery' || (conversationId === getOpenConversationId() &&
               (event.serverId === null || conversationTimelineStore.getState().timelines.get(conversationId ?? '')?.serverId === event.serverId))) {
             timelineStore.getState().dispatch(event)
@@ -850,7 +855,7 @@ export function useTimelineBridge(getOpenConversationId: () => string | null): v
             // decline to record it when the fold turns out to change nothing. `subscribeTimeline` has
             // already withheld it for an event whose slice was resolved from the screen rather than
             // from the event; nothing here re-derives that.
-            conversationTimelineStore.getState().dispatchFor(target, event, joinKey)
+            conversationTimelineStore.getState().dispatchFor(target, event, joinKey, historyEntryId)
           }
         },
         Date.now,

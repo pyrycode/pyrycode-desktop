@@ -83,7 +83,7 @@ export interface ConversationRouter<C> {
    * Takes `string | undefined` so `requestSessionSettings`' optional id needs no separate branch at
    * the call site: an absent id is not a known conversation, so it refuses on the ordinary path.
    */
-  route(conversationId: string | undefined): C | null
+  route(conversationId: string | undefined, observedHost?: string): C | null
 }
 
 /**
@@ -136,6 +136,7 @@ export function createConversationRouter<C>(deps: ConversationRouterDeps<C>): Co
    * to claim another host's conversation (it would still need that host's unguessable UUIDv4), so it
    * leaves a trace in the bundle instead of none.
    */
+  const claims = new Map<string, Set<string>>()
   const learn = (conversationId: string, serverId: string): void => {
     if (conversationId.length === 0) return
     const held = index.get(conversationId)
@@ -158,8 +159,22 @@ export function createConversationRouter<C>(deps: ConversationRouterDeps<C>): Co
     const serverId = originOf(event)
     if (serverId === null) return
     if (event.type === 'conversationsReceived') {
-      for (const conversation of event.conversations) learn(conversation.id, serverId)
+      for (const [id, owners] of claims) {
+        owners.delete(serverId)
+        if (owners.size === 0) claims.delete(id)
+      }
+      for (const conversation of event.conversations) {
+        learn(conversation.id, serverId)
+        if (!index.has(conversation.id)) continue
+        const owners = claims.get(conversation.id) ?? new Set<string>()
+        owners.add(serverId); claims.set(conversation.id, owners)
+      }
       return
+    }
+    if (event.type === 'conversationDeleted') {
+      const owners = claims.get(event.id)
+      owners?.delete(serverId)
+      if (owners?.size === 0) claims.delete(event.id)
     }
     if (event.type === 'conversationCreated') learn(event.conversation.id, serverId)
   }
@@ -183,13 +198,20 @@ export function createConversationRouter<C>(deps: ConversationRouterDeps<C>): Co
         }
       }
     },
-    route(conversationId: string | undefined): C | null {
+    route(conversationId: string | undefined, observedHost?: string): C | null {
       const serverId = conversationId === undefined ? undefined : index.get(conversationId)
       // Both halves in one condition, so `conversationId` narrows to `string` below and the delete
       // needs no cast — an absent id and an unplaceable one are the same refusal either way.
       if (conversationId === undefined || serverId === undefined) {
         diagnosticLog?.event({ event: 'conversation-route-refused', code: 'unknown-conversation' })
         return null
+      }
+      if (observedHost !== undefined) {
+        const owners = [...(claims.get(conversationId) ?? [])].filter(host => connectionFor(host) !== null)
+        if (serverId !== observedHost || owners.length !== 1 || owners[0] !== observedHost) {
+          diagnosticLog?.event({ event: 'conversation-route-refused', code: 'observed-host-mismatch' })
+          return null
+        }
       }
       const connection = connectionFor(serverId)
       if (connection === null) {
@@ -198,6 +220,7 @@ export function createConversationRouter<C>(deps: ConversationRouterDeps<C>): Co
         // `registry.reconcile()` is asynchronous, so a prune called beside it would run before the
         // registry had dropped anything and be a no-op on exactly the unpair path it was written for.
         index.delete(conversationId)
+        claims.delete(conversationId)
         diagnosticLog?.event({ event: 'conversation-route-refused', code: 'server-not-connected' })
         return null
       }

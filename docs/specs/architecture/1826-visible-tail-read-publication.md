@@ -54,6 +54,10 @@ Malformed durable IDs fail closed at decode/IPC boundaries. Missing identity or 
 
 None. A separate observer/publisher is simpler than teaching the legacy count bridge viewport authority or putting pending commands into protected history.
 
+## Revisions
+
+2026-10-08: Existing `suppressed` validation permits specific page-source associations, and a row reference alone loses fragment order when history fills a missing live delta (reproduced by the new partial-history test). Retain each live entry's actual typed `row` or `patch` operation with its surviving numeric key, using the existing validated protected schema. Delta operations contain their own fragment, never the accumulated bubble. State-only evidence stays transient. Host-required routing and connection methods remain optional for older callers/doubles. Mounted focus gating injects only the focus oracle because Playwright's original CDP session forces focus; viewport, scroll and reader geometry remain real.
+
 ## Security review
 
 **Verdict:** PASS

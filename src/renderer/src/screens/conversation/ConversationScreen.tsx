@@ -1,3 +1,4 @@
+import { useReadObservation } from '../../store/conversationReadPublisher'
 import { historyGapId } from '@shared/chatHistory'
 import { agentSwitchStore, type AgentSwitchStatus } from '../../store/agentSwitchStore'
 import { useReplySuggestionStore, selectReplySuggestion, visibleReplySuggestion } from '../../store/replySuggestionStore'
@@ -495,6 +496,7 @@ export function ConversationScreen({
   // attachments and its upload listener are mount-local, so an early return here would silently drop them
   // on a same-conversation round trip through the reader. Hiding also keeps the thread's scroll position.
   const readerOpen = reader.state.type !== 'closed'
+  useReadObservation(openConversationId, readerOpen, paneRef, scrollPin.ref)
   return (
     <div className="conversation">
       {reader.state.type !== 'closed' && (
@@ -1397,7 +1399,7 @@ export function Timeline({
     if (row.item.kind !== 'toolCall') {
       const rowKey = row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`
       const content = <TimelineRow key={rowKey}
-        item={row.item} delivery={localEchoes?.find(e => e.rowKey === rowKeys?.[row.itemIndex])?.delivery} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(row.itemIndex)}
+        item={row.item} readRowKey={typeof rowKey === 'number' ? rowKey : undefined} delivery={localEchoes?.find(e => e.rowKey === rowKeys?.[row.itemIndex])?.delivery} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(row.itemIndex)}
         midTurnInput={midTurnInput} onSendQueuedNow={onSendQueuedNow}
         onOpenMarkdownPath={onOpenMarkdownPath} agent={agent}
         onReply={onReply}
@@ -1736,6 +1738,7 @@ export function stoppedTurnText(item: {
 // whole visual difference is that arm's fork.
 function TimelineRow({
   item,
+  readRowKey,
   inProgress,
   queued = null,
   delivery,
@@ -1748,6 +1751,7 @@ function TimelineRow({
   onReply
 }: {
   item: ThreadItem
+  readRowKey?: number
   inProgress: boolean
   queued?: QueuedRowHandle | null
   delivery?: 'waiting' | 'not-sent'
@@ -1767,7 +1771,7 @@ function TimelineRow({
     case 'assistantText': {
       // Streaming owns only derived presentation; settlement always renders the original source.
       return (
-        <div className="message-row message-row--daemon message-row--text">
+        <div className="message-row message-row--daemon message-row--text" data-read-row={readRowKey}>
           <div className="bubble bubble--daemon" data-thread-role="assistant">
             <div className="bubble__markdown">
               {inProgress
@@ -1860,6 +1864,7 @@ function TimelineRow({
       // draws none because the wire item carries none — a difference in what is known, not in treatment.
       return (
         <div
+          data-read-row={readRowKey}
           className={
             queued
               ? 'message-row message-row--user message-row--queued message-row--text'

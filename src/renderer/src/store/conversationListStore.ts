@@ -77,6 +77,7 @@ export type ConversationListStore = ConversationListState & {
     conversations: readonly ConversationSummary[],
     serverId?: string | null
   ) => void
+  advanceLatestEntry: (serverId: string, conversationId: string, latest: number) => void
   advanceReadMark: (serverId: string, conversationId: string, readUpTo: number) => void
   /**
    * The pairing-boundary drop (#1086, AC5) — NULLARY BY DESIGN, the `clearAllModelLists` /
@@ -139,12 +140,14 @@ function stampRows(
   serverId: ConversationListOrigin,
   held: readonly ServerConversationSummary[] = []
 ): readonly ServerConversationSummary[] {
-  const known = new Map(held.map((row) => [row.id, row.read_up_to]))
+  const known = new Map(held.map((row) => [row.id, row]))
   return rows.map((row) => {
-    const read = known.get(row.id)
+    const prior = known.get(row.id)
+    const read = prior?.read_up_to
+    const latest = prior?.latest_entry_id
     return { ...row, ...(read === undefined ? {} : {
       read_up_to: row.read_up_to === undefined ? read : Math.max(read, row.read_up_to)
-    }), serverId }
+    }), ...(latest === undefined ? {} : { latest_entry_id: Math.max(latest, row.latest_entry_id ?? latest) }), serverId }
   })
 }
 
@@ -246,6 +249,16 @@ export function createConversationListStore(
         byServer.set(serverId, stampRows(conversations, serverId, s.byServer.get(serverId)))
         return { conversations: flattenByServer(byServer), byServer, localListReads }
       }),
+    advanceLatestEntry: (serverId, conversationId, latest) => {
+      if (!Number.isSafeInteger(latest) || latest < 0) return
+      set(s => {
+        const rows = s.byServer.get(serverId)
+        const row = rows?.find(r => r.id === conversationId)
+        if (rows === undefined || row === undefined || (row.latest_entry_id !== undefined && latest <= row.latest_entry_id)) return s
+        const byServer = new Map(s.byServer).set(serverId, rows.map(r => r === row ? { ...r, latest_entry_id: latest } : r))
+        return { byServer, conversations: flattenByServer(byServer) }
+      })
+    },
     advanceReadMark: (serverId, conversationId, readUpTo) => {
       if (typeof serverId !== 'string' || serverId.length === 0 ||
           !Number.isSafeInteger(readUpTo) || readUpTo < 0) return

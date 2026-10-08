@@ -12,6 +12,26 @@ import { DAEMON_EVENT_CHANNEL, type DaemonEvent, type StampedDaemonEvent } from 
 import type { ConversationSummary } from '../shared/wire/types'
 import type { DiagnosticEvent } from './diagnosticLog'
 
+it('routes an observed read only to its unique original host', () => {
+  const connections = new Map([['a', { server: 'a' }], ['b', { server: 'b' }]])
+  const router = createConversationRouter({ connectionFor: host => connections.get(host) ?? null })
+  const sink = router.observe(createSinkFake().handle)
+  sink.webContents.send(DAEMON_EVENT_CHANNEL, listEvent('a', 'c'))
+  expect(router.route('c', 'a')).toBe(connections.get('a'))
+  expect(router.route('c', 'b')).toBeNull()
+  sink.webContents.send(DAEMON_EVENT_CHANNEL, listEvent('b', 'c'))
+  expect(router.route('c', 'a')).toBeNull()
+  expect(router.route('c', 'b')).toBeNull()
+  sink.webContents.send(DAEMON_EVENT_CHANNEL, listEvent('a'))
+  expect(router.route('c', 'a')).toBeNull()
+  expect(router.route('c', 'b')).toBe(connections.get('b'))
+  const deleted: StampedDaemonEvent = { type: 'conversationDeleted', id: 'c', serverId: 'b' }
+  sink.webContents.send(DAEMON_EVENT_CHANNEL, deleted)
+  expect(router.route('c', 'b')).toBeNull()
+  connections.delete('b')
+  expect(router.route('c', 'b')).toBeNull()
+})
+
 /** A stand-in connection. Identity is the whole contract — the router never calls a member. */
 interface FakeConnection {
   readonly server: string

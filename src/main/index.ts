@@ -1082,6 +1082,9 @@ app.whenReady().then(() => {
         // return silently.
         router.route(command.payload.conversation_id)?.setSystemPrompt(command.payload)
         return
+      case 'markConversationRead':
+        router.route(command.payload.conversation_id, command.serverId)?.markConversationRead?.(command.payload)
+        return
       case 'setConversationMuted': {
         // ROUTED BY CONVERSATION (#1595), like setSystemPrompt: the frame goes to the one host that
         // claimed the id or to no wire at all. An unclaimed id still settles its attempt as rejected,

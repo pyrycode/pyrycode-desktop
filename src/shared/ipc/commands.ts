@@ -376,6 +376,7 @@ export type RendererCommand =
   // Routed by conversation (#1595). The client-only attemptId is required and correlates exactly one
   // content-free conversationMuteResult; it never reaches the wire.
   | { type: 'setConversationMuted'; payload: SetConversationMutedPayload; attemptId: string }
+  | { type: 'markConversationRead'; serverId: string; payload: { conversation_id: string; up_to: number } }
   | { type: 'createWorkspaceFolder'; payload: CreateWorkspaceFolderPayload; serverId?: string }
   | { type: 'renameWorkspace'; payload: RenameWorkspacePayload; serverId?: string; attemptId?: string }
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
@@ -595,6 +596,14 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       // Payload-required (#1249) — the neighbours' idiom verbatim, including why the
       // explicitly-`undefined` case is refused by the payload guard rather than by the `in` check.
       return 'payload' in value && isSetSystemPromptPayload(value.payload)
+    case 'markConversationRead': {
+      if (!('serverId' in value) || typeof value.serverId !== 'string' || value.serverId.length === 0 ||
+          !('payload' in value) || typeof value.payload !== 'object' || value.payload === null || Array.isArray(value.payload)) return false
+      const payload = value.payload
+      return Object.keys(payload).length === 2 && 'conversation_id' in payload &&
+        typeof payload.conversation_id === 'string' && payload.conversation_id.length > 0 &&
+        'up_to' in payload && typeof payload.up_to === 'number' && Number.isSafeInteger(payload.up_to) && payload.up_to >= 0
+    }
     case 'setConversationMuted':
       return 'payload' in value && isSetConversationMutedPayload(value.payload) &&
         'attemptId' in value && typeof value.attemptId === 'string' &&

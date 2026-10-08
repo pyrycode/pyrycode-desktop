@@ -40,8 +40,11 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   precede observation. Validated live/replayed `history_entry_id` and independently admitted history
   contributions supply durable IDs; connection/replay IDs, timestamps alone, row counts, optimistic
   echoes, served coverage and list `latest_entry_id` do not. Missing/ambiguous identity cannot advance
-  a target, and ID-less replay triggers no identity-recovery fetch. See
-  [snapshot identity](chat-history.md#retained-display-contributions).
+  a target, and ID-less replay triggers no identity-recovery fetch. An independently admitted page
+  can bind its own durable contribution to that same displayed content; this does not recover or
+  assign the replay frame's identity. Ordinary opening/reconnect timeline demand remains owned by
+  [the history bridge](conversation-timeline-store-internals.md#the-opening-ask-1259), independently
+  of read publication. See [snapshot identity](chat-history.md#retained-display-contributions).
 - **Commands are bound to the observed host.** `markConversationRead` requires a nonempty `serverId`
   and exactly `{ conversation_id, up_to }`, with a nonempty conversation ID and non-negative safe
   integer target, including zero. Main validates IPC, resolves the sole current connected claim and
@@ -216,6 +219,23 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   [Unpair channel § The two renderer callers](unpair-channel.md#the-two-renderer-callers) and [Paired
   shell routing](paired-shell-routing.md) for both call sites (the composer's Re-pair control and the
   Settings row's per-server Unpair).
+
+## Testing
+
+Keep connection, replay and durable IDs distinct in fixtures: equal IDs would let a mistaken identity
+source pass. `visible-tail-read.spec.ts` uses connection `900` and replay `700` while asserting actual
+outbound durable targets. Its ID-less replay case checks both no read command and no additional
+history request; the existing opening request's independently admitted page then supplies target `30`
+without duplicating the bubble. `history-on-open.spec.ts` separately pins ordinary newest-page demand
+from #1815. Publisher tests cover zero, retained/folded contributions and ID-less changes; last-read
+bridge/store tests pin daemon-backed stamp suppression and legacy count persistence/clears.
+
+The [#1844 verifier confirmation](https://github.com/pyrycode/pyrycode-desktop/pull/1884#issuecomment-6050590586)
+at `ca1529d7` on 2026-10-08 records 9,587 unit tests executed/passed, 0 failed, 3 skipped, and
+357 fake-transport tests executed/passed, 0 failed, 4 skipped. It explicitly confirms every case in
+`visible-tail-read.spec.ts` (6 executed/passed, 0 failed, 0 skipped) and `history-on-open.spec.ts`
+(5 executed/passed, 0 failed, 0 skipped) was present and passed without retries. No live-Claude result
+is claimed; the skips supply no acceptance evidence.
 
 ## Edge cases and limitations
 

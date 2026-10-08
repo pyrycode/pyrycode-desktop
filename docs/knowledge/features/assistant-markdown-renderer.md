@@ -19,12 +19,23 @@ Takes untrusted assistant source from `TimelineRow` and turns markdown syntax in
 One file: `src/renderer/src/screens/conversation/AssistantMarkdown.tsx`.
 
 ```tsx
-export function AssistantMarkdown({ text, onOpenMarkdownPath, allowElement }: {
+export const AssistantMarkdown = memo(function AssistantMarkdown({ text, onOpenMarkdownPath, allowElement }: {
   text: string
   onOpenMarkdownPath?: (path: string) => void
   allowElement?: AllowElement
-}): JSX.Element
+}): JSX.Element {
+  // Existing components table and Markdown render.
+})
 ```
+
+Ordinary shallow `React.memo` compares `text`, `onOpenMarkdownPath` and `allowElement`.
+Equal inputs skip component execution and synchronous parsing, including when the
+owning row changes metadata or action availability. Changed callbacks or predicates
+must rerender: suppressing them would retain stale reader behavior or streaming
+presentation. The stable reader callback and
+[settled row boundary](conversation-shell-timeline-render.md#settled-row-reuse)
+allow unchanged settled replies to reuse their render on new deltas. Memoization
+changes no security rule below.
 
 Rendering parses `text` synchronously without store access or effect hooks. The module-private `CodeBlock` holds a local DOM ref for user-activated copying; `AssistantMarkdown` emits no wrapper element of its own (`react-markdown` v10 emits block elements directly; the container and its class are [#609](../codebase/609.md)'s `.bubble__markdown`, a flex column with `gap: var(--space-2)` for Figma `16:43`'s 8px block rhythm). Built on `react-markdown@10.1.0` with:
 
@@ -121,8 +132,10 @@ Either `turn_end` or a following tool row unmounts the helper and renders origin
 `item.text` through full `AssistantMarkdown`. Without pending inline/header syntax,
 streaming content matches settlement apart from whitespace between top-level blocks
 (cursor and metadata excluded). Unfinished syntax may correct: final `**bold` becomes
-literal `**bold`. The historical #607/#609 plain-tail policy and memoization decline
-are superseded by [#1751](../../specs/architecture/1751-progressive-assistant-markdown.md).
+literal `**bold`. [#1751](../../specs/architecture/1751-progressive-assistant-markdown.md)
+supersedes the historical #607/#609 plain-tail policy;
+[settled row reuse](../../specs/architecture/1886-settled-row-reuse.md) supersedes
+the earlier memoization decline.
 
 ## Edge cases and limitations
 
@@ -220,6 +233,23 @@ preserve streaming presentation” and “progressive presentation, parser/rende
 and raw-source settlement”, were present and passed (2 executed, 0 failed/skipped).
 All 13 assistant-whitespace tests executed and passed (0 failed/skipped). No live
 Claude or real-daemon evidence is required for this renderer behavior.
+
+The settled-row regression also counts `AssistantMarkdown` separately from
+`TimelineRow`, `ToolRow`, `StreamingAssistantMarkdown` and `parseMarkdown`.
+Establish positive counts before measuring skips and observe each delta before
+delivering the next; batching can otherwise manufacture apparent reuse.
+`StreamingAssistantMarkdown` may execute again for its own partition-state update,
+so its positive counter must remain separate from the parent row count. See
+[row reuse verification](conversation-shell-timeline-render.md#row-reuse-verification)
+for the mounted regression and baseline/fixed evidence.
+
+At `c0268369`, the 2026-10-08
+[verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1889#issuecomment-6053401984)
+and dispatcher gate report record 358 fake-transport tests executed/passed, 0 failed
+and 4 skipped. Both “settled rows skip deltas and unrelated group toggles while the
+active reply renders” and “progressive presentation, parser/render reuse and
+raw-source settlement” were present and passed. This is counted mounted evidence
+for settled reuse alongside the existing progressive proof.
 
 ## Related
 

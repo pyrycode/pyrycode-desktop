@@ -6,6 +6,8 @@ import { useSessionFactsStore, selectSessionFactsFor } from '../../store/session
 import { McpServersSection, boundMcpText, requestMcpStatus } from './McpServersSection'
 import { mcpStatusStore, selectUnacknowledgedMcpFailureFor, useMcpStatusStore } from '../../store/mcpStatusStore'
 import {
+  memo,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -305,14 +307,14 @@ export function ConversationScreen({
     return () => dispatch({ type: 'paneChanged', pane: null })
   }, [selectedHost, openConversationId])
   const [replyFocusRequest, setReplyFocusRequest] = useState(0)
-  const replyToMessage = (role: 'user' | 'assistant', text: string): void => {
+  const replyToMessage = useCallback((role: 'user' | 'assistant', text: string): void => {
     if (selectedHost === null || openConversationId === null) return
     const drafts = composerDraftStore.getState()
     drafts.setDraft(selectedHost, openConversationId,
       appendMessageQuote(selectDraft(drafts, selectedHost, openConversationId), role, text))
     setReplyFocusRequest(request => request + 1)
     window.pyry.sendDiagnostic({ event: 'message-reply-appended', code: role })
-  }
+  }, [selectedHost, openConversationId])
   const offline = useSessionStore(s => selectedHost !== null && s.statuses.get(selectedHost)?.type !== 'connected')
   const heldSlice = useConversationTimelineStore(s => openConversationId === null ? undefined : s.timelines.get(openConversationId))
   const ownSlice = heldSlice?.serverId === selectedHost ? heldSlice : undefined
@@ -435,6 +437,19 @@ export function ConversationScreen({
   // deleted `QueuedBacklog` was until #1214 folded its rows into it).
   const dispatchTimeline = useTimelineStore((s) => s.dispatch)
   const dispatchTimelineFor = useConversationTimelineStore((s) => s.dispatchFor)
+  const onDropQueued = useCallback((queuedMsgId: number, messageId: string | undefined): void => {
+    if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
+    dropQueuedMessage(openConversationId, queuedMsgId, messageId, {
+      diagnose: window.pyry.sendDiagnostic,
+      sendCommand: window.pyry.sendCommand,
+      dispatch: dispatchTimeline,
+      dispatchFor: dispatchTimelineFor
+    })
+  }, [openConversationId, selectedHost, dispatchTimeline, dispatchTimelineFor])
+  const onSendQueuedNow = useCallback((queuedMsgId: number): void => {
+    if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
+    sendQueuedNow(openConversationId, queuedMsgId, { sendCommand: window.pyry.sendCommand })
+  }, [openConversationId, selectedHost])
   // #177: the Run configuration sheet's open/closed state — a single-value screen-local boolean →
   // useState, never the store (ADR 0006). It resets to closed on remount for free, so the sheet
   // never reopens itself across a screen remount. #962 retired the StatusRow trigger that used to sit
@@ -593,22 +608,11 @@ export function ConversationScreen({
         saved={offline || ownSlice?.localRead !== undefined}
         onOpenMarkdownPath={reader.open}
         agent={openAgent}
-        onDropQueued={actionsAvailable ? (queuedMsgId, messageId) => {
-          if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
-          dropQueuedMessage(openConversationId, queuedMsgId, messageId, {
-            diagnose: window.pyry.sendDiagnostic,
-            sendCommand: window.pyry.sendCommand,
-            dispatch: dispatchTimeline,
-            dispatchFor: dispatchTimelineFor
-          })
-        } : undefined}
+        onDropQueued={actionsAvailable ? onDropQueued : undefined}
         midTurnInput={midTurnInput}
         // #1726: the drop closure's gate and guard, verbatim, so Send now is disabled exactly when the drop
         // control is. No timeline write: the message is being delivered, so its echo stays true.
-        onSendQueuedNow={actionsAvailable ? (queuedMsgId) => {
-          if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
-          sendQueuedNow(openConversationId, queuedMsgId, { sendCommand: window.pyry.sendCommand })
-        } : undefined}
+        onSendQueuedNow={actionsAvailable ? onSendQueuedNow : undefined}
       />}
       <TopOverlayControl onRepairHost={onRepairHost} />
       {/* #581: the background-task panel, reading the roster store itself, so only the conversation id goes
@@ -1283,6 +1287,14 @@ export function Timeline({
   // #1872: the open main thread bubble streams even when a subagent's tool calls trail it.
   const openBubble = openBubbleIndex(items)
   const [expandedTools, setExpandedTools] = useState<ReadonlySet<number | string>>(() => new Set())
+  const toggleTool = useCallback((key: number | string): void => {
+    setExpandedTools(previous => {
+      const next = new Set(previous)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
   const [expandedRuns, setExpandedRuns] = useState<ReadonlySet<number | string>>(() => new Set())
   const agentNodes = useRef(new Map<number | string, HTMLDivElement>())
   const agentKeys = useRef(new Map<number, number | string>())
@@ -1422,22 +1434,14 @@ export function Timeline({
       return content
     }
     const content = (
-      <ToolRow
+      <TimelineToolRow
         item={row.item}
-        group={group.hasChildren || group.background ? {
-          count: group.count,
-          background: group.background,
-          running: group.background ? group.running : !saved && group.running
-        } : undefined}
-        expansion={{
-          expanded: expandedTools.has(key),
-          onToggle: () => setExpandedTools((previous) => {
-            const next = new Set(previous)
-            if (next.has(key)) next.delete(key)
-            else next.add(key)
-            return next
-          })
-        }}
+        rowKey={key}
+        count={group.hasChildren || group.background ? group.count : undefined}
+        background={group.background}
+        running={group.background ? group.running : !saved && group.running}
+        expanded={expandedTools.has(key)}
+        onToggle={toggleTool}
       />
     )
     // Origin-relative identity survives history prepends and display regrouping. Keep hidden
@@ -1744,7 +1748,7 @@ export function stoppedTurnText(item: {
 // #1214: `queued` is the row's not-yet-run state, non-null exactly while the daemon reports this row's
 // message queued. Only the `userText` arm reads it — foldQueuedRows can mark no other kind — and the
 // whole visual difference is that arm's fork.
-function TimelineRow({
+const TimelineRow = memo(function TimelineRow({
   item,
   readRowKey,
   inProgress,
@@ -1944,7 +1948,7 @@ function TimelineRow({
         </div>
       )
   }
-}
+})
 
 /** Refusal content is bounded, escaped text; model identifiers remain unchanged in the store. */
 export function ModelRefusalRow({ refusal, defaultExpanded = false }: {
@@ -2221,6 +2225,24 @@ function ToolFailedIcon(): JSX.Element {
     <path d="M7.33333 10H8.66667V11.3333H7.33333V10ZM7.33333 4.66667H8.66667V8.66667H7.33333V4.66667ZM7.99333 1.33333C4.31333 1.33333 1.33333 4.32 1.33333 8C1.33333 11.68 4.31333 14.6667 7.99333 14.6667C11.68 14.6667 14.6667 11.68 14.6667 8C14.6667 4.32 11.68 1.33333 7.99333 1.33333ZM8 13.3333C5.05333 13.3333 2.66667 10.9467 2.66667 8C2.66667 5.05333 5.05333 2.66667 8 2.66667C10.9467 2.66667 13.3333 5.05333 13.3333 8C13.3333 10.9467 10.9467 13.3333 8 13.3333Z" />
   </svg>
 }
+
+// Compare primitive group state and the existing row identity. Legacy ToolRow props are
+// constructed only when something this row consumes changes, including its toggle handler.
+const TimelineToolRow = memo(function TimelineToolRow({
+  item, rowKey, count, background, running, expanded, onToggle
+}: {
+  item: Extract<ThreadItem, { kind: 'toolCall' }>
+  rowKey: number | string
+  count?: number
+  background?: boolean
+  running: boolean
+  expanded: boolean
+  onToggle: (key: number | string) => void
+}): JSX.Element {
+  return <ToolRow item={item}
+    group={count === undefined ? undefined : { count, background, running }}
+    expansion={{ expanded, onToggle: () => onToggle(rowKey) }} />
+})
 
 export function ToolRow({
   item,

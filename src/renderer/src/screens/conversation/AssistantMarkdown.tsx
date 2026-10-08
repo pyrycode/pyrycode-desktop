@@ -1,4 +1,4 @@
-import { Children, isValidElement, useMemo, useRef, type ReactNode } from 'react'
+import { Children, isValidElement, memo, useMemo, useRef, type ReactNode } from 'react'
 import Markdown, { type AllowElement, type Components } from 'react-markdown'
 import { gfmTable } from 'micromark-extension-gfm-table'
 import { gfmTableFromMarkdown } from 'mdast-util-gfm-table'
@@ -400,7 +400,7 @@ function CodeBlock({ children }: { children?: ReactNode }): JSX.Element {
  * CommonMark ends the language token at the first whitespace character and CSS class separators ARE
  * whitespace, so a fence can never contribute more than that one token.
  */
-export function AssistantMarkdown({ text, onOpenMarkdownPath, allowElement }: {
+export const AssistantMarkdown = memo(function AssistantMarkdown({ text, onOpenMarkdownPath, allowElement }: {
   text: string
   /** Streaming presentation can remove elements; all renderer security rules still apply. */
   allowElement?: AllowElement
@@ -432,4 +432,4 @@ export function AssistantMarkdown({ text, onOpenMarkdownPath, allowElement }: {
       {text}
     </Markdown>
   )
-}
+})

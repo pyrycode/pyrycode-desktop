@@ -68,11 +68,18 @@ and disappears on settlement. Its placement follows rendered block layout rather
 raw trailing newlines. Historically, #607's plain `pre-wrap` tail placed it in the
 source's text run; that newline-driven placement ended with progressive markdown.
 
-**React key = array index**, deliberately: the reducer's `appendDelta`/`fillResult` invariants
-guarantee the list is append-only with in-place mutation (the open bubble, which since #1872 can sit
-behind trailing subagent tool calls), never reordering or inserting mid-list, so index
-identity is stable per logical item (`turnId` alone would collide once #205 lets a tool split one turn
-into two `assistantText` items; a text-bearing key would remount the growing bubble every delta).
+**React keys retain logical row identity.** Production uses the timeline's client-owned
+numeric `rowKeys`; without them, the fallback is `firstRowKey + itemIndex`, relative
+to the thread's origin rather than its current display position. History prepends lower
+`firstRowKey` while raising retained source indices, leaving existing fallback keys unchanged.
+Unmatched queued rows use `q<queuedMsgId>`. Confirmed Agent identities retain their
+first key, including `agent-<identity>` when first drawn provisionally; marker and run
+wrappers derive keys from that row identity. These keys survive history prepends,
+queue projection and background-agent regrouping. See
+[timeline identity](thread-timeline-limits.md#edge-cases-and-limitations).
+The original #203 array-index description applied to the initial append-only surface;
+it is no longer the production key policy. A turn-only key still collides when tools
+split a reply, and a text-bearing key remounts the streaming bubble on every delta.
 
 **Strangler-Fig coexistence at ship time, not a cutover** — as originally shipped, `Timeline` sat
 directly beside `MessageThread`; the coarse path was completely untouched and stayed the *live* one,
@@ -86,6 +93,64 @@ render path was inert at ship time.
 dead region — `Timeline` is now the conversation's single thread surface. See
 [The interactive flip + thread cutover](conversation-shell-conversation-and-modals.md#the-interactive-flip--thread-cutover-179) below and
 [#203 codebase notes](../codebase/203.md) for the original design and code review record.
+
+### Settled row reuse
+
+`TimelineRow` uses ordinary shallow `React.memo`. `appendDelta` replaces the growing
+assistant item while retaining unchanged item references, so settled user and assistant
+rows skip execution when their other inputs stay equal. Metadata, delivery, queue state,
+action availability and callback changes remain observable. The separately memoized
+[`AssistantMarkdown`](assistant-markdown-renderer.md#how-it-works) also skips parsing
+when a row changes only its metadata or actions and its markdown inputs stay equal.
+
+`ConversationScreen` stabilizes reply, drop and Send now callbacks with `useCallback`
+and host/conversation dependencies (plus store dispatchers for drop). Queue actions
+still receive `undefined` when unavailable and recheck the connected conversation at
+activation. `reader.open` is already stable. Ignoring callback changes in an equality
+shortcut would retain actions for an old pane; fresh `foldQueuedRows` handles and
+unmatched queue items intentionally remain eligible to rerender.
+`Timeline` remounts by conversation key; host dependencies also refresh actions when
+switching between hosts with equal conversation IDs.
+
+Memoizing exported `ToolRow` directly would still rerender on fresh group/expansion
+objects and toggle closures. Instead, private `TimelineToolRow` compares the original
+item, retained row key, primitive count/background/running/expanded values, and one
+stable keyed toggle. Only an executed wrapper constructs the legacy `group` and
+`expansion` objects. The toggle updates the keyed expansion set functionally;
+`ToolRow` retains its standalone `defaultExpanded` state contract.
+
+Group wrappers update visibility and joins independently of the memoized contents.
+Hidden descendants remain mounted, so collapsing and reopening a parent preserves
+child result expansion. Keys and wrappers are unchanged by memoization. Whole-thread
+projections and join scans still run; this reuse does not establish constant layout
+cost or smoother scrolling through profiling. Design:
+[settled row reuse](../../specs/architecture/1886-settled-row-reuse.md).
+
+### Row reuse verification
+
+[`e2e/settled-row-reuse.spec.ts`](../../../e2e/settled-row-reuse.spec.ts)'s
+“settled rows skip deltas and unrelated group toggles while the active reply renders”
+uses mounted V8 function counters with multiple settled messages, resolved grouped
+and unrelated tools, and an active reply. Positive counts precede measurement, and
+each of three chunks has its own display barrier before the next delivery. Each delta
+executes one `TimelineRow`, one `AssistantMarkdown` and zero `ToolRow`s. Four
+parent/child toggles each execute one tool and zero message, markdown, parser or
+message-action functions; hidden child expansion survives collapse/reopen.
+`StreamingAssistantMarkdown` can execute again for its own partition-state update:
+count its positive execution separately from the parent row, rather than requiring
+one streaming-component call per delta. DOM retention alone cannot prove these skips.
+
+Recorded on 2026-10-08 in the
+[verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1889#issuecomment-6053401984):
+the named regression on unchanged main `5f75ddc3` executed 1 test, failed 1 and
+skipped 0, recording 13 `TimelineRow` calls on the first delta against the expected 1.
+Fixed production executed 1, passed 1, failed 0 and skipped 0. The focused behavior
+run executed 23, passed 23, failed 0 and skipped 0, including that regression and
+copy/reply, host/conversation switching, queue actions, reader links, stats, tool
+progress and history/regrouping coverage. The full fake-transport gate at `c0268369`
+executed 358, passed 358, failed 0 and skipped 4; the named settled-row regression
+was present and passed on its first attempt. Units executed/passed 9,587, failed 0
+and skipped 3; build passed. No live-Claude or visual acceptance is required.
 
 ### Stopped-turn records
 

@@ -56,3 +56,14 @@ Size: one confirmation deliverable, two observable acceptance criteria, approxim
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-08
+
+## Confirmation evidence
+
+2026-10-08, after the final merge of `origin/main` (`16422881aead`), with the plan committed at `1db97328`:
+
+- Source trace confirmed direct validated identity throughout decode, typed IPC forwarding, timeline dispatch and retained display target derivation. No replay read-identity recovery requester exists.
+- Pre-verify: PASS, all five checks; 378 unit files, 9,587 executed/passed, 0 failed, 3 existing skips. This includes durable admission, daemon forwarding, publisher, legacy persistence/clears and newest-demand tests.
+- `npm run build` and `npm run check:docs`: passed.
+- Existing fake-transport `visible-tail-read.spec.ts`: 6 executed, 6 passed, 0 failed/skipped. Distinct connection/replay/durable IDs, actual outbound targets, ID-less no-command/no-extra-request and independently admitted history all passed.
+- Existing fake-transport `history-on-open.spec.ts`: 5 executed, 5 passed, 0 failed/skipped. Opening/reopening, owned-request exclusion, trusted backwards input, reconnect cursor retention and newest content without arrival cascade passed.
+- No production or test edits were needed. No live tests were added or changed; dispatcher owns later full-tier validation.

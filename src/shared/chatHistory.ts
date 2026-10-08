@@ -43,8 +43,16 @@ export type DurableThreadItem =
   | { kind: 'banner'; level: string; text: string; stopsTurn: boolean; truncated: boolean }
   | { kind: 'modelRefusal'; refusal: ModelRefusalEvent }
 
-/** Exact served provenance; never entry-to-display contribution evidence. */
-export interface HistoryGap { olderId: number; newerId: number; cursor?: string }
+/** Unresolved served or display-only boundaries, separate from exact coverage. */
+export type HistoryGap = { newerId: number; cursor?: string; refusedCursors?: readonly string[] } & (
+  | { olderId: number; legacyRowKeys?: never }
+  | { olderId?: never; legacyRowKeys: readonly number[] }
+)
+
+/** Client-owned targeting identity; legacy keys never claim envelope provenance. */
+export function historyGapId(gap: HistoryGap): number | string {
+  return gap.olderId ?? `legacy:${gap.legacyRowKeys?.[0]}`
+}
 
 export type ServedHistory = {
   ids: readonly number[]
@@ -72,6 +80,7 @@ export type ChatHistorySnapshot = { version: 1; serverId: string } & (
       kind: 'timeline'; conversationId: string; items: DurableThreadItem[]; prependedRows: number
       served?: ServedHistory
       gaps?: readonly HistoryGap[]
+      newestCursor?: string
       display?: readonly HistoryContribution[]
       rowIdentity?: { rowKeys: readonly number[]; nextRowKey: number }
       coverage: { status: 'unknown' } | { status: 'received'; cursor: string; atStart: boolean }
@@ -274,14 +283,34 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
   if (!Number.isSafeInteger(prependedRows) || prependedRows < 0) return invalid()
   const items = array(v.items, threadItem)
   const served = optional(v.served, servedHistory)
-  const gaps = optional(v.gaps, value => array(value, value => {
+  const newestCursor = optional(v.newestCursor, string)
+  const gaps = optional(v.gaps, value => array(value, (value): HistoryGap => {
     const g = record(value)
-    const olderId = readId(g.olderId), newerId = readId(g.newerId)
-    if (newerId <= olderId || newerId - olderId <= 1) return invalid()
-    return { olderId, newerId, ...('cursor' in g ? { cursor: string(g.cursor) } : {}) }
+    const newerId = readId(g.newerId)
+    const cursor = 'cursor' in g ? string(g.cursor) : undefined
+    const refusedCursors = optional(g.refusedCursors, value => array(value, string))
+    if (refusedCursors !== undefined && (new Set(refusedCursors).size !== refusedCursors.length ||
+        cursor !== undefined && refusedCursors.includes(cursor))) return invalid()
+    const resume = { ...(cursor === undefined ? {} : { cursor }),
+      ...(refusedCursors === undefined ? {} : { refusedCursors }) }
+    if ('legacyRowKeys' in g) {
+      const legacyRowKeys = array(g.legacyRowKeys, signedSafe)
+      const keys = isRecord(v.rowIdentity) ? array(v.rowIdentity.rowKeys, signedSafe)
+        : items.map((_, index) => index - prependedRows)
+      const positions = new Map(keys.map((key, index) => [key, index]))
+      if ('olderId' in g || legacyRowKeys.length === 0 || new Set(legacyRowKeys).size !== legacyRowKeys.length ||
+          legacyRowKeys.some((key, index) => !positions.has(key) || index > 0 &&
+            (positions.get(key) ?? -1) <= (positions.get(legacyRowKeys[index - 1]) ?? -1))) return invalid()
+      return { legacyRowKeys, newerId, ...resume }
+    }
+    const olderId = readId(g.olderId)
+    if (newerId - olderId <= 1) return invalid()
+    return { olderId, newerId, ...resume }
   }))
-  if (gaps !== undefined && (coverage.status !== 'received' ||
-      gaps.some((g, index) => index > 0 && g.olderId < gaps[index - 1].newerId))) return invalid()
+  const numericGaps = gaps?.filter(g => g.olderId !== undefined)
+  if ((gaps !== undefined || newestCursor !== undefined) && coverage.status !== 'received') return invalid()
+  if (numericGaps?.some((g, index) => index > 0 && g.olderId < numericGaps[index - 1].newerId) ||
+      gaps !== undefined && new Set(gaps.map(historyGapId)).size !== gaps.length) return invalid()
   if (served !== undefined) {
     // Narrow legacy events can advance the pager without declaring served provenance.
     if (coverage.status !== 'received') return invalid()
@@ -358,6 +387,7 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
     version: 1, kind: 'timeline', serverId, conversationId: id(v.conversationId),
     items, prependedRows, coverage,
     ...(display === undefined ? {} : { display }), ...(gaps === undefined ? {} : { gaps }),
+    ...(newestCursor === undefined ? {} : { newestCursor }),
     ...(served === undefined ? {} : { served }), ...(rowIdentity === undefined ? {} : { rowIdentity })
   }
 }

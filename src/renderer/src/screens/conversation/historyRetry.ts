@@ -1,3 +1,4 @@
+import { historyGapId } from '@shared/chatHistory'
 import type { ConversationSlice, HistoryRequestState } from '../../store/conversationTimelineStore'
 import { conversationTimelineStore } from '../../store/conversationTimelineStore'
 import { activeConversationStore } from '../../store/activeConversationStore'
@@ -31,8 +32,8 @@ export function retryHistoryPage(
   if (deps.getOpen() !== open || deps.getConnectedHost(open.id) !== serverId) return
   const held = deps.getHeld(open.id)
   if (!failure.retryable || selectHistoryFailure(held, serverId) !== failure ||
-      held?.localRead === 'loading' || (failure.purpose !== 'newest' && failure.purpose !== 'gap' && held?.coverage?.status === 'received' && held.coverage.atStart)) return
-  if (failure.purpose === 'gap' && !held?.gaps?.some(g => g.olderId === failure.gapId)) return
+      held?.localRead === 'loading' || (failure.purpose !== 'newest' && failure.purpose !== 'gap' && failure.purpose !== 'gap-newest' && held?.coverage?.status === 'received' && held.coverage.atStart)) return
+  if (failure.gapId !== undefined && !held?.gaps?.some(g => historyGapId(g) === failure.gapId)) return
   requestHistoryPage(deps, open.id, failure.cursor ?? (held?.coverage?.status === 'received' ? held.coverage.cursor : ''),
     failure.purpose ?? 'older', failure.gapId)
   deps.logRequested()

@@ -1,3 +1,4 @@
+import { historyGapId } from '@shared/chatHistory'
 import { agentSwitchStore, type AgentSwitchStatus } from '../../store/agentSwitchStore'
 import { useReplySuggestionStore, selectReplySuggestion, visibleReplySuggestion } from '../../store/replySuggestionStore'
 import { useSessionFactsStore, selectSessionFactsFor } from '../../store/sessionFactsStore'
@@ -1071,7 +1072,9 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
     if (marker !== undefined) {
       following.current = false
       rememberTop(el)
-      requestGapHistory(historyAskDeps, conversationId, Number(marker.dataset.historyGap))
+      const gap = conversationTimelineStore.getState().timelines.get(conversationId)?.gaps?.find(g =>
+        String(historyGapId(g)) === marker.dataset.historyGap)
+      if (gap !== undefined) requestGapHistory(historyAskDeps, conversationId, historyGapId(gap))
       return
     }
     const nearTop = isNearTop({ scrollOffset: el.scrollTop,
@@ -1352,16 +1355,17 @@ export function Timeline({
       low = 0; high = displayed.length
       while (low < high) {
         const middle = Math.floor((low + high) / 2)
-        if (displayed[middle].id <= gap.olderId) low = middle + 1
+        if (displayed[middle].id <= (gap.olderId ?? -1)) low = middle + 1
         else high = middle
       }
       index = low === 0 ? rows.length : earlierPositions[low - 1] + 1
     }
+    const gapId = historyGapId(gap)
     const projected = projection.find(group => group.index === index && !group.marker)
     if (projected && hiddenRows.has(index)) index = projected.ancestors.find(ancestor => !hiddenRows.has(ancestor)) ?? runByMember.get(index)?.index ?? index
-    const failure = gapState?.history?.status === 'failed' && gapState.history.gapId === gap.olderId ? gapState.history : null
-    const pending = gapState?.history?.status === 'requested' && gapState.history.gapId === gap.olderId
-    const marker = <div key={`gap-${gap.olderId}`} data-history-gap={gap.olderId}>
+    const failure = gapState?.history?.status === 'failed' && gapState.history.gapId === gapId ? gapState.history : null
+    const pending = gapState?.history?.status === 'requested' && gapState.history.gapId === gapId
+    const marker = <div key={`gap-${gapId}`} data-history-gap={gapId}>
       {failure !== null ? <ComposerHistoryFailure retryable={failure.retryable && onRetryGap !== undefined}
         onRetry={() => onRetryGap?.(failure)} /> :
         <p className="conversation__banner" role={pending ? 'status' : undefined}>
@@ -4934,7 +4938,7 @@ function ComposerErrorSlotControl({
           stoppingBanner !== undefined ? <ComposerBannerReport report={stoppingBanner} agent={agent} /> : null
         )
       }
-      history={historyFailure === null || historyFailure.purpose === 'gap' ? null :
+      history={historyFailure === null || (historyFailure.purpose === 'gap' || historyFailure.purpose === 'gap-newest') ? null :
         <ComposerHistoryFailure retryable={historyFailure.retryable} onRetry={retryHistory} />}
       mcpFailure={mcpFailure === null ? null : <ComposerMcpFailure name={mcpFailure} onOpen={openMcpFailure} />}
       /* The count is checked HERE and not left to the view's own guard: `??` tests the element, not what

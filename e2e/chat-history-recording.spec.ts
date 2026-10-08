@@ -212,7 +212,7 @@ test('receipt saturation still saves a repeated page and later live content acro
   await expect(second.page.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(1)
   await expect(second.page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled({ timeout: 20_000 })
   await second.page.locator('.conversation__thread').focus()
-  const expected = { ...snapshot, coverage: snapshot.coverage, gaps: [],
+  const expected = { ...snapshot, coverage: snapshot.coverage, gaps: [], newestCursor: 'repeat',
     served: { ids, highestId: 199, receipts: [...receipts.slice(1), { ids, cursor: 'repeat', atStart: false }] } }
   await expect.poll(() => read(second.page)).toEqual({ status: 'stored', snapshot: expected })
   await expect(second.page.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(1)

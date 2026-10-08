@@ -232,9 +232,10 @@ coverage only after page admission, even for an empty page. Newest responses ret
 received oldest-end coverage, seeding it only when unknown, while recording their
 own complete served receipts and display evidence. `recordHistoryFailure`
 retains coverage and rows, rejects a conflicting receipt host, and releases pending
-state without retrying. Failures and legacy pages without served metadata
-do not create absent slices or reorder the holder. A page declaring served ids can
-create a host-owned slice even with no drawable rows. Restoration seeds coverage
+state without retrying. Newest receipts also retain `newestCursor` independently
+of oldest-end coverage and later walked cursors. Failures and legacy pages without
+served metadata do not create absent slices or reorder the holder. A page declaring
+served ids can create a host-owned slice even with no drawable rows. Restoration seeds coverage
 and optional receipts through its explicit read handle.
 
 `requestHistoryPage` shares current ownership and local-read/pending exclusion across
@@ -256,9 +257,10 @@ checks run after receipt/writer settlement; connection loss is observed synchron
 
 `subscribeHistoryPage` owns both page and failure events independently of the live
 bridges. Pages are drawn before recording successful coverage. All failure reasons
-settle without automatic retry. A failed gap suppresses fresh demand only for its
-own older boundary; unrelated gap/newest/oldest failures cannot block healthy gaps,
-including nonretryable failures. Main also settles interrupted correlations, so
+settle without automatic retry. Ordinary gap failure suppresses fresh demand only
+for its own client gap identity; cursor refusal permits a new reader step.
+Unrelated gap/newest/oldest failures cannot block healthy gaps, including
+nonretryable failures. Main also settles interrupted correlations, so
 abandonment without a server reply cannot leave the renderer permanently pending.
 
 Trusted upward wheel/trackpad input chooses the last chronological gap marker
@@ -268,16 +270,27 @@ visible marker, the existing oldest-end two-viewport band applies. Mounting,
 observers, arrival, resizing and programmatic scrolling send no page; offline input
 sends nothing. Each settled page needs fresh input, and pending input is discarded.
 
-`requestGapHistory` uses the gap's resume cursor or the nearest saved receipt whose
-oldest id is on its newer side. Cursors name opaque positions before a page's
-oldest entry, never ids; a cursor-less hole can require walking covered pages.
-Every selected page advances the walk, including empty/undrawable pages. Gap
-settlement preserves the independent oldest-end cursor/`atStart`; that completion
-cannot suppress gap demand or Retry. Failure keeps rows, boundary and resume
-evidence. Retry requires retryability, the same captured failure/open conversation,
-current connected host, a surviving owned gap and shared read/request eligibility.
-Unknown legacy boundaries and `history-invalid-cursor` repositioning remain with
-[#1880](https://github.com/pyrycode/pyrycode-desktop/issues/1880).
+`requestGapHistory` targets a numeric gap by `olderId` or a legacy boundary by
+`historyGapId`'s client row-key identity. It uses a usable gap resume cursor, then
+the nearest saved receipt whose oldest id is on the newer side, falling back to
+`newestCursor`. Once a gap has refusal evidence, fallback uses the latest newest
+origin instead of old receipts. Cursors name opaque positions before a page's
+oldest entry, never ids; recovery can require walking already-covered spans.
+Each selected backwards page advances its usable resume position, even when
+empty or undrawable. Settlement preserves independent oldest-end cursor/`atStart`;
+that completion cannot suppress gap demand or Retry.
+
+`history-invalid-cursor` checks the supplying host, removes only the selected gap's
+resume cursor and remembers the refused string. Rows, boundary, coverage and other
+gaps' usable positions survive. Failure remains visible until a new request and
+has no Retry. Fresh qualifying input can use an unrefused newest origin; without
+one it sends exactly one `cursor: ''` request with purpose `gap-newest`, owned by
+that gap. Acquisition preserves oldest coverage and cannot close a legacy boundary
+through `atStart`. Its response requires another reader input before walking.
+A returned refused cursor stays unusable, so another acquisition also needs fresh
+input; arrivals never retry or cascade. Ordinary retryable Retry retains captured
+cursor/purpose and requires the same failure/open conversation, current connected
+host, surviving owned gap and shared read/request eligibility.
 
 ## The history/live join (#1225)
 
@@ -300,6 +313,16 @@ envelopes. Newest overlap containing the held high-water creates no tail marker;
 first opening and adjacency create none. Disjoint newest spans and older holes
 retain chronological boundaries independently of display joins. Receipt expiry
 leaves an unresolved boundary intact until surviving coverage connects it.
+
+Display-only restored rows establish a legacy boundary before their first
+represented newest page. `prependHistoryFor` captures their surviving keys before
+reconciliation draws that page and the bridge settles it; new unbound contributions
+enter after the held legacy rows. Subsequent openings cannot recreate resolved evidence once
+display contributions exist. A selected backwards page moves the marker with its
+oldest served id without inventing an older envelope id. Resolve only on provable
+held-row overlap or `atStart` received during that boundary's fresh backwards walk.
+Held oldest-end `atStart`, newest/acquisition completion, unidentified content and
+ambiguous timestamps do not prove continuity.
 
 `Timeline` places each marker before the first displayed contribution on its newer
 side, before the whole bubble when the boundary lies inside joined text. Hidden
@@ -437,6 +460,17 @@ retained contributions or compacted contiguous ranges. A result arriving before
 its call remains as an orphan patch across pages and protected restoration. Result
 patches fill a missing result; denial patches require matching nonempty turn/tool
 identity and fill a missing denial. Already-complete held calls keep their content.
+
+Legacy overlap reports surviving row keys explicitly. A message-id join proves
+overlap only when unique in both held rows and the page; a legacy tool can also
+join by unique `(turnId, toolUseId)` without a timestamp. That tool retains a
+validated `row` contribution bound to its held key, with call identity and any
+eligible source join key. A source-less `suppressed` tool reference would fail the
+snapshot parser, leaving the old boundary saved despite successful in-memory
+recovery. Unmatched legacy comparisons must continue through normal live
+admission/suppression: bypassing it duplicates newer live tools and redirects
+result patches away from the original held call. The held object and key survive
+both joins; ambiguous comparisons retain content without resolving the boundary.
 
 **Held row invariant:** an existing row keeps its key, relative order among held
 rows, object and every attached live association. History can merge an older text

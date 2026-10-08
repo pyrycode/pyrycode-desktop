@@ -37,8 +37,11 @@ export function reconcileHistory(
   entries: readonly HistoryTimelineEntry[],
   liveKeys: ReadonlySet<string>,
   reserveBoundary: boolean,
-  disjointNewest = false
+  disjointNewest = false,
+  legacyRowKeys: readonly number[] = []
 ) {
+  const afterRowKey = legacyRowKeys.at(-1)
+  const legacyKeys = new Set(legacyRowKeys)
   const oldItems = timeline.items
   const oldKeys = timeline.rowKeys ?? oldItems.map((_, index) => index)
   const oldPosition = new Map(oldKeys.map((key, index) => [key, index]))
@@ -51,6 +54,7 @@ export function reconcileHistory(
   const sorted = [...entries].sort((a, b) => b.id - a.id)
   const admitted = new Set(withoutLiveEntries(sorted, liveKeys))
   const ranges = retainedRows.filter(d => d.lastId !== undefined)
+  const overlapKeys = new Set<number>()
   let scratch = initialTimelineState
   for (const entry of [...sorted].reverse()) {
     // Reconstruct original page edges before overlap filtering; never reduce held live state.
@@ -63,8 +67,28 @@ export function reconcileHistory(
     if (d === undefined) continue
     const messageId = d.kind === 'row' && d.item.kind === 'userText' ? d.item.messageId : undefined
     const echoIndex = messageId ? oldItems.findIndex(item => item.kind === 'userText' && item.messageId === messageId) : -1
-    if (echoIndex !== -1) known.set(entry.id, { id: d.id, kind: 'suppressed', rowKey: oldKeys[echoIndex] })
-    else if (admitted.has(entry)) known.set(entry.id, d)
+    if (echoIndex !== -1) {
+      known.set(entry.id, { id: d.id, kind: 'suppressed', rowKey: oldKeys[echoIndex] })
+      if (oldItems.filter(item => item.kind === 'userText' && item.messageId === messageId).length === 1 &&
+          entries.filter(e => e.event.type === 'messageReceived' && e.event.message.message_id === messageId).length === 1) {
+        overlapKeys.add(oldKeys[echoIndex])
+      }
+      continue
+    }
+    if (d.kind === 'row' && d.item.kind === 'toolCall' && legacyKeys.size > 0) {
+      const call = d.item
+      const matches = oldItems.flatMap((item, index) => item.kind === 'toolCall' &&
+        item.turnId === call.turnId && item.toolUseId === call.toolUseId && legacyKeys.has(oldKeys[index]) ? [oldKeys[index]] : [])
+      const pageMatches = entries.filter(e => e.event.type === 'toolUse' &&
+        e.event.turnId === call.turnId && e.event.toolUseId === call.toolUseId)
+      if (matches.length === 1 && pageMatches.length === 1) {
+        overlapKeys.add(matches[0])
+        // Retain validated call identity/source evidence even when its timestamp cannot join.
+        known.set(entry.id, { ...d, rowKey: matches[0] })
+        continue
+      }
+    }
+    if (admitted.has(entry)) known.set(entry.id, d)
     else {
       const matches = d.kind === 'row' ? oldItems.flatMap((item, index) => {
         const same = item.kind === 'toolCall' && d.item.kind === 'toolCall' && item.toolUseId === d.item.toolUseId ||
@@ -72,6 +96,7 @@ export function reconcileHistory(
           item.kind === 'turnBoundary' && d.item.kind === 'turnBoundary' && item.turnId === d.item.turnId
         return same ? [oldKeys[index]] : []
       }) : []
+      if (matches.length === 1) overlapKeys.add(matches[0])
       known.set(entry.id, { id: d.id, kind: 'suppressed', joinKey: d.joinKey,
         rowKey: matches.length === 1 ? matches[0] : undefined })
     }
@@ -151,8 +176,9 @@ export function reconcileHistory(
     }
   }
   const firstBound = groups.find(group => group.key !== undefined)
-  if (firstBound !== undefined || !disjointNewest) enter(firstBound?.index ?? Infinity)
+  if (afterRowKey === undefined && (firstBound !== undefined || !disjointNewest)) enter(firstBound?.index ?? Infinity)
   oldItems.forEach((held, index) => {
+    if (afterRowKey !== undefined && index > (oldPosition.get(afterRowKey) ?? -1)) enter(firstBound?.index ?? Infinity)
     const group = bound.get(oldKeys[index])
     if (group !== undefined) enter(group.index)
     items.push(group === undefined ? held : merged(held, group, accounted.get(oldKeys[index]) ?? ''))
@@ -234,7 +260,7 @@ export function reconcileHistory(
   const pendingIndex = timeline.pendingCompaction === undefined ? -1 : oldItems.indexOf(timeline.pendingCompaction)
   const pending = pendingIndex === -1 ? undefined : next.items[positions.get(oldKeys[pendingIndex]) ?? -1]
   if (pending?.kind === 'compactionBoundary') next.pendingCompaction = pending
-  return { timeline: next, display, boundaries, inserted: keys.filter(key => !oldPosition.has(key)).length }
+  return { timeline: next, display, boundaries, overlapKeys, inserted: keys.filter(key => !oldPosition.has(key)).length }
 }
 
 function merged(held: ThreadItem, group: Group, accounted: string): ThreadItem {

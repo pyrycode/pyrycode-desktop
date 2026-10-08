@@ -1,3 +1,4 @@
+import { historyGapId } from '@shared/chatHistory'
 // Typed history pages retain rows, contribution evidence and successful paging coverage.
 // Opening/reconnect and explicit reader input create demand; failures never retry automatically.
 import { useEffect } from 'react'
@@ -283,8 +284,8 @@ export function subscribeHistoryPage(
 /** Read current coverage only when a user asks; pending demand is discarded. */
 export interface HistoryAskDeps {
   sendCommand: (command: RendererCommand) => void
-  getHeld: (conversationId: string) => Pick<ConversationSlice, 'history' | 'coverage' | 'localRead' | 'gaps' | 'served'> | null
-  markRequested: (conversationId: string, cursor?: string, purpose?: 'older' | 'newest' | 'gap', gapId?: number) => void
+  getHeld: (conversationId: string) => Pick<ConversationSlice, 'history' | 'coverage' | 'localRead' | 'gaps' | 'served' | 'newestCursor'> | null
+  markRequested: (conversationId: string, cursor?: string, purpose?: 'older' | 'newest' | 'gap' | 'gap-newest', gapId?: number | string) => void
   canRequest?: (conversationId: string) => boolean
 }
 
@@ -296,7 +297,7 @@ export interface HistoryAskDeps {
 export const HISTORY_PAGE_LIMIT = 200
 
 export function requestHistoryPage(deps: HistoryAskDeps, conversationId: string, cursor: string,
-  purpose: 'older' | 'newest' | 'gap', gapId?: number): void {
+  purpose: 'older' | 'newest' | 'gap' | 'gap-newest', gapId?: number | string): void {
   if (deps.canRequest?.(conversationId) === false) return
   const held = deps.getHeld(conversationId)
   if (held?.localRead === 'loading' || held?.history?.status === 'requested') return
@@ -320,14 +321,19 @@ export function requestOlderHistory(
 }
 
 /** A visible marker chooses one backwards step, independent of oldest-end completion. */
-export function requestGapHistory(deps: HistoryAskDeps, conversationId: string, olderId: number): void {
+export function requestGapHistory(deps: HistoryAskDeps, conversationId: string, gapId: number | string): void {
   const held = deps.getHeld(conversationId)
-  const gap = held?.gaps?.find(g => g.olderId === olderId)
-  if (gap === undefined || (held?.history?.status === 'failed' && held.history.purpose === 'gap' && held.history.gapId === olderId)) return
+  const gap = held?.gaps?.find(g => historyGapId(g) === gapId)
+  if (gap === undefined) return
+  const failure = held?.history
+  if (failure?.status === 'failed' && failure.gapId === gapId &&
+      failure.reason !== 'history-invalid-cursor') return
+  const usable = (cursor: string | undefined) => cursor !== undefined && !gap.refusedCursors?.includes(cursor)
   const receipt = held?.served?.receipts.filter(r => r.ids[0] !== undefined && r.ids[0] >= gap.newerId)
     .sort((a, b) => a.ids[0] - b.ids[0])[0]
-  const cursor = gap.cursor ?? receipt?.cursor
-  if (cursor !== undefined) requestHistoryPage(deps, conversationId, cursor, 'gap', olderId)
+  const origin = gap.refusedCursors?.length ? held?.newestCursor : receipt?.cursor ?? held?.newestCursor
+  const cursor = usable(gap.cursor) ? gap.cursor : usable(origin) ? origin : undefined
+  requestHistoryPage(deps, conversationId, cursor ?? '', cursor === undefined ? 'gap-newest' : 'gap', gapId)
 }
 
 export const historyAskDeps: HistoryAskDeps = {

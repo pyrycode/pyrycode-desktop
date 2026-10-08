@@ -136,7 +136,7 @@ it.each(['gap', 'newest', 'older'] as const)('a failed %s ask leaves an unrelate
     h.store.getState().markHistoryRequested('c', 'host', 'failed-position', purpose, purpose === 'gap' ? 3 : undefined)
     h.store.getState().recordHistoryFailure('c', retryable ? 'history-unavailable' : 'history-invalid-cursor', retryable)
     const failed = h.held().history
-    if (purpose === 'gap') {
+    if (purpose === 'gap' && retryable) {
       requestGapHistory(h.deps, 'c', 3)
       expect(h.deps.sendCommand).not.toHaveBeenCalled()
       expect(h.held().history).toBe(failed)

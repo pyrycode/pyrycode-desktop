@@ -37,3 +37,7 @@ No new I/O, result types or failure modes. Empty eligible sets record no anchor.
 ## Open Questions
 
 None. Size check: one deliverable, approximately 550 written lines, zero exported types/components, one production caller, four acceptance behaviors and no new reject branches.
+
+## Revisions
+
+2026-10-08 — Baseline evidence: final browser regressions against the recorded main renderer at `214d15625f51495c2e07772d320003dc1eec7588` executed 2 tests, 0 passed, 2 failed. Deep lookup read 25/265 row rectangles for 32/400 rows (bounds 8/11). Each same-row delta re-observed 34/402 children; long-thread held growth read 265 rectangles, and following growth read 800. The gap/hidden case read 87 rectangles and selected an invalid zero-height anchor. Evidence: `/tmp/builder-1892/baseline-final.txt`. A temporary Vite load plugin substituted the recorded screen source into the baseline renderer without editing implementation files; all other sources were still at that main revision. The repaired focused run before final checks passed 2/2. No design change; total written work remains under 450 lines.

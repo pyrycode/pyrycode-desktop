@@ -891,7 +891,7 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
   const following = useRef(true)
   // Direction distinguishes a reader returning to the bottom from a small upward move in its tolerance.
   const scrollOffset = useRef(0)
-  const viewport = useRef({ width: 0, height: 0 })
+  const viewport = useRef({ width: 0, height: 0, contentHeight: 0 })
   // #1049's growth observer, and the node its observation set was last synced against. Constructed on first
   // use rather than here, so `ResizeObserver` is never referenced under vitest's `node` environment — where
   // neither hook below runs at all, since renderer tests server-render through renderToStaticMarkup.
@@ -1087,7 +1087,7 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
         syncRows(region)
         for (const entry of entries) refreshRow(entry.target)
         reassertPinnedToBottom(region, following, pinnedOffset)
-        viewport.current = { width: region.clientWidth, height: region.clientHeight }
+        viewport.current = { width: region.clientWidth, height: region.clientHeight, contentHeight: region.scrollHeight }
       }
     }))
     const observationRoot = el ?? pane
@@ -1115,7 +1115,7 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
     if (el !== null) {
       syncRows(el)
       reassertPinnedToBottom(el, following, pinnedOffset)
-      viewport.current = { width: el.clientWidth, height: el.clientHeight }
+      viewport.current = { width: el.clientWidth, height: el.clientHeight, contentHeight: el.scrollHeight }
       rememberTop(el)
     }
   })
@@ -1176,7 +1176,12 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
     paneRef,
     scrollPin: {
       onWheel: (event) => {
-        if (event.isTrusted && event.deltaY < 0) readUpward(event.currentTarget)
+        if (!event.isTrusted) return
+        const el = event.currentTarget
+        // Native wheel movement can reach the bottom before its scroll event is delivered.
+        if (event.deltaY > 0 && isAtBottom({ scrollOffset: el.scrollTop,
+          viewportHeight: el.clientHeight, contentHeight: el.scrollHeight })) following.current = true
+        if (event.deltaY < 0) readUpward(el)
       },
       onKeyDown: (event) => {
         if (event.isTrusted && event.target === event.currentTarget &&
@@ -1199,10 +1204,10 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
         const echo = pinnedOffset.current
         pinnedOffset.current = null
         if (echo !== null && el.scrollTop === echo) return
-        // Native anchoring can emit a scroll during resize/zoom before the observer re-pins.
-        // That movement is layout, not a reader leaving the bottom.
+        // Native anchoring can scroll before resize observation, including metadata reveal/collapse.
+        // Retain following through changed geometry; trusted upward input already releases it.
         if (following.current && (el.clientWidth !== viewport.current.width ||
-            el.clientHeight !== viewport.current.height)) return
+            el.clientHeight !== viewport.current.height || el.scrollHeight !== viewport.current.contentHeight)) return
         // Measure the local bottom-following position. The mapping is the one thing
         // this glue can get wrong with no type error and no unit test — scrollTop is the offset,
         // clientHeight the viewport, scrollHeight the total content — so it is written exactly once.
@@ -1212,8 +1217,10 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
           contentHeight: el.scrollHeight
         }
         // The tolerance allows rounding while following; it must not undo upward reader intent.
-        following.current = isAtBottom(metrics) && (following.current || movingDown)
-        if (following.current && el.style.paddingBottom !== '') {
+        const atBottom = isAtBottom(metrics)
+        // Downward motion cannot release an already following reader; metadata may have moved the end.
+        following.current = (following.current && movingDown) || (atBottom && (following.current || movingDown))
+        if (following.current && (!atBottom || el.style.paddingBottom !== '')) {
           reassertPinnedToBottom(el, following, pinnedOffset)
         }
       }

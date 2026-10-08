@@ -144,7 +144,7 @@ Card disappearance alone is insufficient. The configured gate installed/built th
 requested `npm run e2e:real:gate`. Counted execution and this named pass satisfy the execution
 requirement despite the command mismatch. The dispatcher removed `needs-real-claude` and advanced
 the ticket. Evidence comes from the linked comments; documentation did not read dispatcher logs or
-run live tests. See [inline permission verification](development-verification.md#inline-permission-verification)
+run live tests. See [inline permission verification](development-verification-test-tiers.md#inline-permission-verification)
 for fake interaction and visual evidence. The live results concern the local test relay, not the
 production relay.
 

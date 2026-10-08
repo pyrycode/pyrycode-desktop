@@ -29,6 +29,12 @@ the bottom, with 20px horizontal insets. The connected resting first row therefo
 keeps its 97px clearance. Top overlay pills use header height plus their 12px gap;
 the drawer uses both heights to leave controls usable.
 
+Bottom-following is scroll intent, not proof that a durable message was read.
+The [read observer](conversation-last-read-store.md#how-it-works) separately measures
+the newest message's trailing edge against these occupied chrome borders after
+display commit, requiring document focus and a closed Markdown reader. Geometry
+callbacks use the committed slice, so new receipt evidence cannot outrun rendering.
+
 Measure before re-pinning and before zero-offset prepend compensation. Occupied
 height includes status, attachment previews and multiline draft growth/shrink.
 Inline permission/trust cards and questionnaires grow inside history and do not add
@@ -64,7 +70,7 @@ pinned arrival/arming and held-reader arrival, Cancel focus, content growth, com
 visible-checkbox editing and visible-choice arming. It waits two animation frames after positioning
 to let the scroll event update `following`; offscreen controls are first deliberately scrolled into
 view so native focus movement is not confused with growth. See
-[counted inline evidence](development-verification.md#inline-permission-verification).
+[counted inline evidence](development-verification-test-tiers.md#inline-permission-verification).
 
 Resize and Electron zoom can cause native anchoring to emit a scroll before resize
 observations arrive. The hook remembers the last observed `clientWidth` and

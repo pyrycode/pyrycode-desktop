@@ -27,13 +27,47 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
 
 ## How it works
 
+- **Daemon publication observes a committed display.** `useReadObservation`, mounted in
+  `ConversationScreen`, captures the rendered slice in a layout effect. The newest user/assistant
+  message's trailing edge must be inside the thread viewport between the measured header and input
+  borders; the document must be focused and visible, and the Markdown reader closed. Opening,
+  receipt and bottom-following alone prove nothing. Scroll, focus, resize and list changes recheck
+  that committed slice. List changes matter because received-read eligibility can arrive after the
+  display commits; waiting for another timeline change would leave a visible tail unpublished.
+- **Only retained display identity supplies a target.** `readTargetFor` requires a contribution
+  bound to the newest message's surviving numeric row key, then takes the highest retained row-bound
+  ID (including folded deltas/tool patches) and transient display-state ID. The layout commit must
+  precede observation. Validated live/replayed `history_entry_id` and independently admitted history
+  contributions supply durable IDs; connection/replay IDs, timestamps alone, row counts, optimistic
+  echoes, served coverage and list `latest_entry_id` do not. Missing/ambiguous identity cannot advance
+  a target, and ID-less replay triggers no identity-recovery fetch. See
+  [snapshot identity](chat-history.md#retained-display-contributions).
+- **Commands are bound to the observed host.** `markConversationRead` requires a nonempty `serverId`
+  and exactly `{ conversation_id, up_to }`, with a nonempty conversation ID and non-negative safe
+  integer target, including zero. Main validates IPC, resolves the sole current connected claim and
+  requires it to match the observed host before sending a fresh allowlisted `mark_conversation_read`
+  payload through that connection. Duplicate renderer ownership sends nothing; main refuses ambiguous
+  connected claims. See [routing](daemon-connection-conversation-routing.md#host-bound-read-routing).
+- **Sending does not acknowledge reading.** Only that host/conversation's received daemon mark
+  confirms the target. The daemon stores `max(held, min(up_to, latest))`; a clamped reply below the
+  target leaves it unconfirmed. Neither command delivery nor a send result clears attention.
+- **Pending observations survive navigation and disconnection in memory.** `createReadPublisher`
+  coalesces to the highest observed target and consumes an attempt before sending, so repeated delivery,
+  renders and effect replay cannot duplicate it. Each host reconnect permits at most one resend of
+  that unconfirmed target even while blurred; a newer eligible observation can publish a higher target.
+  Send failure, refusal and a lower acknowledgement retain it without an automatic retry loop.
+  Confirmation settles it; deletion, host/pairing removal, loss of the read contract or ambiguous/changed
+  ownership discards it. A later owner never inherits another host's pending mark. Pending commands
+  are never persisted; the local count store below remains the legacy path.
 - **Complete daemon rows suppress local stamping.** Both activation and timeline-driven writes call
   `stampLastReadFor`, whose production `isDaemonBacked(id)` dependency reads the current list at
   invocation time. Any matching row with both `read_up_to` and `latest_entry_id` (including zero)
   suppresses the write. The local map is ID-keyed, so a duplicate ID with a complete row on any host
   also suppresses stamping for its legacy peer; selecting only the first match would make protection
   depend on host order. Daemon unread still compares each actual row independently. The store's direct
-  `recordLastRead` API remains a local count writer, not a daemon mark publisher.
+  `recordLastRead` API remains a local count writer, not a daemon mark publisher. A missing frame
+  `history_entry_id` never re-enables local authority for a complete daemon row; legacy rows receive
+  no read command and retain count persistence and both clear paths.
 - **Shape:** the house four-part store (`zustand/vanilla` DI factory → app-wide singleton → `useStore`
   hook → selector factory bound to one id), the same shape as [conversation activity
   store](conversation-activity-store.md) and [conversation timeline

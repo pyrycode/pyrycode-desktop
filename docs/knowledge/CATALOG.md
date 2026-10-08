@@ -20,6 +20,7 @@ Search this catalog for a topic. Start with INDEX.md. The documentation stage ma
 
 - [Protected local chat history](features/chat-history.md) — Versioned saved-host snapshots, guarded protected storage, received-state recording and echo cancellation, durable coverage, host ownership, coalescing, close/quit flushing and saved-list and on-demand offline timeline restoration, stale-read admission, restored ownership and local read failures.
 - [Protected chat history — API and operations](features/chat-history-api.md) — Fixed IPC, saved-host authorization, main-process removal ordering and operation contracts.
+- [Protected local chat history — results](features/chat-history-results.md) — Saved-read notices, result and error classifications, failed-write preservation and confirmed-removal outcomes.
 - [Protected local chat history — testing](features/chat-history-testing.md) — Admission/refusal, restoration, protected persistence, offline reply regressions and durable-contract verification.
 - [Development verification](features/development-verification.md): source checks, test boundaries, layout evidence and live-test diagnosis.
 - [History admission and protected-restoration verification](features/development-verification-history.md) — Served receipts versus display contributions, held-row regressions and counted protected-relaunch tool/reader-anchor evidence.

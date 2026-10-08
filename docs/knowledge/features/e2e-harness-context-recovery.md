@@ -88,7 +88,7 @@ installation, inspection and context-loss counts as `local-list-failure-setup`. 
 `readList` is overridden; other operations delegate to the captured handler and pairing
 data stays intact. The scenario retains one saved host, its single adjacent notice reading
 “Could not read saved chats on this device.”, no conversation rows or open thread, and
-the 800-pixel capture. See [local-list failure behavior](chat-history.md#results-and-failure-preservation).
+the 800-pixel capture. See [local-list failure behavior](chat-history-results.md#results-and-failure-preservation).
 
 [`localListFailure.test.ts`](../../../e2e/fixtures/localListFailure.test.ts) executes the
 actual callbacks against an IPC registration fake to distinguish loss before and after

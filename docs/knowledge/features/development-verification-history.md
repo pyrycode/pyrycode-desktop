@@ -67,6 +67,47 @@ unit-result claim. Visual review accepted idle/failure at 800×600 and completio
 at 1280×800 against Figma `132:4171`; loading status was verified by interaction,
 without a separate loading capture.
 
+`legacyHistoryGaps.test.ts` extends this path with display-only restoration,
+held/newest `atStart`, covered walks, fresh backwards completion, unique identity
+overlap versus duplicate messages/ambiguous timestamps, isolated refusal, usable
+newest fallback, absent/refused-origin acquisition and repeated refusal without
+cascades. It also covers strict metadata bounds, host/conversation validation,
+foreign-host refusal and shared offline/pending gates. Writer cases save unchanged
+rows with refusal evidence under received or explicitly restored ownership, and
+reject evidence-only renderer changes that would establish a new owner.
+
+[`history-gaps.spec.ts`](../../../e2e/history-gaps.spec.ts) →
+`legacy and refused gap evidence survives full Electron relaunch and needs fresh reader steps`
+projects an old display-only snapshot through validated protected IPC, closes
+Electron and reopens the same profile. Newest admission leaves the legacy marker
+despite held oldest completion. Refusal retains rows/expanded tools, shows no
+Retry and saves its rejected cursor. One fresh focused ArrowUp acquires a newest
+page; returning the refused cursor cannot trigger a walk. Another full close/
+relaunch retains the unknown boundary, refusal evidence and independent oldest
+coverage, while the marker returns idle. A usable acquired origin still needs
+another reader step. Walking preserves anchor geometry and expansion; tool-only
+identity overlap closes the boundary without operator overlap or fresh `atStart`.
+The test polls the saved resolved contribution before a final full restart and
+checks keys, display evidence and coverage after reopening. Expansion is reestablished
+after relaunch; it is preserved during recovery, not persisted as UI state.
+
+The [final verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1882#issuecomment-6049290879)
+and dispatcher gate report record gate 6 on 2026-10-07 at
+`5fa8fb6ae46fcd566b5400b5d1ddc2d6abfc8b27`: 351 executed, 351 passed, 0 failed,
+4 skipped. The verdict confirms both named gap scenarios above were present,
+executed and passed: `history-gaps.spec.ts` contributed 2 executed/passed,
+0 failed/skipped. The complete recording spec contributed 9 executed/passed,
+0 failed, 1 platform skip; the supplied per-test gate report explicitly lists
+`receipt saturation still saves a repeated page and later live content across fresh relaunches`
+as executed and passed. Its additive `newestCursor: 'repeat'` expectation preserves
+the independent oldest coverage, receipts, row identities and later-live-save proof.
+Units recorded 9,571 executed/passed, 0 failed, 3 skipped; the verdict reports
+21 legacy-gap and 39 writer cases passed. These are file/suite counts, not
+individual unit-result artifacts. Visual review compared Figma `132:4171` with
+legacy idle at 1280×800 and refusal at 800×600; separate loading and opposite-width
+captures were not supplied. Synthetic transport satisfies this extension; no new
+live-Claude proof was required or performed.
+
 [`real-daemon-history-on-open.spec.ts`](../../../e2e/real-daemon-history-on-open.spec.ts) →
 `a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed`
 establishes a protected served/display baseline, awaits Electron process exit,
@@ -131,6 +172,16 @@ protected writes and fresh service reads. `historyPageBridge` and
 reserved boundaries and immutable finish evidence even when ordinary rows are
 suppressed. Unit snapshot reconstruction alone is not the protected persistence
 or mounted interaction proof.
+
+Legacy tool-overlap regressions must validate the recovered snapshot, save it
+through the writer/protected store and restore a fresh timeline; an in-memory
+resolved marker alone misses invalid contribution metadata. The unique held/page
+tool identity retains a `row` contribution with the held key, with keyable and
+unkeyable timestamps covered. Pending/completed live-tool suffix controls keep
+one tool, its original key, completed object and result patch target while the
+legacy boundary remains unresolved, then repeat the page after validated fresh
+restoration. The mounted tool-only overlap and full-restart evidence is counted
+in [gap recovery verification](#known-gap-recovery-verification) above.
 
 The fake-transport cases extend the existing presentation:
 

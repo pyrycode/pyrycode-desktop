@@ -13,8 +13,8 @@ timeline on demand whether its host is connected or unavailable. Restored rows r
 readable through reconnect and subsequent same-host receipts continue saving.
 Each actual connected opening and owning-host reconnect requests one newest page
 after owned read/request settlement. Offline opening waits for connection; opening
-never fills the missing range. Known gaps retain reader-driven markers and resume
-positions; older pages require trusted upward thread input;
+never fills the missing range. Served and legacy gaps retain reader-driven markers
+and resume positions; older pages require trusted upward thread input;
 a retryable failed page has a Retry action. Explicit Forget/Unpair removes the host's saved content after credential removal.
 Confirmed conversation deletion removes that host/conversation's saved timeline
 and list entry.
@@ -75,35 +75,41 @@ and a successfully received empty page still establishes coverage.
 
 ### Served provenance and page suppression
 
-Optional protected `gaps: { olderId, newerId, cursor? }[]` records unresolved
-served-envelope boundaries separately from receipts and display contributions.
-Before newest admission, compare the page's complete served ids with the held
-high-water id: an overlap containing it creates no new tail marker; disjoint
-coverage with missing ids creates a boundary. First opening without held evidence
-and adjacency create none. Older nonconsecutive spans also qualify, and newest
-overlap preserves unresolved older holes. Valid skipped/undrawable ids cover their
-positions; timestamps, replay ids and filtered rows cannot establish a gap.
+Optional protected `gaps` records unresolved boundaries independently of receipts
+and display contributions. Each gap has nonnegative safe-integer `newerId`, optional
+`cursor` and optional `refusedCursors`; it has either `olderId` for a served-envelope hole or
+`legacyRowKeys` for held display-only rows, never both. Legacy keys claim no envelope
+ids or numeric hole. Optional `newestCursor` retains the latest received newest-page
+origin separately from walked positions and oldest-end coverage.
 
-Gap boundaries use nonnegative safe ids with at least one missing position between
-them. Parsing requires received paging coverage, sorted nonoverlapping boundaries,
-the existing 100,000-entry array bound and bounded string cursors, projecting only
-the three allowlisted fields. Empty cursor strings are valid. Invalid declared
-metadata rejects the whole snapshot. `gaps` may survive without `served`: receipt
-expiry loses evidence, never proves completion. Only complete surviving served
-coverage connecting the boundaries retires a gap; id magnitude does not size work.
-Legacy snapshots omit gaps and restore their rows without invented ids or holes.
-Unknown legacy-boundary recovery and refused-cursor repositioning remain with
-[#1880](https://github.com/pyrycode/pyrycode-desktop/issues/1880).
+Numeric gaps use nonnegative safe ids separated by at least one missing position.
+Newest admission compares complete served ids with held high-water: overlap
+containing it creates no tail marker; disjoint spans and older holes can create
+one. First opening without evidence and adjacency create none. Skipped ids cover
+their positions; timestamps and replay ids cannot establish gaps. Only complete
+surviving served coverage connecting the boundaries retires a numeric gap.
+Receipt expiry loses evidence, never proves completion; `gaps` can outlive `served`.
 
-Each selected backwards page advances its gap's opaque resume position even when
-covered, empty or undrawable. The writer observes cursor-only changes and includes
-gaps in canonical snapshot comparison; comparing rows alone would lose progress.
-Protected writes/fresh restoration retain boundaries, receipts/high-water and row
-identities alongside independent oldest-end coverage. Pending/failure state stays
-transient. Gaps inherit host ownership: replacement, host removal and conversation
-clearing discard slice evidence; confirmed deletion removes its protected record.
-Holder eviction drops memory evidence while detached saves and protected records
-remain available for an owned fresh read. See [reader demand and Retry](conversation-timeline-store-internals.md#the-opening-ask-1259).
+Parsing requires received coverage for `gaps` or `newestCursor`, sorted nonoverlapping
+numeric boundaries and unique client gap identities. Legacy key arrays must be
+nonempty, with unique signed safe integers referencing retained rows in chronological
+order, using `rowIdentity` or the legacy fallback. Refused cursors must be unique bounded
+strings; a declared resume cursor cannot also be refused. Arrays retain the
+100,000-entry bound; cursors retain the string bound below, including valid empty
+strings. Unknown fields are projected away; malformed declared metadata rejects
+the snapshot. Invalidated cursors are omitted, never declared as `undefined`.
+Older version-1 snapshots remain valid without these fields.
+
+The first represented newest admission captures display-only restored keys before
+draw and retains their boundary until provable overlap or a selected fresh backwards
+`atStart`; held/newest completion cannot close it. Covered spans still need walking.
+Refusal removes only the selected gap's resume cursor and remembers it; other gaps,
+rows and oldest-end coverage survive. The writer compares gaps and newest-origin
+evidence even when rows are unchanged. Protected restoration retains this evidence
+and identities, resetting pending/failure state. Replacement, host removal and
+conversation clearing discard slice evidence; confirmed deletion removes its saved
+record. Eviction drops memory evidence while buffered saves/disk records remain
+for an owned fresh read. See [reader demand and Retry](conversation-timeline-store-internals.md#the-opening-ask-1259).
 
 Version-1 timelines optionally retain `served: { ids, highestId?, receipts }`.
 `ids` is the sorted unique set of durable `HistoryEntry.id` values observed in
@@ -303,7 +309,7 @@ shell eligibility checks run after admission/writer capture, while connection lo
 is observed synchronously so rapid connection edges survive.
 
 Backwards downloads require trusted upward wheel/trackpad input over the thread, or
-ArrowUp/PageUp/Home with the thread itself focused. A visible known-gap marker
+ArrowUp/PageUp/Home with the thread itself focused. A visible gap marker
 between the measured header/input overlays takes priority, choosing the first
 boundary encountered from newer toward older rows. Without one, the current offset must be
 within the near-top band — two viewport heights, scaled by the thread's own measured
@@ -325,16 +331,17 @@ after a response also requires new input. There is no timer or automatic walk.
 
 Requests and failures retain same-host rows, prepend metadata and successful
 coverage. Pending/failed history retains the requested cursor and purpose (`older`,
-`newest` or `gap`), plus a selected gap's older boundary. Main clears outstanding
-history correlations before emitting classified
+`newest`, `gap` or `gap-newest`), plus the selected gap's client identity. Main clears
+outstanding history correlations before emitting classified
 failure events on connection drop, terminal/error, pairing rejection or explicit
 redial, including when no server failure reply arrived. Unavailable/build/send
 failures also settle immediately. This releases pending state without retrying:
 new qualifying upward input while connected can ask again for an oldest-end page
-even when its failure classification is nonretryable. A failed gap instead retains
-its marker/resume evidence and waits for explicit retry; unrelated gaps remain
-eligible regardless of failure purpose or retryability. The separate
-[composer Retry action](conversation-shell-composer-status.md#history-page-failure-and-retry)
+even when its failure classification is nonretryable. Ordinary gap failures wait
+for Retry; `history-invalid-cursor` has no Retry but permits fresh reader input
+to use a usable newest origin or acquire one page for that gap. Acquisition and
+arrival never continue the walk automatically. Unrelated gaps remain eligible.
+The separate [composer Retry action](conversation-shell-composer-status.md#history-page-failure-and-retry)
 requires `retryable: true`, the displayed conversation and its connected owning host,
 and the same held failure at activation. It calls `requestHistoryPage` with the
 captured cursor/purpose and `limit: 200`; newest Retry resends `''` despite held
@@ -440,7 +447,7 @@ Read pushes patch held attention immediately but do not themselves write history
 reply captures the monotonic held mark. Timeline updates folded
 during daemon delivery use that receipt's origin, never the active host at save time.
 
-Outside daemon delivery, two local edits qualify:
+Outside daemon delivery, these local edits qualify:
 
 - An appended `userText` echo with a message id and `localSendPending`, whose
   preceding rows retain their references and order. Its host must be the unique
@@ -452,6 +459,11 @@ Outside daemon delivery, two local edits qualify:
   and successful coverage, even when it removes the only row and saves an empty
   timeline. An append-only rule misclassifies this edit as restoration and stops
   later recording; removing an arbitrary restored row cannot authorize a save.
+- Evidence-only gap/newest-cursor changes with unchanged rows and an established
+  matching stamped owner, including explicit owned restoration. Refusal changes
+  durable evidence without changing content; requiring a receipt would lose its
+  invalidation on restart. Such changes cannot establish ownership from renderer
+  state and retain the writer's list-claim checks.
 
 Timeline slices are keyed only by conversation id, so the writer pins an owner
 while each slice is held. Explicit main-stamped receipts establish the supplying

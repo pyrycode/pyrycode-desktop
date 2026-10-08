@@ -221,6 +221,8 @@ test('receipt saturation still saves a repeated page and later live content acro
   const read = (page: PairedApp['page']) => page.evaluate(({ serverId, conversationId }) =>
     window.pyry.chatHistory({ operation: 'readTimeline', serverId, conversationId }),
   { serverId, conversationId: SEEDED_ROW.id })
+  // Settle the opening page's buffered save before seeding a different protected snapshot.
+  await expect.poll(async () => snapshotText(await read(first.page))).toBe('retained assistant')
   expect(await first.page.evaluate(snapshot => window.pyry.chatHistory({ operation: 'replaceTimeline',
     serverId: snapshot.serverId, conversationId: snapshot.conversationId, snapshot }), snapshot)).toEqual({ status: 'ok' })
   await first.app.close()

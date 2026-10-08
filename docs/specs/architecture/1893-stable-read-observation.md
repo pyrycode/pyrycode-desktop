@@ -39,3 +39,6 @@ None. The simpler reconciliation inside one per-commit layout effect avoids addi
 
 ## Size check
 One deliverable (stable read observation preserving publication); about 350 written lines including plan/tests. Zero new exported types/components/stores, one production caller, four observable acceptance criteria, no new reject branches. Within all sizing limits.
+
+## Revisions
+2026-10-08 validation: the new regression failed against the unchanged `9aa12511` publisher on both 30-row and 400-row threads. Three separate commits produced 3 observer constructions, 3 discovery queries, 6 listener additions and 3 list subscriptions on each thread. The original six browser scenarios passed. The repair reduces those setup counts to zero, including growing content, while publishing geometry-preserving durable advances. Added direct hidden/queued/document-visibility gates and a received-but-uncommitted frame check; admitted ID-less history must reuse the initially unknown observation. A non-delta daemon event intentionally flushes buffered deltas, so the pending-frame oracle drives focus/scroll callbacks without sending a list. No production design change.

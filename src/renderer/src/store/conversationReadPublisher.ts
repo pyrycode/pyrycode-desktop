@@ -1,8 +1,8 @@
-import { useEffect, useLayoutEffect, type RefObject } from 'react'
+import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react'
 import type { RendererCommand } from '@shared/ipc/commands'
 import { conversationListStore } from './conversationListStore'
 import { sessionStore } from './sessionStore'
-import { conversationTimelineStore, useConversationTimelineStore, type ConversationSlice } from './conversationTimelineStore'
+import { useConversationTimelineStore, type ConversationSlice } from './conversationTimelineStore'
 
 type ReadRow = { id: string; serverId?: string | null; read_up_to?: number; latest_entry_id?: number }
 type ReadCommand = Extract<RendererCommand, { type: 'markConversationRead' }>
@@ -52,15 +52,21 @@ export function createReadPublisher(deps: {
   }
 }
 
+function newestReadRowKey(slice: ConversationSlice): number | undefined {
+  const { items, rowKeys } = slice.timeline
+  for (let index = items.length - 1; index >= 0; index--) {
+    if (items[index].kind === 'assistantText' || items[index].kind === 'userText') return rowKeys?.[index]
+  }
+  return undefined
+}
+
 export function readTargetFor(slice: ConversationSlice | undefined): number | undefined {
   if (slice === undefined) return undefined
-  const { items, rowKeys } = slice.timeline
-  const index = items.reduce((last, item, index) => item.kind === 'assistantText' || item.kind === 'userText' ? index : last, -1)
-  if (index < 0) return undefined
-  const key = rowKeys?.[index]
-  const keys = new Set(rowKeys)
+  const key = newestReadRowKey(slice)
+  if (key === undefined) return undefined
+  const keys = new Set(slice.timeline.rowKeys)
   const retained = slice.display?.filter(d => d.rowKey !== undefined && keys.has(d.rowKey)) ?? []
-  if (key === undefined || !retained.some(d => d.rowKey === key)) return undefined
+  if (!retained.some(d => d.rowKey === key)) return undefined
   const ids = retained.map(d => d.lastId ?? d.id)
   if (slice.displayStateId !== undefined) ids.push(slice.displayStateId)
   return ids.reduce<number | undefined>((held, id) => held === undefined ? id : Math.max(held, id), undefined)
@@ -89,16 +95,33 @@ export function useReadPublication(): void {
 export function useReadObservation(id: string | null, readerOpen: boolean,
   pane: RefObject<HTMLDivElement>, thread: RefObject<HTMLDivElement>): void {
   const slice = useConversationTimelineStore(s => id === null ? undefined : s.timelines.get(id))
+  const committed = useRef<{ slice: ConversationSlice | undefined; target: number | undefined }>({ slice: undefined, target: undefined })
+  const setup = useRef<{
+    id: string; key: number; region: HTMLDivElement; covered: HTMLDivElement; tail: HTMLElement
+    observe: () => void; dispose: () => void
+  }>()
   useLayoutEffect(() => {
+    // Callbacks may run on list receipt before React commits a newer timeline.
+    // Only this layout effect advances their displayed identity and target.
+    committed.current = { slice, target: readTargetFor(slice) }
     const region = thread.current
     const covered = pane.current
-    if (id === null || region === null || covered === null || readerOpen || slice === undefined) return
-    const target = readTargetFor(slice)
-    const index = slice.timeline.items.reduce((last, item, index) => item.kind === 'assistantText' || item.kind === 'userText' ? index : last, -1)
-    const key = slice.timeline.rowKeys?.[index]
-    const tail = Array.from(region.querySelectorAll<HTMLElement>('[data-read-row]')).find(node => node.dataset.readRow === String(key))
-    if (target === undefined || key === undefined || tail === undefined) return
+    const key = slice === undefined ? undefined : newestReadRowKey(slice)
+    const held = setup.current
+    if (!readerOpen && id !== null && key !== undefined && held?.id === id && held.key === key &&
+      held.region === region && held.covered === covered && held.tail.isConnected && region?.contains(held.tail)) {
+      // Identity can advance without a resize (including initially unknown identity).
+      held.observe()
+      return
+    }
+    held?.dispose()
+    setup.current = undefined
+    if (id === null || region === null || covered === null || readerOpen || key === undefined) return
+    const tail = region.querySelector<HTMLElement>(`[data-read-row="${key}"]`)
+    if (tail === null) return
     const observe = () => {
+      const { slice: displayed, target } = committed.current
+      if (displayed === undefined || target === undefined) return
       if (!document.hasFocus() || document.visibilityState !== 'visible' || tail.closest('[hidden]') || tail.classList.contains('message-row--queued')) return
       const viewport = region.getBoundingClientRect()
       const top = Math.max(viewport.top, covered.querySelector('.conversation__top-chrome')?.getBoundingClientRect().bottom ?? viewport.top)
@@ -107,7 +130,7 @@ export function useReadObservation(id: string | null, readerOpen: boolean,
       if (rect.height <= 0 || rect.bottom <= top || rect.bottom > bottom) return
       const matches = conversationListStore.getState().conversations?.filter(r => r.id === id) ?? []
       const host = matches.length === 1 ? matches[0].serverId : undefined
-      if (typeof host === 'string' && slice.serverId === host) publisher.observe(host, id, target)
+      if (typeof host === 'string' && displayed.serverId === host) publisher.observe(host, id, target)
     }
     const resize = new ResizeObserver(observe)
     resize.observe(region); resize.observe(covered); resize.observe(tail)
@@ -115,7 +138,9 @@ export function useReadObservation(id: string | null, readerOpen: boolean,
     region.addEventListener('scroll', observe); window.addEventListener('focus', observe)
     // A list can establish read eligibility without changing the committed display.
     const offList = conversationListStore.subscribe(observe)
+    setup.current = { id, key, region, covered, tail, observe,
+      dispose: () => { offList(); resize.disconnect(); region.removeEventListener('scroll', observe); window.removeEventListener('focus', observe) } }
     observe()
-    return () => { offList(); resize.disconnect(); region.removeEventListener('scroll', observe); window.removeEventListener('focus', observe) }
-  }, [id, readerOpen, slice, pane, thread])
+  })
+  useLayoutEffect(() => () => { setup.current?.dispose(); setup.current = undefined }, [])
 }

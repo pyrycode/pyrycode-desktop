@@ -40,3 +40,10 @@ No new failure mode or boundary. Existing queue guards, diagnostics, copy result
 
 ## Open Questions
 None. All input equality uses React's shallow comparison; no deep comparisons or callback suppression.
+
+## Verification evidence
+2026-10-08: the final `settled-row-reuse.spec.ts` regression ran against an isolated archive of unchanged main `5f75ddc3`: 1 executed, 1 failed. The first delta recorded 13 TimelineRow calls against the expected one active row (`/tmp/builder-1886/final-baseline.log`). The fixed production passed the same test: 1 executed, 1 passed (`/tmp/builder-1886/focused.log`). Each of three observed deltas executes one TimelineRow, one AssistantMarkdown and zero ToolRows; each of four group/child toggles executes one ToolRow and zero message/markdown/parser functions. StreamingAssistantMarkdown may execute again for its own partition-state update, so its positive counter is deliberately distinct from the parent row count.
+
+The focused behavior run executed and passed all 23 tests across settled-row-reuse, progressive-markdown, tool-groups, message-reply, message-copy, queued-send-now, offline-conversation-actions, markdown-reader, turn-stats-hover and tool-progress (`/tmp/builder-1886/behavior.log`). This includes equal conversation IDs on different hosts, offline reopening, history prepends/regrouping, queue delivery and reader links. The dispatcher retains the full fake-suite gate; no live Claude acceptance is required.
+
+After the final merge of main `5f75ddc3`, pre-verify passed all five checks, including typecheck and all 9,587 executed unit tests (3 existing skips); `npm run build` passed. Total written work is about 250 lines including plan, production changes and the 115-line mounted regression, below the 800-line limit.

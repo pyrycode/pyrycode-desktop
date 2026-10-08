@@ -110,13 +110,24 @@ view so native focus movement is not confused with growth. See
 [counted inline evidence](development-verification-test-tiers.md#inline-permission-verification).
 
 Resize and Electron zoom can cause native anchoring to emit a scroll before resize
-observations arrive. The hook remembers the last observed `clientWidth` and
-`clientHeight`. While following, a scroll with changed dimensions leaves the decision
+observations arrive. Metadata hover/focus reveal and collapse can do the same without
+changing the viewport. The hook remembers the last observed `clientWidth`, `clientHeight`
+and `scrollHeight`. While following, a scroll with changed geometry leaves the decision
 to the pending observer rather than clearing the flag on layout movement. That
-observer refreshes dimensions after the guarded pin. At unchanged dimensions, reader
-scrolls still release following outside the bottom band or resume it on downward
-movement into the band. This covers narrowing, widening and 100%/125%
-zoom without adding another follow state machine.
+observer refreshes all three measurements after the guarded pin. Trusted upward input
+still releases following synchronously, so the geometry guard cannot reclaim a held reader.
+Held readers retain native anchoring. This covers metadata reflow, narrowing, widening
+and 100%/125% zoom without another follow state machine or async task.
+
+Chromium can reach the bottom before delivering a trusted downward wheel callback,
+then change hovered-row heights before the scroll callback. The wheel handler measures
+the actual bottom and resumes following there; subsequent downward scrolls retain an
+already-following reader's intent even if metadata moved the endpoint. The existing pin
+write restores clearance only when outside the tolerance or clearing temporary padding.
+An immediate predictive wheel pin would interrupt small native movements; movements
+inside the tolerance remain unsnapped. Upward input still takes precedence. See
+[metadata-collapse design](../../specs/architecture/1898-collapse-message-metadata.md)
+and [counted browser evidence](conversation-shell-message-bubble-testing.md#metadata-collapse-verification).
 
 `pinnedOffset` protects the pin's own scroll-event echo. It records the exact offset
 read back after a write that actually moved the thread, and is cleared on every scroll
@@ -145,9 +156,12 @@ case clicks Re-pair below the measured header.
 matching padding delta when the draft grows rather than expecting viewport shrink.
 [`thread-scroll-pin.spec.ts`](../../../e2e/thread-scroll-pin.spec.ts) retains send,
 late-image, queued-content and prepend checks. The late-image fixture needs enough
-rows to park more than a viewport away: its 24 synthetic replies preserve that
-precondition after the viewport grew to fill the pane. See
-[recorded browser and capture evidence](development-verification.md#layout-and-input).
+rows to park more than a viewport away: its 40 synthetic replies preserve that
+precondition with a full-pane viewport and collapsed metadata. The metadata spec also
+repeatedly reveals/collapses the tail at 1280px and 800px, wheels from history start
+through changing metadata, and focuses an above-viewport row without moving a held
+content anchor. See
+[recorded browser and capture evidence](development-verification-layout-evidence.md#translucent-conversation-controls).
 
 ### Streaming input verification
 

@@ -806,7 +806,7 @@ const useThreadLayoutEffect = typeof document === 'undefined' ? useEffect : useL
  * IDEMPOTENT: it writes only while following, and assigns scrollTop a value it already holds — a no-op that
  * fires no scroll event — so neither caller can drive a feedback loop, and a StrictMode double-invoke is
  * likewise a no-op. And it is NOT A WRITER OF THE FLAG: `following` is taken read-only, so the hook's
- * contract that only the container's own scroll events and `followBottom` ever set it survives the arrival of
+ * contract that only reader input, scroll events and `followBottom` set it survives the arrival of
  * a second caller.
  *
  * ⭐ `pinnedOffset` IS WHAT KEEPS THAT SECOND CALLER FROM CORRUPTING THE FLAG, and it is not defensive
@@ -855,8 +855,8 @@ function measureThreadChrome(pane: HTMLElement): void {
 /**
  * #601: keep the thread following the conversation while the operator is already reading at the bottom.
  *
- * The ORDER of the decision is the whole design. The flag is written only by the container's own scroll
- * events; the re-assert reads that flag and never re-measures. A measurement taken when new content lands
+ * The ORDER of the decision is the whole design. Reader input and the container's own scroll events
+ * write the flag; the re-assert reads it and never re-measures. A measurement taken when new content lands
  * reads a layout that already includes it, so it cannot say whether the operator was at the bottom
  * beforehand. Mobile draws the same separation with its `userScrolledAway` flag (ThreadScreen.kt:249-256) —
  * what carries over from mobile is the flag, not the measurement (it reverses its layout and tests an exact
@@ -1086,15 +1086,23 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
     requestOlderHistory(historyAskDeps, conversationId, nearTop)
   }
 
+  const readUpward = (el: HTMLDivElement): void => {
+    // Release before native scrolling starts: a render or growth observation can otherwise
+    // pin during the input-to-scroll-event interval and interrupt Chromium's animated movement.
+    // No upward range means no movement intent, except for demandHistory's deliberate release.
+    if (el.scrollTop > 0) following.current = false
+    demandHistory(el)
+  }
+
   return {
     paneRef,
     scrollPin: {
       onWheel: (event) => {
-        if (event.isTrusted && event.deltaY < 0) demandHistory(event.currentTarget)
+        if (event.isTrusted && event.deltaY < 0) readUpward(event.currentTarget)
       },
       onKeyDown: (event) => {
         if (event.isTrusted && event.target === event.currentTarget &&
-          ['ArrowUp', 'PageUp', 'Home'].includes(event.key)) demandHistory(event.currentTarget)
+          ['ArrowUp', 'PageUp', 'Home'].includes(event.key)) readUpward(event.currentTarget)
       },
       ref,
       // The metric mapping is the one thing this feature can get wrong with no type error and no unit test:

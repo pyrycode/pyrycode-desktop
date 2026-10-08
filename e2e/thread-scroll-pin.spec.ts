@@ -1,7 +1,7 @@
 import { capturePairedApp } from './fixtures/capturePairedApp'
 import { createHash } from 'node:crypto'
 import type { ElectronApplication, Locator, Page } from '@playwright/test'
-import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { test, expect, seedConversationsFrame, SEEDED_ROW, FIRST_SERVER_ID } from './fixtures/launchPairedApp'
 import { bubbleTextExactly } from './fixtures/bubbleText'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import {
@@ -9,6 +9,7 @@ import {
   HISTORY_ASK_BAND_VIEWPORTS
 } from '../src/renderer/src/screens/conversation/threadScrollPosition'
 import { ATTACHMENT_UPLOAD_EVENT_CHANNEL } from '../src/shared/ipc/attachmentUpload'
+import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
 import type { AttachmentUploadEvent } from '../src/shared/ipc/attachmentUpload'
 import type {
   AssistantDeltaPayload,
@@ -386,6 +387,161 @@ const settleScrollEvent = (page: Page): Promise<void> =>
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
       })
   )
+
+const readerDeltaFrame = (seq: number, paragraphs = 4): Uint8Array => encodeEnvelope({
+  id: REPLY_ENVELOPE_ID, type: 'assistant_delta', ts: FIXED_TS,
+  payload: { conversation_id: SEEDED_ROW.id, turn_id: 'reader-stream', seq,
+    text: `Reader stream ${seq}\n\n${'A growing unfinished reply.\n\n'.repeat(paragraphs)}`
+  } satisfies AssistantDeltaPayload
+})
+
+// Two frames only flush scroll events. Native wheel/key motion must stop before a held baseline.
+const stableThreadOffset = (page: Page): Promise<number> => page.locator('.conversation__thread').evaluate(el =>
+  new Promise<number>(resolve => {
+    let last = el.scrollTop
+    let stable = 0
+    const sample = (): void => {
+      const next = el.scrollTop
+      stable = Math.abs(next - last) < 0.1 ? stable + 1 : 0
+      last = next
+      if (stable >= 20) resolve(next)
+      else requestAnimationFrame(sample)
+    }
+    requestAnimationFrame(sample)
+  }))
+
+test('upward wheel during streaming holds the reader after native motion settles', async ({ launchPairedApp }) => {
+  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames })
+  await primeOverflowingThread(page)
+  daemon.pushFrame(readerDeltaFrame(0, 160))
+  const thread = page.locator('.conversation__thread')
+  await expect(thread).toContainText('Reader stream 0')
+  await stableThreadOffset(page)
+  await expectPinnedToBottom(page)
+  const before = await readThreadMetrics(page)
+  expect(before.scrollTop).toBeGreaterThan(4 * before.clientHeight)
+  await expect(thread.locator('[data-history-gap]')).toHaveCount(0)
+  const box = await thread.boundingBox()
+  expect(box).not.toBeNull()
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2)
+  await thread.evaluate(el => el.addEventListener('wheel', event => {
+    if (!event.isTrusted || event.deltaY >= 0) return
+    el.dataset.readerWheelStart = String(el.scrollTop)
+    // Make row growth precede the first native animation step deterministically. This
+    // exercises the same observer path as a late decoded image, alongside real deltas.
+    const row = el.lastElementChild as HTMLElement
+    row.style.paddingBottom = '200px'
+  }, { once: true }))
+  // Stream successive deltas across the native wheel animation, rather than assigning scrollTop.
+  await page.mouse.wheel(0, -500)
+  for (let seq = 1; seq <= 16; seq++) {
+    daemon.pushFrame(readerDeltaFrame(seq))
+    await page.waitForTimeout(15)
+  }
+  await expect(thread).toContainText('Reader stream 16')
+  expect((await readThreadMetrics(page)).scrollHeight).toBeGreaterThan(before.scrollHeight)
+  const held = await stableThreadOffset(page)
+  const wheelStart = await thread.evaluate(el => Number(el.dataset.readerWheelStart))
+  expect(wheelStart).toBe(before.scrollTop)
+  expect(held).toBeLessThan(wheelStart - 450)
+  expect(held).toBeGreaterThan(HISTORY_ASK_BAND_VIEWPORTS * before.clientHeight)
+  const height = (await readThreadMetrics(page)).scrollHeight
+  daemon.pushFrame(readerDeltaFrame(17, 20))
+  await expect(thread).toContainText('Reader stream 17')
+  await expect.poll(async () => (await readThreadMetrics(page)).scrollHeight).toBeGreaterThan(height)
+  expect(await stableThreadOffset(page)).toBeCloseTo(held, 0)
+  await capturePairedApp(app, page, '/tmp/builder-1885/held-stream.png')
+  await page.mouse.wheel(0, 100_000)
+  await stableThreadOffset(page)
+  await expectPinnedToBottom(page)
+  daemon.pushFrame(readerDeltaFrame(18, 20))
+  await expect(thread).toContainText('Reader stream 18')
+  await settleScrollEvent(page)
+  await expectPinnedToBottom(page)
+})
+
+for (const key of ['ArrowUp', 'PageUp', 'Home']) {
+  test(`thread-focused ${key} releases following during streaming`, async ({ launchPairedApp }) => {
+    const { page, daemon } = await launchPairedApp({ buildReplyFrames })
+    await primeOverflowingThread(page)
+    daemon.pushFrame(readerDeltaFrame(0, 160))
+    const thread = page.locator('.conversation__thread')
+    await expect(thread).toContainText('Reader stream 0')
+    await stableThreadOffset(page)
+    const before = await readThreadMetrics(page)
+    await thread.focus()
+    await page.keyboard.press(key)
+    daemon.pushFrame(readerDeltaFrame(1, 20))
+    await expect(thread).toContainText('Reader stream 1')
+    const held = await stableThreadOffset(page)
+    expect(held).toBeLessThan(before.scrollTop)
+    const height = (await readThreadMetrics(page)).scrollHeight
+    daemon.pushFrame(readerDeltaFrame(2, 20))
+    await expect(thread).toContainText('Reader stream 2')
+    await expect.poll(async () => (await readThreadMetrics(page)).scrollHeight).toBeGreaterThan(height)
+    expect(await stableThreadOffset(page)).toBeCloseTo(held, 0)
+  })
+}
+
+test('untrusted input and keys owned by a descendant control keep bottom following', async ({ launchPairedApp }) => {
+  const { page, daemon } = await launchPairedApp({ buildReplyFrames })
+  await primeOverflowingThread(page)
+  const thread = page.locator('.conversation__thread')
+  await thread.evaluate(el => {
+    el.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true }))
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
+  })
+  daemon.pushFrame(readerDeltaFrame(0, 20))
+  await expect(thread).toContainText('Reader stream 0')
+  await expectPinnedToBottom(page)
+  const control = thread.getByRole('button', { name: 'Copy message', exact: true }).last()
+  // Model a control that consumes native navigation while allowing the trusted event to bubble.
+  // The thread must respect target ownership, rather than taking every bubbled upward key.
+  await control.evaluate(el => el.addEventListener('keydown', event => event.preventDefault()))
+  await control.focus()
+  for (const [seq, key] of ['ArrowUp', 'PageUp', 'Home'].entries()) {
+    await page.keyboard.press(key)
+    const height = (await readThreadMetrics(page)).scrollHeight
+    daemon.pushFrame(readerDeltaFrame(seq + 1, 20))
+    await expect(thread).toContainText(`Reader stream ${seq + 1}`)
+    await expect.poll(async () => (await readThreadMetrics(page)).scrollHeight).toBeGreaterThan(height)
+    await expectPinnedToBottom(page)
+  }
+})
+
+for (const input of ['wheel', 'ArrowUp', 'PageUp', 'Home']) {
+  test(`no-op ${input} on a short offline thread keeps following row growth`, async ({ launchPairedApp }) => {
+    const { page, app, daemon } = await launchPairedApp({ buildReplyFrames })
+    daemon.pushFrame(assistantDeltaFrame(1))
+    const thread = page.locator('.conversation__thread')
+    await expect(thread).toContainText(replyText(1))
+    await daemon.close()
+    // Exercise the offline store/IPC boundary explicitly; closing a responder alone leaves
+    // relay availability independent of daemon availability in this harness.
+    await app.evaluate(({ BrowserWindow }, { channel, serverId }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send(channel, { type: 'disconnected', serverId })
+    }, { channel: DAEMON_EVENT_CHANNEL, serverId: FIRST_SERVER_ID })
+    await expect(page.getByText('Offline. Showing saved messages.', { exact: true })).toBeVisible()
+    await stableThreadOffset(page)
+    const before = await readThreadMetrics(page)
+    expect(before.scrollTop).toBe(0)
+    expect(before.scrollHeight).toBe(before.clientHeight)
+    await thread.focus()
+    if (input === 'wheel') {
+      await thread.hover()
+      await page.mouse.wheel(0, -500)
+    } else await page.keyboard.press(input)
+    await stableThreadOffset(page)
+    // Reproduce late intrinsic row growth without a daemon connection or a React render.
+    await thread.evaluate(el => {
+      const row = el.firstElementChild as HTMLElement
+      row.style.minHeight = `${el.clientHeight * 3}px`
+    })
+    await expect.poll(async () => (await readThreadMetrics(page)).scrollHeight).toBeGreaterThan(before.scrollHeight)
+    await settleScrollEvent(page)
+    await expectPinnedToBottom(page)
+  })
+}
 
 test('an arriving item of every kind leaves a bottom-resting thread at the bottom', async ({
   launchPairedApp

@@ -28,3 +28,7 @@ Sizing: one behavior deliverable, five acceptance criteria, approximately 300 wr
 - Cover thread-focused ArrowUp/PageUp/Home, descendant-control keys, zero upward range without history demand, downward bottom resumption, and successful send.
 - Keep existing scroll-pin image, prepend and send scenarios green; run history-demand boundary coverage if needed. Existing static tests cannot execute this DOM/ref behavior.
 - After final main merge, run pre-verify (typecheck/full unit suite) and build, plus the focused fake spec. Capture synthetic conversation state for appearance comparison. No live tests are changed.
+
+## Revisions
+
+2026-10-08: The wheel regression now schedules intrinsic last-row growth in a trusted wheel listener, alongside successive real daemon deltas. This makes growth precede the first native scroll step, exercising the existing ResizeObserver path without relying on IPC scheduling. It records the wheel-start offset, proves at least 450px movement from a 500px upward gesture, waits for 20 stable animation frames, then checks held position only after further rendered growth. The production contract is unchanged. Against the byte-identical main hook at `5f75ddc3` (renderer bundle `index-XUsNQIBt.js`), the final wheel case failed: expected offset below 6038, actual 6328, starting at 6488. ArrowUp also failed; the existing scroll-pin scenarios passed.

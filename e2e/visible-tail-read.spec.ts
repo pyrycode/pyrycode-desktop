@@ -126,3 +126,55 @@ test('ID-less replay stays unknown until independently admitted history, and uns
   expect(targets(commands)).toEqual([30])
   expect(commands.filter(c => c.type === 'request_history')).toHaveLength(1)
 })
+
+for (const gate of ['visible', 'blurred', 'reader-covered', 'above-tail'] as const) {
+  test(`late read contract rechecks the committed tail while ${gate}`, async ({ launchPairedApp }) => {
+    const commands: Envelope[] = []
+    const { app, page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
+      const e = decodeEnvelope(bytes); commands.push(e)
+      if (e.type === 'list_conversations') return [frame('conversations', { conversations: [SEEDED_ROW] })]
+      if (e.type === 'request_history') return [pageReply(e.id, Array.from({ length: 30 }, (_, i) => ({
+        id: i + 1, type: 'message', ts, payload: { conversation_id: row.id, message_id: `m${i}`,
+          role: 'user', text: `Synthetic saved message ${i}\n\nEnough content to hold a reader above the tail.` }
+      })))]
+      return []
+    } })
+    await focus(app, page)
+    await expect(page.locator('.bubble')).toHaveCount(30)
+    daemon.pushFrame(delta(31, 0, 'Read [the note](notes/Plan.md).'))
+    await expect(page.locator('.bubble').last()).toContainText('Read the note.')
+    await settle(page)
+    expect(targets(commands)).toEqual([])
+    const thread = page.locator('.conversation__thread')
+    if (gate === 'blurred') {
+      await page.evaluate(() => {
+        Object.defineProperty(document, 'hasFocus', { configurable: true, value: () => false })
+        window.dispatchEvent(new Event('blur'))
+      })
+    } else if (gate === 'reader-covered') {
+      await page.getByRole('button', { name: 'the note', exact: true }).click()
+      await expect(page.locator('.markdown-reader')).toBeVisible()
+    } else if (gate === 'above-tail') {
+      await thread.evaluate(el => { el.scrollTop = 0 })
+    }
+    await settle(page)
+    // Only the list changes: the durable tail was already committed before eligibility arrived.
+    daemon.pushFrame(list())
+    const dot = page.locator('.conversation-status-dot')
+    await expect(dot).toHaveClass(/--new-messages/)
+    await settle(page)
+    if (gate !== 'visible') {
+      expect(targets(commands)).toEqual([])
+      if (gate === 'blurred') await focus(app, page)
+      else if (gate === 'reader-covered') await page.getByRole('button', { name: 'Back', exact: true }).click()
+      else await thread.evaluate(el => { el.scrollTop = el.scrollHeight })
+    }
+    await expect.poll(() => targets(commands)).toEqual([31])
+    daemon.pushFrame(list())
+    await settle(page)
+    expect(targets(commands)).toEqual([31])
+    await expect(dot).toHaveClass(/--new-messages/)
+    daemon.pushFrame(markReply(31))
+    await expect(dot).toHaveClass(/--idle/)
+  })
+}

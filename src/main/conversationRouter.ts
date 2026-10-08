@@ -199,7 +199,7 @@ export function createConversationRouter<C>(deps: ConversationRouterDeps<C>): Co
       }
     },
     route(conversationId: string | undefined, observedHost?: string): C | null {
-      const serverId = conversationId === undefined ? undefined : index.get(conversationId)
+      let serverId = conversationId === undefined ? undefined : index.get(conversationId)
       // Both halves in one condition, so `conversationId` narrows to `string` below and the delete
       // needs no cast — an absent id and an unplaceable one are the same refusal either way.
       if (conversationId === undefined || serverId === undefined) {
@@ -208,10 +208,12 @@ export function createConversationRouter<C>(deps: ConversationRouterDeps<C>): Co
       }
       if (observedHost !== undefined) {
         const owners = [...(claims.get(conversationId) ?? [])].filter(host => connectionFor(host) !== null)
-        if (serverId !== observedHost || owners.length !== 1 || owners[0] !== observedHost) {
+        if (owners.length !== 1 || owners[0] !== observedHost) {
           diagnosticLog?.event({ event: 'conversation-route-refused', code: 'observed-host-mismatch' })
           return null
         }
+        // Current claims can outlive the last-indexed host's list, deletion or pairing.
+        serverId = observedHost
       }
       const connection = connectionFor(serverId)
       if (connection === null) {

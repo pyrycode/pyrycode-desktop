@@ -58,6 +58,17 @@ None. A separate observer/publisher is simpler than teaching the legacy count br
 
 2026-10-08: Existing `suppressed` validation permits specific page-source associations, and a row reference alone loses fragment order when history fills a missing live delta (reproduced by the new partial-history test). Retain each live entry's actual typed `row` or `patch` operation with its surviving numeric key, using the existing validated protected schema. Delta operations contain their own fragment, never the accumulated bubble. State-only evidence stays transient. Host-required routing and connection methods remain optional for older callers/doubles. Mounted focus gating injects only the focus oracle because Playwright's original CDP session forces focus; viewport, scroll and reader geometry remain real.
 
+2026-10-08 (verifier findings 1–2): Host-required routing resolves from the sole current connected claim, still requiring it to match the observation's host; the legacy last-write-wins index is not evidence against a surviving claim. Regression units remove the last-indexed claimant through list replacement, deletion and pairing removal, while refusing its stale observations. The mounted layout effect subscribes to list changes and rechecks its last committed slice with the existing focus, reader and measured viewport gates; cleanup removes that subscription. Four mounted regressions deliver eligibility after commit: the visible tail publishes without another user action; blurred, reader-covered and scrolled-up tails wait for their gates to clear. Repeated lists do not repeat publication, and only received acknowledgement clears attention. Security re-review: these changes retain the existing claim/IPC boundary and committed-geometry authority; no new payload, storage or retry path.
+
+## Documentation handoff
+
+Pending for the documentation stage, as requested by the verifier:
+
+- `docs/knowledge/features/conversation-last-read-store.md` § How it works: focused, uncovered committed-tail observation; host-bound safe-integer read commands including zero; received-only acknowledgement and daemon clamping; coalescing, one resend per reconnect, failure/refusal retention and ownership invalidation.
+- `docs/knowledge/features/chat-history.md` § Snapshot contract: saved live row/patch identity, transient state evidence and pending commands, unknown older snapshots, independent history admission without ID recovery or paging changes.
+- `docs/knowledge/features/conversation-list-store.md` § Received read state and `docs/knowledge/features/conversation-unread.md` § How it works: durable latest-ID advancement, monotonic lists, older acknowledgements preserving unseen attention and legacy local-count authority.
+- `docs/knowledge/features/development-verification.md` § What each test tier proves: counted fake-transport evidence and the injected focus-oracle limitation.
+
 ## Security review
 
 **Verdict:** PASS

@@ -32,6 +32,24 @@ it('routes an observed read only to its unique original host', () => {
   expect(router.route('c', 'b')).toBeNull()
 })
 
+it.each(['list replacement', 'deletion', 'pairing removal'])('routes the surviving claim after last-indexed host %s', removal => {
+  const h = harness()
+  const a = h.connect('a')
+  h.connect('b')
+  emit(h.router, listEvent('a', 'c'))
+  emit(h.router, listEvent('b', 'c'))
+  expect(h.router.route('c', 'a')).toBeNull()
+  expect(h.router.route('c', 'b')).toBeNull()
+  if (removal === 'list replacement') emit(h.router, listEvent('b'))
+  else if (removal === 'deletion') {
+    const deleted: StampedDaemonEvent = { type: 'conversationDeleted', id: 'c', serverId: 'b' }
+    emit(h.router, deleted)
+  } else h.disconnect('b')
+  expect(h.router.route('c', 'b')).toBeNull()
+  expect(h.router.route('c', 'a')).toBe(a)
+  expect(h.router.route('c', 'b')).toBeNull()
+})
+
 /** A stand-in connection. Identity is the whole contract — the router never calls a member. */
 interface FakeConnection {
   readonly server: string

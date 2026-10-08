@@ -113,7 +113,9 @@ export function useReadObservation(id: string | null, readerOpen: boolean,
     resize.observe(region); resize.observe(covered); resize.observe(tail)
     for (const chrome of covered.querySelectorAll('.conversation__top-chrome, .conversation__input-chrome')) resize.observe(chrome)
     region.addEventListener('scroll', observe); window.addEventListener('focus', observe)
+    // A list can establish read eligibility without changing the committed display.
+    const offList = conversationListStore.subscribe(observe)
     observe()
-    return () => { resize.disconnect(); region.removeEventListener('scroll', observe); window.removeEventListener('focus', observe) }
+    return () => { offList(); resize.disconnect(); region.removeEventListener('scroll', observe); window.removeEventListener('focus', observe) }
   }, [id, readerOpen, slice, pane, thread])
 }

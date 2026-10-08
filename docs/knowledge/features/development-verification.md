@@ -266,6 +266,11 @@ from running to idle. Drive the prerequisite transition when the fixture require
 
 ## Layout and input
 
+For message-action sizing, normal controls fit inside the existing 80px bubble, so
+comparing normal and hidden buttons alone passes even without size containment.
+[Message-bubble testing](conversation-shell-message-bubble-testing.md#action-sizing-regression)
+records the test-only taller stack, browser height/gap comparisons and counted evidence.
+
 A completed Playwright `hover()` does not guarantee that Chromium still matches
 `:hover` at the following style read. Shown windows on one Xvfb display can deliver
 native pointer input between those operations. Observe the target's `matches(':hover')`,

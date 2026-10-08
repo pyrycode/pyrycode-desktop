@@ -2,6 +2,8 @@
 
 The desktop text message bubble, its reserved timestamp and optional turn stats, and copy/reply controls
 beside it. Text rows are centred within a 900px outer cap, with a 40px far-side inset.
+See [testing](conversation-shell-message-bubble-testing.md) for regression fixtures and counted
+evidence, and [attachment slots](conversation-shell-message-bubble-attachments.md) for file/image rows.
 
 Part of [Conversation shell](conversation-shell.md); see that document for what the screen does, its
 edge cases and its links. The bubble's original shipped shape and its `assistantText`/`userText` render
@@ -173,7 +175,11 @@ Module-local `MessageActions({ text, role, onReply })` in `ConversationScreen.ts
 of the bubble**: after assistant bubbles (actions on the right), before delivered user bubbles (actions
 on the left), including bubbles with code blocks or attachments. `.message-actions` is a fixed 13px
 flex column stretching to the bubble's height and vertically centring the whole copy/reply stack,
-separated from the bubble by 12px. Queued rows use a 12px variant for Send now/Cancel;
+separated from the bubble by 12px. `.message-actions:not(.message-actions--queued)` uses
+`contain: size`: the stack cannot contribute intrinsic height to the flex row, so the bubble
+determines row height and neighbour spacing even when the controls are taller than its content.
+The explicit flex basis preserves action width under containment; stretch and centring still apply.
+Queued rows are excluded from containment and keep their 12px Send now/Cancel variant;
 see [queued side actions](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213).
 
 `BubbleMeta({ side, createdAt, turnStats })` remains the bubble's **last child**, after markdown or the
@@ -475,95 +481,8 @@ would reject the expected timestamp reveal instead of proving that no stats were
 
 ## Testing
 
-**vitest** (static server renders, no DOM): `copyMessageText.test.ts` mocks
-`navigator.clipboard.writeText` as a global and asserts the exact string reaches it, a resolved write
-returns `true`, a rejected write returns `false` without throwing, and a missing `navigator.clipboard`
-returns `false` untouched. `ConversationScreen.test.tsx` asserts the assistant bubble (settled and
-in-progress) and the user bubble each end in `.bubble__meta` as the bubble's *last* child (index
-ordering against the message text and against `.bubble__markdown`), the user meta row carries
-`bubble__meta--user` and the assistant meta row does not. Copy is a `<button type="button">` with
-`COPY_MESSAGE_LABEL` inside a direct `.message-actions` sibling: before the user bubble and after
-settled or streaming assistant bubbles, including file/image children and fenced code. The meta row
-contains no button. Reply follows copy as a second native named button on both sides, including the
-streaming tail and attached bubbles; its icon introduces no focus stop. Queued rows carry the text-row
-modifier and queued actions column but have no copy, reply or meta;
-standalone offers have none of that text-row treatment. The queued row / `MessageBubble` residue
-render **zero** `.bubble__meta` (a count assertion over the whole markup, not a per-string absence).
-`messageTime.test.ts` covers the
-formatter alone — the drawing's own moment verbatim, a single-digit day/month/hour/minute together
-(proving all four `padStart`s at once), midnight and 23:59 (24-hour, no meridiem), a sub-minute component
-that must not leak into the string, a sub-four-digit year, and the `toLocaleString`/`Intl`-removal case
-above. #1014 also added stamped `assistantText`/`userText` cases to the #969 meta-row `describe` in
-`ConversationScreen.test.tsx` alongside an absent-stamp case; the 39 pre-existing stamp-free item literals
-in that file were left unedited — #1013's optional field is what keeps them compiling, and they remain the
-coverage for the empty-slot path. **#1057's whitespace fix gained no unit test** — `vitest.config.ts`
-runs the `node` environment, every renderer spec is a `renderToStaticMarkup` string with no stylesheet
-and no layout, and the markup is byte-identical before and after; see § Whitespace above and
-`e2e/user-whitespace.spec.ts` below.
-
-**Playwright** (`e2e/message-copy.spec.ts`, fake-transport tier): the clipboard-permission measurement
-above; the keyboard path (focus + Enter, same clipboard read-back); and the restyle's geometry as
-computed style — all four `border-radius` corners equal, `padding` 16/20, and the meta row's
-`justify-content` differing between the two sides. Its copy locator now starts from the message row.
-`assistant-whitespace` keeps its inert-markdown check inside markdown but counts working controls
-at the row, naming both `Copy message` and `Reply to message`; saved-history and offline copy locators
-likewise use the row.
-Filling the slot broke thirteen *other* specs' bubble text assertions across the fake tier plus four
-raw `textContent` reads in the real-claude tier — see
-[E2E test harness — scenario history](e2e-harness-scenarios.md) and [Real-claude liveness
-e2e](real-claude-liveness-e2e.md#assertions--content-agnostic-two-turn-liveness) for the fix and the sweep
-method that finds the next one.
-
-**Side-actions geometry and reveal** (`e2e/message-side-actions.spec.ts`, fake transport): both sides
-with long and short text at 800/1280/1800 window widths, centred 900px outer cap, 40px insets,
-13px stretching actions column, 12px row gap, centred copy/reply stack, both glyph sizes, 12px glyph
-spacing, separate targets and thread overflow containment. Centring copy alone would reject the
-correct two-control stack.
-It checks unchanged inverse-primary ink on hover/press, a visible keyboard outline, and timestamp
-reveal over empty row space and on copy/file-button focus with identical bubble and row dimensions.
-It also copies a streaming partial reply through the OS clipboard, verifies queued sizing/dimming
-and Cancel activation without copy/reply/meta, and guards standalone-offer sizing.
-Queued geometry, fixture setup and counted browser/visual evidence are in
-[queued-action testing](conversation-shell-conversation-and-modals.md#queued-action-testing). Static tests establish
-the image-button markup; the row's `:focus-within` rule applies to image buttons too.
-
-**Side-actions hover** (same spec): both message roles at 800px and 1280px, token fill,
-6px corners and measured 4px glyph-relative bounds for each action. It checks no sibling
-layer, identical row/bubble/actions/button/glyph boxes during hover and after leaving,
-then real Tab transitions with the existing outline style, width, colour and button radius
-and no layer. Static renders cannot establish these paint or interaction claims.
-
-**Hover acceptance evidence (#1864).** Dispatcher gate 6 at `39c71b161b924eaf8af079028390b3523d36bf62`
-executed 340 tests: 340 passed, 0 failed, 4 skipped. The [verifier's counted review](https://github.com/pyrycode/pyrycode-desktop/pull/1870#issuecomment-6044032161)
-confirms both side-actions scenarios were present and passed (2 executed, 2 passed, 0 failed,
-0 skipped), including `copy and reply hover layers surround only the pointed glyph without changing layout or keyboard focus`.
-It also confirms all eight assistant-row copy/reply hover/focus captures at 800×800 and
-1280×800 matched Figma 840:16132. Live Claude was not required or run for this CSS change.
-
-**Recorded acceptance evidence (#1778).** The dispatcher browser gate on `10d57f51` executed 287
-tests: 287 passed, 0 failed, 4 skipped. The [verifier's counted runtime review](https://github.com/pyrycode/pyrycode-desktop/pull/1799#issuecomment-6008316736)
-confirms that the named `message-copy`, `user-whitespace`, `assistant-whitespace`, `thread-shadow`
-and `turn-stats-hover` regression specs were present, executed and passed with their behavioral
-checks preserved. Along with `message-side-actions`, `chat-history-recording` and
-`offline-conversation-actions`, that group executed 28 tests: 28 passed, 0 failed, 1 platform skip.
-The skipped case is not a pass. No live-Claude evidence is required for this presentation change.
-
-**Reply acceptance evidence (#1779).** On `986c9845`, the dispatcher browser gate executed 314 tests:
-314 passed, 0 failed, 5 skipped. The [verifier's counted review](https://github.com/pyrycode/pyrycode-desktop/pull/1812#issuecomment-6027306207)
-confirms all four active `e2e/message-reply.spec.ts` scenarios were present and passed, covering
-pointer/keyboard append and outgoing text, covered-composer focus, equal-ID host draft isolation and
-reopened saved/offline drafting. It also confirms the named side-actions geometry test and task-list
-test passed, with all 13 assistant-whitespace scenarios passing. Equal-ID history persistence was
-skipped in that run; it is now enabled and checks both protected timelines before reopening the
-first host offline and quoting its own reply. All five reply scenarios executed and passed at
-`0b0bfe73` (full gate: 322 executed, 322 passed, 0 failed, 4 skipped; reply spec: 5 executed,
-5 passed, 0 failed, 0 skipped); see [counted evidence](development-verification.md#equal-id-received-history).
-Draft isolation and ordinary offline drafting alone do not prove persistence. SVG decoding and
-captures at 1280×800 and 800×800 were accepted against Figma in the earlier review.
-
-**The attachment slots' own coverage (#815, #816, #1045, #869)** is in
-[Conversation shell — message bubble attachment slots § Testing](conversation-shell-message-bubble-attachments.md#testing),
-alongside the sections that describe what each spec proves.
+See [message-bubble testing](conversation-shell-message-bubble-testing.md#testing) for static
+and browser coverage, regression fixtures and counted acceptance evidence.
 
 ## Related
 

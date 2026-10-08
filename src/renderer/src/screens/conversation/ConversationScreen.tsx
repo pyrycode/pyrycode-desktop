@@ -897,6 +897,11 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
   // neither hook below runs at all, since renderer tests server-render through renderToStaticMarkup.
   const growth = useRef<ResizeObserver | null>(null)
   const observedRegion = useRef<HTMLElement | null>(null)
+  const membership = useRef<MutationObserver | null>(null)
+  const rows = useRef<{ root: Element | null; positions: Map<Element, number>;
+    eligible: Element[]; visible: Set<Element> }>({ root: null,
+    positions: new Map(), eligible: [], visible: new Set() })
+  const chromeTargets = useRef(new Set<Element>())
   // The offset the pin itself last wrote, while the scroll event that write queued is still outstanding. See
   // `reassertPinnedToBottom` for why this exists and why it cannot go stale.
   const pinnedOffset = useRef<number | null>(null)
@@ -906,13 +911,64 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
     prependedRows: number
     conversationId: string | null
   } | null>(null)
+  const refreshRow = (row: Element): void => {
+    const index = rows.current
+    const position = index.positions.get(row)
+    if (position === undefined) return
+    const visible = !row.hasAttribute('data-history-gap') && row.getBoundingClientRect().height > 0
+    if (visible === index.visible.has(row)) return
+    let lo = 0
+    let hi = index.eligible.length
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1
+      const candidatePosition = index.positions.get(index.eligible[mid])
+      if (candidatePosition !== undefined && candidatePosition < position) lo = mid + 1
+      else hi = mid
+    }
+    if (visible) { index.eligible.splice(lo, 0, row); index.visible.add(row) }
+    else { index.eligible.splice(lo, 1); index.visible.delete(row) }
+  }
+  const syncRows = (el: Element, records = membership.current?.takeRecords() ?? []): void => {
+    const index = rows.current
+    if (index.root !== el || records.some(record => record.type === 'childList' && record.target === el)) {
+      const children = Array.from(el.children)
+      const positions = new Map(children.map((row, position) => [row, position]))
+      for (const row of index.positions.keys()) {
+        if (!positions.has(row)) growth.current?.unobserve(row)
+      }
+      for (const row of children) {
+        if (!index.positions.has(row)) growth.current?.observe(row)
+      }
+      index.root = el
+      index.positions = positions
+      index.eligible = children.filter(row => !row.hasAttribute('data-history-gap') && row.getBoundingClientRect().height > 0)
+      index.visible = new Set(index.eligible)
+      return
+    }
+    const changed = new Set<Element>()
+    for (const record of records) {
+      let node = record.target instanceof Element ? record.target : record.target.parentElement
+      while (node !== null && node !== el && node.parentElement !== el) node = node.parentElement
+      if (node !== null && node.parentElement === el) changed.add(node)
+    }
+    for (const row of changed) refreshRow(row)
+  }
   const rememberTop = (el: HTMLDivElement): void => {
-    const edge = Math.max(el.getBoundingClientRect().top,
+    syncRows(el)
+    const threadTop = el.getBoundingClientRect().top
+    const edge = Math.max(threadTop,
       paneRef.current?.querySelector('.conversation__top-chrome')?.getBoundingClientRect().bottom ?? 0)
-    const row = Array.from(el.children).find(child => !child.hasAttribute('data-history-gap') &&
-      child.getBoundingClientRect().bottom > edge) ?? null
+    const candidates = rows.current.eligible
+    let lo = 0
+    let hi = candidates.length
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1
+      if (candidates[mid].getBoundingClientRect().bottom <= edge) lo = mid + 1
+      else hi = mid
+    }
+    const row = candidates[lo] ?? null
     topAnchor.current = row !== null
-      ? { row, top: row.getBoundingClientRect().top - el.getBoundingClientRect().top,
+      ? { row, top: row.getBoundingClientRect().top - threadTop,
           prependedRows, conversationId }
       : null
   }
@@ -981,13 +1037,8 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
   // wrapper would move all three, change the markup run every renderer test asserts against, and interpose an
   // element between the rows and a container several CSS rules describe themselves as stretch items of.
   //
-  // THE OBSERVED SET SYNCS HERE because this effect already runs after every render and rows can only appear
-  // via a render. `observe()` on an already-observed target with the same box is a no-op, so the loop is
-  // O(rows) early returns — and re-observing unconditionally is also what makes the set heal itself after
-  // StrictMode's simulated teardown. Rows only ever LEAVE the set with the container: within one container's
-  // lifetime the timeline is append-only with tail mutation under index keys, so rows are updated in place,
-  // and `.conversation__thread` unmounts outright when the timeline empties (Timeline renders <EmptyThread />
-  // at zero items). A change of container identity is therefore the one and only disconnect point.
+  // Membership mutations reconcile row targets; same-row growth updates only that row's eligibility.
+  // The layout effect drains pending mutations before lookup, including hidden tool-group changes.
   //
   // Two properties make the dep-free form safe. It is IDEMPOTENT: it writes only while following, and
   // assigning scrollTop a value it already holds is a no-op that fires no scroll event, so there is no
@@ -1026,13 +1077,15 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
       if (el.scrollTop !== 0) pinnedOffset.current = el.scrollTop
     }
 
-    const observer = (growth.current ??= new ResizeObserver(() => {
+    const observer = (growth.current ??= new ResizeObserver(entries => {
       // Re-read the ref rather than closing over `el`: an observation can be delivered in the same frame as
       // an unmount, and the null path is that case.
       const region = ref.current
       const currentPane = paneRef.current
       if (currentPane) measureThreadChrome(currentPane)
       if (region !== null) {
+        syncRows(region)
+        for (const entry of entries) refreshRow(entry.target)
         reassertPinnedToBottom(region, following, pinnedOffset)
         viewport.current = { width: region.clientWidth, height: region.clientHeight }
       }
@@ -1040,14 +1093,27 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
     const observationRoot = el ?? pane
     if (observedRegion.current !== observationRoot) {
       observer.disconnect()
+      membership.current?.disconnect()
+      membership.current = null
+      rows.current = { root: null, positions: new Map(), eligible: [], visible: new Set() }
+      chromeTargets.current.clear()
+      topAnchor.current = null
       observedRegion.current = observationRoot
+      if (el !== null) {
+        membership.current = new MutationObserver(records => syncRows(el, records))
+        membership.current.observe(el, { childList: true, subtree: true, characterData: true,
+          attributes: true, attributeFilter: ['hidden', 'style', 'class', 'data-history-gap'] })
+      }
     }
-    observer.observe(pane)
-    if (header) observer.observe(header)
-    if (input) observer.observe(input)
+    const chrome = new Set<Element>([pane])
+    if (header) chrome.add(header)
+    if (input) chrome.add(input)
+    if (el) chrome.add(el)
+    for (const target of chromeTargets.current) if (!chrome.has(target)) observer.unobserve(target)
+    for (const target of chrome) if (!chromeTargets.current.has(target)) observer.observe(target)
+    chromeTargets.current = chrome
     if (el !== null) {
-      observer.observe(el)
-      for (const row of el.children) observer.observe(row)
+      syncRows(el)
       reassertPinnedToBottom(el, following, pinnedOffset)
       viewport.current = { width: el.clientWidth, height: el.clientHeight }
       rememberTop(el)
@@ -1062,6 +1128,11 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
   useEffect(() => {
     return () => {
       growth.current?.disconnect()
+      membership.current?.disconnect()
+      membership.current = null
+      rows.current = { root: null, positions: new Map(), eligible: [], visible: new Set() }
+      chromeTargets.current.clear()
+      topAnchor.current = null
       observedRegion.current = null
     }
   }, [])

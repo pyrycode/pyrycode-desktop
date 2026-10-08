@@ -13,6 +13,24 @@ const entry = (i: number) => ({ id: i, type: 'message', ts, payload: {
 const snapshotText = (result: ChatHistoryResult): string => result.status === 'stored' && result.snapshot.kind === 'timeline'
   ? result.snapshot.items.map((i) => 'text' in i ? i.text : '').join('|') : ''
 
+async function pushDeltaThroughPausedFrame(app: PairedApp, turnId: string, seq: number, text: string) {
+  await app.page.evaluate(({ turnId, seq }) => {
+    Object.assign(window, { bufferedDeltaDelivered: false })
+    const off = window.pyry.onDaemonEvent(event => {
+      if (event.type === 'assistantDelta' && event.turnId === turnId && event.seq === seq) {
+        Object.assign(window, { bufferedDeltaDelivered: true })
+        off()
+      }
+    })
+  }, { turnId, seq })
+  await app.daemon.pushFrame(frame('assistant_delta', {
+    conversation_id: SEEDED_ROW.id, turn_id: turnId, seq, text }))
+  await expect.poll(() => app.page.evaluate(() =>
+    (window as typeof window & { bufferedDeltaDelivered: boolean }).bufferedDeltaDelivered)).toBe(true)
+  // Publish on the next frame, keeping the writer's 200ms save timer buffered for removal/close.
+  await app.page.clock.runFor(16)
+}
+
 test('confirmed deletion removes saved content through restart without waiting for a list refresh', async ({ launchPairedApp }) => {
   const commands: string[] = []
   let deleteReplyTo: number | undefined
@@ -134,8 +152,7 @@ test('explicit unpair discards buffered history across restart while same-server
 
   await first.page.clock.install({ time: new Date('2026-09-13T00:00:00Z') })
   await first.page.clock.pauseAt(new Date('2026-09-13T00:00:01Z'))
-  await first.daemon.pushFrame(frame('assistant_delta', {
-    conversation_id: SEEDED_ROW.id, turn_id: 'before-forget', seq: 1, text: ' buffered stale tail' }))
+  await pushDeltaThroughPausedFrame(first, 'before-forget', 1, ' buffered stale tail')
   await expect(first.page.locator('.bubble[data-thread-role="assistant"]')).toContainText('buffered stale tail')
   expect(await read(first.page)).toEqual(saved)
   await first.page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
@@ -347,11 +364,11 @@ test('records received content, drains buffered quit, and reads locally after re
 test('window close drains the writer and a reopened window can read its saved rows', async ({ launchPairedApp }) => {
   // macOS only: everywhere else `window-all-closed` quits the app, so there is no window to reopen.
   test.skip(process.platform !== 'darwin', 'only macOS keeps the app running after its last window closes')
-  const { page, app, daemon, servers } = await launchPairedApp()
+  const launched = await launchPairedApp()
+  const { page, app, servers } = launched
   await page.clock.install({ time: new Date('2026-09-12T12:00:00Z') })
   await page.clock.pauseAt(new Date('2026-09-12T12:00:01Z'))
-  await daemon.pushFrame(frame('assistant_delta', {
-    conversation_id: SEEDED_ROW.id, turn_id: 'window-turn', seq: 0, text: 'buffered before window close' }))
+  await pushDeltaThroughPausedFrame(launched, 'window-turn', 0, 'buffered before window close')
   await expect.poll(() => page.locator('.bubble[data-thread-role="assistant"]').textContent()).toContain('buffered before window close')
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())
   await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(0)

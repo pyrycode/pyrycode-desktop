@@ -733,10 +733,17 @@ export function timelineWriteTarget(
   }
 }
 
+export interface TimelineFrameOptions {
+  scheduler: { request: (callback: () => void) => number; cancel: (handle: number) => void }
+  batch: (run: () => void) => void
+  receiptHost: () => string | null | undefined
+  beforeMutation: (flush: () => void) => () => void
+}
+
 /**
  * Subscribe via the injected `onDaemonEvent`; each owned arm translates to a `ThreadEvent` and is
- * dispatched, every other arm no-ops. Returns the exact unsubscribe handle from `onDaemonEvent` (the
- * `subscribeRunConfig` idiom) so the React binding can use it as its effect cleanup. Injecting
+ * dispatched, every other arm no-ops. With no frame options, returns the original unsubscribe handle.
+ * Frame options defer delta-only bursts and settle accepted deltas during effect cleanup. Injecting
  * `onDaemonEvent` + `dispatch` keeps it React-free and unit-testable with plain spies. The listener
  * only translates + dispatches — it never throws into React, imports no store, and performs no fan-out
  * of its own.
@@ -759,25 +766,56 @@ export function timelineWriteTarget(
  */
 export function subscribeTimeline(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
-  dispatch: (event: ThreadEvent, conversationId: string | null, joinKey?: string, historyEntryId?: number) => void,
+  dispatch: (event: ThreadEvent, conversationId: string | null, joinKey?: string, historyEntryId?: number, origin?: string | null) => void,
   now?: () => number,
-  onReconnect?: (serverId: string) => void
+  onReconnect?: (serverId: string) => void,
+  frames?: TimelineFrameOptions
 ): () => void {
-  return onDaemonEvent((event) => {
+  let active = true
+  let pending: (() => void)[] = []
+  let scheduled: number | undefined
+  let generation = 0
+  const flush = (): void => {
+    generation++
+    if (scheduled !== undefined) frames?.scheduler.cancel(scheduled)
+    scheduled = undefined
+    const accepted = pending
+    pending = []
+    if (accepted.length > 0) frames?.batch(() => { for (const apply of accepted) apply() })
+  }
+  const removeBoundary = frames?.beforeMutation(flush)
+  const off = onDaemonEvent((event) => {
+    if (!active) return
+    if (event.type !== 'assistantDelta') flush()
     if (event.type === 'connected' && 'serverId' in event && typeof event.serverId === 'string') {
       onReconnect?.(event.serverId)
     }
     const threadEvent = translateTimelineEvent(event, now)
     if (!threadEvent) return
-    // #1225 — the ARITY widens a third time, for #756's own arithmetic: a function of arity 2 is
-    // assignable to a parameter typed at arity 3, so the twenty existing call sites keep compiling.
     const conversationId = timelineTargetFor(event)
     if (conversationId !== null && 'serverId' in event && typeof event.serverId === 'string' && event.historyEntryId !== undefined) {
       conversationListStore.getState().advanceLatestEntry(event.serverId, conversationId, event.historyEntryId)
     }
-    if (event.historyEntryId === undefined) dispatch(threadEvent, conversationId, joinKeyToRecord(event, conversationId))
-    else dispatch(threadEvent, conversationId, joinKeyToRecord(event, conversationId), event.historyEntryId)
+    const joinKey = joinKeyToRecord(event, conversationId)
+    const historyEntryId = event.historyEntryId
+    if (frames && event.type === 'assistantDelta') {
+      const origin = frames.receiptHost() ?? null
+      pending.push(() => dispatch(threadEvent, conversationId, joinKey, historyEntryId, origin))
+      if (scheduled === undefined) {
+        const frameGeneration = generation
+        scheduled = frames.scheduler.request(() => { if (active && frameGeneration === generation) flush() })
+      }
+    } else if (event.historyEntryId === undefined) dispatch(threadEvent, conversationId, joinKey)
+    else dispatch(threadEvent, conversationId, joinKey, event.historyEntryId)
   })
+  if (!frames) return off
+  return () => {
+    if (!active) return
+    active = false
+    off()
+    flush()
+    removeBoundary?.()
+  }
 }
 
 /**
@@ -810,9 +848,8 @@ function joinKeyToRecord(event: DaemonEvent, conversationId: string | null): str
  * inside the effect, never during render.
  *
  * #756 makes this the FAN-OUT composition root: the flat store is written unconditionally and FIRST,
- * then the keyed holder, guarded on a non-null id. Flat-first is not cosmetic — it is what keeps AC4
- * true even if the keyed write were to throw. Both writes are synchronous zustand `set`s with no
- * `await` between them, so nothing can interleave. The dual write is deliberate and temporary
+ * then the keyed holder, guarded on a non-null id. Delta folds run in synchronous publication batches
+ * with no `await` between them, so each store publishes the burst once. The dual write is deliberate and temporary
  * (Strangler Fig, ADR 0008): nothing reads the holder yet, so this ships as a verified no-op, and
  * retiring the flat store belongs to the ticket that removes its last reader.
  *
@@ -844,7 +881,7 @@ export function useTimelineBridge(getOpenConversationId: () => string | null): v
     () =>
       subscribeTimeline(
         window.pyry.onDaemonEvent,
-        (event, conversationId, joinKey, historyEntryId) => {
+        (event, conversationId, joinKey, historyEntryId, origin) => {
           if (event.type !== 'messageDelivery' || (conversationId === getOpenConversationId() &&
               (event.serverId === null || conversationTimelineStore.getState().timelines.get(conversationId ?? '')?.serverId === event.serverId))) {
             timelineStore.getState().dispatch(event)
@@ -855,11 +892,24 @@ export function useTimelineBridge(getOpenConversationId: () => string | null): v
             // decline to record it when the fold turns out to change nothing. `subscribeTimeline` has
             // already withheld it for an event whose slice was resolved from the screen rather than
             // from the event; nothing here re-derives that.
-            conversationTimelineStore.getState().dispatchFor(target, event, joinKey, historyEntryId)
+            conversationTimelineStore.getState().dispatchFor(target, event, joinKey, historyEntryId, origin)
           }
         },
         Date.now,
-        serverId => conversationTimelineStore.getState().clearSessionErrorsForHost(serverId)
+        serverId => conversationTimelineStore.getState().clearSessionErrorsForHost(serverId),
+        {
+          scheduler: {
+            request: callback => window.requestAnimationFrame(callback),
+            cancel: handle => window.cancelAnimationFrame(handle)
+          },
+          receiptHost: () => window.pyry.chatHistoryReceipt()?.serverId,
+          batch: run => timelineStore.batchTimeline(() => conversationTimelineStore.batchTimeline(run)),
+          beforeMutation: flush => {
+            const flat = timelineStore.onBeforeTimelineMutation(flush)
+            const keyed = conversationTimelineStore.onBeforeTimelineMutation(flush)
+            return () => { flat(); keyed() }
+          }
+        }
       ),
     [getOpenConversationId]
   )

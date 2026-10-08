@@ -37,3 +37,6 @@ No new I/O, wire parsing or failure modes. Existing typed boundary results and r
 
 ## Open Questions
 None. The simpler shape is publication transactions around existing folds rather than a second batch reducer or concatenated text.
+
+## Revisions
+2026-10-08: The publication helper also flushes before an action's injected state read, because `beginLocalTimelineRead` can decide whether to replace a slice before reaching its setter. Staged reads inside batches remain immediate. Frame generations invalidate canceled callbacks so they cannot settle a newer burst. The mounted proof uses the existing React production devtools commit hook in the test window, with no production instrumentation.

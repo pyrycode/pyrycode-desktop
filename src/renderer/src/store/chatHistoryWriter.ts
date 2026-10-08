@@ -24,6 +24,7 @@ export function createChatHistoryWriter(deps: {
   timelines: Pick<StoreApi<ConversationTimelineStore>, 'getState' | 'subscribe'>
   subscribeTimelineWrites?: (listener: (state: ConversationTimelineStore, previous: ConversationTimelineStore,
     origin?: string | null) => void) => () => void
+  flushTimeline?: () => void
   subscribeEvents?: (listener: (event: StampedDaemonEvent) => void) => () => void
   receipt: () => Receipt | null
   write: (request: ChatHistoryRequest) => Promise<ChatHistoryResult>
@@ -264,6 +265,8 @@ export function createChatHistoryWriter(deps: {
   })
   deps.log({ event: 'history-writer-started' })
   return { flush, stop: () => {
+    // Window close can precede the next frame; capture accepted deliveries before detaching.
+    if (!stopped) deps.flushTimeline?.()
     stopped = true
     offLists(); offTimelines(); offRemoval(); offEvents?.()
     return Promise.all([...removals]).then(flush)
@@ -274,6 +277,7 @@ export function useChatHistoryWriter(): void {
   useEffect(() => {
     const writer = createChatHistoryWriter({ lists: conversationListStore, timelines: conversationTimelineStore,
       subscribeTimelineWrites: conversationTimelineStore.subscribeTimelineWrites,
+      flushTimeline: conversationTimelineStore.flushTimeline,
       subscribeEvents: window.pyry.onDaemonEvent,
       receipt: window.pyry.chatHistoryReceipt, write: window.pyry.chatHistory, log: window.pyry.sendDiagnostic,
       schedule: (run) => { const timer = setTimeout(run, 200); return () => clearTimeout(timer) } })

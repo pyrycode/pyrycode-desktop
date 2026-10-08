@@ -361,21 +361,57 @@ test('records received content, drains buffered quit, and reads locally after re
   expect(historyAsks).toBe(2)
 })
 
-test('window close drains the writer and a reopened window can read its saved rows', async ({ launchPairedApp }) => {
-  // macOS only: everywhere else `window-all-closed` quits the app, so there is no window to reopen.
-  test.skip(process.platform !== 'darwin', 'only macOS keeps the app running after its last window closes')
-  const launched = await launchPairedApp()
-  const { page, app, servers } = launched
-  await page.clock.install({ time: new Date('2026-09-12T12:00:00Z') })
-  await page.clock.pauseAt(new Date('2026-09-12T12:00:01Z'))
-  await pushDeltaThroughPausedFrame(launched, 'window-turn', 0, 'buffered before window close')
-  await expect.poll(() => page.locator('.bubble[data-thread-role="assistant"]').textContent()).toContain('buffered before window close')
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())
-  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(0)
-  const [reopened] = await Promise.all([app.waitForEvent('window'), app.evaluate(({ app }) => app.emit('activate'))])
-  const result = await reopened.evaluate(({ serverId, conversationId }) => window.pyry.chatHistory({
-    operation: 'readTimeline', serverId, conversationId }), { serverId: servers[0].serverId, conversationId: SEEDED_ROW.id })
-  expect(snapshotText(result)).toBe('buffered before window close')
+test('window close saves accepted deltas before their frame and reopening restores the full reply', async ({ launchPairedApp }) => {
+  const first = await launchPairedApp()
+  const { page, app, servers } = first
+  const serverId = servers[0].serverId
+  const read = (target: typeof page) => target.evaluate(({ serverId, conversationId }) => window.pyry.chatHistory({
+    operation: 'readTimeline', serverId, conversationId }), { serverId, conversationId: SEEDED_ROW.id })
+  const push = (seq: number, text: string) => first.daemon.pushFrame(encodeEnvelope({
+    id: 100 + seq, type: 'assistant_delta', history_entry_id: seq + 1,
+    ts: `2026-10-08T00:00:0${seq}Z`,
+    payload: { conversation_id: SEEDED_ROW.id, turn_id: 'window-turn', seq, text }
+  }))
+  await push(0, 'saved prefix')
+  await expect.poll(async () => snapshotText(await read(page))).toBe('saved prefix')
+  await page.evaluate(() => {
+    const state = { delivered: 0, requested: 0 }
+    Object.assign(window, { heldShutdownFrames: state })
+    window.requestAnimationFrame = () => { state.requested++; return -state.requested }
+    const cancel = window.cancelAnimationFrame.bind(window)
+    window.cancelAnimationFrame = handle => { if (handle >= 0) cancel(handle) }
+    window.pyry.onDaemonEvent(event => {
+      if (event.type === 'assistantDelta' && event.turnId === 'window-turn' && event.seq === 1) state.delivered++
+    })
+  })
+  await push(1, ' accepted tail')
+  const held = () => page.evaluate(() => (window as typeof window & {
+    heldShutdownFrames: { delivered: number; requested: number }
+  }).heldShutdownFrames)
+  await expect.poll(async () => (await held()).delivered).toBe(1)
+  expect((await held()).requested).toBe(1)
+  await expect(page.locator('[data-thread-role="assistant"] .bubble__markdown')).toHaveText('saved prefix')
+  expect(snapshotText(await read(page))).toBe('saved prefix')
+
+  // Close the real window with the accepted tail still held; never release its animation frame.
+  let reopened: typeof page
+  if (process.platform === 'darwin') {
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())
+    await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(0)
+    ;[reopened] = await Promise.all([app.waitForEvent('window'), app.evaluate(({ app }) => app.emit('activate'))])
+  } else {
+    await Promise.all([app.waitForEvent('close'),
+      app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())])
+    await first.daemon.close()
+    const second = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
+    reopened = second.page
+  }
+  await expect(reopened.locator('section[aria-label="Conversations"]')).toBeVisible()
+  const result = await read(reopened)
+  expect(snapshotText(result)).toBe('saved prefix accepted tail')
+  expect(result).toMatchObject({ status: 'stored', snapshot: { display: [{ id: 1 }, { id: 2 }] } })
+  await reopened.locator('.channel-list__row-open').click()
+  await expect(reopened.locator('[data-thread-role="assistant"] .bubble__markdown')).toHaveText('saved prefix accepted tail')
 })
 
 test('restores a pairing-rejected saved host beside a usable connected host', async ({ launchPairedApp }) => {

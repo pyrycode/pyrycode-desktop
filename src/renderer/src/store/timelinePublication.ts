@@ -46,6 +46,7 @@ export function createPublishedTimelineStore<T extends object>(
   })
   return Object.assign(store, {
     batchTimeline: (run: () => void) => batchTimeline(run),
+    flushTimeline: () => { for (const boundary of boundaries) boundary() },
     subscribeTimelineWrites: (listener: (state: T, previous: T, origin?: string | null) => void) => {
       writes.add(listener)
       const off = store.subscribe((state, previous) => {

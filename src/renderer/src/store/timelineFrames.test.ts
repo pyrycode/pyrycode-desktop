@@ -63,11 +63,43 @@ function historyWriter(h: ReturnType<typeof harness>) {
   const save = vi.fn(async (_request: ChatHistoryRequest): Promise<ChatHistoryResult> => ({ status: 'ok' }))
   const writer = createChatHistoryWriter({ lists: createConversationListStore(), timelines: h.keyed,
     subscribeTimelineWrites: h.keyed.subscribeTimelineWrites,
+    flushTimeline: h.keyed.flushTimeline,
     receipt: h.receipt, write: save, log: vi.fn(), schedule: () => () => {} })
   const snapshots = () => save.mock.calls.map(([request]) => request)
     .filter(request => request.operation === 'replaceTimeline').map(request => request.snapshot)
   return { save, writer, snapshots }
 }
+
+it.each([false, true])('stop saves accepted deltas before detaching the writer, saved prefix=%s', async savedPrefix => {
+  const h = harness()
+  const w = historyWriter(h)
+  h.delta(0)
+  if (savedPrefix) {
+    h.frame()
+    await w.writer.flush()
+  }
+  h.delta(1)
+  const stale = [...h.callbacks.values()][0]
+  h.host(undefined)
+  const publications = h.keyedPublications.mock.calls.length
+  // Stop the writer while the bridge is still mounted and its next frame has not run.
+  await w.writer.stop()
+  expect(h.callbacks.size).toBe(0)
+  expect(h.keyedPublications).toHaveBeenCalledTimes(publications + 1)
+  expect(h.flatPublications).toHaveBeenCalledTimes(publications + 1)
+  expect(w.snapshots()).toHaveLength(savedPrefix ? 2 : 1)
+  const saved = w.snapshots().at(-1)!
+  expect(saved).toMatchObject({ serverId: 'host-a', conversationId: 'a', items: [{ text: '01' }] })
+  expect(saved.display?.map(part => part.id)).toEqual([1, 2])
+  const restored = createConversationTimelineStore()
+  restored.getState().beginLocalTimelineRead('host-a', 'a')!.complete(saved)
+  expect(restored.getState().timelines.get('a')?.timeline.items[0]).toMatchObject({ text: '01' })
+  stale()
+  h.stop()
+  await w.writer.stop()
+  expect(h.keyedPublications).toHaveBeenCalledTimes(publications + 1)
+  expect(w.snapshots()).toHaveLength(savedPrefix ? 2 : 1)
+})
 
 it('saves a deferred burst after receipt expiry and restores all durable fragments', async () => {
   const h = harness()

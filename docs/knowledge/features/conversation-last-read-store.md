@@ -28,12 +28,27 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
 ## How it works
 
 - **Daemon publication observes a committed display.** `useReadObservation`, mounted in
-  `ConversationScreen`, captures the rendered slice in a layout effect. The newest user/assistant
+  `ConversationScreen`, updates a ref with the rendered slice and derived durable target only in a
+  layout effect. Stable callbacks read that ref, never an initial captured slice or an uncommitted
+  timeline-store snapshot; current list state supplies ownership and read eligibility only. Each
+  commit explicitly rechecks observation: a target can advance without any geometry change, so
+  resize alone cannot establish publication. The newest user/assistant
   message's trailing edge must be inside the thread viewport between the measured header and input
   borders; the document must be focused and visible, and the Markdown reader closed. Opening,
-  receipt and bottom-following alone prove nothing. Scroll, focus, resize and list changes recheck
+  receipt and bottom-following alone prove nothing; hidden or queued rows cannot publish.
+  Scroll, focus, resize and list changes recheck
   that committed slice. List changes matter because received-read eligibility can arrive after the
   display commits; waiting for another timeline change would leave a visible tail unpublished.
+- **Observation setup follows row and mounted-node identity, not streamed slice identity.** A layout
+  effect reconciles setup after each commit. The same conversation, numeric newest-message row key,
+  pane and thread nodes, and connected tail inside that thread reuse one ResizeObserver, scroll and
+  focus listeners, and list subscription. Newest-row discovery searches backwards and stops at the
+  first user/assistant item; replacement uses a targeted numeric `data-read-row` selector rather than
+  querying all read rows. Durable-target calculation still considers retained contributions below.
+  Setup exists even when its initial target is unknown, so independently admitted identity can later
+  publish without rediscovery. A changed conversation, key or mounted node disposes replaced setup;
+  reader coverage, missing slice/nodes/key and unmount also unsubscribe, remove listeners and
+  disconnect all observer targets. Observation watches thread, pane, tail and measured chrome.
 - **Only retained display identity supplies a target.** `readTargetFor` requires a contribution
   bound to the newest message's surviving numeric row key, then takes the highest retained row-bound
   ID (including folded deltas/tool patches) and transient display-state ID. The layout commit must

@@ -79,13 +79,15 @@ confirms both tests below were present, executed and passed in that run (scoped 
 
 ### Visible-tail read publication
 
-The [final verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/1883#issuecomment-6050294530)
-records dispatcher gates at `787b1258c30e692a824c81d6f829414809d9455d` on 2026-10-08:
-fake Playwright (`npx playwright test --reporter=json`) ran 357 executed, 357 passed,
-0 failed and 4 skipped. It confirms all six scenarios in
+The [final verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/1895#issuecomment-6055688246)
+confirms dispatcher gates at `fec401cf6ee638bd0d9bb5b8980f21ac7873322b` on 2026-10-08:
+fake Playwright (`npx playwright test --reporter=json`) ran 375 executed, 375 passed,
+0 failed and 3 skipped. It confirms all eight scenarios in
 [`visible-tail-read.spec.ts`](../../../e2e/visible-tail-read.spec.ts) were present, executed and
-passed: 6 executed, 6 passed, 0 failed, 0 skipped. These are:
+passed: 8 executed, 8 passed, 0 failed, 0 skipped. These are:
 
+- `read setup is reused across committed same-row deltas on short and long threads`
+- `stable callbacks exclude hidden, queued and received but uncommitted tails`
 - `committed folded tails require focus, uncovered viewport and a closed reader`
 - `ID-less replay stays unknown until independently admitted history, and unseen live content restores attention`
 - `late read contract rechecks the committed tail while visible`
@@ -103,11 +105,32 @@ without another user action, while gated cases wait. Repeated lists/delivery can
 and attention remains until a correlated reply or unsolicited received push. Immediate absence
 checks alone could pass before delivery; retain committed-content and received-state barriers.
 
+After setup settles, spec-local instrumentation attributes read observer construction by its first
+thread target and listener/subscription ownership by callback identity, excluding scroll-pin work
+and test-oracle discovery. The verifier confirms `read-work-30` and `read-work-400` each record zero
+observer constructions, tail discoveries, listener additions and subscription additions across
+separate same-row commits. Spaces advance durable targets with identical numeric row key and
+bounding rectangle; growing paragraphs also advance targets without setup churn. Row replacement
+keeps one active setup with connected targets; reader coverage and navigation away leave no active
+observer targets, listeners or subscription, and returning restores one setup. Independently admitted
+history reuses the initially unknown observation too. The [plan's baseline record](../../specs/architecture/1893-stable-read-observation.md#revisions)
+reports 3 constructions, 3 discoveries, 6 listener additions and 3 subscriptions for three same-row
+commits on each thread size at `9aa12511`; the new churn assertion failed before repair. These are
+recorded work counts, not a separately counted suite result or a documentation-stage rerun.
+
+For received-but-uncommitted exclusion, hold the scheduled animation frame and use a real preload
+receipt barrier before driving focus/scroll callbacks. Confirm the pending text is still absent and
+the outbound target unchanged, then release the frame and require the committed target advance.
+Injecting a non-delta daemon event, including a conversation list, flushes buffered deltas in
+`subscribeTimeline` and invalidates that pending-frame oracle. Hidden-document, hidden-row and
+queued-row cases wait for committed text before checking withheld targets, then clear the gate and
+require publication.
+
 Playwright's original CDP session forces focus, so blur cases inject only `document.hasFocus()`.
 Viewport, measured overlays, scrolling, reader geometry and outbound transport remain real.
 This proves the focus gate, not native OS blur propagation. No live-Claude execution was required
-or performed. Unit evidence is 9,587 executed/passed, 0 failed, 3 skipped; the verdict confirms
-26 router units passed, including ordinary cleanup before surviving-host reads. Publisher/identity
+or performed. Unit evidence is 9,606 executed/passed, 0 failed, 3 skipped; the verdict confirms
+all six publisher unit tests were present and passed. Publisher/identity
 units cover numeric admission, commit candidates, coalescing, failure retention, reconnect/isolation
 and protected restoration; static renders alone cannot prove the mounted observation.
 

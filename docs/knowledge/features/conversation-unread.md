@@ -38,7 +38,10 @@ outputs. `hasDaemonReadState(row)` tests whether both daemon fields are present,
 - **Publication and confirmation are separate.** The focused, uncovered committed newest-message
   tail supplies a host-bound observation through the [read publisher](conversation-last-read-store.md#how-it-works).
   Sending the command changes neither daemon read state nor this predicate's answer; a received
-  owning-host mark advances the comparison. Missing frame identity on a complete daemon row cannot
+  owning-host mark advances the comparison. Reusing observation setup still requires the latest
+  committed target and current sole host ownership on every observation; duplicate claims or a
+  mismatch with the displayed slice's host cannot create a new claim. Receipt of an uncommitted
+  delta cannot advance the observed target. Missing frame identity on a complete daemon row cannot
   restore local read authority. Daemons without the received contract retain local count persistence,
   stamps and pairing/per-server clears and receive no read command.
 - **Incomplete or absent daemon contract uses three legacy branches, in this order:**

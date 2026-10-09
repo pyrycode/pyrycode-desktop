@@ -83,10 +83,10 @@ const FIXED_TS = '2026-07-07T12:00:00.000Z'
 // delta because same-turn deltas coalesce into a single bubble (threadTimeline.appendDelta), so newlines
 // would grow one bubble instead of the row count this spec varies. (#607 since gave the assistant bubble
 // `white-space: pre-wrap`, so a newline now does buy height — the reason above is the one that stands.)
-// 20 is sized for headroom over the 1100x800 window (src/main/index.ts:37-38), not measured — if
+// 40 keeps parked readers a full viewport above the bottom even with metadata collapsed — if
 // the thread does not overflow, the scrollHeight > clientHeight gate fails loudly, which is the gate
 // working. Raise the count; never weaken the gate.
-const REPLY_TURNS = 24
+const REPLY_TURNS = 40
 const replyText = (turn: number): string => `Streamed reply line ${turn}`
 
 // A collapsed tool row's height: 1px border + 8px chip padding + the 20px summary line + 8 + 1. Asserted
@@ -418,12 +418,14 @@ test('upward wheel during streaming holds the reader after native motion settles
   await expect(thread).toContainText('Reader stream 0')
   await stableThreadOffset(page)
   await expectPinnedToBottom(page)
-  const before = await readThreadMetrics(page)
-  expect(before.scrollTop).toBeGreaterThan(4 * before.clientHeight)
   await expect(thread.locator('[data-history-gap]')).toHaveCount(0)
   const box = await thread.boundingBox()
   expect(box).not.toBeNull()
   await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2)
+  // Hover can reveal metadata; settle that layout before measuring native wheel movement.
+  await stableThreadOffset(page)
+  const before = await readThreadMetrics(page)
+  expect(before.scrollTop).toBeGreaterThan(4 * before.clientHeight)
   await thread.evaluate(el => el.addEventListener('wheel', event => {
     if (!event.isTrusted || event.deltaY >= 0) return
     el.dataset.readerWheelStart = String(el.scrollTop)
@@ -469,10 +471,11 @@ for (const delta of [1, AT_BOTTOM_TOLERANCE_PX]) {
     await expect(thread).toContainText('Reader stream 0')
     await stableThreadOffset(page)
     await expectPinnedToBottom(page)
-    const before = await readThreadMetrics(page)
-    expect(before.scrollTop).toBeGreaterThan(4 * before.clientHeight)
     await expect(thread.locator('[data-history-gap]')).toHaveCount(0)
     await thread.hover()
+    await stableThreadOffset(page)
+    const before = await readThreadMetrics(page)
+    expect(before.scrollTop).toBeGreaterThan(4 * before.clientHeight)
     await page.mouse.wheel(0, -delta)
     const held = await stableThreadOffset(page)
     expect(before.scrollTop - held).toBeCloseTo(delta, 0)

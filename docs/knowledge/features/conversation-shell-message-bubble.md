@@ -1,6 +1,6 @@
 # Conversation shell — message bubble
 
-The desktop text message bubble, its reserved timestamp and optional turn stats, and copy/reply controls
+The desktop text message bubble, its collapsible timestamp and optional turn stats, and copy/reply controls
 beside it. Text rows are centred within a 900px outer cap, with a 40px far-side inset.
 See [testing](conversation-shell-message-bubble-testing.md) for regression fixtures and counted
 evidence, and [attachment slots](conversation-shell-message-bubble-attachments.md) for file/image rows.
@@ -79,29 +79,31 @@ label vocabulary would be wearing another step's name for a coincidence in the n
 
 ### The meta row
 
-`.bubble__meta` is the row every text message bubble now ends in (Figma `Meta row`, 132:4446 assistant /
+`BubbleMeta` emits a details row only when a timestamp or formatted turn stats exists (Figma `Meta row`, 132:4446 assistant /
 132:4435 user): `display: flex`, `align-items: center`, `gap: var(--space-2)`, the body-small type
 quartet, and `color: var(--color-inverse-primary)` — read from the Figma **variable**, not the export's
 fallback hex (`#9dcbfc`), which is the light/dark transposition trap `tokens.css:25-33` already warns
 about. `.bubble__meta--user` adds `justify-content: flex-end` (the drawing's `justify-end` on 132:4435;
 the assistant row carries none, so the base rule's `flex-start` is already right).
 
-**`min-height: var(--text-body-small-line)` is load-bearing, not decorative.** The row holds
-`bubble__meta-time` and optional assistant turn stats; actions are siblings of the bubble. #970 split
-into a data slice
-([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013) — gives the `assistantText`/`userText`
-[timeline items](thread-timeline-internals.md#types) an optional `createdAt`) and a render slice
-([#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014) — formats it into this slot), both
-shipped. An empty inline element generates no line box, so without the `min-height` the row would collapse
-when `createdAt` is absent. The slot keeps its drawn 16px height even then.
+**Details collapse at rest (#1898), superseding #1778's timestamp reservation.**
+`.bubble__meta--details` uses `display: none`, removing its height, width and 12px top margin
+from layout. There is no minimum height or empty timestamp slot. With neither `createdAt` nor
+`turnStats`, `BubbleMeta` returns `null`; stats without a timestamp still emit a details row.
+User and assistant bubbles therefore hug visible content at rest.
 
-**Timestamp visibility follows the whole text row (#1778).** `.bubble__meta-time` uses
-`visibility: hidden` at rest and `visibility: visible` under `.message-row--text:hover` or
-`:focus-within`. Hovering empty row space or focusing copy, reply, a file button or an image button therefore
-reveals the timestamp beneath the text in its existing position. Visibility reserves both width and
-height, so revealing or hiding it changes neither bubble nor row dimensions; an absent stamp retains
-the empty slot. Using `display: none` here would lose that reservation. Turn stats keep their separate
-meta-row hover trigger, described below.
+`.message-row--text:hover` or `:focus-within` restores `display: flex`, revealing time and
+available stats together. Hovering empty row space or focusing copy, reply, a file button or
+an image button reveals the same row; leaving hover keeps it revealed while focus remains
+inside. Leaving both collapses the row and its gap again. Revealed details retain body-small
+type, inverse-primary ink, an 8px item gap and the 12px top margin. `flex-wrap: wrap` lets
+complete timestamp/stats items take separate lines at constrained widths, including 800px,
+rather than squeezing date digits beside an unbroken stats string. Normal-width details
+fit on one line.
+
+Delivery feedback is a separate `.bubble__meta` row without the details modifier. Its
+waiting/failure copy remains visible at rest; hiding time and stats must never hide that feedback.
+Changing metadata height also requires preserving [scroll-following intent](conversation-shell-scroll-pin.md#thread-scroll-pin).
 
 **The time itself is `formatMessageTime(epochMs)` in `messageTime.ts` (new, beside the bubble, the
 `copyMessageText.ts` module-plus-spec shape again — 46 + 98 lines).** Pure: `new Date(epochMs)` read with
@@ -120,17 +122,16 @@ exact inverse of local getters, so each case yields the same string in any zone 
 `NaN`/non-finite branch: the only producer of `createdAt` is `Date.now`, so a non-finite epoch is not a
 reachable input.
 
-**The render slot: `createdAt === undefined ? null : formatMessageTime(createdAt)`, never `'createdAt' in
+**The render slot: `createdAt !== undefined` gates the timestamp span, never `'createdAt' in
 item`.** `BubbleMeta` gained one optional prop, `createdAt?: number`, threaded from the `assistantText` and
 `userText` arms of `TimelineRow` only — no other row kind gained a call (the tool rows aren't bubbles, the
 session-reset separator draws its own timestamp, and the `userText` arm still renders no `BubbleMeta` at
 all while a row is queued — see [Conversation shell — conversation surfaces and modals § Queued rows
 folded into the
 thread](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213)).
-React renders a `null` child as no children, so the absent case is byte-identical to what #969 always
-emitted (`<span class="bubble__meta-time"></span>`) — #1013's contract fixes the read as `=== undefined`
-because the reducer assigns the field unconditionally on every arm that carries it, so the key is always
-present and only its value distinguishes a stamped item from an unstamped one.
+An absent timestamp emits no span. #1013's contract requires comparing the value with `undefined`
+because the reducer assigns the field unconditionally on every arm that carries it: key presence
+does not distinguish a stamped item from an unstamped one.
 
 **Timestamp contrast on the bubble fills.**
 `--color-inverse-primary` on the two new bubble fills measures 2.67:1 (assistant) and 2.04:1 (user),
@@ -182,10 +183,10 @@ The explicit flex basis preserves action width under containment; stretch and ce
 Queued rows are excluded from containment and keep their 12px Send now/Cancel variant;
 see [queued side actions](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213).
 
-`BubbleMeta({ side, createdAt, turnStats })` remains the bubble's **last child**, after markdown or the
+When details exist, `BubbleMeta({ side, createdAt, turnStats })` remains the bubble's **last child**, after markdown or the
 inline streaming cursor on the assistant side and after user text and attachments on the other. It
 contains neither action. Keeping `.bubble` out of flex-column layout preserves the inline cursor;
-the existing 12px meta margin supplies the spacing below content.
+the existing 12px meta margin supplies spacing below content only while details are revealed.
 
 **Both actions read the same current `item.text`.** Copy calls `copyMessageText` directly; reply uses
 `Timeline`'s optional `onReply(role, text)` callback through `TimelineRow`. The streaming tail supplies
@@ -399,11 +400,12 @@ is byte-identical, so no unit test changed.
 
 ## Turn stats on hover (#1566)
 
-Hovering the meta row of a turn's *last* assistant bubble reveals that turn's tokens and wall time —
+Hovering or focusing within the message row of a turn's *last* assistant bubble reveals its time
+and that turn's tokens and wall time together —
 `12.4k in · 800 out · 41s` — as one more `.bubble__meta` child, never inline in the bubble body. The
 numbers ride on `turnBoundary`'s `TurnEndMetrics` (#1565), which a saved offline thread never carries
-(`DurableThreadItem` has no such field), so a saved thread's turns show nothing on hover — expected, not
-a gap.
+(`DurableThreadItem` has no such field), so a saved thread's turns reveal no stats; an available
+timestamp still reveals normally.
 
 **Formatting — `turnStats.ts` (new, beside `messageTime.ts`).** `formatTurnStats(metrics)` builds up to
 three segments joined by ` · `, each independently omitted when its value is non-positive or absent (a
@@ -428,22 +430,22 @@ maps nothing either.
 **Render and reveal.** `Timeline` computes the map once per render and threads
 `turnStats={map.get(group.index)}` through `TimelineRow` to `BubbleMeta`, which appends it as
 `<span className="bubble__turn-stats">` after the timestamp slot — a React text child only, never an
-attribute (not even `title`) and never logged, per CLAUDE.md's daemon-text rule. `.bubble__turn-stats {
-display: none }`, flipped to `inline` by `.bubble__meta:hover` — `display: none` rather than
-`visibility: hidden` because the latter would still reserve the span's width and could widen a short
-bubble's meta row while nothing is hovered. Hovering the rest of the message row or focusing copy, reply or
-an attachment reveals the timestamp only; it does not reveal stats. Selection and formatting remain
-unchanged when copy moves outside the bubble.
+attribute (not even `title`) and never logged, per CLAUDE.md's daemon-text rule. Stats inherit
+the [details row's hover/focus reveal](#the-meta-row); there is no separate meta-row hover gate.
+`.bubble__turn-stats` keeps `white-space: nowrap`, while its parent wraps complete items.
+Hiding the entire row avoids reserving invisible stats width as well as timestamp height.
+Formatting and association with the last assistant bubble of a completed turn remain unchanged.
 
 **Testing.** `turnStats.test.ts` covers the format's count and duration boundaries and the selection's
 tracker behaviour directly; `ConversationScreen.test.tsx` adds one static-render case for a two-bubble
-turn. `e2e/turn-stats-hover.spec.ts` is the only place that can prove the hover transition itself (the
-unit tier is `renderToStaticMarkup` and cannot hover): it pushes one turn whose `turn_end` carries every
-number and one whose carries none, and asserts the meta row's `boundingBox()` height is identical hovered
-and not — proving the stats reveal preserves height, not just that the text appears.
-For a metrics-free turn, compare **`textContent`**, then assert timestamp visibility separately:
-`innerText` omits a hidden timestamp and changes when row hover reveals it, so visible-text equality
-would reject the expected timestamp reveal instead of proving that no stats were added.
+turn, plus absent-details and stats-only cases. `e2e/turn-stats-hover.spec.ts` proves the
+interaction and geometry that static rendering cannot: a resting metadata box is absent,
+the bubble height equals content plus padding, time/stats reveal together, and losing both
+hover and focus restores the resting height. It covers user timestamps, metrics-free turns,
+normal/minimum widths and repeated reveal with bottom clearance and held-reader anchoring.
+For a metrics-free turn, assert stats absence separately from timestamp visibility; visible
+text changes when details reveal and cannot prove that no stats were added. See
+[current counted evidence](conversation-shell-message-bubble-testing.md#metadata-collapse-verification).
 
 ## What stays untouched
 
@@ -490,8 +492,10 @@ and browser coverage, regression fixtures and counted acceptance evidence.
 - [#1779 architecture spec](../../specs/architecture/1779-message-reply.md) — reply wiring, permission
   coverage and the SVG/CSP revision; [composer send](composer-send-internals.md#3-the-controlled-composer--conversationscreentsx)
   owns quote assembly and retained drafts.
+- [#1898 architecture spec](../../specs/architecture/1898-collapse-message-metadata.md) — collapsed
+  details, simultaneous hover/focus reveal, wrapping and metadata-aware scroll intent.
 - [#1778 architecture spec](../../specs/architecture/1778-message-side-copy.md) — sibling copy,
-  text-row sizing and reserved timestamp reveal; includes the saved-history/offline locator sweep
+  text-row sizing and the earlier timestamp reservation, superseded above; includes the saved-history/offline locator sweep
   and the `innerText` versus `textContent` testing revision.
 - [#1566 architecture spec](../../specs/architecture/1566-turn-stats-hover.md) — the hover-stats design,
   and [thread timeline internals](thread-timeline-internals.md#types) for `TurnEndMetrics`'s fields on

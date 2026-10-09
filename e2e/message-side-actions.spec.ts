@@ -137,6 +137,8 @@ test('copy and reply hover layers surround only the pointed glyph without changi
       await bubble.scrollIntoViewIfNeeded()
       await page.mouse.move(0, 0)
       await page.getByPlaceholder('Message…').focus()
+      // Keep metadata revealed so this test isolates action paint geometry.
+      await copy.focus()
       const before = await geometry(bubble)
       for (const [button, sibling, box, glyph, name] of [
         [copy, reply, before.copy, before.copyGlyph, 'copy'],
@@ -186,7 +188,7 @@ test('copy and reply hover layers surround only the pointed glyph without changi
   }
 })
 
-test('side copy, row cap and timestamp reveal preserve geometry at minimum and wide windows', async ({ launchPairedApp }) => {
+test('side copy and row cap retain sizing while metadata expands on hover and focus', async ({ launchPairedApp }) => {
   const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: frames })
   for (const text of [LONG, SHORT]) {
     await page.getByPlaceholder('Message…').fill(text)
@@ -242,13 +244,13 @@ test('side copy, row cap and timestamp reveal preserve geometry at minimum and w
     const size = await dimensions(bubble)
     await row.hover({ position: { x: 2, y: 2 } })
     await expect(time).toBeVisible()
-    expect(await dimensions(bubble)).toEqual(size)
+    expect((await dimensions(bubble))[1]).toBeGreaterThan(size[1])
     await page.mouse.move(0, 0)
     await expect(time).toBeHidden()
     await page.keyboard.press('Tab')
     await copy.focus()
     await expect(time).toBeVisible()
-    expect(await dimensions(bubble)).toEqual(size)
+    expect((await dimensions(bubble))[1]).toBeGreaterThan(size[1])
     expect(await copy.evaluate(el => getComputedStyle(el).outlineStyle)).toBe('solid')
     if (await bubble.getAttribute('data-thread-role') === 'assistant') await page.screenshot({ path: '/tmp/builder-1778/messages-focus-1800.png' })
     const ink = await copy.evaluate(el => getComputedStyle(el).color)
@@ -283,7 +285,7 @@ test('side copy, row cap and timestamp reveal preserve geometry at minimum and w
   await expect(attached.locator('.bubble__meta-time')).toBeHidden()
   await attachment.focus()
   await expect(attached.locator('.bubble__meta-time')).toBeVisible()
-  expect(await dimensions(attached)).toEqual(attachedSize)
+  expect((await dimensions(attached))[1]).toBeGreaterThan(attachedSize[1])
 
   daemon.pushFrame(encodeEnvelope({ id: 30, type: 'assistant_delta', ts: TS, payload: {
     conversation_id: SEEDED_ROW.id, turn_id: 'stream', seq: 0, text: 'Streaming partial reply'

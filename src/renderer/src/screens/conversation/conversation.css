@@ -369,15 +369,6 @@ button.top-overlay-pill:hover,
   contain: size;
 }
 
-.bubble__meta-time {
-  visibility: hidden;
-}
-
-.message-row--text:hover .bubble__meta-time,
-.message-row--text:focus-within .bubble__meta-time {
-  visibility: visible;
-}
-
 /* #969 — the desktop drawing's `Message` component (Figma 132:4477 assistant / 132:4508 user),
    replacing the mobile thread's bubble (16-22 / 16-23) this wore until now. ONE SHAPE FOR BOTH SIDES:
    6px on all four corners, so the two side modifiers below no longer carry a radius at all and the
@@ -750,21 +741,28 @@ button.top-overlay-pill:hover,
    the static tier, which has no layout at all. If .bubble's word-break is ever removed or narrowed, that
    spec is what goes red — a deterministic detector rather than a duplicated declaration. */
 
-/* The bubble's final child: body-small timestamp and optional turn stats. The 16px minimum
-   keeps the empty timestamp slot from collapsing. Visibility reserves stamped text's width
-   and height at rest; row hover/focus reveals it without reflow. Margin supplies the existing
-   12px rhythm without turning streaming text and its inline cursor into separate flex items. */
+/* Body-small metadata and delivery status share typography. Details collapse at rest;
+   the revealed row uses the existing 12px rhythm without making streaming text a flex item. */
 .bubble__meta {
   margin-top: var(--space-3);
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: var(--text-body-small-line);
   color: var(--color-inverse-primary);
   font-size: var(--text-body-small-size);
   line-height: var(--text-body-small-line);
   letter-spacing: var(--text-body-small-tracking);
   font-weight: var(--text-body-small-weight);
+}
+
+.bubble__meta--details {
+  display: none;
+  flex-wrap: wrap;
+}
+
+.message-row--text:hover .bubble__meta--details,
+.message-row--text:focus-within .bubble__meta--details {
+  display: flex;
 }
 
 /* The drawing's `justify-end` on the user variant's row (132:4435); the assistant variant carries none,
@@ -833,17 +831,9 @@ button.top-overlay-pill:hover,
   mask: url('../../assets/reply-solid-full.svg#svgView(viewBox(0,0,13,12))') center / contain no-repeat;
 }
 
-/* #1566 — a turn's tokens and time, on the meta row of its last assistant bubble. The drawing gives the
-   hover content no state of its own, so it takes the row's type and ink by inheritance and adds nothing
-   until hovered. display: none rather than visibility: hidden, which would reserve its width and could
-   widen a short bubble while nothing is hovered. nowrap keeps the revealed row on its one 16px line. */
+/* Stats use the metadata row's type, ink and reveal; keep their existing single-line format. */
 .bubble__turn-stats {
-  display: none;
   white-space: nowrap;
-}
-
-.bubble__meta:hover .bubble__turn-stats {
-  display: inline;
 }
 
 /* The streaming and settled markdown container (Figma 16:43): a flex column with an 8px gap between

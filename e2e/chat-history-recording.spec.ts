@@ -4,6 +4,7 @@ import type { ChatHistoryResult } from '../src/shared/chatHistory'
 import { pairAnotherServerFromSettings } from './fixtures/pairingArrival'
 import { readMainProcess } from './fixtures/mainProcessRead'
 import { installUnreadableLocalList } from './fixtures/localListFailure'
+import { HISTORY_ASK_BAND_VIEWPORTS } from '../src/renderer/src/screens/conversation/threadScrollPosition'
 
 const ts = '2026-07-07T12:00:00.000Z'
 const frame = (type: string, payload: Record<string, unknown>, in_reply_to?: number) =>
@@ -717,8 +718,22 @@ test('protected restoration joins partial pages while retaining an expanded tool
   await expect(survivor.locator('.tool-row__result')).toHaveText('result survivor')
   const toolNode = await survivor.elementHandle()
   await thread.focus()
+  // Collapsed metadata can leave tool expansion outside the pre-input history-demand band.
+  // Settle focus/hover geometry, then park inside the measured band without asking for a page.
+  await second.page.mouse.move(0, 0)
+  await second.page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  const demandOffset = await thread.evaluate((el, band) => {
+    const offset = band * el.clientHeight / 2
+    el.scrollTop = offset
+    return offset
+  }, HISTORY_ASK_BAND_VIEWPORTS)
+  await second.page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  await expect.poll(() => thread.evaluate(el => el.scrollTop)).toBe(demandOffset)
+  expect(asks).toBe(2)
   await second.page.keyboard.press('Home')
   await expect.poll(() => request).toBeDefined()
+  // Home animates: finish its navigation before establishing the held content anchor.
+  await expect.poll(() => thread.evaluate(el => el.scrollTop)).toBe(0)
   const anchor = thread.locator('.message-row--user').filter({ hasText: 'loaded history 105' })
   await anchor.evaluate(element => {
     const thread = element.closest('.conversation__thread')

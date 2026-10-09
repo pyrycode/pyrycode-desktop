@@ -1,14 +1,14 @@
 # Conversation shell — message bubble testing
 
 Static and browser coverage for [message bubbles](conversation-shell-message-bubble.md),
-their copy/reply actions and reserved metadata.
+their copy/reply actions and collapsible metadata.
 
 ## Testing
 
 **vitest** (static server renders, no DOM): `copyMessageText.test.ts` mocks
 `navigator.clipboard.writeText` as a global and asserts the exact string reaches it, a resolved write
 returns `true`, a rejected write returns `false` without throwing, and a missing `navigator.clipboard`
-returns `false` untouched. `ConversationScreen.test.tsx` asserts the assistant bubble (settled and
+returns `false` untouched. With stamped fixtures, `ConversationScreen.test.tsx` asserts the assistant bubble (settled and
 in-progress) and the user bubble each end in `.bubble__meta` as the bubble's *last* child (index
 ordering against the message text and against `.bubble__markdown`), the user meta row carries
 `bubble__meta--user` and the assistant meta row does not. Copy is a `<button type="button">` with
@@ -25,9 +25,10 @@ formatter alone — the drawing's own moment verbatim, a single-digit day/month/
 that must not leak into the string, a sub-four-digit year, and the `toLocaleString`/`Intl`-removal case
 in [the meta-row reference](conversation-shell-message-bubble.md#the-meta-row). #1014 also added stamped
 `assistantText`/`userText` cases to the #969 meta-row `describe` in
-`ConversationScreen.test.tsx` alongside an absent-stamp case; the 39 pre-existing stamp-free item literals
-in that file were left unedited — #1013's optional field is what keeps them compiling, and they remain the
-coverage for the empty-slot path. **#1057's whitespace fix gained no unit test** — `vitest.config.ts`
+`ConversationScreen.test.tsx`. An unstamped user or assistant with no stats emits no metadata;
+an unstamped assistant with available stats keeps the details row but omits the time span.
+The tests preserve timestamp ordering and last-completed-assistant association.
+**#1057's whitespace fix gained no unit test** — `vitest.config.ts`
 runs the `node` environment, every renderer spec is a `renderToStaticMarkup` string with no stylesheet
 and no layout, and the markup is byte-identical before and after; see
 [Whitespace](conversation-shell-message-bubble.md#whitespace-1057) and `e2e/user-whitespace.spec.ts`.
@@ -52,12 +53,43 @@ with long and short text at 800/1280/1800 window widths, centred 900px outer cap
 spacing, separate targets and thread overflow containment. Centring copy alone would reject the
 correct two-control stack.
 It checks unchanged inverse-primary ink on hover/press, a visible keyboard outline, and timestamp
-reveal over empty row space and on copy/file-button focus with identical bubble and row dimensions.
+reveal over empty row space and on copy/file-button focus with increased bubble and row heights.
+Geometry specs reveal metadata before measuring its boxes or text-to-meta spacing;
+hidden details have no box.
 It also copies a streaming partial reply through the OS clipboard, verifies queued sizing/dimming
 and Cancel activation without copy/reply/meta, and guards standalone-offer sizing.
 Queued geometry, fixture setup and counted browser/visual evidence are in
 [queued-action testing](conversation-shell-conversation-and-modals.md#queued-action-testing). Static tests establish
 the image-button markup; the row's `:focus-within` rule applies to image buttons too.
+
+### Metadata collapse verification
+
+[`turn-stats-hover.spec.ts`](../../../e2e/turn-stats-hover.spec.ts) checks collapsed
+content-plus-padding height, simultaneous time/stats reveal from empty row space and
+focus, persistence while either hover or focus remains, and contraction after both leave.
+It covers user timestamps and metrics-free turns at 1280px and 800px. Repeated tail
+reveal/collapse and downward wheel navigation through changing metadata must retain
+bottom clearance; focusing a row above a held reader with `preventScroll` must retain
+the reference row's viewport position through reveal and collapse.
+
+Dispatcher verifier gate 6 at `abef223a1736029cd94967c1019c38561af0dc59`
+(2026-10-08, `npx playwright test --reporter=json`) executed 377 tests: 377 passed,
+0 failed and 3 skipped. The supplied per-test report confirms both named cases were
+present, executed and passed (2 executed, 2 passed, 0 failed, 0 skipped):
+
+- `repeated metadata reveal preserves bottom clearance and held reader position`
+- `protected restoration joins partial pages while retaining an expanded tool and content anchor`
+
+The latter retains join, DOM identity, expansion, content-anchor, cursor and request-count
+checks after [measured demand positioning and settled Home navigation](development-verification.md#layout-and-input).
+The [final verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1899#issuecomment-6068428336)
+also records independent comparison with Figma `132:4225` and `814:12025`: rest/hover/focus
+captures at 1280×900 and 800×900 show collapsed rest, shared reveal, unchanged metadata
+type/ink and 12px top gap, and complete-item wrapping at minimum width. Bottom-clearance
+captures at 1280×800 and 800×800 show the revealed tail above input chrome. Reviewed
+copies were retained under `/tmp/verifier-1899/metadata-{rest,hover,focus}-{1280,800}.png`
+and `/tmp/verifier-1899/metadata-scroll-{rest,focus}-{1280,800}.png`; these are scratch
+evidence paths. This is fake-transport acceptance; no live-Claude run was required or performed.
 
 ### Action sizing regression
 
@@ -67,7 +99,7 @@ rows, with short/wrapped/short text for both user and assistant roles. The fixtu
 each outbound `message_id` as the reply's turn ID rather than a text-dependent ID,
 keeping repeated short sends distinct for the neighbour comparison.
 
-Normal controls fit within the existing 80px short bubble, so a normal-versus-hidden
+Normal controls fit within a short bubble, so a normal-versus-hidden
 comparison would pass without the fix. The test additionally sets each button's
 `min-height` to 60px: before containment, short bubbles and rows grew to 116px. It
 compares normal, enlarged and hidden buttons with the action columns still present,
@@ -89,7 +121,8 @@ not required or run for this CSS change.
 
 ### Hover and earlier acceptance evidence
 
-**Side-actions hover** (same spec): both message roles at 800px and 1280px, token fill,
+**Side-actions hover** (same spec): holds copy focus to reveal metadata before taking boxes,
+isolating action paint from metadata reflow. Both message roles at 800px and 1280px, token fill,
 6px corners and measured 4px glyph-relative bounds for each action. It checks no sibling
 layer, identical row/bubble/actions/button/glyph boxes during hover and after leaving,
 then real Tab transitions with the existing outline style, width, colour and button radius

@@ -183,10 +183,8 @@ for (const width of [1280, 800]) test(`authoritative items retain identity, acti
 
 
 for (const realRetrieval of [false, true]) test(realRetrieval
-  ? 'blocked on #1926 — snapshot attachment scope through daemon retrieval'
+  ? 'snapshot attachment scope through daemon retrieval'
   : 'snapshot attachment actions retain their host and conversation across reused IDs', async ({ launchPairedApp }) => {
-  // https://github.com/pyrycode/pyrycode-desktop/issues/1926: main routes retrieval only by listed conversation.
-  test.skip(realRetrieval, 'blocked on #1926 — explicit host routing is outside this renderer ticket')
   const server = await rendererFixture()
   try {
     const asks: { host: string; payload: unknown }[] = []
@@ -221,14 +219,14 @@ for (const realRetrieval of [false, true]) test(realRetrieval
     if (!realRetrieval) await app.evaluate(({ ipcMain }, channels) => {
       const asks: unknown[] = []
       ;(globalThis as unknown as { attachmentAsks: unknown[] }).attachmentAsks = asks
-      // Ticket-local IPC fake: scope reaches the real preload; transport routing is tracked by #1926.
+      // Renderer-only variant: scope reaches real preload; the sibling variant uses production retrieval.
       ipcMain.removeAllListeners(channels.retrieval)
       ipcMain.removeAllListeners(channels.bytes)
       ipcMain.on(channels.retrieval, (event, request) => {
         asks.push(request)
         event.sender.send(channels.retrievalEvent, request.attachmentId === channels.pictureId
-          ? { type: 'completed', attachmentId: request.attachmentId }
-          : { type: 'failed', reason: 'not-found', attachmentId: request.attachmentId })
+          ? { type: 'completed', attachmentId: request.attachmentId, conversationId: request.conversationId, serverId: request.serverId }
+          : { type: 'failed', reason: 'not-found', attachmentId: request.attachmentId, conversationId: request.conversationId, serverId: request.serverId })
       })
       ipcMain.on(channels.bytes, (event, request) => event.sender.send(channels.bytesEvent,
         { type: 'delivered', attachmentId: request.attachmentId, bytes: new Uint8Array(channels.picture) }))
@@ -258,6 +256,7 @@ for (const realRetrieval of [false, true]) test(realRetrieval
       expect(await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.activeChat())).toBe(SEEDED_ROW.id)
       const images = page.getByRole('button', { name: 'Attached image' })
       await expect(images).toHaveCount(2)
+      await expect.poll(() => images.locator('img').evaluateAll(rows => rows.every(row => row instanceof HTMLImageElement && row.complete && row.naturalWidth > 0) && rows.length === 2)).toBe(true)
       await expect.poll(async () => (await retrievals()).filter(a => a.serverId === host && a.attachmentId === pictureId).length).toBeGreaterThan(0)
       for (const name of ['report.pdf', 'offered.pdf']) await page.getByRole('button', { name, exact: true }).click()
       for (const index of [0, 1]) await images.nth(index).click()
@@ -277,5 +276,67 @@ for (const realRetrieval of [false, true]) test(realRetrieval
     // Availability must follow the snapshot host even while the globally selected host stays connected.
     await page.evaluate(host => (window as unknown as { threadFixture: Fixture }).threadFixture.unavailable(host), SECOND_SERVER_ID)
     await expect(page.getByRole('button', { name: 'report.pdf', exact: true })).toBeDisabled()
+  } finally { await new Promise<void>((resolve, reject) => server.httpServer.close(e => e ? reject(e) : resolve())) }
+})
+
+test('a late retrieval disconnect cannot settle a switched thread with reused image IDs', async ({ launchPairedApp }) => {
+  const server = await rendererFixture()
+  try {
+    const asks = new Map<string, number>()
+    const pictureId = '7a8b9c0d-1e2f-4a3b-8c9d-7e8f9a0b1c2d'
+    const picture = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=', 'base64')
+    const replies = (host: string) => (bytes: Uint8Array) => {
+      const e = decodeEnvelope(bytes)
+      if (e.type === 'request_attachment') asks.set(host, e.id)
+      return e.type === 'list_conversations'
+        ? [seedConversationsFrame(host === FIRST_SERVER_ID ? SEEDED_ROW : SECOND_SEEDED_ROW)] : []
+    }
+    const { page, servers } = await launchPairedApp({ buildReplyFrames: replies(FIRST_SERVER_ID) }, {
+      rendererUrl: server.resolvedUrls!.local[0], secondServer: { buildReplyFrames: replies(SECOND_SERVER_ID) }
+    })
+    await page.locator('.channel-list__row-open').first().click()
+    await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled()
+    await page.evaluate(() => {
+      const outcomes: unknown[] = []
+      ;(window as unknown as { retrievalOutcomes: unknown[] }).retrievalOutcomes = outcomes
+      window.pyry.onAttachmentRetrievalEvent(event => outcomes.push(event))
+    })
+    // Actual IPC boundary: invalid host asks are silent even when another paired host is available.
+    await page.evaluate(({ pictureId }) => {
+      for (const serverId of [null, '', 7, 'x'.repeat(257)]) window.pyry.requestAttachment({
+        serverId, conversationId: 'unlisted', attachmentId: pictureId
+      } as never)
+      window.pyry.requestAttachment({ serverId: 'unknown', conversationId: 'unlisted', attachmentId: pictureId })
+    }, { pictureId })
+    const outcomes = () => page.evaluate(() => (window as unknown as { retrievalOutcomes: unknown[] }).retrievalOutcomes)
+    await expect.poll(outcomes).toEqual([{ type: 'failed', serverId: 'unknown', conversationId: 'unlisted', attachmentId: pictureId, reason: 'not-connected' }])
+    expect(asks.size).toBe(0)
+    for (const host of [FIRST_SERVER_ID, SECOND_SERVER_ID]) {
+      await page.evaluate(host => {
+        const f = (window as unknown as { threadFixture: Fixture }).threadFixture
+        f.scope(host, 'unlisted', 'epoch')
+      }, host)
+      await page.evaluate(pictureId => (window as unknown as { threadFixture: Fixture }).threadFixture.batch([
+        { id: 10, rev: 10, kind: 'user_message', order: 10, status: 'delivered', active: false, shown: true, summary: '',
+          content: { text: 'picture', attachments: [{ attachment_id: pictureId, filename: 'picture.png' }] } }
+      ], 100), pictureId)
+      await expect.poll(() => asks.has(host)).toBe(true)
+    }
+    servers[0].forwarder.closeClientLeg(4401)
+    await expect.poll(outcomes).toEqual(expect.arrayContaining([
+      { type: 'failed', serverId: FIRST_SERVER_ID, conversationId: 'unlisted', attachmentId: pictureId, reason: 'connection-lost' }
+    ]))
+    // Receipt barrier above ensures the old host's terminal has actually crossed preload.
+    const images = page.getByRole('button', { name: 'Attached image' })
+    await expect(images.locator('img')).toHaveCount(0)
+    servers[1].daemon.pushFrame(encodeEnvelope({ id: 9000, in_reply_to: asks.get(SECOND_SERVER_ID)!,
+      type: 'attachment_chunk', ts: '2026-10-10T12:00:00Z', payload: {
+        attachment_id: pictureId, index: 0, total_chunks: 1, filename: 'picture.png', mime_type: 'image/png',
+        size: picture.length, sha256: createHash('sha256').update(picture).digest('hex'), data: picture.toString('base64')
+      } }))
+    await expect.poll(() => images.locator('img').evaluateAll(rows => rows.length === 1 && rows.every(row => row instanceof HTMLImageElement && row.complete && row.naturalWidth > 0))).toBe(true)
+    await expect.poll(outcomes).toEqual(expect.arrayContaining([
+      { type: 'completed', serverId: SECOND_SERVER_ID, conversationId: 'unlisted', attachmentId: pictureId }
+    ]))
   } finally { await new Promise<void>((resolve, reject) => server.httpServer.close(e => e ? reject(e) : resolve())) }
 })

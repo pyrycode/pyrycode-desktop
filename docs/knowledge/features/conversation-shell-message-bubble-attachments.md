@@ -109,12 +109,16 @@ sink the paragraph above closes on purpose — and there is no visually-hidden u
 prefix a client-owned verb with instead. Neither child takes a `tabIndex`: a real `<button>` rather than a
 `div` with a handler gives keyboard activation (click, Enter, Space) and one tab stop for free.
 
-**Wiring is two asks, not one, and lives in `downloadAttachment.ts`** (new, beside `copyMessageText.ts`,
-same React-free module-helper shape — see [Attachment retrieval § the download
-wiring](attachment-retrieval.md#the-renderer-click-816) for the full design). The button's `onClick` calls
-it directly with the row's own `attachment` record — no prop drilling, `BubbleMeta`'s copy control is the
-in-bubble precedent, and the open conversation id is read outside React from `activeConversationStore`
-rather than threaded down through `Timeline`'s ~30 render sites.
+**Activation lives in `downloadAttachment.ts`**, a React-free helper beside `copyMessageText.ts`.
+It tries the local original first; only `unavailable` falls back to retrieval then save/reveal.
+Capture conversation and optional host once at activation, validate every supplied identifier before
+subscribing, and match the retrieval terminal against that captured scope. A same-ID outcome from
+another host/thread must leave the listener pending; only its own `completed` triggers a save.
+Legacy callers read the active conversation and accept legacy unscoped events. Supplied
+`ThreadItemsView` rows bind getters to their snapshot host/conversation through
+`ThreadAttachmentScopeContext`, so global selection cannot redirect fallback retrieval.
+See [retrieval wiring](attachment-retrieval.md#the-renderer-click-816) and
+[original-first opening](attachment-open.md#composition-root-wiring--srcmainindexts--srcpreloadindexts).
 
 **Image attachments no longer draw this row.** [§ The attachment image thumbnail](#the-attachment-image-thumbnail-1045)
 takes the same `Slot` over for a name `isImageAttachmentName` admits and draws the picture instead — see
@@ -176,7 +180,8 @@ container** so all three drawn states stay provable under `renderToStaticMarkup`
   #1044's leg rather than #867's.
 
 **`BubbleAttachmentImage` sends one fire-and-forget ask and does not lift a fetch-then-act shape (#869).**
-`onOpen` is `() => window.pyry.openAttachment({ attachmentId: attachment.attachmentId })`, the bridge
+`onOpen` asks `window.pyry.openAttachment` with the attachment ID and its owner (the supplied snapshot
+scope or the legacy `attachmentAskTarget` lookup), the bridge
 dereferenced inside the arrow body (`downloadAttachment.ts`'s idiom) so a static render with no bridge
 present stays green. No `onAttachmentOpenEvent` subscription exists: [attachment open](attachment-open.md)
 answers with one of four failure reasons and none has designed feedback (the ticket's open question,
@@ -189,7 +194,7 @@ screen at all is itself proof the file is on this machine, and the click needs n
 This inverts the file row's situation (#816): that row draws *before* any fetch, so its click had to fetch
 first or answer `unavailable` forever.
 
-**The identifier and nothing else crosses into the ask.** `AttachmentOpenRequest` has one field; nothing in
+**The identifier and client-local owner cross into the ask.** Nothing in
 this component builds, joins or forwards a path, and no filename reaches a URL or an attribute — the blob
 URL the `ready` state holds takes no part in the ask, since the open channel addresses the file by
 identifier rather than by the bytes already on screen.
@@ -361,8 +366,8 @@ and **does not use `bubbleTextExactly`**: that fixture is an anchored whole-bubb
 callers), and this is the first bubble in the suite with a text-bearing child beside the message text.
 
 **#816's own coverage.** `downloadAttachment.test.ts` (new, plain vitest, no React, no DOM) drives the
-helper against fakes for all four injected seams: the ask carries exactly `{ conversationId,
-attachmentId }`; subscribe happens before the ask (an ordering assertion, since a `busy`/`not-connected`
+helper against injected fakes: legacy retrieval asks carry exactly `{ conversationId,
+attachmentId }`, scoped asks also carry `serverId`; subscribe happens before the ask (an ordering assertion, since a `busy`/`not-connected`
 retrieval can resolve synchronously in main); a `completed` terminal for this attachment asks the save
 channel with `{ attachmentId, filename }` verbatim (a name carrying `../`, a bidi control and a leading
 dot crosses unsanitised, pinning the no-second-sanitiser ruling above); a `failed` terminal saves nothing
@@ -376,6 +381,12 @@ its own row's attachment id and nothing else — the round trip is deliberately 
 in this tier, since a real save would copy into the runner's actual Downloads folder and open a Finder
 window. The same test also asserts the row is a `<button>`, becomes `document.activeElement` after a
 keyboard interaction, and matches `:focus-visible` with a solid outline.
+
+Current download tests also cover original-first activation, fallback only on `unavailable`, captured
+host/conversation despite later selection changes, ignoring mismatched scoped terminals and legacy
+compatibility. The enabled production snapshot retrieval and delayed-disconnect cases in
+`e2e/thread-items.spec.ts` prove the reused image rows through real preload/main with two fake hosts;
+see [retrieval testing](attachment-retrieval.md#testing) for counted evidence and fixture constraints.
 
 **#1045's own coverage.** `attachmentIsImage.test.ts` pins the two cases that justify the helper existing
 (`photo.p-n-g` and `x.jpegg` are **not** images, where `attachmentExtensionLabel` would call them `PNG` and

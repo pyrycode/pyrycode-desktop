@@ -1,5 +1,6 @@
 import {
   MAX_RETRIEVAL_IDENTIFIER_LENGTH,
+  matchesAttachmentRetrieval,
   type AttachmentRetrievalEvent,
   type AttachmentRetrievalFailure,
   type AttachmentRetrievalRequest
@@ -94,6 +95,7 @@ export type AttachmentImageSourceOutcome =
 export interface AttachmentImageSourceDeps {
   /** The conversation the thread is showing, or `null` when none is open. */
   getOpenConversationId: () => string | null
+  getServerId?: () => string | undefined
   /** `window.pyry.requestAttachment` — fire-and-forget; the terminal arrives on the listener below. */
   requestAttachment: (request: AttachmentRetrievalRequest) => void
   /** `window.pyry.onAttachmentRetrievalEvent`; returns the unsubscribe handle this module must call. */
@@ -142,14 +144,16 @@ interface LiveSource {
  * a cap is its own ticket. NO MAIN-SIDE CAP IS TOUCHED.
  */
 export function createAttachmentImageSources(deps: AttachmentImageSourceDeps): AttachmentImageSources {
-  /** Keyed by attachment id — the correlation key both legs echo back. An entry exists only while a
-   *  holder does, so there is nothing to clear on conversation exit or pairing end. */
+  /** Live URLs belong to a captured host/thread/attachment tuple, and last release removes them. */
   const live = new Map<string, LiveSource>()
 
   function request(
     attachmentId: string,
     onOutcome: (outcome: AttachmentImageSourceOutcome) => void
   ): () => void {
+    const conversationId = deps.getOpenConversationId()
+    const serverId = deps.getServerId?.()
+    const key = JSON.stringify([serverId, conversationId, attachmentId])
     let released = false
     let held: LiveSource | null = null
     // EVERY listener teardown this ask takes, rather than one slot that the second leg overwrites. Each
@@ -169,7 +173,7 @@ export function createAttachmentImageSources(deps: AttachmentImageSourceDeps): A
       if (held === null) return
       held.holders -= 1
       if (held.holders === 0) {
-        live.delete(attachmentId)
+        live.delete(key)
         deps.revokeObjectUrl(held.url)
       }
       held = null
@@ -196,13 +200,12 @@ export function createAttachmentImageSources(deps: AttachmentImageSourceDeps): A
 
     // The URL is already live: join it and touch no seam at all. This is what makes a scroll-away-and-
     // back remount free, and it is why fetching first costs a round trip only on the cold path.
-    const alreadyLive = live.get(attachmentId)
+    const alreadyLive = live.get(key)
     if (alreadyLive !== undefined) {
       takeShare(alreadyLive)
       return release
     }
 
-    const conversationId = deps.getOpenConversationId()
     if (conversationId === null) {
       // A thumbnail can only be mounted inside an open conversation, so this is unreachable rather than
       // a state to present — but it is still ANSWERED. Logged as a bare event name: no identifier.
@@ -211,17 +214,21 @@ export function createAttachmentImageSources(deps: AttachmentImageSourceDeps): A
       return release
     }
 
-    if (!addressable(conversationId) || !addressable(attachmentId)) {
+    if (!addressable(conversationId) || !addressable(attachmentId) ||
+        (serverId !== undefined && !addressable(serverId))) {
       console.error('attachment image source refused a malformed identifier')
       fail('refused')
       return release
     }
 
-    // LEG ONE — fetch the attachment back from the host.
+    const retrievalAsk = { conversationId, attachmentId, ...(serverId === undefined ? {} : { serverId }) }
+    // LEG ONE — fetch the attachment back from the captured host/thread scope.
     awaitTerminal<AttachmentRetrievalEvent>(
       attachmentId,
-      deps.onAttachmentRetrievalEvent,
-      () => deps.requestAttachment({ conversationId, attachmentId }),
+      listener => deps.onAttachmentRetrievalEvent(event => {
+        if (matchesAttachmentRetrieval(event, retrievalAsk)) listener(event)
+      }),
+      () => deps.requestAttachment(retrievalAsk),
       teardowns,
       (retrieval) => {
         if (released) return
@@ -256,13 +263,13 @@ export function createAttachmentImageSources(deps: AttachmentImageSourceDeps): A
             // The join arm is not hypothetical: the bytes leg does NOT coalesce, so two asks for one
             // attachment produce two `delivered` events — and both asks' listeners are still subscribed
             // when the first arrives, so both settle on it and the second one lands here.
-            const raced = live.get(attachmentId)
+            const raced = live.get(key)
             if (raced !== undefined) {
               takeShare(raced)
               return
             }
             const source: LiveSource = { url: deps.createObjectUrl(toBlob(bytes.bytes)), holders: 0 }
-            live.set(attachmentId, source)
+            live.set(key, source)
             takeShare(source)
           }
         )

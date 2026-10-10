@@ -34,6 +34,93 @@ Part of [Inbound message decode](inbound-message-decode.md); see that document f
 - **`slash_command_list` ([#936](https://github.com/pyrycode/pyrycode-desktop/issues/936)) decodes and now crosses IPC as the `slashCommandList` `DaemonEvent` arm ([#937](https://github.com/pyrycode/pyrycode-desktop/issues/937), landed), but is claimed by no renderer store yet — the same dormancy `question_shown` carried through #884/#885.** `daemonConnection.ts`'s inbound switch has a `case 'slash-command-list'` that emits the arm; all four exhaustive renderer bridges no-op it. Its four row strings are the file's first **workspace-authored** text, a lower trust tier than the claude-authored strings every other kind here carries (`question_shown`'s four strings included) — the daemon bounds them but does not sanitize them, and `0x0a` is the only sub-`0x20` byte measured across the capture's 51 entries, so an embedded newline in a `description` is the control character that actually occurs. Same no-bound-by-design posture as `question_shown`: no entry cap, no per-field length check, and `name` carries no charset guarantee (one measured name is `__remote-workflow`). `dropped_commands` is never cross-checked against `commands.length`, matching `background_task_roster`'s `dropped_tasks` precedent — a client-side entry cap would fail-close a valid future frame, since the count is workspace- and daemon-version-dependent by design.
 - **`model_list` ([#972](https://github.com/pyrycode/pyrycode-desktop/issues/972)) decodes but is claimed by nobody — `daemonConnection.ts`'s inbound switch has no `case 'model-list'` and no catch-all, so the decoded value is silently un-routed, the same dormancy `slash_command_list` carried through #936 before #937.** `resolved_model`/`value`/`display_name`/`effort_levels` are **claude-authored**, a higher trust tier than `slash_command_list`'s workspace-authored strings — the never-into-a-log clause here rests on the daemon's bounds-but-does-not-sanitize contract rather than on a measured control byte, since none is measured in these short model labels (see [model-list wire types](model-list-wire-types.md) § trust tier). Every string decodes via `requireString`, never `requireNonEmptyString`: the daemon's committed all-zero fixture — an empty `conversation_id`/`resolved_model`/`value`/`display_name` — is legal traffic, since neither `ModelListPayload` nor `WireModelOption` carries `omitempty` on any key. **The same `null`-vs-`[]` trap `background_task_roster`/`slash_command_list` already carry, transposed onto a second array field within one frame:** `models: null` fails closed (`Array.isArray(null)` is `false`) while a row's own `truncated_fields: null` is a valid, preserved value; `effort_levels`, unlike `truncated_fields`, may never be `null` (`requireStringArray` rejects it) because upstream collapses absent/`null`/empty into one `[]`. No entry cap, no charset or length check on any string, and no closed set over either array field's elements — closing `effort_levels` would discard the evidence a consumer needs the day claude publishes a level the daemon's own inbound `validEffort` enum has not yet widened to match. `dropped_models` is never cross-checked against `models.length`, the same `background_task_roster`/`slash_command_list` precedent. Thirteen reject branches, one more than `slash_command_list`'s ten, all from scaling the row narrower from five fields to six.
 
+## Complete live thread validation
+
+The shared `ThreadItem`, `ThreadUpdate` and `ThreadRepairReason` types live in
+`src/shared/wire/thread.ts`. Main's `createThreadUpdateReceiver` in
+`src/main/transport/threadUpdates.ts` validates ordinary and reconstructed payloads
+through the same logical decoder, before [typed IPC delivery](daemon-event-channel.md#complete-thread-events).
+All three updates require string `conversation_id` and `epoch` and a nonnegative
+safe-integer `version`. Their remaining required fields are:
+
+| Wire type | Logical payload |
+| --- | --- |
+| `thread_item_added` | Full `item`: numeric `id`/`rev`, string `kind`/`status`/`summary`, boolean `active`/`shown`, and an own `content` field of any JSON shape. |
+| `thread_item_changed` | Numeric `item_id`/`base_rev`/`rev` and object `changes`; any own `id` or `kind` replacement rejects the update. |
+| `thread_text_append` | Numeric `item_id`/`base_rev`/`rev` and string `text`, including an explicit empty string. |
+
+Every numeric field above is a nonnegative safe integer. Full items optionally
+carry numeric `order`, `ended_order`, `parent`; string `session`, `agent`, `turn`,
+`subtype`; and boolean `no_child`. A supplied optional field must have its declared
+type; omission differs from null. Placement and recorded attribution pass through
+unchanged. Unknown kind/status words, unknown item/patch fields and nested
+`content`, including prototype-like JSON keys, remain inert data and are never
+merged into application objects. Supplied `active` is authoritative for carriage;
+transport infers no activity from status. Patches retain omission and explicit
+empty/false/zero/null replacements without applying them to held items.
+
+## Bounded thread assembly
+
+An own `continuation` property selects fragment handling even when its value is
+malformed. Parts require nonempty valid UTF-8 `data`, a lowercase 64-hex
+`update_id`, nonnegative safe-integer `index`/`offset`/`total_bytes` (total positive),
+and boolean `final`. Indices start at zero and increase consecutively; offsets
+start at zero and count decoded UTF-8 bytes, never JavaScript string length.
+Repeated metadata must agree on type, conversation, epoch, version, item id/rev,
+total bytes and `base_rev` presence/value. Added-item parts omit `base_rev`;
+changed-item and append parts require it.
+
+Final delivery requires exact declared length, SHA-256 of the envelope type plus
+one NUL byte plus the original logical payload bytes, strict UTF-8/JSON decoding,
+logical DTO validation and matching reconstructed routing/revisions. Hashing a
+reserialized DTO would lose the original byte identity. Only a successfully
+assembled sequence emits one complete update; incomplete/rejected sequences emit
+no item, patch, suffix or completed version.
+
+Each connection owns a synchronous receiver keyed by conversation and update
+digest. Client policy permits at most 8 MiB per logical update, 16 MiB buffered
+logical bytes and eight incomplete updates per connection, measured in decoded
+UTF-8 bytes. A completing single-part update does not consume an incomplete slot,
+but still obeys byte bounds. An accepted nonfinal part rearms a 30-second idle
+timer. Geometrically grown buffers avoid retaining an object per tiny fragment;
+a byte bound alone would not bound that bookkeeping.
+
+Identifiable rejection/expiry releases only the affected assembly and timer,
+leaving other conversations/updates intact, and emits scoped `threadRepairNeeded`.
+Without a string conversation id, malformed input is dropped without inventing
+one. Reasons are static `malformed`, `sequence`, `metadata`, `limit`,
+`final-length`, `digest`, `reconstructed` or `expired`; repair sends no recovery
+request. Receiver diagnostics contain only static event/code fields, never
+content, ids, fragments or caught errors. [Connection resets](daemon-connection.md#thread-receiver-lifetime)
+silently release all pending state. The 65519-byte plaintext frame cap still
+applies to every supplied frame; assembly limits are receiver policy, not daemon
+wire limits.
+
+## Thread transport ownership and coverage
+
+Supplied encoded frames exercise ordinary/oversized delivery for all three kinds,
+replacement presence, unknown/prototype-like JSON, multibyte offsets,
+metadata/digest/routing rejection, exact resource boundaries, expiry and reset in
+`src/main/transport/threadUpdates.test.ts`. `src/main/threadUpdates.test.ts` drives
+the actual parser, connection, host-stamped IPC, simulated structured cloning and
+existing preload subscription, including successor-connection isolation and
+unchanged hello capabilities. [Legacy subscription coverage](conversation-timeline-store-data-flow.md#data-flow)
+also checks pending deltas, not just null translation.
+
+The [verifier's focused-run evidence](https://github.com/pyrycode/pyrycode-desktop/pull/1915#issuecomment-6096949076)
+records 47 executed, 47 passed, 0 failed and 0 skipped on 2026-10-10. This proves
+the supplied-frame transport checks, not production activation or live-Claude
+delivery.
+
+Item application, stable-kind/message-append applicability, held `base_rev` checks
+and atomic changes belong to [#1901](https://github.com/pyrycode/pyrycode-desktop/issues/1901).
+[#1912](https://github.com/pyrycode/pyrycode-desktop/issues/1912) reuses the representation
+and assembly for catch-up/pages; [#1914](https://github.com/pyrycode/pyrycode-desktop/issues/1914)
+owns summary/session-state metadata. Production capability activation and combined
+live proof remain [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+The supplied-delivery transport adds no catch-up/page commands or capability
+requests.
+
 ## Why the explicit size guard, given the transport already bounds the plaintext
 
 A Noise transport message is ≤ 65535 bytes, so a single decrypted plaintext is structurally ≤ `MAX_PLAINTEXT_BYTES`. But this module's trust boundary is its **own function argument**, not the socket: the unit test drives `parseInboundMessage` directly (the transport cap is not in the loop), and a future change to the driver's guarantees must not silently un-bound this arm. The guard is one deterministic line, directly satisfies the "oversized" AC, and is testable at this boundary — belt (upstream Noise cap) and suspenders (this check), both deterministic code. It does **not** modify `decodeEnvelope` (shared with the ack path), so there is no drift.

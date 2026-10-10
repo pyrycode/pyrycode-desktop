@@ -121,7 +121,8 @@ useTimelineBridge(getOpenConversationId: () => string | null): void
 Production scheduling retains translated events individually, including arrival
 timestamps, sequence/parent identity, conversation, joins and durable ids. The
 FIFO schedules once on its first delta, flushes on the next runnable frame or
-before any non-delta event/action boundary, and never concatenates chunks before
+before non-delta events except thread indications, or action boundaries; it never
+concatenates chunks before
 `dispatchFor`/`retainLiveDisplay`. Flush detaches work and invalidates canceled
 callback generations; cleanup settles once, then removes boundary hooks. See the
 [data flow](conversation-timeline-store-data-flow.md#data-flow) for ordering.

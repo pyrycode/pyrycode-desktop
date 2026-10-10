@@ -1,8 +1,8 @@
 # Protected local chat history
 
-The main-process service stores ordered conversation lists and timeline display
-records through the [secure store](secure-store.md). A fresh service instance can
-read saved content without a connection or Noise handshake. Host identity is the
+The main-process service stores ordered conversation lists, legacy timeline display
+records and daemon-item snapshots through the [secure store](secure-store.md). A
+fresh service instance can read saved content without a connection or Noise handshake. Host identity is the
 saved pairing record's `server` field, so equal conversation ids on different
 hosts remain separate.
 
@@ -16,8 +16,8 @@ after owned read/request settlement. Offline opening waits for connection; openi
 never fills the missing range. Served and legacy gaps retain reader-driven markers
 and resume positions; older pages require trusted upward thread input;
 a retryable failed page has a Retry action. Explicit Forget/Unpair removes the host's saved content after credential removal.
-Confirmed conversation deletion removes that host/conversation's saved timeline
-and list entry.
+Confirmed conversation deletion removes both saved conversation formats
+and that host/conversation's list entry.
 Observing, saving, flushing and restoration create no lifecycle demand themselves.
 Offline opening and scrolling retain the existing host-scoped request gates. Disk
 retention is independent of the renderer holder's ten-conversation memory limit.
@@ -29,7 +29,23 @@ authorization, removal ordering and supported operations.
 
 ## Snapshot contract
 
-Every snapshot has `version: 1`, `serverId` and a `kind` of `list` or `timeline`.
+Every snapshot has `version: 1`, `serverId` and a `kind` of `list`, `timeline` or
+`daemon-items`. Legacy timelines remain readable for the one-release fallback;
+they never become authoritative daemon items. Both conversation formats may coexist
+at the same coordinates and have separate reads.
+
+A daemon-item record adds `conversationId` and shared `ThreadSnapshot` field
+`thread`, retaining epoch, item ids/revisions, held order, hidden/unordered items,
+attribution and unknown inert JSON, including patch-produced nulls. It also retains
+applied `version`, complete `checkpoint`, certified `ranges`, optional
+`olderAvailable`, `repair`, `uncommittedVersion` and optional `arrivalOrder`.
+Hydration certifies no additional progress or coverage. Older snapshots without
+unfinished metadata conservatively fence applied progress ahead of checkpoint;
+without arrival metadata, supplied item order is the fallback. See
+[snapshot and hydration rules](thread-item-store.md#snapshots-and-completed-batches)
+and [API validation](chat-history-api.md#api). Permission prompts, question batches,
+session live state and local unaccepted messages do not enter this cache.
+
 A list retains the eight required `ConversationSummary` fields:
 `id`, `name`, `is_promoted`, `is_archived`, `cwd`, `last_message_ts`, `last_used_at`
 and `workspace_label`. Optional `is_muted` and `agent` (mapped through `agentFromWire`) are retained;
@@ -292,7 +308,8 @@ Refusal reports retain `type`, `originalModel`, `refusalCategory`, `banner`,
 `truncatedFields` and `droppedFields`, plus `fallbackModel` and `scope` for
 `modelRefusalFallback`. `modelRefusalNoFallback` has no fallback fields.
 
-Only declared schema fields are persisted and returned, including nested records.
+For legacy display rows, only declared schema fields are persisted and returned,
+including nested records.
 Absent optional values stay absent on disk, and empty strings, false values,
 declared nulls and array order survive. Saving or reading never synthesizes a
 terminal row: partial assistant text and unresolved tool results stay partial.
@@ -410,8 +427,8 @@ request. List restoration does not restore timeline messages or establish timeli
 recording ownership. Received lists still replace their host's displayed list.
 
 [`readSavedTimeline`](../../../src/renderer/src/store/savedTimelineRestorer.ts)
-uses only `readTimeline`. `PairedShell` starts it from every clicked host-stamped
-sidebar row, regardless of connection status, and retains those coordinates explicitly:
+defaults to `readTimeline` for legacy callers. `PairedShell` starts it from every
+clicked host-stamped sidebar row, regardless of connection status, and retains those coordinates explicitly:
 active metadata reseeding projects wire fields and can discard an incidental host stamp.
 The view checks the selected host against the held slice in either connection state;
 another host's rows under an equal conversation id cannot substitute.
@@ -541,7 +558,8 @@ the refresh response. Missing supplying-host context reports `unknown-ownership`
 and never borrows the active host. Other conversations on that host and equal ids
 on other hosts remain saved. Sending a delete command without confirmation, including
 rejection or network failure, removes no saved timeline. Persistence removal does
-not itself change renderer display state.
+not itself change legacy renderer display state; an injected thread source is cleared
+on confirmed deletion.
 
 [`runUnpairServer`](../../../src/renderer/src/screens/settings/unpairServerAction.ts)
 begins the renderer-local [removal lifecycle](../../../src/renderer/src/store/chatHistoryRemoval.ts)
@@ -587,6 +605,16 @@ for saved-read notices, result/error classifications and preservation after fail
 
 ### Buffered replacements
 
+With optional `threads`, the writer observes changed owned daemon snapshots in the
+same queue, excluding the private hydration marker from saves. Removing a held
+thread discards its pending replacement; memory cleanup alone does not erase disk.
+Confirmed deletion discards both formats' pending replacements, suppresses later
+captures and invalidates the thread's reads/held state. Successful unpair clears
+every held thread for that host, including off-screen scopes and pending reads;
+failure resumes buffered work. `stop()` detaches this observer and awaits owned
+removal/flush work. Production thread subscriptions and offline/reconnect screen
+proof remain [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+
 The renderer writer coalesces bursts on a 200 ms timer in a per-record pending map.
 Canonical projected values are compared with the latest observed value, so
 transient-only changes and unchanged durable records submit no replacement.
@@ -602,9 +630,9 @@ received conversation can therefore evict the first before its timer runs withou
 losing the first conversation's captured snapshot.
 
 Confirmed deletion shares this serial drain with replacements. It discards the
-exact timeline's buffered replacement, filters its entry from buffered host lists
+exact conversation's buffered replacements, filters its entry from buffered host lists
 without reordering peers, and waits behind any already in-flight write. A per-host
-deleted-id set suppresses subsequent timeline captures and filters delayed list
+deleted-id set suppresses subsequent timeline/daemon-item captures and filters delayed list
 captures for the writer's lifetime, including retained holder mutations and shutdown.
 Stale captures therefore cannot overwrite the queued removal or recreate successfully
 removed records. Each removal attempt clears comparison state for that timeline and
@@ -628,9 +656,9 @@ later-removed record. Separate service instances or processes have no shared loc
 
 All snapshots occupy one versioned collection, `{ version: 1, snapshots: [...] }`,
 under the constant secure-store name `chat-history`. Identity comparisons use
-string equality over `serverId`, `kind` and, for timelines, `conversationId`;
+string equality over `serverId`, `kind` and, for both conversation formats, `conversationId`;
 caller ids never become filenames or object lookup keys. One collection makes
-list-entry/timeline removal atomic without a journal or mutable manifest.
+list-entry and both conversation-record removals atomic without a journal or mutable manifest.
 
 Each operation reads and validates the whole collection; each changed mutation
 encrypts and replaces it in full, unless removing the final snapshot deletes the
@@ -659,7 +687,8 @@ The mounted `writer.stop()` first calls its injected `flushTimeline` while the
 per-fold observer remains attached, settling accepted deltas even when their frame
 has not run. Detaching first loses accepted text on window close. Repeated stops
 skip this settlement hook; injected writers without it keep their existing behavior.
-It then unsubscribes both stores, daemon events and host-removal notifications,
+It then unsubscribes the list/timeline and optional thread observers, daemon events
+and host-removal notifications,
 waits for already-started host removals to settle, then cancels the timer and drains
 buffered and in-flight replacements and confirmed conversation removals in order.
 Deletion suppression remains active throughout the flush. Unsubscribing alone

@@ -278,7 +278,21 @@ Hover and focus can resize rows before a wheel, checkbox or content-anchor asser
 Settle the intended pointer/focus state before recording its baseline: move the pointer
 away where hover is irrelevant, focus the checkbox before its Space baseline, and wait
 for native motion to settle before measuring wheel displacement. Two animation frames
-flush queued events; streaming wheel cases additionally require a stable offset.
+flush queued events; held-reader checks additionally need stable offset, content height
+and viewport height after the corresponding rendered effect.
+
+Stability alone can preserve a bottom baseline overwritten by resize-driven pinning.
+A programmatic park during metadata reflow does not release following through the
+geometry guard. Confirm completed overflowing history, settle dismissal/pointer geometry,
+then establish trusted upward intent and prove movement and distance from the bottom
+before recording a held baseline. Keep it immutable through arrival, initial focus,
+same-request growth and drafting; position visible controls before their own baselines.
+The [controlled observation](https://github.com/pyrycode/pyrycode-desktop/issues/1916#issuecomment-6097098604)
+reproduced the exact 1125px → 1567px jump after all 24 rows rendered, distinguishing setup
+intent from seeded delivery and Cancel focus. See
+[inline permission reader verification](conversation-shell-scroll-pin.md#inline-permission-reader-verification)
+for the controlled counts, 20 focused Linux/Xvfb passes with 3 workers and zero retries,
+and the named test's full-gate result separately from an unrelated failure.
 
 Protected-restoration joins need an explicit pre-input history-demand position. After
 restored tool expansion and settled focus/hover, park at half the measured

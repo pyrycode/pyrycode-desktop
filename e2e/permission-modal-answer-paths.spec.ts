@@ -3,6 +3,7 @@ import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { ConversationSummary, Envelope, EnvelopeType, ModalShownPayload, WireQuestion } from '../src/shared/wire/types'
 import type { Locator, Page } from '@playwright/test'
 import { capturePairedApp } from './fixtures/capturePairedApp'
+import { bubbleTextExactly } from './fixtures/bubbleText'
 import { ATTACHMENT_UPLOAD_EVENT_CHANNEL } from '../src/shared/ipc/attachmentUpload'
 
 // All content is synthetic. Assert only routing fields; never serialize captured answer tokens.
@@ -121,40 +122,74 @@ test('inline arrival and growth follow pinned readers while focus preserves held
   }
   const thread = page.locator('.conversation__thread'), panel = panelFor(page)
   const distance = () => thread.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)
+  // Observe layout/resize delivery as well as native motion; never replace a held baseline after arrival.
+  const settled = () => thread.evaluate(el => new Promise<number>(resolve => {
+    const metrics = () => [el.scrollTop, el.scrollHeight, el.clientHeight]
+    let last = metrics(), stable = 0
+    const sample = (): void => {
+      const next = metrics()
+      stable = next.every((value, i) => Math.abs(value - last[i]) < 0.1) ? stable + 1 : 0
+      last = next
+      if (stable >= 20) resolve(el.scrollTop)
+      else requestAnimationFrame(sample)
+    }
+    requestAnimationFrame(sample)
+  }))
+  const replies = thread.locator('.bubble[data-thread-role="assistant"]')
+  await expect(replies).toHaveCount(24)
+  await expect(replies.last()).toHaveText(bubbleTextExactly('Reader row 23'))
+  expect(await thread.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(500)
+  await settled()
   await expect.poll(distance).toBeLessThanOrEqual(2)
   daemon.pushFrame(grantShown('Pinned card'))
   await expect(page.locator('.conversation__thread .permission-panel')).toContainText('Pinned card')
+  await settled()
   await expect.poll(distance).toBeLessThanOrEqual(2)
   await choose(panel, 'allow_once')
+  await expect(armed(panel)).toBeVisible()
+  await settled()
   await expect.poll(distance).toBeLessThanOrEqual(2)
   await capturePairedApp(app, page, '/tmp/builder-1818/inline-armed.png')
   daemon.pushFrame(dismissed('Pinned card'))
   await expect(panel).toHaveCount(0)
-  await thread.evaluate(el => { el.scrollTop = 100 })
-  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
-  const before = await thread.evaluate(el => el.scrollTop)
+  await page.mouse.move(0, 0)
+  await settled()
+  const box = await thread.boundingBox()
+  if (box === null) throw new Error('the overflowing thread must be mounted')
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  const pinned = await settled()
+  // A direct scrollTop write during metadata reflow can retain following through the geometry guard.
+  // Trusted upward input releases following before native movement and resize delivery.
+  await page.mouse.wheel(0, -500)
+  await page.mouse.move(0, 0)
+  const before = await settled()
+  expect(before).toBeLessThan(pinned - 450)
+  expect(before).toBeGreaterThan(0)
+  expect(await distance()).toBeGreaterThan(450)
   daemon.pushFrame(grantShown('Held card', { default_to_no: true }))
   await expect(action(panel, 'Cancel')).toBeFocused()
-  expect(await thread.evaluate(el => el.scrollTop)).toBeCloseTo(before, 0)
+  expect(await settled()).toBeCloseTo(before, 0)
+  const cardHeight = await panel.evaluate(el => el.getBoundingClientRect().height)
   daemon.pushFrame(grantShown('Held card', { description: 'Content grows '.repeat(30) }))
   await expect(panel).toContainText('Content grows')
-  expect(await thread.evaluate(el => el.scrollTop)).toBeCloseTo(before, 0)
+  await expect.poll(() => panel.evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThan(cardHeight)
+  expect(await settled()).toBeCloseTo(before, 0)
   await page.getByPlaceholder('Message…').fill('Draft remains available')
-  expect(await thread.evaluate(el => el.scrollTop)).toBeCloseTo(before, 0)
+  await expect(page.getByPlaceholder('Message…')).toHaveValue('Draft remains available')
+  expect(await settled()).toBeCloseTo(before, 0)
   await panel.getByRole('checkbox').scrollIntoViewIfNeeded()
   await page.mouse.move(0, 0)
   await panel.getByRole('checkbox').focus()
-  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
-  const checkboxBefore = await thread.evaluate(el => el.scrollTop)
+  const checkboxBefore = await settled()
   await panel.getByRole('checkbox').press('Space')
-  expect(await thread.evaluate(el => el.scrollTop)).toBeCloseTo(checkboxBefore, 0)
+  await expect(panel.getByRole('checkbox')).toBeChecked()
+  expect(await settled()).toBeCloseTo(checkboxBefore, 0)
   await action(panel, 'allow_once').scrollIntoViewIfNeeded()
-  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  const armBefore = await settled()
   expect(await distance()).toBeGreaterThan(2)
-  const armBefore = await thread.evaluate(el => el.scrollTop)
   await choose(panel, 'allow_once')
   await expect(armed(panel)).toBeVisible()
-  expect(await thread.evaluate(el => el.scrollTop)).toBeCloseTo(armBefore, 0)
+  expect(await settled()).toBeCloseTo(armBefore, 0)
   await expect(page.locator('.composer__footer')).toBeVisible()
 })
 

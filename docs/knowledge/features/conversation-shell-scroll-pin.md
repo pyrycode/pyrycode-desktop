@@ -104,9 +104,14 @@ Initial hinted Cancel focus uses `focus({ preventScroll: true })`. Without it, f
 arrived offscreen card would move a scrolled-up reader despite the guarded pin. The fake-transport
 case `inline arrival and growth follow pinned readers while focus preserves held position` proves
 pinned arrival/arming and held-reader arrival, Cancel focus, content growth, composer drafting,
-visible-checkbox editing and visible-choice arming. It waits two animation frames after positioning
-to let the scroll event update `following`; offscreen controls are first deliberately scrolled into
-view so native focus movement is not confused with growth. See
+visible-checkbox editing and visible-choice arming. It confirms all 24 completed replies render
+with more than 500px of overflow, settles dismissal and pointer geometry, then uses a trusted
+500px upward wheel. Before held-card delivery it requires more than 450px of upward movement
+and distance from the bottom, with a positive offset. Its baseline requires 20 consecutive
+stable frames of offset, content height and viewport height; arrival, focus, positive same-request
+growth and drafting retain that baseline and the original <0.5px tolerance. Visible controls are
+deliberately positioned before their own settled baselines so native focus movement is not
+confused with growth. See [reader setup evidence](#inline-permission-reader-verification) and
 [counted inline evidence](development-verification-test-tiers.md#inline-permission-verification).
 
 Resize and Electron zoom can cause native anchoring to emit a scroll before resize
@@ -202,6 +207,52 @@ confirmed by the [verifier verdict](https://github.com/pyrycode/pyrycode-desktop
 
 These runs exercised the built Electron app with fake-daemon streaming; physical
 trackpad gestures and live-Claude streaming were not exercised.
+
+### Inline permission reader verification
+
+A stable offset alone can be an overwritten bottom endpoint. A programmatic park during
+metadata reflow supplies no trusted upward intent, so the geometry guard can retain following
+and pending resize delivery can re-pin before the baseline. Settle layout and prove actual
+upward movement and distance from the bottom before delivering held-reader content. After each
+action, wait for its rendered effect and stable offset/content/viewport geometry; keep the
+pre-arrival baseline immutable rather than polling until a jump disappears.
+
+The [controlled cause observation](https://github.com/pyrycode/pyrycode-desktop/issues/1916#issuecomment-6097098604)
+at `794574c4` focused an existing Copy control with `preventScroll` immediately before the old
+`scrollTop = 100` setup. All 24 replies were rendered. Metadata reveal added 28px; captured
+setter stacks showed the row resize observer re-pinning 100px to 1125px before the baseline.
+The arriving 470px card triggered the layout-effect pin, while Cancel focus collapsed that
+metadata, yielding 1567px: the original 442px jump. This distinguishes retained setup intent
+from pending seeded delivery or Cancel scrolling. The controlled run used Linux x86_64,
+shown Electron windows on Xvfb `:99`, a 1280×800 Playwright viewport, 3 actual workers and
+zero retries: 3 executed, 0 passed, 3 failed, 0 skipped, each at the original held-arrival
+assertion. Settled-control and original-timing instrumented runs passed 3/3 and 20/20
+respectively, each with 0 failed/skipped; green repetitions alone missed the setup race.
+
+The original reports at `de222e52ff`, linked from that cause comment, record 377 executed,
+376 passed, 1 failed, 3 skipped with 3 actual workers; this named test failed attempt 0.
+Its focused rerun used 1 actual worker: 1 executed/passed, 0 failed/skipped, attempt 0.
+
+[Post-repair validation](https://github.com/pyrycode/pyrycode-desktop/issues/1916#issuecomment-6097173089)
+at `d357bfe90f4bd7eb63f739e5917332f1acdde516` records the named test
+`inline arrival and growth follow pinned readers while focus preserves held position`
+in `permission-modal-answer-paths.spec.ts`, on Linux x86_64 with shown Electron windows
+on Xvfb `:99` and a 1280×800 Playwright viewport. Both runs configured and used 3 workers,
+with retries disabled:
+
+- Focused repetitions: 20 executed, 20 passed, 0 failed, 0 skipped; all named-test attempts 0.
+- Full default fake-transport gate: 377 executed, 377 passed, 0 failed, 3 skipped.
+  Named test separately: 1 executed/passed, 0 failed/skipped, attempt 0, worker 1.
+
+The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1917#issuecomment-6097311216)
+confirms the spec is unchanged at reviewed merge head `f1ada1b9df1f905a2c95baecbc5542a6d92a18e2`.
+Dispatcher gate 6 there used 3 configured/actual workers and zero retries: 377 executed,
+376 passed, 1 unrelated failure, 3 skipped. The named test was present and passed:
+1 executed/passed, 0 failed/skipped, attempt 0. The unrelated failure's focused rerun
+executed/passed 1, with 0 failed/skipped and 1 actual worker. Builder scratch reports were
+unavailable to the verifier; the controlled and 20-repeat evidence comes from the linked
+ticket records, while the verifier independently checked the original and current gate JSON.
+This repair changes only the regression; no renderer change or live-Claude run was required.
 
 ### Bounded anchor and growth verification
 

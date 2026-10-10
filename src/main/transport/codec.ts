@@ -140,6 +140,7 @@ export function decodeEnvelope(bytes: Uint8Array): Envelope {
     }
     envelope.history_entry_id = obj.history_entry_id
   }
+  if (typeof obj.session_id === 'string') envelope.session_id = obj.session_id
   return envelope
 }
 

@@ -171,6 +171,31 @@ Three pieces, three layers:
 
 `src/shared/ipc/` is the new IPC-contract module, mirroring how `src/shared/wire/` is the wire module. #18 creates one file in it; #17 later adds its command file (recommended: a sibling `commands.ts` with its own `COMMAND_CHANNEL`, so the two tickets never edit the same file).
 
+### Complete thread events
+
+`threadUpdate` carries `conversationId`, a validated shared `ThreadUpdate` and
+`correlation: Omit<Envelope, 'payload' | 'type'>`. Ordinary delivery preserves its
+envelope's correlation; assembled delivery uses the completing envelope's `id`,
+`ts` and supplied optional `in_reply_to`, `event_id`, `history_entry_id` and string
+`session_id`. Absent optional correlation stays absent. Main also supplies
+`daemonTs` from `ts` and `historyEntryId` from `history_entry_id`; none substitutes
+for logical `version`, item `rev` or fragment progress.
+
+`threadRepairNeeded` carries `conversationId` and a static `ThreadRepairReason`.
+Both events receive `serverId` from the connection's existing `bindServerOrigin`,
+so repair is scoped to the host/conversation that failed. No recovery request is
+sent. Validation, digest checks, raw bytes and incomplete buffers stay in main;
+only complete DTOs or repair indications reach `window.pyry.onDaemonEvent` through
+the existing subscription and cleanup handle. Unknown item/patch JSON stays inert
+across structured cloning, including prototype-like keys; never merge it into
+application objects.
+
+The four exhaustive legacy translators explicitly return null for both arms.
+The timeline subscription additionally ignores them before its pending-delta
+flush, as described in [data flow](conversation-timeline-store-data-flow.md#data-flow).
+See [validation and assembly bounds](inbound-message-decode-limits.md#complete-live-thread-validation)
+for shared DTO shapes and downstream ownership.
+
 ### Reply suggestions
 
 Main projects a [validated `reply_suggestion`](inbound-message-decode.md#reply-suggestion-validation)

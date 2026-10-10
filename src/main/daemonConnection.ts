@@ -19,6 +19,7 @@
 // classification code and the event name — never the caught error object, the human-readable banner
 // (messageFor), the ack/plaintext bytes, or the numeric close code (that is #127's relay leg). Every
 // failure surfaces as a non-connected DaemonEvent; nothing throws out of the module.
+import { createThreadUpdateReceiver } from './transport/threadUpdates'
 import type { MessageLifecycle } from './messageLifecycle'
 import { notifySend } from './transport/sendObservation'
 import type { SendOutcome } from './transport/sendObservation'
@@ -788,6 +789,15 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // one — is the only binding by that name in the factory, and the unbound sink can be reached only
   // by naming `deps.sink` again, which nothing below does.
   const sink = bindServerOrigin(deps.sink, deps.serverId)
+  const threadReceiver = createThreadUpdateReceiver(event => {
+    if (event.kind === 'thread-repair') {
+      emitDaemonEvent(sink, { type: 'threadRepairNeeded', conversationId: event.conversationId, reason: event.reason })
+      return
+    }
+    const { payload, type, ...correlation } = event.envelope
+    emitDaemonEvent(sink, { type: 'threadUpdate', conversationId: event.update.payload.conversation_id,
+      update: event.update, correlation, daemonTs: correlation.ts, historyEntryId: correlation.history_entry_id })
+  }, deps.diagnosticLog)
   const connectionSink = sink
   const now = deps.now ?? ((): string => new Date().toISOString())
   const createDriver = deps.createDriver ?? createNoiseRelayDriver
@@ -1248,6 +1258,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   function onDriverEvent(event: RelaySessionEvent): void {
     switch (event.type) {
       case 'handshake-complete': {
+        threadReceiver.reset()
         let ack: HelloAckPayload
         try {
           ack = parseHelloAck(event.helloAck)
@@ -1301,6 +1312,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         // optional chaining, or the settled reassembler's own inert guard — preserving the prior
         // drop behaviour and keeping an unrelated `error` harmless when no bundle is streaming).
         switch (inbound.kind) {
+          case 'thread-frame':
+            if (authenticated && !stopped) threadReceiver.receive(inbound.envelope)
+            return
           case 'message':
             emitDaemonEvent(sink, { type: 'messageReceived', message: inbound.message, daemonTs: inbound.ts })
             return
@@ -1315,6 +1329,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             return
           case 'daemon-error': {
             if (inbound.pairingReject === 'pairing-rejected') {
+              threadReceiver.reset()
               pairingRejected = true
               failBundleStream()
               failAttachmentTransfers()
@@ -1330,6 +1345,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // generation and are dropped before onDriverEvent, so neither can overwrite the reason
             // with `connection-closed`. Nothing is persisted; a manual reconnect() dials afresh.
             if (inbound.updateRequired !== undefined) {
+              threadReceiver.reset()
               failBundleStream()
               failAttachmentTransfers()
               failAttachmentRetrievals()
@@ -2934,6 +2950,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         emitDaemonEvent(sink, { type: 'relayLinkChanged', status: 'connected' })
         return
       case 'relay-link-down': {
+        threadReceiver.reset()
         abandonHostPrompts()
         pendingSwitchAgents.clear()
         const wasAuthenticated = authenticated
@@ -2959,6 +2976,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         return
       }
       case 'terminal':
+        threadReceiver.reset()
         abandonHostPrompts()
         // A stream interrupted by a socket drop resolves the consumer (no hang, no lingering bytes).
         // Deterministic code, safe unconditionally: fail on a settled/absent reassembler is inert.
@@ -2979,6 +2997,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         emitFailed('connection-closed', `The connection to pyrybox was closed (code ${event.code}).`)
         return
       case 'error':
+        threadReceiver.reset()
         // Same teardown net for a connection-level driver error mid-stream.
         failBundleStream()
         failAttachmentTransfers()
@@ -4306,6 +4325,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
 
   // The single fresh-connect path both start() and reconnect() funnel through.
   function dial(): void {
+    threadReceiver.reset()
     abandonHostPrompts()
     authenticated = false
     deliveryFailed = false
@@ -4399,6 +4419,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     stop(): void {
       if (stopped) return
       stopped = true
+      threadReceiver.reset()
       authenticated = false
       failHeldMessages(true)
       pendingSwitchAgents.clear()

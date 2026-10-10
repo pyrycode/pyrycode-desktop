@@ -73,6 +73,9 @@ export interface InnerFrameV2 {
 }
 
 export type EnvelopeType =
+  | 'thread_item_added'
+  | 'thread_item_changed'
+  | 'thread_text_append'
   | 'reply_suggestion'
   | 'request_host_system_prompt'
   | 'set_host_system_prompt'
@@ -542,6 +545,7 @@ export interface Envelope {
   event_id?: number
   /** Per-conversation durable history identity; never a connection or replay counter. */
   history_entry_id?: number
+  session_id?: string
 }
 
 export type WireRole = 'user' | 'assistant'

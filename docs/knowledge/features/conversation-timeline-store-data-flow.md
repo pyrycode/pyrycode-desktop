@@ -21,9 +21,17 @@ explicit null when no host was supplied. Neither a later receipt nor the selecte
 host can supply ownership at flush time; switching the open conversation cannot
 redirect the queued text. Individual folds preserve grouping and history joins.
 
-Every non-delta daemon event flushes earlier deltas before translation or reconnect
-handling, even when the translator returns null. Both stores also flush before
-ordinary action reads and setters: tool/terminal/stall events, history admission,
+`threadUpdate` and `threadRepairNeeded` return at subscription entry, preserving
+legacy store identity and the scheduled delta frame. Returning null only from the
+translator would still flush pending deltas before ignoring the event.
+`src/renderer/src/store/threadUpdates.test.ts` covers both translator no-ops and a
+pending-delta subscription: neither indication dispatches or cancels the frame,
+and the original callback later applies its delta once. These thread indications
+belong to the [separate item-application path](inbound-message-decode-limits.md#thread-transport-ownership-and-coverage).
+
+Every other non-delta daemon event flushes earlier deltas before translation or
+reconnect handling, even when the translator returns null. Both stores also flush
+before ordinary action reads and setters: tool/terminal/stall events, history admission,
 local echo, queue removal and reset/clear retain their order and immediate handling.
 These boundaries can add publications within the same frame. Flush detaches the
 FIFO and invalidates/cancels its callback before folding, so recursive boundaries

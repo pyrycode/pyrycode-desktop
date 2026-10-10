@@ -106,3 +106,12 @@ describe('isAttachmentRetrievalRequest', () => {
     expect(isAttachmentRetrievalRequest(hostile)).toBe(false)
   })
 })
+
+describe('explicit retrieval host', () => {
+  it.each([undefined, 'host', 'x'.repeat(MAX_RETRIEVAL_IDENTIFIER_LENGTH)])('accepts optional bounded host %s', serverId => {
+    expect(isAttachmentRetrievalRequest({ ...VALID, serverId })).toBe(true)
+  })
+  it.each([null, 7, false, {}, '', 'x'.repeat(MAX_RETRIEVAL_IDENTIFIER_LENGTH + 1)])('drops malformed host %s', serverId => {
+    expect(isAttachmentRetrievalRequest({ ...VALID, serverId })).toBe(false)
+  })
+})

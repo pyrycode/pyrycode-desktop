@@ -346,3 +346,24 @@ describe('downloadAttachment — the refusals, which are listener-lifetime preco
     logged.mockRestore()
   })
 })
+
+it('captures activation host and conversation and waits only for its scoped terminal', () => {
+  const r = recorder()
+  let host = 'A', chat = 'chat'
+  r.deps.getServerId = () => host
+  r.deps.getOpenConversationId = () => chat
+  downloadAttachment(r.deps, ATTACHMENT)
+  host = 'B'; chat = 'other'
+  downloadAttachment(r.deps, ATTACHMENT)
+  r.push({ type: 'failed', serverId: 'A', conversationId: 'chat', attachmentId: ATTACHMENT.attachmentId, reason: 'connection-lost' })
+  expect(r.liveListeners()).toBe(1)
+  expect(r.saves).toEqual([])
+  r.push({ type: 'completed', serverId: 'B', conversationId: 'chat', attachmentId: ATTACHMENT.attachmentId })
+  expect(r.liveListeners()).toBe(1)
+  r.push({ type: 'completed', serverId: 'B', conversationId: 'other', attachmentId: ATTACHMENT.attachmentId })
+  expect(r.saves).toEqual([{ attachmentId: ATTACHMENT.attachmentId, filename: ATTACHMENT.filename }])
+  expect(r.asks).toEqual([
+    { serverId: 'A', conversationId: 'chat', attachmentId: ATTACHMENT.attachmentId },
+    { serverId: 'B', conversationId: 'other', attachmentId: ATTACHMENT.attachmentId }
+  ])
+})

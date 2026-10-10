@@ -30,6 +30,7 @@
 // scope for a main-process routing slice.
 //
 // Imported by relative path: src/main has no @shared alias (tsconfig.node.json).
+import type { ServerTarget } from './serverRouter'
 import type { DaemonEventSink } from './emitDaemonEvent'
 import type { DaemonEvent } from '../shared/ipc/events'
 import type { DiagnosticLog } from './diagnosticLog'
@@ -84,6 +85,8 @@ export interface ConversationRouter<C> {
    * the call site: an absent id is not a known conversation, so it refuses on the ordinary path.
    */
   route(conversationId: string | undefined, observedHost?: string): C | null
+  /** Legacy routing decision with its resolved host for scoped retrieval ownership. */
+  resolve(conversationId: string | undefined, observedHost?: string): ServerTarget<C> | null
 }
 
 /**
@@ -180,6 +183,44 @@ export function createConversationRouter<C>(deps: ConversationRouterDeps<C>): Co
     if (event.type === 'conversationCreated') learn(event.conversation.id, serverId)
   }
 
+  const resolve = (conversationId: string | undefined, observedHost?: string): ServerTarget<C> | null => {
+    let serverId = conversationId === undefined ? undefined : index.get(conversationId)
+    // Both halves in one condition, so `conversationId` narrows to `string` below and the delete
+    // needs no cast — an absent id and an unplaceable one are the same refusal either way.
+    if (conversationId === undefined || serverId === undefined) {
+      diagnosticLog?.event({ event: 'conversation-route-refused', code: 'unknown-conversation' })
+      return null
+    }
+    if (observedHost !== undefined) {
+      const owners = [...(claims.get(conversationId) ?? [])].filter(host => connectionFor(host) !== null)
+      if (owners.length !== 1 || owners[0] !== observedHost) {
+        diagnosticLog?.event({ event: 'conversation-route-refused', code: 'observed-host-mismatch' })
+        return null
+      }
+      // Current claims can outlive the last-indexed host's list, deletion or pairing.
+      serverId = observedHost
+    }
+    const connection = serverId === null ? null : connectionFor(serverId)
+    if (connection === null) {
+      // The refusal above is the boundary; this deletion is hygiene, applied at the one moment the
+      // stale mapping could ever have mattered. There is deliberately NO reconcile-driven sweep:
+      // `registry.reconcile()` is asynchronous, so a prune called beside it would run before the
+      // registry had dropped anything and be a no-op on exactly the unpair path it was written for.
+      const owners = claims.get(conversationId)
+      if (serverId !== null) owners?.delete(serverId)
+      if (owners !== undefined && owners.size > 0) {
+        // Only a fresh event restores ordinary routing; surviving observed hosts still use claims.
+        index.set(conversationId, null)
+      } else {
+        index.delete(conversationId)
+        claims.delete(conversationId)
+      }
+      diagnosticLog?.event({ event: 'conversation-route-refused', code: 'server-not-connected' })
+      return null
+    }
+    return { serverId, connection }
+  }
+
   return {
     observe(target: DaemonEventSink): DaemonEventSink {
       return {
@@ -199,42 +240,9 @@ export function createConversationRouter<C>(deps: ConversationRouterDeps<C>): Co
         }
       }
     },
+    resolve,
     route(conversationId: string | undefined, observedHost?: string): C | null {
-      let serverId = conversationId === undefined ? undefined : index.get(conversationId)
-      // Both halves in one condition, so `conversationId` narrows to `string` below and the delete
-      // needs no cast — an absent id and an unplaceable one are the same refusal either way.
-      if (conversationId === undefined || serverId === undefined) {
-        diagnosticLog?.event({ event: 'conversation-route-refused', code: 'unknown-conversation' })
-        return null
-      }
-      if (observedHost !== undefined) {
-        const owners = [...(claims.get(conversationId) ?? [])].filter(host => connectionFor(host) !== null)
-        if (owners.length !== 1 || owners[0] !== observedHost) {
-          diagnosticLog?.event({ event: 'conversation-route-refused', code: 'observed-host-mismatch' })
-          return null
-        }
-        // Current claims can outlive the last-indexed host's list, deletion or pairing.
-        serverId = observedHost
-      }
-      const connection = serverId === null ? null : connectionFor(serverId)
-      if (connection === null) {
-        // The refusal above is the boundary; this deletion is hygiene, applied at the one moment the
-        // stale mapping could ever have mattered. There is deliberately NO reconcile-driven sweep:
-        // `registry.reconcile()` is asynchronous, so a prune called beside it would run before the
-        // registry had dropped anything and be a no-op on exactly the unpair path it was written for.
-        const owners = claims.get(conversationId)
-        if (serverId !== null) owners?.delete(serverId)
-        if (owners !== undefined && owners.size > 0) {
-          // Only a fresh event restores ordinary routing; surviving observed hosts still use claims.
-          index.set(conversationId, null)
-        } else {
-          index.delete(conversationId)
-          claims.delete(conversationId)
-        }
-        diagnosticLog?.event({ event: 'conversation-route-refused', code: 'server-not-connected' })
-        return null
-      }
-      return connection
+      return resolve(conversationId, observedHost)?.connection ?? null
     }
   }
 }

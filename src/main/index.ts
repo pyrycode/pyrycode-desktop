@@ -77,7 +77,8 @@ import {
 import {
   ATTACHMENT_RETRIEVAL_CHANNEL,
   ATTACHMENT_RETRIEVAL_EVENT_CHANNEL,
-  isAttachmentRetrievalRequest
+  isAttachmentRetrievalRequest,
+  type AttachmentRetrievalEvent
 } from '../shared/ipc/attachmentRetrieval'
 import {
   WORKSPACE_FILE_READ_CHANNEL,
@@ -1433,22 +1434,11 @@ app.whenReady().then(() => {
   // state that only means anything ACROSS asks, so rebuilding it per ask would silently disable both.
   const attachmentDir = join(app.getPath('userData'), ATTACHMENT_DIR_NAME)
   const retrieveAttachment = createAttachmentRetrieval({
-    // ROUTED BY CONVERSATION (#1118), and the tenth of the ten entry points that carry the key they
-    // need: `AttachmentRetrievalRequest.conversationId` already survived the boundary guard, so this
-    // is a lookup rather than a new field. It is the one routed site that OWES ITS ASKER AN ANSWER —
-    // the window is waiting on a terminal — so a refusal is reported rather than dropped, on the
-    // existing `not-connected` outcome ("the ask arrived with no live session, so nothing was sent"),
-    // which the driver turns into exactly one `failed` on the asker's own emit and releases its
-    // in-flight slot. No member is added to AttachmentRetrievalFailure. Attachment UPLOAD carries no
-    // conversation id and stays on the stand-in above.
-    requestAttachment: (payload, consumer) => {
-      const owner = router.route(payload.conversation_id)
-      if (owner === null) {
-        consumer.fail('not-connected')
-        return
-      }
-      owner.requestAttachment(payload, consumer)
-    },
+    // Explicit thread scope uses paired registry lookup, including unlisted/equal-ID conversations.
+    // Legacy requests retain the conversation index's refusal behavior.
+    resolve: ask => ask.serverId === undefined
+      ? router.resolve(ask.conversationId)
+      : servers.resolve(ask.serverId),
     store: (attachmentId, bytes) => storeAttachment(attachmentDir, attachmentId, bytes),
     diagnosticLog
   })
@@ -1463,13 +1453,20 @@ app.whenReady().then(() => {
   // with the in-flight entry. The isDestroyed() guard is the upload edge's: a window closed
   // mid-retrieval drops the outcome instead of throwing. It cannot route through `live.sink`, whose
   // send re-supplies DAEMON_EVENT_CHANNEL and ignores the channel it is given.
+  // Stable emitter identity bounds duplicate subscribers to one per window and caller scope.
+  const retrievalEmitters = new WeakMap<Electron.WebContents, (event: AttachmentRetrievalEvent) => void>()
   const attachmentRetrievalListener = (event: Electron.IpcMainEvent, request: unknown): void => {
     if (!isAttachmentRetrievalRequest(request)) return
     const sender = event.sender
-    retrieveAttachment(request, (retrievalEvent) => {
-      if (sender.isDestroyed()) return
-      sender.send(ATTACHMENT_RETRIEVAL_EVENT_CHANNEL, retrievalEvent)
-    })
+    let emit = retrievalEmitters.get(sender)
+    if (emit === undefined) {
+      emit = retrievalEvent => {
+        if (sender.isDestroyed()) return
+        sender.send(ATTACHMENT_RETRIEVAL_EVENT_CHANNEL, retrievalEvent)
+      }
+      retrievalEmitters.set(sender, emit)
+    }
+    retrieveAttachment(request, emit)
   }
   ipcMain.on(ATTACHMENT_RETRIEVAL_CHANNEL, attachmentRetrievalListener)
   app.on('will-quit', () =>

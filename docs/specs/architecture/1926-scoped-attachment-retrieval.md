@@ -69,3 +69,8 @@ None. Resolved ownership lives in main; requested scope is echoed to match each 
 - [Threat model alignment] Compromised renderer is limited to bounded paired-host retrievals and the aggregate cap. Hostile daemon remains confined by existing parser/reassembler/path gate; malicious relay delays end via existing timeout. Token theft defenses and relay cryptography are unchanged.
 **Reviewer:** builder (self-review per builder/security-review.md)
 **Date:** 2026-10-10
+
+## Revisions
+2026-10-10: Security implementation review found that per-ask duplicate emitter arrays could retain unbounded callbacks for repeated same-window asks. Main now gives each WebContents a stable emitter in a WeakMap; the driver deduplicates recipients by emitter and requested host scope. Distinct originating windows still receive the shared terminal, and legacy/explicit asks still receive their own scope. The repeated-emitter test asserts one terminal for twenty duplicate asks.
+
+Additional mounted proof: `a late retrieval disconnect cannot settle a switched thread with reused image IDs` in `e2e/thread-items.spec.ts` holds both hosts' replies, switches the supplied snapshot, waits for host A's actual connection-lost event through preload, then completes host B and requires image decoding. It also sends malformed host values through real preload/main and uses a valid unknown-host terminal as a receipt barrier before asserting no malformed outcomes or wire requests.

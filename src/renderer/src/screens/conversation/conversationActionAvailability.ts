@@ -3,14 +3,14 @@ import { sessionStore, useSessionStore } from '../../store/sessionStore'
 import { serverIdForOpenConversation } from './unpairAction'
 import { activeConversationStore } from '../../store/activeConversationStore'
 
-export function useConversationActionAvailability(conversationId: string | null): boolean {
-  const serverId = useConversationListStore(s => serverIdForOpenConversation(selectConversations(s), conversationId))
+export function useConversationActionAvailability(conversationId: string | null, hostId?: string): boolean {
+  const serverId = useConversationListStore(s => hostId ?? serverIdForOpenConversation(selectConversations(s), conversationId))
   return useSessionStore(s => serverId !== null && s.statuses.get(serverId)?.type === 'connected')
 }
 
 // Resolve again immediately before dispatch, before any optimistic state changes.
-export function connectedConversationHostNow(conversationId: string | null): string | null {
-  const serverId = serverIdForOpenConversation(selectConversations(conversationListStore.getState()), conversationId)
+export function connectedConversationHostNow(conversationId: string | null, hostId?: string): string | null {
+  const serverId = hostId ?? serverIdForOpenConversation(selectConversations(conversationListStore.getState()), conversationId)
   const connected = serverId !== null && sessionStore.getState().statuses.get(serverId)?.type === 'connected'
   if (typeof window !== 'undefined') {
     window.pyry?.sendDiagnostic?.({ event: 'conversation-action-availability', code: connected ? 'connected' : 'unavailable' })

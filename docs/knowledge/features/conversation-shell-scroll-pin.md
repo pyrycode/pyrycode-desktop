@@ -303,6 +303,47 @@ These are bounded-operation and behavior proofs, not profiling evidence for over
 scroll smoothness. Frame publication, read-observation setup and backdrop-filter paint
 cost are separate concerns. No live-Claude or visual comparison was required or performed.
 
+## Supplied snapshot anchor restoration
+
+The injectable [daemon item view](conversation-shell-timeline-render.md#supplied-daemon-item-presentation)
+calls `useThreadScrollPin(conversationId, 0, false, snapshot.items)`: legacy history
+demand is disabled, and the optional immutable presentation token is the item-list
+reference. A held reader's remembered anchor includes that token. A changed list
+restores the surviving direct-child row to its measured viewport position before
+paint, covering older-item prepends (including at offset zero) and content revisions
+above the reader. Following readers use the existing bottom pin as rows append/grow.
+Native anchoring remains enabled for non-React growth such as decoded images.
+
+`snapshot.version` is protocol progress, not a presentation-change counter. A completed
+older batch may insert rows while the store retains its existing version through
+`Math.max`; same/lower-watermark batches can also revise held content. Requiring an
+increasing watermark would miss those changes and let the viewed row move at zero
+offset, where Chromium suppresses native anchoring. Immutable `snapshot.items`
+identity detects those display changes independently of certification. Legacy callers
+omit the token and retain restoration on increasing `prependedRows`.
+
+The scope-keyed view remount resets its anchor and following state on host,
+conversation or epoch changes even when ids match. Observer cleanup still belongs
+to the existing hook; this path adds no pagination requests or scroll state machine.
+
+[`thread-items.spec.ts`](../../../e2e/thread-items.spec.ts)'s two width cases hold a
+reader at zero, prepend batches at the same and lower watermark, then deliver a
+lower-watermark revision above the reader. They also grow the newest row while
+following. After assigning `scrollTop` programmatically, the fixture waits two
+animation frames before measuring the anchor: the assignment queues a scroll event,
+so immediate delivery could test stale following/anchor state. This flush is distinct
+from the stable-geometry baselines needed for animated input described above.
+
+The [verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/1925#issuecomment-6102450645)
+confirms both named `authoritative items retain identity, actions and scroll at 1280`
+and `authoritative items retain identity, actions and scroll at 800` cases present and
+passed. Ticket coverage executed 3, passed 3,
+failed 0, skipped 1; the skip is the separate #1926 attachment transport reproduction.
+Full fake-transport coverage executed 380, passed 379, failed 1, skipped 4, with the
+unrelated `history-gaps` failure passing an isolated rerun (1 executed/passed,
+0 failed/skipped). These are injected snapshot/typed-update proofs; production
+selection and combined live acceptance remain with #1908.
+
 ## Inline question growth
 
 `Timeline.trailing` places `QuestionHistorySlot` after message rows, even with empty/offline history

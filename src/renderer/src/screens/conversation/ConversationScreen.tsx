@@ -1,4 +1,7 @@
+import { createAttachmentImageSources } from './attachmentImageSource'
 import { useReadObservation } from '../../store/conversationReadPublisher'
+import type { ThreadSnapshot } from '../../store/threadItemStore'
+import { threadItemPresentations } from './threadItemPresentation'
 import { historyGapId } from '@shared/chatHistory'
 import { agentSwitchStore, type AgentSwitchStatus } from '../../store/agentSwitchStore'
 import { useReplySuggestionStore, selectReplySuggestion, visibleReplySuggestion } from '../../store/replySuggestionStore'
@@ -8,6 +11,7 @@ import { mcpStatusStore, selectUnacknowledgedMcpFailureFor, useMcpStatusStore } 
 import {
   memo,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -152,7 +156,7 @@ import { formatMessageTime } from './messageTime'
 import { turnStatsByItemIndex } from './turnStats'
 import { AttachmentFileIcon } from './AttachmentFileIcon'
 import { isImageAttachmentName } from './attachmentIsImage'
-import { BubbleAttachmentImage } from './BubbleAttachmentImage'
+import { BubbleAttachmentImage, ThreadAttachmentScopeContext } from './BubbleAttachmentImage'
 import { downloadAttachment, attachmentDownloadDeps } from './downloadAttachment'
 import { sendInterrupt } from './sendInterrupt'
 import { sendNewSession } from './sendNewSession'
@@ -885,7 +889,7 @@ function measureThreadChrome(pane: HTMLElement): void {
  * dependency array it already runs after every render, so "jump to the bottom now" and "stay pinned while
  * the reply streams" are not two behaviours: both are consequences of the flag being `true`.
  */
-function useThreadScrollPin(conversationId: string | null, prependedRows: number): ThreadPin {
+function useThreadScrollPin(conversationId: string | null, prependedRows: number, legacyHistory = true, presentation?: object): ThreadPin {
   const ref = useRef<HTMLDivElement>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const following = useRef(true)
@@ -909,6 +913,7 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
     row: Element
     top: number
     prependedRows: number
+    presentation?: object
     conversationId: string | null
   } | null>(null)
   const refreshRow = (row: Element): void => {
@@ -969,7 +974,7 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
     const row = candidates[lo] ?? null
     topAnchor.current = row !== null
       ? { row, top: row.getBoundingClientRect().top - threadTop,
-          prependedRows, conversationId }
+          prependedRows, presentation, conversationId }
       : null
   }
 
@@ -1057,7 +1062,8 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
 
     const anchor = topAnchor.current
     if (el !== null && !following.current && anchor !== null &&
-        anchor.conversationId === conversationId && prependedRows > anchor.prependedRows &&
+        anchor.conversationId === conversationId &&
+        (presentation === undefined ? prependedRows > anchor.prependedRows : presentation !== anchor.presentation) &&
         anchor.row.parentElement === el) {
       // Preserve the surviving visible row at zero and during middle-of-thread gap insertion:
       // short threads include unused viewport space that is not part of the inserted content.
@@ -1138,6 +1144,11 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
   }, [])
 
   const demandHistory = (el: HTMLDivElement): void => {
+    if (!legacyHistory) {
+      following.current = false
+      rememberTop(el)
+      return
+    }
     // Measure before the input scrolls: crossing into the band needs a new input.
     if (connectedConversationHostNow(conversationId) === null) return
     if (conversationId === null) return
@@ -1563,8 +1574,81 @@ export function Timeline({
   )
 }
 
-// The stable empty backlog for a `<Timeline>` render that passes none — module scope so the fold's input
-// identity does not churn per render (the EMPTY_BACKLOG idiom from queueStore).
+type ThreadItemsProps = {
+  snapshot: ThreadSnapshot
+  foldTools?: boolean
+  onReply?: (role: 'user' | 'assistant', text: string) => void
+  onOpenMarkdownPath?: (path: string) => void
+}
+/** Explicit presentation seam; the ordinary app keeps selecting the legacy Timeline. */
+export function ThreadItemsTimeline(props: ThreadItemsProps): JSX.Element {
+  const s = props.snapshot
+  return <ThreadItemsView key={JSON.stringify([s.hostId, s.conversationId, s.epoch])} {...props} />
+}
+function ThreadItemsView({ snapshot, foldTools = false, onReply, onOpenMarkdownPath }: ThreadItemsProps): JSX.Element {
+  const rows = useMemo(() => threadItemPresentations(snapshot), [snapshot])
+  const attachmentScope = useMemo(() => {
+    const target = { conversationId: snapshot.conversationId, serverId: snapshot.hostId }
+    return { hostId: snapshot.hostId, conversationId: snapshot.conversationId,
+      imageSources: createAttachmentImageSources({
+        getOpenConversationId: () => target.conversationId,
+        requestAttachment: request => window.pyry.requestAttachment({ ...request, ...target }),
+        onAttachmentRetrievalEvent: listener => window.pyry.onAttachmentRetrievalEvent(listener),
+        requestAttachmentBytes: request => window.pyry.requestAttachmentBytes(request),
+        onAttachmentBytesEvent: listener => window.pyry.onAttachmentBytesEvent(listener),
+        createObjectUrl: blob => URL.createObjectURL(blob), revokeObjectUrl: url => URL.revokeObjectURL(url)
+      }) }
+  }, [snapshot.hostId, snapshot.conversationId])
+  // Completed older pages change the immutable item list without necessarily advancing the watermark.
+  const { scrollPin, paneRef } = useThreadScrollPin(snapshot.conversationId, 0, false, snapshot.items)
+  const [expandedTools, setTools] = useState<ReadonlySet<number>>(() => new Set())
+  const [expandedRuns, setRuns] = useState<ReadonlySet<number>>(() => new Set())
+  const items: ThreadItem[] = rows.map(row => row.item ?? { kind: 'userText', text: '' })
+  const projection = rows.map((row, index) => ({ index, depth: 0, ancestors: [], count: 1,
+    hasChildren: false, running: row.source.active === true }))
+  const runs = foldTools ? foldToolRuns(items, projection) : []
+  const byMember = new Map(runs.flatMap(run => run.members.map(index => [index, run] as const)))
+  const byStart = new Map(runs.map(run => [run.index, run]))
+  const open = (run: ToolRun) => run.members.some(index => expandedRuns.has(rows[index].source.id))
+  const toggleTool = (id: number) => setTools(previous => {
+    const next = new Set(previous)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    return next
+  })
+  return <ThreadAttachmentScopeContext.Provider value={attachmentScope}><div className="conversation__message-area" ref={paneRef}>
+    <div className="conversation__thread" ref={scrollPin.ref} onScroll={scrollPin.onScroll}
+      onWheel={scrollPin.onWheel} onKeyDown={scrollPin.onKeyDown} aria-label="Conversation history" tabIndex={0}>
+      {rows.flatMap((row, index) => {
+        const id = row.source.id, item = row.item, run = byMember.get(index), start = byStart.get(index)
+        const hidden = run !== undefined && !open(run)
+        const adjacentTool = (at: number) => rows[at]?.item?.kind === 'toolCall'
+        const classes = item?.kind === 'toolCall' ? ['tool-group-row', 'tool-group-row--depth-0',
+          (adjacentTool(index - 1) || (start && open(start))) && 'tool-group-row--joined-above',
+          adjacentTool(index + 1) && 'tool-group-row--joined-below'].filter(Boolean).join(' ') : undefined
+        const summary = typeof row.source.summary === 'string' ? row.source.summary.slice(0, 4096) : 'Unsupported item'
+        const agent = row.source.agent === 'claude' || row.source.agent === 'codex' ? row.source.agent : undefined
+        return [start && <div key={`run-${id}`} className={`tool-group-row tool-run${open(start) ? ' tool-group-row--joined-below' : ''}`}>
+          <ToolRunHeader run={start} expanded={open(start)} onToggle={() => setRuns(previous => {
+            const next = new Set(previous)
+            if (start.members.some(member => previous.has(rows[member].source.id))) {
+              for (const member of start.members) next.delete(rows[member].source.id)
+            }
+            else next.add(id)
+            return next
+          })} />
+        </div>, <div key={id} className={classes} hidden={hidden}>
+          {item === null ? <p className="session-delimiter__title">{summary}</p> : item.kind === 'toolCall'
+            ? <ToolRow item={item} running={row.source.active === true}
+                expansion={{ expanded: expandedTools.has(id), onToggle: () => toggleTool(id) }} />
+            : <TimelineRow item={item} inProgress={row.source.active === true} authoritativeSummary={summary}
+                turnStats={row.stats} agent={agent} onReply={onReply} onOpenMarkdownPath={onOpenMarkdownPath} />}
+        </div>]
+      })}
+    </div>
+  </div></ThreadAttachmentScopeContext.Provider>
+}
+
+// The stable empty backlog for a `<Timeline>` render that passes none.
 const EMPTY_QUEUED: readonly QueuedItem[] = []
 
 // The accessible name on the message copy control — a CLIENT-OWNED constant, beside
@@ -1690,16 +1774,23 @@ function MessageActions({ text, role, onReply }: {
 // Cleaning the name here would make what the operator SEES differ from what a save WRITES — a worse defect
 // than the tidiness it buys.
 function BubbleAttachmentRow({ attachment }: { attachment: MessageAttachment }): JSX.Element {
-  const conversationId = useActiveConversationStore(s => s.activeConversation?.id ?? null)
-  const available = useConversationActionAvailability(conversationId)
+  const scope = useContext(ThreadAttachmentScopeContext)
+  const conversationId = useActiveConversationStore(s => scope?.conversationId ?? s.activeConversation?.id ?? null)
+  const available = useConversationActionAvailability(conversationId, scope?.hostId)
   return (
     <button
       type="button"
       className="bubble__file"
       disabled={!available}
       onClick={() => {
-        if (connectedConversationHostNow(conversationId) === null) return
-        downloadAttachment(attachmentDownloadDeps, attachment)
+        if (connectedConversationHostNow(conversationId, scope?.hostId) === null) return
+        const target = scope && { conversationId: scope.conversationId, serverId: scope.hostId }
+        downloadAttachment(target === null ? attachmentDownloadDeps : {
+          ...attachmentDownloadDeps,
+          getOpenConversationId: () => target.conversationId,
+          openLocalAttachment: request => window.pyry.openAttachment({ ...request, ...target, localOnly: true }),
+          requestAttachment: request => window.pyry.requestAttachment({ ...request, ...target })
+        }, attachment)
       }}
     >
       {/* #1262 LIFTED THE DRAWING INTO `AttachmentFileIcon`, which the composer's pending tile now shares.
@@ -1842,7 +1933,8 @@ const TimelineRow = memo(function TimelineRow({
   turnStats,
   onOpenMarkdownPath,
   agent,
-  onReply
+  onReply,
+  authoritativeSummary
 }: {
   item: ThreadItem
   readRowKey?: number
@@ -1860,6 +1952,7 @@ const TimelineRow = memo(function TimelineRow({
   /** #1656: read by the banner and turnBoundary arms, which name the conversation's agent. */
   agent?: WireAgent
   onReply?: (role: 'user' | 'assistant', text: string) => void
+  authoritativeSummary?: string
 }): JSX.Element | null {
   switch (item.kind) {
     case 'assistantText': {
@@ -1887,15 +1980,16 @@ const TimelineRow = memo(function TimelineRow({
       // produces.
       return <ToolRow item={item} />
     case 'banner':
-      return item.level === 'info' ? null : (
+      return item.level === 'info' && authoritativeSummary === undefined ? null : (
         <p className={item.level === 'warning'
           ? 'session-delimiter__title claude-banner claude-banner--warning'
-          : 'session-delimiter__title claude-banner'}>{bannerDisplayText(item, agent)}</p>
+          : 'session-delimiter__title claude-banner'}>{authoritativeSummary !== undefined && agent === undefined ? item.text : bannerDisplayText(item, agent)}</p>
       )
     case 'modelRefusal':
       return <ModelRefusalRow refusal={item.refusal} />
     case 'turnBoundary': {
-      const text = stoppedTurnText(item, agent)
+      const text = (authoritativeSummary !== undefined && agent === undefined
+        ? authoritativeSummary : stoppedTurnText(item, agent) ?? authoritativeSummary) ?? null
       return text === null ? null : <p className="session-delimiter__title stopped-turn">{text}</p>
     }
     case 'compactionBoundary':
@@ -2330,25 +2424,27 @@ export function ToolRow({
   item,
   defaultExpanded = false,
   group,
-  expansion
+  expansion,
+  running
 }: {
   item: Extract<ThreadItem, { kind: 'toolCall' }>
   defaultExpanded?: boolean
   group?: { count: number; running: boolean; background?: boolean }
   expansion?: { expanded: boolean; onToggle: () => void }
+  running?: boolean
 }): JSX.Element {
   const { result, denial } = item
-  const elapsed = !group?.background && result === null && denial === undefined ? item.elapsedSeconds : undefined
-  const expandable = group !== undefined || result !== null || denial !== undefined
+  const elapsed = running !== false && !group?.background && result === null && denial === undefined ? item.elapsedSeconds : undefined
+  const expandable = group !== undefined || result !== null || denial !== undefined || (running !== undefined && item.input !== undefined)
   const [localExpanded, setExpanded] = useState(defaultExpanded)
   const expanded = expansion?.expanded ?? localExpanded
   const rowClass =
-    group?.background ? 'tool-row tool-row--resolved' : denial !== undefined
+    group?.background || (running === false && result === null && denial === undefined) ? 'tool-row tool-row--resolved' : denial !== undefined
       ? 'tool-row tool-row--resolved tool-row--denied'
       : result
         ? `tool-row tool-row--resolved${result.isError ? ' tool-row--error' : ''}`
         : 'tool-row'
-  const body = expanded && (result !== null || denial !== undefined)
+  const body = expanded && (result !== null || denial !== undefined || (running !== undefined && item.input !== undefined))
   const resultText = denial !== undefined
     ? denialDisplayText(result?.resultSummary ?? denial.message)
     : result?.resultSummary ?? ''
@@ -2558,7 +2654,7 @@ export function ToolRow({
               {denial.decisionReason !== '' ? `: ${denialDisplayText(denial.decisionReason)}` : ''}
             </p>
           )}
-          {resultText === '' ? (
+          {(result !== null || denial !== undefined) && (resultText === '' ? (
             // `=== ''` exactly — never `.trim()`, which would relabel whitespace-only output (real
             // output the daemon sent) as absent, and never a falsy check, which would read as if
             // `undefined` were reachable on a `string` field.
@@ -2571,7 +2667,7 @@ export function ToolRow({
             // shape and scrolls — the .unrecognized-row__raw side of the whitespace rule stated on
             // .code-block__body in conversation.css, not the reflowing code-block side.
             <pre className="tool-row__result">{resultText}</pre>
-          )}
+          ))}
         </div>
       )}
     </div>

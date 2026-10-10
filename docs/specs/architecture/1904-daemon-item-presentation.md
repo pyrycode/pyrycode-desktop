@@ -55,3 +55,12 @@ Test first with focused static renders for all kinds, shown visibility, inert fa
 None. Content that lacks an existing presentation contract deliberately uses the supplied summary.
 
 Sizing: one presentation deliverable; approximately 380 production + 330 tests/fixture + 70 plan lines = 780 written lines, at most five exports, no consumer migration, five observable criteria, no new protocol state machine.
+
+## Revisions
+2026-10-10 — verifier rework at `cdfb7c5a`:
+- Finding 1: `useThreadScrollPin` accepts an optional immutable presentation token. The authoritative view supplies `snapshot.items`; anchor restoration compares list identity, independently of `snapshot.version`. Legacy callers retain the increasing prepend-count contract. Mounted tests certify zero-offset prepends at the same and lower watermark, then revise content above the reader with a lower-watermark completed batch.
+- Finding 2: `ThreadItemsView` provides its host/conversation and a scope-owned image-source driver through `ThreadAttachmentScopeContext`. Existing file/image slots, including attachment offers, use that scope for availability, retrieval and local opening; file download dependencies capture it for fallback retrieval. Scope teardown releases existing image shares/listeners, and matching attachment IDs on another host cannot reuse this driver's URLs. Availability helpers accept an optional explicit host without changing existing callers. The mounted two-host test keeps the global chat different, checks scoped IPC retrieval/open-owner requests, and marks the snapshot host unavailable to verify availability.
+- Finding 3: `e2e/thread-items.spec.ts` joins the serialized clipboard project. List collection verifies its partition.
+Re-count: one deliverable, fewer than 800 total written lines, four touched production files, one additional context export, no required consumer migration, the original five observable criteria and no protocol state machine. No visual styling changes or live tests.
+
+- The mounted transport attempt exposed existing main-process retrieval routing that ignores an explicit host and requires a listed conversation; filed #1926 (bug, priority:low). This renderer slice proves scoped requests across the real preload using a ticket-local IPC fake. The production transport reproduction is skipped with its blocker link. No main/preload/shared production repair is included.

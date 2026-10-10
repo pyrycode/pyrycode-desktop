@@ -1,3 +1,4 @@
+import { createAttachmentImageSources } from './attachmentImageSource'
 import { useReadObservation } from '../../store/conversationReadPublisher'
 import type { ThreadSnapshot } from '../../store/threadItemStore'
 import { threadItemPresentations } from './threadItemPresentation'
@@ -10,6 +11,7 @@ import { mcpStatusStore, selectUnacknowledgedMcpFailureFor, useMcpStatusStore } 
 import {
   memo,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -154,7 +156,7 @@ import { formatMessageTime } from './messageTime'
 import { turnStatsByItemIndex } from './turnStats'
 import { AttachmentFileIcon } from './AttachmentFileIcon'
 import { isImageAttachmentName } from './attachmentIsImage'
-import { BubbleAttachmentImage } from './BubbleAttachmentImage'
+import { BubbleAttachmentImage, ThreadAttachmentScopeContext } from './BubbleAttachmentImage'
 import { downloadAttachment, attachmentDownloadDeps } from './downloadAttachment'
 import { sendInterrupt } from './sendInterrupt'
 import { sendNewSession } from './sendNewSession'
@@ -887,7 +889,7 @@ function measureThreadChrome(pane: HTMLElement): void {
  * dependency array it already runs after every render, so "jump to the bottom now" and "stay pinned while
  * the reply streams" are not two behaviours: both are consequences of the flag being `true`.
  */
-function useThreadScrollPin(conversationId: string | null, prependedRows: number, legacyHistory = true): ThreadPin {
+function useThreadScrollPin(conversationId: string | null, prependedRows: number, legacyHistory = true, presentation?: object): ThreadPin {
   const ref = useRef<HTMLDivElement>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const following = useRef(true)
@@ -911,6 +913,7 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
     row: Element
     top: number
     prependedRows: number
+    presentation?: object
     conversationId: string | null
   } | null>(null)
   const refreshRow = (row: Element): void => {
@@ -971,7 +974,7 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
     const row = candidates[lo] ?? null
     topAnchor.current = row !== null
       ? { row, top: row.getBoundingClientRect().top - threadTop,
-          prependedRows, conversationId }
+          prependedRows, presentation, conversationId }
       : null
   }
 
@@ -1059,7 +1062,8 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
 
     const anchor = topAnchor.current
     if (el !== null && !following.current && anchor !== null &&
-        anchor.conversationId === conversationId && prependedRows > anchor.prependedRows &&
+        anchor.conversationId === conversationId &&
+        (presentation === undefined ? prependedRows > anchor.prependedRows : presentation !== anchor.presentation) &&
         anchor.row.parentElement === el) {
       // Preserve the surviving visible row at zero and during middle-of-thread gap insertion:
       // short threads include unused viewport space that is not part of the inserted content.
@@ -1583,7 +1587,20 @@ export function ThreadItemsTimeline(props: ThreadItemsProps): JSX.Element {
 }
 function ThreadItemsView({ snapshot, foldTools = false, onReply, onOpenMarkdownPath }: ThreadItemsProps): JSX.Element {
   const rows = useMemo(() => threadItemPresentations(snapshot), [snapshot])
-  const { scrollPin, paneRef } = useThreadScrollPin(snapshot.conversationId, snapshot.version, false)
+  const attachmentScope = useMemo(() => {
+    const target = { conversationId: snapshot.conversationId, serverId: snapshot.hostId }
+    return { hostId: snapshot.hostId, conversationId: snapshot.conversationId,
+      imageSources: createAttachmentImageSources({
+        getOpenConversationId: () => target.conversationId,
+        requestAttachment: request => window.pyry.requestAttachment({ ...request, ...target }),
+        onAttachmentRetrievalEvent: listener => window.pyry.onAttachmentRetrievalEvent(listener),
+        requestAttachmentBytes: request => window.pyry.requestAttachmentBytes(request),
+        onAttachmentBytesEvent: listener => window.pyry.onAttachmentBytesEvent(listener),
+        createObjectUrl: blob => URL.createObjectURL(blob), revokeObjectUrl: url => URL.revokeObjectURL(url)
+      }) }
+  }, [snapshot.hostId, snapshot.conversationId])
+  // Completed older pages change the immutable item list without necessarily advancing the watermark.
+  const { scrollPin, paneRef } = useThreadScrollPin(snapshot.conversationId, 0, false, snapshot.items)
   const [expandedTools, setTools] = useState<ReadonlySet<number>>(() => new Set())
   const [expandedRuns, setRuns] = useState<ReadonlySet<number>>(() => new Set())
   const items: ThreadItem[] = rows.map(row => row.item ?? { kind: 'userText', text: '' })
@@ -1598,7 +1615,7 @@ function ThreadItemsView({ snapshot, foldTools = false, onReply, onOpenMarkdownP
     if (next.has(id)) next.delete(id); else next.add(id)
     return next
   })
-  return <div className="conversation__message-area" ref={paneRef}>
+  return <ThreadAttachmentScopeContext.Provider value={attachmentScope}><div className="conversation__message-area" ref={paneRef}>
     <div className="conversation__thread" ref={scrollPin.ref} onScroll={scrollPin.onScroll}
       onWheel={scrollPin.onWheel} onKeyDown={scrollPin.onKeyDown} aria-label="Conversation history" tabIndex={0}>
       {rows.flatMap((row, index) => {
@@ -1628,7 +1645,7 @@ function ThreadItemsView({ snapshot, foldTools = false, onReply, onOpenMarkdownP
         </div>]
       })}
     </div>
-  </div>
+  </div></ThreadAttachmentScopeContext.Provider>
 }
 
 // The stable empty backlog for a `<Timeline>` render that passes none.
@@ -1757,16 +1774,23 @@ function MessageActions({ text, role, onReply }: {
 // Cleaning the name here would make what the operator SEES differ from what a save WRITES — a worse defect
 // than the tidiness it buys.
 function BubbleAttachmentRow({ attachment }: { attachment: MessageAttachment }): JSX.Element {
-  const conversationId = useActiveConversationStore(s => s.activeConversation?.id ?? null)
-  const available = useConversationActionAvailability(conversationId)
+  const scope = useContext(ThreadAttachmentScopeContext)
+  const conversationId = useActiveConversationStore(s => scope?.conversationId ?? s.activeConversation?.id ?? null)
+  const available = useConversationActionAvailability(conversationId, scope?.hostId)
   return (
     <button
       type="button"
       className="bubble__file"
       disabled={!available}
       onClick={() => {
-        if (connectedConversationHostNow(conversationId) === null) return
-        downloadAttachment(attachmentDownloadDeps, attachment)
+        if (connectedConversationHostNow(conversationId, scope?.hostId) === null) return
+        const target = scope && { conversationId: scope.conversationId, serverId: scope.hostId }
+        downloadAttachment(target === null ? attachmentDownloadDeps : {
+          ...attachmentDownloadDeps,
+          getOpenConversationId: () => target.conversationId,
+          openLocalAttachment: request => window.pyry.openAttachment({ ...request, ...target, localOnly: true }),
+          requestAttachment: request => window.pyry.requestAttachment({ ...request, ...target })
+        }, attachment)
       }}
     >
       {/* #1262 LIFTED THE DRAWING INTO `AttachmentFileIcon`, which the composer's pending tile now shares.

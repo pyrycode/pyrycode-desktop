@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import type { ThreadSnapshot } from '../../store/threadItemStore'
+import { createContext, useContext, useEffect, useState } from 'react'
 import { activeConversationStore } from '../../store/activeConversationStore'
 import { connectedConversationHostNow } from './conversationActionAvailability'
 import type { MessageAttachment } from '../../store/threadTimeline'
-import { attachmentImageSources } from './attachmentImageSource'
+import { attachmentImageSources, type AttachmentImageSources } from './attachmentImageSource'
 import { attachmentAskTarget } from './ComposerAttach'
 
 /**
@@ -17,9 +18,9 @@ import { attachmentAskTarget } from './ComposerAttach'
  * the browser tier. The container's own arm — draws nothing, because the fetch has not started — is what
  * that tier CAN see, and it is asserted.
  *
- * THE MODULE SINGLETON IS CONSUMED, NEVER RECONSTRUCTED. `attachmentImageSources` is built once for the
- * app lifetime and its live-URL map is only meaningful across asks: a per-consumer instance would mint one
- * URL per mount, revoke none of the others, and disable the sharing silently. Its own header says so.
+ * Legacy rows share the module's `attachmentImageSources`; authoritative rows share the driver's
+ * scope-owned instance. Both retain URLs across consumers within their ownership scope, and every
+ * consumer releases its share on teardown.
  *
  * NO RENDERER-SIDE QUEUE, AND NO MAIN-SIDE CAP IS TOUCHED. Both legs cap at 4 concurrent, so a thread with
  * five images in view meets `busy` — which arrives here as an ordinary terminal and draws the fallback.
@@ -130,16 +131,23 @@ export function AttachmentThumbnail({
   }
 }
 
+/** Supplied thread ownership; legacy consumers keep their active-conversation wiring. */
+export const ThreadAttachmentScopeContext = createContext<
+  (Pick<ThreadSnapshot, 'hostId' | 'conversationId'> & { imageSources: AttachmentImageSources }) | null
+>(null)
+
 export function BubbleAttachmentImage({
   attachment
 }: {
   attachment: MessageAttachment
 }): JSX.Element | null {
+  const scope = useContext(ThreadAttachmentScopeContext)
+  const sources = scope?.imageSources ?? attachmentImageSources
   const [state, setState] = useState<AttachmentThumbnailState>({ type: 'pending' })
 
   useEffect(() => {
-    const conversationId = activeConversationStore.getState().activeConversation?.id ?? null
-    if (connectedConversationHostNow(conversationId) === null) {
+    const conversationId = scope?.conversationId ?? activeConversationStore.getState().activeConversation?.id ?? null
+    if (connectedConversationHostNow(conversationId, scope?.hostId) === null) {
       setState({ type: 'failed' })
       return
     }
@@ -158,7 +166,7 @@ export function BubbleAttachmentImage({
     // a total no-op, and the second mount STILL settles: main answers on
     // ATTACHMENT_RETRIEVAL_EVENT_CHANNEL with `sender.send`, a channel broadcast every listener receives
     // and filters by attachment id, not a per-request reply.
-    return attachmentImageSources.request(attachment.attachmentId, (outcome) => {
+    return sources.request(attachment.attachmentId, (outcome) => {
       if (outcome.type === 'ready') {
         setState({ type: 'ready', url: outcome.url })
         return
@@ -170,9 +178,9 @@ export function BubbleAttachmentImage({
       // would duplicate the record without adding a fact.
       setState({ type: 'failed' })
     })
-    // The record is frozen at send, so this never changes for a given mount today. Depending on the id
-    // rather than on the object keeps that true if a reducer ever re-creates the record.
-  }, [attachment.attachmentId])
+    // Re-created attachment metadata retains the share. A scope/driver change releases it before
+    // retrieving again, so matching IDs in another scope cannot reuse a previous picture.
+  }, [attachment.attachmentId, sources, scope])
 
   // Scope the local preference to this conversation and host. Main retains the existing raster
   // fallback for images without a readable original; thumbnail retrieval already populated its cache.
@@ -182,10 +190,12 @@ export function BubbleAttachmentImage({
       filename={attachment.filename}
       onDecodeError={() => setState({ type: 'failed' })}
       onOpen={() => {
-        const conversationId = activeConversationStore.getState().activeConversation?.id
+        const conversationId = scope?.conversationId ?? activeConversationStore.getState().activeConversation?.id
+        if (scope && connectedConversationHostNow(scope.conversationId, scope.hostId) === null) return
         window.pyry.openAttachment({
           attachmentId: attachment.attachmentId,
-          ...(conversationId === undefined ? {} : attachmentAskTarget(conversationId))
+          ...(scope ? { conversationId: scope.conversationId, serverId: scope.hostId }
+            : conversationId === undefined ? {} : attachmentAskTarget(conversationId))
         })
       }}
     />

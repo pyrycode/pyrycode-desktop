@@ -1,13 +1,20 @@
+import { createHash } from 'node:crypto'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { build, loadConfigFromFile, preview } from 'vite'
 import type { ThreadItem, ThreadUpdate } from '../src/shared/wire/thread'
-import { decodeEnvelope } from '../src/main/transport/codec'
+import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
+import { ATTACHMENT_RETRIEVAL_CHANNEL, ATTACHMENT_RETRIEVAL_EVENT_CHANNEL } from '../src/shared/ipc/attachmentRetrieval'
+import { ATTACHMENT_BYTES_CHANNEL, ATTACHMENT_BYTES_EVENT_CHANNEL } from '../src/shared/ipc/attachmentBytes'
+import { ATTACHMENT_OPEN_CHANNEL } from '../src/shared/ipc/attachmentOpen'
+import type { AttachmentOpenRequest } from '../src/shared/ipc/attachmentOpen'
 import { capturePairedApp } from './fixtures/capturePairedApp'
-import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { test, expect, seedConversationsFrame, SEEDED_ROW, FIRST_SERVER_ID, SECOND_SERVER_ID, SECOND_SEEDED_ROW } from './fixtures/launchPairedApp'
 
 type Fixture = {
+  activeChat: () => string | null
+  unavailable: (host: string) => void
   scope: (host: string, chat: string, epoch: string) => void
   batch: (items: ThreadItem[], version: number) => void
   update: (update: ThreadUpdate) => void
@@ -17,6 +24,8 @@ type Fixture = {
 const fixtureSource = `
 import { useState } from 'react';
 import { useStore } from 'zustand';
+import { activeConversationStore } from './store/activeConversationStore';
+import { sessionStore } from './store/sessionStore';
 import { createThreadItemStore } from './store/threadItemStore';
 import { ThreadItemsTimeline } from './screens/conversation/ConversationScreen';
 const threadStore = createThreadItemStore();
@@ -25,6 +34,8 @@ function ThreadFixture() {
   const [scope, setScope] = useState(null);
   const snapshot = useStore(threadStore, s => scope ? s.snapshot(scope.host, scope.chat) : null);
   window.threadFixture = { replies, paths,
+    activeChat() { return activeConversationStore.getState().activeConversation?.id ?? null; },
+    unavailable(host) { sessionStore.setState(s => ({ statuses: new Map(s.statuses).set(host, { type: 'disconnected' }) })); },
     scope(host, chat, epoch) { threadStore.getState().acceptEpoch(host, chat, epoch); setScope({ host, chat, epoch }); },
     batch(items, version) { const s = threadStore.getState(); const b = s.beginBatch(scope.host, scope.chat, scope.epoch);
       b.applyItems(items, version); b.commit({ fromVersion: 0, version, ranges: [{ start: 0, end: version }] }); },
@@ -63,12 +74,12 @@ for (const width of [1280, 800]) test(`authoritative items retain identity, acti
     await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 800), width)
     let version = 100
     const revs = new Map<number, number>()
-    const scope = async (host = 'host', chat = SEEDED_ROW.id, epoch = 'epoch') => page.evaluate(({ host, chat, epoch }) =>
+    const scope = async (host = FIRST_SERVER_ID, chat = SEEDED_ROW.id, epoch = 'epoch') => page.evaluate(({ host, chat, epoch }) =>
       (window as unknown as { threadFixture: Fixture }).threadFixture.scope(host, chat, epoch), { host, chat, epoch })
-    const batch = async (items: ThreadItem[]) => {
+    const batch = async (items: ThreadItem[], certifiedVersion = ++version) => {
       for (const i of items) revs.set(i.id, i.rev)
       await page.evaluate(({ items, version }) => (window as unknown as { threadFixture: Fixture }).threadFixture.batch(items, version),
-        { items, version: ++version })
+        { items, version: certifiedVersion })
     }
     const change = async (id: number, changes: Record<string, unknown> | string) => {
       const base_rev = revs.get(id)!, rev = ++version; revs.set(id, rev)
@@ -132,13 +143,14 @@ for (const width of [1280, 800]) test(`authoritative items retain identity, acti
     await batch([item(25, 'tool_call', { name: 'Read', input_summary: 'older tool' })])
     await expect(run).toHaveAttribute('aria-expanded', 'true')
     await expect(first.locator('.tool-row__result')).toHaveText('current result')
-    for (const [host, chat, epoch] of [['other-host', SEEDED_ROW.id, 'epoch'], ['host', 'other-chat', 'epoch'], ['host', SEEDED_ROW.id, 'other-epoch']]) {
+    for (const [host, chat, epoch] of [['other-host', SEEDED_ROW.id, 'epoch'], [FIRST_SERVER_ID, 'other-chat', 'epoch'], [FIRST_SERVER_ID, SEEDED_ROW.id, 'other-epoch']]) {
       await scope(host, chat, epoch); await batch(initial)
       await expect(run).toHaveAttribute('aria-expanded', 'false')
       await run.click(); await first.locator('button').click()
       await expect(first.locator('.tool-row__result')).toBeVisible()
     }
-    await scope('host', SEEDED_ROW.id, 'scroll')
+    await scope(FIRST_SERVER_ID, SEEDED_ROW.id, 'scroll')
+    version = 1000
     await batch(Array.from({ length: 25 }, (_, index) => item(200 + index, 'assistant_message', { text: `Row ${index}\n\n` + 'A reading paragraph. '.repeat(15) })))
     const distance = () => thread.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)
     await expect.poll(distance).toBeLessThanOrEqual(1)
@@ -147,10 +159,15 @@ for (const width of [1280, 800]) test(`authoritative items retain identity, acti
     await expect.poll(distance).toBeLessThanOrEqual(1)
     await thread.focus(); await page.keyboard.press('Home')
     await expect.poll(() => thread.evaluate(el => el.scrollTop)).toBe(0)
-    const viewed = page.locator('[data-thread-role="assistant"]').first()
-    const top = (await viewed.boundingBox())!.y
-    await batch([item(100, 'user_message', { text: 'Older page '.repeat(30) }, { status: 'delivered' })])
-    await expect.poll(async () => (await viewed.boundingBox())!.y).toBeCloseTo(top, 0)
+    // Older-page completion changes the presentation without advancing its protocol watermark.
+    for (const [id, certifiedVersion] of [[100, version], [101, 900]]) {
+      await thread.focus(); await page.keyboard.press('Home')
+      await expect.poll(() => thread.evaluate(el => el.scrollTop)).toBe(0)
+      const firstRow = (await thread.locator(':scope > div').first().elementHandle())!
+      const originalTop = (await firstRow.boundingBox())!.y
+      await batch([item(id, 'user_message', { text: 'Older page '.repeat(30) }, { status: 'delivered' })], certifiedVersion)
+      await expect.poll(async () => (await firstRow.boundingBox())!.y).toBeCloseTo(originalTop, 0)
+    }
     expect(await distance()).toBeGreaterThan(100)
     const anchor = page.locator('[data-thread-role="assistant"]').nth(2)
     await thread.evaluate(el => new Promise<void>(resolve => {
@@ -158,8 +175,107 @@ for (const width of [1280, 800]) test(`authoritative items retain identity, acti
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
     }))
     const before = (await anchor.boundingBox())!.y
-    await batch([item(100, 'user_message', { text: 'Revision above reader\n'.repeat(30) }, { status: 'delivered', rev: ++version })])
+    await batch([item(100, 'user_message', { text: 'Revision above reader\n'.repeat(30) }, { status: 'delivered', rev: 899 })], 900)
     await expect.poll(async () => (await anchor.boundingBox())!.y).toBeCloseTo(before, 0)
     expect(await distance()).toBeGreaterThan(100)
+  } finally { await new Promise<void>((resolve, reject) => server.httpServer.close(e => e ? reject(e) : resolve())) }
+})
+
+
+for (const realRetrieval of [false, true]) test(realRetrieval
+  ? 'blocked on #1926 — snapshot attachment scope through daemon retrieval'
+  : 'snapshot attachment actions retain their host and conversation across reused IDs', async ({ launchPairedApp }) => {
+  // https://github.com/pyrycode/pyrycode-desktop/issues/1926: main routes retrieval only by listed conversation.
+  test.skip(realRetrieval, 'blocked on #1926 — explicit host routing is outside this renderer ticket')
+  const server = await rendererFixture()
+  try {
+    const asks: { host: string; payload: unknown }[] = []
+    const pictureId = '7a8b9c0d-1e2f-4a3b-8c9d-7e8f9a0b1c2d'
+    const picture = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=', 'base64')
+    const replies = (host: string) => (bytes: Uint8Array) => {
+      const e = decodeEnvelope(bytes)
+      if (e.type === 'request_attachment') {
+        asks.push({ host, payload: e.payload })
+        const { attachment_id } = e.payload as { attachment_id: string }
+        if (attachment_id === pictureId) return [encodeEnvelope({ id: e.id + 900, in_reply_to: e.id,
+          type: 'attachment_chunk', ts: '2026-10-10T12:00:00Z', payload: {
+            attachment_id, index: 0, total_chunks: 1, filename: 'picture.png', mime_type: 'image/png',
+            size: picture.length, sha256: createHash('sha256').update(picture).digest('hex'), data: picture.toString('base64')
+          } })]
+      }
+      return e.type === 'list_conversations'
+        ? [seedConversationsFrame(host === FIRST_SERVER_ID ? SEEDED_ROW : SECOND_SEEDED_ROW)] : []
+    }
+    const { page, app } = await launchPairedApp({ buildReplyFrames: replies(FIRST_SERVER_ID) }, {
+      rendererUrl: server.resolvedUrls!.local[0], secondServer: { buildReplyFrames: replies(SECOND_SERVER_ID) }
+    })
+    await page.locator('.channel-list__row-open').first().click()
+    await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled()
+    await app.evaluate(({ ipcMain, shell }, channel) => {
+      const opens: AttachmentOpenRequest[] = []
+      ;(globalThis as unknown as { attachmentOpens: AttachmentOpenRequest[] }).attachmentOpens = opens
+      ipcMain.on(channel, (_event, request) => opens.push(request))
+      Object.defineProperty(shell, 'openPath', { value: async () => '', configurable: true })
+    }, ATTACHMENT_OPEN_CHANNEL)
+    const opens = () => app.evaluate(() => (globalThis as unknown as { attachmentOpens: AttachmentOpenRequest[] }).attachmentOpens)
+    if (!realRetrieval) await app.evaluate(({ ipcMain }, channels) => {
+      const asks: unknown[] = []
+      ;(globalThis as unknown as { attachmentAsks: unknown[] }).attachmentAsks = asks
+      // Ticket-local IPC fake: scope reaches the real preload; transport routing is tracked by #1926.
+      ipcMain.removeAllListeners(channels.retrieval)
+      ipcMain.removeAllListeners(channels.bytes)
+      ipcMain.on(channels.retrieval, (event, request) => {
+        asks.push(request)
+        event.sender.send(channels.retrievalEvent, request.attachmentId === channels.pictureId
+          ? { type: 'completed', attachmentId: request.attachmentId }
+          : { type: 'failed', reason: 'not-found', attachmentId: request.attachmentId })
+      })
+      ipcMain.on(channels.bytes, (event, request) => event.sender.send(channels.bytesEvent,
+        { type: 'delivered', attachmentId: request.attachmentId, bytes: new Uint8Array(channels.picture) }))
+    }, { retrieval: ATTACHMENT_RETRIEVAL_CHANNEL, retrievalEvent: ATTACHMENT_RETRIEVAL_EVENT_CHANNEL,
+      bytes: ATTACHMENT_BYTES_CHANNEL, bytesEvent: ATTACHMENT_BYTES_EVENT_CHANNEL, picture: [...picture], pictureId })
+    const retrievals = () => realRetrieval ? Promise.resolve(asks.map(a => {
+      const p = a.payload as { conversation_id: string; attachment_id: string }
+      return { serverId: a.host, conversationId: p.conversation_id, attachmentId: p.attachment_id }
+    })) : app.evaluate(() => (globalThis as unknown as {
+      attachmentAsks: { serverId: string; conversationId: string; attachmentId: string }[]
+    }).attachmentAsks)
+    const chat = 'snapshot-chat-B'
+    const items = [
+      item(10, 'user_message', { text: 'scoped attachments', attachments: [
+        { attachment_id: 'supplied-file', filename: 'report.pdf' },
+        { attachment_id: pictureId, filename: 'picture.png' }
+      ] }, { status: 'delivered' }),
+      item(20, 'notice', { attachment_id: 'offered-file', filename: 'offered.pdf' }, { subtype: 'attachment_offered' }),
+      item(30, 'notice', { attachment_id: pictureId, filename: 'offered.png' }, { subtype: 'attachment_offered' })
+    ]
+    for (const host of [FIRST_SERVER_ID, SECOND_SERVER_ID]) {
+      await page.evaluate(({ host, chat }) => {
+        const f = (window as unknown as { threadFixture: Fixture }).threadFixture
+        f.scope(host, chat, 'epoch')
+      }, { host, chat })
+      await page.evaluate(items => (window as unknown as { threadFixture: Fixture }).threadFixture.batch(items, 1000), items)
+      expect(await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.activeChat())).toBe(SEEDED_ROW.id)
+      const images = page.getByRole('button', { name: 'Attached image' })
+      await expect(images).toHaveCount(2)
+      await expect.poll(async () => (await retrievals()).filter(a => a.serverId === host && a.attachmentId === pictureId).length).toBeGreaterThan(0)
+      for (const name of ['report.pdf', 'offered.pdf']) await page.getByRole('button', { name, exact: true }).click()
+      for (const index of [0, 1]) await images.nth(index).click()
+      await expect.poll(async () => (await opens()).filter(o => o.serverId === host)).toHaveLength(4)
+      expect((await opens()).filter(o => o.serverId === host)).toEqual([
+        { conversationId: chat, serverId: host, attachmentId: 'supplied-file', localOnly: true },
+        { conversationId: chat, serverId: host, attachmentId: 'offered-file', localOnly: true },
+        { conversationId: chat, serverId: host, attachmentId: pictureId },
+        { conversationId: chat, serverId: host, attachmentId: pictureId }
+      ])
+      await expect.poll(async () => (await retrievals()).filter(a => a.serverId === host)).toEqual(expect.arrayContaining([
+        { serverId: host, conversationId: chat, attachmentId: 'supplied-file' },
+        { serverId: host, conversationId: chat, attachmentId: 'offered-file' },
+        { serverId: host, conversationId: chat, attachmentId: pictureId }
+      ]))
+    }
+    // Availability must follow the snapshot host even while the globally selected host stays connected.
+    await page.evaluate(host => (window as unknown as { threadFixture: Fixture }).threadFixture.unavailable(host), SECOND_SERVER_ID)
+    await expect(page.getByRole('button', { name: 'report.pdf', exact: true })).toBeDisabled()
   } finally { await new Promise<void>((resolve, reject) => server.httpServer.close(e => e ? reject(e) : resolve())) }
 })

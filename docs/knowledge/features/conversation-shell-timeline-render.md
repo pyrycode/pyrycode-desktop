@@ -4,7 +4,7 @@ Part of [Turn status surfaces](conversation-shell-turn-status.md).
 
 ## Structured-stream timeline render (#203)
 
-`Timeline` is the conversation's single thread surface, fed by the open conversation's
+`Timeline` is the conversation's production thread surface, fed by the open conversation's
 [held timeline](conversation-timeline-holder.md). Its exported view accepts `ThreadItem[]`
 and can be server-rendered from injected items. `TimelineRow` switches exhaustively
 on each item's `kind`; wire-to-render translation belongs to the bridge.
@@ -93,6 +93,122 @@ render path was inert at ship time.
 dead region — `Timeline` is now the conversation's single thread surface. See
 [The interactive flip + thread cutover](conversation-shell-conversation-and-modals.md#the-interactive-flip--thread-cutover-179) below and
 [#203 codebase notes](../codebase/203.md) for the original design and code review record.
+
+## Supplied daemon item presentation
+
+[`ThreadItemsTimeline`](../../../src/renderer/src/screens/conversation/ConversationScreen.tsx)
+accepts an injected `ThreadSnapshot`, optional `foldTools` (default false), `onReply`
+and `onOpenMarkdownPath`. The owner creates/subscribes to the
+[retained item store](thread-item-store.md) and supplies snapshots; this view adds no
+production subscription. Ordinary `ConversationScreen` still selects legacy `Timeline`.
+The [presentation adapter](../../../src/renderer/src/screens/conversation/threadItemPresentation.ts)
+narrows held JSON into existing row props without calling `reduceTimeline`, searching
+for an open bubble, inferring parents or relocating agents.
+
+Only `shown === true` items create rows, in snapshot order. Hidden items remain held.
+Unknown kinds/statuses, unsupported notice subtypes (including saved answers), and
+missing or malformed required content use the supplied summary as escaped React text,
+bounded to 4096 characters; absent summaries use `Unsupported item`. Fallback rows
+have no markdown, links or actions. Agent/parent items currently use this fallback at
+their supplied position, without roster inference or agent cards.
+
+### Saved content and activity
+
+The adapter consumes presentation fields from saved `content`, omitting invalid
+optional details. It does not reconstruct facts from source events.
+
+| Supplied kind | Existing presentation and narrowed fields |
+| --- | --- |
+| `user_message` | User bubble with required `text`; valid attachment records require `attachment_id` and `filename`. |
+| `assistant_message` | Assistant markdown bubble with required `text`; copy/reply read the current text and path links use the supplied reader callback. |
+| `tool_call` | Tool row with required `name`, optional `tool_use_id`, `input_summary`, string-valued `input` entries and finite `elapsed_seconds`; nested `result` supplies `is_error`, `result_summary` and optional `result_detail`. Nested `denial` supplies tool name, reason type/reason, message and optional truncation/dropped-field lists. Malformed supplied result/denial uses summary fallback. |
+| `session_divider` | Existing divider for `clear`, `idle_evict` or `workspace_change`, with supplied `workspace_cwd` and `occurred_at`. |
+| `compaction` | Existing divider from string `trigger`: `failed` selects failure, `manual` selects manual, other triggers use ordinary compaction; finite `pre_tokens`/`post_tokens` provide counts. |
+| `turn_end` | Existing stopping copy from supplied stop reason, outcome, error flag, terminal reason and error category; summary supplies visible copy when that formatter would suppress the ending. |
+| `notice` | Existing banner/reroute, model refusal, unrecognized-output or attachment-offer row when its subtype and required fields are supported. |
+
+Message timestamps parse the first supplied string among `ts`, `client_sent_at`,
+`accepted_at` and `occurred_at`; an invalid/missing timestamp draws no time.
+Supported notice subtypes are `banner`, `model_refusal_fallback`,
+`model_refusal_no_fallback`, `unrecognized_message` and `attachment_offered`.
+Authoritative row mode bypasses legacy informational-banner and normal-ending
+suppression: a shown item must stay visible. Recorded `claude`/`codex` attribution
+selects existing agent wording; absent/unsupported attribution uses supplied banner
+text or ending summary rather than assigning the current conversation's agent.
+
+Assistant progressive markdown and cursor follow supplied `active === true`, even
+with later rows or a settled status. Tools and collapsed-run activity also read
+`active` directly. An inactive terminal tool without `result` is resolved without a
+running indicator or invented `No output`; saved interruption/ending payloads do not
+become fabricated result text.
+
+Turn metrics use finite input/output/cache token counts and duration from recorded
+`turn_end` content, including hidden endings. Association requires nonempty recorded
+session and turn, and joins on `(session, agent, turn)` within the snapshot. Only the
+last shown, successfully adapted assistant in that identity gets formatted stats.
+Equal turn strings in different sessions do not join; adjacency and current-session
+attribution never supply missing identity.
+
+### Scoped identity, expansion and attachments
+
+The inner view remounts on `(hostId, conversationId, epoch)`. Numeric daemon item ids
+key row wrappers within that scope, so appends, revisions and older-item prepends
+retain row identity; equal ids after a scope change reset row-local state. Tool
+expansion is keyed by item id. `foldToolRuns` receives a flat projection with supplied
+activity, and run expansion is remembered by member ids: inserting an older member
+or appending to an expanded run retains its expansion. Collapsed members remain
+mounted, preserving their result expansion while hidden. A text-bearing or positional
+key would remount rows during exactly these updates.
+
+`ThreadAttachmentScopeContext` carries snapshot host/conversation ownership and a
+scope-owned image-source driver through reused file/image slots and attachment offers.
+Availability checks use that host. File actions capture that target for local-original
+opening and fallback retrieval; image retrieval/opening uses the same target. Changing
+scope releases image shares/listeners through effect cleanup and cannot reuse another
+scope's thumbnail URL merely because attachment ids match. Remounting rows alone would
+not fix action ownership if their dependencies still read the global active chat.
+
+Renderer-scoped requests do not establish production transport ownership.
+[#1926](https://github.com/pyrycode/pyrycode-desktop/issues/1926) tracks main-process
+retrieval routing/coalescing/outcome ownership; its production reproduction remains
+skipped. The two-host mounted proof uses real preload with a ticket-local IPC fake,
+so scoped completion isolation and production cross-host retrieval remain unverified.
+That repair must precede combined production acceptance in
+[#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+
+The slice leaves agent placement to #1905, local settlement/queue actions to #1906,
+server paging to #1902, and production path selection, subscriptions, capability
+advertisement and combined live verification to #1908. Supplied older batches are
+presentation inputs here, not a server paging implementation. See
+[watermark-independent scroll restoration](conversation-shell-scroll-pin.md#supplied-snapshot-anchor-restoration)
+and the [design](../../specs/architecture/1904-daemon-item-presentation.md).
+
+### Supplied-item verification
+
+[`threadItems.test.tsx`](../../../src/renderer/src/screens/conversation/threadItems.test.tsx)
+statically exercises kinds/order, hidden rows, inert fallback, activity independent
+of status/position, terminal tools, recorded usage and supported notices. Static
+rendering does not prove effects or interaction.
+[`thread-items.spec.ts`](../../../e2e/thread-items.spec.ts) mounts an injected owner
+using `createThreadItemStore`, typed appends/changes and completed-batch snapshots.
+It checks retained row/tool/run state, current-text copy/reply, reader callbacks,
+attachments, scope resets, following growth and held-reader prepends/revisions.
+All its cases belong to the serialized clipboard project because copy assertions
+share Electron's system clipboard.
+
+The [verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/1925#issuecomment-6102450645)
+at `c4420495` records `authoritative items retain identity, actions and scroll at 1280`,
+`authoritative items retain identity, actions and scroll at 800`, and
+`snapshot attachment actions retain their host and conversation across reused IDs`
+as present and passed: ticket coverage executed 3, passed 3, failed 0, skipped 1
+(the separate #1926 production reproduction). The full fake-transport run executed
+380, passed 379, failed 1, skipped 4; its unrelated `history-gaps` failure passed an
+isolated rerun (1 executed/passed, 0 failed/skipped). No skipped case is a pass.
+The same verdict confirms reused row styling at 1280 and 800 widths against Figma
+102:4; the synthetic fixture omits the production shell. No live Claude or production
+thread capability verification was required or performed.
+
+## Legacy row reuse and stopped-turn records
 
 ### Settled row reuse
 

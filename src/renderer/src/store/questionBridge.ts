@@ -96,6 +96,9 @@ function assertNoPickArm(_event: never): never {
  */
 export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent | null {
   switch (event.type) {
+    case 'threadUpdate':
+    case 'threadRepairNeeded':
+      return null // The daemon-built thread consumer owns these additive events.
     case 'questionShown': {
       // Rebuilt per row by name. `multiSelect` is the family's ONE renamed field; `options` is the
       // held wire array itself, never a copy (see the docblock).

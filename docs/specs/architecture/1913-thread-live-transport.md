@@ -60,3 +60,6 @@ None. The completing frame supplies event correlation; no correlation is synthes
 - [Threat alignment] Relay delay/reorder/flood and hostile daemon JSON are bounded/rejected; renderer receives inert complete DTOs. Existing disk-token and renderer isolation protections remain unchanged. Item applicability is explicitly owned by #1901, capability activation by #1908.
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-10
+
+## Revisions
+2026-10-10: Focused regressions clarified that a completing single-part update does not consume an incomplete-update slot, and an unrelated correlated daemon refusal must leave pending thread buffers intact. Reset on driver errors and terminal daemon auth/update-required errors only. The receiver uses geometrically grown byte buffers to bound tiny-fragment bookkeeping; connection tests also simulate IPC structured cloning. A pending-delta regression also requires `subscribeTimeline` to ignore thread indications before its legacy flush, preserving state identity and the scheduled frame. Final scope is approximately 640 inserted lines, four exported types and six consumer updates.

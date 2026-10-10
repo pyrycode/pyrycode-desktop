@@ -86,6 +86,7 @@ export function translateModalEvent(
   conversationIdsFor: (origin: ConversationListOrigin) => ReadonlySet<string>
 ): ModalEvent | null {
   switch (event.type) {
+    case 'sessionStateCleared':
     case 'threadUpdate':
     case 'threadRepairNeeded':
       return null // The daemon-built thread consumer owns these additive events.

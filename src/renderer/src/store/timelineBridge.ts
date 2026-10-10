@@ -116,6 +116,7 @@ export function translateTimelineEvent(
   now?: () => number
 ): ThreadEvent | null {
   switch (event.type) {
+    case 'sessionStateCleared':
     case 'threadUpdate':
     case 'threadRepairNeeded':
       return null // The daemon-built thread consumer owns these additive events.

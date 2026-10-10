@@ -29,6 +29,18 @@ click handlers, focus changes, or layout. A removed bridge mount can leave its
 import and all unit tests green. Check that each bridge is mounted in the app.
 Use the fake-transport browser tier to prove event delivery through the app.
 
+Main/preload and renderer tests belong to separate TypeScript projects. Importing
+renderer translators into a main test can pass Vitest's alias resolution while
+breaking the node project typecheck. Keep supplied-frame/structured-cloned IPC
+and real preload-subscription coverage in `src/main/sessionStateMetadata.test.ts`,
+and pure legacy-translator coverage in
+`src/renderer/src/store/sessionStateMetadata.test.ts`. Assert `Object.hasOwn` for
+optional metadata: checking only `undefined` cannot distinguish a missing key
+from an added enumerable property. Use different payload/envelope session IDs
+and equal conversation/session IDs on two hosts to expose substitution and
+origin-isolation defects. This is supplied-contract proof; it does not establish
+production capability activation or live-daemon delivery.
+
 Detailed [permission/session verification, host prompt verification and message lifecycle diagnostics](development-verification-test-tiers.md)
 live in the test-tier reference; static proofs and mounted delivery establish different facts.
 
@@ -633,6 +645,13 @@ review. Read existing evidence and use a distinct file for the new verdict.
 Inspect the end of every added Markdown document for tool-call scaffolding.
 The documentation guard scans feature docs and cannot prove that every changed
 Markdown file is clean. A successful rendered preview can also hide stray tags.
+
+CodeGraph's existing ignore patterns do not cover every runtime artifact. Check
+`.codegraph/codegraph.lock`, `.codegraph/writer.pid`, `.codegraph/codegraph.db-shm`
+and `.codegraph/codegraph.db-wal` against both the tracked diff and
+`git check-ignore -v`; an ignored file can still be tracked. Repository-local Git
+exclusions keep these generated lock/PID and mutable SQLite sidecar files out of
+automatic commits while preserving the running index's local files.
 
 A listener-count warning may predate the change. Compare against the base before
 calling it the cause. Browser console events need explicit collection when the

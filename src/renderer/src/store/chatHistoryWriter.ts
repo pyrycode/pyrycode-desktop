@@ -7,6 +7,7 @@ import { conversationListStore, type ConversationListStore } from './conversatio
 import { conversationTimelineStore, type ConversationTimelineStore } from './conversationTimelineStore'
 import { subscribeChatHistoryRemoval } from './chatHistoryRemoval'
 import type { ThreadItem } from './threadTimeline'
+import type { ThreadItemStore } from './threadItemStore'
 
 type ConversationRemoval = Extract<ChatHistoryRequest, { operation: 'removeConversation' }>
 type TimelineSnapshot = Extract<ChatHistorySnapshot, { kind: 'timeline' }>
@@ -20,6 +21,7 @@ type Observation = { owner: string | null; coverage: TimelineSnapshot['coverage'
 
 /** Receipts are synchronous; snapshots and their supplying host are detached before scheduling. */
 export function createChatHistoryWriter(deps: {
+  threads?: Pick<StoreApi<ThreadItemStore>, 'getState' | 'subscribe'>
   lists: Pick<StoreApi<ConversationListStore>, 'getState' | 'subscribe'>
   timelines: Pick<StoreApi<ConversationTimelineStore>, 'getState' | 'subscribe'>
   subscribeTimelineWrites?: (listener: (state: ConversationTimelineStore, previous: ConversationTimelineStore,
@@ -45,7 +47,7 @@ export function createChatHistoryWriter(deps: {
   let running: Promise<void> | undefined
   const report = (code: string) => deps.log({ event: 'history-writer-result', code })
   const keyFor = (s: ChatHistorySnapshot) => JSON.stringify([s.serverId, s.kind,
-    s.kind === 'timeline' ? s.conversationId : null])
+    s.kind !== 'list' ? s.conversationId : null])
   const hasReady = () => [...pending.values()].some(snapshot => !paused.has(snapshot.serverId))
   function forgetComparison(id: string): void {
     const owner = observations.get(id)?.owner
@@ -57,7 +59,7 @@ export function createChatHistoryWriter(deps: {
 
   function capture(value: ChatHistorySnapshot): void {
     const removed = deleted.get(value.serverId)
-    if (value.kind === 'timeline' && removed?.has(value.conversationId)) return
+    if (value.kind !== 'list' && removed?.has(value.conversationId)) return
     if (value.kind === 'list' && removed !== undefined) {
       value = { ...value, conversations: value.conversations.filter(row => !removed.has(row.id)) }
     }
@@ -92,6 +94,8 @@ export function createChatHistoryWriter(deps: {
       const encoded = JSON.stringify(snapshot)
       const request: ChatHistoryRequest = snapshot.kind === 'list'
         ? { operation: 'replaceList', serverId: snapshot.serverId, snapshot }
+        : snapshot.kind === 'daemon-items'
+          ? { operation: 'replaceThread', serverId: snapshot.serverId, conversationId: snapshot.conversationId, snapshot }
         : { operation: 'replaceTimeline', serverId: snapshot.serverId, conversationId: snapshot.conversationId, snapshot }
       if (saved.get(key) !== encoded) {
         try {
@@ -209,6 +213,18 @@ export function createChatHistoryWriter(deps: {
         } })
     }
   })
+  const offThreads = deps.threads?.subscribe((state, previous) => {
+    for (const [host, conversations] of previous.hosts) {
+      for (const id of conversations.keys()) if (!state.hosts.get(host)?.has(id)) {
+        const key = JSON.stringify([host, 'daemon-items', id])
+        pending.delete(key); seen.delete(key); saved.delete(key)
+      }
+    }
+    for (const [host, conversations] of state.hosts) for (const [id, slice] of conversations) {
+      if (slice.snapshot === previous.hosts.get(host)?.get(id)?.snapshot || slice.snapshot === slice.restored) continue
+      capture({ version: 1, kind: 'daemon-items', serverId: host, conversationId: id, thread: slice.snapshot })
+    }
+  })
   const offEvents = deps.subscribeEvents?.(event => {
     if (stopped || event.type !== 'conversationDeleted') return
     const { serverId, id } = event
@@ -219,6 +235,8 @@ export function createChatHistoryWriter(deps: {
     const key = JSON.stringify([serverId, 'timeline', id])
     // Replace buffered timeline content with a removal in the same serial drain.
     pending.delete(key)
+    pending.delete(JSON.stringify([serverId, 'daemon-items', id]))
+    deps.threads?.getState().deleteConversation(serverId, id)
     for (const snapshot of pending.values()) {
       if (!('operation' in snapshot) && snapshot.serverId === serverId && snapshot.kind === 'list') capture(snapshot)
     }
@@ -253,6 +271,7 @@ export function createChatHistoryWriter(deps: {
         for (const [id, observation] of observations) {
           if (observation.owner === serverId) observations.set(id, { owner: null, coverage: { status: 'unknown' } })
         }
+        deps.threads?.getState().removeHost(serverId)
         report('host-removed')
       }
       const remaining = (paused.get(serverId) ?? 1) - 1
@@ -268,7 +287,7 @@ export function createChatHistoryWriter(deps: {
     // Window close can precede the next frame; capture accepted deliveries before detaching.
     if (!stopped) deps.flushTimeline?.()
     stopped = true
-    offLists(); offTimelines(); offRemoval(); offEvents?.()
+    offLists(); offTimelines(); offThreads?.(); offRemoval(); offEvents?.()
     return Promise.all([...removals]).then(flush)
   } }
 }

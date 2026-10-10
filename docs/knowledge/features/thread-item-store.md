@@ -28,6 +28,15 @@ kind/status/content/fields remain held. `shown` and `active` are independent sup
 facts, never inferred from status. Active items and parents outside loaded ranges
 do not establish additional history coverage.
 
+Snapshots emit immutable `arrivalOrder` ids separately from display-sorted `items`.
+Hydration rebuilds Map insertion order from that complete permutation while keeping
+supplied held item order unchanged. Saving only display order would change later
+ties: A arriving at order 20 before B at 10 displays `[B,A]`, but changing A to 10
+must yield `[A,B]`, including after restart. Null-cleared orders retain the same
+first-arrival rule. Older snapshots without this metadata use supplied item order
+because their original arrival order is unavailable. Declared metadata with missing,
+duplicate, unknown or invalid ids is rejected.
+
 Full live additions and `batch.applyItems(items, version)` use each item's `rev`,
 independently of reply arrival time or conversation version. A newer revision
 replaces the whole held item, removing omitted optional fields; equal/older
@@ -65,14 +74,18 @@ Optional diagnostics emit only static event/code values, never content or scope 
 
 ## Snapshots and completed batches
 
-`ThreadSnapshot` is the host/conversation-scoped sync/cache read surface:
+`ThreadSnapshot` is the host/conversation-scoped sync/cache read surface, defined in
+[`src/shared/chatHistory.ts`](../../../src/shared/chatHistory.ts) and re-exported by
+the store so storage contracts remain independent of renderer imports:
 
 | Field | Meaning |
 | --- | --- |
 | `hostId`, `conversationId`, `epoch` | Accepted ownership of the held facts. |
 | `items` | Ordered immutable retained items, including hidden and out-of-range items. |
+| `arrivalOrder` | Optional complete permutation of held ids in first-arrival order; emitted by the store independently of display placement. |
 | `version` | Greatest applied conversation version, including uncertified batch progress. |
 | `checkpoint` | Last complete resumable conversation version. |
+| `uncommittedVersion` | Optional highest unfinished batch version; only a value above checkpoint fences live success. Store snapshots emit it explicitly. |
 | `ranges` | Caller-certified loaded order ranges; item presence alone proves no range. |
 | `olderAvailable` | Optional availability reading for the oldest certified boundary. |
 | `repair` | Missing-progress fence `{ fromVersion, throughVersion }`, or null. |
@@ -80,6 +93,22 @@ Optional diagnostics emit only static event/code values, never content or scope 
 Versions can skip integers. Newer held facts may accompany an earlier complete
 checkpoint; caching them does not certify the intervening progress. Envelope replay
 cursors and fragment progress are [separate transport facts](inbound-message-decode-interface.md#complete-live-thread-updates).
+
+`beginLocalRead(hostId, conversationId)` provides the narrowly scoped disk hydration
+seam. A held scope returns null; an absent one receives a one-shot `complete`,
+`fail`, `cancel` handle owned by a private process-local token. A replacement read,
+epoch admission, published facts or conversation/host/global cleanup invalidates
+that token. Late success, missing data or failure cannot replace admitted state,
+including after the same host/conversation/epoch strings are reused.
+
+Completion revalidates exact coordinates through the shared daemon-record parser,
+detaches and freezes the snapshot, and publishes it directly with a fresh generation.
+It retains item ids/revisions, held order, unknown JSON/null clears, epoch, applied
+version, complete checkpoint, ranges, optional older availability, repair and
+unfinished progress. No raw event replay, server request, batch completion or new
+coverage is manufactured. A missing result leaves the scope absent. The private
+restored marker lets the [history writer](chat-history.md#buffered-replacements)
+exclude hydration from saves while accepting later owned changes.
 
 `beginBatch(hostId, conversationId, epoch)` returns null without matching ownership.
 Its handle has `applyItems`, `commit` and `abandon`. Applying full items can publish
@@ -107,8 +136,8 @@ exhausted (`false`) reading at the same boundary.
 
 ## Repair and unfinished-batch checkpoint fences
 
-Live successes may advance checkpoint only without a repair or outstanding
-uncertified batch progress. Repair starts at the held checkpoint and extends through
+Live successes may advance checkpoint only without a repair and with unfinished
+batch progress at or below checkpoint. Repair starts at the held checkpoint and extends through
 the greatest missing version; later successful live updates can change held facts
 without bypassing that interval. A completed page outside the interval cannot
 repair it. Certification must start at or before the repair's lower bound and
@@ -116,8 +145,9 @@ reach its upper bound.
 
 Exact item bases alone cannot establish complete conversation progress: a live
 append can succeed against an item from an unfinished reply. The slice therefore
-also retains a private highest uncommitted batch version. Abandoning that batch does
-not remove the fence. A delayed completion advances only to its certified version,
+also retains the highest uncommitted batch version, exposed in `ThreadSnapshot` and
+persisted separately from applied version. Abandoning that batch does not remove
+the fence. A delayed completion advances only to its certified version,
 preserving newer held facts; if it falls below pending batch progress, later live
 successes remain fenced even after `repair` becomes null.
 
@@ -128,6 +158,16 @@ abandoned batch at 250 still prevents a repair certificate through 200 followed 
 a live success at 400 from moving checkpoint beyond 200. A completed certificate
 covering 250 releases that fence; a subsequent live success can resume progress.
 A content-only no-op check would lose this obligation and falsely certify recovery.
+
+Already-covered unfinished versions are valid: after checkpoint 100, an older or
+equal batch abandoned at 50 or 100 can leave that value in `uncommittedVersion`.
+It does not fence a later live success; rejecting it at the cache boundary would
+silently prevent later snapshots from saving. Explicit values are preserved and
+must be nonnegative safe integers no greater than applied version. Older supplied
+snapshots without the field conservatively restore it as applied `version` when
+ahead of checkpoint, otherwise zero. Using applied version for every snapshot
+would overstate the unfinished obligation when newer live facts coexist with a
+lower pending batch, preventing its actual completion from releasing the fence.
 
 ## Epochs and cleanup ownership
 
@@ -149,9 +189,9 @@ Cleared scopes read absent and repeated cleanup is a no-op. Other hosts/conversa
 keep their held references. Old batch application/commit cannot recreate a cleared
 scope, including after the same host/conversation/epoch is accepted again.
 
-Requests, recovery and reply certification remain with #1902; disk persistence with
-[#1903](https://github.com/pyrycode/pyrycode-desktop/issues/1903); lifecycle subscriptions,
-consumer migration and production capability activation with
+Requests, recovery and reply certification remain with #1902;
+[protected disk persistence](chat-history-api.md#api) consumes these snapshots.
+Lifecycle subscriptions, consumer migration and production capability activation remain with
 [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908). These APIs alone claim
 no production daemon integration or live-Claude validation.
 
@@ -162,6 +202,10 @@ uses supplied complete-item and certificate fixtures without Electron, a daemon 
 Claude. It covers revision races, replayed/empty appends, atomic replacement presence,
 inert JSON, repair/unfinished-batch fencing, certified boundaries and generation reuse
 after each cleanup operation.
+
+The [cache testing reference](chat-history-testing.md#restoration) covers local-read
+ownership, protected fresh-instance restoration and restart regressions for
+already-covered unfinished progress and first-arrival ties.
 
 The [verifier's re-review](https://github.com/pyrycode/pyrycode-desktop/pull/1920#issuecomment-6099461564)
 on 2026-10-10 records 2 executed, 2 passed, 0 failed and 32 skipped by its name filter.

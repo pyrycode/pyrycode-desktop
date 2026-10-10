@@ -11,6 +11,8 @@
 //
 // Imported by src/main and src/preload, which have no @shared path alias — hence the
 // relative import here and in those callers (see tsconfig.node.json).
+import type { ThreadUpdate, ThreadRepairReason } from '../wire/thread'
+import type { Envelope } from '../wire/types'
 import type {
   HelloAckPayload,
   MessagePayload,
@@ -304,6 +306,8 @@ export type RelayLinkStatus = 'connected' | 'offline' | 'daemon-absent'
  * `DaemonEventTimestamp` for why the field is added by intersection rather than per arm.
  */
 type BaseDaemonEvent =
+  | { type: 'threadUpdate'; conversationId: string; update: ThreadUpdate; correlation: Omit<Envelope, 'payload' | 'type'> }
+  | { type: 'threadRepairNeeded'; conversationId: string; reason: ThreadRepairReason }
   | { type: 'messageDelivery'; conversationId: string; messageId: string; status: 'waiting' | 'not-sent' | 'written' }
   | { type: 'replySuggestion'; conversationId: string; sessionId: string; revision: number; suggestedReply: string | null }
   | { type: 'hostSystemPromptReceived'; requestId: string; operation: 'read' | 'write'; systemPrompt: string; defaultSystemPrompt: string }

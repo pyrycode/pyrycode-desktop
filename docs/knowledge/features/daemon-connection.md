@@ -40,6 +40,24 @@ Gives the composition root **one factory** — `createDaemonConnection(deps): Da
 - **`stop()`** tears the driver down idempotently and **suppresses** the clean-stop `terminal` (the window is going away on quit, so there is nothing to report).
 - **On the driver's `relay-link-up`/`relay-link-down{code}`** ([#328](../codebase/328.md)), it emits a `relayLinkChanged{status}` event carrying the relay-**socket** leg — distinct from the combined session status above. This is the single point that classifies the relay-controlled raw close `code` into the closed `RelayLinkStatus` enum (`connected`/`offline`/`daemon-absent`, `4404` → `daemon-absent`); the code itself never crosses IPC. Ships **dormant** (see the driver-event mapping table below).
 
+### Thread receiver lifetime
+
+Each `createDaemonConnection` owns one main-only `createThreadUpdateReceiver`;
+authenticated, non-stopped `thread-frame` deliveries enter it. Its complete
+updates and static repair reasons use the connection's bound sink and the
+[existing typed preload channel](daemon-event-channel.md#complete-thread-events).
+See [validation and bounds](inbound-message-decode-limits.md#complete-live-thread-validation).
+
+Relay-link-down, every handshake-complete (before ack parsing), driver terminal
+or error, explicit `dial()`/reconnect and `stop()` silently reset all assembly
+buffers/timers. Sealed `auth.invalid_token` and `client.update_required` errors
+also reset them. An unrelated correlated daemon refusal leaves pending thread
+work intact. Resetting only when replacing a driver would miss automatic
+re-handshake: it reuses the same driver/connection object. Existing generation
+fences reject replaced-driver callbacks, while receiver reset prevents old
+fragments or timers from completing in the successor session. Production hello
+capability requests are unchanged; activation/live proof belong to #1908.
+
 ### Pairing rejection lifetime
 
 `parseInboundMessage` supplies a separate `pairingReject: 'pairing-rejected'` category for an

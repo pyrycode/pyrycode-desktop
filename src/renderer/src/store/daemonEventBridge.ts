@@ -57,6 +57,9 @@ function originOf(event: DaemonEvent): StatusOrigin {
  */
 export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
   switch (event.type) {
+    case 'threadUpdate':
+    case 'threadRepairNeeded':
+      return null // The daemon-built thread consumer owns these additive events.
     case 'connecting':
       return { type: 'connecting', serverId: originOf(event) }
     case 'connected':

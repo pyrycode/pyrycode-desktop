@@ -810,6 +810,7 @@ interface FrameTimestamp {
  * catch-all, so the stream stops here until claimed.
  */
 export type InboundDaemonMessage =
+  | { kind: 'thread-frame'; envelope: Envelope }
   | { kind: 'reply-suggestion'; replySuggestion: ReplySuggestionPayload }
   | { kind: 'host-system-prompt'; hostSystemPrompt: HostSystemPromptPayload; inReplyTo: number | undefined }
   | { kind: 'banner'; banner: BannerPayload }
@@ -4112,6 +4113,10 @@ export function parseInboundMessage(
   // frame that fails to narrow throws first and leaves no record. Optional chaining short-circuits the
   // whole call (including hashPlaintext) when no logger is injected — absent-logger costs nothing.
   switch (envelope.type) {
+    case 'thread_item_added':
+    case 'thread_item_changed':
+    case 'thread_text_append':
+      return { kind: 'thread-frame', envelope }
     case 'reply_suggestion': {
       const payload = envelope.payload
       const text = isRecord(payload) ? payload.suggested_reply : undefined

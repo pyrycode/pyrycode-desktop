@@ -5,6 +5,11 @@ conversation timelines. The [keyed holder](conversation-timeline-holder.md) reta
 each conversation's rows and transient state; it is the chat pane's render source.
 The legacy flat store remains dual-written.
 
+The separate [retained daemon item store](thread-item-store.md) holds decoded items
+by host/conversation/epoch and daemon id/revision for sync/cache consumers. Its
+exact-base updates and certified checkpoints do not use this event reconstruction
+or its receipt/history joins; production consumer migration remains with #1908.
+
 ## Where the detail lives
 
 - [Internals](conversation-timeline-store-internals.md): reducers, translation, subscriptions and history joins.

@@ -112,8 +112,12 @@ records 47 executed, 47 passed, 0 failed and 0 skipped on 2026-10-10. This prove
 the supplied-frame transport checks, not production activation or live-Claude
 delivery.
 
-Item application, stable-kind/message-append applicability, held `base_rev` checks
-and atomic changes belong to [#1901](https://github.com/pyrycode/pyrycode-desktop/issues/1901).
+The [retained daemon item store](thread-item-store.md#exact-base-changes-appends-and-inert-json)
+owns item application, stable-kind/message-append applicability, held `base_rev`
+checks and atomic changes. It also fences resumable checkpoints behind repair and
+unfinished batch progress; complete logical delivery here does not certify a server
+reply or history range. [#1902](https://github.com/pyrycode/pyrycode-desktop/issues/1902)
+owns that certification and recovery requests.
 [#1912](https://github.com/pyrycode/pyrycode-desktop/issues/1912) reuses the representation
 and assembly for catch-up/pages; [#1914](https://github.com/pyrycode/pyrycode-desktop/issues/1914)
 owns summary/session-state metadata. Production capability activation and combined

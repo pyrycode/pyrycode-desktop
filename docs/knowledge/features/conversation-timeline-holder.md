@@ -6,6 +6,11 @@ rather than scoped to whichever conversation is open, so leaving a chat and comi
 its thread away. Bounded at ten and evicted least-recently-**viewed**, the one deliberate divergence from
 both of its keyed precedents.
 
+The [retained daemon item store](thread-item-store.md) is a separate factory scoped
+by host/conversation/epoch, retaining daemon identity, revisions and certified sync
+progress. It does not reconstruct rows or inherit this holder's ten-slice eviction
+policy; the holder remains the chat pane's render source until consumer migration.
+
 Introduced in [#755](../codebase/755.md), split from #675 alongside #751-#754 (the transport arms that
 widened eight `DaemonEvent`s with `conversationId`, all shipped), #756 (the writer), #757 (the clears) and
 \#758 (the reader cutover, shipped). #755 shipped the holder alone — no writer, no reader — the same

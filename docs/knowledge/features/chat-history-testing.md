@@ -153,6 +153,23 @@ as their receipt barrier; saved rows can return without a status replay, so row
 count alone is not that barrier. The test encryption backend does not prove the OS
 keychain adapter.
 
+Repeated-page persistence needs separate receipt and save barriers. Restored rows
+and enabled Send can precede the newest reply; focusing the thread creates no
+history demand. Install `observeCommands` and a `historyPageReceived` listener
+before opening the saved chat, match the host/conversation/expected cursor, then
+await delivery before polling the actual protected `readTimeline` snapshot. The
+receipt is not proof of the writer's buffered save. Keep immediate fake replies
+so synchronization does not remove restoration-overlap coverage; a held reply is
+useful for diagnosis, not a replacement for that timing.
+
+The receipt-saturation scenario keeps 500 receipts × 200 ids, evicts only `page-0`
+for `repeat`, and preserves oldest-end coverage and the single assistant's key
+`-8`. It verifies exactly one newest command (`cursor: ''`, limit 200), retains the
+five-second full saved-snapshot predicate after the separate 20-second receipt
+wait, then saves later live content at key `42` with next key `43` and checks
+equality after a third fresh Electron launch. See
+[cause and counted validation](development-verification-history.md#served-page-persistence-verification).
+
 ## History continuity and overlap
 
 The continuity scenario starts with incomplete saved coverage, restarts offline,

@@ -28,6 +28,45 @@ settlement before absence checks. Cancelling an echo retains content/keys with
 advanced allocation; whole-snapshot equality would stop quit/relaunch proof early.
 This is fake transport; no live-Claude run was required or performed.
 
+For repeated pages that change only receipt metadata, restored rows and enabled
+Send cannot prove reply settlement, and thread focus creates no history demand.
+Observe the host/conversation/cursor-specific `historyPageReceived` before polling
+the real protected save. Retain immediate fake replies, the 500 × 200 saturated
+receipts, eviction of `page-0` for `repeat`, unchanged oldest-end coverage, one
+assistant with its original identity, later live content with the next allocated
+key, and whole-snapshot equality after a third fresh Electron launch. See the
+[browser lifecycle contract](chat-history-testing.md#browser-persistence-and-lifecycle).
+
+The [confirmed synchronization cause](https://github.com/pyrycode/pyrycode-desktop/issues/1918#issuecomment-6097546760)
+distinguishes missing receipt observation from an unproven product defect. The
+original gate at `f1ada1b9df` recorded 377 executed, 376 passed, 1 failed, 3 skipped;
+the saturation test failed when its five-second save predicate still saw the seed
+(16,870 ms overall). Its focused rerun recorded 1 executed/passed, 0 failed/skipped
+(9,360 ms). Original log references are in the
+[refinement evidence](https://github.com/pyrycode/pyrycode-desktop/issues/1918#issuecomment-6097325467).
+Those logs do not distinguish request/receipt scheduling delay from save latency.
+The controlled held-reply diagnostic confirmed one newest request and both old UI
+readiness checks while the protected record still equaled the saturated seed:
+1 executed, 1 deliberately failed, 0 skipped/retried. Releasing that correlated
+reply and awaiting its receipt recorded 1 executed/passed, 0 failed/skipped/retried.
+This establishes the missing receipt boundary before the buffered metadata save;
+holding the reply was diagnostic only.
+
+The [builder's counted validation](https://github.com/pyrycode/pyrycode-desktop/issues/1918#issuecomment-6097574390)
+at `e94e2398` records the exact saturation test above with
+`--repeat-each=10 --workers=1 --retries=0`: 10 consecutive executions, 10 passed,
+0 failed/skipped/retried. The complete `chat-history-recording.spec.ts` run with
+`--workers=1 --retries=0` recorded 10 executed/passed, 0 failed/skipped/retried,
+including the named saturation test. Raw builder diagnostic and repetition logs
+were unavailable to the verifier; these counts rely on the recorded ticket evidence.
+The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1921#issuecomment-6099383720)
+and supplied dispatcher per-test report independently confirm the saturation test
+was present, executed and passed in gate 6 on 2026-10-10 at
+`bad47b9e00675dfda34db438ca7baa48bb072a0a`: 377 executed/passed, 0 failed,
+3 skipped. The verdict confirms the complete recording spec contributed
+10 executed/passed, 0 failed/skipped, every retry 0. No production behavior changed;
+no visual or live-Claude check applied to this fake-transport synchronization fix.
+
 ### Known-gap recovery verification
 
 `historyGaps.test.ts` exercises admission, one-entry/multi-page and older holes,

@@ -171,6 +171,49 @@ Three pieces, three layers:
 
 `src/shared/ipc/` is the new IPC-contract module, mirroring how `src/shared/wire/` is the wire module. #18 creates one file in it; #17 later adds its command file (recommended: a sibling `commands.ts` with its own `COMMAND_CHANNEL`, so the two tickets never edit the same file).
 
+### Session-scoped live state
+
+Main carries supplied envelope `session_id` as optional `envelopeSessionId`:
+omission stays absent, explicit null stays null, and a nonempty string survives
+verbatim. `decodeEnvelope` rejects empty/mistyped tags and non-boolean
+`session_state_cleared` flags. Supplied `in_reply_to` becomes optional `inReplyTo`;
+omission creates no key. Payload `sessionId` remains independent, so settings and
+suggestions can report a different session from their envelope.
+
+The main-only `sessionStateFamily` allowlist covers `modal_shown`,
+`modal_dismissed`, `question_shown`, `question_dismissed`, `turn_state`, `stall`,
+`api_retry`, `compacting`, `thinking_progress`, `tool_progress`,
+`background_task_progress`, `resetting`, `rate_limited`, `context_usage`,
+`model_announced`, `session_facts`, `session_settings`, `session_settings_updated`,
+`mcp_status`, `slash_command_list`, `model_list`, `reply_suggestion` and
+`session_error`. The connection captures metadata per admitted frame and copies
+it to every resulting event only after payload validation succeeds. Keep this
+forwarding restricted to the allowlist: a generic parser correlation spread would
+expose legacy history/attachment reply routing IDs and add enumerable keys to
+legacy results. Ordinary request settlement and conversation attribution still
+use their existing main-owned maps.
+
+With `session_state_cleared: true`, `parseInboundMessage` requires a supported
+type and an empty non-array object payload before ordinary family validation.
+The connection emits `sessionStateCleared { family, correlation }`, with
+`correlation: Omit<Envelope, 'payload' | 'type'>` and supplied provenance/correlation
+metadata. Modal shown/dismissed map to `modal_shown`, question shown/dismissed to
+`question_shown`, and settings/settings-updated to `session_settings`; other
+supported types name their own family. Nonempty/non-object payloads and unsupported
+clear types fail closed. False or absent flags use ordinary payload validation.
+
+Clears carry no conversation identity: the envelope has no such field, and main
+never fills one from the selected chat, a binding or a session tag. Clear then
+fresh delivery remains synchronous and ordered through host stamping, IPC and
+the existing preload subscription. Clears bypass prompt/request settlement,
+replay advancement and thread assembly. All four exhaustive legacy translators
+return null without producing store actions. Filtering, retained-state clearing
+and unread/read publication belong to [#1907](https://github.com/pyrycode/pyrycode-desktop/issues/1907);
+catch-up/pages remain [#1912](https://github.com/pyrycode/pyrycode-desktop/issues/1912),
+and production activation/combined live proof remain [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+Supplied-frame coverage lives in `src/main/sessionStateMetadata.test.ts`, with
+legacy translator coverage in `src/renderer/src/store/sessionStateMetadata.test.ts`.
+
 ### Complete thread events
 
 `threadUpdate` carries `conversationId`, a validated shared `ThreadUpdate` and

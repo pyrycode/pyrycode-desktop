@@ -32,6 +32,7 @@ import {
 } from '../../shared/wire/types'
 import type {
   Envelope,
+  SessionStateFamily,
   ReplySuggestionPayload,
   WireAgent,
   BannerPayload,
@@ -809,7 +810,14 @@ interface FrameTimestamp {
  * Nothing consumes this arm yet: the reassembler is #995, and daemonConnection's inbound switch has no
  * catch-all, so the stream stops here until claimed.
  */
-export type InboundDaemonMessage =
+export type InboundDaemonMessage = InboundPayload & {
+  /** Envelope provenance is independent of payload session fields. */
+  envelopeSessionId?: string | null
+  inReplyTo?: number
+}
+
+type InboundPayload =
+  | { kind: 'session-state-cleared'; family: SessionStateFamily; correlation: Omit<Envelope, 'payload' | 'type'> }
   | { kind: 'thread-frame'; envelope: Envelope }
   | { kind: 'reply-suggestion'; replySuggestion: ReplySuggestionPayload }
   | { kind: 'host-system-prompt'; hostSystemPrompt: HostSystemPromptPayload; inReplyTo: number | undefined }
@@ -3187,8 +3195,23 @@ function parseConversationSummary(payload: unknown): ConversationSummary {
     workspace_label,
     ...optionalAgent(payload),
     ...optionalReadId(payload, 'read_up_to'),
-    ...optionalReadId(payload, 'latest_entry_id')
+    ...optionalReadId(payload, 'latest_entry_id'),
+    ...optionalSummaryMetadata(payload)
   }
+}
+
+/** Supplied zero/empty readings are values, while omitted metadata remains absent. */
+function optionalSummaryMetadata(payload: Record<string, unknown>): Pick<ConversationSummary, 'current_session_id' | 'last_shown_version'> {
+  const metadata: Pick<ConversationSummary, 'current_session_id' | 'last_shown_version'> = {}
+  if ('current_session_id' in payload) metadata.current_session_id = requireString(payload, 'current_session_id')
+  if ('last_shown_version' in payload) {
+    const value = payload.last_shown_version
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+      throw new WireDecodeError('invalid shown version')
+    }
+    metadata.last_shown_version = value
+  }
+  return metadata
 }
 
 /** Omitted legacy fields remain unknown; numeric IDs are admitted without coercion. */
@@ -4085,6 +4108,21 @@ function parseBannerPayload(payload: unknown): BannerPayload {
   }
 }
 
+/** A switch avoids prototype lookup and admits only the published live-state families. */
+export function sessionStateFamily(type: string): SessionStateFamily | null {
+  switch (type) {
+    case 'modal_dismissed': return 'modal_shown'
+    case 'question_dismissed': return 'question_shown'
+    case 'session_settings_updated': return 'session_settings'
+    case 'modal_shown': case 'question_shown': case 'turn_state': case 'stall': case 'api_retry':
+    case 'compacting': case 'thinking_progress': case 'tool_progress': case 'background_task_progress':
+    case 'resetting': case 'rate_limited': case 'context_usage': case 'model_announced': case 'session_facts':
+    case 'session_settings': case 'mcp_status': case 'slash_command_list': case 'model_list':
+    case 'reply_suggestion': case 'session_error': return type
+    default: return null
+  }
+}
+
 /**
  * Decode + route + narrow one decrypted app-message plaintext. Returns an InboundDaemonMessage for a
  * `message` / `message_chunk` envelope, the three debug-bundle kinds (`debug_bundle_chunk` /
@@ -4109,6 +4147,26 @@ export function parseInboundMessage(
   const envelope = decodeEnvelope(plaintext)
   // Replay position belongs to the admitted envelope, even when payload narrowing later fails.
   observeEnvelope?.(envelope)
+  const family = sessionStateFamily(envelope.type)
+  const metadata = {
+    ...('session_id' in envelope ? { envelopeSessionId: envelope.session_id } : {}),
+    ...('in_reply_to' in envelope ? { inReplyTo: envelope.in_reply_to } : {})
+  }
+  if (envelope.session_state_cleared === true) {
+    if (family === null || !isRecord(envelope.payload) || Object.keys(envelope.payload).length !== 0) {
+      diagnosticLog?.event({ event: 'inbound-rejected', code: 'session-clear-invalid' })
+      throw new WireDecodeError('invalid session state clear')
+    }
+    const { payload, type, ...correlation } = envelope
+    diagnosticLog?.event({ event: 'inbound-decoded', code: 'session-state-cleared', bytes: plaintext.length })
+    return { kind: 'session-state-cleared', family, correlation, ...metadata }
+  }
+  const inbound = parseInboundPayload(envelope, plaintext, diagnosticLog)
+  if (inbound === null || family === null) return inbound
+  return { ...inbound, ...metadata }
+}
+
+function parseInboundPayload(envelope: Envelope, plaintext: Uint8Array, diagnosticLog?: DiagnosticLog): InboundPayload | null {
   // Each log fires AFTER the modeled envelope has fully narrowed, so the throw path stays unlogged: a
   // frame that fails to narrow throws first and leaves no record. Optional chaining short-circuits the
   // whole call (including hashPlaintext) when no logger is injected — absent-logger costs nothing.
@@ -4196,7 +4254,8 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'session-settings', sessionSettings, inReplyTo: envelope.in_reply_to }
+      return { kind: 'session-settings', sessionSettings,
+        ...('in_reply_to' in envelope ? { inReplyTo: envelope.in_reply_to } : {}) }
     }
     case 'host_system_prompt': {
       const payload = envelope.payload
@@ -4649,7 +4708,8 @@ export function parseInboundMessage(
       })
       // Propagate the ALREADY-decoded Envelope.in_reply_to (#261) — do not re-decode. `undefined` when
       // the frame omits it, which makes the consumer's correlation fail closed.
-      return { kind: 'session-settings-updated', sessionSettingsUpdated, inReplyTo: envelope.in_reply_to }
+      return { kind: 'session-settings-updated', sessionSettingsUpdated,
+        ...('in_reply_to' in envelope ? { inReplyTo: envelope.in_reply_to } : {}) }
     }
     case 'tool_use': {
       // Narrow BEFORE logging so a malformed frame (a missing / non-string field, or a malformed

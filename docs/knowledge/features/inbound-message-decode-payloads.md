@@ -115,6 +115,18 @@ field rejects the whole reply. These are durable per-conversation history entry 
 envelope and replay IDs. See [the wire contract](conversation-list-fetch.md#the-wire-contract) and
 [host-scoped read reconciliation](conversation-list-store.md#received-read-state).
 
+Summary metadata also admits optional `current_session_id` and `last_shown_version`.
+The binding must be a string, including `""` for an unbound conversation; null and
+other types reject the reply. The shown-thread watermark must be a nonnegative
+safe integer, including zero. Omission leaves each property absent through main,
+typed IPC and preload; an unavailable watermark must never default to zero.
+Existing `read_up_to` and `latest_entry_id` survive independently, and neither
+history identity nor replay position substitutes for shown version. Supplied-frame
+coverage in `src/main/sessionStateMetadata.test.ts` checks actual own-property
+absence and empty/zero values through the existing preload callback. See
+[session-scoped live state](daemon-event-channel.md#session-scoped-live-state)
+for the separate envelope provenance and clear contract.
+
 ## Durable frame identity
 
 `decodeEnvelope` admits optional envelope `history_entry_id` only when it is a non-negative safe

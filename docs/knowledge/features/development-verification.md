@@ -29,6 +29,12 @@ click handlers, focus changes, or layout. A removed bridge mount can leave its
 import and all unit tests green. Check that each bridge is mounted in the app.
 Use the fake-transport browser tier to prove event delivery through the app.
 
+Keep builds sequential with Electron suites: launches read generated renderer assets.
+A concurrent rebuild can rewrite those assets during Welcome setup and produce
+timeouts unrelated to the scenario under review. Record that full run as failed
+even if the named test passed; a later uninterrupted pass is separate evidence.
+See [the counted history-gap runs](development-verification-history.md#known-gap-recovery-verification).
+
 Main/preload and renderer tests belong to separate TypeScript projects. Importing
 renderer translators into a main test can pass Vitest's alias resolution while
 breaking the node project typecheck. Keep supplied-frame/structured-cloned IPC
@@ -305,6 +311,18 @@ intent from seeded delivery and Cancel focus. See
 [inline permission reader verification](conversation-shell-scroll-pin.md#inline-permission-reader-verification)
 for the controlled counts, 20 focused Linux/Xvfb passes with 3 workers and zero retries,
 and the named test's full-gate result separately from an unrelated failure.
+
+Known-gap demand measures marker intersection before native key scrolling, so
+older-end proximity and an earlier screenshot do not prove eligibility. Pending
+tool layout can overwrite a programmatic park while following. At both fresh-input
+sites in the known-gap scenario, including protected restoration, settle pointer,
+thread focus and measured scroll/content/viewport geometry before centering the
+marker between the actual top/input chrome. Settle that movement, then assert
+focused intersection and unchanged request count before one ArrowUp. Keep these
+helpers local; readiness uses measured animation-frame stability without extra
+trusted keys, sleeps, test retries or larger timeouts. See
+[the gap testing contract](chat-history-testing.md#demand-and-snapshot-contracts)
+and [controlled failure evidence](development-verification-history.md#known-gap-recovery-verification).
 
 Protected-restoration joins need an explicit pre-input history-demand position. After
 restored tool expansion and settled focus/hover, park at half the measured

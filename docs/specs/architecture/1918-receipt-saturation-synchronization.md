@@ -28,3 +28,7 @@ Sizing: one independently verifiable behavior, three acceptance criteria, approx
 - Run the named test ten consecutive times with `--repeat-each=10 --workers=1 --retries=0`; record executed/pass/failure/skip counts and logs.
 - Run the complete `e2e/chat-history-recording.spec.ts` with retries disabled; only existing platform skips are allowed.
 - After merging final `origin/main`, run the pre-verify check and `npm run build`. The dispatcher owns the full verifier gate.
+
+## Revisions
+
+2026-10-10: The controlled held-reply diagnostic observed exactly one newest request (`cursor: ''`, limit 200), completed restored-row/Send checks, and read the unchanged saturated seed before the original five-second equality predicate failed. Adding the receipt barrier and releasing that same correlated reply passed (1 executed, 1 passed). Evidence: `/tmp/builder-1918/held-reply-before-fix.log` and `/tmp/builder-1918/held-reply-after-fix.log`. This establishes the missing receipt boundary in the test, without identifying an unlogged transport delay in the original occurrence or demonstrating a product defect. The final test keeps the original immediate fake reply timing; holding/releasing was diagnostic only, so it cannot hide a restoration overlap. It installs a host/conversation/cursor-specific receipt listener before navigation, awaits delivery with the existing 20-second connection-operation budget, verifies exactly one newest command via `observeCommands`, and retains the original five-second full protected-save equality assertion.

@@ -228,10 +228,27 @@ test('receipt saturation still saves a repeated page and later live content acro
     serverId: snapshot.serverId, conversationId: snapshot.conversationId, snapshot }), snapshot)).toEqual({ status: 'ok' })
   await first.app.close()
   const second = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
+  const commands = await observeCommands(second)
+  await second.page.evaluate(({ serverId, conversationId }) => {
+    Object.assign(window, { repeatPageDelivered: false })
+    const off = window.pyry.onDaemonEvent(event => {
+      if (event.type === 'historyPageReceived' && event.serverId === serverId &&
+          event.conversationId === conversationId && event.cursor === 'repeat') {
+        Object.assign(window, { repeatPageDelivered: true })
+        off()
+      }
+    })
+  }, { serverId, conversationId: SEEDED_ROW.id })
   await second.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
   await expect(second.page.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(1)
   await expect(second.page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled({ timeout: 20_000 })
-  await second.page.locator('.conversation__thread').focus()
+  // Restored rows and enabled Send can precede this receipt; focus creates no history demand.
+  await expect.poll(() => second.page.evaluate(() => (window as typeof window & {
+    repeatPageDelivered: boolean
+  }).repeatPageDelivered), { timeout: 20_000 }).toBe(true)
+  expect((await commands()).filter(command => 'type' in command && command.type === 'requestHistory')).toEqual([
+    { type: 'requestHistory', payload: { conversation_id: SEEDED_ROW.id, cursor: '', limit: 200 } }
+  ])
   const expected = { ...snapshot, coverage: snapshot.coverage, gaps: [], newestCursor: 'repeat',
     served: { ids, highestId: 199, receipts: [...receipts.slice(1), { ids, cursor: 'repeat', atStart: false }] } }
   await expect.poll(() => read(second.page)).toEqual({ status: 'stored', snapshot: expected })

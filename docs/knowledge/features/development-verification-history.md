@@ -95,8 +95,54 @@ expanded-tool retention and content-anchor geometry. It polls the protected gap
 cursor before reloading the renderer, then verifies a newest overlap leaves the
 restored walk intact and fresh input uses that cursor. This is a fresh renderer
 over protected storage; full Electron exit is established by the live proof below.
+Both fresh-input sites establish focused, settled geometry and marker
+intersection with the reading area between measured top/input chrome before one ArrowUp, while setup
+adds no requests. See [the local readiness contract](chat-history-testing.md#demand-and-snapshot-contracts).
 
-The [final verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1881#issuecomment-6048495036)
+The [controlled cause observation](https://github.com/pyrycode/pyrycode-desktop/issues/1932#issuecomment-6102627361)
+records the original failure at `c4420495fe` in `verifier-gate_#1904_6.log`:
+380 executed, 379 passed, 1 failed, 4 skipped, 4 actual workers, attempt zero.
+The named test received two requests instead of three. Its selected rerun in
+`2026-10-10T21-36-32-883Z_verifier-gate-rerun_#1904.log` recorded 1 executed/passed,
+0 failed/skipped, 1 actual worker, attempt zero. Neither log captured pre-key
+geometry, so the exact reflow in that occurrence cannot be recovered.
+
+Before repair, the controlled diagnostic returned to the bottom with End, settled
+native movement, then expanded the existing tool and parked the marker in the
+same renderer task. Pending layout/resize pinning overwrote the park. Three trials
+recorded 3 executed, 0 passed, 3 failed, 0 skipped at 3 actual workers, retries zero.
+Two initial samples intersected at 351–395px; at trusted ArrowUp capture the focused
+thread's marker was at −968–−924px against reading bounds 105–436px, with scrollTop
+1319 and content height 1879. This establishes invalidated test positioning rather
+than rejection of eligible input. Metadata focus did not reproduce this fixture,
+whose user rows have no metadata. The same controlled expansion after repair
+recorded 3 executed/passed, 0 failed/skipped, 3 actual workers, retries zero.
+Diagnostic logs are `/tmp/builder-1932/{expansion,control-repaired}.log`; an
+uncontrolled 20/20 baseline pass is not causal evidence.
+
+The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1934#issuecomment-6103292311)
+confirms the named test above executed and passed in all 20 repetitions:
+20 executed, 20 passed, 0 failed, 0 skipped, 3 actual workers, retries zero,
+all attempt zero (`/tmp/builder-1932/repeats.log`). The builder's final uninterrupted
+default suite recorded 380 executed, 380 passed, 0 failed, 4 skipped at the normal
+4 actual workers, retries zero (`stable-full-suite.log`). Named-test result
+separately: 1 executed/passed, 0 failed/skipped, attempt zero.
+
+The earlier builder full run remained red: 380 executed, 378 passed, 2 failed,
+4 skipped, 4 actual workers, retries zero; the named test passed. Two Welcome
+setup timeouts began at 22:02:44 while a concurrent rebuild rewrote renderer
+assets at 22:02:45. Both scenarios passed in the later uninterrupted run. Keep
+builds sequential with Electron suites because launches read those assets.
+
+The supplied dispatcher per-test report and verdict independently confirm the
+named test was present, executed and passed in verifier gate 6 on 2026-10-10 at
+`4a500e81e55b1c6d72c2490b9b9399b53b82715b`: 382 executed, 382 passed, 0 failed,
+3 skipped. The verdict records 4 actual workers, retries zero, and the named
+test separately as 1 executed/passed, 0 failed/skipped, attempt zero. No renderer
+or presentation change ships; live-Claude and visual-design checks did not apply
+to this fake-transport synchronization repair.
+
+The [original feature verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1881#issuecomment-6048495036)
 and supplied dispatcher report record gate 6 at `609a8ba87db3520fc306b07daa626b18a598856d`
 on 2026-10-07: 350 executed, 350 passed, 0 failed, 4 skipped. The verdict confirms
 the named fake gap test above was present, executed and passed, along with all

@@ -19,6 +19,20 @@ content appears without upward input and arrival creates no scroll cascade.
 An empty page needs a later received live frame as a receipt barrier;
 row count alone cannot prove that the empty response has settled.
 
+The known-gap scenario in [`history-gaps.spec.ts`](../../../e2e/history-gaps.spec.ts)
+measures eligibility before each fresh ArrowUp, including after protected restoration.
+A successful programmatic park or screenshot can precede a layout pin that moves
+the marker out of view. Its local helper moves the pointer away, focuses the thread,
+and polls for scroll offset, content height and viewport dimensions stable within
+0.1px over three animation frames. It then centers the marker between the measured
+top/input chrome, settles movement, and asserts focused, positive-height marker
+intersection with that unobscured reading area and unchanged request count.
+Older-end `isNearTop` readiness cannot establish gap eligibility. One fresh key
+must add exactly one request with `gap-start`, or the saved `gap-step` after reload;
+retain negative/pending-input, no settlement cascade, failure/Retry, sub-two-pixel
+anchor, expanded-tool and final-content assertions. See
+[controlled cause and counted validation](development-verification-history.md#known-gap-recovery-verification).
+
 [`newestHistoryDemand.test.ts`](../../../src/renderer/src/store/newestHistoryDemand.test.ts)
 covers offline opening, connection edges, navigation/equal-id host isolation,
 duplicate sync, read settlement/cancellation/live supersession, pending deferral,

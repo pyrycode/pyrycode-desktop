@@ -38,6 +38,40 @@ test('known gaps require fresh input, retain failure/resume, anchor and expansio
   await expect.poll(() => asks.length).toBe(2)
   daemon.pushFrame(reply(asks[1], newestIds, 'gap-start'))
   const marker = thread.locator('[data-history-gap]')
+  // Focus and layout can invalidate a park before the pre-scroll demand measurement.
+  const settled = () => expect.poll(() => thread.evaluate(async el => {
+    const metrics = () => [el.scrollTop, el.scrollHeight, el.clientHeight, el.clientWidth]
+    let previous = metrics()
+    for (let frame = 0; frame < 3; frame++) {
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+      const next = metrics()
+      if (next.some((value, index) => Math.abs(value - previous[index]) > 0.1)) return false
+      previous = next
+    }
+    return true
+  })).toBe(true)
+  const prepareGapInput = async (expectedRequests: number) => {
+    await page.mouse.move(0, 0)
+    await thread.focus()
+    await expect(thread).toBeFocused()
+    await settled()
+    await marker.evaluate(node => {
+      const el = node.parentElement!, viewport = el.getBoundingClientRect()
+      const top = Math.max(viewport.top, document.querySelector('.conversation__top-chrome')!.getBoundingClientRect().bottom)
+      const bottom = Math.min(viewport.bottom, document.querySelector('.conversation__input-chrome')!.getBoundingClientRect().top)
+      const rect = node.getBoundingClientRect()
+      el.scrollTop += (rect.top + rect.bottom - top - bottom) / 2
+    })
+    await settled()
+    await expect.poll(() => marker.evaluate(node => {
+      const el = node.parentElement!, viewport = el.getBoundingClientRect(), rect = node.getBoundingClientRect()
+      const top = Math.max(viewport.top, document.querySelector('.conversation__top-chrome')!.getBoundingClientRect().bottom)
+      const bottom = Math.min(viewport.bottom, document.querySelector('.conversation__input-chrome')!.getBoundingClientRect().top)
+      return document.activeElement === el && rect.height > 0 && rect.bottom > top && rect.top < bottom
+    })).toBe(true)
+    await app.evaluate(() => {})
+    expect(asks).toHaveLength(expectedRequests)
+  }
   await expect(marker).toHaveText('Load earlier messages')
   await expect(thread.locator('.bubble')).toHaveCount(21)
   expect(await thread.innerText()).toMatch(/Gap row 1[\s\S]*Load earlier messages[\s\S]*Gap row 8[\s\S]*Gap row 9/)
@@ -53,7 +87,7 @@ test('known gaps require fresh input, retain failure/resume, anchor and expansio
   expect(asks).toHaveLength(2)
   await marker.evaluate(el => el.scrollIntoView({ block: 'center' }))
   await page.screenshot({ path: '/tmp/builder-1879/gap-idle-800.png', animations: 'disabled' })
-  await thread.focus()
+  await prepareGapInput(2)
   await page.keyboard.press('ArrowUp')
   await expect.poll(() => asks.length).toBe(3)
   expect(asks[2].payload).toEqual({ conversation_id: SEEDED_ROW.id, cursor: 'gap-start', limit: 200 })
@@ -94,8 +128,7 @@ test('known gaps require fresh input, retain failure/resume, anchor and expansio
   await expect.poll(() => asks.length).toBe(5)
   daemon.pushFrame(reply(asks[4], newestIds, 'newest-overlap'))
   await expect(marker).toHaveText('Load earlier messages')
-  await marker.evaluate(el => el.scrollIntoView({ block: 'center' }))
-  await thread.focus()
+  await prepareGapInput(5)
   await page.keyboard.press('ArrowUp')
   await expect.poll(() => asks.length).toBe(6)
   expect(asks[5].payload.cursor).toBe('gap-step')

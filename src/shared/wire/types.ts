@@ -538,14 +538,14 @@ export interface Envelope {
   type: EnvelopeType | string
   ts: string
   payload: unknown
-  // Optional wire fields: absent means omitted (never emitted as null — mobile's
-  // explicitNulls = false). `number | undefined` is the faithful representation; a `| null`
-  // here would invite a caller to write null, which JSON.stringify would serialize.
+  // Optional numeric identity fields: absence means omitted, never a synthesized null.
   in_reply_to?: number
   event_id?: number
   /** Per-conversation durable history identity; never a connection or replay counter. */
   history_entry_id?: number
-  session_id?: string
+  /** Producing session: omission, explicit no-session null, or a nonempty ID. */
+  session_id?: string | null
+  session_state_cleared?: boolean
 }
 
 export type WireRole = 'user' | 'assistant'
@@ -3256,6 +3256,13 @@ export interface SlashCommandListPayload {
  */
 export type ListConversationsPayload = Record<string, never>
 
+/** Canonical session-scoped live-state families; dismissals and settings acknowledgements share families. */
+export type SessionStateFamily =
+  | 'modal_shown' | 'question_shown' | 'turn_state' | 'stall' | 'api_retry' | 'compacting'
+  | 'thinking_progress' | 'tool_progress' | 'background_task_progress' | 'resetting'
+  | 'rate_limited' | 'context_usage' | 'model_announced' | 'session_facts' | 'session_settings'
+  | 'mcp_status' | 'slash_command_list' | 'model_list' | 'reply_suggestion' | 'session_error'
+
 /**
  * One row of a `conversations` reply. Mirrors the daemon ConversationSummary field-for-field
  * (conversations_read.go, post-#880), wire order below — all always present, no `omitempty`.
@@ -3287,6 +3294,10 @@ export type ListConversationsPayload = Record<string, never>
  * key counts as Claude.
  */
 export interface ConversationSummary {
+  /** Stored binding, including empty when unbound; omission remains unknown. */
+  current_session_id?: string
+  /** Authoritative shown-thread watermark, including zero; omission means unavailable. */
+  last_shown_version?: number
   /** Durable history IDs from the daemon; absent on legacy rows. */
   read_up_to?: number
   latest_entry_id?: number

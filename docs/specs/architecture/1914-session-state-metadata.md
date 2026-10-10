@@ -74,3 +74,9 @@ Resolved: use `envelopeSessionId` alongside existing payload `sessionId`, with `
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-10
+
+## Revisions
+
+2026-10-10: Keep legacy-translator tests in `src/renderer/src/store/sessionStateMetadata.test.ts`; importing renderer code into a main test crosses TypeScript's process-specific project boundary. The parser also carries a main-only `liveStateMetadata` bag for listed families so the frame sink forwards their correlation without exposing legacy history/attachment reply correlations. Public live-state event fields and ordinary settlement remain as designed.
+
+2026-10-10: The main-only metadata bag would add enumerable fields even to legacy parser results. Replace it with frame-local metadata captured by the existing admitted-envelope observer, using exported main-only `sessionStateFamily(type): SessionStateFamily | null` as the shared allowlist. The connection forwards the bag only after payload parsing succeeds. Parsed family results expose only supplied `envelopeSessionId`/`inReplyTo`; legacy correlations outside the allowlist remain main-owned.

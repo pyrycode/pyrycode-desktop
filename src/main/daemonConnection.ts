@@ -83,7 +83,7 @@ import {
   buildQuestionAnswer,
   buildQuestionRefused
 } from './transport/questionResolutionEnvelope'
-import { parseInboundMessage, turnEndMetricsOf, type InboundDaemonMessage } from './transport/inboundMessage'
+import { parseInboundMessage, sessionStateFamily, turnEndMetricsOf, type InboundDaemonMessage } from './transport/inboundMessage'
 import {
   createBundleReassembler,
   type BundleConsumer,
@@ -1282,8 +1282,16 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         // Decode the decrypted app-envelope at the transport boundary, then map its narrowed result
         // onto the IPC layer — the consumer's only job (transport/ stays IPC-free).
         let inbound: InboundDaemonMessage | null
+        let liveStateMetadata: { envelopeSessionId?: string | null; inReplyTo?: number } = {}
         try {
           inbound = parseInboundMessage(event.plaintext, deps.diagnosticLog, (envelope) => {
+            if (sessionStateFamily(envelope.type) !== null) {
+              liveStateMetadata = {
+                ...('session_id' in envelope ? { envelopeSessionId: envelope.session_id } : {}),
+                ...('in_reply_to' in envelope ? { inReplyTo: envelope.in_reply_to } : {})
+              }
+            }
+            if (envelope.session_state_cleared === true) return
             if (envelope.type === 'resync') {
               replayCursor = undefined
               deps.diagnosticLog?.event({ event: 'replay-cursor-reset', code: 'resync' })
@@ -1305,13 +1313,20 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         const sink: DaemonEventSink = {
           isDestroyed: () => connectionSink.isDestroyed(),
           webContents: { send: (channel, typed) => connectionSink.webContents.send(channel,
-            historyEntryId === undefined ? typed : { ...typed, historyEntryId }) }
+            { ...typed,
+              ...(historyEntryId === undefined ? {} : { historyEntryId }),
+              ...liveStateMetadata
+            }) }
         }
         // Route on the narrowed kind. Messages forward their envelope time for receipt display; the three
         // debug-bundle kinds (#116) feed the armed reassembler (a no-op when none is in flight —
         // optional chaining, or the settled reassembler's own inert guard — preserving the prior
         // drop behaviour and keeping an unrelated `error` harmless when no bundle is streaming).
         switch (inbound.kind) {
+          case 'session-state-cleared':
+            emitDaemonEvent(sink, { type: 'sessionStateCleared', family: inbound.family,
+              correlation: inbound.correlation, daemonTs: inbound.correlation.ts })
+            return
           case 'thread-frame':
             if (authenticated && !stopped) threadReceiver.receive(inbound.envelope)
             return
@@ -1641,8 +1656,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // session was resolved — and crosses verbatim for the same reason. The two are read as a
             // pair; neither is inferred from the other, and neither is inferred from `yolo`.
             // `conversationId` is the map's value, never a field of the decoded payload — the reply
-            // has none — and the numeric in_reply_to it was resolved from is NOT placed on the event:
-            // the renderer receives the id it supplied, not the wire routing id.
+            // has none — and conversation attribution still comes only from this pending request. Supplied
+            // wire correlation is also carried as metadata by the per-frame sink.
             emitDaemonEvent(sink, {
               type: 'runConfigReceived',
               conversationId,
@@ -2390,8 +2405,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // reply, or a hostile daemon forging a confirmation for a change the client never dispatched)
             // is ignored — no coercion (AC3). The emitted event carries `sessionId` (the reply's field) +
             // `changeId` (the map value) in a FRESH literal — never a spread of the decoded payload, and
-            // the numeric in_reply_to is NEVER placed on the event (the renderer receives its own changeId,
-            // not the wire routing id). A session_id is a routing id, not a secret. Consumed by #256.
+            // supplied numeric in_reply_to travels separately as metadata; settlement still uses this
+            // main-owned pending map and client changeId. A session_id is a routing id, not a secret.
             const inReplyTo = inbound.inReplyTo
             if (inReplyTo === undefined) return
             const changeId = pendingSettings.get(inReplyTo)

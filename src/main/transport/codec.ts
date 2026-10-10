@@ -140,7 +140,16 @@ export function decodeEnvelope(bytes: Uint8Array): Envelope {
     }
     envelope.history_entry_id = obj.history_entry_id
   }
-  if (typeof obj.session_id === 'string') envelope.session_id = obj.session_id
+  if ('session_id' in obj) {
+    if (obj.session_id !== null && (typeof obj.session_id !== 'string' || obj.session_id === '')) {
+      throw new WireDecodeError('invalid envelope session tag')
+    }
+    envelope.session_id = obj.session_id
+  }
+  if ('session_state_cleared' in obj) {
+    if (typeof obj.session_state_cleared !== 'boolean') throw new WireDecodeError('invalid session clear flag')
+    envelope.session_state_cleared = obj.session_state_cleared
+  }
   return envelope
 }
 

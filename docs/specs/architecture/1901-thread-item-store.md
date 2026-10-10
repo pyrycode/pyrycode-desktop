@@ -82,3 +82,11 @@ No Playwright or live test: this ticket owns no mounted or interactive productio
 ## Open Questions
 Cleaner shape considered: one generic event reducer would obscure batch ownership;
 use named sync methods and a scoped generation-bound handle. No unresolved questions.
+
+## Revisions
+- 2026-10-10: The unfinished-batch regression exposed that successful live appends
+  can use an item from a partial reply. Retain a private highest uncommitted batch
+  version; live successes cannot advance the checkpoint until certification covers
+  it, even after abandonment. Delayed completion publishes only its certified
+  version while preserving newer held facts. Certificates cannot start beyond the
+  held checkpoint. An exhausted oldest boundary cannot reopen from a delayed reply.

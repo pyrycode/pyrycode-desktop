@@ -168,12 +168,12 @@ scope releases image shares/listeners through effect cleanup and cannot reuse an
 scope's thumbnail URL merely because attachment ids match. Remounting rows alone would
 not fix action ownership if their dependencies still read the global active chat.
 
-Renderer-scoped requests do not establish production transport ownership.
-[#1926](https://github.com/pyrycode/pyrycode-desktop/issues/1926) tracks main-process
-retrieval routing/coalescing/outcome ownership; its production reproduction remains
-skipped. The two-host mounted proof uses real preload with a ticket-local IPC fake,
-so scoped completion isolation and production cross-host retrieval remain unverified.
-That repair must precede combined production acceptance in
+[Scoped attachment retrieval](attachment-retrieval.md#5-the-composition-root--srcmainindexts)
+now resolves explicit paired hosts independently of the conversation index, including unlisted
+snapshots and equal conversation IDs across hosts. Coalescing owns resolved host/conversation/attachment;
+terminals echo requested scope and only matching renderer listeners settle. The two-host production
+variant uses real preload/main, while the renderer-only variant retains its local IPC fake.
+Production thread path selection and combined live acceptance still belong to
 [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
 
 The slice leaves agent placement to #1905, local settlement/queue actions to #1906,
@@ -196,15 +196,25 @@ attachments, scope resets, following growth and held-reader prepends/revisions.
 All its cases belong to the serialized clipboard project because copy assertions
 share Electron's system clipboard.
 
-The [verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/1925#issuecomment-6102450645)
-at `c4420495` records `authoritative items retain identity, actions and scroll at 1280`,
-`authoritative items retain identity, actions and scroll at 800`, and
-`snapshot attachment actions retain their host and conversation across reused IDs`
-as present and passed: ticket coverage executed 3, passed 3, failed 0, skipped 1
-(the separate #1926 production reproduction). The full fake-transport run executed
-380, passed 379, failed 1, skipped 4; its unrelated `history-gaps` failure passed an
-isolated rerun (1 executed/passed, 0 failed/skipped). No skipped case is a pass.
-The same verdict confirms reused row styling at 1280 and 800 widths against Figma
+The [scoped retrieval verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/1933#issuecomment-6102697014)
+at `ce88dd0029db01f4d13a3d5db6569be002376e9d` records all five thread-items cases
+executed/passed, failed 0, skipped 0. Dispatcher gate 6 on 2026-10-10 executed 382,
+passed 382, failed 0, skipped 3. Its named-test evidence confirms these cases present and passed:
+
+- `snapshot attachment actions retain their host and conversation across reused IDs` — retained renderer proof.
+- `snapshot attachment scope through daemon retrieval` — obsolete skip/name removed; off-selection,
+  unlisted snapshots reach each supplied owner through real preload/main and both image rows decode.
+- `a late retrieval disconnect cannot settle a switched thread with reused image IDs` — old host's
+  disconnect crosses preload while the new host remains pending, then the new image completes.
+
+The delayed-disconnect fixture must close `forwarder.closeClientLeg`, since closing the fake daemon
+alone leaves the client relay leg open. Wait for the actual old-host terminal before asserting that
+the switched image remains pending; otherwise the isolation assertion can pass before the event arrives.
+Its malformed-host checks likewise use a valid unknown-host terminal as a receipt barrier.
+See [retrieval testing](attachment-retrieval.md#testing) for unit coverage and storage/byte-read limits.
+
+The [presentation verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/1925#issuecomment-6102450645)
+confirms reused row styling at 1280 and 800 widths against Figma
 102:4; the synthetic fixture omits the production shell. No live Claude or production
 thread capability verification was required or performed.
 

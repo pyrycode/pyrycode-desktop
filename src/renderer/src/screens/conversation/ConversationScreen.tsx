@@ -1592,6 +1592,7 @@ function ThreadItemsView({ snapshot, foldTools = false, onReply, onOpenMarkdownP
     return { hostId: snapshot.hostId, conversationId: snapshot.conversationId,
       imageSources: createAttachmentImageSources({
         getOpenConversationId: () => target.conversationId,
+        getServerId: () => target.serverId,
         requestAttachment: request => window.pyry.requestAttachment({ ...request, ...target }),
         onAttachmentRetrievalEvent: listener => window.pyry.onAttachmentRetrievalEvent(listener),
         requestAttachmentBytes: request => window.pyry.requestAttachmentBytes(request),
@@ -1788,6 +1789,7 @@ function BubbleAttachmentRow({ attachment }: { attachment: MessageAttachment }):
         downloadAttachment(target === null ? attachmentDownloadDeps : {
           ...attachmentDownloadDeps,
           getOpenConversationId: () => target.conversationId,
+          getServerId: () => target.serverId,
           openLocalAttachment: request => window.pyry.openAttachment({ ...request, ...target, localOnly: true }),
           requestAttachment: request => window.pyry.requestAttachment({ ...request, ...target })
         }, attachment)

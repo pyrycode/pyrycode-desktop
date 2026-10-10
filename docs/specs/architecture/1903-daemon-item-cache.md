@@ -76,3 +76,7 @@ None. Cleaner-shape review: extending the existing queue and shared parser avoid
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-10
+
+## Revisions
+
+2026-10-10: Added `e2e/daemon-item-cache.test.ts`, a Node Vitest integration proof using the existing protected filesystem seam. Keeping cross-process test imports outside either TypeScript production project proves writer-to-fresh-service-to-offline-store restoration without a shared harness or Electron launch. No production design change.

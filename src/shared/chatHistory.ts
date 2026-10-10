@@ -74,8 +74,24 @@ export type HistoryContribution = {
   | { kind: 'suppressed' }
 )
 
+/** Retained daemon facts; optional fields may have been explicitly cleared by patches. */
+export interface ThreadSnapshot {
+  readonly hostId: string
+  readonly conversationId: string
+  readonly epoch: string
+  readonly items: readonly Readonly<{ id: number; kind: string; rev: number } & Record<string, unknown>>[]
+  readonly version: number
+  readonly checkpoint: number
+  /** Highest unfinished batch version; zero means no outstanding batch progress. */
+  readonly uncommittedVersion?: number
+  readonly ranges: readonly Readonly<{ start: number; end: number }>[]
+  readonly olderAvailable?: boolean
+  readonly repair: Readonly<{ fromVersion: number; throughVersion: number }> | null
+}
+
 export type ChatHistorySnapshot = { version: 1; serverId: string } & (
   | { kind: 'list'; conversations: ConversationSummary[] }
+  | { kind: 'daemon-items'; conversationId: string; thread: ThreadSnapshot }
   | {
       kind: 'timeline'; conversationId: string; items: DurableThreadItem[]; prependedRows: number
       served?: ServedHistory
@@ -90,9 +106,11 @@ export type ChatHistoryRequest = { serverId: string } & (
   | { operation: 'readList' }
   | { operation: 'removeServer' }
   | { operation: 'readTimeline'; conversationId: string }
+  | { operation: 'readThread'; conversationId: string }
   | { operation: 'removeConversation'; conversationId: string }
   | { operation: 'replaceList'; snapshot: Extract<ChatHistorySnapshot, { kind: 'list' }> }
   | { operation: 'replaceTimeline'; conversationId: string; snapshot: Extract<ChatHistorySnapshot, { kind: 'timeline' }> }
+  | { operation: 'replaceThread'; conversationId: string; snapshot: Extract<ChatHistorySnapshot, { kind: 'daemon-items' }> }
 )
 export type ChatHistoryResult =
   | { status: 'missing' }
@@ -251,6 +269,43 @@ function signedSafe(value: unknown): number {
   return Number.isSafeInteger(n) ? n : invalid()
 }
 
+function retainedThread(value: unknown, hostId: string, conversationId: string): ThreadSnapshot {
+  const v = record(value)
+  let nodes = 0
+  function json(value: unknown, depth = 0): unknown {
+    if (++nodes > MAX_CHAT_HISTORY_ITEMS || depth > 64) return invalid()
+    if (value === null || typeof value === 'boolean') return value
+    if (typeof value === 'string') return string(value)
+    if (typeof value === 'number') return number(value)
+    if (Array.isArray(value)) return array(value, child => json(child, depth + 1))
+    const entries = Object.entries(record(value))
+    if (entries.length > MAX_CHAT_HISTORY_ITEMS ||
+        (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) return invalid()
+    // fromEntries creates own data properties, including __proto__, without invoking setters.
+    return Object.fromEntries(entries.map(([key, child]) => [string(key), json(child, depth + 1)]))
+  }
+  const items = array(v.items, value => {
+    const item = record(json(value))
+    return { ...item, id: readId(item.id), kind: string(item.kind), rev: readId(item.rev) }
+  })
+  const version = readId(v.version), checkpoint = readId(v.checkpoint)
+  const uncommittedVersion = v.uncommittedVersion === undefined ? (version > checkpoint ? version : 0) : readId(v.uncommittedVersion)
+  const ranges = array(v.ranges, value => {
+    const r = record(value), start = readId(r.start), end = readId(r.end)
+    return start <= end ? { start, end } : invalid()
+  })
+  const repair = nullable(v.repair, value => {
+    const r = record(value), fromVersion = readId(r.fromVersion), throughVersion = readId(r.throughVersion)
+    return fromVersion === checkpoint && throughVersion >= fromVersion ? { fromVersion, throughVersion } : invalid()
+  })
+  if (id(v.hostId) !== hostId || id(v.conversationId) !== conversationId || checkpoint > version ||
+      uncommittedVersion > version || (uncommittedVersion !== 0 && uncommittedVersion <= checkpoint) ||
+      new Set(items.map(item => item.id)).size !== items.length ||
+      ranges.some((r, i) => i > 0 && r.start <= ranges[i - 1].end)) return invalid()
+  return { hostId, conversationId, epoch: id(v.epoch), items, version, checkpoint, uncommittedVersion, ranges, repair,
+    ...(v.olderAvailable === undefined ? {} : { olderAvailable: bool(v.olderAvailable) }) }
+}
+
 /** Parsers return detached, allowlisted data; callers contain the static validation failures. */
 export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
   const v = record(value)
@@ -274,6 +329,10 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
     })
     if (new Set(conversations.map((c) => c.id)).size !== conversations.length) return invalid()
     return { version: 1, kind: 'list', serverId, conversations }
+  }
+  if (v.kind === 'daemon-items') {
+    const conversationId = id(v.conversationId)
+    return { version: 1, kind: v.kind, serverId, conversationId, thread: retainedThread(v.thread, serverId, conversationId) }
   }
   if (v.kind !== 'timeline') return invalid()
   const c = record(v.coverage)
@@ -395,17 +454,20 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
 export function parseChatHistoryRequest(value: unknown): ChatHistoryRequest {
   const v = record(value)
   const serverId = id(v.serverId)
-  const operation = choice(v.operation, ['readList', 'replaceList', 'readTimeline', 'replaceTimeline', 'removeConversation', 'removeServer'])
-  const hasConversation = operation === 'readTimeline' || operation === 'replaceTimeline' || operation === 'removeConversation'
-  const replacing = operation === 'replaceList' || operation === 'replaceTimeline'
+  const operation = choice(v.operation, ['readList', 'replaceList', 'readTimeline', 'replaceTimeline', 'readThread', 'replaceThread', 'removeConversation', 'removeServer'])
+  const hasConversation = operation === 'readTimeline' || operation === 'replaceTimeline' || operation === 'readThread' || operation === 'replaceThread' || operation === 'removeConversation'
+  const replacing = operation === 'replaceList' || operation === 'replaceTimeline' || operation === 'replaceThread'
   const keys = ['operation', 'serverId', ...(hasConversation ? ['conversationId'] : []), ...(replacing ? ['snapshot'] : [])]
   if (Object.keys(v).some((key) => !keys.includes(key))) return invalid()
   if (operation === 'readList' || operation === 'removeServer') return { operation, serverId }
-  if (operation === 'readTimeline' || operation === 'removeConversation') return { operation, serverId, conversationId: id(v.conversationId) }
+  if (operation === 'readTimeline' || operation === 'readThread' || operation === 'removeConversation') return { operation, serverId, conversationId: id(v.conversationId) }
   const snapshot = parseChatHistorySnapshot(v.snapshot)
   if (snapshot.serverId !== serverId) return invalid()
   if (operation === 'replaceList' && snapshot.kind === 'list') return { operation, serverId, snapshot }
   if (operation === 'replaceTimeline' && snapshot.kind === 'timeline' && snapshot.conversationId === id(v.conversationId)) {
+    return { operation, serverId, conversationId: snapshot.conversationId, snapshot }
+  }
+  if (operation === 'replaceThread' && snapshot.kind === 'daemon-items' && snapshot.conversationId === id(v.conversationId)) {
     return { operation, serverId, conversationId: snapshot.conversationId, snapshot }
   }
   return invalid()

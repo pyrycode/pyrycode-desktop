@@ -39,7 +39,8 @@ held overlapping writes/removals and preservation after read/write/delete failur
 These tests exercise the storage seams without proving the OS keychain adapter.
 [`chatHistoryHandler.test.ts`](../../../src/main/chatHistoryHandler.test.ts)
 covers membership, rejected requests before record access, ordering and contained
-failures for all six operations.
+failures for the original six operations; the daemon-cache tests below cover the
+additive `readThread`/`replaceThread` operations.
 
 ## Recording and removal
 
@@ -83,7 +84,62 @@ five seconds, so a transient loss of Electron's inspection context does not redd
 reads](e2e-harness-context-recovery.md#tolerating-a-transient-inspection-context-loss-on-reads)); the counting
 wrapper's own install stays a single un-retried call.
 
+[`daemonItemCache.test.ts`](../../../src/renderer/src/store/daemonItemCache.test.ts)
+injects the optional thread source into the same writer. It holds an in-flight save
+while newer snapshots and an epoch replacement arrive, then checks the final owned
+snapshot and the equal-id peer host. Hydration schedules no write; subsequent owned
+facts remain saveable. Confirmation during buffered/held saves clears the held
+conversation, suppresses later captures and queues removal behind admitted writes.
+Successful/failed unpair cases exercise the pause, off-screen scopes, delayed reads,
+other-host preservation and fresh same-host reuse rather than restarting away
+ownership bugs. `stop()` must detach the thread observer and finish its owned work.
+
+[`daemonItemHistory.test.ts`](../../../src/main/daemonItemHistory.test.ts) uses the
+existing protected filesystem seam and fresh storage services to check coexistence
+of legacy/daemon records, equal conversation/item ids on two hosts, and ordered
+removal of both formats plus the saved-list entry. Main-handler unpair tests reject
+stale reads/writes, remove off-screen records and allow fresh same-host requests.
+Malformed IPC/disk metadata, bounded inert JSON, missing optional availability and
+unavailable encryption cases check classified failures and preservation of data.
+Arrival-order rejection fixtures include missing, duplicate, unknown and invalid
+ids; diagnostics remain content-free and inert keys cannot affect object prototypes.
+
 ## Restoration
+
+Daemon restoration uses `readSavedTimeline({ threads, ... })` and `readThread`,
+separately from the legacy holder path below. `daemonItemCache.test.ts` covers
+stored/missing/error/rejected reads settling after live admission, cancellation,
+replacement reads, epoch-string reuse and conversation/host/global cleanup. Its
+incomplete/repair fixture restores checkpoint 100, applied version 300 and unfinished
+version 250: a certificate through 200 clears repair but leaves later live success
+fenced until certification covers 250. A completed snapshot's restoration retains
+its exact ranges and older availability without adding coverage.
+
+[`daemon-item-cache.test.ts`](../../../e2e/daemon-item-cache.test.ts) is a Node Vitest
+integration test, despite its directory. It connects the real writer to protected
+temporary-file storage, flushes or stops the writer, constructs fresh storage and thread
+store instances, and hydrates through the local reader without Electron or a daemon.
+Both completion variants compare snapshots across restart, preserve hidden items,
+patch nulls and inert own keys, and apply later live changes on one of two equal-id
+hosts. The test encryption backend proves the protected persistence seam, not the
+OS keychain adapter. Keeping cross-process imports here avoids pulling renderer
+implementation into the composite Node production project.
+
+Permanent restart regressions in that file cover two traps that a same-instance
+read misses. `saves live success after abandoning a batch already covered through
+%s` uses both 50 and 100 beneath/equal to checkpoint 100, checks that revision and
+checkpoint 200 reach fresh storage, then verifies live progress after hydration.
+`restart preserves first-arrival ties after order changes and clears` compares
+restored and uninterrupted stores after numeric ties and null-cleared orders.
+The renderer test `restores snapshots without arrival metadata using their supplied
+held order` covers the older-snapshot fallback. These fixtures complement unfinished
+progress tests; accepting covered values must not weaken fences above checkpoint.
+
+These supplied-state tests cover cache preparation and local hydration. Production
+thread subscriptions, capability activation, actual offline screen display and
+reconnect from the saved complete checkpoint through #1902 remain
+[#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908). Existing legacy
+browser/liveness proofs below do not establish that daemon-item integration.
 
 [`savedTimelineRestorer.test.ts`](../../../src/renderer/src/store/savedTimelineRestorer.test.ts)
 covers explicit admission, row identity metadata and coverage, equal-id host

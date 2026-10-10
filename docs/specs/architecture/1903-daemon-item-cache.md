@@ -80,3 +80,15 @@ None. Cleaner-shape review: extending the existing queue and shared parser avoid
 ## Revisions
 
 2026-10-10: Added `e2e/daemon-item-cache.test.ts`, a Node Vitest integration proof using the existing protected filesystem seam. Keeping cross-process test imports outside either TypeScript production project proves writer-to-fresh-service-to-offline-store restoration without a shared harness or Electron launch. No production design change.
+
+2026-10-10 (verifier finding 1): Accept `uncommittedVersion` at or below checkpoint, retaining the store's legitimate already-covered unfinished progress. Continue validating nonnegative safe integers no greater than applied version; progress above checkpoint remains a fence. `saves live success after abandoning a batch already covered through %s` proves protected writer/fresh-instance restoration for batches below and equal to checkpoint, followed by live success; existing incomplete/repair tests prove fences remain intact.
+
+2026-10-10 (verifier finding 2): Add optional `ThreadSnapshot.arrivalOrder`, an immutable complete permutation of held item ids in first-arrival order. Store snapshots emit it separately from display-sorted `items`; local hydration reconstructs the Map from that metadata. Older snapshots lacking it use supplied item order because their original arrival order is unavailable, covered by `restores snapshots without arrival metadata using their supplied held order`. `restart preserves first-arrival ties after order changes and clears` compares uninterrupted and restored stores after equal numeric orders and null clears. Metadata validation rejects missing, duplicate, unknown and invalid ids without replacing valid storage.
+
+Security re-review: PASS. The arrival-id array uses existing bounded array/safe-id parsing and must match the held-id set exactly; it is inert data and changes no storage paths, authorization or I/O. Accepting already-covered unfinished versions matches the existing `success` fence condition and grants no additional checkpoint or range certification. No new types, dependencies, failure classifications or production consumers. Rework keeps total written work below 800 lines.
+
+## Documentation handoff
+
+- Pending documentation stage: `docs/knowledge/features/chat-history.md` § Snapshot contract / Storage and concurrency and `docs/knowledge/features/chat-history-api.md` § API: distinguish daemon/legacy records, additive operations, shared snapshots, cleanup and read ownership.
+- Pending documentation stage: `docs/knowledge/features/thread-item-store.md` § Identity, placement and full items / Snapshots and completed batches / Repair and unfinished-batch checkpoint fences: exact hydration, optional arrival metadata and backwards fallback, already-covered unfinished versions, and no new certification.
+- Pending documentation stage: `docs/knowledge/features/chat-history-testing.md` § Restoration / Recording and removal: protected fresh-instance and rework regressions; retain #1908's production offline/reconnect proof boundary.

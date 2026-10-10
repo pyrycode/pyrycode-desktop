@@ -54,7 +54,9 @@ describe('protected daemon item history', () => {
     const invalids = [{ checkpoint: 31 }, { version: -1 }, { uncommittedVersion: 31 }, { epoch: 42 },
       { ranges: [{ start: 10, end: 1 }] }, { ranges: [{ start: 1, end: 5 }, { start: 4, end: 8 }] },
       { repair: { fromVersion: 11, throughVersion: 25 } }, { items: [{ id: 1, rev: -1, kind: 'x' }] },
-      { items: [s.thread.items[0], s.thread.items[0]] }, { olderAvailable: null }, { hostId: 'b' }]
+      { items: [s.thread.items[0], s.thread.items[0]] }, { olderAvailable: null }, { hostId: 'b' },
+      { arrivalOrder: [1] }, { arrivalOrder: [1, 1] }, { arrivalOrder: [1, 3] },
+      { arrivalOrder: [1, -2] }, { arrivalOrder: [1, 2.5] }, { arrivalOrder: null }]
     for (const patch of invalids) {
       expect(await h.store.execute({ operation: 'replaceThread', serverId: 'a', conversationId: 'c', snapshot: { ...s, thread: { ...s.thread, ...patch } } })).toEqual({ status: 'error', code: 'invalid-request' })
     }

@@ -80,9 +80,11 @@ export interface ThreadSnapshot {
   readonly conversationId: string
   readonly epoch: string
   readonly items: readonly Readonly<{ id: number; kind: string; rev: number } & Record<string, unknown>>[]
+  /** Held item ids in first-arrival order, independent of display placement. */
+  readonly arrivalOrder?: readonly number[]
   readonly version: number
   readonly checkpoint: number
-  /** Highest unfinished batch version; zero means no outstanding batch progress. */
+  /** Highest unfinished batch version; only progress above checkpoint fences live success. */
   readonly uncommittedVersion?: number
   readonly ranges: readonly Readonly<{ start: number; end: number }>[]
   readonly olderAvailable?: boolean
@@ -288,6 +290,8 @@ function retainedThread(value: unknown, hostId: string, conversationId: string):
     const item = record(json(value))
     return { ...item, id: readId(item.id), kind: string(item.kind), rev: readId(item.rev) }
   })
+  const itemIds = new Set(items.map(item => item.id))
+  const arrivalOrder = optional(v.arrivalOrder, value => array(value, readId))
   const version = readId(v.version), checkpoint = readId(v.checkpoint)
   const uncommittedVersion = v.uncommittedVersion === undefined ? (version > checkpoint ? version : 0) : readId(v.uncommittedVersion)
   const ranges = array(v.ranges, value => {
@@ -299,10 +303,12 @@ function retainedThread(value: unknown, hostId: string, conversationId: string):
     return fromVersion === checkpoint && throughVersion >= fromVersion ? { fromVersion, throughVersion } : invalid()
   })
   if (id(v.hostId) !== hostId || id(v.conversationId) !== conversationId || checkpoint > version ||
-      uncommittedVersion > version || (uncommittedVersion !== 0 && uncommittedVersion <= checkpoint) ||
-      new Set(items.map(item => item.id)).size !== items.length ||
+      uncommittedVersion > version || itemIds.size !== items.length ||
+      (arrivalOrder !== undefined && (arrivalOrder.length !== items.length ||
+        new Set(arrivalOrder).size !== items.length || arrivalOrder.some(id => !itemIds.has(id)))) ||
       ranges.some((r, i) => i > 0 && r.start <= ranges[i - 1].end)) return invalid()
   return { hostId, conversationId, epoch: id(v.epoch), items, version, checkpoint, uncommittedVersion, ranges, repair,
+    ...(arrivalOrder === undefined ? {} : { arrivalOrder }),
     ...(v.olderAvailable === undefined ? {} : { olderAvailable: bool(v.olderAvailable) }) }
 }
 

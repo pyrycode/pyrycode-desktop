@@ -68,6 +68,16 @@ describe('daemon item cache ownership', () => {
     live(target, 30)
     expect(target.getState().snapshot('a', 'c')).toMatchObject({ checkpoint: 30, ranges: snapshot.ranges, olderAvailable: false })
   })
+  it('restores snapshots without arrival metadata using their supplied held order', async () => {
+    const target = createThreadItemStore()
+    const snapshot: ThreadSnapshot = { hostId: 'a', conversationId: 'c', epoch: 'e', version: 10,
+      checkpoint: 10, ranges: [], repair: null, items: [{ ...item(10, 10), id: 2 }, item(10, 20)] }
+    await read(target, Promise.resolve({ status: 'stored', snapshot: saved(snapshot) })).done
+    target.getState().applyUpdate('a', { type: 'thread_item_changed', payload: { conversation_id: 'c', epoch: 'e',
+      version: 20, item_id: 1, base_rev: 10, rev: 20, changes: { order: 10 } } })
+    expect(target.getState().snapshot('a', 'c')?.items.map(item => item.id)).toEqual([2, 1])
+    expect(target.getState().snapshot('a', 'c')?.arrivalOrder).toEqual([2, 1])
+  })
   it.each(['stored', 'missing', 'failure', 'rejection'] as const)('ignores delayed read outcomes after live admission: %s', async kind => {
     const target = createThreadItemStore(), wait = held<ChatHistoryResult>()
     const task = read(target, kind === 'rejection' ? wait.promise.then(() => { throw Error('private') }) : wait.promise)

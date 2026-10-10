@@ -106,7 +106,9 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
       if (!changed && nextVersion === s.version && checkpoint === s.checkpoint && uncommittedVersion === slice.uncommittedVersion) return
       publish(host, conversation, { ...slice, byId,
         uncommittedVersion, snapshot: Object.freeze({ ...s,
-        items: changed ? ordered(byId) : s.items, version: nextVersion, checkpoint, uncommittedVersion }) })
+        items: changed ? ordered(byId) : s.items,
+        arrivalOrder: changed ? Object.freeze([...byId.keys()]) : s.arrivalOrder,
+        version: nextVersion, checkpoint, uncommittedVersion }) })
       log?.event({ event: 'thread-items-applied', code: live ? 'live' : 'batch' })
     }
     return {
@@ -127,9 +129,14 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
               conversationId: conversation, thread: value })
             if (parsed.kind !== 'daemon-items') return
             const snapshot = detach(parsed.thread)
+            const items = new Map(snapshot.items.map(item => [item.id, item])), byId = new Map<number, HeldItem>()
+            // Older snapshots have only display order; new ones retain the original arrival order.
+            for (const id of snapshot.arrivalOrder ?? items.keys()) {
+              const item = items.get(id)
+              if (item !== undefined) byId.set(id, item)
+            }
             publish(host, conversation, { snapshot, restored: snapshot, generation: Symbol(),
-              uncommittedVersion: snapshot.uncommittedVersion ?? 0,
-              byId: new Map(snapshot.items.map(item => [item.id, item])) })
+              uncommittedVersion: snapshot.uncommittedVersion ?? 0, byId })
             log?.event({ event: 'thread-items-restored', code: 'stored' })
           },
           fail: end, cancel: end
@@ -138,7 +145,7 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
       acceptEpoch(host, conversation, epoch) {
         if (read(host, conversation)?.snapshot.epoch === epoch) return
         publish(host, conversation, { generation: Symbol(), uncommittedVersion: 0, byId: new Map(), snapshot: Object.freeze({
-          hostId: host, conversationId: conversation, epoch, items: Object.freeze([]),
+          hostId: host, conversationId: conversation, epoch, items: Object.freeze([]), arrivalOrder: Object.freeze([]),
           version: 0, checkpoint: 0, uncommittedVersion: 0, ranges: Object.freeze([]), repair: null
         }) })
         log?.event({ event: 'thread-items-epoch' })

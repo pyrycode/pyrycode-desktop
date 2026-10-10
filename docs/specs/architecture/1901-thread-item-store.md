@@ -98,9 +98,11 @@ use named sync methods and a scoped generation-bound handle. No unresolved quest
   certification covers the pending batch version.
 
 ## Documentation handoff
-- Pending for the documentation stage: document retained identity/revisions, exact-base
-  updates and inert JSON, separately from the legacy timeline.
-- Pending: document snapshot/batch certification, repair and unfinished-batch checkpoint
-  fencing, certified ranges and older availability; only #1902 certifies replies.
-- Pending: document generation-bound cleanup; requests, persistence and activation
-  remain #1902, #1903 and #1908.
+- Satisfied: [retained identity/revisions](../../knowledge/features/thread-item-store.md#identity-placement-and-full-items)
+  and [exact-base updates and inert JSON](../../knowledge/features/thread-item-store.md#exact-base-changes-appends-and-inert-json),
+  separately from the legacy timeline.
+- Satisfied: [snapshot/batch certification and certified ranges/older availability](../../knowledge/features/thread-item-store.md#snapshots-and-completed-batches)
+  and [repair/unfinished-batch checkpoint fencing](../../knowledge/features/thread-item-store.md#repair-and-unfinished-batch-checkpoint-fences);
+  only #1902 certifies replies.
+- Satisfied: [generation-bound cleanup and remaining ownership](../../knowledge/features/thread-item-store.md#epochs-and-cleanup-ownership);
+  requests, persistence and activation remain #1902, #1903 and #1908.

@@ -104,9 +104,10 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
       const s = slice.snapshot
       const nextVersion = Math.max(s.version, version)
       const checkpoint = live && !s.repair && slice.uncommittedVersion <= s.checkpoint ? Math.max(s.checkpoint, version) : s.checkpoint
-      if (!changed && nextVersion === s.version && checkpoint === s.checkpoint) return
+      const uncommittedVersion = live ? slice.uncommittedVersion : Math.max(slice.uncommittedVersion, version)
+      if (!changed && nextVersion === s.version && checkpoint === s.checkpoint && uncommittedVersion === slice.uncommittedVersion) return
       publish(host, conversation, { ...slice, byId,
-        uncommittedVersion: live ? slice.uncommittedVersion : Math.max(slice.uncommittedVersion, version), snapshot: Object.freeze({ ...s,
+        uncommittedVersion, snapshot: Object.freeze({ ...s,
         items: changed ? ordered(byId) : s.items, version: nextVersion, checkpoint }) })
       log?.event({ event: 'thread-items-applied', code: live ? 'live' : 'batch' })
     }

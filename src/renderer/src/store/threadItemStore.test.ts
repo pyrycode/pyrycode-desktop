@@ -183,6 +183,34 @@ describe('complete progress and batch ownership', () => {
     expect(snapshot().checkpoint).toBe(70)
   })
 
+  it.each([['equal', 20], ['older', 10]] as const)('retains uncertified progress from %s batch revisions during repair', (_label, rev) => {
+    const { api, snapshot, batch } = setup()
+    api.applyUpdate('h', added(item(), 100))
+    api.requireRepair('h', 'c', 'e', 150)
+    api.applyUpdate('h', append(10, 20, ' live', 300))
+    expect(snapshot()).toMatchObject({ version: 300, checkpoint: 100 })
+    const held = snapshot().items
+    const incomplete = batch()
+    expect(incomplete.applyItems([item(1, rev, { content: { text: 'delayed' } })], 250)).toEqual([{ type: 'ignored' }])
+    incomplete.abandon()
+    expect(incomplete.commit(certificate(250))).toEqual({ type: 'stale' })
+    expect(snapshot().items).toBe(held)
+    expect(snapshot()).toMatchObject({ version: 300, checkpoint: 100 })
+
+    const repair = batch()
+    repair.applyItems([item(1, 20)], 200)
+    expect(repair.commit(certificate(200, { fromVersion: 100 }))).toEqual({ type: 'applied' })
+    expect(snapshot()).toMatchObject({ version: 300, checkpoint: 200, repair: null })
+    expect(api.applyUpdate('h', append(20, 30, ' later', 400))).toEqual({ type: 'applied' })
+    expect(snapshot()).toMatchObject({ version: 400, checkpoint: 200 })
+    expect(snapshot().items[0]).toMatchObject({ rev: 30, content: { text: 'hello live later' } })
+
+    expect(batch().commit(certificate(250, { fromVersion: 200 }))).toEqual({ type: 'applied' })
+    expect(snapshot()).toMatchObject({ version: 400, checkpoint: 250 })
+    expect(api.applyUpdate('h', append(30, 40, ' complete', 500))).toEqual({ type: 'applied' })
+    expect(snapshot().checkpoint).toBe(500)
+  })
+
   it('does not reopen exhausted older history from a delayed certificate at the same boundary', () => {
     const { snapshot, batch } = setup()
     batch().commit(certificate(30, { olderAvailable: false }))

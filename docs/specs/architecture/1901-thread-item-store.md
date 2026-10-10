@@ -90,3 +90,17 @@ use named sync methods and a scoped generation-bound handle. No unresolved quest
   it, even after abandonment. Delayed completion publishes only its certified
   version while preserving newer held facts. Certificates cannot start beyond the
   held checkpoint. An exhausted oldest boundary cannot reopen from a delayed reply.
+- 2026-10-10 (verifier finding 1): Ignored equal/older batch items can still carry
+  uncertified progress while a repair fences newer live facts. Compute the pending
+  batch version before `success` checks for a no-op, and publish when it increases.
+  `retains uncertified progress from %s batch revisions during repair` covers both
+  revisions, abandonment, partial repair completion and live resumption only after
+  certification covers the pending batch version.
+
+## Documentation handoff
+- Pending for the documentation stage: document retained identity/revisions, exact-base
+  updates and inert JSON, separately from the legacy timeline.
+- Pending: document snapshot/batch certification, repair and unfinished-batch checkpoint
+  fencing, certified ranges and older availability; only #1902 certifies replies.
+- Pending: document generation-bound cleanup; requests, persistence and activation
+  remain #1902, #1903 and #1908.

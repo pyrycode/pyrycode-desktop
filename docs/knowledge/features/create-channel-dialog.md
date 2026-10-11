@@ -263,20 +263,33 @@ have compatible remembered effort in their first settings reply and receive zero
 settings acknowledgements before or after the first turn. Reusing the old empty-effort opening
 assertion for both flows would reject the intended creation behaviour.
 
-The [2026-10-06 dispatcher live gate](https://github.com/pyrycode/pyrycode-desktop/issues/1658#issuecomment-6023208690)
-records 25 executed, 25 passed, 0 failed and 1 skipped at branch `6e1910ff3c`, integrated with
-main `2168a4b739`, using `npx playwright test --config playwright.real-claude.config.ts --reporter=json`.
-Its one skip is the Reset session system-prompt case. The supplied report has no per-test result
-for the revised effort-default case and no daemon revision; it does not establish that named
-test's pass. The earlier revision `36acd04c79f1279c5c5dfb14a4c35e4dc6b6aff0` belongs to the failed
-2026-10-01 effort-default run, not this successful suite.
+The combined #1809 delivery normally merges the reviewed picker and preserved documentation
+history through `22775f0901d19e606e3055eb365d19d783c56335`. Its supplied 2026-10-11 live report
+tests `feature/1809` at `f87ad003c615`, integrated with main `dc0ea50aeb85`:
+26 executed, 26 passed, 0 failed, 2 skipped. The named effort-default case,
+`applied effort, confirmed preference, restart, chat recall and channel creation choice`,
+was present, executed and passed on its first attempt in 19.8s against annotated daemon
+`0.37.0`. This supersedes the earlier suite-only evidence for that regression.
 
-**Operator acceptance remains unrecorded:** confirm Low on an existing conversation, create on
-the published GPT-6 Luna row, and send the first message without changing the new channel's
-settings. Record the executed daemon's revision from `pyry version`, real Codex reply, and Luna display name before
-sending and after the reply, never Default. The configured `real-*` suite has no scenario that
-selects a Codex model or performs this Luna sequence; the fake scenario cannot supply its live
-proof. A further run of that same configured gate cannot satisfy this separate operator check.
+[`e2e/real-claude-codex-channel.spec.ts`](../../../e2e/real-claude-codex-channel.spec.ts)
+now automates the Luna sequence: confirm Low on seeded Claude, await a fresh target-host
+published Codex row, select it in Create channel and send without changing the new channel's
+settings. It checks the initial model/effort, correlated completed nonempty Codex reply and
+published Luna footer name before sending and after the reply, never Default. Reopening the
+seeded conversation refreshes its model list; opening the dialog itself would not populate
+the cache. The scenario attaches `daemon-revision` and `published-model-row` when it runs.
+
+**Live Luna acceptance remains blocked:** the named
+`real GPT-6 Luna channel replies with Low effort from creation` was present but skipped in
+that same run (26 executed, 0 failed, 2 skipped), with
+`real-codex: PYRY_CODEX_CAPTURE_HOME is unset`. It supplies no live reply or scenario-specific
+daemon/model-row evidence. Provision the dedicated sign-in and rerun the configured gate;
+the fake picker cannot replace that named pass. See the
+[runbook](live-e2e-runbook.md#current-real-claude-gate-state) for counted evidence and
+[Codex prerequisites](live-e2e-runbook.md#dedicated-codex-sign-in-for-the-local-real--tier).
+After #1809 lands, its named Luna pass and executed daemon identity must reach #1658's
+documentation/PR #1720 handoff so that normal workflow can reconcile the implementation
+already imported here. The existing #1658 blocker and #1809-first landing order remain.
 
 ## Edge cases and limitations
 

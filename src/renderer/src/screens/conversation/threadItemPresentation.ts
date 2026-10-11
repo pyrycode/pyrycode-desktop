@@ -7,6 +7,13 @@ export interface ItemPresentation {
   source: Held
   item: ThreadItem | null
   stats?: string
+  ancestors: number[]
+  depth: number
+  count: number
+  hasChildren: boolean
+  background?: boolean
+  marker?: boolean
+  outcome?: string
 }
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const record = (v: unknown): Record<string, unknown> | null => isRecord(v) ? v : null
@@ -44,7 +51,9 @@ function presentation(s: Held): ThreadItem | null {
         ? c.attachments.flatMap(value => { const a = attachment(value); return a ? [a] : [] }) : undefined
       return { kind: 'userText', text: c.text, createdAt, attachments }
     }
+    case 'agent':
     case 'tool_call': {
+      if (s.kind === 'agent' && ((c.name !== 'Agent' && c.name !== 'Task') || outcome(s) === undefined)) return null
       if (typeof c.name !== 'string') return null
       const r = record(c.result), d = record(c.denial)
       if (c.result != null && (!r || typeof r.result_summary !== 'string' || typeof r.is_error !== 'boolean')) return null
@@ -102,14 +111,106 @@ function presentation(s: Held): ThreadItem | null {
   }
   return null
 }
+function outcome(s: Held): string | undefined {
+  const labels: Record<string, string> = { running: 'Outcome pending', finished: 'Finished', failed: 'Failed',
+    denied: 'Denied', stopped: 'Stopped', stopping: 'Stopping', gone: 'Outcome unknown' }
+  if (s.status === 'ended_with_session') {
+    const cause = text(record(record(s.content)?.ending)?.cause)
+    return cause ? `Session ended: ${cause.slice(0, 4096)}` : undefined
+  }
+  return typeof s.status === 'string' && Object.prototype.hasOwnProperty.call(labels, s.status) ? labels[s.status] : undefined
+}
+function usable(c: Record<string, unknown>, key: string): string | undefined {
+  const value = text(c[key])
+  if (!value) return undefined
+  for (const marker of ['truncated_fields', 'dropped_fields']) {
+    if (c[marker] != null) {
+      const fields = strings(c[marker])
+      if (!fields || fields.includes(key)) return undefined
+    }
+  }
+  return value
+}
+function taskLinked(s: Held): boolean {
+  const c = record(s.content), link = record(c?.task_link)
+  if (!c || !link) return false
+  const call = usable(c, 'tool_use_id'), task = usable(c, 'task_id')
+  if (call === undefined || task === undefined) return false
+  const matches = (value: unknown) => {
+    const entry = record(value)
+    return entry !== null && usable(entry, 'task_id') === task && usable(entry, 'tool_call_id') === call
+  }
+  return matches(link) || (Array.isArray(link.tasks) && link.tasks.some(matches))
+}
+/** Parent edges and placement are supplied facts, never inferred from tool results or names. */
+function nest(rows: ItemPresentation[]): ItemPresentation[] {
+  const byId = new Map(rows.map(row => [row.source.id, row]))
+  const parents = new Map<number, number>()
+  for (const row of rows) {
+    const parent = numeric(row.source.parent)
+    if (parent !== undefined && byId.get(parent)?.source.kind === 'agent') parents.set(row.source.id, parent)
+  }
+  for (const id of parents.keys()) {
+    const path = new Set<number>()
+    let current: number | undefined = id
+    while (current !== undefined && !path.has(current)) { path.add(current); current = parents.get(current) }
+    if (current !== undefined) {
+      const cycle = current
+      do {
+        const next = parents.get(current)
+        parents.delete(current)
+        current = next
+      } while (current !== undefined && current !== cycle)
+    }
+  }
+  const children = new Map<number | undefined, ItemPresentation[]>()
+  for (const row of rows) {
+    const parent = parents.get(row.source.id), lane = children.get(parent) ?? []
+    lane.push(row); children.set(parent, lane)
+    const linked = taskLinked(row.source)
+    if (row.item !== null && (row.source.kind === 'agent' || linked)) row.outcome = outcome(row.source)
+    row.background = row.source.kind === 'agent' && row.item !== null && linked
+  }
+  const creation = (row: ItemPresentation) => numeric(row.source.order) ?? row.source.id
+  const position = (row: ItemPresentation) => {
+    const ending = numeric(row.source.ended_order)
+    return row.background && !row.marker && row.source.active !== true && ending !== undefined && ending > 0 ? ending : creation(row)
+  }
+  const lane = (parent: number | undefined): ItemPresentation[] => (children.get(parent) ?? []).flatMap(row => row.background
+    ? [{ ...row, marker: true, count: 0, hasChildren: false }, row] : [row]).sort((a, b) => {
+      const active = (r: ItemPresentation) => r.background && !r.marker && r.source.active === true ? 1 : 0
+      return active(a) - active(b) || position(a) - position(b) || creation(a) - creation(b) || Number(!a.marker) - Number(!b.marker)
+    })
+  const result: ItemPresentation[] = []
+  const stack = lane(undefined).reverse().map(row => ({ row, ancestors: new Array<number>() }))
+  while (stack.length) {
+    const entry = stack.pop()
+    if (!entry) break
+    const { row, ancestors } = entry
+    row.ancestors = ancestors; row.depth = Math.min(ancestors.length, 2)
+    if (!row.marker) row.hasChildren = children.has(row.source.id)
+    result.push(row)
+    if (!row.marker) for (const child of lane(row.source.id).reverse()) stack.push({ row: child, ancestors: [...ancestors, row.source.id] })
+  }
+  const counts = new Map<number, Set<number>>()
+  for (const row of result) if (!row.marker && row.source.kind === 'tool_call') {
+    for (const ancestor of row.ancestors) {
+      const ids = counts.get(ancestor) ?? new Set<number>()
+      ids.add(row.source.id); counts.set(ancestor, ids)
+    }
+  }
+  for (const row of result) if (!row.marker) row.count = counts.get(row.source.id)?.size ?? 0
+  return result
+}
 function identity(s: Held): string | null {
   return typeof s.session === 'string' && s.session !== '' && typeof s.turn === 'string' && s.turn !== ''
-    ? JSON.stringify([s.session, s.agent, s.turn]) : null
+    ? JSON.stringify([s.session, s.agent, s.turn, s.parent ?? null]) : null
 }
 /** Adapt display facts only; every join uses the recorded attribution, including hidden endings. */
 export function threadItemPresentations(snapshot: ThreadSnapshot): ItemPresentation[] {
   const endings = new Map<string, string>(), last = new Map<string, ItemPresentation>()
-  const rows: ItemPresentation[] = snapshot.items.filter(s => s.shown === true).map(source => ({ source, item: presentation(source) }))
+  const rows: ItemPresentation[] = snapshot.items.filter(s => s.shown === true).map(source => ({ source, item: presentation(source),
+    ancestors: [], depth: 0, count: 0, hasChildren: false }))
   for (const source of snapshot.items) {
     const key = identity(source), c = record(source.content)
     if (key !== null && source.kind === 'turn_end' && c) {
@@ -122,5 +223,5 @@ export function threadItemPresentations(snapshot: ThreadSnapshot): ItemPresentat
     if (key !== null && row.item?.kind === 'assistantText') last.set(key, row)
   }
   for (const [key, row] of last) row.stats = endings.get(key)
-  return rows
+  return nest(rows)
 }

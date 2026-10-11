@@ -340,3 +340,129 @@ test('a late retrieval disconnect cannot settle a switched thread with reused im
     ]))
   } finally { await new Promise<void>((resolve, reject) => server.httpServer.close(e => e ? reject(e) : resolve())) }
 })
+
+for (const width of [1280, 800]) test(`supplied agents repair nesting and retain lifecycle, expansion and scroll at ${width}`, async ({ launchPairedApp }) => {
+  const server = await rendererFixture()
+  try {
+    const { page, app } = await launchPairedApp({ buildReplyFrames: bytes => decodeEnvelope(bytes).type === 'list_conversations'
+      ? [seedConversationsFrame()] : [] }, { rendererUrl: server.resolvedUrls!.local[0] })
+    await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 800), width)
+    let version = 1000
+    const revisions = new Map<number, number>()
+    const scope = async (host = FIRST_SERVER_ID, chat = SEEDED_ROW.id, epoch = 'agents') => page.evaluate(({ host, chat, epoch }) =>
+      (window as unknown as { threadFixture: Fixture }).threadFixture.scope(host, chat, epoch), { host, chat, epoch })
+    const batch = async (items: ThreadItem[]) => {
+      for (const i of items) revisions.set(i.id, i.rev)
+      await page.evaluate(({ items, version }) => (window as unknown as { threadFixture: Fixture }).threadFixture.batch(items, version),
+        { items, version: ++version })
+    }
+    const change = async (id: number, changes: Record<string, unknown>) => {
+      const base_rev = revisions.get(id)!, rev = ++version; revisions.set(id, rev)
+      await page.evaluate(update => (window as unknown as { threadFixture: Fixture }).threadFixture.update(update), {
+        type: 'thread_item_changed', payload: { conversation_id: SEEDED_ROW.id, epoch: 'agents', version,
+          item_id: id, base_rev, rev, changes }
+      })
+    }
+    const agent = (id: number, fields: Partial<ThreadItem> = {}) => item(id, 'agent', {
+      name: 'Agent', tool_use_id: `call-${id}`, input_summary: `agent-${id}`, input: { description: `agent-${id}` },
+      task_id: `task-${id}`, task_link: { tasks: [{ task_id: `task-${id}`, tool_call_id: `call-${id}` }] },
+      result: { is_error: false, result_summary: 'immediate launch result' }
+    }, { status: 'running', active: true, session: 'prior-session', agent: 'claude', ...fields })
+    const row = (id: number) => page.locator(`[data-read-row="${id}"]`)
+    const chip = (id: number) => row(id).locator('.tool-row__chip')
+    const thread = page.getByLabel('Conversation history')
+    const distance = () => thread.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)
+    await scope()
+    await batch([item(40, 'tool_call', { name: 'Read', input_summary: 'early child', result: {
+      is_error: false, result_summary: 'child output' } }, { parent: 10 }),
+      item(20, 'assistant_message', { text: 'Main reply' }, { active: true, session: 'prior-session', turn: 'main' }),
+      item(41, 'tool_call', { name: 'Read', input_summary: 'root one' }),
+      item(42, 'tool_call', { name: 'Read', input_summary: 'root two' })])
+    const folded = page.locator('.tool-run button')
+    await expect(folded).toHaveAttribute('aria-expanded', 'false')
+    await folded.click()
+    await expect(row(40)).toHaveClass(/depth-0/)
+    await chip(40).click()
+    await row(40).evaluate(el => { (window as unknown as { agentChild: Element }).agentChild = el })
+    await batch([agent(10), agent(30)])
+    await expect(page.locator('.agent-start-marker')).toHaveCount(2)
+    expect(await thread.locator('[data-read-row]').evaluateAll(rows => rows.map(row => row.getAttribute('data-read-row'))))
+      .toEqual(['20', '41', '42', '10', '40', '30'])
+    await expect(row(40)).toHaveCount(1)
+    await expect(row(40)).toBeHidden()
+    await expect(folded).toHaveAttribute('aria-expanded', 'true')
+    await expect(chip(10)).toContainText('running · 1 tool')
+    await chip(10).click()
+    await expect(row(40)).toBeVisible()
+    await expect(row(40).locator('.tool-row__result')).toHaveText('child output')
+    expect(await row(40).evaluate(el => el === (window as unknown as { agentChild: Element }).agentChild)).toBe(true)
+    await change(40, { parent: 30 })
+    await expect(row(40)).toBeHidden()
+    await batch([item(35, 'tool_call', { name: 'Read', input_summary: 'older folded member' })])
+    await expect(folded).toHaveAttribute('aria-expanded', 'true')
+    await expect(chip(10)).toContainText('0 tools')
+    await chip(30).click()
+    await expect(row(40).locator('.tool-row__result')).toBeVisible()
+    expect(await row(40).evaluate(el => el === (window as unknown as { agentChild: Element }).agentChild)).toBe(true)
+    await chip(30).click()
+    await page.locator('.agent-start-marker').filter({ hasText: 'agent-30' }).click()
+    await expect(chip(30)).toHaveAttribute('aria-expanded', 'false')
+    await expect(row(40)).toBeHidden()
+    await change(20, { active: false, content: { text: 'Main reply complete' } })
+    await batch([item(60, 'turn_end', { stop_reason: 'end_turn' }, { session: 'prior-session', turn: 'main' }),
+      item(70, 'assistant_message', { text: 'work after main reply' }, { parent: 30, active: true })])
+    await chip(30).click()
+    await expect(row(70)).toBeVisible()
+    await expect(chip(30)).toContainText('running ·')
+    await expect(row(20).locator('.bubble__cursor')).toHaveCount(0)
+    await expect(row(70).locator('.bubble__cursor')).toHaveCount(1)
+    await change(30, { active: true, status: 'stopping' })
+    await expect(chip(30)).toContainText('Stopping')
+    await change(30, { active: false, status: 'stopped', ended_order: 65 })
+    await expect(chip(30)).toContainText('Stopped')
+    await expect(chip(30)).not.toContainText('running ·')
+    expect(await thread.locator('[data-read-row]').evaluateAll(rows => rows.map(row => row.getAttribute('data-read-row'))))
+      .toEqual(['20', '35', '41', '42', '60', '30', '40', '70', '10'])
+    await chip(30).click()
+    await page.locator('.agent-start-marker').filter({ hasText: 'agent-30' }).click()
+    await expect(chip(30)).toHaveAttribute('aria-expanded', 'false')
+    await chip(30).click()
+    await capturePairedApp(app, page, `/tmp/builder-1937/agents-${width}.png`)
+
+    await batch(Array.from({ length: 20 }, (_, i) => item(100 + i, 'assistant_message', { text: `Reading row ${i}\n\n` + 'Paragraph. '.repeat(100) })))
+    await thread.focus(); await page.keyboard.press('End')
+    await expect.poll(distance).toBeLessThanOrEqual(1)
+    await change(10, { active: false, status: 'finished', ended_order: 125 })
+    await expect.poll(distance).toBeLessThanOrEqual(1)
+    await thread.focus(); await page.keyboard.press('Home')
+    await expect.poll(() => thread.evaluate(el => el.scrollTop)).toBe(0)
+    await row(100).evaluate(el => el.scrollIntoView({ block: 'start' }))
+    await expect.poll(async () => (await row(100).boundingBox())!.y - (await thread.boundingBox())!.y).toBeCloseTo(0, 0)
+    const anchor = row(100), before = (await anchor.boundingBox())!.y
+    await change(40, { parent: 10 })
+    await expect.poll(async () => (await anchor.boundingBox())!.y).toBeCloseTo(before, 0)
+    await batch([item(5, 'user_message', { text: 'Older history. '.repeat(100) }, { status: 'delivered' })])
+    await expect.poll(async () => (await anchor.boundingBox())!.y).toBeCloseTo(before, 0)
+    expect(await distance()).toBeGreaterThan(100)
+    await expect(chip(10)).toHaveAttribute('aria-expanded', 'true')
+    await expect(row(40).locator('.tool-row__result')).toBeVisible()
+    await thread.focus(); await page.keyboard.press('Home')
+    await page.locator('.agent-start-marker').filter({ hasText: 'agent-10' }).click()
+    await expect.poll(async () => {
+      const card = (await row(10).boundingBox())!, viewport = (await thread.boundingBox())!
+      return card.y >= viewport.y - 1 && card.y + card.height <= viewport.y + viewport.height + 1
+    }).toBe(true)
+    await expect(chip(10)).toHaveAttribute('aria-expanded', 'true')
+
+    for (const [host, chat, epoch] of [['other-host', SEEDED_ROW.id, 'agents'], [FIRST_SERVER_ID, 'other-chat', 'agents'],
+      [FIRST_SERVER_ID, SEEDED_ROW.id, 'reopened']]) {
+      await scope(host, chat, epoch)
+      await batch([agent(10, { status: 'finished', active: false, ended_order: 50 }),
+        item(40, 'tool_call', { name: 'Read', input_summary: 'early child' }, { parent: 10 })])
+      await expect(chip(10)).toContainText('Finished')
+      await expect(chip(10)).not.toContainText('running ·')
+      await expect(chip(10)).toHaveAttribute('aria-expanded', 'false')
+      await expect(row(40)).toBeHidden()
+    }
+  } finally { await new Promise<void>((resolve, reject) => server.httpServer.close(e => e ? reject(e) : resolve())) }
+})

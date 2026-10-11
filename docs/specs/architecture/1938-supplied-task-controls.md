@@ -47,3 +47,14 @@ Test first: pure projection/static tests for membership, dedup, status/fallback,
 
 ## Open Questions
 None. A cleaner alternative is to feed composite ids through the legacy roster shape; rejected because it conflates row identity with raw Stop targets and defaults attribution to Claude. Explicit supplied rows keep the legacy contract intact.
+
+## Revisions
+2026-10-11 — Verifier findings 1–3: optional display selection now honors dropped markers at each enclosing record and retains cut metadata with the chosen field. Matching direct links keep their description when task arrays have no match. Saved ending causes carry their own cut notice beside the outcome. Projection/static regressions cover nested/enclosing availability and direct-link arrays.
+
+The shared panel view now owns the existing capture Escape listener, including cleanup, IME deferral and composer interrupt arbitration. Both routes pass the main-turn `turnRunning` reading; the supplied seam accepts it as an optional prop used only for keyboard arbitration. It never changes task membership, activity or status. The mounted supplied task-control cases cover Escape from Stop and thread focus, composition, running/idle composer focus, arbitration and teardown.
+
+## Documentation handoff
+Pending for the documentation stage, from the verifier review:
+- `docs/knowledge/features/conversation-shell-background-tasks.md` § Background-task panel and `docs/knowledge/features/thread-item-store.md` § Identity, placement and full items: supplied membership/deduplication, recorded attribution, scope isolation, independent active/status authority and settled reopening.
+- `docs/knowledge/features/conversation-shell-background-tasks.md` § Background-task panel: injected progress/pending/refusal, owning-host capability gate, raw Stop targets and the preserved legacy path.
+- Both topics: production wiring and combined live-daemon verification remain #1908; live-input admission/reset remain #1935.

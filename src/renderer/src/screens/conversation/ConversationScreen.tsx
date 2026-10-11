@@ -1578,6 +1578,7 @@ export function Timeline({
 type ThreadItemsProps = {
   snapshot: ThreadSnapshot
   taskInputs?: ThreadTaskInputs
+  turnRunning?: boolean
   foldTools?: boolean
   onReply?: (role: 'user' | 'assistant', text: string) => void
   onOpenMarkdownPath?: (path: string) => void
@@ -1587,7 +1588,7 @@ export function ThreadItemsTimeline(props: ThreadItemsProps): JSX.Element {
   const s = props.snapshot
   return <ThreadItemsView key={JSON.stringify([s.hostId, s.conversationId, s.epoch])} {...props} />
 }
-function ThreadItemsView({ snapshot, taskInputs, foldTools = false, onReply, onOpenMarkdownPath }: ThreadItemsProps): JSX.Element {
+function ThreadItemsView({ snapshot, taskInputs, turnRunning = false, foldTools = false, onReply, onOpenMarkdownPath }: ThreadItemsProps): JSX.Element {
   const tasks = useMemo(() => threadTaskPresentations(snapshot, taskInputs), [snapshot, taskInputs])
   const [tasksOpen, setTasksOpen] = useState(false)
   const activeTaskCount = tasks.filter(task => task.active).length
@@ -1689,7 +1690,7 @@ function ThreadItemsView({ snapshot, taskInputs, foldTools = false, onReply, onO
     {tasks.length > 0 && activeTaskCount === 0 && <button type="button" className="composer-status__tasks"
       aria-expanded={tasksOpen} onClick={() => setTasksOpen(open => !open)}>Background tasks</button>}
     </div>}
-    {tasksOpen && <BackgroundTaskPanelView entry={null} suppliedTasks={tasks} onClose={() => setTasksOpen(false)}
+    {tasksOpen && <BackgroundTaskPanelView entry={null} suppliedTasks={tasks} turnRunning={turnRunning} onClose={() => setTasksOpen(false)}
       onStopTask={taskId => taskInputs?.onStopTask?.(snapshot.hostId, snapshot.conversationId, taskId)} />}
   </div></ThreadAttachmentScopeContext.Provider>
 }

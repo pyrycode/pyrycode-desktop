@@ -240,6 +240,7 @@ export function BackgroundTaskPanelView({
   agent = 'claude',
   pendingTaskIds = null,
   onStopTask,
+  turnRunning = false,
   onClose
 }: {
   entry: BackgroundTaskRosterEntry | null
@@ -249,8 +250,22 @@ export function BackgroundTaskPanelView({
   agent?: WireAgent
   pendingTaskIds?: ReadonlySet<string> | null
   onStopTask?: (taskId: string) => void
+  turnRunning?: boolean
   onClose: () => void
 }): JSX.Element {
+  useEffect(() => {
+    // Capture lets one Escape close the drawer before other overlays claim it, while
+    // yielding composition keys and the composer's running-turn interrupt binding.
+    const onKeyDown = (event: DocumentEventMap['keydown']): void => {
+      const { target } = event
+      const inComposerStop = target instanceof Element && target.matches(COMPOSER_STOP_BINDINGS)
+      if (!drawerClosesOnKeyDown(event, { inComposerStop, turnRunning })) return
+      event.stopPropagation()
+      onClose()
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => document.removeEventListener('keydown', onKeyDown, true)
+  }, [onClose, turnRunning])
   return (
     // #1634: `role="dialog"` WITHOUT `aria-modal` — a non-modal dialog, which is what a drawer that leaves
     // the thread and the composer usable is. The role and its name are also what every spec finds it by.
@@ -441,6 +456,9 @@ function TaskRow({ task, finished, pending, onStopTask, suppliedOutcome }: {
         <span className="background-task-panel__type">{formatTaskType(task.taskType)}</span>
         <TaskStatusTag status={task.status} label={suppliedOutcome} />
       </div>
+      {suppliedOutcome !== undefined && wasCut(task.truncatedFields, 'ending.cause') && (
+        <span className="background-task-panel__cut-type background-task-panel__cut-outcome">{BACKGROUND_TASK_PANEL_CUT_COPY}</span>
+      )}
       {wasCut(task.truncatedFields, CUT_FIELD_TASK_TYPE) && (
         <span className="background-task-panel__cut-type">{BACKGROUND_TASK_PANEL_CUT_COPY}</span>
       )}
@@ -608,23 +626,7 @@ function BackgroundTaskPanel({
       conversation_id: conversationId, task_id: taskId
     } })
   }, [conversationId, serverId, agent])
-  useEffect(() => {
-    // #1634: a CAPTURE listener on `document`, which runs before React's root listener and before any
-    // bubble-phase document listener. A press the drawer takes is stopped right here, so the options
-    // overlay, the type-ahead and every other Escape claimant never see it: one Escape does one thing.
-    // A press it yields travels on untouched, which is how the composer's #1072 stop still works with
-    // the drawer open. The panel only mounts while open, so the listener lives exactly as long as it.
-    const onKeyDown = (event: DocumentEventMap['keydown']): void => {
-      const { target } = event
-      const inComposerStop = target instanceof Element && target.matches(COMPOSER_STOP_BINDINGS)
-      if (!drawerClosesOnKeyDown(event, { inComposerStop, turnRunning })) return
-      event.stopPropagation()
-      onClose()
-    }
-    document.addEventListener('keydown', onKeyDown, true)
-    return () => document.removeEventListener('keydown', onKeyDown, true)
-  }, [onClose, turnRunning])
-  return <BackgroundTaskPanelView entry={entry} finishedTaskIds={finishedTaskIds} agent={agent}
+  return <BackgroundTaskPanelView entry={entry} finishedTaskIds={finishedTaskIds} agent={agent} turnRunning={turnRunning}
     pendingTaskIds={pendingTaskIds} onStopTask={supported ? onStopTask : undefined} onClose={onClose} />
 }
 

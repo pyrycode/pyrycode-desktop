@@ -20,6 +20,31 @@ const key = (scope: TaskScope): string => JSON.stringify([scope.hostId, scope.co
   scope.session ?? null, scope.agent ?? null, scope.taskId,
   scope.session === undefined || scope.agent === undefined ? scope.creatingItemId ?? null : null])
 
+/** Availability belongs to the selected field and every enclosing saved record. */
+function savedText(content: Record<string, unknown>, ...path: (string | number)[]): { text: string; cut: boolean } | undefined {
+  let value: unknown = content, cut = false
+  for (const [index, field] of path.entries()) {
+    if (typeof field === 'number') {
+      if (!Array.isArray(value)) return undefined
+      value = value[field]
+      continue
+    }
+    const owner = record(value)
+    if (!owner) return undefined
+    for (const marker of ['dropped_fields', 'truncated_fields']) {
+      const fields = owner[marker]
+      if (fields == null) continue
+      if (!Array.isArray(fields) || !fields.every(entry => typeof entry === 'string')) return undefined
+      if (!fields.includes(field) && !fields.includes(path.slice(index).join('.'))) continue
+      if (marker === 'dropped_fields') return undefined
+      cut = true
+    }
+    value = owner[field]
+  }
+  const displayed = text(value)
+  return displayed === undefined ? undefined : { text: displayed, cut }
+}
+
 /** Item membership and lifecycle are supplied facts; live readings only decorate matching rows. */
 export function threadTaskPresentations(snapshot: ThreadSnapshot, inputs: ThreadTaskInputs = {}): SuppliedBackgroundTask[] {
   const rows = new Map<string, SuppliedBackgroundTask>()
@@ -40,28 +65,33 @@ export function threadTaskPresentations(snapshot: ThreadSnapshot, inputs: Thread
     const labels: Record<string, string> = { running: 'Running', finished: 'Completed', failed: 'Failed', denied: 'Denied',
       stopped: 'Stopped', stopping: 'Stopping', ended_with_session: 'Ended with session', gone: 'Outcome unknown' }
     const known = typeof status === 'string' && Object.prototype.hasOwnProperty.call(labels, status)
-    const input = record(c.input), link = record(c.task_link)
-    const linkedRow = Array.isArray(link?.tasks) ? link.tasks.map(record).find(row => row &&
-      usable(row, 'task_id') === taskId && usable(row, 'tool_call_id') === callId) : link
-    const description = text(linkedRow?.description) ?? text(input?.description) ?? text(input?.command) ?? text(c.input_summary)
+    const link = record(c.task_link)
+    const linkedIndex = Array.isArray(link?.tasks) ? link.tasks.findIndex(value => {
+      const row = record(value)
+      return row && usable(row, 'task_id') === taskId && usable(row, 'tool_call_id') === callId
+    }) : -1
+    const linkedDescription = linkedIndex >= 0 ? savedText(c, 'task_link', 'tasks', linkedIndex, 'description') :
+      link && usable(link, 'task_id') === taskId && usable(link, 'tool_call_id') === callId ? savedText(c, 'task_link', 'description') : undefined
+    const description = linkedDescription ?? savedText(c, 'input', 'description') ?? savedText(c, 'input', 'command') ?? savedText(c, 'input_summary')
     const fallback = text(source.summary) ?? 'Unsupported item'
-    const report = record(c.task_report), update = record(c.task_update) ?? report
-    const summary = text(report?.summary) ?? text(update?.summary), patch = text(update?.patch)
-    const cause = text(record(c.ending)?.cause)
-    const outcomeLabel = known ? labels[String(status)] + (status === 'ended_with_session' && cause ? ' · ' + cause : '') : 'Outcome unknown'
+    const summary = savedText(c, 'task_report', 'summary') ?? savedText(c, 'task_update', 'summary')
+    const patch = savedText(c, record(c.task_update) ? 'task_update' : 'task_report', 'patch')
+    const cause = status === 'ended_with_session' ? savedText(c, 'ending', 'cause') : undefined
+    const outcomeLabel = known ? labels[String(status)] + (cause?.text ? ' · ' + cause.text : '') : 'Outcome unknown'
     const matches = (reading: TaskScope) => key(reading) === rowKey
     const liveProgress = active ? inputs.progress?.find(matches)?.progress : undefined
     const stop = inputs.stops?.find(matches)
     rows.set(rowKey, {
       rowKey, taskId, toolCallId: callId, taskType: source.kind === 'agent' ? 'local_agent' : 'local_bash',
-      description: known && description !== undefined ? description : fallback, truncatedFields: null,
+      description: known && description !== undefined ? description.text : fallback,
+      truncatedFields: [...(known && description?.cut ? ['description'] : []), ...(known && cause?.text && cause.cut ? ['ending.cause'] : [])],
       active, pending: stop?.pending === true && stop.refused !== true,
       canStop: active && agent === 'claude' && inputs.onStopTask !== undefined &&
         inputs.connection?.hostId === snapshot.hostId && backgroundTaskStopSupported(inputs.connection.status, agent),
       status: status === 'finished' ? 'completed' : status === 'failed' || status === 'denied' ? 'failed' :
         status === 'running' || status === 'stopping' ? null : 'stopped', outcomeLabel,
-      summary: summary === undefined ? null : { text: summary, truncatedFields: null },
-      latestUpdate: patch === undefined ? null : { patch, truncatedFields: null },
+      summary: summary === undefined ? null : { text: summary.text, truncatedFields: summary.cut ? ['summary'] : null },
+      latestUpdate: patch === undefined ? null : { patch: patch.text, truncatedFields: patch.cut ? ['patch'] : null },
       progress: liveProgress ? { ...liveProgress, currentActivity: liveProgress.currentActivity.slice(0, 4096),
         subagentType: liveProgress.subagentType.slice(0, 4096), lastToolName: liveProgress.lastToolName.slice(0, 4096) } : null
     })

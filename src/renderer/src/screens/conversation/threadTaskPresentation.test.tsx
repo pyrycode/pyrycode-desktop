@@ -46,6 +46,48 @@ describe('supplied task controls', () => {
     expect(rows.filter(r => r.canStop)).toHaveLength(2)
   })
 
+  it.each([{ tasks: [] }, { tasks: [{ task_id: 'other', tool_call_id: 'other', description: 'wrong link' }] }])(
+    'retains the matching direct description when tasks contains $tasks', ({ tasks }) => {
+      const s = snapshot([item(1, { content: { ...content, task_link: {
+        task_id: 'raw-task', tool_call_id: 'call', description: 'direct description', tasks
+      } } })])
+      expect(threadTaskPresentations(s, inputs)[0].description).toBe('direct description')
+    })
+
+  it.each(['nested', 'enclosing'])('omits dropped optional display fields marked on %s records', placement => {
+    const marker = (field: string) => placement === 'nested' ? { dropped_fields: [field] } : {}
+    const c = { ...content, task_link: { task_id: 'raw-task', tool_call_id: 'call',
+      description: 'dropped description', ...marker('description') }, input: { command: 'dropped command', ...marker('command') },
+      input_summary: 'dropped input summary', task_report: { summary: 'dropped report', ...marker('summary') },
+      task_update: { patch: 'dropped patch', ...marker('patch') }, ending: { cause: 'dropped cause', ...marker('cause') },
+      dropped_fields: placement === 'enclosing' ? ['task_link', 'input', 'input_summary', 'task_report', 'task_update', 'ending'] : ['input_summary'] }
+    const s = snapshot([item(1, { status: 'ended_with_session', active: false, content: c })])
+    expect(threadTaskPresentations(s, inputs)[0]).toMatchObject({ description: 'safe fallback',
+      summary: null, latestUpdate: null, outcomeLabel: 'Ended with session' })
+    expect(render(s)).not.toContain('dropped')
+    expect(render(s)).not.toContain('Truncated by the daemon')
+  })
+
+  it.each(['nested', 'enclosing'])('pairs partial display fields with cut notices from %s records', placement => {
+    const marker = (field: string) => placement === 'nested' ? { truncated_fields: [field] } : {}
+    const s = snapshot([item(1, { status: 'ended_with_session', active: false, content: { ...content,
+      task_link: { task_id: 'raw-task', tool_call_id: 'call', description: '<partial description>', ...marker('description') },
+      task_report: { summary: '<partial report>', ...marker('summary') },
+      task_update: { patch: '<partial patch>', ...marker('patch') }, ending: { cause: '<partial cause>', ...marker('cause') },
+      truncated_fields: placement === 'enclosing' ? ['task_link', 'task_report', 'task_update', 'ending'] : []
+    } })])
+    const row = threadTaskPresentations(s, inputs)[0]
+    expect(row.truncatedFields).toContain('description')
+    expect(row.summary?.truncatedFields).toContain('summary')
+    expect(row.latestUpdate?.truncatedFields).toContain('patch')
+    const html = render(s)
+    expect(html).toMatch(/&lt;partial description&gt;<\/span><span class="background-task-panel__cut-description">Truncated by the daemon/)
+    expect(html).toMatch(/&lt;partial report&gt;<\/span><span class="background-task-panel__cut-summary">Truncated by the daemon/)
+    expect(html).toMatch(/&lt;partial patch&gt;<\/span><\/div><span class="background-task-panel__cut-patch">Truncated by the daemon/)
+    expect(html).toMatch(/Ended with session · &lt;partial cause&gt;.*?background-task-panel__cut-outcome">Truncated by the daemon/)
+    expect(html.match(/Truncated by the daemon/g)).toHaveLength(4)
+  })
+
   it.each([
     ['finished', 'Completed'], ['failed', 'Failed'], ['denied', 'Denied'], ['stopped', 'Stopped'],
     ['stopping', 'Stopping'], ['ended_with_session', 'Ended with session · capacity_eviction'], ['gone', 'Outcome unknown']

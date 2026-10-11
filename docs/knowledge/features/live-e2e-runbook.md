@@ -137,9 +137,13 @@ confirms the normally merged #1658 history includes preserved documentation comm
 `22775f0901d19e606e3055eb365d19d783c56335`. The supplied deterministic browser report
 at `f87ad003c615` records 392 executed, 392 passed, 0 failed, 3 skipped;
 the Luna test did not run in that tier. Neither that report nor the live suite's totals
-establish #1809 AC5 or #1658 criterion 5. The operator must provision the dedicated sign-in
-and rerun the full configured live gate with the named Luna scenario executed and passed,
-retaining both attachments and tested feature/main identities. After #1809 lands, supply
+establish #1809 AC5 or #1658 criterion 5. **AC5's operator blocker is the unset
+`PYRY_CODEX_CAPTURE_HOME`.** Provision the dedicated sign-in, export it to the dispatcher,
+and rerun `npx playwright test --config playwright.real-claude.config.ts --reporter=json`
+through the configured live gate. Require the named Luna scenario executed and passed,
+retaining both attachments and tested feature/main identities. Keep `needs-real-claude`
+until that evidence exists. The named pass cannot yet be supplied to the downstream handoff.
+After #1809 lands, supply
 that named result and daemon identity to #1658's documentation/PR #1720 handoff;
 reconcile the imported picker there through its normal workflow. Keep the existing causal
 blocker and #1809-first landing order. See [create-channel testing](create-channel-dialog.md#testing).

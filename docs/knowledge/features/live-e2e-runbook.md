@@ -121,6 +121,11 @@ Luna acceptance blocked.** The supplied dispatcher report records run
 Daemon annotations identify `0.37.0` on 8 of 28 tests; `PYRY_BIN` was `/usr/local/bin/pyry`.
 This is the supplied binary release identity, not a daemon source revision.
 
+The [dispatcher gate comment](https://github.com/pyrycode/pyrycode-desktop/issues/1809#issuecomment-6109424773)
+records an execution floor of 10, advancement to In Documentation and removal of
+`needs-real-claude`. That routing outcome does not establish named Luna acceptance:
+the operator/dispatcher must restore the live requirement until the provisioned scenario passes.
+
 The named `real-claude-codex-channel.spec.ts` scenario,
 **`real GPT-6 Luna channel replies with Low effort from creation`**, was present but
 **skipped: `real-codex: PYRY_CODEX_CAPTURE_HOME is unset`**. It did not execute or pass,

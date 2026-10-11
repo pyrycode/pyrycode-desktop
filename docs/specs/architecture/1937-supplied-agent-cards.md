@@ -54,3 +54,8 @@ None. The simpler flat forest projection preserves mounted identity across lane 
 
 ## Size check
 One card-presentation deliverable, five observable acceptance criteria; approximately 700–760 total written lines, no new exported symbols, three production files, two consumer routes, no protocol state machine. All sizing ceilings hold.
+
+## Revisions
+2026-10-11: Child text can share the main reply's recorded session/agent/turn. The new regression demonstrated that the existing usage join would move main usage onto that child. Include recorded parent identity in this display-only join; `keeps main reply usage independent of child traffic sharing a turn` covers it.
+
+2026-10-11: Mounted catch-up-parent tests exposed collapsed residual folded runs when their former first member moved into a card. Remember every member ID when opening a supplied run, so surviving members retain expansion after repair or older prepends. This changes only the supplied route.

@@ -1605,8 +1605,18 @@ function ThreadItemsView({ snapshot, foldTools = false, onReply, onOpenMarkdownP
   const [expandedTools, setTools] = useState<ReadonlySet<number>>(() => new Set())
   const [expandedRuns, setRuns] = useState<ReadonlySet<number>>(() => new Set())
   const items: ThreadItem[] = rows.map(row => row.item ?? { kind: 'userText', text: '' })
-  const projection = rows.map((row, index) => ({ index, depth: 0, ancestors: [], count: 1,
-    hasChildren: false, running: row.source.active === true }))
+  const positions = new Map(rows.flatMap((row, index) => row.marker ? [] : [[row.source.id, index] as const]))
+  const projection = rows.map((row, index) => ({ index, depth: row.depth,
+    ancestors: row.ancestors.flatMap(id => { const at = positions.get(id); return at === undefined ? [] : [at] }),
+    count: row.count, hasChildren: row.hasChildren, marker: row.marker,
+    background: row.source.kind === 'agent', running: row.source.active === true }))
+  const agentNodes = useRef(new Map<number, HTMLDivElement>())
+  const [revealAgent, setRevealAgent] = useState<number | null>(null)
+  useThreadLayoutEffect(() => {
+    if (revealAgent === null) return
+    agentNodes.current.get(revealAgent)?.scrollIntoView({ block: 'nearest' })
+    setRevealAgent(null)
+  }, [revealAgent])
   const runs = foldTools ? foldToolRuns(items, projection) : []
   const byMember = new Map(runs.flatMap(run => run.members.map(index => [index, run] as const)))
   const byStart = new Map(runs.map(run => [run.index, run]))
@@ -1621,25 +1631,47 @@ function ThreadItemsView({ snapshot, foldTools = false, onReply, onOpenMarkdownP
       onWheel={scrollPin.onWheel} onKeyDown={scrollPin.onKeyDown} aria-label="Conversation history" tabIndex={0}>
       {rows.flatMap((row, index) => {
         const id = row.source.id, item = row.item, run = byMember.get(index), start = byStart.get(index)
-        const hidden = run !== undefined && !open(run)
-        const adjacentTool = (at: number) => rows[at]?.item?.kind === 'toolCall'
-        const classes = item?.kind === 'toolCall' ? ['tool-group-row', 'tool-group-row--depth-0',
-          (adjacentTool(index - 1) || (start && open(start))) && 'tool-group-row--joined-above',
-          adjacentTool(index + 1) && 'tool-group-row--joined-below'].filter(Boolean).join(' ') : undefined
+        const collapsedOwner = row.ancestors.some(owner => !expandedTools.has(owner))
+        const hidden = collapsedOwner || (run !== undefined && !open(run))
+        if (row.marker) return <div key={`marker-${id}`} className={`tool-group-row tool-group-row--depth-${row.depth}`} hidden={collapsedOwner}>
+          <button type="button" className="agent-start-marker" onClick={() => {
+            setTools(previous => new Set([...previous, ...row.ancestors]))
+            setRevealAgent(id)
+          }}>
+            <span className={`conversation-status-dot${row.source.active === true ? ' agent-start-marker__running'
+              : row.source.status === 'finished' ? ' agent-start-marker__finished' : ''}`} aria-hidden="true" />
+            <span className="agent-start-marker__state">{row.source.active === true ? 'Agent working · ' : ''}{row.outcome}</span>
+            <span aria-hidden="true">·</span>
+            <span className="agent-start-marker__description">{item?.kind === 'toolCall' ? item.inputSummary.slice(0, 4096) : ''}</span>
+            <span className="agent-start-marker__action">Go to agent ↓</span>
+          </button>
+        </div>
+        const adjacentTool = (at: number) => rows[at]?.item?.kind === 'toolCall' && !rows[at].marker &&
+          rows[at].ancestors.at(-1) === row.ancestors.at(-1)
+        const classes = ['tool-group-row', `tool-group-row--depth-${row.depth}`,
+          item?.kind === 'toolCall' && (adjacentTool(index - 1) || (start && open(start))) && 'tool-group-row--joined-above',
+          item?.kind === 'toolCall' && adjacentTool(index + 1) && 'tool-group-row--joined-below'].filter(Boolean).join(' ')
         const summary = typeof row.source.summary === 'string' ? row.source.summary.slice(0, 4096) : 'Unsupported item'
         const agent = row.source.agent === 'claude' || row.source.agent === 'codex' ? row.source.agent : undefined
-        return [start && <div key={`run-${id}`} className={`tool-group-row tool-run${open(start) ? ' tool-group-row--joined-below' : ''}`}>
+        return [start && <div key={`run-${id}`} hidden={collapsedOwner} className={`tool-group-row tool-run${open(start) ? ' tool-group-row--joined-below' : ''}`}>
           <ToolRunHeader run={start} expanded={open(start)} onToggle={() => setRuns(previous => {
             const next = new Set(previous)
             if (start.members.some(member => previous.has(rows[member].source.id))) {
               for (const member of start.members) next.delete(rows[member].source.id)
             }
-            else next.add(id)
+            else for (const member of start.members) next.add(rows[member].source.id)
             return next
           })} />
-        </div>, <div key={id} className={classes} hidden={hidden}>
-          {item === null ? <p className="session-delimiter__title">{summary}</p> : item.kind === 'toolCall'
+        </div>, <div key={id} data-read-row={id} className={classes} hidden={hidden}
+          ref={node => { if (node) agentNodes.current.set(id, node); else agentNodes.current.delete(id) }}>
+          {item === null ? row.hasChildren
+            ? <button type="button" className="tool-row__chip tool-row__chip--toggle" aria-expanded={expandedTools.has(id)}
+                onClick={() => toggleTool(id)}>{summary}</button>
+            : <p className="session-delimiter__title">{summary}</p> : item.kind === 'toolCall'
             ? <ToolRow item={item} running={row.source.active === true}
+                suppliedOutcome={row.outcome === undefined ? undefined : { label: row.outcome,
+                  failed: row.source.status === 'failed', denied: row.source.status === 'denied' }}
+                group={row.source.kind === 'agent' ? { count: row.count, running: row.source.active === true } : undefined}
                 expansion={{ expanded: expandedTools.has(id), onToggle: () => toggleTool(id) }} />
             : <TimelineRow item={item} inProgress={row.source.active === true} authoritativeSummary={summary}
                 turnStats={row.stats} agent={agent} onReply={onReply} onOpenMarkdownPath={onOpenMarkdownPath} />}
@@ -2427,21 +2459,25 @@ export function ToolRow({
   defaultExpanded = false,
   group,
   expansion,
-  running
+  running,
+  suppliedOutcome
 }: {
   item: Extract<ThreadItem, { kind: 'toolCall' }>
   defaultExpanded?: boolean
   group?: { count: number; running: boolean; background?: boolean }
   expansion?: { expanded: boolean; onToggle: () => void }
   running?: boolean
+  suppliedOutcome?: { label: string; failed: boolean; denied: boolean }
 }): JSX.Element {
   const { result, denial } = item
-  const elapsed = running !== false && !group?.background && result === null && denial === undefined ? item.elapsedSeconds : undefined
+  const elapsed = suppliedOutcome !== undefined ? running === true ? item.elapsedSeconds : undefined
+    : running !== false && !group?.background && result === null && denial === undefined ? item.elapsedSeconds : undefined
   const expandable = group !== undefined || result !== null || denial !== undefined || (running !== undefined && item.input !== undefined)
   const [localExpanded, setExpanded] = useState(defaultExpanded)
   const expanded = expansion?.expanded ?? localExpanded
-  const rowClass =
-    group?.background || (running === false && result === null && denial === undefined) ? 'tool-row tool-row--resolved' : denial !== undefined
+  const rowClass = suppliedOutcome !== undefined
+    ? `tool-row${running === true ? '' : ' tool-row--resolved'}${suppliedOutcome.failed ? ' tool-row--error' : suppliedOutcome.denied ? ' tool-row--denied' : ''}`
+    : group?.background || (running === false && result === null && denial === undefined) ? 'tool-row tool-row--resolved' : denial !== undefined
       ? 'tool-row tool-row--resolved tool-row--denied'
       : result
         ? `tool-row tool-row--resolved${result.isError ? ' tool-row--error' : ''}`
@@ -2502,7 +2538,8 @@ export function ToolRow({
       {(expandable || elapsed !== undefined) && (
         <span className="tool-row__right">
           {elapsed !== undefined && <span className="tool-row__count">{formatToolElapsed(elapsed)}</span>}
-          {denial !== undefined && <span className="tool-row__denied-tag">Denied</span>}
+          {suppliedOutcome !== undefined && <span className="tool-row__count">{suppliedOutcome.label}</span>}
+          {suppliedOutcome === undefined && denial !== undefined && <span className="tool-row__denied-tag">Denied</span>}
           {/* #856: the daemon's précis of what the call returned — "265 lines", "110 of 1676 lines".
               A <span> and never Figma's <p>: a resolved chip is a real <button>, which admits phrasing
               content only, so flow content in here is invalid HTML and a React DOM-nesting warning.
@@ -2531,10 +2568,10 @@ export function ToolRow({
           {group && (
             <span className="tool-row__count">{group.running ? 'running · ' : ''}{group.count} {group.count === 1 ? 'tool' : 'tools'}</span>
           )}
-          {!group && result && result.resultDetail !== undefined && result.resultDetail !== '' && (
+          {suppliedOutcome === undefined && !group && result && result.resultDetail !== undefined && result.resultDetail !== '' && (
             <span className="tool-row__count">{result.resultDetail}</span>
           )}
-          {denial === undefined && result?.isError && <ToolFailedIcon />}
+          {(suppliedOutcome?.failed || (suppliedOutcome === undefined && denial === undefined && result?.isError)) && <ToolFailedIcon />}
           {/* The .status-row__chevron / .composer__actions-icon idiom: a bare inline <svg> sized by its
               own width/height, fill="currentColor" so it takes the ink from CSS, and aria-hidden so it
               adds no accessible name — the button's name stays exactly its text runs, three of them

@@ -103,14 +103,33 @@ and `onOpenMarkdownPath`. The owner creates/subscribes to the
 production subscription. Ordinary `ConversationScreen` still selects legacy `Timeline`.
 The [presentation adapter](../../../src/renderer/src/screens/conversation/threadItemPresentation.ts)
 narrows held JSON into existing row props without calling `reduceTimeline`, searching
-for an open bubble, inferring parents or relocating agents.
+for an open bubble or using legacy roster/evidence inference. Supplied `parent`,
+`active`, `status`, `order` and `ended_order` govern nesting, lifecycle and placement.
 
-Only `shown === true` items create rows, in snapshot order. Hidden items remain held.
+Only `shown === true` items create rows. Hidden items remain held without rows.
 Unknown kinds/statuses, unsupported notice subtypes (including saved answers), and
 missing or malformed required content use the supplied summary as escaped React text,
 bounded to 4096 characters; absent summaries use `Unsupported item`. Fallback rows
-have no markdown, links or actions. Agent/parent items currently use this fallback at
-their supplied position, without roster inference or agent cards.
+have no markdown, links or content actions; a fallback agent owning children retains
+collapse/reveal disclosure without fabricated activity or completion.
+
+Shown messages, tools and nested agents belong to a shown `agent` whose item id matches
+their supplied `parent` in the same snapshot. Missing, hidden or non-agent parents leave
+children flat at their supplied position. A catch-up parent or revised parent relocates
+each child once. Self/cycle edges are disconnected without losing rows or other valid
+descendants. The projection retains full ancestry for collapse and counts, while visual
+indentation stops at two levels. Counts include distinct shown descendant `tool_call`
+item ids, excluding messages, nested agent cards and the owner; equal `tool_use_id`
+values do not merge distinct items. Text-only descendants still permit disclosure.
+
+Within each sibling lane, ordinary rows use creation `order`. Task-linked active agent
+cards follow ordinary rows in creation order, with their descendants. Inactive linked
+cards settle at positive `ended_order`, with ties broken by creation `order`; absent or
+zero ending order retains creation placement. Nesting takes precedence, so a nested
+card stays in its owner's lane. Linked cards also have launch markers at creation order
+in that lane. Markers show supplied activity/outcome and retain `Go to agent` navigation
+to the same card: reveal ancestors and scroll to the card, preserving its expansion.
+Agent traffic never splits or settles the main assistant reply.
 
 ### Saved content and activity
 
@@ -122,6 +141,7 @@ optional details. It does not reconstruct facts from source events.
 | `user_message` | User bubble with required `text`; valid attachment records require `attachment_id` and `filename`. |
 | `assistant_message` | Assistant markdown bubble with required `text`; copy/reply read the current text and path links use the supplied reader callback. |
 | `tool_call` | Tool row with required `name`, optional `tool_use_id`, `input_summary`, string-valued `input` entries and finite `elapsed_seconds`; nested `result` supplies `is_error`, `result_summary` and optional `result_detail`. Nested `denial` supplies tool name, reason type/reason, message and optional truncation/dropped-field lists. Malformed supplied result/denial uses summary fallback. |
+| `agent` | Existing Agent/Task card requiring saved `name` of `Agent` or `Task` and a supported lifecycle status; launch fields narrow as for tools. Saved result/denial remains detail, while supplied activity/outcome controls the card. |
 | `session_divider` | Existing divider for `clear`, `idle_evict` or `workspace_change`, with supplied `workspace_cwd` and `occurred_at`. |
 | `compaction` | Existing divider from string `trigger`: `failed` selects failure, `manual` selects manual, other triggers use ordinary compaction; finite `pre_tokens`/`post_tokens` provide counts. |
 | `turn_end` | Existing stopping copy from supplied stop reason, outcome, error flag, terminal reason and error category; summary supplies visible copy when that formatter would suppress the ending. |
@@ -142,23 +162,57 @@ with later rows or a settled status. Tools and collapsed-run activity also read
 running indicator or invented `No output`; saved interruption/ending payloads do not
 become fabricated result text.
 
+Agent activity reads only `active === true`; launch results, descendant activity,
+main-turn endings, roster absence and session dividers cannot change it. Inactive
+prior-session work remains settled when reopened. Status independently supplies
+`Outcome pending` for `running`, and distinct `Finished`, `Failed`, `Denied`, `Stopped`
+and `Stopping` labels. `ended_with_session` requires saved `content.ending.cause` and
+shows `Session ended: <cause>` as escaped text, with the cause bounded to 4096 characters; `gone`
+shows `Outcome unknown`. Unsupported agent status or malformed required content uses
+summary fallback. No terminal status synthesizes a successful result. Optional
+`ToolRow.suppliedOutcome` treatment leaves legacy result/denial-driven callers unchanged.
+
+Background membership requires usable saved `content.tool_use_id` and `task_id`, plus
+either a direct `task_link` with matching `tool_call_id`/`task_id`, or one matching entry
+in `task_link.tasks`. The daemon can save an entire `background_task_roster` payload as
+the link; direct-link-only fixtures would miss its placement and navigation behavior.
+Both identities must match in the same entry, never across separate entries. Content
+and candidate identity fields must be nonempty strings and unmarked by their
+`truncated_fields`/`dropped_fields`; malformed marker lists also invalidate identity.
+Names, `run_in_background` and result text establish no membership. Task-linked shells
+retain ordinary tool rows and creation placement, with supported supplied lifecycle
+outcomes; only agent cards gain background placement and launch markers. These common
+display fields add no daemon Codex-agent support or current-session/Claude defaults.
+
 Turn metrics use finite input/output/cache token counts and duration from recorded
 `turn_end` content, including hidden endings. Association requires nonempty recorded
-session and turn, and joins on `(session, agent, turn)` within the snapshot. Only the
-last shown, successfully adapted assistant in that identity gets formatted stats.
-Equal turn strings in different sessions do not join; adjacency and current-session
-attribution never supply missing identity.
+session and turn, and joins on `(session, agent, turn, parent)` within the snapshot,
+normalizing absent parent to null. Only the last shown, successfully adapted assistant
+in that identity gets formatted stats. Child text can share the main reply's recorded
+session/agent/turn: omitting parent would move the main usage footer onto that child.
+Equal turn strings in different sessions or parents do not join; adjacency and
+current-session attribution never supply missing identity.
 
 ### Scoped identity, expansion and attachments
 
 The inner view remounts on `(hostId, conversationId, epoch)`. Numeric daemon item ids
 key row wrappers within that scope, so appends, revisions and older-item prepends
 retain row identity; equal ids after a scope change reset row-local state. Tool
-expansion is keyed by item id. `foldToolRuns` receives a flat projection with supplied
-activity, and run expansion is remembered by member ids: inserting an older member
-or appending to an expanded run retains its expansion. Collapsed members remain
-mounted, preserving their result expansion while hidden. A text-bearing or positional
-key would remount rows during exactly these updates.
+and card expansion is keyed by item id. Stable sibling wrappers retain mounted children
+through catch-up parents and late reparenting, rather than giving each card recursive
+component ownership. New groups start collapsed; ancestor collapse hides descendants
+without clearing their own expansion. Two hosts reusing conversation/item ids have
+separate cards, and host/conversation/epoch switches reset tools, cards, runs and refs.
+
+`foldToolRuns` receives the flat projection with supplied ancestry/activity and card/
+marker barriers. Opening a run remembers every member id; any retained member keeps
+the regrouped run open through revisions, older prepends and appends. Remembering only
+the first member would collapse the residual run when that member moved into a card.
+Collapsing a run clears its current member ids. Collapsed members remain mounted,
+preserving their result expansion while hidden. A text-bearing or positional key would
+remount rows during these updates. The immutable `snapshot.items` change signal also
+preserves existing following and held-reader scroll behavior during regrouping; see
+[supplied snapshot anchor restoration](conversation-shell-scroll-pin.md#supplied-snapshot-anchor-restoration).
 
 `ThreadAttachmentScopeContext` carries snapshot host/conversation ownership and a
 scope-owned image-source driver through reused file/image slots and attachment offers.
@@ -176,25 +230,44 @@ variant uses real preload/main, while the renderer-only variant retains its loca
 Production thread path selection and combined live acceptance still belong to
 [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
 
-The slice leaves agent placement to #1905, local settlement/queue actions to #1906,
-server paging to #1902, and production path selection, subscriptions, capability
-advertisement and combined live verification to #1908. Supplied older batches are
-presentation inputs here, not a server paging implementation. See
+Task panel/count/stop controls remain [#1938](https://github.com/pyrycode/pyrycode-desktop/issues/1938),
+local settlement/queue actions remain #1906, server paging/recovery remains #1902 and
+live-state admission remains #1935. Production path selection, subscriptions, capability
+advertisement, command connection and combined live verification remain #1908; this
+injected route is still inactive in production, and ordinary/non-thread connections
+retain the legacy roster path. Supplied older batches are presentation inputs here,
+not a server paging implementation. See
 [watermark-independent scroll restoration](conversation-shell-scroll-pin.md#supplied-snapshot-anchor-restoration)
-and the [design](../../specs/architecture/1904-daemon-item-presentation.md).
+and the designs for [item presentation](../../specs/architecture/1904-daemon-item-presentation.md)
+and [supplied agent cards](../../specs/architecture/1937-supplied-agent-cards.md).
 
 ### Supplied-item verification
 
 [`threadItems.test.tsx`](../../../src/renderer/src/screens/conversation/threadItems.test.tsx)
 statically exercises kinds/order, hidden rows, inert fallback, activity independent
-of status/position, terminal tools, recorded usage and supported notices. Static
-rendering does not prove effects or interaction.
+of status/position, terminal tools, recorded usage and supported notices. Agent
+projection/static cases cover ancestry repair/cycles, capped depth, visibility,
+descendant counts, direct and roster-shaped links, sibling placement, lifecycle and
+bounded escaped fallback. Static rendering does not prove effects or interaction.
 [`thread-items.spec.ts`](../../../e2e/thread-items.spec.ts) mounts an injected owner
 using `createThreadItemStore`, typed appends/changes and completed-batch snapshots.
 It checks retained row/tool/run state, current-text copy/reply, reader callbacks,
 attachments, scope resets, following growth and held-reader prepends/revisions.
+The supplied-agent scenarios additionally prove child-before-parent and late reparenting,
+card/child/run expansion and marker navigation retention, immediate launch results with
+work after the main reply, settled prior-session reopen and reused-scope isolation.
 All its cases belong to the serialized clipboard project because copy assertions
 share Electron's system clipboard.
+
+The [supplied-agent verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/1939#issuecomment-6107300201)
+at `916a2219ddd57f5914204a181a2e63022e409872` confirms the named mounted cases
+`supplied agents repair nesting and retain lifecycle, expansion and scroll at 1280`
+and `supplied agents repair nesting and retain lifecycle, expansion and scroll at 800`
+were present and passed in dispatcher gate 6 on 2026-10-11: 384 executed, 384 passed,
+0 failed, 3 skipped. Both use roster-shaped links and check active/settled ordering
+before navigation and retention. Rework captures at 1280×773 and 800×773 fit the existing
+card/marker styling against Figma 102:4; the injected fixture omits production shell
+chrome. No real-Claude or production-thread capability acceptance was performed.
 
 The [scoped retrieval verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/1933#issuecomment-6102697014)
 at `ce88dd0029db01f4d13a3d5db6569be002376e9d` records all five thread-items cases

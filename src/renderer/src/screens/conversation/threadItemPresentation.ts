@@ -135,7 +135,12 @@ function taskLinked(s: Held): boolean {
   const c = record(s.content), link = record(c?.task_link)
   if (!c || !link) return false
   const call = usable(c, 'tool_use_id'), task = usable(c, 'task_id')
-  return call !== undefined && task !== undefined && usable(link, 'task_id') === task && usable(link, 'tool_call_id') === call
+  if (call === undefined || task === undefined) return false
+  const matches = (value: unknown) => {
+    const entry = record(value)
+    return entry !== null && usable(entry, 'task_id') === task && usable(entry, 'tool_call_id') === call
+  }
+  return matches(link) || (Array.isArray(link.tasks) && link.tasks.some(matches))
 }
 /** Parent edges and placement are supplied facts, never inferred from tool results or names. */
 function nest(rows: ItemPresentation[]): ItemPresentation[] {

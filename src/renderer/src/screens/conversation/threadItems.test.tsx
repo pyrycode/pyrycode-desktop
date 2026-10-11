@@ -108,6 +108,10 @@ const agent = (id: number, fields: Partial<ThreadItem> = {}, content = {}) => it
   name: 'Agent', tool_use_id: `call-${id}`, input_summary: `agent-${id}`, ...content
 }, { status: 'running', active: true, ...fields })
 const linked = (id: number) => ({ task_id: `task-${id}`, task_link: { task_id: `task-${id}`, tool_call_id: `call-${id}` } })
+const rosterLinked = (id: number) => ({ task_id: `task-${id}`, task_link: { tasks: [
+  { task_id: 'unrelated', tool_call_id: 'other', truncated_fields: ['tool_call_id'] },
+  { task_id: `task-${id}`, tool_call_id: `call-${id}`, truncated_fields: ['description'] }
+] } })
 
 describe('supplied agents', () => {
   it('supplied ancestry repairs missing parents, caps depth and counts only distinct shown tools', () => {
@@ -164,6 +168,58 @@ describe('supplied agents', () => {
     expect(rows).toHaveLength(5)
     expect(rows.every(r => !r.background && !r.marker)).toBe(true)
     expect(rows.at(-1)?.item).toMatchObject({ kind: 'toolCall', name: 'Bash' })
+  })
+
+  it('places roster-linked cards with matching launch-marker identity and keeps shell outcomes supplied', () => {
+    const input = [agent(10, {}, rosterLinked(10)),
+      agent(20, { active: false, status: 'finished', ended_order: 80 }, rosterLinked(20)),
+      agent(30, { active: false, status: 'stopped', ended_order: 80 }, rosterLinked(30)),
+      agent(40, { active: false, status: 'gone', ended_order: 0 }, rosterLinked(40)),
+      item(50, 'assistant_message', { text: 'ordinary reply' }),
+      item(60, 'tool_call', { name: 'Bash', tool_use_id: 'call-60', ...rosterLinked(60),
+        result: { is_error: false, result_summary: 'immediate shell launch' }
+      }, { status: 'stopped', ended_order: 95 }),
+      item(90, 'assistant_message', { text: 'later reply' })]
+    const rows = threadItemPresentations(snapshot(input))
+    expect(rows.map(r => `${r.marker ? 'm' : ''}${r.source.id}`))
+      .toEqual(['m10', 'm20', 'm30', 'm40', '40', '50', '60', '20', '30', '90', '10'])
+    for (const id of [10, 20, 30, 40]) {
+      const marker = rows.find(r => r.source.id === id && r.marker)!
+      const card = rows.find(r => r.source.id === id && !r.marker)!
+      expect(marker.source).toBe(card.source)
+      expect(marker.item).toBe(card.item)
+      expect(marker.outcome).toBe(card.outcome)
+    }
+    expect(rows.find(r => r.source.id === 60)).toMatchObject({ background: false, outcome: 'Stopped',
+      item: { kind: 'toolCall', name: 'Bash' } })
+    expect(render(input).match(/Go to agent/g)).toHaveLength(4)
+    for (const [status, label] of [['running', 'Outcome pending'], ['stopping', 'Stopping'],
+      ['finished', 'Finished'], ['failed', 'Failed'], ['denied', 'Denied'], ['stopped', 'Stopped'], ['gone', 'Outcome unknown']]) {
+      const shell = { ...input[5], status, active: status === 'running' || status === 'stopping' }
+      expect(threadItemPresentations(snapshot([shell]))[0].outcome).toBe(label)
+      expect(render([shell])).toContain(label)
+    }
+  })
+
+  it('rejects mismatched or damaged roster identities without combining separate entries', () => {
+    const match = { task_id: 'task-10', tool_call_id: 'call-10' }
+    const invalid = [[], [{ ...match, task_id: 'other' }], [{ ...match, tool_call_id: 'other' }],
+      [{ ...match, tool_call_id: 'other' }, { ...match, task_id: 'other' }], [null, 'not an entry'],
+      ...['task_id', 'tool_call_id'].flatMap(field => [
+        [{ ...match, [field]: '' }], [{ ...match, [field]: 7 }],
+        [{ ...match, truncated_fields: [field] }], [{ ...match, dropped_fields: [field] }]
+      ]), [{ ...match, truncated_fields: 'task_id' }], [{ ...match, dropped_fields: [7] }]]
+    for (const tasks of invalid) {
+      const rows = threadItemPresentations(snapshot([agent(10, {}, { task_id: 'task-10', task_link: { tasks } })]))
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({ background: false })
+    }
+    for (const field of ['task_id', 'tool_use_id']) {
+      for (const marker of ['truncated_fields', 'dropped_fields']) {
+        expect(threadItemPresentations(snapshot([agent(10, {}, { ...rosterLinked(10), [marker]: [field] })]))[0])
+          .toMatchObject({ background: false })
+      }
+    }
   })
 
   it('supplied outcomes ignore launch results, child activity and session dividers', () => {

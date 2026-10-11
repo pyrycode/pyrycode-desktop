@@ -365,7 +365,7 @@ for (const width of [1280, 800]) test(`supplied agents repair nesting and retain
     }
     const agent = (id: number, fields: Partial<ThreadItem> = {}) => item(id, 'agent', {
       name: 'Agent', tool_use_id: `call-${id}`, input_summary: `agent-${id}`, input: { description: `agent-${id}` },
-      task_id: `task-${id}`, task_link: { task_id: `task-${id}`, tool_call_id: `call-${id}` },
+      task_id: `task-${id}`, task_link: { tasks: [{ task_id: `task-${id}`, tool_call_id: `call-${id}` }] },
       result: { is_error: false, result_summary: 'immediate launch result' }
     }, { status: 'running', active: true, session: 'prior-session', agent: 'claude', ...fields })
     const row = (id: number) => page.locator(`[data-read-row="${id}"]`)
@@ -385,6 +385,9 @@ for (const width of [1280, 800]) test(`supplied agents repair nesting and retain
     await chip(40).click()
     await row(40).evaluate(el => { (window as unknown as { agentChild: Element }).agentChild = el })
     await batch([agent(10), agent(30)])
+    await expect(page.locator('.agent-start-marker')).toHaveCount(2)
+    expect(await thread.locator('[data-read-row]').evaluateAll(rows => rows.map(row => row.getAttribute('data-read-row'))))
+      .toEqual(['20', '41', '42', '10', '40', '30'])
     await expect(row(40)).toHaveCount(1)
     await expect(row(40)).toBeHidden()
     await expect(folded).toHaveAttribute('aria-expanded', 'true')
@@ -418,6 +421,8 @@ for (const width of [1280, 800]) test(`supplied agents repair nesting and retain
     await change(30, { active: false, status: 'stopped', ended_order: 65 })
     await expect(chip(30)).toContainText('Stopped')
     await expect(chip(30)).not.toContainText('running ·')
+    expect(await thread.locator('[data-read-row]').evaluateAll(rows => rows.map(row => row.getAttribute('data-read-row'))))
+      .toEqual(['20', '35', '41', '42', '60', '30', '40', '70', '10'])
     await chip(30).click()
     await page.locator('.agent-start-marker').filter({ hasText: 'agent-30' }).click()
     await expect(chip(30)).toHaveAttribute('aria-expanded', 'false')

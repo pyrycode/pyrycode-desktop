@@ -44,6 +44,43 @@ revisions preserve held content. A kind conflict requests repair even when the
 incoming revision is older. A delayed reply cannot roll back newer live content,
 and receiving an older item cannot regress the held conversation version.
 
+The supplied `ThreadItemsTimeline` task controls project these snapshots through
+[`threadTaskPresentations`](../../../src/renderer/src/screens/conversation/threadTaskPresentation.ts),
+without writing to the legacy roster store. Only shown task-linked `agent` and
+`tool_call` items establish panel membership: usable nonempty `content.task_id` and
+`content.tool_use_id` must match saved `task_id`/`tool_call_id` in `content.task_link`
+or its `tasks` rows. Truncated/dropped routing identity, damaged declared
+session/agent attribution, hidden items and missing links establish no row or
+count; names, background flags and launch-result text cannot substitute for a link.
+
+Deduplication uses host/conversation/epoch/recorded-session/recorded-agent/task id,
+with the first linked representation in snapshot order controlling display, count
+and action. Recorded session and agent never inherit current-session or Claude
+defaults. When either attribution is unavailable, the creating item id joins the
+identity so distinct creators stay distinct. Equal task/item/conversation ids on
+another host and reused task ids in another recorded session remain separate.
+This scoped display identity is distinct from the raw task id used to route Stop.
+
+For these controls, supplied `active === true` alone determines Running grouping
+and the count pill; supplied `status` independently supplies Completed, Failed,
+Denied, Stopped, Stopping, Ended with session (plus saved `content.ending.cause`)
+or Outcome unknown for `gone`/unknown status. Reports, launch results, progress,
+turn endings, roster absence and session dividers cannot override either fact.
+Unknown status or unavailable display content falls back to escaped item summary
+bounded to 4096 characters, without inferring completion or activity. Settled rows
+survive reopening even with no count pill; a Background tasks opener remains.
+
+Injected progress and pending/refusal match the same full identity, including the
+recorded session and creating item id when attribution is absent; another scope's
+readings cannot affect a row. Host/conversation/epoch switches remount the supplied
+view and discard local drawer/expansion state. See
+[Background-task panel](conversation-shell-background-tasks.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583)
+for saved-field availability, owning-host Stop gating and raw callback targets.
+Production wiring, capability advertisement and combined live-daemon verification
+remain [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908); live-input
+admission and reset remain [#1935](https://github.com/pyrycode/pyrycode-desktop/issues/1935).
+The ordinary app retains its legacy roster path.
+
 ## Exact-base changes, appends and inert JSON
 
 `applyUpdate(hostId, update)` accepts changes/appends only when the item exists,

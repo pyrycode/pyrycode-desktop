@@ -4,7 +4,102 @@ Part of [Turn status surfaces](conversation-shell-turn-status.md).
 
 ## Background-task panel (#581, cap and cut display since #582, latest patch since #583)
 
-An openable surface listing the tasks claude has running in the background for the open conversation
+The drawer shares `BackgroundTaskPanelView` between the ordinary app's legacy roster
+container and the supplied `ThreadItemsTimeline` seam. The supplied route introduced
+by [#1938](https://github.com/pyrycode/pyrycode-desktop/issues/1938) takes immutable
+[thread snapshots](thread-item-store.md#identity-placement-and-full-items) and optional
+`ThreadTaskInputs`; it neither subscribes to nor populates `backgroundTaskRosterStore`.
+The roster behavior described below remains the ordinary app's path, including
+connections without thread support.
+
+**Supplied membership and identity.**
+[`threadTaskPresentations`](../../../src/renderer/src/screens/conversation/threadTaskPresentation.ts)
+projects only `shown === true` task-linked `agent` and `tool_call` items, including
+settled work. Shared `taskLinked`/`usable` rules require nonempty usable
+`content.task_id` and `content.tool_use_id`, with matching `task_id`/`tool_call_id`
+in a direct `content.task_link` or one of its `tasks` rows. Identity fields marked
+truncated or dropped are unusable; hidden, unlinked and identity-damaged items have
+no row or count. Names, `run_in_background` and launch-result text cannot establish
+membership.
+
+Rows deduplicate by host, conversation, epoch, recorded session, recorded agent and
+task id. The first linked item in snapshot order supplies display, activity and
+action consistently. Recorded attribution never falls back to the current session
+or Claude. Missing session or agent attribution adds the creating item id to the row
+identity so distinct creators cannot merge; damaged declared attribution excludes
+membership. The composite `rowKey` is separate from the raw Stop target: putting a
+composite id into the legacy roster shape would lose routing and inherit its Claude
+default.
+
+**Supplied activity and outcomes.** Only `active === true` determines the Running
+group and `ComposerTaskCount`; all other admitted rows belong to Finished. The pill
+disappears at zero, while a fixed Background tasks opener retains access to settled
+rows. Only supplied `status` determines the outcome: `finished` displays Completed,
+with distinct Failed, Denied, Stopped and Stopping labels; `ended_with_session`
+displays Ended with session plus an available saved `content.ending.cause`; `gone`
+and unknown status display Outcome unknown. Group names do not assert successful
+completion. Launch results/denials, reports, progress, main-turn endings, roster
+absence and session dividers cannot change these readings. Reopening inactive work
+from an earlier recorded session therefore keeps it settled.
+
+**Saved display and availability.** Descriptions select the matching saved link's
+description, then `input.description`, `input.command` or `input_summary`.
+An unmatched or empty `tasks` array does not hide a matching direct link's
+description. Available `task_report`/`task_update` summaries and patches render as
+inert saved text, including reports on active rows; supplied summaries are not
+suppressed when they repeat a description. Unknown status or a missing/malformed
+description falls back to escaped item summary, bounded to 4096 characters (or
+Unsupported item when no string summary exists). Optional unavailable details are
+omitted. Availability checks follow the selected field through every enclosing
+record: dropped fields are omitted, and truncated fields keep their own cut notice
+beside the displayed description, report, patch or session-ending cause. Selecting
+text separately from its cut metadata would silently display a partial value as
+complete. Saved and live display strings are bounded and render only as React text
+children.
+
+**Injected live readings and Stop.** `ThreadTaskInputs.progress` and `.stops` decorate
+existing rows; they cannot create membership or change lifecycle. Matching uses the
+full row identity, including recorded session and the creating item id when
+attribution is unavailable. Progress displays only on active rows. Reused task ids
+on another host, conversation, epoch, session or agent cannot share progress or
+pending controls. A matching `pending: true` disables repeat activation; matching
+`refused: true` overrides that pending reading without changing activity or outcome.
+The injected owner supplies these readings; the view does not claim or settle a
+stop wait itself.
+
+Stop requires an active linked item, a usable raw `content.task_id`, an injected
+callback, recorded `agent === 'claude'` and the connected owning host passing
+`backgroundTaskStopSupported` with `stop_background_task` capability. Missing,
+unknown or Codex agent attribution cannot inherit eligibility from the view's
+legacy Claude default. Activation calls
+`onStopTask(hostId, conversationId, taskId)` with the snapshot's owning coordinates
+and raw content task id, never the item id, launch tool id or composite row key.
+Acceptance has no acknowledgement and introduces no optimistic Stopping or finish;
+only subsequent item updates change lifecycle.
+
+The supplied view keys its local drawer and expansion state by host/conversation/epoch,
+so switching any coordinate discards the previous scope's presentation state. This
+differs from the legacy drawer visibility held in `PairedShell` below. Production
+subscriptions, command wiring, capability advertisement and combined live-daemon
+verification remain [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908);
+live-input admission and reset remain
+[#1935](https://github.com/pyrycode/pyrycode-desktop/issues/1935). The injectable seam
+does not establish either integration.
+
+**Supplied testing.** `threadTaskPresentation.test.tsx` uses pure projection and
+static renders for membership/deduplication, recorded attribution, independent
+activity/outcomes, fallback/availability, scoped progress, gates and pending/refusal.
+The existing injected owner in `e2e/thread-items.spec.ts` uses completed batches and
+typed changes without roster events to exercise raw callback targets, repeated
+activation, item-driven stopping/finish, settled reopening and host/session/epoch
+isolation at 1280 and 800 pixels. It also covers shared drawer Escape arbitration
+and listener teardown. Wrap array-valued `it.each` cases in objects: positional
+argument expansion can silently supply an undefined task array and let a direct-link
+regression pass without exercising the damaged case. Static markup cannot prove
+those effects or clicks; see
+[test boundaries](development-verification.md#what-each-test-tier-proves).
+
+**Legacy roster presentation.** An openable surface listing the tasks claude has running in the background for the open conversation
 — the first reader of [`backgroundTaskRosterStore`](background-task-roster-store.md), shipped and
 unread since #573. The store joins roster, started, updated and progress frames; the panel reads
 task labels, status, summary, progress and latest update, and offers a separate Stop task action.
@@ -89,8 +184,8 @@ retired its `QueuedBacklogControl` container): `activeConversation?.id ?? null` 
 conversation" reads as `null` — the correct "never observed" reading — for free. Since #1635 the container
 takes a second, sibling `useMemo`-stable read the same way —
 [`selectFinishedTasksFor(conversationId ?? '')`](background-task-roster-store-internals.md#the-panels-grouping-read-selectfinishedtasksfor-1635)
-— and passes the result down as `finishedTaskIds`; the view stays a pure function of its props and does not
-read the store itself.
+— and passes the result down as `finishedTaskIds`; the view renders from its props and does not
+read the store itself. Its shared Escape effect is described below.
 
 **\#1656 named the conversation's agent in the `entry.tasks.size === 0` support line.** "Claude has
 nothing running in the background for this conversation." became a Claude/Codex pair
@@ -110,7 +205,7 @@ the parent shell instead of the screen itself. When the props are absent, as at 
 `useState`, so none of those sites needed to change. Unpairing unmounts `PairedShell` and drops the state;
 switching conversations keeps it and re-renders the newly active conversation's roster underneath it.
 
-**Escape is arbitrated, not just handled, since #1634.** The container's `document` listener moved to the
+**Escape is arbitrated, not just handled, since #1634.** The `document` listener runs in the
 **capture** phase (`addEventListener('keydown', onKeyDown, true)`), which runs before React's root
 listener and before any bubble-phase document listener, so a press the drawer takes never reaches the
 options overlay, a type-ahead, or any other claimant. Whether a given press is the drawer's is decided by
@@ -119,8 +214,12 @@ a non-`Escape` key or mid-IME-composition, and false when focus is on one of the
 bindings (`.composer__input`, `.composer__send`) and the composer's own `shouldInterruptOnKeyDown`
 predicate says that Escape will stop the running turn — the drawer asks the composer's predicate rather
 than restating it, so the two cannot disagree about which press belongs to which. Everywhere else, Escape
-closes the drawer. The container gained a `turnRunning: boolean` prop, wired from `ConversationScreen` as
-`isTurnRunning(phase)`, the same gate the stop button itself uses. One interaction is accepted rather than
+closes the drawer. Since #1938, `BackgroundTaskPanelView` owns this effect for both
+routes and removes its listener on closure/unmount. The legacy container passes
+`turnRunning` from `ConversationScreen` as `isTurnRunning(phase)`, the same gate the
+composer stop button uses. The supplied seam accepts optional `turnRunning` solely
+for keyboard arbitration; it cannot change task activity, membership or status.
+One interaction is accepted rather than
 fixed: `stopPropagation` on a press the drawer takes means a modal overlay stacked over it (the markdown
 reader, Run configuration, Channel info) needs a **second** Escape to close, since the first one only
 closes the drawer beneath it — "one Escape does one thing" per press, not per overlay stack.
@@ -250,6 +349,9 @@ existing token that matched it.
 
 ## Stop task
 
+This section describes the legacy roster command and wait ownership. Supplied
+controls use the injected readings and callback in § Background-task panel above.
+
 Each eligible Running row has a separate **Stop task** button after its progress, latest-update block
 and all cut markers. It uses the shared `.button-small` shape with the local
 `.background-task-panel__stop` outlined treatment: surface background, primary text/border, 6px radius,
@@ -328,6 +430,9 @@ description styling. Computing expected labels with the same transformation woul
 pass on both sides; these tests pin the rendered span instead. See [renderer test boundaries](development-verification.md#what-each-test-tier-proves).
 
 ## Status tag and summary (#1639)
+
+The following status and summary rules apply to legacy roster rows. Supplied rows
+use explicit outcome labels and saved reports as described in § Background-task panel.
 
 Closes the "stays unread" hand-off the bridge doc comment named since #1561: `backgroundTaskUpdated`'s
 `status` and `summary` now reach the row, held on `HeldBackgroundTask` itself (`status: string | null`,

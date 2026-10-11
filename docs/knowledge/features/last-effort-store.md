@@ -2,7 +2,7 @@
 
 The renderer's persisted, client-owned last successfully confirmed effort choice — a `string | null`
 slice reused by chats and channels with no choice of their own. The [footer](composer-effort-menu.md)
-shows Claude's applied reading independently of this preference.
+shows the daemon's applied reading independently of this preference.
 
 Introduced in [#1169](../codebase/1169.md). The **data half** only — see [Composer effort default](composer-effort-menu.md#the-default-apply-1169)
 for the decision that reads it and applies it to a newly opened chat.
@@ -26,6 +26,15 @@ value, or an explicit null reading, it shows unselected **Effort**.
 restarts through the same desktop profile. It is renderer-local and is not synchronised with mobile.
 Recall checks the opened conversation's published levels before applying the preference; unsupported
 values do not replace explicit choices or acquire a fallback. See [the default-apply rules](composer-effort-menu.md#the-default-apply-1169).
+
+[Create channel](create-channel-dialog.md#requests-and-replies) also reads this preference
+synchronously at submission, across hosts and agents. It sends `effort` in the create request only
+when the selected target-host cached model row publishes that exact level, including inherited
+Claude Default and Codex rows. A missing/empty cache, absent preference or unsupported level omits
+effort. The modal owns no effort draft. This stores the channel's choice before its first turn and
+needs no later recall write; chat opening still uses the existing recall path. Creation and passive
+settings replies do not update this preference: its writer remains a correlated effort-write
+confirmation.
 
 ## How it works
 
@@ -66,10 +75,10 @@ port may hand out — the same posture `requestRunConfigSnapshot` takes on an em
 writer in this app ever persists `''` (the write side refuses it before it reaches here); this guards a
 hand-edited or corrupt cell rather than an observed frame.
 
-**No length bound**, and that is a decision, not an omission. A stored level is claude-authored text, but
-it can only leave the apply decision by being byte-identical to a level the daemon just published for the
-opened chat's model, and it renders through `.composer__effort-label`'s existing escaped, ellipsized 64px
-bound exactly as a live level does. Bounding here would be a defense for a failure mode nothing has
+**No length bound**, and that is a decision, not an omission. A stored level is daemon-published text,
+but recall or channel creation can send it only when it is byte-identical to a published level for the
+opened chat's model or selected create row. It renders through `.composer__effort-label`'s existing
+escaped, ellipsized 64px bound exactly as a live level does. Bounding here would be a defense for a failure mode nothing has
 observed; if one surfaces, this is where it lands.
 
 ### The store (`src/renderer/src/store/lastEffortStore.ts`)
@@ -113,18 +122,21 @@ idempotent, not a loop.
   '../../store/lastEffortStore'`.
 - **The one write consumer:** `runSettingsWriteBridge.ts`'s `foldWriteEvent`, wired to
   `lastEffortStore.getState().setLastEffort`. See [Run configuration write store](run-settings-write-store.md#remembering-the-confirmed-level-1169).
-- **The one read consumer:** [`EffortDefaultData`](composer-effort-menu.md#the-default-apply-1169), which
+- **Opening-time read consumer:** [`EffortDefaultData`](composer-effort-menu.md#the-default-apply-1169), which
   composes `selectLastEffort` with the opened chat's session id, composed effort and published levels to
   decide whether to apply it.
+- **Submission-time read consumer:** [`CreateChannelDialog`](create-channel-dialog.md#requests-and-replies)
+  reads `selectLastEffort(lastEffortStore.getState())` when confirming creation and checks the
+  selected model row's published levels through `channelCreateChoice`.
 
 ## Edge cases and limitations
 
 - **Nothing remembered (fresh install, or every level rejected so far)** — `lastEffort` is `null`; the
   default-apply decision sends nothing. This does not imply that applied effort is unknown; the
   footer reads `effectiveEffort` separately.
-- **A remembered level absent from the opened chat's published levels** — the store still reports it
-  (this store does no validation of its own); the membership check lives entirely in
-  `effortDefaultToApply`, downstream.
+- **A remembered level absent from the selected model's published levels** — the store still reports
+  it (this store does no validation of its own); `effortDefaultToApply` checks membership for recall,
+  and `channelCreateChoice` checks it for channel creation.
 - **Corrupt/hand-edited stored value** — decodes as the raw string; only a stored empty string is mapped
   to `null`. No further validation happens at this layer by design — see § Mechanism above.
 - **`localStorage` throwing (quota / disabled) is not handled** — deliberately no try/catch (see §
@@ -139,5 +151,7 @@ idempotent, not a loop.
   `typeof window` import-safety guard; the deferred key-namespacing helper this ticket declines to build).
 - [Composer effort menu § The default apply](composer-effort-menu.md#the-default-apply-1169) — the
   decision and headless leaf that reads this store and applies its value to a newly opened chat.
+- [Create-channel dialog](create-channel-dialog.md) — compatible preference supplied at creation
+  across Claude and Codex models without a subsequent settings write.
 - [Run configuration write store § Remembering the confirmed level](run-settings-write-store.md#remembering-the-confirmed-level-1169) —
   the one writer, and why it sits on the confirm edge rather than the pick.

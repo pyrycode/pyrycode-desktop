@@ -3,6 +3,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { build, loadConfigFromFile, preview } from 'vite'
+import type { ThreadTaskInputs } from '../src/renderer/src/screens/conversation/threadTaskPresentation'
 import type { ThreadItem, ThreadUpdate } from '../src/shared/wire/thread'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import { ATTACHMENT_RETRIEVAL_CHANNEL, ATTACHMENT_RETRIEVAL_EVENT_CHANNEL } from '../src/shared/ipc/attachmentRetrieval'
@@ -18,6 +19,8 @@ type Fixture = {
   scope: (host: string, chat: string, epoch: string) => void
   batch: (items: ThreadItem[], version: number) => void
   update: (update: ThreadUpdate) => void
+  taskInputs: (inputs: Omit<ThreadTaskInputs, 'onStopTask'>, callback?: boolean) => void
+  stops: string[][]
   replies: string[]
   paths: string[]
 }
@@ -29,11 +32,13 @@ import { sessionStore } from './store/sessionStore';
 import { createThreadItemStore } from './store/threadItemStore';
 import { ThreadItemsTimeline } from './screens/conversation/ConversationScreen';
 const threadStore = createThreadItemStore();
-const replies = [], paths = [];
+const replies = [], paths = [], stops = [];
 function ThreadFixture() {
   const [scope, setScope] = useState(null);
+  const [taskInputs, setTaskInputs] = useState({});
   const snapshot = useStore(threadStore, s => scope ? s.snapshot(scope.host, scope.chat) : null);
-  window.threadFixture = { replies, paths,
+  window.threadFixture = { replies, paths, stops,
+    taskInputs(inputs, callback = true) { setTaskInputs({ ...inputs, onStopTask: callback ? (host, chat, task) => stops.push([host, chat, task]) : undefined }); },
     activeChat() { return activeConversationStore.getState().activeConversation?.id ?? null; },
     unavailable(host) { sessionStore.setState(s => ({ statuses: new Map(s.statuses).set(host, { type: 'disconnected' }) })); },
     scope(host, chat, epoch) { threadStore.getState().acceptEpoch(host, chat, epoch); setScope({ host, chat, epoch }); },
@@ -42,7 +47,7 @@ function ThreadFixture() {
     update(update) { threadStore.getState().applyUpdate(scope.host, update); }
   };
   return snapshot ? <div className="conversation"><div className="conversation__covered">
-    <ThreadItemsTimeline snapshot={snapshot} foldTools onReply={(role, text) => replies.push(role + ':' + text)}
+    <ThreadItemsTimeline snapshot={snapshot} taskInputs={taskInputs} foldTools onReply={(role, text) => replies.push(role + ':' + text)}
       onOpenMarkdownPath={path => paths.push(path)} />
   </div></div> : <App />;
 }
@@ -465,4 +470,101 @@ for (const width of [1280, 800]) test(`supplied agents repair nesting and retain
       await expect(row(40)).toBeHidden()
     }
   } finally { await new Promise<void>((resolve, reject) => server.httpServer.close(e => e ? reject(e) : resolve())) }
+})
+
+for (const width of [1280, 800]) test('supplied task controls retain lifecycle and scope at ' + width, async ({ launchPairedApp }) => {
+  const server = await rendererFixture()
+  try {
+    const { page, app } = await launchPairedApp({ buildReplyFrames: bytes => decodeEnvelope(bytes).type === 'list_conversations'
+      ? [seedConversationsFrame(SEEDED_ROW)] : [] }, { rendererUrl: server.resolvedUrls!.local[0] })
+    await page.locator('.channel-list__row-open').first().click()
+    await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled()
+    await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 800), width)
+    const scope = async (host = FIRST_SERVER_ID, chat = SEEDED_ROW.id, epoch = 'tasks') =>
+      page.evaluate(({ host, chat, epoch }) => (window as unknown as { threadFixture: Fixture }).threadFixture.scope(host, chat, epoch), { host, chat, epoch })
+    let version = 1000
+    const batch = async (items: ThreadItem[]) => page.evaluate(({ items, version }) =>
+      (window as unknown as { threadFixture: Fixture }).threadFixture.batch(items, version), { items, version: ++version })
+    const connection = (hostId: string, capabilities = ['stop_background_task']): ThreadTaskInputs['connection'] =>
+      ({ hostId, status: { type: 'connected', ack: { server_id: hostId, conn_id: 'conn', protocol_version: '2', capabilities } } })
+    const live = async (inputs: Omit<ThreadTaskInputs, 'onStopTask'>, callback = true) => page.evaluate(({ inputs, callback }) =>
+      (window as unknown as { threadFixture: Fixture }).threadFixture.taskInputs(inputs, callback), { inputs, callback })
+    const reading = { hostId: FIRST_SERVER_ID, conversationId: SEEDED_ROW.id, epoch: 'tasks', session: 'prior', agent: 'claude', taskId: 'raw-task' }
+    const content = { task_id: 'raw-task', tool_use_id: 'launch-call', input: { description: 'Review races' },
+      task_link: { task_id: 'raw-task', tool_call_id: 'launch-call' }, result: { is_error: false, result_summary: 'launch done' } }
+    const work = item(10, 'agent', content, { session: 'prior', agent: 'claude', status: 'running', active: true })
+    await scope()
+    await batch([work, item(11, 'tool_call', content, { session: 'prior', agent: 'claude', status: 'finished', active: false }),
+      item(12, 'agent', content, { session: 'other', agent: 'codex', status: 'finished', active: false })])
+    await live({ connection: connection(FIRST_SERVER_ID), progress: [{ ...reading, progress: {
+      currentActivity: 'Reading relay', subagentType: '', lastToolName: 'Read', totalTokens: 42000, toolUses: 7, durationMs: 65000, truncatedFields: null } }] })
+    const pill = page.getByRole('button', { name: '1 task running', exact: true })
+    await pill.click()
+    const panel = page.getByRole('dialog', { name: 'Background tasks' })
+    await expect(panel.locator('li')).toHaveCount(2)
+    await expect(panel).toContainText('Running · 1')
+    await expect(panel).toContainText('Finished · 1')
+    await expect(panel).toContainText('Reading relay')
+    await capturePairedApp(app, page, '/tmp/builder-1938/running-panel-' + width + '.png')
+    const stop = panel.getByRole('button', { name: 'Stop task', exact: true })
+    await expect(stop).toHaveCount(1)
+    await stop.click()
+    expect(await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.stops))
+      .toEqual([[FIRST_SERVER_ID, SEEDED_ROW.id, 'raw-task']])
+    await expect(panel).toContainText('Running')
+    await expect(panel).not.toContainText('Stopping')
+    await live({ connection: connection(FIRST_SERVER_ID), stops: [{ ...reading, pending: true }] })
+    await expect(stop).toBeDisabled()
+    await stop.evaluate(el => (el as HTMLButtonElement).click())
+    await live({ connection: connection(FIRST_SERVER_ID), stops: [{ ...reading, pending: true, refused: true }] })
+    await expect(stop).toBeEnabled()
+    for (const inputs of [{ connection: connection(SECOND_SERVER_ID) }, { connection: connection(FIRST_SERVER_ID, []) }]) {
+      await live(inputs)
+      await expect(stop).toHaveCount(0)
+    }
+    await live({ connection: connection(FIRST_SERVER_ID) }, false)
+    await expect(stop).toHaveCount(0)
+    await live({ connection: connection(FIRST_SERVER_ID) })
+    await expect(stop).toBeEnabled()
+    await page.evaluate(update => (window as unknown as { threadFixture: Fixture }).threadFixture.update(update), {
+      type: 'thread_item_changed', payload: { conversation_id: SEEDED_ROW.id, epoch: 'tasks', version: ++version,
+        item_id: 10, base_rev: 10, rev: version, changes: { status: 'stopping' } } })
+    await expect(panel).toContainText('Stopping')
+    await page.evaluate(update => (window as unknown as { threadFixture: Fixture }).threadFixture.update(update), {
+      type: 'thread_item_changed', payload: { conversation_id: SEEDED_ROW.id, epoch: 'tasks', version: ++version,
+        item_id: 10, base_rev: version - 1, rev: version, changes: { active: false, status: 'finished',
+          content: { ...content, task_report: { summary: 'Review complete' } } } } })
+    await expect(pill).toHaveCount(0)
+    await expect(stop).toHaveCount(0)
+    await expect(panel).toContainText('Review complete')
+    await panel.getByRole('button', { name: 'Close', exact: true }).click()
+    await page.getByRole('button', { name: 'Background tasks', exact: true }).click()
+    await expect(panel).toContainText('Finished · 2')
+    await capturePairedApp(app, page, '/tmp/builder-1938/panel-' + width + '.png')
+    await scope(SECOND_SERVER_ID)
+    await batch([work])
+    await expect(panel).toHaveCount(0)
+    await live({ connection: connection(SECOND_SERVER_ID), stops: [{ ...reading, pending: true }], progress: [{ ...reading, progress: {
+      currentActivity: 'Wrong host', subagentType: '', lastToolName: '', totalTokens: 1, toolUses: 1, durationMs: 1, truncatedFields: null } }] })
+    await pill.click()
+    await expect(stop).toBeEnabled()
+    await expect(panel).not.toContainText('Wrong host')
+    await stop.click()
+    expect(await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.stops))
+      .toEqual([[FIRST_SERVER_ID, SEEDED_ROW.id, 'raw-task'], [SECOND_SERVER_ID, SEEDED_ROW.id, 'raw-task']])
+    await scope()
+    await expect(panel).toHaveCount(0)
+    await expect(pill).toHaveCount(0)
+    await page.getByRole('button', { name: 'Background tasks', exact: true }).click()
+    await expect(panel).toContainText('Review complete')
+    await scope(FIRST_SERVER_ID, 'another-chat')
+    await batch([work])
+    await expect(panel).toHaveCount(0)
+    await pill.click()
+    await expect(panel).not.toContainText('Wrong host')
+    await expect(stop).toHaveCount(0)
+    await scope(FIRST_SERVER_ID, SEEDED_ROW.id, 'new-epoch')
+    await expect(panel).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Background tasks', exact: true })).toHaveCount(0)
+  } finally { await new Promise<void>((resolve, reject) => server.httpServer!.close(error => error ? reject(error) : resolve())) }
 })

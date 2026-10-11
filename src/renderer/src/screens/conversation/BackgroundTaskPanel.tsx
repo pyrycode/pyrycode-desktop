@@ -225,22 +225,47 @@ function wasCut(truncatedFields: readonly string[] | null, wireFieldName: string
 // #1635: `finishedTaskIds` is `selectFinishedTasksFor`'s return type. It only splits the populated arm into
 // a Running and a Finished group, so the three-way branch above is unchanged. Optional, with `null`
 // meaning "nothing finished", the same reading the pill's count takes when the key is absent.
+export interface SuppliedBackgroundTask extends HeldBackgroundTask {
+  rowKey: string
+  active: boolean
+  pending: boolean
+  canStop: boolean
+  outcomeLabel: string
+}
+
 export function BackgroundTaskPanelView({
   entry,
+  suppliedTasks,
   finishedTaskIds = null,
   agent = 'claude',
   pendingTaskIds = null,
   onStopTask,
+  turnRunning = false,
   onClose
 }: {
   entry: BackgroundTaskRosterEntry | null
+  suppliedTasks?: readonly SuppliedBackgroundTask[]
   finishedTaskIds?: ReadonlySet<string> | null
   /** #1656 — the conversation's agent; absent reads Claude. */
   agent?: WireAgent
   pendingTaskIds?: ReadonlySet<string> | null
   onStopTask?: (taskId: string) => void
+  turnRunning?: boolean
   onClose: () => void
 }): JSX.Element {
+  useEffect(() => {
+    // Capture lets one Escape close the drawer before other overlays claim it, while
+    // yielding composition keys and the composer's running-turn interrupt binding.
+    const onKeyDown = (event: DocumentEventMap['keydown']): void => {
+      const { target } = event
+      const inComposerStop = target instanceof Element && target.matches(COMPOSER_STOP_BINDINGS)
+      if (!drawerClosesOnKeyDown(event, { inComposerStop, turnRunning })) return
+      event.stopPropagation()
+      onClose()
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => document.removeEventListener('keydown', onKeyDown, true)
+  }, [onClose, turnRunning])
   return (
     // #1634: `role="dialog"` WITHOUT `aria-modal` — a non-modal dialog, which is what a drawer that leaves
     // the thread and the composer usable is. The role and its name are also what every spec finds it by.
@@ -291,7 +316,20 @@ export function BackgroundTaskPanelView({
               {partialListCopy(entry.droppedTasks)}
             </p>
           )}
-          {entry === null ? (
+          {suppliedTasks !== undefined ? (
+            <div className="background-task-panel__groups">
+              {[true, false].map(active => {
+                const tasks = suppliedTasks.filter(task => task.active === active)
+                return tasks.length === 0 ? null : <section key={String(active)} className="background-task-panel__group">
+                  <h3 className="background-task-panel__group-header">{(active ? BACKGROUND_TASK_PANEL_RUNNING_LABEL : BACKGROUND_TASK_PANEL_FINISHED_LABEL) + ' · ' + tasks.length}</h3>
+                  <ul className="background-task-panel__list">{tasks.map(task =>
+                    <TaskRow key={task.rowKey} task={task} finished={!active} pending={task.pending}
+                      suppliedOutcome={task.outcomeLabel} onStopTask={task.canStop ? onStopTask : undefined} />
+                  )}</ul>
+                </section>
+              })}
+            </div>
+          ) : entry === null ? (
             // #1635: each reading is the drawn centred column — ring, heading, support line — and they
             // stay apart in copy, class AND ring: dashed for never reported, solid for observed empty.
             <div className="background-task-panel__reading">
@@ -392,8 +430,9 @@ function formatTaskType(taskType: string): string {
 /** #1635: one task as the drawn card: the type line with its status tag, the description, then the
  *  latest update; a finished card adds its summary under the description (#1639). Every daemon field is an
  *  auto-escaped child of its own element. */
-function TaskRow({ task, finished, pending, onStopTask }: {
+function TaskRow({ task, finished, pending, onStopTask, suppliedOutcome }: {
   task: HeldBackgroundTask
+  suppliedOutcome?: string
   finished: boolean
   pending: boolean
   onStopTask?: (taskId: string) => void
@@ -415,8 +454,11 @@ function TaskRow({ task, finished, pending, onStopTask }: {
           from the app's own claim. The field NAMES are matched, never displayed. */}
       <div className="background-task-panel__head">
         <span className="background-task-panel__type">{formatTaskType(task.taskType)}</span>
-        <TaskStatusTag status={task.status} />
+        <TaskStatusTag status={task.status} label={suppliedOutcome} />
       </div>
+      {suppliedOutcome !== undefined && wasCut(task.truncatedFields, 'ending.cause') && (
+        <span className="background-task-panel__cut-type background-task-panel__cut-outcome">{BACKGROUND_TASK_PANEL_CUT_COPY}</span>
+      )}
       {wasCut(task.truncatedFields, CUT_FIELD_TASK_TYPE) && (
         <span className="background-task-panel__cut-type">{BACKGROUND_TASK_PANEL_CUT_COPY}</span>
       )}
@@ -428,8 +470,8 @@ function TaskRow({ task, finished, pending, onStopTask }: {
           not the held record, decides that, so a running row never shows one. An empty summary draws
           no line, and its cut chip follows it straight after, reading the SUMMARY's own list.
           Summaries repeating a non-empty description hide both the line and its chip. */}
-      {finished && task.summary !== null && task.summary.text !== '' &&
-        (trimmedDescription === '' || !task.summary.text.trim().includes(trimmedDescription)) && (
+      {(finished || suppliedOutcome !== undefined) && task.summary !== null && task.summary.text !== '' &&
+        (suppliedOutcome !== undefined || trimmedDescription === '' || !task.summary.text.trim().includes(trimmedDescription)) && (
         <>
           <span className="background-task-panel__summary">{task.summary.text}</span>
           {wasCut(task.summary.truncatedFields, CUT_FIELD_SUMMARY) && (
@@ -514,13 +556,13 @@ function TaskProgress({ progress }: { progress: HeldBackgroundTaskProgress }): J
  *  non-empty word reads as itself, an auto-escaped child, in the Stopped style. The class is always one
  *  of the four constants above, so the word never reaches an attribute. It chooses the tag only: which
  *  group a row sits in is `finishedTaskIds`'s call, so an unknown word stays in Running. */
-function TaskStatusTag({ status }: { status: string | null }): JSX.Element {
+function TaskStatusTag({ status, label }: { status: string | null; label?: string }): JSX.Element {
   const known = status === null ? undefined : TASK_STATUS_TAGS.get(status)
   const className = status === null ? TASK_TAG_RUNNING_CLASS : (known?.className ?? TASK_TAG_UNKNOWN_CLASS)
   return (
     <span className={className}>
       <span className="background-task-panel__tag-dot" aria-hidden="true" />
-      {status === null ? BACKGROUND_TASK_PANEL_RUNNING_LABEL : (known?.label ?? status)}
+      {label ?? (status === null ? BACKGROUND_TASK_PANEL_RUNNING_LABEL : (known?.label ?? status))}
     </span>
   )
 }
@@ -584,23 +626,7 @@ function BackgroundTaskPanel({
       conversation_id: conversationId, task_id: taskId
     } })
   }, [conversationId, serverId, agent])
-  useEffect(() => {
-    // #1634: a CAPTURE listener on `document`, which runs before React's root listener and before any
-    // bubble-phase document listener. A press the drawer takes is stopped right here, so the options
-    // overlay, the type-ahead and every other Escape claimant never see it: one Escape does one thing.
-    // A press it yields travels on untouched, which is how the composer's #1072 stop still works with
-    // the drawer open. The panel only mounts while open, so the listener lives exactly as long as it.
-    const onKeyDown = (event: DocumentEventMap['keydown']): void => {
-      const { target } = event
-      const inComposerStop = target instanceof Element && target.matches(COMPOSER_STOP_BINDINGS)
-      if (!drawerClosesOnKeyDown(event, { inComposerStop, turnRunning })) return
-      event.stopPropagation()
-      onClose()
-    }
-    document.addEventListener('keydown', onKeyDown, true)
-    return () => document.removeEventListener('keydown', onKeyDown, true)
-  }, [onClose, turnRunning])
-  return <BackgroundTaskPanelView entry={entry} finishedTaskIds={finishedTaskIds} agent={agent}
+  return <BackgroundTaskPanelView entry={entry} finishedTaskIds={finishedTaskIds} agent={agent} turnRunning={turnRunning}
     pendingTaskIds={pendingTaskIds} onStopTask={supported ? onStopTask : undefined} onClose={onClose} />
 }
 

@@ -120,7 +120,7 @@ function outcome(s: Held): string | undefined {
   }
   return typeof s.status === 'string' && Object.prototype.hasOwnProperty.call(labels, s.status) ? labels[s.status] : undefined
 }
-function usable(c: Record<string, unknown>, key: string): string | undefined {
+export function usable(c: Record<string, unknown>, key: string): string | undefined {
   const value = text(c[key])
   if (!value) return undefined
   for (const marker of ['truncated_fields', 'dropped_fields']) {
@@ -131,7 +131,7 @@ function usable(c: Record<string, unknown>, key: string): string | undefined {
   }
   return value
 }
-function taskLinked(s: Held): boolean {
+export function taskLinked(s: Held): boolean {
   const c = record(s.content), link = record(c?.task_link)
   if (!c || !link) return false
   const call = usable(c, 'tool_use_id'), task = usable(c, 'task_id')

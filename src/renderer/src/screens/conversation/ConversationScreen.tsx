@@ -1,6 +1,7 @@
 import { createAttachmentImageSources } from './attachmentImageSource'
 import { useReadObservation } from '../../store/conversationReadPublisher'
 import type { ThreadSnapshot } from '../../store/threadItemStore'
+import { threadTaskPresentations, type ThreadTaskInputs } from './threadTaskPresentation'
 import { threadItemPresentations } from './threadItemPresentation'
 import { historyGapId } from '@shared/chatHistory'
 import { agentSwitchStore, type AgentSwitchStatus } from '../../store/agentSwitchStore'
@@ -191,7 +192,7 @@ import { EditChatDialogView, requestRenameConversation } from '../channels/EditC
 // whose lifetime has to be the dialog's open lifetime. It imports nothing from this directory, so this
 // is the one-way seam `EditChatDialog` already crosses, not a cycle.
 import { EditChannelDialog } from '../channels/EditChannelDialog'
-import { BackgroundTaskPanel } from './BackgroundTaskPanel'
+import { BackgroundTaskPanelView, BackgroundTaskPanel } from './BackgroundTaskPanel'
 import type { RendererCommand } from '@shared/ipc/commands'
 
 // The conversation shell: a scrollable message thread above a pinned composer,
@@ -1576,6 +1577,8 @@ export function Timeline({
 
 type ThreadItemsProps = {
   snapshot: ThreadSnapshot
+  taskInputs?: ThreadTaskInputs
+  turnRunning?: boolean
   foldTools?: boolean
   onReply?: (role: 'user' | 'assistant', text: string) => void
   onOpenMarkdownPath?: (path: string) => void
@@ -1585,7 +1588,10 @@ export function ThreadItemsTimeline(props: ThreadItemsProps): JSX.Element {
   const s = props.snapshot
   return <ThreadItemsView key={JSON.stringify([s.hostId, s.conversationId, s.epoch])} {...props} />
 }
-function ThreadItemsView({ snapshot, foldTools = false, onReply, onOpenMarkdownPath }: ThreadItemsProps): JSX.Element {
+function ThreadItemsView({ snapshot, taskInputs, turnRunning = false, foldTools = false, onReply, onOpenMarkdownPath }: ThreadItemsProps): JSX.Element {
+  const tasks = useMemo(() => threadTaskPresentations(snapshot, taskInputs), [snapshot, taskInputs])
+  const [tasksOpen, setTasksOpen] = useState(false)
+  const activeTaskCount = tasks.filter(task => task.active).length
   const rows = useMemo(() => threadItemPresentations(snapshot), [snapshot])
   const attachmentScope = useMemo(() => {
     const target = { conversationId: snapshot.conversationId, serverId: snapshot.hostId }
@@ -1678,6 +1684,14 @@ function ThreadItemsView({ snapshot, foldTools = false, onReply, onOpenMarkdownP
         </div>]
       })}
     </div>
+    {tasks.length > 0 && <div className="composer-status">
+      <span className="composer-status__activity" aria-hidden="true" />
+      <ComposerTaskCount count={activeTaskCount} open={tasksOpen} onToggle={() => setTasksOpen(open => !open)} />
+    {tasks.length > 0 && activeTaskCount === 0 && <button type="button" className="composer-status__tasks"
+      aria-expanded={tasksOpen} onClick={() => setTasksOpen(open => !open)}>Background tasks</button>}
+    </div>}
+    {tasksOpen && <BackgroundTaskPanelView entry={null} suppliedTasks={tasks} turnRunning={turnRunning} onClose={() => setTasksOpen(false)}
+      onStopTask={taskId => taskInputs?.onStopTask?.(snapshot.hostId, snapshot.conversationId, taskId)} />}
   </div></ThreadAttachmentScopeContext.Provider>
 }
 

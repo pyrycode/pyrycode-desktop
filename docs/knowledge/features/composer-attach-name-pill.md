@@ -87,6 +87,72 @@ this ticket's own drive is modelled on; the assertion is not attached to any sym
 no reading of the code would have surfaced it — a grep for `not.toContainText` across `e2e/` at plan time,
 keyed on the criterion rather than the code, would have.
 
+### Controlled hover and geometry verification
+
+Visibility and treatment can pass before native pointer interference removes the pill's box.
+The retained historical `188fd6b7` transcript records this named test failing at `pillBox.height`
+after those checks: 322 executed, 321 passed, 1 failed, 4 skipped, three actual workers,
+zero retries. The [controlled diagnosis](https://github.com/pyrycode/pyrycode-desktop/issues/1833#issuecomment-6127206600)
+reproduces that geometry-loss mechanism and confirms merged
+[PR #1836](https://github.com/pyrycode/pyrycode-desktop/pull/1836) protects it.
+The overwritten original #1818 occurrence remains explicitly unconfirmed; the controlled
+reproduction does not establish the contemporaneous trigger of the historical #1819 failure.
+
+The diagnostic reuses both attachment completions and ordinary first-tile hover, then maps
+an independent input-enabled cover between the original visibility/treatment checks and geometry.
+All comparisons used Linux x86_64, Electron 33.4.11, dedicated 1920×1080 Xvfb and shown
+1100×800 app windows, serially with one actual worker and zero retries. Each comparison
+executed/passed two scenarios, with zero failed, skipped or flaky results:
+
+| Revision / retained report | Cover over native pointer | Corner focus control |
+| --- | --- | --- |
+| Historical `188fd6b7`, `historical-final.json` | New pointer exit; hover true → false, display block → none, pill box present → null | Native focus lost; hover and identical pill box retained, zero new exits |
+| Protected main `f2e0d6104c9593e83bfc0241d506b118def8bc52`, `protected-final.json` | Hover and identical pill box retained, zero new exits | Hover/box retained despite native focus loss |
+| Same protected main, initial-window protection deleted, `deleted.json` | Historical hover loss and null box reproduced | Hover/box retained despite native focus loss |
+
+Slot focus-within is false throughout, excluding keyboard focus as the pill trigger.
+Timestamped pointer events and synchronous nullable pill/tile/composer/pane/strip/input boxes
+are recorded before/after, alongside exact treatment, renderer focus/active element and native
+focus/bounds. Strip height and input-row y stay at their resting baselines. See
+[native display-pointer protection](e2e-harness-desktop-isolation.md#native-display-pointer-protection)
+for actual cover bounds and the independent-process requirement.
+
+This is an evidence-only resolution. The attachment spec is byte-identical to `188fd6b7`:
+filename identity and sibling absence, hover/leave, focus/blur, exact computed treatment,
+placement/containment, unchanged strip/input geometry, escaped text/attribute exclusions,
+envelope absence and the subsequent send remain intact. Input, actionability, timeouts,
+retries and suite parallelism are unchanged. Separate protected negative controls each
+executed this exact test once and failed on attempt 0, with actual hover true, focus-within
+false, display block and a present 24px box: a transparent-background mutation fails the
+original `drawn` equality; changing bottom to `100%` fails pill-bottom/composer-top equality
+(589 versus 581px). Source and built CSS mutations were restored byte-for-byte before acceptance.
+
+The [verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/1943#issuecomment-6127503162)
+audited the raw reports for final revision `1254902c67099fdf21cad652a93509bdd2a29942`
+on Ubuntu 24.04.5 Linux x86_64, with the same Electron/display/window presentation above.
+The exact named test, `a tile’s pill names its file on hover and on focus, one row up and moving nothing`,
+was present and passed in every acceptance run:
+
+| Report | Actual workers | Named executed / passed / failed / skipped / flaky | Suite executed / passed / failed / skipped / flaky |
+| --- | --- | --- | --- |
+| `named-one.json` | 1 | 20 / 20 / 0 / 0 / 0 | 20 / 20 / 0 / 0 / 0 |
+| `named-three.json` | 3 | 20 / 20 / 0 / 0 / 0 | 20 / 20 / 0 / 0 / 0 |
+| `full-default.json` | 3 | 1 / 1 / 0 / 0 / 0 | 386 / 386 / 0 / 3 / 0 |
+
+Every named result is attempt 0, with retries explicitly disabled; no unrelated failure occurred.
+The dispatcher verifier gate 6 at the same revision independently records 386 executed/passed,
+0 failed and 3 skipped, with this named test and
+`an independent input-enabled cover preserves isolated hover` both present and passed.
+Acceptance is fake transport; no live-Claude run applies.
+
+Raw reports, observation folders, exact diagnostic/deletion/CSS patches and negative-control
+failure traces/error context are retained under `/tmp/builder-1833/`; the complete bundle is
+`retained-proof.tar.gz`, with file hashes in `evidence-manifest.json`. These are local retained
+artifacts, not GitHub uploads or documentation-stage test runs. The committed
+[plan and diagnosis](../../specs/architecture/1833-attachment-pill-reliability.md#revisions)
+and linked verdict preserve provenance. Setup failures are retained separately and excluded
+from acceptance counts.
+
 ## Security
 
 **PASS.** The strip's first render sink for an untrusted string — unlike #1264, which added none. The

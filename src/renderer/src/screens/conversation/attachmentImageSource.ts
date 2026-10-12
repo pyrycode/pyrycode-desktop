@@ -342,7 +342,8 @@ function awaitTerminal<E extends { attachmentId: string }>(
  * An `<img>` does not need it: image decoding is driven by the bytes, not by the blob's type. What a
  * declared type WOULD buy is forcing a `Content-Type` on a navigation to this URL, and that vector is
  * already closed three times over — `will-navigate` confines in-place navigation to the app's own
- * document, `setWindowOpenHandler` denies every scheme and externalises only `http:`/`https:`, and the
+ * document, `setWindowOpenHandler` denies every in-app window and externalises only `allowedLinkHref`
+ * links (src/shared/externalLink.ts: web links and Obsidian `open` links to a note), and the
  * CSP's `default-src 'self'` plus `object-src 'none'` blocks a blob frame or object. #1045 must widen
  * `img-src` ONLY; a `frame-src`, `child-src` or relaxed `default-src` would reopen it.
  *

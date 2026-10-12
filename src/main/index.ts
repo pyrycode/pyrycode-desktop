@@ -55,6 +55,7 @@ import { emitDaemonEvent, bindServerOrigin } from './emitDaemonEvent'
 import { createLiveWindow } from './liveWindow'
 import { fireNotification, activateWindow, windowHasFocus } from './fireNotification'
 import { createContextMenuListener } from './editContextMenu'
+import { createWindowOpenHandler } from './windowOpenHandler'
 import { createDiagnosticLog } from './diagnosticLog'
 import { fileRotatingSink, stdoutSink } from './diagnosticLogSinks'
 import { logSessionStart } from './sessionBanner'
@@ -147,21 +148,14 @@ function createWindow(presentation: WindowPresentation): BrowserWindow {
 
   if (!hidden) mainWindow.on('ready-to-show', () => mainWindow.show())
 
-  // Open external links in the OS browser, never in-app, and only for web schemes. A file:
-  // URL or a custom protocol-handler URL is dropped, so a hostile link cannot open a local
-  // file or launch a registered protocol handler through the window-open path.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    let scheme = ''
-    try {
-      scheme = new URL(url).protocol
-    } catch {
-      return { action: 'deny' }
-    }
-    if (scheme === 'https:' || scheme === 'http:') {
-      void shell.openExternal(url)
-    }
-    return { action: 'deny' }
-  })
+  // Open external links outside the app, never in-app, and only the shapes the shared allowlist admits:
+  // web links, and Obsidian `open` links with read-only parameters (src/shared/externalLink.ts, the same
+  // check the renderer uses). A file: URL or any other protocol-handler URL is dropped, so a hostile link
+  // cannot open a local file or launch a registered protocol handler through the window-open path.
+  // `shell.openExternal` is read at call time, which the e2e stub in assistant-link-opens-externally relies on.
+  mainWindow.webContents.setWindowOpenHandler(
+    createWindowOpenHandler((url) => void shell.openExternal(url))
+  )
 
   // #1445: right-click opens the OS's own edit menu. The decision — whether a menu applies at all, and
   // which items it carries — lives in editContextMenu.ts, which imports no `electron`; this is the only

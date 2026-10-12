@@ -16,8 +16,9 @@
       ⭐ DO NOT ADD `frame-src`, `child-src`, OR RELAX `default-src`. A blob: URL inherits the creating
       document's origin, so a blob of HTML NAVIGATED TO would run script holding the preload bridge. Four
       things close that and all four must stay: `will-navigate` confines in-place navigation to the app's
-      own document, `setWindowOpenHandler` denies every scheme and externalises only http/https (both in
-      src/main/index.ts), `object-src 'none'` below blocks a blob object, and frames fall back to
+      own document (src/main/index.ts), `setWindowOpenHandler` denies every in-app window and externalises
+      only `allowedLinkHref` links (src/shared/externalLink.ts: web links and Obsidian `open` links to a
+      note), `object-src 'none'` below blocks a blob object, and frames fall back to
       `default-src 'self'` because no frame-src is declared. img-src alone reopens none of it; any of
       those three would.
 

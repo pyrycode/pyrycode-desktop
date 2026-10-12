@@ -32,6 +32,7 @@ One synchronous main-process writer per connection; query registration precedes 
 | Empty and repeated final marker | empty and multibatch completion |
 | Multiple batches/captured epoch-version | rejects coverage and captured metadata changes |
 | Missing/malformed/expired fragment then marker | invalid assembly cannot certify success |
+| Parser rejects first or in-progress assembly/envelope | parser rejection interrupts pending queries before success through preload |
 | Request/session/routing identity changed mid-assembly | fragment metadata and request isolation |
 | Interleaved hosts/requests, equal conversation IDs | host isolation through preload |
 | Correlated reset/error/local send drop | terminal and send failure settle once |
@@ -49,6 +50,7 @@ None. Size sketch and plan re-count: approximately 780 written lines (280 produc
 ## Security review
 **Verdict:** PASS
 - [Trust boundaries] `isRendererCommand` validates host/request strings and safe integers; `logical`/`part` validate network DTOs; query admission checks locally registered correlation before publication.
+- [Trust boundaries, rework] Parser rejection in `onDriverEvent` precedes receiver admission and can hide a batch even before assembly registration. The parser catch must call `threadReceiver.reset`: no rejected envelope correlation is trusted, all pending queries on that connection fail with static `interrupted`, and shared assembly buffers/timers are released before a later marker. `parser rejection interrupts pending queries before success through preload` covers rejected first/partial assemblies, invalid UTF-8/JSON, oversized frames and invalid session metadata, including other-host isolation and fresh queries.
 - [Tokens] No new secrets; existing main-only safeStorage/Noise ownership remains unchanged. Request IDs are correlation, not credentials.
 - [File/storage] No runtime filesystem/cache writes or paths derived from responses; #1901/#1902 own persistence/checkpoints.
 - [Electron] Existing isolated preload exposes typed commands/events only; unknown JSON remains inert, no Node/socket/byte exposure or new navigation surface.
@@ -62,3 +64,10 @@ None. Size sketch and plan re-count: approximately 780 written lines (280 produc
 
 ## Revisions
 2026-10-12: Extract `dispatchThreadQuery` from main's command switch so supplied-frame tests exercise the production host-routing/failure handler through the existing preload and registry. The contract and state ownership are unchanged. Existing reconnect numbering assertion now requires a unique next app ID rather than recycling 2; hello remains id 1.
+
+2026-10-12 (verifier findings 1–2): Treat every `parseInboundMessage` exception as an interruption of pending thread queries and assembly on that connection, including rejection before any fragment is registered. Reuse receiver reset and its static failures; never reparse rejected bytes to infer correlation. A later marker cannot complete an interrupted request, while another host and newly registered unique IDs remain usable. Allow `queryThread` catch-up epochs to be any string of at most 1024 characters, including the empty epoch with version zero; host/request/conversation IDs remain nonempty. The named parser regression and `initial empty-epoch catch-up reaches authenticated transport` prove these contracts through production dispatch, structured-cloned IPC and the actual preload API; epoch admission tests retain type/length rejection. The security review above records the newly covered boundary.
+
+## Documentation handoff
+- Pending documentation stage: `docs/knowledge/features/daemon-connection-methods.md` § Public surface — host-addressed queries, caller/envelope correlation, empty initial epoch, numeric admission and daemon limit policy.
+- Pending documentation stage: `docs/knowledge/features/daemon-event-channel-sealed-union.md` § 1. The sealed union — additive preload replies/failures, captured metadata and exclusive empty success markers; reset/error/failure certify no progress. Numeric continuation is coverage, object continuation is assembly; active/parent extras do not determine range/older availability.
+- Pending documentation stage: `docs/knowledge/features/daemon-connection-lifecycle.md` § The driver-event → DaemonEvent mapping — shared live/history bounds, lifecycle and parser-boundary settlement, assembly release and unique IDs across reconnects; legacy subscribers ignore additive events. Supplied encoded frames prove transport/IPC; #1902 owns checkpoints and #1908 owns production activation/integration.

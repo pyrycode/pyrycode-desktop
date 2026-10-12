@@ -60,7 +60,75 @@ async function connected(serverId = 'a') {
   const replies = () => events.filter(e => e.type === 'threadReply' || e.type === 'threadQueryFailed')
   return { connection, configs, events, sent, ack, emit, ask, replies, observations, failSend: (throwing = false) => { drop = true; throws = throwing } }
 }
+function routePreloadQueries(route: Parameters<typeof dispatchThreadQuery>[1]) {
+  electron.send.mockImplementation((_channel, command) => {
+    const cloned = structuredClone(command)
+    if (isRendererCommand(cloned) && cloned.type === 'queryThread') dispatchThreadQuery(cloned, route, {
+      isDestroyed: () => false, webContents: { send: (_channel, e) => electron.listeners.forEach(listener => listener({}, structuredClone(e))) }
+    })
+  })
+}
 afterEach(() => { electron.listeners.clear(); electron.send.mockReset(); vi.useRealTimers() })
+it.each([undefined, 0])('initial empty-epoch catch-up reaches authenticated transport with limit %s', async limit => {
+  const h = await connected()
+  routePreloadQueries(id => id === 'a' ? h.connection : null)
+  const q: ThreadQuery = { type: 'thread_catch_up', payload: { conversation_id: 'c', epoch: '', version: 0,
+    ...(limit === undefined ? {} : { limit }) } }
+  const command = { type: 'queryThread' as const, serverId: 'a', requestId: 'initial', query: q }
+  expect(isRendererCommand(command)).toBe(true)
+  expect(() => api.sendCommand(command)).not.toThrow()
+  expect(h.sent).toHaveLength(1)
+  const envelope = decodeEnvelope(h.sent[0])
+  expect(envelope).toMatchObject({ type: 'thread_catch_up', payload: q.payload })
+  expect(Object.hasOwn(envelope.payload as object, 'limit')).toBe(limit !== undefined)
+  const received: StampedDaemonEvent[] = [], off = api.onDaemonEvent(e => received.push(e))
+  h.emit(frame('thread_items', windowDone, envelope.id))
+  expect(received).toMatchObject([{ type: 'threadReply', serverId: 'a', requestId: 'initial', reply: { payload: windowDone } }])
+  off(); h.connection.stop()
+})
+it('catch-up epoch admission retains string type and length bounds', () => {
+  const command = { type: 'queryThread', serverId: 'a', requestId: 'initial', query }
+  for (const epoch of [null, undefined, 0, {}, 'e'.repeat(1025)]) {
+    expect(isRendererCommand({ ...command, query: { ...query, payload: { ...query.payload, epoch } } })).toBe(false)
+  }
+  expect(isRendererCommand({ ...command, query: { ...query, payload: { ...query.payload, epoch: 'e'.repeat(1024) } } })).toBe(true)
+})
+it.each(['single-part', 'partial-assembly', 'invalid-utf8', 'invalid-json', 'oversized', 'invalid-session'])('parser rejection interrupts pending queries before success through preload: %s', async mode => {
+  const a = await connected('a'), b = await connected('b'), received: StampedDaemonEvent[] = []
+  const off = api.onDaemonEvent(e => received.push(e))
+  routePreloadQueries(id => id === 'a' ? a.connection : id === 'b' ? b.connection : null)
+  for (const [serverId, requestId] of [['a', 'broken'], ['a', 'same-host'], ['b', 'other-host']]) {
+    api.sendCommand({ type: 'queryThread', serverId, requestId, query })
+  }
+  const id = decodeEnvelope(a.sent[0]).id, sibling = decodeEnvelope(a.sent[1]).id, other = decodeEnvelope(b.sent[0]).id
+  vi.useFakeTimers()
+  if (mode === 'partial-assembly') a.emit(fragments(id)[0])
+  expect(vi.getTimerCount()).toBe(mode === 'partial-assembly' ? 1 : 0)
+  // Even a rejected first, single-part assembly must fence its later success marker.
+  const rejected: any = decodeEnvelope(fragments(id, batch)[0])
+  rejected.ts = 123
+  let bytes = encodeEnvelope(rejected)
+  if (mode === 'invalid-utf8') bytes = Uint8Array.of(255)
+  if (mode === 'invalid-json') bytes = new TextEncoder().encode('{broken')
+  if (mode === 'oversized') bytes = new Uint8Array(65520)
+  if (mode === 'invalid-session') bytes = frame('thread_items', batch, id, { session_id: 123 })
+  a.emit(bytes)
+  expect(received).toMatchObject([
+    { type: 'threadQueryFailed', serverId: 'a', conversationId: 'c', requestId: 'broken', inReplyTo: id, reason: 'interrupted' },
+    { type: 'threadQueryFailed', serverId: 'a', conversationId: 'c', requestId: 'same-host', inReplyTo: sibling, reason: 'interrupted' }
+  ])
+  expect(received).toHaveLength(2); expect(vi.getTimerCount()).toBe(0)
+  fragments(id).forEach(f => a.emit(f)); a.emit(frame('thread_items', done, id)); a.emit(frame('thread_items', done, sibling))
+  expect(received).toHaveLength(2)
+  // Other hosts and freshly registered requests remain usable after conservative interruption.
+  b.emit(frame('thread_items', done, other)); const next = a.ask(query, 'next')
+  a.emit(frame('thread_items', done, id)); a.emit(frame('thread_items', done, next))
+  expect(received.slice(2)).toMatchObject([
+    { type: 'threadReply', serverId: 'b', requestId: 'other-host' }, { type: 'threadReply', serverId: 'a', requestId: 'next' }
+  ])
+  expect(received).toHaveLength(4)
+  off(); a.connection.stop(); b.connection.stop(); expect(vi.getTimerCount()).toBe(0)
+})
 it('admits both typed preload requests and preserves omitted, zero and positive limits', async () => {
   const h = await connected()
   for (const q of [query, page]) for (const limit of [undefined, 0, 1, 300]) {
@@ -183,12 +251,7 @@ it('the production command handler carries cloned preload commands through regis
   await vi.waitFor(() => expect(registry.connectionFor('b')).not.toBeNull())
   const servers = createServerRouter({ connectionFor: id => registry.connectionFor(id), soleConnection: () => registry.soleConnection() })
   const off = api.onDaemonEvent(e => received.push(e))
-  electron.send.mockImplementation((_channel, command) => {
-    const cloned = structuredClone(command)
-    if (isRendererCommand(cloned) && cloned.type === 'queryThread') dispatchThreadQuery(cloned, id => servers.route(id), {
-      isDestroyed: () => false, webContents: { send: (_channel, e) => electron.listeners.forEach(listener => listener({}, structuredClone(e))) }
-    })
-  })
+  routePreloadQueries(id => servers.route(id))
   for (const serverId of ['a', 'b', 'missing']) api.sendCommand({ type: 'queryThread', serverId, requestId: serverId, query: page })
   expect(a.sent).toHaveLength(1); expect(b.sent).toHaveLength(1)
   for (const h of [a, b]) h.emit(frame('thread_items', windowDone, decodeEnvelope(h.sent[0]).id))

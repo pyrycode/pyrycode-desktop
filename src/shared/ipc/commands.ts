@@ -527,7 +527,7 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       if (!('type' in q) || !('payload' in q) || typeof q.payload !== 'object' || q.payload === null || Array.isArray(q.payload)) return false
       const p = q.payload
       return 'conversation_id' in p && text(p.conversation_id) && (!('limit' in p) || number(p.limit)) &&
-        (q.type === 'thread_catch_up' ? 'epoch' in p && text(p.epoch) && 'version' in p && number(p.version) :
+        (q.type === 'thread_catch_up' ? 'epoch' in p && typeof p.epoch === 'string' && p.epoch.length <= 1024 && 'version' in p && number(p.version) :
           q.type === 'thread_page' && 'before_order' in p && number(p.before_order))
     }
     case 'sendMessage': {

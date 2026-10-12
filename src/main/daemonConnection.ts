@@ -1314,9 +1314,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             }
           })
         } catch {
-          // Fail-closed (AC4): oversized / malformed / unparseable / mistyped payload. Drop the
-          // frame — no event, no throw. The caught WireDecodeError is DROPPED (classify-don't-
-          // forward: its message could echo message plaintext; it never reaches a log or an event).
+          // Rejected envelopes have no trusted correlation. Interrupt queries and release assembly
+          // so a later marker cannot certify a batch dropped before receiver admission. The caught
+          // error is discarded: only the receiver's static failure reason reaches IPC or logs.
+          threadReceiver.reset()
           return
         }
         if (inbound === null) return // AC5: a well-formed envelope of another type is ignored.

@@ -10,7 +10,9 @@ it('legacy consumers ignore thread updates and scoped repair without throwing or
     { type: 'threadUpdate', conversationId: 'c', update: { type: 'thread_text_append', payload: {
       conversation_id: 'c', epoch: 'e', version: 1, item_id: 0, base_rev: 0, rev: 1, text: ''
     } }, correlation: { id: 4, ts: 'stamp' } },
-    { type: 'threadRepairNeeded', conversationId: 'c', reason: 'expired' }
+    { type: 'threadRepairNeeded', conversationId: 'c', reason: 'expired' },
+    { type: 'threadReply', conversationId: 'c', requestId: 'r', reply: { type: 'thread_reset', payload: { conversation_id: 'c', epoch: 'e', version: 0 } }, correlation: { id: 9, ts: '', in_reply_to: 2 } },
+    { type: 'threadQueryFailed', conversationId: 'c', requestId: 'r', inReplyTo: 2, reason: 'malformed' }
   ]
   for (const e of events) {
     expect(translateDaemonEvent(e)).toBeNull()
@@ -32,6 +34,8 @@ it('thread indications leave scheduled legacy deltas and store identity untouche
   emit({ type: 'threadUpdate', conversationId: 'c', update: { type: 'thread_text_append', payload: {
     conversation_id: 'c', epoch: 'e', version: 1, item_id: 0, base_rev: 0, rev: 1, text: ''
   } }, correlation: { id: 4, ts: 'stamp' } })
+  emit({ type: 'threadQueryFailed', conversationId: 'c', requestId: 'r', inReplyTo: 2, reason: 'malformed' })
+  emit({ type: 'threadReply', conversationId: 'c', requestId: 'r', reply: { type: 'thread_reset', payload: { conversation_id: 'c', epoch: 'e', version: 0 } }, correlation: { id: 9, ts: '' } })
   expect(store.getState()).toBe(before)
   expect(dispatch).not.toHaveBeenCalled(); expect(cancel).not.toHaveBeenCalled()
   frame(); expect(dispatch).toHaveBeenCalledTimes(1); off()

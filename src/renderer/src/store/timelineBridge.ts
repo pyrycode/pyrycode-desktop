@@ -117,6 +117,8 @@ export function translateTimelineEvent(
 ): ThreadEvent | null {
   switch (event.type) {
     case 'sessionStateCleared':
+    case 'threadReply':
+    case 'threadQueryFailed':
     case 'threadUpdate':
     case 'threadRepairNeeded':
       return null // The daemon-built thread consumer owns these additive events.
@@ -789,7 +791,7 @@ export function subscribeTimeline(
   }
   const removeBoundary = frames?.beforeMutation(flush)
   const off = onDaemonEvent((event) => {
-    if (!active || event.type === 'threadUpdate' || event.type === 'threadRepairNeeded') return
+    if (!active || event.type === 'threadReply' || event.type === 'threadQueryFailed' || event.type === 'threadUpdate' || event.type === 'threadRepairNeeded') return
     if (event.type !== 'assistantDelta') flush()
     if (event.type === 'connected' && 'serverId' in event && typeof event.serverId === 'string') {
       onReconnect?.(event.serverId)

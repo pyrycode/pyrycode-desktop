@@ -1,3 +1,4 @@
+import type { ThreadQuery } from '../shared/wire/thread'
 // The background-process consumer the Noise relay driver (#50) was built for: it SOURCES the
 // device static key (#43), the paired-server record (#44), and the `hello` early-data (#10),
 // CONSTRUCTS and drives the driver, and MAPS its four lifecycle events onto the typed DaemonEvent
@@ -284,6 +285,7 @@ interface PendingRetrieval {
  * record-reload.
  */
 export interface DaemonConnection {
+  queryThread(query: ThreadQuery, requestId: string): void
   requestHostSystemPrompt(requestId: string): void
   setHostSystemPrompt(systemPrompt: string, requestId: string): void
   /** Idempotent. Emits `connecting`, then sources the inputs and constructs the driver. */
@@ -790,6 +792,17 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // by naming `deps.sink` again, which nothing below does.
   const sink = bindServerOrigin(deps.sink, deps.serverId)
   const threadReceiver = createThreadUpdateReceiver(event => {
+    if (event.kind === 'thread-query-failed') {
+      emitDaemonEvent(sink, { type: 'threadQueryFailed', conversationId: event.conversationId,
+        requestId: event.requestId, inReplyTo: event.inReplyTo, reason: event.reason })
+      return
+    }
+    if (event.kind === 'thread-reply') {
+      const { payload, type, ...correlation } = event.envelope
+      emitDaemonEvent(sink, { type: 'threadReply', conversationId: event.reply.payload.conversation_id,
+        requestId: event.requestId, reply: event.reply, correlation })
+      return
+    }
     if (event.kind === 'thread-repair') {
       emitDaemonEvent(sink, { type: 'threadRepairNeeded', conversationId: event.conversationId, reason: event.reason })
       return
@@ -1179,9 +1192,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // it has already abandoned. Idempotent and total — an empty set is a no-op, and a settled transfer's
   // own `settled` flag absorbs a second fail.
   //
-  // This is also what makes dial()'s reset of nextEnvelopeId to 2 safe: every live transfer is failed
-  // before ids recycle, so a stale envelope id can never correlate a reject on the reconnected
-  // session (the pendingSettings.clear() rationale, applied to the transfer set).
+  // Every live transfer is failed on dial; monotonically unique envelope IDs also keep late
+  // rejects from correlating on the reconnected session (the pendingSettings.clear() rationale, applied to the transfer set).
   function failAttachmentTransfers(): void {
     const abandoned = [...activeTransfers]
     activeTransfers.clear()
@@ -1199,9 +1211,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // already abandoned. Clearing the map also drops each reassembler's accumulated chunk bytes.
   // Idempotent and total — an empty map is a no-op.
   //
-  // This is what makes dial()'s reset of nextEnvelopeId to 2 safe for this map: every live retrieval
-  // is failed before ids recycle, so a stale envelope id can never correlate an answer on the
-  // reconnected session (the pendingSettings.clear() rationale, applied to the retrieval map).
+  // Every live retrieval is failed on dial; monotonically unique envelope IDs also keep late
+  // answers from correlating on the reconnected session (the pendingSettings.clear() rationale, applied to the retrieval map).
   function failAttachmentRetrievals(): void {
     const abandoned = [...pendingRetrievals.values()]
     pendingRetrievals.clear()
@@ -1384,6 +1395,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // client never dispatched) falls through unchanged (AC3). The emitted event carries ONLY the
             // client's OWN changeId, never a field read from the untrusted error payload (AC1/AC4 no-echo).
             const inReplyTo = inbound.inReplyTo
+            if (inReplyTo !== undefined && threadReceiver.fail(inReplyTo, 'daemon-error')) return
             if (inReplyTo !== undefined) {
               for (const operation of ['read', 'write'] as const) {
                 const found = takeHostPrompt(inReplyTo, operation)
@@ -3371,6 +3383,23 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     for (const conversationId of pending) failHistoryRequest(conversationId, 'interrupted')
   }
 
+  function queryThread(query: ThreadQuery, requestId: string): void {
+    const id = nextEnvelopeId++
+    threadReceiver.register(id, requestId, query)
+    if (driver === null || !authenticated || stopped) { threadReceiver.fail(id, 'unavailable'); return }
+    const p = query.payload
+    const payload = { conversation_id: p.conversation_id,
+      ...(query.type === 'thread_catch_up' ? { epoch: query.payload.epoch, version: query.payload.version } : { before_order: query.payload.before_order }),
+      ...(p.limit === undefined ? {} : { limit: p.limit }) }
+    try {
+      const bytes = encodeEnvelope({ id, type: query.type, ts: now(), payload })
+      driver.sendMessage(bytes, outcome => {
+        if (outcome.type === 'dropped') threadReceiver.fail(id, 'send-failed')
+      })
+      deps.diagnosticLog?.event({ event: 'thread-query-sent', code: query.type })
+    } catch { threadReceiver.fail(id, 'send-failed') }
+  }
+
   function requestHistory(payload: RequestHistoryPayload): void {
     if (driver === null || !authenticated) {
       failHistoryRequest(payload.conversation_id, 'unavailable')
@@ -4352,31 +4381,28 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // this is a no-op.
     driver?.stop()
     driver = null
-    // Fresh session, fresh app-envelope numbering — each dial rebuilds `hello` at id 1, so app
-    // envelopes restart at 2. Correctness-neutral (the daemon correlates by id, not sequence; see
-    // the nextEnvelopeId comment above) but keeps a re-dialed session self-consistent.
-    nextEnvelopeId = 2
+    // Each hello still uses id 1. Keep app IDs monotonic across dials so delayed history
+    // replies cannot match a successor query after the old pending state is released.
     // Reset the modal-answer correlation window (#248): a fresh connection starts with no outstanding
     // answer, so a stale answer from a dead session can never correlate an `error` on the reconnected
     // one. Holds only strings — nothing to abort, just clear the array in place.
     outstandingAnswers.length = 0
     // Reset the set_session_settings pending map (#261, AC5): a reconnect abandons outstanding changes,
-    // so a stale reply from a dead session can never correlate on the reconnected one. This is what makes
-    // the recycled envelope ids (nextEnvelopeId restarts at 2 above) safe.
+    // releasing the old pending state independently of the monotonically unique envelope IDs.
     pendingSettings.clear()
     // Reset the create_workspace_folder pending set (#396, AC1): a reconnect abandons outstanding
     // requests, so a stale envelope id from a dead session can never correlate an `error` on the
-    // reconnected one (which recycles ids from 2). The pendingSettings.clear() rationale, applied to the
+    // reconnected one. The pendingSettings.clear() rationale, applied to the
     // create-folder set.
     pendingCreateFolders.clear()
     // Reset the create_conversation pending set (#1307, AC1): the pendingCreateFolders rationale applied
     // to the create verb. A reconnect abandons outstanding creates, so a stale envelope id from a dead
-    // session can never correlate an `error` on the reconnected one (which recycles ids from 2).
+    // session can never correlate an `error` on the reconnected one.
     pendingCreateConversations.clear()
     pendingSwitchAgents.clear()
     // Reset the run-config request correlation map (#1176, AC4): a reconnect abandons outstanding
     // reads, so a reply correlated against a previous connection's envelope ids can never match on the
-    // reconnected one — which is what makes the recycled ids safe here too. Without it, the fresh
+    // reconnected one. Without it, the fresh
     // connection's first request would inherit the dead one's conversation. The pendingSettings.clear()
     // rationale, applied to the read leg.
     pendingConfigRequests.clear()
@@ -4390,7 +4416,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // here a surviving entry would settle a NEW connection's write against a dead one's conversation —
     // reporting a prompt as stored on a conversation that was never written to.
     pendingSystemPromptWrites.clear()
-    // The same rationale for the MCP status ask (#1578): a recycled id must not settle a new connection's
+    // The same rationale for the MCP status ask (#1578): old pending state must not settle a new connection's
     // refusal against a dead one's conversation.
     pendingMcpStatusRequests.clear()
     pendingMcpReconnects.clear()
@@ -4454,6 +4480,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     requestHostSystemPrompt,
     setHostSystemPrompt,
     requestSystemPrompt,
+    queryThread,
     requestHistory,
     requestConversations,
     requestRecentWorkspaces,

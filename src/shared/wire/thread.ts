@@ -26,3 +26,13 @@ export type ThreadUpdate =
   | { type: 'thread_text_append'; payload: Routing & Revision & { text: string } }
 
 export type ThreadRepairReason = 'malformed' | 'sequence' | 'metadata' | 'limit' | 'final-length' | 'digest' | 'reconstructed' | 'expired'
+
+export type ThreadQuery =
+  | { type: 'thread_catch_up'; payload: { conversation_id: string; epoch: string; version: number; limit?: number } }
+  | { type: 'thread_page'; payload: { conversation_id: string; before_order: number; limit?: number } }
+export type ThreadReply =
+  | { type: 'thread_items'; payload: Routing & { items: ThreadItem[]; final: false } }
+  | { type: 'thread_items'; payload: Routing & { items: []; final: true } &
+      ({ from_version: number } | { lower_order: number; upper_order: number; continuation: number; older_exists: boolean }) }
+  | { type: 'thread_reset'; payload: Routing }
+export type ThreadQueryFailure = ThreadRepairReason | 'unavailable' | 'send-failed' | 'interrupted' | 'daemon-error'

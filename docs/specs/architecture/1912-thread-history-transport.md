@@ -59,3 +59,6 @@ None. Size sketch and plan re-count: approximately 780 written lines (280 produc
 - [Threat model] Relay reorder/drop/flood fails bounded assembly and cannot certify a failed query. Hostile daemon DTOs fail validation. Compromised renderer is constrained by IPC admission/main-only transport. Existing disk-token protection unchanged.
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-12
+
+## Revisions
+2026-10-12: Extract `dispatchThreadQuery` from main's command switch so supplied-frame tests exercise the production host-routing/failure handler through the existing preload and registry. The contract and state ownership are unchanged. Existing reconnect numbering assertion now requires a unique next app ID rather than recycling 2; hello remains id 1.

@@ -15,6 +15,7 @@
 //
 // Imported by src/main and src/preload, which have no @shared path alias — hence the
 // relative import here and in those callers (see tsconfig.node.json).
+import type { ThreadQuery } from '../wire/thread'
 import type {
   SetHostSystemPromptPayload,
   SendMessagePayload,
@@ -346,6 +347,7 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * the boundary.
  */
 export type RendererCommand =
+  | { type: 'queryThread'; serverId: string; requestId: string; query: ThreadQuery }
   | { type: 'requestHostSystemPrompt'; serverId: string; requestId: string }
   | { type: 'setHostSystemPrompt'; serverId: string; requestId: string; payload: SetHostSystemPromptPayload }
   | { type: 'sendMessage'; payload: SendMessagePayload; serverId?: string }
@@ -516,6 +518,18 @@ export function interruptCommand(fields: InterruptCommandPayload): RendererComma
 export function isRendererCommand(value: unknown): value is RendererCommand {
   if (typeof value !== 'object' || value === null || !('type' in value)) return false
   switch (value.type) {
+    case 'queryThread': {
+      const text = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 1024
+      const number = (v: unknown): boolean => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
+      if (!('serverId' in value) || !text(value.serverId) || !('requestId' in value) || !text(value.requestId) ||
+          !('query' in value) || typeof value.query !== 'object' || value.query === null) return false
+      const q = value.query
+      if (!('type' in q) || !('payload' in q) || typeof q.payload !== 'object' || q.payload === null || Array.isArray(q.payload)) return false
+      const p = q.payload
+      return 'conversation_id' in p && text(p.conversation_id) && (!('limit' in p) || number(p.limit)) &&
+        (q.type === 'thread_catch_up' ? 'epoch' in p && typeof p.epoch === 'string' && p.epoch.length <= 1024 && 'version' in p && number(p.version) :
+          q.type === 'thread_page' && 'before_order' in p && number(p.before_order))
+    }
     case 'sendMessage': {
       const serverId = 'serverId' in value ? value.serverId : undefined
       return (serverId === undefined || (typeof serverId === 'string' && serverId.length > 0 && serverId.length <= 1024)) &&

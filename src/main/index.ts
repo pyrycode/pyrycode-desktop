@@ -1,3 +1,4 @@
+import { dispatchThreadQuery } from './threadQueryCommand'
 import { createAppUpdateController, registerAppUpdate, createQuitDrain } from './appUpdate'
 import { APP_UPDATE_STATE_CHANNEL } from '../shared/ipc/appUpdate'
 import { createMessageLifecycle } from './messageLifecycle'
@@ -865,6 +866,9 @@ app.whenReady().then(() => {
         router.route(conversationId)?.stopBackgroundTask(conversationId, command.payload.task_id)
         return
       }
+      case 'queryThread':
+        dispatchThreadQuery(command, serverId => servers.route(serverId), live.sink)
+        return
       case 'requestHistory':
         // ROUTED BY CONVERSATION, mirroring the two cases above — a conversation's history belongs to
         // the server that hosts it, so the frame goes there or to no wire at all (#1222). The WHOLE

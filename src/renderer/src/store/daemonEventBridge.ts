@@ -58,6 +58,8 @@ function originOf(event: DaemonEvent): StatusOrigin {
 export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
   switch (event.type) {
     case 'sessionStateCleared':
+    case 'threadReply':
+    case 'threadQueryFailed':
     case 'threadUpdate':
     case 'threadRepairNeeded':
       return null // The daemon-built thread consumer owns these additive events.

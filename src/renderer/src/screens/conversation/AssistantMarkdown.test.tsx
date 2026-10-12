@@ -148,6 +148,20 @@ describe('AssistantMarkdown', () => {
     )
   })
 
+  it('renders an Obsidian open link as an anchor carrying its href unchanged', () => {
+    // react-markdown's default urlTransform blanks `obsidian:`, so this case is what proves the custom
+    // transform lets the shared allowlist through. `&` is HTML-escaped in the attribute, nothing else moves.
+    const markup = render('open [the plan](obsidian://open?vault=Second%20brain&file=%F0%9F%93%8B%20Plan) now')
+    expect(markup).toContain(
+      '<a href="obsidian://open?vault=Second%20brain&amp;file=%F0%9F%93%8B%20Plan" target="_blank" rel="noreferrer">the plan</a>'
+    )
+  })
+
+  it('renders an uppercase Obsidian scheme as an anchor too', () => {
+    const markup = render('[t](OBSIDIAN://open?vault=x)')
+    expect(markup).toContain('<a href="OBSIDIAN://open?vault=x" target="_blank" rel="noreferrer">t</a>')
+  })
+
   it('renders a reference-style link as an anchor on its resolved target (AC1)', () => {
     const markup = render(lines('[label][ref]', '', '[ref]: https://ref.example/target'))
     expect(markup).toContain(
@@ -198,7 +212,16 @@ describe('AssistantMarkdown', () => {
     // click navigates (http://localhost:5173/example.com under the dev server, http://example.com/ when
     // packaged). It is the only guard on the authority condition; without this case that condition can be
     // deleted as a redundant second scheme check with every other test here still green.
-    ['a scheme carrying no authority', '[t](http:example.com)']
+    ['a scheme carrying no authority', '[t](http:example.com)'],
+    // Obsidian is allowed only as the `open` action with read-only parameters and no fragment. The full
+    // matrix is src/shared/externalLink.test.ts; these prove the renderer consults it.
+    ['the Obsidian new action', '[t](obsidian://new?vault=x&content=y)'],
+    ['the Advanced URI plugin action', '[t](obsidian://adv-uri?vault=x&commandid=y)'],
+    ['the Obsidian search action', '[t](obsidian://search?query=y)'],
+    ['an Obsidian open link that appends', '[t](obsidian://open?vault=x&file=y&append=z)'],
+    ['an Obsidian open link with a fragment', '[t](obsidian://open?vault=x#append=z)'],
+    ['an uppercase Obsidian action', '[t](obsidian://OPEN?vault=x)'],
+    ['an uppercase javascript: href', '[t](JAVASCRIPT:alert(1))']
   ]
 
   it.each(denied)('renders %s as its visible text with no anchor (AC2)', (_name, markdown) => {

@@ -12,6 +12,10 @@ export type DebugBundleFailure = 'unavailable' | 'stream-corrupt' | 'write-faile
 export const DAEMON_EVENT_CHANNEL = 'pyry:daemon-event' as const
 
 export type DaemonEvent =
+  | { type: 'threadReply'; conversationId: string; requestId: string; reply: ThreadReply
+      ; correlation: Omit<Envelope, 'payload' | 'type'> }
+  | { type: 'threadQueryFailed'; conversationId: string; requestId: string; inReplyTo: number
+      ; reason: ThreadQueryFailure }
   | { type: 'connecting' }
   | { type: 'connected'; ack: HelloAckPayload }
   | { type: 'disconnected' }
@@ -46,6 +50,48 @@ export type DaemonEvent =
   | { type: 'historyRequestFailed'; conversationId: string; reason: HistoryRequestFailure
       ; retryable: boolean }
 ```
+
+`threadReply` and `threadQueryFailed` are additive members on the existing
+`window.pyry.onDaemonEvent` subscription. The connection-bound sink supplies
+the host `serverId` stamp; each event also carries the conversation and caller
+request ID. Validated replies retain envelope metadata, including `in_reply_to`,
+in `correlation`; failures carry the corresponding `inReplyTo` directly.
+The failure reasons are the static assembly classifications (`malformed`,
+`sequence`, `metadata`, `limit`, `final-length`, `digest`, `reconstructed`,
+`expired`) plus `unavailable`, `send-failed`, `interrupted` and `daemon-error`.
+Daemon error prose and item content never enter failure events or diagnostics.
+
+`ThreadReply` reuses the full-item validation from live updates. Unknown item
+kinds, statuses, fields and content remain inert data. Every logical
+`thread_items` batch has explicit `final: false`, complete `items`, and the same
+captured conversation `epoch`/`version` across the reply. It has no coverage
+fields. The captured version is not inferred from item revisions or orders.
+Only one separate `items: []`, `final: true` marker certifies success, including
+an empty result; terminal settlement ignores repeated or late markers.
+
+| Query | Exclusive marker fields | Certified coverage |
+| --- | --- | --- |
+| Catch-up with requested version greater than zero | `from_version`, matching the requested checkpoint and no greater than captured `version`; no page fields | `(from_version, version]` in the requested epoch |
+| Newest-window catch-up (`version: 0`) or page | All of `lower_order`, `upper_order`, numeric `continuation`, boolean `older_exists`; no `from_version` | `[lower_order, upper_order)`, with `continuation == lower_order` |
+
+History numbers are nonnegative safe integers. Missing, mixed or malformed
+coverage fails the query. A page's upper bound cannot exceed its exclusive
+requested `before_order`; positive lower bounds must be less than upper bounds.
+Zero lower order requires `older_exists: false`, and all zero/false fields stay
+present. Numeric continuation supplies the next exclusive page position when
+`older_exists` is true. Active items and out-of-range parents do not expand the
+supplied interval; neither batch size nor the oldest returned parent determines
+older availability.
+
+An object `continuation` selects bounded fragment assembly instead. Its
+`continuation.final` completes only a validated single-item batch, whose logical
+`final` remains false; the separate request success marker is still required.
+`thread_reset` carries only current `conversation_id`, `epoch` and `version`,
+with no items, final flag or coverage. It terminates as `threadReply`; an existing
+correlated `error` terminates as static `threadQueryFailed` with `daemon-error`.
+Reset, error and local failure certify no partial progress. See
+[query admission](daemon-connection-methods.md#public-surface) and
+[assembly and lifetime](daemon-connection-lifecycle.md#thread-history-queries).
 
 `snapshotReceived` and `screenSnapshotReceived` — the two members that occupied this spot through
 \#620 — are gone as of [#621](../codebase/621.md); `runConfigReceived` (added at #491, shown above at

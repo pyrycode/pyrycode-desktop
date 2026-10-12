@@ -35,6 +35,13 @@ timeouts unrelated to the scenario under review. Record that full run as failed
 even if the named test passed; a later uninterrupted pass is separate evidence.
 See [the counted history-gap runs](development-verification-history.md#known-gap-recovery-verification).
 
+Keep report basenames distinct from app/worktree directories: a sibling `historical.json`
+shadowed `historical/` during Electron module resolution and prevented startup.
+Playwright grep matches project/file prefixes as well as the title; a fully anchored
+bare title can select zero tests. Select the exact unique title suffix and confirm
+nonzero executed counts in the JSON report before recording acceptance. See
+[retained setup and acceptance evidence](composer-attach-name-pill.md#controlled-hover-and-geometry-verification).
+
 Main/preload and renderer tests belong to separate TypeScript projects. Importing
 renderer translators into a main test can pass Vitest's alias resolution while
 breaking the node project typecheck. Keep supplied-frame/structured-cloned IPC
@@ -368,6 +375,23 @@ preserving renderer hit tests and actionability. Use an independent input-enable
 process for interference: same-app covers inherit protection and can falsely pass
 a deletion mutation. Keep unprotected mutations serial to avoid pointer contention. See
 [controlled boundary and counted evidence](e2e-harness-desktop-isolation.md#native-display-pointer-protection).
+
+For hover geometry, capture actual hover/focus, exact treatment and every relevant box
+in one synchronous renderer snapshot, comparing layout with its resting baseline.
+Record absent boxes explicitly: loss of both hover and focus can switch a pill to
+`display: none` after visibility passes. A null-only guard or passive style poll does
+not establish the complete observation. If protection leaves a residual failure,
+re-deliver ordinary Playwright hover on each bounded observation attempt, retaining
+every assertion and normal actionability, timeouts, retries and parallelism.
+
+Prove treatment and geometry sensitivity separately with actual hover present.
+The [attachment controls](composer-attach-name-pill.md#controlled-hover-and-geometry-verification)
+fail the original background equality and vertical-placement assertion independently,
+with present boxes and true hover; temporary CSS changes are negative controls only
+and must be restored before acceptance. Frames acknowledge paint/events, not hover
+recovery. The protected comparison needs no shipping correction and cannot confirm
+the overwritten original #1818 occurrence. Raw observations, patches and failure
+artifacts are retained in `/tmp/builder-1833/retained-proof.tar.gz`.
 
 For a [Welcome stall](e2e-harness-desktop-isolation.md#separate-welcome-readiness-boundary),
 retain `welcome-stall` and launch-fate before teardown. Controlled faults, green

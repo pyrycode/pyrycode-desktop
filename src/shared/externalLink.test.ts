@@ -17,6 +17,9 @@ describe('allowedLinkHref', () => {
     ['an Obsidian open link by absolute path', 'obsidian://open?path=%2FUsers%2Fme%2Fnote.md'],
     ['an Obsidian open link with a pane type', `${OPEN_NOTE}&paneType=tab`],
     ['a bare Obsidian open link', 'obsidian://open'],
+    ['an Obsidian open link naming the note with its extension', 'obsidian://open?vault=x&file=Plan.md'],
+    ['an Obsidian open link with an uppercase note extension', 'obsidian://open?vault=x&file=Plan.MD'],
+    ['an Obsidian open link to a nested note with no extension', 'obsidian://open?vault=x&file=A%2FB%2FPlan'],
     // Scheme case is folded by every URL parser on the way, so it cannot change which handler runs.
     ['an uppercase Obsidian scheme', 'OBSIDIAN://open?vault=x'],
     ['a mixed-case Obsidian scheme', 'ObSiDiAn://open?vault=x']
@@ -47,6 +50,19 @@ describe('allowedLinkHref', () => {
     ['open with an action parameter', `${OPEN_NOTE}&action=new`],
     ['open with an unknown parameter', `${OPEN_NOTE}&commandid=y`],
     ['open with a percent-encoded key', `${OPEN_NOTE}&%61ppend=text`],
+    // A file with no Obsidian viewer goes to the operating system's default app, so it would run.
+    ['open naming a non-note file', 'obsidian://open?vault=x&file=x.hta'],
+    ['open naming a nested non-note file', 'obsidian://open?vault=x&file=A%2Fx.jar'],
+    ['open naming a non-note file behind a trailing slash', 'obsidian://open?vault=x&file=x.hta%2F'],
+    ['open naming a non-note file behind a trailing backslash', 'obsidian://open?vault=x&file=x.hta%5C'],
+    ['open naming a non-note file with a trailing dot', 'obsidian://open?vault=x&file=x.hta.'],
+    ['open naming a non-note file by absolute path', 'obsidian://open?path=%2Ftmp%2Fx.command'],
+    ['open naming a file through the exact-path prefix', 'obsidian://open?vault=x&file=file%3Ax'],
+    // The documented cost of the rule above: a dot in a note's name needs the `.md` spelled out.
+    ['open naming a dotted note without its extension', 'obsidian://open?vault=x&file=Plan%20v1.2'],
+    // Obsidian decodes every value in its main process and a malformed escape throws there.
+    ['open with a malformed escape in file', 'obsidian://open?vault=x&file=%zz'],
+    ['open with a malformed escape in vault', 'obsidian://open?vault=%zz'],
     ['open with an encoded ampersand in a value', 'obsidian://open?vault=x&file=a%26append%3Dtext'],
     ['open with an encoded hash in a value', 'obsidian://open?vault=x&file=a%23append=text'],
     // Obsidian parses the fragment into handler parameters too.

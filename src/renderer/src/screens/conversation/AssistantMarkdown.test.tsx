@@ -220,6 +220,7 @@ describe('AssistantMarkdown', () => {
     ['the Obsidian search action', '[t](obsidian://search?query=y)'],
     ['an Obsidian open link that appends', '[t](obsidian://open?vault=x&file=y&append=z)'],
     ['an Obsidian open link with a fragment', '[t](obsidian://open?vault=x#append=z)'],
+    ['an Obsidian open link naming a non-note file', '[t](obsidian://open?vault=x&file=x.hta)'],
     ['an uppercase Obsidian action', '[t](obsidian://OPEN?vault=x)'],
     ['an uppercase javascript: href', '[t](JAVASCRIPT:alert(1))']
   ]

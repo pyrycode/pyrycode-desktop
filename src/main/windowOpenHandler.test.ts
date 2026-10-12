@@ -19,6 +19,7 @@ describe('createWindowOpenHandler', () => {
     ['the Obsidian new action', 'obsidian://new?vault=x&content=y'],
     ['the Advanced URI plugin action', 'obsidian://adv-uri?vault=x&commandid=y'],
     ['an Obsidian open link that appends', 'obsidian://open?vault=x&file=y&append=z'],
+    ['an Obsidian open link naming a non-note file', 'obsidian://open?vault=x&file=x.hta'],
     ['a javascript: URL', 'javascript:alert(1)'],
     ['a file: URL', 'file:///etc/passwd'],
     ['a mailto: URL', 'mailto:a@b.example'],

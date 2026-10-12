@@ -6,7 +6,7 @@
 // node test tier can load it.
 //
 // Two shapes are allowed and NOTHING ELSE: an absolute http/https URL carrying an authority, and an
-// Obsidian `open` link with read-only parameters. Every other scheme stays denied (`javascript:`,
+// Obsidian `open` link with read-only parameters naming a markdown note. Every other scheme stays denied (`javascript:`,
 // `data:`, `file:`, `mailto:`, any custom protocol handler), because a hostile reply must not be able
 // to fire an arbitrary handler on the operator's machine. Widening this file is a security change.
 
@@ -39,7 +39,33 @@ const OBSIDIAN_OPEN_PARAMS: ReadonlySet<string> = new Set(['vault', 'file', 'pat
  */
 const ENCODED_SEPARATOR = /%(?:26|23)/i
 
-/** True when every query key is one of the read-only `open` parameters, compared raw and exactly. */
+/** The two parameters that name a file. Their value decides what Obsidian opens, and how. */
+const OBSIDIAN_FILE_PARAMS: ReadonlySet<string> = new Set(['file', 'path'])
+
+/**
+ * True when Obsidian can only resolve `value` to a markdown note. Measured against Obsidian 1.14.4's own
+ * `open` handler: it resolves `file` the way a wikilink resolves, and a resolved file with no Obsidian
+ * viewer goes to `openWithDefaultApp`, which hands it to the operating system. So `file=x.hta`, `x.jar`
+ * or `x.lnk` already in the vault would RUN on one click.
+ *
+ * The rule mirrors that resolver. A last segment with no dot is looked up only as `<name>.md`, which is
+ * also the form Obsidian's own "Copy Obsidian URL" writes; one ending in `.md` is a note. Any other dot
+ * is refused. Backslashes count as separators and trailing ones are dropped, as Obsidian's normaliser
+ * does, so `x.hta/` cannot hide its extension. A colon is refused outright: Obsidian forbids it in note
+ * names, and a value starting `file:` switches the resolver to an exact path lookup.
+ */
+function opensAsNote(value: string): boolean {
+  if (value.includes(':')) return false
+  const path = value.replace(/\\/g, '/').replace(/\/+$/, '')
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  return !name.includes('.') || name.toLowerCase().endsWith('.md')
+}
+
+/**
+ * True when every query key is one of the read-only `open` parameters, compared raw and exactly, and
+ * every value decodes. Obsidian runs `decodeURIComponent` on each value in its main process, where a
+ * malformed escape such as `%zz` throws an error dialog, so such a link is refused here instead.
+ */
 function hasOnlyReadOnlyOpenParams(query: string): boolean {
   if (ENCODED_SEPARATOR.test(query)) return false
   for (const pair of query.split('&')) {
@@ -47,6 +73,13 @@ function hasOnlyReadOnlyOpenParams(query: string): boolean {
     const equals = pair.indexOf('=')
     const key = equals === -1 ? pair : pair.slice(0, equals)
     if (!OBSIDIAN_OPEN_PARAMS.has(key)) return false
+    let value: string
+    try {
+      value = decodeURIComponent(equals === -1 ? '' : pair.slice(equals + 1))
+    } catch {
+      return false
+    }
+    if (OBSIDIAN_FILE_PARAMS.has(key) && !opensAsNote(value)) return false
   }
   return true
 }

@@ -59,7 +59,7 @@ server too; it no longer does — adding a server ends no pairing, so the open c
 stays live, and `setSessionSettings` routes by session id (`correlations.routeSession`, #1119) to the
 daemon that owns it, never to whichever server was paired most recently.
 [#652](../codebase/652.md) (the deleted-open-discussion exit) added a third, via
-[`exitActiveConversation`](paired-shell.md#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652) —
+[`exitActiveConversation`](paired-shell-conversation-deletion.md#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652) —
 gated on the id like #530's, but comparing against a *deleted* conversation's id rather than a
 *newly-opened* one's.
 [#1166](https://github.com/pyrycode/pyrycode-desktop/issues/1166) shortened the window `#530`'s clear
@@ -204,4 +204,4 @@ daemon → transport (#254) → sessionTransition{newSessionId, conversationId (
   [`clearPairingScopedState`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx).
 - [#652 codebase notes](../codebase/652.md) — `clearSessionId`'s third production caller: the open
   discussion being deleted, gated on the id like #530's, via
-  [`exitActiveConversation`](paired-shell.md#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652).
+  [`exitActiveConversation`](paired-shell-conversation-deletion.md#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652).

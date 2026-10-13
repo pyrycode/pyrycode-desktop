@@ -110,7 +110,10 @@ reconnect preserves restored rows and their recording ownership. See
   the discussion currently open in the thread now returns to `list` on the daemon's own confirmation.
   Unlike the three `open` triggers above, this reuses the existing absolute `back` transition — no new
   `PairedNav` arm, no `PairedRoute` member — via `useConversationDeletedExit` mounted beside
-  `useConversationCreatedNav`. See [below](#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652).
+  `useConversationCreatedNav`. The callback now carries the main-stamped origin into
+  `confirmConversationDeleted`: exact retained-slice ownership authorizes removal, while only an active
+  match invokes the exit. A delayed confirmation after opening another conversation clears only the
+  deleted slice. See [confirmed deletion](paired-shell-conversation-deletion.md).
 - [#653](../codebase/653.md) added a **fifth** `back` trigger, the archive sibling of #652's delete
   trigger: the discussion currently open in the thread returning to `list` once the daemon's
   authoritative conversation list shows it archived. Same reused `back` transition, same

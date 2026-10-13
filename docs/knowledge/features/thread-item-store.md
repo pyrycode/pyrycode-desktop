@@ -154,8 +154,8 @@ Application is per item: a rejected item does not roll back prior successful ite
 but any repair result makes that handle ineligible to commit. Abandonment retains
 received facts and leaves complete progress unchanged.
 
-Only the sync coordinator in [#1902](https://github.com/pyrycode/pyrycode-desktop/issues/1902)
-certifies a completed server reply. The store consumes client-owned
+Only the [thread query coordinator](#thread-query-coordinator) certifies a completed
+server reply. The store consumes client-owned
 `ThreadBatchCertificate` fields `fromVersion`, `version`, `ranges` and optional
 `olderAvailable`; it cannot prove reply completion itself. `commit` is one-shot,
 including a rejected commit. Failed, abandoned, settled or stale handles return
@@ -226,11 +226,144 @@ Cleared scopes read absent and repeated cleanup is a no-op. Other hosts/conversa
 keep their held references. Old batch application/commit cannot recreate a cleared
 scope, including after the same host/conversation/epoch is accepted again.
 
-Requests, recovery and reply certification remain with #1902;
+The [thread query coordinator](#thread-query-coordinator) owns requests, recovery and reply certification;
 [protected disk persistence](chat-history-api.md#api) consumes these snapshots.
 Lifecycle subscriptions, consumer migration and production capability activation remain with
 [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908). These APIs alone claim
 no production daemon integration or live-Claude validation.
+
+## Thread query coordinator
+
+`createThreadQueryCoordinator` in
+[`threadQueryCoordinator.ts`](../../../src/renderer/src/store/threadQueryCoordinator.ts)
+coordinates supplied navigation, connection and decoded-event inputs over the same
+retained store. It returns `input`, `cancelHost` and `dispose`; it mounts no
+production singleton or subscription. Main retains wire validation and logical-part
+assembly. The coordinator sends only host-addressed `queryThread` commands containing
+`thread_catch_up` or `thread_page`, with no raw-history, replay or resync requests.
+
+### Dependencies and inputs
+
+`ThreadQueryDeps` requires the vanilla `store`, synchronous `sendCommand`,
+`requestId` factory and scoped `onState(serverId, conversationId, state)` callback.
+Optional `log.event` receives only static `event`/`code` values. Request ids must be
+fresh across attempts **and coordinator lifetimes**, such as caller-generated UUIDs:
+reusing an id after teardown could correlate a delayed reply with its successor.
+
+`ThreadQueryInput` has these supplied forms:
+
+| Input | Meaning |
+| --- | --- |
+| `sync {serverId, conversationId, connected, restorePending?}` | Set this host's open conversation and connection/read readiness. `conversationId: null` leaves it; omitted `restorePending` means false. |
+| `daemon {event}` | Consume host-stamped `threadReply`, `threadQueryFailed`, `threadUpdate` or `threadRepairNeeded`. Null host stamps are ignored. |
+| `older {serverId}` | Demand older items for this host's open conversation. |
+| `retry {serverId}` | Retry a failed open scope; otherwise a no-op. |
+
+Opening while connected or reconnecting creates catch-up demand only for that
+host's open conversation. Repeated `sync` coalesces; offline opening sends nothing.
+`restorePending: true` holds demand until the existing restore owner supplies
+readiness. Dispatch reads the current saved epoch and complete `checkpoint`, even
+when applied `version` or `uncommittedVersion` is greater; an absent scope uses
+empty epoch and version zero. Leaving discards unsent demand.
+
+The additive `createChatHistoryWriter` and `readSavedTimeline` hooks and local-read
+handles remain owned by [protected history](chat-history.md#storage-and-concurrency),
+as established by [#1903](https://github.com/pyrycode/pyrycode-desktop/issues/1903).
+The coordinator never starts/cancels disk reads or replaces cache storage. Hydrated
+repair and unfinished-progress fences retain their store meaning.
+[#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908) owns production
+subscriptions, capability/content-path selection and mapping `onState`/older/retry
+into existing `conversationTimelineStore` presentation and demand seams
+(`activateConversation`, `createNewestHistoryDemand`, `requestOlderHistory`,
+`retryHistoryPage`). The ordinary app still uses those legacy callers.
+[#1931](https://github.com/pyrycode/pyrycode-desktop/issues/1931) owns bounded local
+paging over this network-demand contract.
+
+### Reply certification and recovery
+
+Replies must match host, conversation, caller request id and the store generation
+captured at dispatch before application. The first valid reply admits its epoch
+before opening a batch and captures its version once; nonzero catch-up and pages
+must retain the accepted epoch. Every later part must keep that epoch/version.
+All complete full items, including active items and out-of-range parents, apply
+through the retained store's revision rules; delayed full items cannot overwrite
+newer live facts. Store replacement or cleanup invalidates the request even when
+the same epoch text is reused.
+
+Only the separate empty `final: true` success marker certifies a batch, including
+an empty reply. A nonzero catch-up marker must carry the exact requested
+`from_version`; zero-version newest windows and pages certify only supplied order
+bounds and availability. The certificate uses captured reply version, never item
+revisions or fragment completion. Interrupted application retains received facts
+and unfinished-progress fences, with the earlier complete checkpoint unchanged.
+
+Live updates use `applyUpdate` on that same store. `threadRepairNeeded` fences an
+existing snapshot through its applied version with `requireRepair`. Off-screen
+repair stays scoped without creating off-screen requests. An open repair schedules
+catch-up from the unchanged checkpoint; newer live facts cannot bypass it. A page
+may retain facts but cannot certify recovery or add coverage while repair is pending.
+
+An initial failed batch certificate permits one automatic repair catch-up. An
+incomplete recovery exposes explicit retry; reopening a retained repair already
+counts as a recovery attempt. Further live facts cannot restart a failed recovery.
+
+A correlated `thread_reset` abandons its batch, deletes only that conversation and
+accepts the reported epoch, including when unchanged. Calling idempotent
+`acceptEpoch` alone would leave same-epoch items, coverage and repair behind. The
+reset's version establishes no checkpoint: recovery requests a newest window at
+version zero in that epoch. Repair recovery and reset-window recovery have separate
+ownership, so a repair query's first reset still gets a fresh newest window. A
+reset during that window exposes retry instead of looping. Other conversations
+retain their snapshots.
+
+### Certified older paging
+
+Older demand waits for catch-up/recovery success and coalesces while waiting.
+Repeated demand during an active page does not queue a duplicate page. Dispatch
+uses exclusive `before_order` at the lower boundary of the newest continuous
+certified range (`ranges.at(-1).start`); an earlier disjoint range cannot bridge the
+gap. Without a certified boundary no page is sent.
+
+A page marker must have `upper_order === before_order` and numeric
+`continuation === lower_order`. Commit only supplied `[lower_order, upper_order)`;
+after ranges merge, its certified lower boundary drives the next explicit demand.
+Authoritative `older_exists: false` suppresses further pages. Item presence, page
+length and active/parent extras establish neither continuity nor exhaustion.
+
+### Host slots, presentation and cleanup
+
+Each host owns one unfinished-query slot; other hosts dispatch independently.
+Pending state and its 30-second idle timer are installed before presentation/send
+callbacks, allowing synchronous cancellation or terminal delivery. Every matching
+logical reply part renews the deadline; fragment handling remains in main.
+
+Navigation abandons application and publishes idle. An unsent request immediately
+releases its timer/slot. A sent request retains a cancelled tombstone until terminal
+reply/reset, query failure or idle expiry, preventing another request from competing
+for the daemon's unfinished slot. A nonterminal generation/metadata rejection also
+publishes failure while keeping that tombstone. Explicit retry queues behind it;
+late parts can release the slot but cannot publish facts or certify a successor.
+
+`ThreadQueryState` is `idle`, `loading {purpose}` or
+`failed {purpose, reason, retryable: true}`; purpose is `catch-up` or `older`.
+Local failure codes are `send-failed`, `disconnected`, `timeout`, `generation`,
+`metadata` and `recovery`. Decoded `threadQueryFailed` forwards static transport
+codes: `malformed`, `sequence`, `metadata`, `limit`, `final-length`, `digest`,
+`reconstructed`, `expired`, `unavailable`, `send-failed`, `interrupted`, `daemon-error`.
+No daemon error text, content, epoch or scope id enters diagnostics.
+
+Transport failure, disconnect, sender exception and idle timeout abandon the
+batch and release timers/loading/slot. Failure blocks dispatch until explicit
+retry or a fresh navigation/reconnect edge. Retry chooses catch-up whenever repair,
+catch-up failure or incomplete readiness remains; otherwise it retries the page.
+It resumes from complete checkpoint and retains received facts.
+
+`cancelHost(serverId)` means **connection teardown**, not navigation: it removes
+that host's scheduling state, clears timers, abandons batches and publishes idle,
+without deleting retained items. Navigation uses `sync` so sent slots survive.
+`dispose()` cancels every host and ignores subsequent inputs. Store cleanup remains
+with the owning lifecycle integration; fresh ids and generation checks fence late
+delivery after either form of cleanup.
 
 ## Testing
 
@@ -249,3 +382,18 @@ on 2026-10-10 records 2 executed, 2 passed, 0 failed and 32 skipped by its name 
 Both `retains uncertified progress from equal batch revisions during repair` and
 `retains uncertified progress from older batch revisions during repair` were present
 and passed. This counted evidence covers those two permanent checkpoint regressions.
+
+[`threadQueryCoordinator.test.ts`](../../../src/renderer/src/store/threadQueryCoordinator.test.ts)
+uses an isolated real store, supplied decoded events and fake timers. Coverage
+includes saved-checkpoint reopening, empty-marker certification, multipart
+disconnect/late completion, live revision overlap, scoped/repeated reset, repair
+failure/retry, generation replacement, disjoint paging with out-of-range extras,
+host isolation and retained slots, timeout renewal, synchronous callbacks and cleanup.
+
+The [verifier review](https://github.com/pyrycode/pyrycode-desktop/pull/1946#issuecomment-6153714743)
+on 2026-10-13 records all 22 coordinator cases executed and passed, 0 failed and
+0 skipped, in the dispatcher unit run of 10,033 executed/passed, 0 failed and 3
+skipped across 396 passing files at `4b220d4457aaa93a26d7b0a2ea99e205bb4a9778`.
+The fake-transport gate recorded 388 executed/passed, 0 failed and 3 skipped;
+its `thread` name entry was not run and supplies no coordinator-specific evidence.
+These supplied-input checks establish no production daemon or live-Claude proof.

@@ -37,16 +37,18 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
   function present(host: string, scope: Scope, state: ThreadQueryState): void {
     scope.state = state
     deps.onState(host, scope.id, state)
-    deps.log?.event({ event: 'thread-query-state', code: state.type })
+    deps.log?.event({ event: 'thread-query-state', code: state.type === 'failed' ? state.reason : state.type })
   }
   function release(h: Host, p: Pending): void {
     clearTimeout(p.timer); p.batch?.abandon()
     if (h.pending === p) h.pending = undefined
   }
-  function fail(host: string, h: Host, p: Pending, reason: string): void {
+  function fail(host: string, h: Host, p: Pending, reason: string, unfinished = false): void {
     if (h.pending !== p) return
-    release(h, p)
-    if (!p.cancelled && h.scope === p.scope) {
+    const visible = !p.cancelled && h.scope === p.scope
+    if (unfinished) { p.cancelled = true; p.batch?.abandon() }
+    else release(h, p)
+    if (visible) {
       present(host, p.scope, { type: 'failed', purpose: p.query.type === 'thread_page' ? 'older' : 'catch-up', reason, retryable: true })
     }
     deps.log?.event({ event: 'thread-query-failed', code: reason })
@@ -79,6 +81,7 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
     present(host, s, { type: 'loading', purpose: query.type === 'thread_page' ? 'older' : 'catch-up' })
     if (disposed || h.pending !== p || p.cancelled) return
     p.sent = true
+    deps.log?.event({ event: 'thread-query-dispatched', code: query.type })
     try { deps.sendCommand({ type: 'queryThread', serverId: host, requestId: p.requestId, query }) }
     catch { fail(host, h, p, 'send-failed') }
   }
@@ -100,9 +103,10 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
     deadline(host, h, p)
     const terminal = reply.type === 'thread_reset' || reply.payload.final
     if (p.cancelled) { if (terminal) { release(h, p); pump(host, h) }; return }
-    if (generation(host, p.scope.id) !== p.generation) { fail(host, h, p, 'generation'); return }
+    if (generation(host, p.scope.id) !== p.generation) { fail(host, h, p, 'generation', !terminal); return }
     const s = p.scope
     if (reply.type === 'thread_reset') {
+      deps.log?.event({ event: 'thread-query-reset', code: 'reset' })
       release(h, p)
       store().deleteConversation(host, s.id)
       store().acceptEpoch(host, s.id, value.epoch)
@@ -115,13 +119,13 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
     const v = reply.payload
     if (!p.captured) {
       if ((p.query.type === 'thread_page' || p.query.payload.version > 0) &&
-        store().snapshot(host, s.id)?.epoch !== v.epoch) { fail(host, h, p, 'metadata'); return }
+        store().snapshot(host, s.id)?.epoch !== v.epoch) { fail(host, h, p, 'metadata', !terminal); return }
       store().acceptEpoch(host, s.id, v.epoch)
       p.generation = generation(host, s.id)
       p.captured = { epoch: v.epoch, version: v.version }
       p.batch = store().beginBatch(host, s.id, v.epoch) ?? undefined
     }
-    if (!p.batch || p.captured.epoch !== v.epoch || p.captured.version !== v.version) { fail(host, h, p, 'metadata'); return }
+    if (!p.batch || p.captured.epoch !== v.epoch || p.captured.version !== v.version) { fail(host, h, p, 'metadata', !terminal); return }
     if (!v.final) {
       if (p.batch.applyItems(v.items, p.captured.version).some(result => result.type === 'repair')) repair(host, h, s.id)
       return
@@ -148,6 +152,7 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
       return
     }
     release(h, p)
+    deps.log?.event({ event: 'thread-query-completed', code: p.query.type })
     if (p.query.type === 'thread_catch_up') { s.catchUp = false; s.ready = true; s.recovery = false }
     if ('older_exists' in v) s.exhausted = !v.older_exists
     present(host, s, { type: 'idle' }); pump(host, h)

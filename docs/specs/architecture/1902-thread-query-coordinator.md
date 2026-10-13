@@ -79,3 +79,5 @@ None. Cleaner-shape check: a single host-owned reducer avoids a second queue/sto
 ## Revisions
 
 2026-10-13: The synchronous-presentation cancellation test exposed a timer left behind before send. Pending state now records whether dispatch occurred: navigation immediately releases an unsent request, while a sent request keeps its cancelled host slot. `requestId` must supply fresh ids across attempts/lifetimes; `cancelHost` means connection teardown. Null host stamps are ignored. These clarify the original ownership contract without production wiring or store changes.
+
+2026-10-13: `holds an invalidated unfinished slot through explicit retry` exposed premature dispatch after generation replacement. A nonterminal generation/metadata rejection now publishes retryable failure but keeps a cancelled slot through terminal settlement/idle expiry. Explicit retry queues demand behind it; late completion cannot certify the replacement store.

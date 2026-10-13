@@ -263,4 +263,15 @@ describe('supplied thread query coordination', () => {
     expect(f.commands[1].query.payload.conversation_id).toBe('c')
     f.coordinator.dispose()
   })
+
+  it('holds an invalidated unfinished slot through explicit retry', () => {
+    const f = setup(); f.sync(); f.batch()
+    f.store.getState().deleteConversation('h', 'c'); f.store.getState().acceptEpoch('h', 'c', 'e')
+    f.batch(); expect(f.states.at(-1)?.state).toMatchObject({ type: 'failed', reason: 'generation' })
+    f.retry(); expect(f.commands).toHaveLength(1)
+    f.window(); expect(f.commands).toHaveLength(2)
+    expect(f.snapshot()?.checkpoint).toBe(0)
+    f.window(1); expect(f.snapshot()?.checkpoint).toBe(20)
+    f.coordinator.dispose()
+  })
 })
